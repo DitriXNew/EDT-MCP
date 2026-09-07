@@ -799,6 +799,63 @@ public class MetadataTypeBuilderTest
         }
     }
 
+    /**
+     * The nested split accepts a PLURAL segment ({@code Recalculations}) because nested FQN
+     * segments really do appear both ways - but the platform's type index publishes only the
+     * singular. So the refusal must advise the canonical spelling instead of replaying the
+     * caller's, and the advice is followed here rather than merely inspected: the string is taken
+     * out of the message and retried against a provider that knows ONLY the published name.
+     */
+    @Test
+    public void testNestedProducedTypeRefusalAdvisesASpellingThePlatformPublishes()
+    {
+        String pluralKind = "RecalculationsRecordSet"; //$NON-NLS-1$
+        assertTrue(pluralKind, MetadataTypeBuilder.splitProducedTypeKind(pluralKind).isNested());
+
+        JsonObject item = json("{\"kind\":\"" + pluralKind //$NON-NLS-1$
+            + "\",\"ref\":\"CalculationRegister.R.Recalculation.Rc\"}").getAsJsonObject(); //$NON-NLS-1$
+
+        for (MetadataTypeBuilder.TypeTarget target : new MetadataTypeBuilder.TypeTarget[] {
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
+            MetadataTypeBuilder.TypeTarget.EVENT_SOURCE})
+        {
+            TypeDescription refused = McoreFactory.eINSTANCE.createTypeDescription();
+            String error = MetadataTypeBuilder.addType(refused, item, pluralKind, null,
+                MdClassFactory.eINSTANCE.createConfiguration(), false, target);
+
+            assertEquals(target.name(), "Type kind 'RecalculationsRecordSet' is a produced type of " //$NON-NLS-1$
+                + "a NESTED object (Recalculation lives inside its owning register), which cannot " //$NON-NLS-1$
+                + "be addressed by ref. Pass {kind:'RecalculationRecordSet'} without ref to use " //$NON-NLS-1$
+                + "its abstract form.", error); //$NON-NLS-1$
+            assertFalse("the advice must not replay the unpublished plural: " + error, //$NON-NLS-1$
+                error.contains("{kind:'" + pluralKind + "'}")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(target.name(), refused.getTypes().isEmpty());
+
+            // Follow the advice: it must resolve against a provider that knows only the
+            // published singular. A pinned string nothing exercises is how the previous
+            // message came to recommend a spelling the platform does not carry.
+            Type expected = McoreFactory.eINSTANCE.createType();
+            TypeDescription retried = McoreFactory.eINSTANCE.createTypeDescription();
+            String retryError = addKind(advisedKind(error),
+                providerKnowing("RecalculationRecordSet", expected), retried, target); //$NON-NLS-1$
+
+            assertNull(target.name(), retryError);
+            assertEquals(target.name(), 1, retried.getTypes().size());
+            assertSame(target.name(), expected, retried.getTypes().get(0));
+        }
+    }
+
+    /** The kind an error message tells the caller to pass, read back out of the message itself. */
+    private static String advisedKind(String error)
+    {
+        String marker = "{kind:'"; //$NON-NLS-1$
+        int open = error.indexOf(marker);
+        assertTrue("the refusal must advise a kind: " + error, open >= 0); //$NON-NLS-1$
+        int close = error.indexOf('\'', open + marker.length());
+        assertTrue("the advised kind must be quoted: " + error, close > open); //$NON-NLS-1$
+        return error.substring(open + marker.length(), close);
+    }
+
     @Test
     public void testAbstractRecalculationRecordSetIsAcceptedOnBothTargets()
     {

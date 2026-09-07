@@ -33,9 +33,50 @@ public final class Main
     private static final String OPT_VERSION = "--version"; //$NON-NLS-1$
     private static final String OPTION_PREFIX = "--"; //$NON-NLS-1$
 
+    /**
+     * Property the JDK's HTTP server reads (once, statically) for the number of connections it
+     * will hold open before refusing new ones.
+     */
+    private static final String PROP_MAX_CONNECTIONS = "jdk.httpserver.maxConnections"; //$NON-NLS-1$
+
+    /**
+     * The ceiling this process sets when the operator has not. Far above any legitimate use of
+     * a developer-fleet proxy - the handler sheds at 50 in flight long before this - so reaching
+     * it means connections are being opened faster than they are being finished.
+     */
+    private static final String DEFAULT_MAX_CONNECTIONS = "1024"; //$NON-NLS-1$
+
     private Main()
     {
         // entry-point class
+    }
+
+    /**
+     * Bounds the connections the proxy will hold open, BEFORE the HTTP server exists.
+     * <p>
+     * This is the one admission decision that does not need a worker. The handler's own
+     * admission control ({@code McpProxyHandler.MAX_IN_FLIGHT_REQUESTS}) runs inside a worker
+     * thread, so a burst arriving while every worker is blocked on a backend is queued, not
+     * shed, and each queued exchange holds a socket and a file descriptor. Nothing in
+     * {@code com.sun.net.httpserver} can answer a request without giving it a worker - the
+     * {@code Executor} receives an opaque {@code Runnable}, not the exchange - so the queue can
+     * either be bounded (and a burst dropped with NO response, by the executor's abort policy)
+     * or unbounded (and always answered). It is unbounded, and this is what bounds the
+     * retention instead: {@code ServerImpl}'s accept loop closes a connection outright once the
+     * limit is reached, before any of it is queued.
+     * <p>
+     * Set only when the operator has not set it: an explicit {@code -Djdk.httpserver.maxConnections}
+     * on the command line wins, including a {@code -1} that turns the limit off. It must be set
+     * before the first {@code HttpServer} is created, because {@code ServerConfig} reads it in a
+     * static initializer - hence the very first line of {@code main}. Package-visible so the
+     * "only when unset" half is testable without launching a process.
+     */
+    static void capOpenConnections()
+    {
+        if (System.getProperty(PROP_MAX_CONNECTIONS) == null)
+        {
+            System.setProperty(PROP_MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
+        }
     }
 
     /**
@@ -45,6 +86,7 @@ public final class Main
      */
     public static void main(String[] args)
     {
+        capOpenConnections();
         String[] safeArgs = args == null ? new String[0] : args;
 
         if (containsAny(safeArgs, OPT_HELP_LONG, OPT_HELP_SHORT))

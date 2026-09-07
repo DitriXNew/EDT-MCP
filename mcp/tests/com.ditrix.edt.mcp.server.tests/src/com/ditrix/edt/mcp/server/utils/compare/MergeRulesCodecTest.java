@@ -37,6 +37,7 @@ import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -4516,8 +4517,7 @@ public class MergeRulesCodecTest
         }
         catch (MergeRulesFormatException expected)
         {
-            assertTrue("the parser must be refusing it over the character itself: " //$NON-NLS-1$
-                + expected.getMessage(), expected.getMessage().contains("invalid XML character")); //$NON-NLS-1$
+            assertRefusedOverTheRestrictedCharacter(expected.getMessage());
         }
     }
 
@@ -4543,9 +4543,31 @@ public class MergeRulesCodecTest
         }
         catch (MergeRulesFormatException expected)
         {
-            assertTrue("the read must be refusing it over the character itself: " //$NON-NLS-1$
-                + expected.getMessage(), expected.getMessage().contains("invalid XML character")); //$NON-NLS-1$
+            assertRefusedOverTheRestrictedCharacter(expected.getMessage());
         }
+    }
+
+    /**
+     * The refusal has to be about the restricted character itself - but which WORDS say so belong
+     * to the platform's StAX implementation, not to this codec, which forwards the parser's
+     * message verbatim. That wording is not stable across platforms: the reader behind EDT 2026.1
+     * said {@code Character reference "&#x1" is an invalid XML character}, the one behind 2026.2
+     * says {@code Illegal character ((CTRL-CHAR, code 1))} and {@code Illegal character entity:
+     * expansion character (code 0x1}. Pinning either sentence pins a vendor, so what is asserted
+     * is what all of them state and what this test is actually about: this codec's own wrapper,
+     * the character, and its code point.
+     *
+     * @param message the refusal from {@code MergeRulesCodec.parse}
+     */
+    private static void assertRefusedOverTheRestrictedCharacter(String message)
+    {
+        assertTrue("the refusal must come from this codec's own read: " + message, //$NON-NLS-1$
+            message.startsWith("The merge-settings file could not be parsed as XML: ")); //$NON-NLS-1$
+        String lowered = message.toLowerCase(Locale.ROOT);
+        assertTrue("the refusal must be about a character: " + message, //$NON-NLS-1$
+            lowered.contains("character")); //$NON-NLS-1$
+        assertTrue("the refusal must name the code point U+0001: " + message, //$NON-NLS-1$
+            lowered.contains("#x1") || lowered.contains("0x1") || lowered.contains("code 1")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     /**

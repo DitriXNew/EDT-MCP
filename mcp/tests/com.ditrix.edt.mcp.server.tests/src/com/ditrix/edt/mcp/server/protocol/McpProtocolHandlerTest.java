@@ -11,6 +11,7 @@ import static org.junit.Assert.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.After;
 import org.junit.Before;
@@ -18,6 +19,7 @@ import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.UserSignal;
 import com.ditrix.edt.mcp.server.UserSignal.SignalType;
+import com.ditrix.edt.mcp.server.protocol.jsonrpc.JsonRpcRequest;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.utils.OutputSizeGuard;
@@ -126,6 +128,38 @@ public class McpProtocolHandlerTest
         assertEquals(expected, augmented);
         assertEquals("BACKGROUND", signal.get("type").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("still running", signal.get("message").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // === History timing ===
+
+    @Test
+    public void testTheOneArgumentOverloadTimesItsOwnParse()
+    {
+        DurationCapturingHandler timed = new DurationCapturingHandler();
+
+        timed.processRequest(buildJsonRpcRequest(1, "initialize", null)); //$NON-NLS-1$
+
+        // Lower bound only: load can only make this larger, never smaller.
+        assertTrue("the parse belongs inside the recorded duration, got " + timed.recordedDurationMs //$NON-NLS-1$
+            + "ms for a parse that alone takes " + DurationCapturingHandler.PARSE_MILLIS + "ms", //$NON-NLS-1$ //$NON-NLS-2$
+            timed.recordedDurationMs >= DurationCapturingHandler.PARSE_MILLIS);
+    }
+
+    @Test
+    public void testTheParsedOverloadTimesFromTheCallersClock()
+    {
+        // The transport parses first to decide the route, so it - not this method - knows when
+        // the exchange began. If the duration were taken here instead, everything the caller did
+        // before handing the request down would vanish from the history.
+        DurationCapturingHandler timed = new DurationCapturingHandler();
+        String request = buildJsonRpcRequest(1, "initialize", null); //$NON-NLS-1$
+        JsonRpcRequest parsed = timed.parse(request);
+        long startedFiveSecondsAgo = System.nanoTime() - TimeUnit.SECONDS.toNanos(5);
+
+        timed.processRequest(request, parsed, startedFiveSecondsAgo);
+
+        assertTrue("the caller's start must be what is measured, got " + timed.recordedDurationMs //$NON-NLS-1$
+            + "ms for an exchange that began 5000ms ago", timed.recordedDurationMs >= 5000L); //$NON-NLS-1$
     }
 
     // === Initialize ===
@@ -289,6 +323,107 @@ public class McpProtocolHandlerTest
         assertTrue("declared roots capability must be retrievable", caps.has("roots"));
         assertTrue("declared sampling capability must be retrievable", caps.has("sampling"));
         assertFalse("an undeclared capability must read absent", caps.has("elicitation"));
+    }
+
+    @Test
+    public void testAnOversizedCapabilitiesObjectIsNotRetained()
+    {
+        // Every open SESSION keeps the capabilities its client declared, so the size of that
+        // object is memory a caller can pin on its own word, multiplied by the session cap. A
+        // real capabilities object is a few hundred characters; one past the ceiling is treated
+        // exactly like a malformed one - the permissive default - rather than stored.
+        StringBuilder padding = new StringBuilder();
+        while (padding.length() < McpProtocolHandler.MAX_RETAINED_CAPABILITIES_CHARS)
+        {
+            padding.append('x');
+        }
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\","
+            + "\"capabilities\":{\"roots\":{\"listChanged\":true},\"pad\":\"" + padding + "\"},"
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        handler.processRequest(request);
+
+        ClientCapabilities caps = handler.getClientCapabilities();
+        assertFalse("an oversized capabilities object must not be retained", caps.isPresent());
+        assertFalse("and none of it may be readable afterwards", caps.has("roots"));
+        assertTrue("the refusal keeps the permissive default, it is not a failure",
+            caps.allowsStructuredContent());
+    }
+
+    @Test
+    public void testACapabilitiesObjectAtTheCeilingIsStillRetained()
+    {
+        // The other edge: the ceiling must admit anything a real client sends, so a capabilities
+        // object just under it is stored in full. Without this, a tightened limit could silently
+        // start discarding legitimate declarations and nothing would notice.
+        StringBuilder padding = new StringBuilder();
+        while (padding.length() < McpProtocolHandler.MAX_RETAINED_CAPABILITIES_CHARS - 200)
+        {
+            padding.append('x');
+        }
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\","
+            + "\"capabilities\":{\"roots\":{\"listChanged\":true},\"pad\":\"" + padding + "\"},"
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        handler.processRequest(request);
+
+        ClientCapabilities caps = handler.getClientCapabilities();
+        assertTrue("a capabilities object under the ceiling must still be stored", caps.isPresent());
+        assertTrue("and remain readable", caps.has("roots"));
+    }
+
+    @Test
+    public void testAnOversizedCapabilitiesObjectStillHonoursAnExplicitOptOut()
+    {
+        // The ceiling bounds what the server RETAINS. It must not also decide what the client
+        // MEANT: dropping the whole object would turn an explicit
+        // experimental.structuredContent=false into the permissive default, so the one client
+        // that refused structuredContent would be the one client that receives it.
+        StringBuilder padding = new StringBuilder();
+        while (padding.length() < McpProtocolHandler.MAX_RETAINED_CAPABILITIES_CHARS)
+        {
+            padding.append('x');
+        }
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\","
+            + "\"capabilities\":{\"experimental\":{\"structuredContent\":false},"
+            + "\"roots\":{\"listChanged\":true},\"pad\":\"" + padding + "\"},"
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        handler.processRequest(request);
+
+        ClientCapabilities caps = handler.getClientCapabilities();
+        assertFalse("an explicit opt-out must survive the size ceiling",
+            caps.allowsStructuredContent());
+        assertFalse("but the oversized declaration itself is still not retained",
+            caps.has("pad"));
+        assertFalse("nor anything else it declared alongside it", caps.has("roots"));
+    }
+
+    @Test
+    public void testWhatSurvivesAnOversizedDeclarationIsConstantSize()
+    {
+        // The other edge of the same change: honouring the opt-out must not become a way to
+        // retain the payload it arrived with. Whatever the client sent, what is kept is the
+        // flag - so the per-session memory cost stays constant no matter how large the
+        // declaration was.
+        StringBuilder padding = new StringBuilder();
+        while (padding.length() < McpProtocolHandler.MAX_RETAINED_CAPABILITIES_CHARS * 20)
+        {
+            padding.append('x');
+        }
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\","
+            + "\"capabilities\":{\"experimental\":{\"structuredContent\":false,"
+            + "\"pad\":\"" + padding + "\"}},"
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        handler.processRequest(request);
+
+        ClientCapabilities caps = handler.getClientCapabilities();
+        assertFalse("the opt-out is still honoured", caps.allowsStructuredContent());
+        assertNotNull("a distilled holder still exposes what it kept", caps.getRaw());
+        int retained = caps.getRaw().toString().length();
+        assertTrue("what is retained must not scale with the declaration: " + retained
+            + " characters", retained < 100);
     }
 
     @Test
@@ -1489,6 +1624,39 @@ public class McpProtocolHandlerTest
         int recordCount()
         {
             return methods.size();
+        }
+    }
+
+    /**
+     * A handler that reports what the recorder was told, and whose parse is deliberately slow:
+     * the parse of a multi-megabyte tool call is real work, and the point of these two tests is
+     * that it lands INSIDE the duration the history reports, whichever overload was called.
+     */
+    private static class DurationCapturingHandler extends McpProtocolHandler
+    {
+        static final long PARSE_MILLIS = 60L;
+
+        long recordedDurationMs = -1L;
+
+        @Override
+        public JsonRpcRequest parse(String requestBody)
+        {
+            try
+            {
+                Thread.sleep(PARSE_MILLIS);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            return super.parse(requestBody);
+        }
+
+        @Override
+        void recordToHistory(String method, String toolName, String requestJson, String responseJson,
+            long durationMs)
+        {
+            recordedDurationMs = durationMs;
         }
     }
 

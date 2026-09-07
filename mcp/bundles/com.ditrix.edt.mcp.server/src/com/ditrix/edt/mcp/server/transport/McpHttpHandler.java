@@ -6,9 +6,7 @@
 
 package com.ditrix.edt.mcp.server.transport;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
@@ -19,9 +17,12 @@ import java.util.concurrent.atomic.AtomicLong;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.McpServer;
 import com.ditrix.edt.mcp.server.SseStreamRegistry;
+import com.ditrix.edt.mcp.server.protocol.ClientCapabilities;
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
 import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
+import com.ditrix.edt.mcp.server.protocol.McpSessionRegistry;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
+import com.ditrix.edt.mcp.server.protocol.jsonrpc.JsonRpcRequest;
 import com.ditrix.edt.mcp.server.tools.impl.GetEdtVersionTool;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -37,6 +38,17 @@ import com.sun.net.httpserver.HttpHandler;
  * reads the live executors and request/tool-call state through the {@code server}
  * reference, delegates {@code tools/call} to {@link InterruptibleToolExecutor},
  * and everything else to {@link McpProtocolHandler}.
+ *
+ * <p><b>Sessions.</b> {@code initialize} mints one in {@link McpSessionRegistry} and returns its
+ * id in {@code Mcp-Session-Id}; every other POST must present that id back (400 without one, 404
+ * for one this listener never issued or has closed), and {@code DELETE /mcp} closes it. The
+ * session also carries the capabilities ITS client declared, so two clients cannot format each
+ * other's responses.
+ *
+ * <p>The SSE GET stream is deliberately outside that rule: it carries no JSON-RPC method, runs no
+ * tool and only receives server notifications, and clients such as LM Studio open it BEFORE they
+ * initialize - there is no session to present yet. It is admitted by the same Origin check and
+ * shared-token auth as everything else.
  */
 public class McpHttpHandler implements HttpHandler
 {
@@ -45,6 +57,40 @@ public class McpHttpHandler implements HttpHandler
     private static final String CONNECTION = "Connection"; //$NON-NLS-1$
     private static final String KEEP_ALIVE = "keep-alive"; //$NON-NLS-1$
 
+    /**
+     * The path a POST body takes through this transport, decided by the PARSED method.
+     * <p>
+     * It used to be decided by a substring probe of the raw body, which reported "initialize" for
+     * any {@code tools/call} whose payload merely CONTAINED the quoted word - an argument whose
+     * value is that word, such as a search for {@code initialize} - and that answer carried a
+     * stray {@code Mcp-Session-Id} header on both the JSON and the SSE path. The real method is
+     * parsed either way, so nothing is paid for reading it instead of guessing.
+     */
+    enum Route
+    {
+        INITIALIZE,
+        TOOL_CALL,
+        OTHER;
+
+        /**
+         * @param request the parsed request, or {@code null} on a JSON syntax error
+         * @return the route this request takes; {@link #OTHER} for anything unparsed or unknown
+         */
+        static Route of(JsonRpcRequest request)
+        {
+            String method = request != null ? request.getMethod() : null;
+            if (McpConstants.METHOD_INITIALIZE.equals(method))
+            {
+                return INITIALIZE;
+            }
+            if (McpConstants.METHOD_TOOLS_CALL.equals(method))
+            {
+                return TOOL_CALL;
+            }
+            return OTHER;
+        }
+    }
+
     /** Event ID counter for SSE - AtomicLong for thread safety across concurrent SSE streams */
     private final AtomicLong eventIdCounter = new AtomicLong(0);
 
@@ -52,12 +98,39 @@ public class McpHttpHandler implements HttpHandler
     private final McpProtocolHandler protocolHandler;
     private final InterruptibleToolExecutor interruptibleExecutor;
 
+    /**
+     * Whether the listener THIS handler serves accepts connections from other hosts. It is a
+     * final snapshot rather than a lookup on the server, and that is the point: a handler exists
+     * for exactly as long as the context it was created for, so no start or stop can leave it
+     * describing a different socket than the one the request arrived on.
+     */
+    private final boolean boundRemotely;
+
+    /**
+     * The sessions this listener has issued. Owned by the handler, so they live exactly as long
+     * as the socket does: a server stop/start invalidates every session, and the clients holding
+     * one are told to initialize again rather than being served against a listener that no longer
+     * knows them.
+     */
+    private final McpSessionRegistry sessions = new McpSessionRegistry();
+
     public McpHttpHandler(McpServer server, McpProtocolHandler protocolHandler,
-        InterruptibleToolExecutor interruptibleExecutor)
+        InterruptibleToolExecutor interruptibleExecutor, boolean boundRemotely)
     {
         this.server = server;
         this.protocolHandler = protocolHandler;
         this.interruptibleExecutor = interruptibleExecutor;
+        this.boundRemotely = boundRemotely;
+    }
+
+    /**
+     * The sessions this handler has issued. Package-visible for tests.
+     *
+     * @return the session registry
+     */
+    McpSessionRegistry getSessions()
+    {
+        return sessions;
     }
 
     @Override
@@ -67,9 +140,12 @@ public class McpHttpHandler implements HttpHandler
         // occupy threads in the main request pool or block the dispatcher.
         String method = exchange.getRequestMethod();
 
-        // Optional shared-token auth — applies to every method, including SSE GET.
-        // No-op when PREF_AUTH_TOKEN is empty (default), preserving prior behavior.
-        if (!HttpTransport.isAuthorized(exchange))
+        // Optional shared-token auth — applies to every method except the CORS preflight,
+        // including SSE GET (see HttpTransport.requiresAuthorization for why OPTIONS is exempt).
+        // No-op when PREF_AUTH_TOKEN is empty on the default loopback bind; on a listener bound
+        // to every interface an empty token refuses instead, because that listener was only
+        // allowed to open because a token was set.
+        if (HttpTransport.requiresAuthorization(method) && !HttpTransport.isAuthorized(exchange, boundRemotely))
         {
             try
             {
@@ -137,7 +213,10 @@ public class McpHttpHandler implements HttpHandler
             }
             else if ("DELETE".equals(method)) //$NON-NLS-1$
             {
-                // Session termination - accept but we don't track sessions currently
+                // Session termination, and it now terminates something: the named session is
+                // closed and its next request answers 404. Idempotent - an absent or already
+                // closed id is still a 200, so a client that retries its DELETE is not punished.
+                sessions.close(exchange.getRequestHeaders().getFirst(McpConstants.HEADER_SESSION_ID));
                 HttpTransport.sendResponse(exchange, 200, ""); //$NON-NLS-1$
             }
             else
@@ -266,40 +345,70 @@ public class McpHttpHandler implements HttpHandler
 
         Activator.logInfo("MCP request received from " + exchange.getRemoteAddress()); //$NON-NLS-1$
 
-        // Read request body
+        // Read the request body, bounded: an unbounded read grows inside the EDT JVM while
+        // holding a worker, and the proxy in front of this server already caps it the same way.
         String requestBody;
         try
         {
-            StringBuilder body = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8)))
-            {
-                String line;
-                while ((line = reader.readLine()) != null)
-                {
-                    body.append(line);
-                }
-            }
-            requestBody = body.toString();
+            requestBody = HttpTransport.readBody(exchange);
         }
         catch (IOException e)
         {
             Activator.logInfo("Connection lost while reading request body: " + e.getMessage()); //$NON-NLS-1$
             return;
         }
+        if (requestBody == null)
+        {
+            Activator.logInfo("Request body over the " + HttpTransport.MAX_BODY_BYTES //$NON-NLS-1$
+                + "-byte limit rejected with 413"); //$NON-NLS-1$
+            HttpTransport.sendResponse(exchange, 413, JsonUtils.buildJsonRpcError(
+                McpConstants.ERROR_INVALID_REQUEST, "Request body exceeds the " //$NON-NLS-1$
+                    + HttpTransport.MAX_BODY_BYTES + "-byte limit", null)); //$NON-NLS-1$
+            return;
+        }
 
         Activator.logDebug("MCP request body: " + requestBody); //$NON-NLS-1$
 
-        String response;
-        boolean isInitialize = requestBody.contains("\"" + McpConstants.METHOD_INITIALIZE + "\""); //$NON-NLS-1$ //$NON-NLS-2$
-        boolean isToolCall = requestBody.contains("\"" + McpConstants.METHOD_TOOLS_CALL + "\""); //$NON-NLS-1$ //$NON-NLS-2$
+        // Parse ONCE, here, and route on the parsed method. The parsed request is handed down so
+        // neither path below parses the same body again; a syntax error leaves it null and the
+        // protocol handler answers "invalid request" exactly as before. The clock is read before
+        // the parse and handed down with it, so moving the parse up here did not shorten the
+        // duration the history reports for this exchange.
+        long startNanos = System.nanoTime();
+        JsonRpcRequest request = protocolHandler.parse(requestBody);
+        Route route = Route.of(request);
 
+        String response;
+        boolean isInitialize = route == Route.INITIALIZE;
+        boolean isToolCall = route == Route.TOOL_CALL;
+
+        // Session admission. initialize needs no session - it is what mints one; a body that did
+        // not parse never had a method to attach to a session and is answered as the invalid
+        // request it is, exactly as before. Everything else must present the id this listener
+        // issued, and is answered with the capabilities THAT client declared.
+        ClientCapabilities sessionCapabilities = null;
+        if (!isInitialize && request != null)
+        {
+            String presentedSessionId =
+                exchange.getRequestHeaders().getFirst(McpConstants.HEADER_SESSION_ID);
+            // Looked up ONCE: the same lookup answers "is it open?" and "what did it declare?",
+            // so a concurrent DELETE cannot pass the check and then be read as an unknown
+            // (permissive) session below.
+            sessionCapabilities = sessions.capabilitiesOf(presentedSessionId);
+            if (!requireValidSession(exchange, presentedSessionId, sessionCapabilities, request))
+            {
+                return;
+            }
+        }
+
+        String issuedSessionId = null;
         try
         {
             if (isToolCall)
             {
                 // Handle tool calls with interruptible execution
-                response = interruptibleExecutor.execute(exchange, requestBody);
+                response =
+                    interruptibleExecutor.execute(exchange, requestBody, request, startNanos, sessionCapabilities);
                 if (response == null)
                 {
                     // Response was already sent (user interrupted)
@@ -308,7 +417,7 @@ public class McpHttpHandler implements HttpHandler
             }
             else
             {
-                response = protocolHandler.processRequest(requestBody);
+                response = protocolHandler.processRequest(requestBody, request, startNanos, sessionCapabilities);
             }
 
             // null response means notification (no response needed)
@@ -328,6 +437,25 @@ public class McpHttpHandler implements HttpHandler
                 McpConstants.ERROR_INTERNAL, e.getMessage(), null);
         }
 
+        if (isInitialize && !JsonUtils.isErrorResponse(response))
+        {
+            // Mint the session this handshake is for, remembering the capabilities THIS client
+            // declared, and hand its id back.
+            //
+            // Only for a handshake that SUCCEEDED. A session issued alongside an error would be
+            // wrong in both directions: it tells a client whose initialize failed that it may
+            // proceed, and it spends a slot toward MAX_SESSIONS - so a stream of malformed
+            // initialize requests could exhaust the registry without ever completing a handshake.
+            issuedSessionId = sessions.create(McpProtocolHandler.parseClientCapabilities(request));
+            if (issuedSessionId == null)
+            {
+                response = JsonUtils.buildJsonRpcError(McpConstants.ERROR_INTERNAL,
+                    "Session limit reached (" + McpSessionRegistry.MAX_SESSIONS //$NON-NLS-1$
+                        + "); close idle sessions with DELETE /mcp and retry.", //$NON-NLS-1$
+                    McpProtocolHandler.normalizeId(request.getId()));
+            }
+        }
+
         // Check if client accepts SSE
         String acceptHeader = exchange.getRequestHeaders().getFirst("Accept"); //$NON-NLS-1$
         boolean acceptsSse = acceptHeader != null && acceptHeader.contains(TEXT_EVENT_STREAM);
@@ -335,14 +463,14 @@ public class McpHttpHandler implements HttpHandler
         if (acceptsSse)
         {
             // Send response as SSE event
-            sendSseResponse(exchange, response, isInitialize);
+            sendSseResponse(exchange, response, issuedSessionId);
         }
         else
         {
             // Send as plain JSON - add session header for initialize
-            if (isInitialize)
+            if (issuedSessionId != null)
             {
-                exchange.getResponseHeaders().add(McpConstants.HEADER_SESSION_ID, generateSessionId());
+                exchange.getResponseHeaders().add(McpConstants.HEADER_SESSION_ID, issuedSessionId);
             }
             exchange.getResponseHeaders().add(CONTENT_TYPE, "application/json"); //$NON-NLS-1$
             exchange.getResponseHeaders().add(CONNECTION, KEEP_ALIVE);
@@ -351,27 +479,53 @@ public class McpHttpHandler implements HttpHandler
     }
 
     /**
-     * Generates a simple session ID.
+     * Admits a non-{@code initialize} request only when it carries a session this listener
+     * issued and has not closed: a missing header answers {@code 400}, an unknown or terminated
+     * one {@code 404} - the same two answers the proxy's {@code requireValidSession} gives, so
+     * the two components no longer implement the same protocol differently. On refusal the
+     * response has already been sent.
+     *
+     * @param exchange the exchange to answer on refusal
+     * @param sessionId the presented {@code Mcp-Session-Id} (may be {@code null})
+     * @param capabilities the lookup's result for that id, {@code null} when it is not open
+     * @param request the parsed request, whose id the error echoes
+     * @return {@code true} when the session is valid and dispatch should continue
      */
-    private String generateSessionId()
+    private boolean requireValidSession(HttpExchange exchange, String sessionId,
+        ClientCapabilities capabilities, JsonRpcRequest request) throws IOException
     {
-        return java.util.UUID.randomUUID().toString();
+        Object requestId = McpProtocolHandler.normalizeId(request.getId());
+        if (sessionId == null || sessionId.isBlank())
+        {
+            HttpTransport.sendResponse(exchange, 400, JsonUtils.buildJsonRpcError(
+                McpConstants.ERROR_INVALID_REQUEST, "Missing " + McpConstants.HEADER_SESSION_ID //$NON-NLS-1$
+                    + " header - call initialize first and send back the id it returns.", requestId)); //$NON-NLS-1$
+            return false;
+        }
+        if (capabilities == null)
+        {
+            HttpTransport.sendResponse(exchange, 404, JsonUtils.buildJsonRpcError(
+                McpConstants.ERROR_INVALID_REQUEST, "Unknown or expired session '" + sessionId //$NON-NLS-1$
+                    + "' - call initialize again.", requestId)); //$NON-NLS-1$
+            return false;
+        }
+        return true;
     }
 
     /**
      * Sends response as SSE event stream.
      * As per MCP 2025-11-25: should include event ID for reconnection.
      */
-    private void sendSseResponse(HttpExchange exchange, String response, boolean isInitialize) throws IOException
+    private void sendSseResponse(HttpExchange exchange, String response, String issuedSessionId) throws IOException
     {
         exchange.getResponseHeaders().add(CONTENT_TYPE, TEXT_EVENT_STREAM);
         exchange.getResponseHeaders().add("Cache-Control", "no-cache"); //$NON-NLS-1$ //$NON-NLS-2$
         exchange.getResponseHeaders().add(CONNECTION, KEEP_ALIVE);
 
         // Add session ID for initialize response
-        if (isInitialize)
+        if (issuedSessionId != null)
         {
-            exchange.getResponseHeaders().add(McpConstants.HEADER_SESSION_ID, generateSessionId());
+            exchange.getResponseHeaders().add(McpConstants.HEADER_SESSION_ID, issuedSessionId);
         }
 
         // Build SSE message with event ID (per 2025-11-25 spec)

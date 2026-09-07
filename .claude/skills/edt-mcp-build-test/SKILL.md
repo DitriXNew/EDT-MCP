@@ -13,7 +13,7 @@ description: How to build the EDT-MCP Eclipse plugin (Tycho/Maven) and run its u
 
 ## Build
 
-A Tycho build from `mcp/` (Maven, JDK 17). The artifact is a p2 update-site in `repositories/com.ditrix.edt.mcp.server.repository/target`.
+A Tycho build from `mcp/` (Maven, JDK 25 - Tycho 5 needs 21+ and the EDT 2026.2 platform is Java 25; the bundle itself still compiles to release 17). The artifact is a p2 update-site in `repositories/com.ditrix.edt.mcp.server.repository/target`.
 
 **A local build is available — use it to validate Java edits** (don't claim "verified by review/grep only"). The canonical script is `source/compile.sh` (it reproduces the CI flow `mvn clean verify -T 1C` from `.github/workflows/build.yml`):
 
@@ -24,7 +24,7 @@ bash source/compile.sh
 bash source/compile.sh --skip-tests
 ```
 
-- The toolchain (JDK 17 + Maven 3.9+) is often **not on `PATH`** — pass it explicitly: `--java-home <JDK17 home> --maven-home <maven home>` (or env `JAVA_HOME`/`MAVEN_HOME`). The exact paths are **machine-specific — discover them on the spot**, don't hardcode into committed files. Exact options are in README "Building from source".
+- The toolchain (JDK 25 + Maven 3.9+) is often **not on `PATH`** — pass it explicitly: `--java-home <JDK25 home> --maven-home <maven home>` (or env `JAVA_HOME`/`MAVEN_HOME`). The exact paths are **machine-specific — discover them on the spot**, don't hardcode into committed files. Exact options are in README "Building from source".
 - **The first build is slow**: Tycho pulls the EDT p2 repository (`edt.1c.ru`) + the Eclipse SDK (hundreds of MB). Once the caches are warm (`~/.m2/repository/p2`, `.cache/tycho`) it runs in ~1 minute. If the caches are absent and there's no network, the build legitimately can't run — say so, don't fake "green".
 - **Unit tests need the target platform too** (Mockito/JUnit come from the p2 target, not plain Maven Central) — a green `compile.sh` is the real proof for Java edits; grep only catches anchor/text problems.
 
@@ -34,7 +34,7 @@ A green build proves Java logic; only a redeploy proves a tool's schema, descrip
 
 - **Redeploy without a `-Build` flag only swaps the LAST built jar** — run `compile.sh` first (or pass `-Build`), else you ship stale code and validate the previous build.
 - **Kill the whole stand before swapping**: `taskkill /IM 1cedt.exe /T /F`, plus `1cv8.exe` if an infobase is running. Terminate both again when done.
-- **Inspect payloads with `Invoke-RestMethod`** (PowerShell), not `curl` — curl mangles nested JSON. Tools with a JSON responseType put the data in `result.structuredContent`; `content[0].text` is only a `Done`/`Error` placeholder.
+- **Inspect payloads with `Invoke-RestMethod`** (PowerShell), not `curl` — curl mangles nested JSON. Tools with a JSON responseType put the data in `result.structuredContent`; `content[0].text` is only a `Done`/`Error` placeholder. **Do the handshake first**: the server validates its session, so a cold `tools/call` answers `400` — send `initialize`, keep the `Mcp-Session-Id` it returns and put that header on every later request (the e2e harness client does this for you).
 - **Infobase-dependent tools** (debug / run / YAXUnit / profiling) need the infobase (or a `launch`) started first.
 
 ## Unit tests — conventions

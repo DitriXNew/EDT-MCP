@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.transport;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 
@@ -22,9 +23,56 @@ import com.sun.net.httpserver.HttpExchange;
  */
 public final class HttpTransport
 {
+    /**
+     * The largest request body this transport will buffer. The same cap the proxy applies
+     * ({@code McpProxyHandler.MAX_BODY_BYTES}), so the two components answer the question the same
+     * way; the plugin needs it at least as badly, because it buffers inside the developer's IDE
+     * JVM and a body with no end would grow there while holding a worker.
+     */
+    public static final int MAX_BODY_BYTES = 4 * 1024 * 1024;
+
     private HttpTransport()
     {
         // utility
+    }
+
+    /**
+     * Reads the request body, never buffering more than {@link #MAX_BODY_BYTES} plus one byte. A
+     * declared {@code Content-Length} over the cap is refused without reading the stream at all
+     * (the container drains it on {@link HttpExchange#close()}); an absent or understated
+     * {@code Content-Length} (chunked transfer) is caught by the bounded read itself.
+     *
+     * @param exchange the HTTP exchange
+     * @return the decoded UTF-8 body, or {@code null} when it exceeds {@link #MAX_BODY_BYTES} -
+     *         the caller must answer {@code 413} and MUST NOT read the exchange further
+     * @throws IOException if the client connection is lost while reading
+     */
+    public static String readBody(HttpExchange exchange) throws IOException
+    {
+        String contentLength = exchange.getRequestHeaders().getFirst("Content-Length"); //$NON-NLS-1$
+        if (contentLength != null)
+        {
+            try
+            {
+                if (Long.parseLong(contentLength.trim()) > MAX_BODY_BYTES)
+                {
+                    return null;
+                }
+            }
+            catch (NumberFormatException malformed)
+            {
+                // Fall through to the bounded read, which enforces the cap regardless.
+            }
+        }
+        try (InputStream in = exchange.getRequestBody())
+        {
+            byte[] bytes = in.readNBytes(MAX_BODY_BYTES + 1);
+            if (bytes.length > MAX_BODY_BYTES)
+            {
+                return null;
+            }
+            return new String(bytes, StandardCharsets.UTF_8);
+        }
     }
 
     /**
@@ -46,12 +94,35 @@ public final class HttpTransport
             }
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin", origin); //$NON-NLS-1$
             exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"); //$NON-NLS-1$ //$NON-NLS-2$
-            exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Accept"); //$NON-NLS-1$ //$NON-NLS-2$
+            // Authorization and Mcp-Session-Id are named because a browser may not send a header
+            // the preflight did not allow: without them a browser client could never present the
+            // shared token, nor carry the session id this transport assigns it.
+            exchange.getResponseHeaders().add("Access-Control-Allow-Headers", //$NON-NLS-1$
+                "Content-Type, Accept, Authorization, Mcp-Session-Id"); //$NON-NLS-1$
+            // And may not READ one that is not exposed - the session id is returned, not just sent.
+            exchange.getResponseHeaders().add("Access-Control-Expose-Headers", "Mcp-Session-Id"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         // A missing Origin means a non-browser client (CLI / MCP client) — browsers
         // always send Origin, so the browser-CSRF allow-list does not apply here.
         // Real access control is the loopback bind + the optional auth token.
         return true;
+    }
+
+    /**
+     * Whether a request of this method must carry the shared token.
+     * <p>
+     * Everything must, except the CORS preflight: a browser sends {@code OPTIONS} with no
+     * credentials by design - it is asking what it is allowed to send - so authenticating the
+     * preflight would answer 401 to every browser client before it could ever present the token.
+     * The preflight carries no payload and runs no tool; the request it precedes is authenticated
+     * like any other. Origin validation still applies to it.
+     *
+     * @param method the HTTP request method
+     * @return true when the request must be authorized
+     */
+    public static boolean requiresAuthorization(String method)
+    {
+        return !"OPTIONS".equals(method); //$NON-NLS-1$
     }
 
     /**
@@ -64,24 +135,59 @@ public final class HttpTransport
      * @param exchange the HTTP exchange
      * @return true if authorized (or auth disabled), false otherwise
      */
-    public static boolean isAuthorized(HttpExchange exchange)
+    public static boolean isAuthorized(HttpExchange exchange, boolean boundRemotely)
     {
-        String token = configuredAuthToken();
-        if (token == null || token.isEmpty())
+        return isAuthorized(configuredAuthToken(), exchange.getRequestHeaders().getFirst("Authorization"), //$NON-NLS-1$
+            boundRemotely);
+    }
+
+    /**
+     * The same decision as a pure function of its inputs, so it is unit-testable without a
+     * preference store or an {@link HttpExchange}.
+     *
+     * @param configuredToken the configured {@code PREF_AUTH_TOKEN} (may be {@code null})
+     * @param authorizationHeader the request's {@code Authorization} header (may be {@code null})
+     * @param boundRemotely whether the OPEN listener accepts connections from other hosts
+     * @return true if authorized (or auth disabled), false otherwise
+     */
+    static boolean isAuthorized(String configuredToken, String authorizationHeader, boolean boundRemotely)
+    {
+        String token = normalizeToken(configuredToken);
+        if (token.isEmpty())
         {
-            return true; // authentication disabled (default)
+            // A listener on every interface exists only BECAUSE a token was set when it was
+            // bound - and the preference page saves a changed token without restarting the
+            // server, so by now the token may be gone. Refuse everything rather than serve the
+            // network unauthenticated; the operator restores service by setting a token again
+            // (or by restarting, which the bind refusal then answers for).
+            return !boundRemotely;
         }
-        String header = exchange.getRequestHeaders().getFirst("Authorization"); //$NON-NLS-1$
-        if (header == null)
+        if (authorizationHeader == null)
         {
             return false;
         }
         // Accept "Bearer <token>" (scheme case-insensitive per RFC 6750) or the raw token.
-        String trimmed = header.trim();
+        String trimmed = authorizationHeader.trim();
         String presented = trimmed.regionMatches(true, 0, "Bearer ", 0, 7) //$NON-NLS-1$
             ? trimmed.substring(7).trim()
             : trimmed;
         return constantTimeEquals(token, presented);
+    }
+
+    /**
+     * The one definition of what the configured token IS, shared with the remote-bind refusal in
+     * {@code McpServer} so the two cannot disagree. Surrounding whitespace is dropped because it
+     * cannot survive the trip: the presented credential is trimmed out of the header, so an
+     * untrimmed comparison would lock out every request while the server looked configured. By
+     * the same rule a whitespace-only preference is NOT a token — it leaves auth disabled here,
+     * and a remote bind with it is refused there.
+     *
+     * @param raw the stored preference value (may be {@code null})
+     * @return the token as it is compared; empty when no token is configured
+     */
+    public static String normalizeToken(String raw)
+    {
+        return raw == null ? "" : raw.trim(); //$NON-NLS-1$
     }
 
     private static String configuredAuthToken()

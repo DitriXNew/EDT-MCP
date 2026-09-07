@@ -34,19 +34,59 @@ def parse_args():
     return ap.parse_args()
 
 
+# The session the server issued us. It validates it on every non-initialize request (400
+# without one, 404 for an unknown one), so this script has to do the real MCP handshake
+# rather than firing tools/list at the endpoint cold.
+_SESSION_ID = None
+
+
 def rpc(url, method, params=None):
+    global _SESSION_ID
+    if _SESSION_ID is None and method != "initialize":
+        initialize(url)
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method,
                        "params": params or {}}).encode("utf-8")
-    req = urllib.request.Request(url, data=body, headers={
+    headers = {
         "Content-Type": "application/json",
         "Accept": "application/json",
         "MCP-Protocol-Version": "2025-11-25",
-    })
+    }
+    if _SESSION_ID:
+        headers["Mcp-Session-Id"] = _SESSION_ID
+    req = urllib.request.Request(url, data=body, headers=headers)
     with urllib.request.urlopen(req, timeout=30) as resp:
+        issued = resp.headers.get("Mcp-Session-Id")
+        if issued:
+            _SESSION_ID = issued
         payload = json.loads(resp.read().decode("utf-8"))
     if "error" in payload:
         raise RuntimeError("%s -> %s" % (method, payload["error"]))
     return payload.get("result", {})
+
+
+def initialize(url):
+    """MCP handshake: initialize (captures the issued session id) + the initialized notification."""
+    rpc(url, "initialize", {
+        "protocolVersion": "2025-11-25",
+        "capabilities": {},
+        "clientInfo": {"name": "generate_tool_docs", "version": "1"},
+    })
+    if not _SESSION_ID:
+        raise RuntimeError("the server answered initialize without an Mcp-Session-Id header")
+    notify(url, "notifications/initialized")
+
+
+def notify(url, method, params=None):
+    """Fire-and-forget JSON-RPC notification (no id, answered 202 with an empty body)."""
+    body = json.dumps({"jsonrpc": "2.0", "method": method, "params": params or {}}).encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "MCP-Protocol-Version": "2025-11-25",
+        "Mcp-Session-Id": _SESSION_ID,
+    })
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        resp.read()
 
 
 def call_text(url, name, arguments):

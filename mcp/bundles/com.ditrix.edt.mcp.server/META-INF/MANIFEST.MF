@@ -7,6 +7,8 @@ Bundle-SymbolicName: com.ditrix.edt.mcp.server;singleton:=true
 Bundle-Activator: com.ditrix.edt.mcp.server.Activator
 Bundle-ActivationPolicy: lazy
 Bundle-Localization: plugin
+Bundle-License: AGPL-3.0-or-later;link="https://www.gnu.org/licenses/
+ agpl-3.0.html"
 Bundle-ClassPath: .,
  lib/copy-down-1.1.jar,
  lib/jsoup-1.17.2.jar,

@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -25,6 +26,7 @@ import java.util.List;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.tools.impl.GitTool.CommandRejectedException;
 
@@ -1509,6 +1511,89 @@ public class GitToolTest
         assertNotNull(GitTool.destructiveForm(argv("checkout", "--forc", "main"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertNotNull(GitTool.destructiveForm(argv("merge", "--abort"))); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull(GitTool.destructiveForm(argv("stash", "pop"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void gitArgumentsAreShownToAHumanAndKeptOutOfTheLogWhenTheyCanCarryAMessage()
+    {
+        // commit / tag / stash / merge / pull accept the caller's own text (-m, -F, or
+        // 'stash save' positionally), and the unattended bypass writes the preview into
+        // <workspace>/.metadata/.log - a file that outlives the run and travels with bug reports.
+        // A credential URL is refused earlier by parseCommand, but nothing can prove a MESSAGE
+        // holds no token.
+        for (String subcommand : new String[] {"commit", "tag", "stash", "merge", "pull"}) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        {
+            ConsentPreview preview = GitTool.consentPreview(subcommand,
+                argv(subcommand, "-m", "wip: token=ghp_secretvalue")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse("git " + subcommand + " can carry a message, so its arguments must not " //$NON-NLS-1$ //$NON-NLS-2$
+                + "reach the audit line", preview.areNamesLoggable()); //$NON-NLS-1$
+            assertTrue("but the human deciding must still see the whole command", //$NON-NLS-1$
+                preview.getTopNames().get(0).contains("token=ghp_secretvalue")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void theAuditKeepsTheTargetOfAGitCommandThatLeavesNoOtherTrace()
+    {
+        // The other edge. 'restore --worktree <path>' and 'branch -D <name>' destroy something and
+        // leave NO commit, NO reflog entry and NO remote behind - so for these the audit line is
+        // the only place the target is written down, and redacting it would make the line evidence
+        // of nothing. Their grammar carries refs and paths, never a message.
+        ConsentPreview restore =
+            GitTool.consentPreview("restore", argv("restore", "--worktree", "src/Module.bsl")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertTrue("a restore's path is what it destroyed and must be recorded", //$NON-NLS-1$
+            restore.areNamesLoggable());
+        assertTrue("and it must actually be in the preview: " + restore.getTopNames(), //$NON-NLS-1$
+            restore.getTopNames().get(0).contains("src/Module.bsl")); //$NON-NLS-1$
+
+        ConsentPreview branch =
+            GitTool.consentPreview("branch", argv("branch", "-D", "feature/x")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertTrue("a deleted branch name has no other record either", branch.areNamesLoggable()); //$NON-NLS-1$
+        assertTrue("and must name the branch: " + branch.getTopNames(), //$NON-NLS-1$
+            branch.getTopNames().get(0).contains("feature/x")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void anUnclassifiedGitSubcommandIsRedactedByDefault()
+    {
+        // The property that keeps this from rotting: the classification is an ALLOW-list, so a
+        // subcommand added to ALLOWED_SUBCOMMANDS later is redacted until someone reads its
+        // grammar. The failure mode of forgetting is a thinner audit line, never a leak.
+        assertFalse("an unclassified subcommand must default to redacted", //$NON-NLS-1$
+            GitTool.consentPreview("wibble", argv("wibble", "whatever")).areNamesLoggable()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void aTransmittedServerOptionIsCallerTextToo()
+    {
+        // push/fetch carry no message, but --push-option / --server-option transmit an arbitrary
+        // server-specific payload - a CI variable, say - which is the caller's text under a
+        // different spelling, and parseCommand does not refuse it. Both leave their own trace in
+        // the remote-tracking refs they move, so redacting them costs the audit little.
+        ConsentPreview push = GitTool.consentPreview("push", //$NON-NLS-1$
+            argv("push", "--push-option=ci.variable=TOKEN=s3cret", "origin", "main")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertFalse("a transmitted push option may hold a secret and must not be logged", //$NON-NLS-1$
+            push.areNamesLoggable());
+        assertFalse("fetch transmits the same way", //$NON-NLS-1$
+            GitTool.consentPreview("fetch", argv("fetch", "--server-option=x")).areNamesLoggable()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void theAuditLineKeepsTheBoundariesBetweenArguments()
+    {
+        // Flattening argv with a plain join makes two DIFFERENT destructive operations produce the
+        // same record: restoring one path called 'a b' and restoring the two paths 'a' and 'b'.
+        // Since this line is the only record either leaves, they must not read alike.
+        String onePath = GitTool.consentPreview("restore", //$NON-NLS-1$
+            argv("restore", "--worktree", "a b")).getTopNames().get(0); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String twoPaths = GitTool.consentPreview("restore", //$NON-NLS-1$
+            argv("restore", "--worktree", "a", "b")).getTopNames().get(0); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertNotEquals("one path with a space must not read like two paths", onePath, twoPaths); //$NON-NLS-1$
+        assertTrue("and the one with a space must show where it ended: " + onePath, //$NON-NLS-1$
+            onePath.contains("\"a b\"")); //$NON-NLS-1$
+        assertEquals("while an ordinary command stays exactly what was sent", //$NON-NLS-1$
+            "restore --worktree a b", twoPaths); //$NON-NLS-1$
     }
 
     @Test

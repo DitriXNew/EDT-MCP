@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.protocol.McpProtocolHandler;
 import com.ditrix.edt.mcp.server.tools.BuiltInToolRegistrar;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.transport.HealthHandler;
+import com.ditrix.edt.mcp.server.transport.HttpTransport;
 import com.ditrix.edt.mcp.server.transport.InterruptibleToolExecutor;
 import com.ditrix.edt.mcp.server.transport.McpHttpHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -36,6 +37,7 @@ public class McpServer
     private HttpServer server;
     private int port;
     private volatile boolean running = false;
+
     
     /** Request counter - use AtomicLong for thread safety */
     private final AtomicLong requestCount = new AtomicLong(0);
@@ -62,10 +64,24 @@ public class McpServer
      * Starts the MCP server on the specified port.
      * 
      * @param port the port number
-     * @throws IOException if startup fails
+     * @throws IOException if startup fails, or if the configuration would expose an
+     *             unauthenticated server to the network (see {@link #remoteBindRefusal})
      */
     public synchronized void start(int port) throws IOException
     {
+        // ONE read of the configuration decides both the refusal and the bind address below.
+        // Reading the preference twice would let a flip in between bind every interface on a
+        // snapshot that had just been validated as loopback.
+        BindConfig config = readBindConfig();
+
+        // Fail CLOSED, and before anything is torn down or bound: a running server keeps
+        // running, and a refused start never reaches the listening socket.
+        String refusal = remoteBindRefusal(config.allowRemote, config.authToken, port);
+        if (refusal != null)
+        {
+            throw new IOException(refusal);
+        }
+
         if (running)
         {
             stop();
@@ -92,14 +108,9 @@ public class McpServer
         // Bind to loopback only by default: the tool surface includes arbitrary-BSL
         // (evaluate_expression) and destructive tools, so it must not be reachable
         // from the network unless explicitly opted in. Set PREF_ALLOW_REMOTE_ACCESS
-        // to expose on all interfaces (pair it with PREF_AUTH_TOKEN).
-        boolean allowRemote = false;
-        Activator activator = Activator.getDefault();
-        if (activator != null)
-        {
-            allowRemote = activator.getPreferenceStore()
-                .getBoolean(PreferenceConstants.PREF_ALLOW_REMOTE_ACCESS);
-        }
+        // to expose on all interfaces (it REQUIRES PREF_AUTH_TOKEN - see the refusal above).
+        // This is the snapshot that passed that refusal, not a fresh read.
+        boolean allowRemote = config.allowRemote;
         InetSocketAddress bindAddress = allowRemote
             ? new InetSocketAddress(port)
             : new InetSocketAddress(InetAddress.getLoopbackAddress(), port);
@@ -107,24 +118,17 @@ public class McpServer
         Activator.logInfo("MCP Server binding to " //$NON-NLS-1$
             + (allowRemote ? "all interfaces (remote access enabled)" : "loopback only") //$NON-NLS-1$ //$NON-NLS-2$
             + " on port " + port); //$NON-NLS-1$
-        if (allowRemote)
-        {
-            String authToken = activator != null
-                ? activator.getPreferenceStore().getString(PreferenceConstants.PREF_AUTH_TOKEN)
-                : ""; //$NON-NLS-1$
-            if (authToken == null || authToken.isEmpty())
-            {
-                Activator.logWarning("SECURITY: MCP server is bound to all interfaces with NO auth token. " //$NON-NLS-1$
-                    + "Any host that can reach this port can invoke every tool (including arbitrary BSL). " //$NON-NLS-1$
-                    + "Set an auth token in MCP preferences."); //$NON-NLS-1$
-            }
-        }
 
         // MCP endpoints. The transport handlers read the live executors and
         // execution state back through this server instance.
         InterruptibleToolExecutor interruptibleExecutor =
             new InterruptibleToolExecutor(this, protocolHandler);
-        server.createContext("/mcp", new McpHttpHandler(this, protocolHandler, interruptibleExecutor)); //$NON-NLS-1$
+        // The handler is told what kind of listener it serves, once. Asking the server per
+        // request instead would race its own shutdown: a request admitted through the remote
+        // listener could read "loopback" while stop() is closing the socket, and with the token
+        // erased that answer authorizes it.
+        server.createContext("/mcp", //$NON-NLS-1$
+            new McpHttpHandler(this, protocolHandler, interruptibleExecutor, allowRemote));
         server.createContext("/health", new HealthHandler()); //$NON-NLS-1$
 
         // Main thread pool for POST/OPTIONS/DELETE requests (finite-duration only).
@@ -168,6 +172,73 @@ public class McpServer
     }
 
     /**
+     * Why a start must be refused, or {@code null} when this configuration is safe to start.
+     * <p>
+     * Remote access binds every interface, and the tool surface includes arbitrary BSL
+     * ({@code evaluate_expression}) and destructive tools. The shared-token check in
+     * {@code HttpTransport.isAuthorized} is the only thing standing in front of it, and that check
+     * is a no-op while the token is empty - so an opt-in to remote access with no token used to
+     * degrade, on a log warning nobody reads, into an unauthenticated remote shell. It is refused
+     * instead. A loopback bind is unaffected: the token stays optional there.
+     * <p>
+     * Pure and package-visible so the decision is unit-testable without a preference store.
+     *
+     * @param allowRemote whether {@code PREF_ALLOW_REMOTE_ACCESS} is set
+     * @param authToken the configured {@code PREF_AUTH_TOKEN} (may be {@code null})
+     * @param port the port the server would listen on, named in the message
+     * @return the actionable refusal, or {@code null} when the start may proceed
+     */
+    static String remoteBindRefusal(boolean allowRemote, String authToken, int port)
+    {
+        // What counts as "a token is set" is HttpTransport's definition, not a second one:
+        // a value this refusal accepted but the authorizer could never match would bind the
+        // port remotely and then reject every request.
+        if (!allowRemote || !HttpTransport.normalizeToken(authToken).isEmpty())
+        {
+            return null;
+        }
+        // Both callers frame this message themselves ("Failed to start MCP Server: ..."), so it
+        // states the cause and the remedy without restating that the start failed.
+        return "remote access is enabled but no auth token is set, so port " //$NON-NLS-1$
+            + port + " would accept every tool call - including arbitrary BSL execution - from any " //$NON-NLS-1$
+            + "host that can reach it. Fix it in EDT Preferences \u2192 MCP Server \u2192 General: " //$NON-NLS-1$
+            + "set an auth token, or turn 'Allow remote access' off to listen on loopback only."; //$NON-NLS-1$
+    }
+
+    /** The bind-relevant configuration, read together so one decision cannot mix two reads. */
+    static final class BindConfig
+    {
+        final boolean allowRemote;
+        final String authToken;
+
+        BindConfig(boolean allowRemote, String authToken)
+        {
+            this.allowRemote = allowRemote;
+            this.authToken = authToken;
+        }
+    }
+
+    /**
+     * Reads the bind-relevant preferences in one go. Package-visible and overridable so a test can
+     * supply a configuration without a preference store - {@link #start} and {@link #restart} are
+     * otherwise undrivable headlessly, and what they owe is an ORDER, not a value.
+     *
+     * @return the current configuration; {@code allowRemote} is false and the token {@code null}
+     *         when there is no preference store (headless, or a shutdown race)
+     */
+    BindConfig readBindConfig()
+    {
+        Activator activator = Activator.getDefault();
+        if (activator == null)
+        {
+            return new BindConfig(false, null);
+        }
+        return new BindConfig(
+            activator.getPreferenceStore().getBoolean(PreferenceConstants.PREF_ALLOW_REMOTE_ACCESS),
+            activator.getPreferenceStore().getString(PreferenceConstants.PREF_AUTH_TOKEN));
+    }
+
+    /**
      * Registers all MCP tools. Package-private so Activator can call it early
      * to populate descriptions for the preferences UI even if the server hasn't started.
      */
@@ -201,13 +272,26 @@ public class McpServer
     }
 
     /**
-     * Restarts the MCP server.
-     * 
+     * Restarts the MCP server. A configuration that {@link #remoteBindRefusal} rejects is refused
+     * here, with the running server untouched.
+     *
      * @param port the port number
-     * @throws IOException if restart fails
+     * @throws IOException if restart fails, or if the new configuration would expose an
+     *             unauthenticated server to the network - in which case nothing was stopped
      */
     public void restart(int port) throws IOException
     {
+        // Decided BEFORE stop(), not inside start(): the preferences page persists the new
+        // settings and then restarts, so a reconfiguration that cannot be started would
+        // otherwise take a healthy loopback listener offline and report the refusal afterwards.
+        // start() checks again on its own snapshot; this one only keeps the running server alive.
+        BindConfig config = readBindConfig();
+        String refusal = remoteBindRefusal(config.allowRemote, config.authToken, port);
+        if (refusal != null)
+        {
+            throw new IOException(refusal);
+        }
+
         stop();
         start(port);
     }
@@ -221,6 +305,7 @@ public class McpServer
     {
         return running;
     }
+
 
     /**
      * Returns the current port.

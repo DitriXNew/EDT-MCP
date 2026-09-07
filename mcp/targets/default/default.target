@@ -13,7 +13,7 @@
 
 <!-- EDT Platform Support -->
 <location followRepositoryReferences="false" includeAllPlatforms="true" includeConfigurePhase="false" includeMode="slicer" includeSource="true" type="InstallableUnit">
-<repository id="dt_repository" location="https://edt.1c.ru/downloads/releases/ruby/2026.1/"/>
+<repository id="dt_repository" location="https://edt.1c.ru/downloads/releases/ruby/2026.2/"/>
 <unit id="com._1c.g5.v8.dt.platform.support_v8.3.8.feature.feature.group" version="0.0.0"/>
 <unit id="com._1c.g5.v8.dt.platform.support_v8.3.9.feature.feature.group" version="0.0.0"/>
 <unit id="com._1c.g5.v8.dt.platform.support_v8.3.10.feature.feature.group" version="0.0.0"/>
@@ -39,7 +39,7 @@
 
 <!-- EDT -->
 <location followRepositoryReferences="false" includeAllPlatforms="true" includeConfigurePhase="false" includeMode="slicer" includeSource="true" type="InstallableUnit">
-<repository id="dt_repository" location="https://edt.1c.ru/downloads/releases/ruby/2026.1/"/>
+<repository id="dt_repository" location="https://edt.1c.ru/downloads/releases/ruby/2026.2/"/>
 <unit id="com._1c.g5.v8.dt.rcp" version="0.0.0"/>
 <unit id="com._1c.g5.v8.dt.feature.feature.group" version="0.0.0"/>
 <unit id="com._1c.g5.v8.dt.thirdparty.feature.group" version="0.0.0"/>
@@ -57,8 +57,8 @@
 
 <!-- SVG -->
 <location followRepositoryReferences="false" includeAllPlatforms="true" includeConfigurePhase="false" includeMode="slicer" includeSource="true" type="InstallableUnit">
-<unit id="org.eclipse.orbit.maven.org.apache.batik.feature.group" version="4.37.0"/>
-<repository location="https://download.eclipse.org/tools/orbit/simrel/orbit-aggregation/release/4.37.0/"/>
+<unit id="org.eclipse.orbit.maven.org.apache.batik.feature.group" version="4.38.0"/>
+<repository location="https://download.eclipse.org/tools/orbit/simrel/orbit-aggregation/release/4.38.0/"/>
 </location>
 
 <!-- Eclipse -->
@@ -67,8 +67,32 @@
 <unit id="org.eclipse.platform.feature.group" version="0.0.0"/>
 <unit id="org.eclipse.pde.feature.group" version="0.0.0"/>
 <unit id="org.eclipse.orbit.xml-apis-ext" version="0.0.0"/>
-<unit id="org.eclipse.ecf.filetransfer.httpclientjava.feature.feature.group" version="0.0.0"/>
-<repository id="eclipse_repository" location="https://download.eclipse.org/releases/2023-12/"/>
+<!-- Eclipse 4.38's org.eclipse.ui and org.eclipse.jface require the SWT capability
+     eclipse.swt;(image.format=svg), which only this bundle provides. Without it the whole
+     workbench stack fails to RESOLVE at runtime - the tycho-surefire test runtime included -
+     while compilation still succeeds, so the symptom is a launch that dies, not a build error. -->
+<unit id="org.eclipse.swt.svg" version="0.0.0"/>
+<!-- EDT's mobiledigisign requires jakarta.xml.bind-api [2.3.3,3.0.0); the release also
+     publishes 4.0.4, which a 0.0.0 range would pick instead, so the 2.x line is named.
+     javax.activation is what that 2.x line imports; both are shipped by EDT itself. -->
+<unit id="jakarta.xml.bind-api" version="2.3.3"/>
+<unit id="javax.activation" version="0.0.0"/>
+<!-- org.eclipse.osgi.services, which EGit pulls in, requires all of these as BUNDLES, and the
+     slicer follows no requirement of its own accord. The 2023-12 platform still folded these
+     packages into org.eclipse.osgi.services itself; 2025-12 splits them out. -->
+<unit id="org.osgi.service.http.whiteboard" version="0.0.0"/>
+<unit id="org.eclipse.equinox.http.service.api" version="0.0.0"/>
+<unit id="org.osgi.service.cm" version="0.0.0"/>
+<unit id="org.osgi.service.component" version="0.0.0"/>
+<unit id="org.osgi.service.device" version="0.0.0"/>
+<unit id="org.osgi.service.event" version="0.0.0"/>
+<unit id="org.osgi.service.metatype" version="0.0.0"/>
+<unit id="org.osgi.service.provisioning" version="0.0.0"/>
+<unit id="org.osgi.service.upnp" version="0.0.0"/>
+<unit id="org.osgi.service.useradmin" version="0.0.0"/>
+<unit id="org.osgi.service.wireadmin" version="0.0.0"/>
+<unit id="org.eclipse.ecf.provider.filetransfer.httpclientjava" version="0.0.0"/>
+<repository id="eclipse_repository" location="https://download.eclipse.org/releases/2025-12/"/>
 </location>
 
 <location followRepositoryReferences="false" includeAllPlatforms="true" includeConfigurePhase="false" includeMode="slicer" includeSource="true" type="InstallableUnit">

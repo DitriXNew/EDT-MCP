@@ -32,6 +32,7 @@ public final class ConsentPreview
     private final String subtitle;
     private final int totalCount;
     private final List<String> topNames;
+    private final boolean namesLoggable;
 
     /**
      * Creates a preview.
@@ -45,12 +46,58 @@ public final class ConsentPreview
      */
     public ConsentPreview(String title, String subtitle, int totalCount, List<String> topNames)
     {
+        this(title, subtitle, totalCount, topNames, true);
+    }
+
+    /**
+     * Creates a preview whose item names are the CALLER'S OWN TEXT rather than identifiers this
+     * server chose - {@code evaluate_expression} is the case: its one "name" is the BSL the
+     * caller sent.
+     * <p>
+     * A human approving the operation must still see it, so the dialog is unchanged. What
+     * changes is the unattended-bypass AUDIT LINE, which goes to
+     * {@code <workspace>/.metadata/.log} - a file that outlives the process, rotates into
+     * {@code .bak_*.log} and is what people attach to bug reports. A short expression can carry
+     * a password, a token or a connection string, and bounding and sanitising it (which the
+     * audit already does) does not stop it from being written down. So for such a preview the
+     * audit records the SHAPE of what was allowed - how many items, how long - and never the
+     * text.
+     * </p>
+     *
+     * @param title a short heading; may be {@code null}
+     * @param subtitle a one-line description of the effect; may be {@code null}
+     * @param totalCount the total number of affected items
+     * @param topNames the caller-supplied names to show a human; {@code null} is treated as empty
+     * @return a preview whose names must not reach the log
+     */
+    public static ConsentPreview withUnloggableNames(String title, String subtitle, int totalCount,
+        List<String> topNames)
+    {
+        return new ConsentPreview(title, subtitle, totalCount, topNames, false);
+    }
+
+    private ConsentPreview(String title, String subtitle, int totalCount, List<String> topNames,
+        boolean namesLoggable)
+    {
         this.title = title;
         this.subtitle = subtitle;
         this.totalCount = Math.max(0, totalCount);
         this.topNames = topNames == null
             ? Collections.emptyList()
             : Collections.unmodifiableList(new ArrayList<>(topNames));
+        this.namesLoggable = namesLoggable;
+    }
+
+    /**
+     * Whether {@link #getTopNames()} may be written to a log. {@code true} for the ordinary
+     * preview, whose names are metadata identifiers this server produced; {@code false} for one
+     * built by {@link #withUnloggableNames} - see there.
+     *
+     * @return {@code true} when the names are safe to record
+     */
+    public boolean areNamesLoggable()
+    {
+        return namesLoggable;
     }
 
     /**

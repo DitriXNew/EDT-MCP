@@ -10,6 +10,7 @@ nulq
 nul
 /source/*
 !/source/compile.sh
+!/source/verify-oldest-platform.sh
 log.log
 .serena/
 # Ignore personal/local .claude state, but SHARE project skills, hooks and settings
@@ -18,6 +19,7 @@ log.log
 !.claude/hooks/
 !.claude/settings.json
 /mcp/repositories/com.ditrix.edt.mcp.server.repository/target
+__pycache__/
 /tests/e2e/__pycache__/
 # grade.py now imports a sibling module, so this directory grows one too.
 /tests/tool-choice/__pycache__/
@@ -34,3 +36,9 @@ tmp/
 
 # EDT builds the external-objects fixture into bin/ (an .epf build artifact, not a source)
 /tests/ExternalObjects/bin/
+
+# JVM crash dumps (hs_err_pid*.log / .mdmp) land in whatever directory the JVM was
+# started from; a stand that died here must not turn into a commit.
+hs_err_pid*.log
+hs_err_pid*.mdmp
+replay_pid*.log

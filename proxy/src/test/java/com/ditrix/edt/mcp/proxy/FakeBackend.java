@@ -34,7 +34,9 @@ import com.sun.net.httpserver.HttpServer;
  *     ({@code fake-<port>}) and answers framed per the request's {@code Accept} header (see
  *     below);</li>
  * <li>{@code notifications/*} — {@code 202} with an empty body;</li>
- * <li>ANY other call without the issued session id — {@code 404} (a stale/absent session);</li>
+ * <li>ANY other call presenting no session — {@code 400}; presenting one this fake did not
+ *     issue — {@code 404}. Both can be switched off with {@link #setIssuesSessions(boolean)},
+ *     which makes the fake behave like a plugin from before sessions were validated;</li>
  * <li>{@code tools/list} — two fake tools;</li>
  * <li>{@code tools/call list_projects} — a result whose {@code structuredContent.projects}
  *     holds the CONFIGURABLE project list, optionally delayed by
@@ -70,6 +72,12 @@ public final class FakeBackend
     private final AtomicInteger sessionGeneration = new AtomicInteger(0);
     private final AtomicInteger initializeCount = new AtomicInteger(0);
     private volatile String currentSessionId;
+
+    /** Whether this fake runs the MCP session layer at all - see {@link #setIssuesSessions}. */
+    private volatile boolean issuesSessions = true;
+
+    /** Whether initialize answers a JSON-RPC error instead of a result - see {@link #setRefusesInitialize}. */
+    private volatile boolean refusesInitialize;
 
     /**
      * Creates a fake backend on an OS-chosen free port (port 0).
@@ -191,6 +199,35 @@ public final class FakeBackend
     }
 
     /**
+     * Makes {@code initialize} REFUSE: {@code HTTP 200} carrying a JSON-RPC error and no session
+     * header - the shape the plugin's session cap answers with. A handshake that looks
+     * successful at the HTTP level but issued no session is the case a client must not mistake
+     * for a backend that simply does not use sessions.
+     *
+     * @param refuses whether initialize answers a JSON-RPC error
+     */
+    public void setRefusesInitialize(boolean refuses)
+    {
+        this.refusesInitialize = refuses;
+    }
+
+    /**
+     * Switches between a backend that runs the MCP session layer and one that does not.
+     * <p>
+     * {@code false} is a plugin from before sessions were validated: {@code initialize} issues
+     * no {@code Mcp-Session-Id} and every later call is served without one. {@code true} (the
+     * default) is the current plugin: it issues one, answers {@code 400} to a call that presents
+     * none and {@code 404} to one that presents an id it did not issue. Flipping it mid-test is
+     * how a client that handshook with the old plugin meets the upgraded one.
+     *
+     * @param issues whether this backend issues and requires a session
+     */
+    public void setIssuesSessions(boolean issues)
+    {
+        this.issuesSessions = issues;
+    }
+
+    /**
      * Invalidates every session issued so far: the next non-initialize call answers 404
      * until the client re-handshakes. Exercises the proxy's stale-session retry.
      */
@@ -236,19 +273,40 @@ public final class FakeBackend
             if ("initialize".equals(method))
             {
                 initializeCount.incrementAndGet();
-                String issued = issueSessionId();
-                exchange.getResponseHeaders().add(HEADER_SESSION_ID, issued);
+                if (issuesSessions)
+                {
+                    exchange.getResponseHeaders().add(HEADER_SESSION_ID, issueSessionId());
+                }
+                if (refusesInitialize)
+                {
+                    // A REFUSED handshake, HTTP 200 - JSON-RPC reports failure inside the body.
+                    // Whether a session header came with it is up to the backend: the plugin's
+                    // session cap sends none (setIssuesSessions(false) here), while a backend
+                    // that mints one first sends both. Neither is a completed handshake.
+                    sendFramed(exchange, jsonRpcError(id, -32603, "Session limit reached (10000)"),
+                        acceptsSse);
+                    return;
+                }
                 sendFramed(exchange, jsonRpcResponse(id, initializeResult()), acceptsSse);
                 return;
             }
 
             String presented = exchange.getRequestHeaders().getFirst(HEADER_SESSION_ID);
-            String issued = currentSessionId;
-            if (issued == null || !issued.equals(presented))
+            if (issuesSessions)
             {
-                // Mirrors the plugin: a call outside a known session is 404.
-                sendPlain(exchange, 404, "text/plain", "session not found");
-                return;
+                if (presented == null || presented.isBlank())
+                {
+                    // Mirrors the plugin: a call that presents no session at all is 400.
+                    sendPlain(exchange, 400, "text/plain", "missing Mcp-Session-Id");
+                    return;
+                }
+                String issued = currentSessionId;
+                if (issued == null || !issued.equals(presented))
+                {
+                    // Mirrors the plugin: a call outside a known session is 404.
+                    sendPlain(exchange, 404, "text/plain", "session not found");
+                    return;
+                }
             }
 
             if (method.startsWith("notifications/"))
@@ -409,6 +467,19 @@ public final class FakeBackend
         response.addProperty("jsonrpc", "2.0");
         response.add("id", id);
         response.add("result", result);
+        return response.toString();
+    }
+
+    /** A JSON-RPC error response - what a REFUSED call answers, inside an HTTP 200. */
+    private static String jsonRpcError(JsonElement id, int code, String message)
+    {
+        JsonObject error = new JsonObject();
+        error.addProperty("code", code);
+        error.addProperty("message", message);
+        JsonObject response = new JsonObject();
+        response.addProperty("jsonrpc", "2.0");
+        response.add("id", id);
+        response.add("error", error);
         return response.toString();
     }
 

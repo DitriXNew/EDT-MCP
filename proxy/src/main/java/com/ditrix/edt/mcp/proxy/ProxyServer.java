@@ -12,8 +12,10 @@ import java.io.UncheckedIOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
 import com.google.gson.JsonObject;
@@ -50,12 +52,19 @@ public final class ProxyServer
     private static final String HTTP_METHOD_POST = "POST"; //$NON-NLS-1$
     private static final String CONTEXT_ADMIN_SHUTDOWN = "/admin/shutdown"; //$NON-NLS-1$
 
+    /**
+     * Worker threads serving {@code /mcp}, {@code /health} and {@code /admin/shutdown}. Each one
+     * spends nearly all its time blocked on a backend socket, so this is a concurrency budget,
+     * not a CPU one.
+     */
+    private static final int WORKER_THREADS = 32;
+
     private final ProxyConfig cfg;
     private final BackendRegistry registry;
     private final McpProxyHandler handler;
 
     private HttpServer httpServer;
-    private ExecutorService executor;
+    private ThreadPoolExecutor executor;
 
     /**
      * Cleanup run once {@code POST /admin/shutdown} has been accepted and its response flushed;
@@ -113,12 +122,34 @@ public final class ProxyServer
                 + (cfg.allowRemote ? cfg.bindHost : "loopback") + ":" + cfg.port //$NON-NLS-1$ //$NON-NLS-2$
                 + " (already in use?): " + e.getMessage(), e); //$NON-NLS-1$
         }
-        executor = Executors.newCachedThreadPool(r -> {
-            Thread thread = new Thread(r, "edt-mcp-proxy-worker"); //$NON-NLS-1$
-            thread.setDaemon(true);
-            return thread;
-        });
+        // A pool bounded in THREADS: a cached pool grew one per concurrent request, so a client
+        // that opened connections faster than the backends answered could exhaust the proxy's
+        // memory - and the proxy is the component most likely to be reachable from a network.
+        //
+        // Wider than the plugin's 8 because the work is different: a plugin worker runs the tool
+        // itself inside EDT, while a proxy worker spends its whole life blocked on a backend
+        // socket, so threads here buy concurrency instead of contention.
+        //
+        // The QUEUE is deliberately unbounded, because bounding it would trade one failure for a
+        // worse one. Admission control (McpProxyHandler.MAX_IN_FLIGHT_REQUESTS) runs INSIDE a
+        // worker, so a burst arriving while every worker is blocked on a backend cannot be shed
+        // until a worker frees; with a capacity, that burst would hit the executor's abort policy
+        // and HttpServer would close those connections with no response at all - the opposite of
+        // the retryable 503 this is for. A queued exchange is a few hundred bytes and a shed one
+        // is answered in microseconds, so the queue drains as fast as workers can pick from it,
+        // and the 50-in-flight ceiling is what actually bounds the work in progress.
+        AtomicInteger workerCounter = new AtomicInteger();
+        executor = new ThreadPoolExecutor(
+            WORKER_THREADS, WORKER_THREADS, 60L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(),
+            r -> {
+                Thread thread = new Thread(r, "edt-mcp-proxy-worker-" + workerCounter.incrementAndGet()); //$NON-NLS-1$
+                thread.setDaemon(true);
+                return thread;
+            });
+        executor.allowCoreThreadTimeOut(true);
         httpServer.setExecutor(executor);
+        handler.setWorkerPool(executor);
         httpServer.createContext("/health", this::handleHealth); //$NON-NLS-1$
         httpServer.createContext("/mcp", handler); //$NON-NLS-1$
         httpServer.createContext(CONTEXT_ADMIN_SHUTDOWN, this::handleAdminShutdown);
