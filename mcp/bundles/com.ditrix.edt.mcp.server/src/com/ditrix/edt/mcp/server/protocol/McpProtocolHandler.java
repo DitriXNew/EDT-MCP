@@ -351,7 +351,7 @@ public class McpProtocolHandler
             // Check for tools/list method
             if (McpConstants.METHOD_TOOLS_LIST.equals(method))
             {
-                return buildToolsListResponse(requestId);
+                return buildToolsListResponse(requestId, capabilities);
             }
             
             // Check for tools/call method
@@ -485,11 +485,7 @@ public class McpProtocolHandler
         }
         
         // Check if plain text mode is enabled (Cursor compatibility).
-        // Activator.getDefault() can be null during a shutdown race; in that
-        // case fall back to the safe default (structured content, not plain text).
-        boolean plainTextMode = Activator.getDefault() != null
-            && Activator.getDefault().getPreferenceStore()
-                .getBoolean(PreferenceConstants.PREF_PLAIN_TEXT_MODE);
+        boolean plainTextMode = isPlainTextMode();
 
         // Return response based on tool's declared response type
         return buildToolCallResponse(tool, result, signal, plainTextMode, requestId, params, capabilities);
@@ -742,20 +738,11 @@ public class McpProtocolHandler
             // Parse JSON and add userSignal field
             result = addUserSignalToJson(result, signal);
         }
-        // In plain text mode, return markdown as plain text instead of structured content. A FAILED
-        // payload keeps isError:true (with the real message in the text channel) - suppressing the
-        // structured payload must never make a failure look like a success.
-        if (plainTextMode)
-        {
-            return buildTextOnlyJsonResponse(result, requestId);
-        }
-        // Capability gate for structuredContent. By DEFAULT (no capabilities,
-        // or a client that does not explicitly opt out) this is true, so the
-        // structuredContent response below is emitted exactly as before — the
-        // no-regression guarantee. Only a client that EXPLICITLY declared it
-        // cannot accept structuredContent suppresses it; the JSON payload is
-        // then delivered as text so the data is still returned.
-        if (!capabilities.allowsStructuredContent())
+        // Both suppression cases go through the SAME predicate that tools/list consults, so the
+        // advertised outputSchema and the delivered structuredContent cannot disagree (#574). A
+        // FAILED payload keeps isError:true (with the real message in the text channel) -
+        // suppressing the structured payload must never make a failure look like a success.
+        if (!emitsStructuredContent(plainTextMode, capabilities))
         {
             return buildTextOnlyJsonResponse(result, requestId);
         }
@@ -783,6 +770,48 @@ public class McpProtocolHandler
         return GsonProvider.toJson(JsonRpcResponse.success(requestId, errorResult));
     }
     
+    /**
+     * Whether a JSON tool's payload will be delivered in {@code structuredContent} on this call.
+     * <p>
+     * This is the ONE place that decides it, because two responses have to agree: {@code tools/call}
+     * fills {@code structuredContent}, and {@code tools/list} advertises an {@code outputSchema}
+     * declaring its shape. The MCP contract binds them - a tool that declares an output schema must
+     * return structured content - and a client that enforces it rejects the whole call when they
+     * disagree. Cursor does exactly that, with {@code -32600 "has an output schema but did not
+     * return structured content"}, which is how the two settings below silently disabled eight
+     * tools (#574).
+     * </p>
+     * <p>
+     * Two settings suppress it, and both are known before {@code tools/list} is answered, so the
+     * schema can be withheld in the same breath: the Cursor-compatibility plain-text preference,
+     * and a client's explicit {@code experimental.structuredContent:false} opt-out. Neither is set
+     * by default, so the default surface is unchanged.
+     * </p>
+     *
+     * @param plainTextMode whether Cursor-compatible plain-text mode is enabled
+     * @param capabilities the capabilities the client declared, never {@code null}
+     * @return {@code true} when structuredContent (and therefore the outputSchema) is in play
+     */
+    static boolean emitsStructuredContent(boolean plainTextMode, ClientCapabilities capabilities)
+    {
+        return !plainTextMode && capabilities.allowsStructuredContent();
+    }
+
+    /**
+     * Reads the Cursor-compatibility plain-text preference.
+     * <p>
+     * {@code Activator.getDefault()} can be null during a shutdown race; in that case this falls
+     * back to the safe default (structured content, not plain text).
+     * </p>
+     *
+     * @return {@code true} when plain-text mode is enabled
+     */
+    private static boolean isPlainTextMode()
+    {
+        return Activator.getDefault() != null
+            && Activator.getDefault().getPreferenceStore().getBoolean(PreferenceConstants.PREF_PLAIN_TEXT_MODE);
+    }
+
     /**
      * Emits the single per-call completion log line. Routed to WARNING when the
      * outcome is an error or the call was slow (so an operator sees it without
@@ -1072,10 +1101,18 @@ public class McpProtocolHandler
 
     /**
      * Builds tools/list response dynamically from registry.
+     *
+     * @param requestId the JSON-RPC request id to echo
+     * @param capabilities the calling client's declared capabilities, consulted for the
+     *        outputSchema/structuredContent agreement
+     * @return the serialized JSON-RPC response
      */
-    private String buildToolsListResponse(Object requestId)
+    private String buildToolsListResponse(Object requestId, ClientCapabilities capabilities)
     {
         ToolsListResult result = new ToolsListResult();
+        // Whether a JSON tool's tools/call will actually carry structuredContent. Decided here,
+        // once, by the same predicate the call path uses - see emitsStructuredContent.
+        boolean structured = emitsStructuredContent(isPlainTextMode(), capabilities);
 
         for (IMcpTool tool : toolRegistry.getVisibleTools())
         {
@@ -1094,7 +1131,10 @@ public class McpProtocolHandler
             // return content (not structured data) and leave outputSchema null, in
             // which case the shared Gson omits the field entirely. The shape goes over
             // the wire but its prose does not — see OutputSchemaCompactor for why.
-            String outputSchemaJson = tool.getOutputSchema();
+            // ... and it is advertised only while the calls this session makes will honour it:
+            // under plain-text mode or a structuredContent opt-out the payload arrives as text,
+            // and a schema promising otherwise makes an enforcing client discard the result (#574).
+            String outputSchemaJson = structured ? tool.getOutputSchema() : null;
             JsonElement outputSchema = outputSchemaJson != null
                 ? OutputSchemaCompactor.compact(JsonParser.parseString(outputSchemaJson))
                 : null;

@@ -32,6 +32,7 @@ import org.eclipse.ui.plugin.AbstractUIPlugin;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.McpServer;
+import com.ditrix.edt.mcp.server.SseStreamRegistry;
 import com.ditrix.edt.mcp.server.UpdateChecker;
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
 import com.ditrix.edt.mcp.server.transport.HttpTransport;
@@ -446,7 +447,16 @@ public class GeneralTab
         store.setValue(PreferenceConstants.PREF_PORT, portSpinner.getSelection());
         store.setValue(PreferenceConstants.PREF_AUTO_START, autoStartCheck.getSelection());
         store.setValue(PreferenceConstants.PREF_CHECKS_FOLDER, checksFolderText.getText());
+        // Plain-text mode decides whether tools/list advertises an outputSchema at all, so a
+        // client that listed under the old setting is holding a list that no longer matches
+        // what its calls will receive (#574). Read the previous value before overwriting it and,
+        // on a real change, tell any open stream to re-list.
+        boolean plainTextWas = store.getBoolean(PreferenceConstants.PREF_PLAIN_TEXT_MODE);
         store.setValue(PreferenceConstants.PREF_PLAIN_TEXT_MODE, plainTextCheck.getSelection());
+        if (plainTextWas != plainTextCheck.getSelection())
+        {
+            SseStreamRegistry.getInstance().notifyToolsListChanged();
+        }
         store.setValue(PreferenceConstants.PREF_ALLOW_REMOTE_ACCESS, allowRemoteCheck.getSelection());
         // Stored the way it is compared. Surrounding whitespace cannot travel in an HTTP header
         // - the authorizer only ever sees the trimmed credential - so keeping it here would save
