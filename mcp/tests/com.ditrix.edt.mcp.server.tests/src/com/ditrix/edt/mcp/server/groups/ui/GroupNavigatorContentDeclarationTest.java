@@ -41,27 +41,24 @@ import com.ditrix.edt.mcp.server.utils.SecureXml;
  * cannot see it. Group nodes silently sank to the bottom of every collection when the priority was
  * lowered, and no test failed.
  *
- * <p>The two assertions live in one file on purpose. The priority may only be the highest one
- * because {@code possibleChildren} claims nothing but our own node type: at equal priorities CNF
- * breaks the tie by extension-id hash, so a broader claim would put {@code getParent} - selection
- * and expansion - at the mercy of which third-party plugins happen to be installed, which is the
- * damage issue #476 recorded. Loosening either half alone is the bug; the pair is the contract.
+ * <p>The assertions live in one file on purpose: the priority and the claim are one contract. The
+ * priority is the floor CNF offers, so it ties with any peer extension that also asks for it, and
+ * CNF orders such a tie by extension-id hash. What bounds that is not disjointness - a peer
+ * claiming {@code IWorkbenchAdapter} as a possible child DOES match a group node, since
+ * {@code GroupNavigatorAdapter} extends {@code WorkbenchAdapter} - but direction and semantics:
+ * {@code getParent} returns the FIRST NON-NULL answer among the matching extensions, our own
+ * provider answers {@code null} for anything that is not a group node, and a peer that outranks us
+ * would be asked first every time rather than half the time. Keeping the claim narrow is what
+ * stops us from contesting THEIR nodes, which is the asymmetry that settled #476.
  */
 public class GroupNavigatorContentDeclarationTest
 {
     private static final String GROUPS_CONTENT_ID = "com.ditrix.edt.mcp.server.groups.navigatorContent"; //$NON-NLS-1$
 
-    /**
-     * The priority EDT declares for its own navigator content
-     * ({@code com._1c.g5.v8.dt.navigator.ui.v8model}). Read from the platform's own
-     * {@code plugin.xml}; it is what the group nodes have to outrank to stay at the top.
-     */
-    private static final String EDT_OWN_CONTENT_PRIORITY = "higher"; //$NON-NLS-1$
-
     private static final String GROUP_NODE_TYPE = "com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter"; //$NON-NLS-1$
 
     @Test
-    public void groupNodesOutrankTheNavigatorsOwnContentSoTheySortToTheTop() throws Exception
+    public void groupNodesTakeTheOnlyPriorityNothingCanOutrank() throws Exception
     {
         Element groupsContent = groupsNavigatorContent();
         String declared = groupsContent.getAttribute("priority"); //$NON-NLS-1$
@@ -69,25 +66,34 @@ public class GroupNavigatorContentDeclarationTest
         assertTrue("the groups content must declare a priority - CNF defaults an omitted one to " //$NON-NLS-1$
             + "NORMAL, which would sort group nodes below the tree's ordinary contents", //$NON-NLS-1$
             !declared.isEmpty());
-        assertTrue("group nodes must outrank EDT's own navigator content to stay at the top of a " //$NON-NLS-1$
-            + "collection, but this declares '" + declared + "' against EDT's '" //$NON-NLS-1$ //$NON-NLS-2$
-            + EDT_OWN_CONTENT_PRIORITY + "'. CommonViewerSorter sorts by the contributing " //$NON-NLS-1$
-            + "descriptor's sequence number, so a HIGHER number means LOWER in the tree.", //$NON-NLS-1$
-            Priority.get(declared).getValue() < Priority.get(EDT_OWN_CONTENT_PRIORITY).getValue());
+
+        // Asserted against the FLOOR rather than against EDT's declared value. Comparing with
+        // "higher" - what com._1c.g5.v8.dt.navigator.ui.v8model declares today - would make this
+        // ratchet depend on a constant copied out of another product's manifest: were EDT to move
+        // its own content up, the comparison would still pass while the guarantee was gone. At
+        // HIGHEST there is nothing below to be outranked BY, whatever any other extension declares
+        // now or later. It is also the only value that satisfies the placement at all, since EDT's
+        // is one step above the floor.
+        assertEquals("group nodes must take the lowest sequence number CNF offers, or the tree's " //$NON-NLS-1$
+            + "ordinary contents can sort above them; this declares '" + declared //$NON-NLS-1$
+            + "'. CommonViewerSorter sorts by the contributing descriptor's sequence number, so a " //$NON-NLS-1$
+            + "HIGHER number means LOWER in the tree.", //$NON-NLS-1$
+            Priority.HIGHEST_PRIORITY_VALUE, Priority.get(declared).getValue());
     }
 
     @Test
     public void theGroupsContentClaimsOnlyItsOwnNodesAsAPossibleChild() throws Exception
     {
-        // The other half of the same contract. The priority above is the highest CNF offers, so it
-        // ties with any third-party extension that also asks for it, and CNF resolves such a tie by
-        // extension-id hash - deterministic per installation, arbitrary across installations. That
-        // only matters where two descriptors claim the SAME element: keeping this claim to our own
-        // node type is what makes the tie cosmetic instead of a fight over getParent (#476).
+        // The other half of the same contract, and the half that is ours to keep. A peer at this
+        // priority can claim our nodes (GroupNavigatorAdapter is a WorkbenchAdapter), and CNF
+        // breaks the tie by extension-id hash - but getParent takes the first NON-NULL answer, so
+        // what we control is not being the one that answers wrongly for someone else's node. This
+        // claim is why our provider is never even asked about them.
         List<String> claimed = instanceOfValuesUnder(groupsNavigatorContent(), "possibleChildren"); //$NON-NLS-1$
 
         assertEquals("the groups content must claim its own node type and nothing else as a " //$NON-NLS-1$
-            + "possible child; anything broader re-opens #476 at this priority", //$NON-NLS-1$
+            + "possible child; a broader claim would have our provider answer for nodes it does not " //$NON-NLS-1$
+            + "own, which is the half of #476 that was ours", //$NON-NLS-1$
             List.of(GROUP_NODE_TYPE), claimed);
     }
 

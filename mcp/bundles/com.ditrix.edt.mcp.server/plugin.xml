@@ -584,11 +584,16 @@
            (com._1c.g5.v8.dt.navigator.ui.v8model) is declared "higher" = 1, so "highest" = 0 is
            the only value that puts group nodes ABOVE the tree's ordinary contents; at "high" = 2
            they sank to the bottom of every collection.
-           This does tie with any third-party extension that also declares "highest", and CNF
-           breaks such a tie by extension-id hash - but the tie is now cosmetic only, because
-           possibleChildren below claims nothing but our own node type, so getParent (selection
-           and expansion, the actual damage in #476) can no longer be contested. Widening
-           possibleChildren would make this priority dangerous again: the two belong together. -->
+           On the tie this creates: GroupNavigatorAdapter extends WorkbenchAdapter, so a peer
+           extension claiming IWorkbenchAdapter as a possible child DOES match our nodes, and at
+           equal priorities CNF orders such a tie by extension-id hash. That is bounded, and NOT
+           improved by yielding. NavigatorContentServiceContentProvider.getParent walks the
+           matching extensions in sequence order and returns the FIRST NON-NULL answer, so a peer
+           only displaces us by returning a wrong non-null parent for an object it does not own;
+           and at a lower priority such a peer would be asked BEFORE us every time instead of half
+           the time. Our own getParent answers null for anything that is not a
+           GroupNavigatorAdapter, so we never contest theirs - that asymmetry, not the priority,
+           is what settled #476. -->
       <navigatorContent
             id="com.ditrix.edt.mcp.server.groups.navigatorContent"
             name="Navigator Groups"
