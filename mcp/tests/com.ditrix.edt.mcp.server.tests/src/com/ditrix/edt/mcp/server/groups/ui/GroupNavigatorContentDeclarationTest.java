@@ -298,6 +298,22 @@ public class GroupNavigatorContentDeclarationTest
             triggers.contains("org.eclipse.ui.model.IWorkbenchAdapter")); //$NON-NLS-1$
     }
 
+    @Test
+    public void theOrderingContractBelongsToTheProviderThatMakesTheGroupNodes() throws Exception
+    {
+        // Everything else here describes WHERE this extension's children land. None of it says
+        // whose children they are: rewire contentProvider to another valid ICommonContentProvider
+        // and the id, the priority, the binding and both expressions still check out while the
+        // tree produces no GroupNavigatorAdapter at all - the "groups disappeared" that #521 was
+        // first reported as, under a ratchet that would not notice.
+        //
+        // Compared against the CLASS rather than a string literal, so renaming the provider
+        // without updating plugin.xml fails here too, as does a typo that no compiler would see.
+        assertEquals("the ordering contract must be attached to the provider that actually " //$NON-NLS-1$
+            + "creates the group nodes", GroupContentProvider.class.getName(), //$NON-NLS-1$
+            groupsNavigatorContent().getAttribute("contentProvider")); //$NON-NLS-1$
+    }
+
     private static Element groupsNavigatorContent() throws Exception
     {
         Document document = parsePluginXml();
