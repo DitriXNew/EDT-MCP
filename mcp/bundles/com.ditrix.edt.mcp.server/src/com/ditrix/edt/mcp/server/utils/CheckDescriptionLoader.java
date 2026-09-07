@@ -75,9 +75,18 @@ public final class CheckDescriptionLoader
      * map, touching no file. Only for a check with no shipped description does the override
      * decide, and there the file is actually READ, because "a regular file exists" is not the
      * same as "a body can be produced": a file that is not valid UTF-8 passes every existence
-     * check and still cannot be decoded. Promising a body that {@code get_check_description}
-     * then cannot return is the one failure this method must not have, and it is worth one read
-     * of one small file in the rare override-only case to avoid it.
+     * check and still cannot be decoded. Answering yes for a file that cannot produce a body is
+     * the failure this avoids, and it is worth one read of one small file in the rare
+     * override-only case.
+     * </p>
+     * <p>
+     * What it answers is the state AT THE TIME IT IS ASKED, and no more. The override folder is
+     * deliberately live - an operator edits it - so a description can appear or vanish between
+     * this call and the {@link #load(String) load} that follows it in a later request, and the
+     * flag {@code get_project_errors} reports is a snapshot rather than a reservation. Holding
+     * the body to make it one is the wrong trade: it would serve an operator the text they had
+     * just replaced. The shipped descriptions, which cannot change while the plugin runs, carry
+     * no such caveat.
      * </p>
      *
      * @param checkId the symbolic dash-cased check id (may be {@code null})
