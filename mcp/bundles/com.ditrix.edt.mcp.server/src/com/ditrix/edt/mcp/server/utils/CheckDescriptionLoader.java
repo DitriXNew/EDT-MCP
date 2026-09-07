@@ -95,13 +95,21 @@ public final class CheckDescriptionLoader
         {
             return null;
         }
+        Path override = overrideFile(id);
+        if (override != null)
+        {
+            String overridden = readOverride(override, id);
+            if (overridden != null)
+            {
+                return overridden;
+            }
+            // Not returned: an override that cannot be READ must not hide the description the
+            // plugin ships. It passed isRegularFile, so has() has already promised a body - and
+            // the shipped one is a body. Failing here instead would turn a stray unreadable file
+            // into a hole in the documentation for that check.
+        }
         try
         {
-            Path override = overrideFile(id);
-            if (override != null)
-            {
-                return Files.readString(override, StandardCharsets.UTF_8);
-            }
             URL url = shippedUrl(id);
             if (url == null)
             {
@@ -176,8 +184,8 @@ public final class CheckDescriptionLoader
         }
         try
         {
-            Path folderPath = Paths.get(folder);
-            if (!Files.isDirectory(folderPath))
+            Path folderPath = folderPath(folder);
+            if (folderPath == null)
             {
                 return null;
             }
@@ -204,7 +212,62 @@ public final class CheckDescriptionLoader
     }
 
     /**
-     * The configured override folder, trimmed, or {@code null} when unset or blank.
+     * The directory the preference names, or {@code null} when it names none.
+     * <p>
+     * The value is used EXACTLY as stored first, because a directory may legitimately have a
+     * leading or trailing space on a POSIX filesystem and a folder picker returns the real name.
+     * Only if that is not a directory is the trimmed form tried, which is what rescues the far
+     * commoner case of a path pasted with a stray space. Both directions matter here: preferring
+     * either form outright breaks the other one.
+     * </p>
+     *
+     * @param folder the non-blank preference value
+     * @return the directory, or {@code null} when neither form is one
+     */
+    private static Path folderPath(String folder)
+    {
+        Path asStored = directoryAt(folder);
+        if (asStored != null)
+        {
+            return asStored;
+        }
+        String trimmed = folder.trim();
+        return trimmed.equals(folder) ? null : directoryAt(trimmed);
+    }
+
+    /**
+     * The directory at {@code value}, or {@code null} when there is none there.
+     * <p>
+     * Each candidate is asked separately BECAUSE one of them can be unaskable: Windows rejects a
+     * padded path outright ({@code Paths.get} throws {@link java.nio.file.InvalidPathException}),
+     * which is precisely the pasted-with-a-space value whose trimmed form is a perfectly good
+     * directory. Letting that throw escape would have the stored form veto the trimmed one and
+     * lose the override.
+     * </p>
+     *
+     * @param value a candidate path
+     * @return the directory, or {@code null} when the value names none or is not a path at all
+     */
+    private static Path directoryAt(String value)
+    {
+        try
+        {
+            Path path = Paths.get(value);
+            return Files.isDirectory(path) ? path : null;
+        }
+        catch (RuntimeException notAPath)
+        {
+            return null;
+        }
+    }
+
+    /**
+     * The configured override folder as stored, or {@code null} when unset or blank.
+     * <p>
+     * Blankness is decided on the trimmed value, but the value itself is returned UNTRIMMED -
+     * {@link #folderPath} needs the original to find a directory whose name really does end in a
+     * space.
+     * </p>
      * <p>
      * A missing Activator or store (headless, or a plain-classpath unit test) reads as "no
      * override" rather than throwing, so the shipped descriptions still answer there.
@@ -221,12 +284,38 @@ public final class CheckDescriptionLoader
             return null;
         }
         String folder = store.getString(PreferenceConstants.PREF_CHECKS_FOLDER);
-        if (folder == null)
+        if (folder == null || folder.trim().isEmpty())
         {
             return null;
         }
-        folder = folder.trim();
-        return folder.isEmpty() ? null : folder;
+        return folder;
+    }
+
+    /**
+     * Reads an override file, or {@code null} when it cannot be read.
+     * <p>
+     * Its own failure, kept separate from the shipped read so that a bad override degrades to
+     * the shipped description instead of replacing it with nothing. Unreadable covers more than
+     * permissions: {@link Files#readString} reports malformed input, so a file that is not valid
+     * UTF-8 lands here too, and a regular file passes every existence check before it.
+     * </p>
+     *
+     * @param file the override file
+     * @param id the check id, for the log line
+     * @return the body, or {@code null} when it could not be read
+     */
+    private static String readOverride(Path file, String id)
+    {
+        try
+        {
+            return Files.readString(file, StandardCharsets.UTF_8);
+        }
+        catch (IOException | RuntimeException e)
+        {
+            Log.warning("check description override unreadable for '" + id //$NON-NLS-1$ //$NON-NLS-2$
+                + "', using the shipped one: " + e.getMessage()); //$NON-NLS-1$
+            return null;
+        }
     }
 
     /**

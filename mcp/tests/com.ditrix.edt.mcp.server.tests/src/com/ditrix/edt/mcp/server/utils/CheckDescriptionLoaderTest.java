@@ -84,12 +84,78 @@ public class CheckDescriptionLoaderTest
      */
     private void useOverrideFolder(Path folder)
     {
+        useOverrideFolder(folder, folder.toString());
+    }
+
+    /**
+     * The same, storing {@code stored} as the preference VALUE while {@code folder} is the
+     * directory it is meant to name - so a test can store a value that is not literally the path.
+     *
+     * @param folder the override folder that must end up being read
+     * @param stored the preference value to store
+     */
+    private void useOverrideFolder(Path folder, String stored)
+    {
         IPreferenceStore store = preferenceStore();
         Assume.assumeTrue("needs a preference store to point at an override folder", store != null);
+        assertTrue("the folder must exist before it is configured", Files.isDirectory(folder)); //$NON-NLS-1$
         savedChecksFolder = store.getString(PreferenceConstants.PREF_CHECKS_FOLDER);
-        store.setValue(PreferenceConstants.PREF_CHECKS_FOLDER, folder.toString());
+        store.setValue(PreferenceConstants.PREF_CHECKS_FOLDER, stored);
         Assume.assumeTrue("the preference store must accept the override folder", //$NON-NLS-1$
             CheckDescriptionLoader.hasOverrideFolder());
+    }
+
+    /**
+     * A fresh empty override folder.
+     *
+     * @return the folder
+     */
+    private static Path createOverrideFolder()
+    {
+        try
+        {
+            return Files.createTempDirectory("edt-mcp-checks-override"); //$NON-NLS-1$
+        }
+        catch (IOException e)
+        {
+            throw new AssertionError("could not create a temp folder", e); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Writes {@code text} as UTF-8.
+     *
+     * @param file the file to write
+     * @param text the content
+     */
+    private static void writeString(Path file, String text)
+    {
+        try
+        {
+            Files.writeString(file, text);
+        }
+        catch (IOException e)
+        {
+            throw new AssertionError("could not write " + file, e); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Writes raw bytes, so a test can produce content that is not valid UTF-8.
+     *
+     * @param file the file to write
+     * @param bytes the content
+     */
+    private static void writeBytes(Path file, byte[] bytes)
+    {
+        try
+        {
+            Files.write(file, bytes);
+        }
+        catch (IOException e)
+        {
+            throw new AssertionError("could not write " + file, e); //$NON-NLS-1$
+        }
     }
 
     @Test
@@ -184,6 +250,74 @@ public class CheckDescriptionLoaderTest
         // ... and every other check still resolves from the plugin.
         assertTrue("a check the override does not cover must still come from the bundle", //$NON-NLS-1$
             CheckDescriptionLoader.has(OTHER_SHIPPED_CHECK));
+    }
+
+    @Test
+    public void anUnreadableOverrideFallsBackToTheShippedDescription()
+    {
+        // A regular file passes every existence check, so has() promises a body - but readString
+        // reports malformed input, and a byte sequence that is not UTF-8 is exactly how a file
+        // saved in another encoding arrives. If that failure ended the lookup, a stray bad file
+        // would put a HOLE in the documentation for that check rather than merely failing to
+        // improve it: get_project_errors would flag hasDocumentation and get_check_description
+        // would answer nothing, for a check the plugin ships a perfectly good description for.
+        Path folder = createOverrideFolder();
+        // 0xFF cannot begin a UTF-8 sequence, so this file is unreadable as UTF-8 by construction.
+        writeBytes(folder.resolve(SHIPPED_CHECK + ".md"), new byte[] { (byte)0xFF, (byte)0xFE, 'x' }); //$NON-NLS-1$
+        useOverrideFolder(folder);
+
+        assertTrue("the check still has a description", CheckDescriptionLoader.has(SHIPPED_CHECK)); //$NON-NLS-1$
+        String body = CheckDescriptionLoader.load(SHIPPED_CHECK);
+        assertNotNull("and the shipped one must be returned, not nothing", body); //$NON-NLS-1$
+        assertFalse("what came back must not be the unreadable file's content", //$NON-NLS-1$
+            body.isEmpty());
+    }
+
+    @Test
+    public void theConfiguredFolderIsUsedExactlyAsItWasStored()
+    {
+        // A directory name may legitimately end in a space on a POSIX filesystem, and a folder
+        // picker hands back the real name. Trimming before the lookup would send the loader to a
+        // DIFFERENT directory and silently serve shipped descriptions instead of the operator's
+        // translations. Windows will not create such a name, so the test asks for one and skips
+        // where the filesystem refuses.
+        Path spaced = null;
+        try
+        {
+            Path parent = Files.createTempDirectory("edt-mcp-checks-parent"); //$NON-NLS-1$
+            spaced = Files.createDirectory(parent.resolve("checks ")); //$NON-NLS-1$
+        }
+        catch (IOException | RuntimeException refused)
+        {
+            Assume.assumeNoException("this filesystem cannot hold a trailing space", refused); //$NON-NLS-1$
+        }
+        Assume.assumeTrue("the name must have survived creation", //$NON-NLS-1$
+            spaced != null && spaced.getFileName().toString().endsWith(" ")); //$NON-NLS-1$
+
+        writeString(spaced.resolve(SHIPPED_CHECK + ".md"), "FROM THE SPACED FOLDER"); //$NON-NLS-1$ //$NON-NLS-2$
+        useOverrideFolder(spaced);
+
+        assertEquals("the folder must be read at the path that was stored", //$NON-NLS-1$
+            "FROM THE SPACED FOLDER", CheckDescriptionLoader.load(SHIPPED_CHECK)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void aPathPastedWithAStraySpaceStillResolves()
+    {
+        // The other direction, and the commoner one: nothing is named "<dir> ", the value simply
+        // picked up a blank on its way into the field. Preferring the stored form must not cost
+        // that case its override.
+        Path folder = createOverrideFolder();
+        writeString(folder.resolve(SHIPPED_CHECK + ".md"), "FROM THE PADDED VALUE"); //$NON-NLS-1$ //$NON-NLS-2$
+        String padded = "  " + folder + "  "; //$NON-NLS-1$ //$NON-NLS-2$
+        useOverrideFolder(folder, padded);
+
+        // State the premise: if the store ever trimmed on the way in, this test would be proving
+        // nothing about the loader and should say so here rather than pass by accident.
+        assertEquals("the preference must keep the padding for this test to mean anything", //$NON-NLS-1$
+            padded, preferenceStore().getString(PreferenceConstants.PREF_CHECKS_FOLDER));
+        assertEquals("a padded preference value must still find its folder", //$NON-NLS-1$
+            "FROM THE PADDED VALUE", CheckDescriptionLoader.load(SHIPPED_CHECK)); //$NON-NLS-1$
     }
 
     @Test
