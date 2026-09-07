@@ -618,7 +618,13 @@ public class GeneralTab
         {
             text = text + " " + Messages.GeneralTab_TokenPending; //$NON-NLS-1$
         }
-        if (endpointRefusesItsOwnConfiguration())
+        if (!HttpTransport.isTransportSafeToken(effectiveAuthToken()))
+        {
+            // Said separately from the lockout below because the remedy is different: this one
+            // is cured by changing the token, not by restarting or setting one.
+            text = text + " " + Messages.GeneralTab_TokenNotTransportSafe; //$NON-NLS-1$
+        }
+        else if (endpointRefusesItsOwnConfiguration())
         {
             text = text + " " + Messages.GeneralTab_EndpointLockedOut; //$NON-NLS-1$
         }
@@ -756,6 +762,27 @@ public class GeneralTab
             return ConsentSettingsService.Level.fromPreferenceValue(CONSENT_LEVELS[idx][1]);
         }
         return ConsentSettingsService.Level.ASK_ALWAYS;
+    }
+
+    /**
+     * Repaints everything that speaks for the LIVE server - the status line, the start/stop
+     * buttons and the endpoint line.
+     * <p>
+     * The tab repaints itself on the start, stop and restart IT performs, but the preference page
+     * restarts the server too (when tool enablement changed), and it does so AFTER this tab has
+     * already saved and repainted. Everything derived from the live server is stale from that
+     * moment: the port it reports, and the lockout warning, which would go on accusing a remote
+     * listener that the restart has just replaced with a loopback one.
+     * </p>
+     */
+    public void refreshServerState()
+    {
+        if (statusLabel == null || statusLabel.isDisposed())
+        {
+            return;
+        }
+        updateStatusLabel();
+        updateButtons();
     }
 
     private void updateStatusLabel()

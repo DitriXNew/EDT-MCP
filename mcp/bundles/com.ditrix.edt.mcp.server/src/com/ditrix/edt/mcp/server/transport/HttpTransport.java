@@ -200,8 +200,51 @@ public final class HttpTransport
     public static boolean refusesItsOwnConfiguration(String configuredToken, boolean boundRemotely)
     {
         String token = normalizeToken(configuredToken);
+        if (!isTransportSafeToken(token))
+        {
+            // The credential never reaches isAuthorized to be compared: the client cannot put it
+            // in a header in the first place, or puts bytes there that arrive as a different
+            // string. Either way the endpoint refuses every request from the config it describes.
+            return true;
+        }
         return !isAuthorized(configuredToken, token.isEmpty() ? null : "Bearer " + token, //$NON-NLS-1$
             boundRemotely);
+    }
+
+    /**
+     * Whether a token can survive the trip in an {@code Authorization} header.
+     * <p>
+     * A header field value is bytes, not text. The JDK's HTTP server decodes what arrives as
+     * ISO-8859-1, while clients that will send anything at all send UTF-8 - so a token with a
+     * code point above US-ASCII arrives as a DIFFERENT string than the one stored and can never
+     * match, and many clients refuse to send it rather than guess. A Cyrillic or accented token
+     * therefore looks configured and locks the endpoint out silently, which is worth saying out
+     * loud rather than leaving to a run of unexplained 401s.
+     * </p>
+     * <p>
+     * Only the printable US-ASCII range qualifies. An empty token is safe by default: there is
+     * nothing to send, and no header is generated for it.
+     * </p>
+     *
+     * @param token the token as it is compared, i.e. already {@link #normalizeToken normalized}
+     *            (may be {@code null})
+     * @return true when every character can be presented and compared unchanged
+     */
+    public static boolean isTransportSafeToken(String token)
+    {
+        if (token == null || token.isEmpty())
+        {
+            return true;
+        }
+        for (int i = 0; i < token.length(); i++)
+        {
+            char c = token.charAt(i);
+            if (c < 0x20 || c > 0x7E)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

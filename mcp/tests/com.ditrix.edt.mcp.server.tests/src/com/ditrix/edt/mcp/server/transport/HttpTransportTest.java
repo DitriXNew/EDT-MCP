@@ -182,6 +182,47 @@ public class HttpTransportTest
     }
 
     @Test
+    public void testATokenThatCannotTravelInAHeaderIsNotAUsableOne()
+    {
+        // A header field value is bytes. The listener decodes what arrives as ISO-8859-1 while a
+        // client that sends anything at all sends UTF-8, so a token above US-ASCII arrives as a
+        // different string and can never match - and plenty of clients refuse to send it at all.
+        // Stored, it looks configured and silently refuses every request, which is the state the
+        // page must not advertise as ready to paste.
+        assertFalse("a Cyrillic token cannot be presented", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("\u043f\u0430\u0440\u043e\u043b\u044c")); //$NON-NLS-1$
+        assertFalse("nor can a Latin-1 one that is not ASCII", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("\u00e9")); //$NON-NLS-1$
+        assertFalse("nor one carrying a control character", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("a\tb")); //$NON-NLS-1$
+
+        // And the whole printable ASCII range is fine, punctuation and spaces included - the
+        // credential is everything after "Bearer ", so an inner space survives the trip.
+        assertTrue("printable ASCII is exactly what a header carries", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("s3cret-~!@#$%^&*()_+ =/")); //$NON-NLS-1$
+        assertTrue("no token is nothing to send, so nothing can go wrong", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("")); //$NON-NLS-1$
+        assertTrue("and an absent one is the same case", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken(null));
+    }
+
+    @Test
+    public void testAnUnsendableTokenIsCalledOutOnEveryBind()
+    {
+        // Unlike the empty-token lockout, this one does not depend on where the server is bound:
+        // the client cannot present the credential to a loopback listener either. Both binds must
+        // warn, so the page never labels that configuration ready.
+        assertTrue("a token that cannot be sent refuses a remote listener", //$NON-NLS-1$
+            HttpTransport.refusesItsOwnConfiguration("\u043f\u0430\u0440\u043e\u043b\u044c", REMOTE)); //$NON-NLS-1$
+        assertTrue("and a loopback one, where it is equally unpresentable", //$NON-NLS-1$
+            HttpTransport.refusesItsOwnConfiguration("\u043f\u0430\u0440\u043e\u043b\u044c", LOOPBACK)); //$NON-NLS-1$
+        // The surrounding blanks are dropped before the question is asked, so a padded ASCII
+        // token is still usable and must not be caught by this rule.
+        assertFalse("trimming happens first, so padding is not a foreign character", //$NON-NLS-1$
+            HttpTransport.refusesItsOwnConfiguration("  s3cret  ", LOOPBACK)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testTheLoopbackDefaultStillNeedsNoToken()
     {
         // The other direction of the same rule: the default bind is protected by being loopback,
