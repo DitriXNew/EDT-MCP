@@ -15,6 +15,9 @@ import org.eclipse.jface.preference.IPreferenceStore;
 import org.eclipse.jface.resource.ImageDescriptor;
 import org.eclipse.osgi.util.NLS;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.events.SelectionEvent;
 import org.eclipse.swt.layout.GridData;
@@ -59,6 +62,7 @@ public class GeneralTab
     private Combo consentLevelCombo;
     private Combo updateCheckCombo;
     private Label statusLabel;
+    private Label endpointLabel;
     private Button startButton;
     private Button stopButton;
     private Button restartButton;
@@ -429,14 +433,114 @@ public class GeneralTab
         // Empty placeholder for alignment
         new Label(controlComposite, SWT.NONE);
 
-        // Connection info
-        Label infoLabel = new Label(controlComposite, SWT.NONE);
-        infoLabel.setText(Messages.GeneralTab_Endpoint);
+        // Connection info. The label used to read "http://localhost:<port>/mcp" literally, so the
+        // one thing a user comes here for - the address to paste into their agent - had to be
+        // assembled by hand from the spinner above it (#464). It now shows the real URL and
+        // follows the spinner, and the two buttons put it on the clipboard.
+        endpointLabel = new Label(controlComposite, SWT.NONE);
         GridData infoGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        infoGd.horizontalSpan = 4;
-        infoLabel.setLayoutData(infoGd);
+        infoGd.horizontalSpan = 2;
+        endpointLabel.setLayoutData(infoGd);
+        updateEndpointLabel();
+
+        Button copyUrlButton = new Button(controlComposite, SWT.PUSH);
+        copyUrlButton.setText(Messages.GeneralTab_CopyUrl);
+        copyUrlButton.setToolTipText(Messages.GeneralTab_CopyUrl_Tooltip);
+        copyUrlButton.addSelectionListener(new SelectionAdapter()
+        {
+            @Override
+            public void widgetSelected(SelectionEvent e)
+            {
+                copyToClipboard(serviceUrl());
+            }
+        });
+
+        Button copyConfigButton = new Button(controlComposite, SWT.PUSH);
+        copyConfigButton.setText(Messages.GeneralTab_CopyConfig);
+        copyConfigButton.setToolTipText(Messages.GeneralTab_CopyConfig_Tooltip);
+        copyConfigButton.addSelectionListener(new SelectionAdapter()
+        {
+            @Override
+            public void widgetSelected(SelectionEvent e)
+            {
+                copyToClipboard(mcpClientConfigJson());
+            }
+        });
+
+        // The URL is derived from the spinner, so it must follow it while the page is still open -
+        // otherwise the button copies the address of the port the user just stopped using.
+        portSpinner.addModifyListener(e -> updateEndpointLabel());
 
         updateButtons();
+    }
+
+    /**
+     * The address an MCP client connects to, built from the port currently in the spinner (the
+     * value about to be saved), not from the stored one - the label and the buttons must describe
+     * what the user is looking at.
+     * <p>
+     * Always {@code localhost}: the "allow remote access" preference widens what the server BINDS
+     * to, but the address to hand a client on this machine is the loopback one either way, and a
+     * remote client needs this machine's hostname, which this page cannot know.
+     * </p>
+     *
+     * @return the MCP endpoint URL
+     */
+    private String serviceUrl()
+    {
+        return "http://localhost:" + portSpinner.getSelection() + "/mcp"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The server entry an MCP client's config file expects, ready to paste. Some agents have no UI
+     * for this at all and are configured only by editing JSON, which is what #464 asked for.
+     *
+     * @return the JSON snippet naming this server and its URL
+     */
+    private String mcpClientConfigJson()
+    {
+        return "{\n" //$NON-NLS-1$
+            + "  \"mcpServers\": {\n" //$NON-NLS-1$
+            + "    \"EDT.MCP\": {\n" //$NON-NLS-1$
+            + "      \"type\": \"http\",\n" //$NON-NLS-1$
+            + "      \"url\": \"" + serviceUrl() + "\"\n" //$NON-NLS-1$ //$NON-NLS-2$
+            + "    }\n" //$NON-NLS-1$
+            + "  }\n" //$NON-NLS-1$
+            + "}"; //$NON-NLS-1$
+    }
+
+    /**
+     * Repaints the endpoint label from the current spinner value.
+     */
+    private void updateEndpointLabel()
+    {
+        if (endpointLabel != null && !endpointLabel.isDisposed())
+        {
+            endpointLabel.setText(NLS.bind(Messages.GeneralTab_Endpoint, serviceUrl()));
+            endpointLabel.getParent().layout();
+        }
+    }
+
+    /**
+     * Puts {@code text} on the system clipboard.
+     * <p>
+     * The {@link Clipboard} is disposed straight away: it holds an OS resource, and the clipboard
+     * CONTENT outlives it - the text stays available to other applications after this returns.
+     * </p>
+     *
+     * @param text the text to copy
+     */
+    private void copyToClipboard(String text)
+    {
+        Clipboard clipboard = new Clipboard(composite.getDisplay());
+        try
+        {
+            clipboard.setContents(new Object[] {text}, new Transfer[] {TextTransfer.getInstance()});
+        }
+        finally
+        {
+            clipboard.dispose();
+        }
     }
 
     /**
