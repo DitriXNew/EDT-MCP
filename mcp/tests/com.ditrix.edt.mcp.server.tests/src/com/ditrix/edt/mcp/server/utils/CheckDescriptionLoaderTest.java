@@ -274,6 +274,39 @@ public class CheckDescriptionLoaderTest
     }
 
     @Test
+    public void anUnreadableOverrideForACheckWithNoShippedCopyIsNotAdvertised()
+    {
+        // The case the shipped fallback cannot rescue, because there is nothing to fall back to:
+        // an override-only check whose file is unreadable. If has() answered on the file's mere
+        // existence, get_project_errors would report hasDocumentation while get_check_description
+        // returned nothing for the same id - the two disagreeing, which is the failure this pair
+        // exists to prevent. The id is synthetic, so no shipped description can mask the case.
+        String id = "not-a-real-check-unreadable-probe"; //$NON-NLS-1$
+        Path folder = createOverrideFolder();
+        writeBytes(folder.resolve(id + ".md"), new byte[] { (byte)0xFF, (byte)0xFE, 'x' }); //$NON-NLS-1$
+        useOverrideFolder(folder);
+
+        assertFalse("an unreadable override is not a description", CheckDescriptionLoader.has(id)); //$NON-NLS-1$
+        assertNull("and load agrees there is none", CheckDescriptionLoader.load(id)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void aReadableOverrideOnlyCheckIsStillAdvertised()
+    {
+        // The other edge: reading the file to answer has() must not make an override-only check
+        // invisible. A check the plugin ships nothing for is exactly what the override folder is
+        // for, and it must be offered.
+        String id = "not-a-real-check-readable-probe"; //$NON-NLS-1$
+        Path folder = createOverrideFolder();
+        writeString(folder.resolve(id + ".md"), "A CUSTOM CHECK, DOCUMENTED LOCALLY"); //$NON-NLS-1$ //$NON-NLS-2$
+        useOverrideFolder(folder);
+
+        assertTrue("an override-only check has a description", CheckDescriptionLoader.has(id)); //$NON-NLS-1$
+        assertEquals("and it is the one in the folder", //$NON-NLS-1$
+            "A CUSTOM CHECK, DOCUMENTED LOCALLY", CheckDescriptionLoader.load(id)); //$NON-NLS-1$
+    }
+
+    @Test
     public void theConfiguredFolderIsUsedExactlyAsItWasStored()
     {
         // A directory name may legitimately end in a space on a POSIX filesystem, and a folder

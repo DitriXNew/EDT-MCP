@@ -68,6 +68,17 @@ public final class CheckDescriptionLoader
     /**
      * Whether a description is available for {@code checkId} - from the override folder or from
      * the plugin's own {@code checks/} resources.
+     * <p>
+     * The shipped resource is consulted FIRST, and that ordering is the whole design. When the
+     * plugin ships a description the answer is yes whatever the override folder holds, because
+     * {@link #load(String)} falls back to the shipped copy - and it is answered from a cached
+     * map, touching no file. Only for a check with no shipped description does the override
+     * decide, and there the file is actually READ, because "a regular file exists" is not the
+     * same as "a body can be produced": a file that is not valid UTF-8 passes every existence
+     * check and still cannot be decoded. Promising a body that {@code get_check_description}
+     * then cannot return is the one failure this method must not have, and it is worth one read
+     * of one small file in the rare override-only case to avoid it.
+     * </p>
      *
      * @param checkId the symbolic dash-cased check id (may be {@code null})
      * @return {@code true} when {@link #load(String)} would return a body
@@ -79,7 +90,12 @@ public final class CheckDescriptionLoader
         {
             return false;
         }
-        return overrideFile(id) != null || shippedUrl(id) != null;
+        if (shippedUrl(id) != null)
+        {
+            return true;
+        }
+        Path override = overrideFile(id);
+        return override != null && readOverride(override, id) != null;
     }
 
     /**
@@ -104,9 +120,9 @@ public final class CheckDescriptionLoader
                 return overridden;
             }
             // Not returned: an override that cannot be READ must not hide the description the
-            // plugin ships. It passed isRegularFile, so has() has already promised a body - and
-            // the shipped one is a body. Failing here instead would turn a stray unreadable file
-            // into a hole in the documentation for that check.
+            // plugin ships. Failing here instead would turn a stray unreadable file into a hole
+            // in the documentation for that check. Where there is no shipped copy to fall back
+            // to, has() has already read this same file and answered false, so the two agree.
         }
         try
         {
