@@ -17,6 +17,9 @@ import java.util.List;
 
 import javax.xml.parsers.DocumentBuilder;
 
+import org.eclipse.core.runtime.IConfigurationElement;
+import org.eclipse.core.runtime.IExtensionRegistry;
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.ui.navigator.Priority;
 import org.junit.Test;
 import org.osgi.framework.Bundle;
@@ -55,6 +58,8 @@ public class GroupNavigatorContentDeclarationTest
 {
     private static final String GROUPS_CONTENT_ID = "com.ditrix.edt.mcp.server.groups.navigatorContent"; //$NON-NLS-1$
 
+    private static final String EDT_CONTENT_ID = "com._1c.g5.v8.dt.navigator.ui.v8model"; //$NON-NLS-1$
+
     private static final String GROUP_NODE_TYPE = "com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter"; //$NON-NLS-1$
 
     @Test
@@ -81,6 +86,56 @@ public class GroupNavigatorContentDeclarationTest
             Priority.HIGHEST_PRIORITY_VALUE, Priority.get(declared).getValue());
     }
 
+
+    @Test
+    public void groupNodesOutrankThePlatformsOwnNavigatorContent()
+    {
+        // The floor above proves nothing can outrank us; it does not prove we outrank the tree's
+        // ordinary contents, because a peer is free to take the floor as well. That is the part
+        // #521 is actually about, so it is asserted against the LIVE declaration in the running
+        // platform rather than a value copied into this file, which would go stale in silence.
+        String ours = registryPriorityOf(GROUPS_CONTENT_ID);
+        String platforms = registryPriorityOf(EDT_CONTENT_ID);
+
+        assertNotNull("this test cannot see its own extension in the registry, so it would be " //$NON-NLS-1$
+            + "vacuous - the navigatorContent extension point is not populated in this runtime", //$NON-NLS-1$
+            ours);
+        assertNotNull("the registry has this plugin's navigator content but not EDT's " //$NON-NLS-1$
+            + EDT_CONTENT_ID + ", so the strict comparison cannot be made here", platforms); //$NON-NLS-1$
+
+        assertTrue("group nodes must sort strictly above the navigator's own contents: ours is '" //$NON-NLS-1$
+            + ours + "', the platform's is '" + platforms + "'. Equal priorities land in the same " //$NON-NLS-1$ //$NON-NLS-2$
+            + "band, where CNF orders by extension-id hash and ordinary nodes can come first - " //$NON-NLS-1$
+            + "which the declared floor alone cannot rule out. If the platform ever takes the " //$NON-NLS-1$
+            + "floor too, no priority can fix this and the placement needs a different mechanism.", //$NON-NLS-1$
+            Priority.get(ours).getValue() < Priority.get(platforms).getValue());
+    }
+
+    /**
+     * The {@code priority} that the RUNNING platform's extension registry reports for a
+     * {@code navigatorContent} id, or {@code null} when no such contribution is present.
+     *
+     * @param contentId the navigatorContent id
+     * @return the declared priority, or {@code null}
+     */
+    private static String registryPriorityOf(String contentId)
+    {
+        IExtensionRegistry registry = Platform.getExtensionRegistry();
+        if (registry == null)
+        {
+            return null;
+        }
+        for (IConfigurationElement element : registry
+            .getConfigurationElementsFor("org.eclipse.ui.navigator.navigatorContent")) //$NON-NLS-1$
+        {
+            if ("navigatorContent".equals(element.getName()) //$NON-NLS-1$
+                && contentId.equals(element.getAttribute("id"))) //$NON-NLS-1$
+            {
+                return element.getAttribute("priority"); //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
     @Test
     public void theGroupsContentClaimsOnlyItsOwnNodesAsAPossibleChild() throws Exception
     {
@@ -129,8 +184,15 @@ public class GroupNavigatorContentDeclarationTest
 
     /**
      * The {@code value} of every {@code <instanceof>} under the named child element, in document
-     * order. The {@code <or>} wrapper CNF allows is transparent here: what matters is WHICH types
-     * are claimed, not how they are grouped.
+     * order - and a refusal for any operator that would change what the expression MEANS.
+     * <p>
+     * Flattening to type names alone is not enough: wrapping the expected predicate in
+     * {@code <not>} leaves the collected list identical while inverting the claim, so
+     * {@code possibleChildren} would claim every node EXCEPT a group node and the ratchet would
+     * still be green. Only {@code <or>} is treated as transparent - it is the one wrapper CNF's
+     * schema needs here and the one that cannot change the meaning of a single-element list.
+     * Anything else ({@code not}, {@code and}, {@code adapt}, {@code test}, ...) fails the test by
+     * name rather than being walked through.
      *
      * @param content the navigatorContent element
      * @param childName {@code triggerPoints} or {@code possibleChildren}
@@ -142,12 +204,12 @@ public class GroupNavigatorContentDeclarationTest
         NodeList children = content.getElementsByTagName(childName);
         for (int i = 0; i < children.getLength(); i++)
         {
-            collectInstanceOf(children.item(i), values);
+            collectInstanceOf(children.item(i), childName, values);
         }
         return values;
     }
 
-    private static void collectInstanceOf(Node node, List<String> values)
+    private static void collectInstanceOf(Node node, String childName, List<String> values)
     {
         NodeList children = node.getChildNodes();
         for (int i = 0; i < children.getLength(); i++)
@@ -158,13 +220,22 @@ public class GroupNavigatorContentDeclarationTest
                 continue;
             }
             Element element = (Element)child;
-            if ("instanceof".equals(element.getNodeName())) //$NON-NLS-1$
+            String name = element.getNodeName();
+            if ("instanceof".equals(name)) //$NON-NLS-1$
             {
                 values.add(element.getAttribute("value")); //$NON-NLS-1$
             }
+            else if ("or".equals(name)) //$NON-NLS-1$
+            {
+                collectInstanceOf(element, childName, values);
+            }
             else
             {
-                collectInstanceOf(element, values);
+                throw new AssertionError("<" + name + "> under <" + childName //$NON-NLS-1$ //$NON-NLS-2$
+                    + ">: this ratchet reads the claimed types, and only <or> can be walked " //$NON-NLS-1$
+                    + "through without changing what they mean. An operator like <not> would " //$NON-NLS-1$
+                    + "leave the type list identical while inverting the claim. If the expression " //$NON-NLS-1$
+                    + "really needs this, teach the test what it means before allowing it."); //$NON-NLS-1$
             }
         }
     }
