@@ -300,7 +300,7 @@ Create `.vscode/mcp.json`:
 
 ### Cursor IDE
 
-> **Note:** Cursor doesn't support MCP embedded resources. Enable **"Plain text mode (Cursor compatibility)"** in EDT preferences: **Window → Preferences → MCP Server**.
+> **Note:** Cursor doesn't support MCP embedded resources. Enable **"Plain text mode (Cursor compatibility)"** in EDT preferences: **Window → Preferences → MCP Server**. It moves a result into `content[0].text`; a JSON tool still returns its `structuredContent` as well, so a client that enforces the declared `outputSchema` is satisfied too.
 
 Create `.cursor/mcp.json`:
 ```json

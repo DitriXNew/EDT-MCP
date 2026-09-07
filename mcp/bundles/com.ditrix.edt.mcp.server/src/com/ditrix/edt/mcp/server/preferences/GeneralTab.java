@@ -35,7 +35,6 @@ import org.eclipse.ui.plugin.AbstractUIPlugin;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.McpServer;
-import com.ditrix.edt.mcp.server.SseStreamRegistry;
 import com.ditrix.edt.mcp.server.UpdateChecker;
 import com.ditrix.edt.mcp.server.protocol.McpConstants;
 import com.ditrix.edt.mcp.server.transport.HttpTransport;
@@ -467,17 +466,23 @@ public class GeneralTab
             }
         });
 
-        // The URL is derived from the spinner, so it must follow it while the page is still open -
-        // otherwise the button copies the address of the port the user just stopped using.
+        // The URL follows both inputs it is derived from while the page is open: the spinner, and
+        // whether a server is running (updateButtons runs on every start/stop/restart).
         portSpinner.addModifyListener(e -> updateEndpointLabel());
 
         updateButtons();
     }
 
     /**
-     * The address an MCP client connects to, built from the port currently in the spinner (the
-     * value about to be saved), not from the stored one - the label and the buttons must describe
-     * what the user is looking at.
+     * The address an MCP client connects to.
+     * <p>
+     * The port is the one a client can reach RIGHT NOW: a running server keeps serving the port it
+     * was started on, and changing the spinner does not move it - Apply only stores the preference,
+     * and only a manual Restart re-binds. Copying the spinner's value while the server ran on
+     * another port would hand out an endpoint nothing is listening on. When the server is stopped
+     * there is no actual port, so the spinner's value - what the next start will use - is the
+     * honest answer.
+     * </p>
      * <p>
      * Always {@code localhost}: the "allow remote access" preference widens what the server BINDS
      * to, but the address to hand a client on this machine is the loopback one either way, and a
@@ -488,7 +493,23 @@ public class GeneralTab
      */
     private String serviceUrl()
     {
-        return "http://localhost:" + portSpinner.getSelection() + "/mcp"; //$NON-NLS-1$ //$NON-NLS-2$
+        return "http://localhost:" + effectivePort() + "/mcp"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The port the endpoint line and the copy buttons speak for: the running server's, or the
+     * spinner's when no server is running.
+     *
+     * @return the port a client should use
+     */
+    private int effectivePort()
+    {
+        McpServer server = Activator.getDefault() != null ? Activator.getDefault().getMcpServer() : null;
+        if (server != null && server.isRunning())
+        {
+            return server.getPort();
+        }
+        return portSpinner.getSelection();
     }
 
     /**
@@ -510,15 +531,23 @@ public class GeneralTab
     }
 
     /**
-     * Repaints the endpoint label from the current spinner value.
+     * Repaints the endpoint label, and says so when the spinner holds a port the running server is
+     * not on yet - otherwise the line would silently disagree with the number right above it.
      */
     private void updateEndpointLabel()
     {
-        if (endpointLabel != null && !endpointLabel.isDisposed())
+        if (endpointLabel == null || endpointLabel.isDisposed())
         {
-            endpointLabel.setText(NLS.bind(Messages.GeneralTab_Endpoint, serviceUrl()));
-            endpointLabel.getParent().layout();
+            return;
         }
+        String text = NLS.bind(Messages.GeneralTab_Endpoint, serviceUrl());
+        if (effectivePort() != portSpinner.getSelection())
+        {
+            text = text + " " + NLS.bind(Messages.GeneralTab_EndpointPending, //$NON-NLS-1$
+                Integer.valueOf(portSpinner.getSelection()));
+        }
+        endpointLabel.setText(text);
+        endpointLabel.getParent().layout();
     }
 
     /**
@@ -551,16 +580,7 @@ public class GeneralTab
         store.setValue(PreferenceConstants.PREF_PORT, portSpinner.getSelection());
         store.setValue(PreferenceConstants.PREF_AUTO_START, autoStartCheck.getSelection());
         store.setValue(PreferenceConstants.PREF_CHECKS_FOLDER, checksFolderText.getText());
-        // Plain-text mode decides whether tools/list advertises an outputSchema at all, so a
-        // client that listed under the old setting is holding a list that no longer matches
-        // what its calls will receive (#574). Read the previous value before overwriting it and,
-        // on a real change, tell any open stream to re-list.
-        boolean plainTextWas = store.getBoolean(PreferenceConstants.PREF_PLAIN_TEXT_MODE);
         store.setValue(PreferenceConstants.PREF_PLAIN_TEXT_MODE, plainTextCheck.getSelection());
-        if (plainTextWas != plainTextCheck.getSelection())
-        {
-            SseStreamRegistry.getInstance().notifyToolsListChanged();
-        }
         store.setValue(PreferenceConstants.PREF_ALLOW_REMOTE_ACCESS, allowRemoteCheck.getSelection());
         // Stored the way it is compared. Surrounding whitespace cannot travel in an HTTP header
         // - the authorizer only ever sees the trimmed credential - so keeping it here would save
@@ -683,6 +703,9 @@ public class GeneralTab
         startButton.setEnabled(!running);
         stopButton.setEnabled(running);
         restartButton.setEnabled(running);
+        // The endpoint speaks for the RUNNING port, so it changes meaning here too: this runs on
+        // every start, stop and restart.
+        updateEndpointLabel();
     }
 
     private void startServer()

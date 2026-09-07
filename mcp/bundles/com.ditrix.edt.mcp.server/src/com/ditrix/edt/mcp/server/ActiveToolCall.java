@@ -184,6 +184,14 @@ public class ActiveToolCall
         textContent.addProperty("text", messageText); //$NON-NLS-1$
         content.add(textContent);
         result.add("content", content); //$NON-NLS-1$
+        // isError, for two reasons that point the same way. It is TRUE: the call was interrupted
+        // and never produced the tool's result, so reporting success would tell the agent the
+        // opposite of what happened. And it is what keeps the interrupt working at all - this
+        // response carries no structuredContent, while tools/list may have advertised the tool's
+        // outputSchema, and MCP exempts an error result from that obligation. Without the flag a
+        // client that enforces it (Cursor: -32600) discards the very response whose job is to hand
+        // control back to the agent (#574).
+        result.addProperty("isError", true); //$NON-NLS-1$
         response.add("result", result); //$NON-NLS-1$
         
         // Handle request ID (can be string or number)

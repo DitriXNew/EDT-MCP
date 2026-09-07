@@ -20,6 +20,7 @@ import org.junit.Test;
 import com.ditrix.edt.mcp.server.UserSignal;
 import com.ditrix.edt.mcp.server.UserSignal.SignalType;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.JsonRpcRequest;
+import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolCallResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.utils.OutputSizeGuard;
@@ -677,22 +678,70 @@ public class McpProtocolHandlerTest
     }
 
     @Test
-    public void testEmitsStructuredContentIsFalseWheneverEitherSettingSuppressesIt()
+    public void testAdvertisedSchemaAndDeliveredStructuredContentAgreeOnEveryInput()
     {
-        // The predicate both responses are built from. Pinned directly because the plain-text
-        // half of it reads a preference store that no unit test has (Activator is absent here),
+        // THE invariant of #574, pinned mechanically rather than case by case: for every
+        // combination of the two inputs, tools/list advertises the outputSchema exactly when
+        // tools/call will produce structuredContent. Pinned on the pure functions because the
+        // plain-text half reads a preference store no unit test has (Activator is absent here),
         // so only the capability half is reachable through processRequest.
-        assertTrue("the default emits structuredContent",
-            McpProtocolHandler.emitsStructuredContent(false, ClientCapabilities.ABSENT));
-        assertFalse("plain-text mode suppresses it",
-            McpProtocolHandler.emitsStructuredContent(true, ClientCapabilities.ABSENT));
-
         ClientCapabilities optedOut = ClientCapabilities.from(JsonParser.parseString(
             "{\"experimental\":{\"structuredContent\":false}}"));
-        assertFalse("an explicit opt-out suppresses it",
-            McpProtocolHandler.emitsStructuredContent(false, optedOut));
-        assertFalse("both together still suppress it",
-            McpProtocolHandler.emitsStructuredContent(true, optedOut));
+
+        for (ClientCapabilities caps : new ClientCapabilities[] {ClientCapabilities.ABSENT, optedOut})
+        {
+            for (boolean plainText : new boolean[] {false, true})
+            {
+                boolean delivers =
+                    McpProtocolHandler.jsonDeliveryFor(plainText, caps) != McpProtocolHandler.JsonDelivery.TEXT_ONLY;
+                assertEquals("schema/content disagree for plainText=" + plainText,
+                    McpProtocolHandler.advertisesOutputSchema(caps), delivers);
+            }
+        }
+    }
+
+    @Test
+    public void testPlainTextModeMovesThePayloadIntoTextWithoutTakingItOutOfStructured()
+    {
+        // The fix for the race the invariant above would otherwise still have: plain-text mode is
+        // a MUTABLE global preference, so if it decided the schema, a flip between a client's
+        // tools/list and its next call would break the promise, and no notification can reach a
+        // client that holds no SSE stream. It therefore does not decide it - it only moves the
+        // payload into the text channel, which is all issue #39 ever asked for.
+        assertEquals(McpProtocolHandler.JsonDelivery.TEXT_PAYLOAD_AND_STRUCTURED,
+            McpProtocolHandler.jsonDeliveryFor(true, ClientCapabilities.ABSENT));
+        assertEquals(McpProtocolHandler.JsonDelivery.STRUCTURED,
+            McpProtocolHandler.jsonDeliveryFor(false, ClientCapabilities.ABSENT));
+
+        // ... and the opt-out still wins over it, in both directions.
+        ClientCapabilities optedOut = ClientCapabilities.from(JsonParser.parseString(
+            "{\"experimental\":{\"structuredContent\":false}}"));
+        assertEquals(McpProtocolHandler.JsonDelivery.TEXT_ONLY,
+            McpProtocolHandler.jsonDeliveryFor(true, optedOut));
+        assertEquals(McpProtocolHandler.JsonDelivery.TEXT_ONLY,
+            McpProtocolHandler.jsonDeliveryFor(false, optedOut));
+    }
+
+    @Test
+    public void testPlainTextDeliveryCarriesTheWholePayloadInBothChannels()
+    {
+        // What TEXT_PAYLOAD_AND_STRUCTURED actually produces, asserted on the result builder the
+        // handler uses: the text channel gets the payload itself (not the "OK - keys: ..." digest
+        // that made #39's clients show nothing), and structuredContent carries it too.
+        JsonObject payload = JsonParser.parseString("{\"success\":true,\"value\":7}").getAsJsonObject();
+        ToolCallResult r = ToolCallResult.textWithStructured(payload, false);
+
+        String text = r.getContent().get(0).getText();
+        assertTrue("the text channel must carry the payload, not a digest", text.contains("\"value\""));
+        assertTrue("the text channel must carry the payload, not a digest", text.contains("7"));
+        assertNotNull("structuredContent must still be there", r.getStructuredContent());
+        assertNull("a success must not be flagged as an error", r.getIsError());
+
+        // A failed payload keeps isError, so moving it into the text channel cannot make a
+        // failure read as a success.
+        JsonObject failed = JsonParser.parseString(
+            "{\"success\":false,\"error\":\"bad param\"}").getAsJsonObject();
+        assertEquals(Boolean.TRUE, ToolCallResult.textWithStructured(failed, true).getIsError());
     }
 
     /**

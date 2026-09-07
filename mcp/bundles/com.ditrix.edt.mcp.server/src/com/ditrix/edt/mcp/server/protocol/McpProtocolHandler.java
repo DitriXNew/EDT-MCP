@@ -738,15 +738,18 @@ public class McpProtocolHandler
             // Parse JSON and add userSignal field
             result = addUserSignalToJson(result, signal);
         }
-        // Both suppression cases go through the SAME predicate that tools/list consults, so the
-        // advertised outputSchema and the delivered structuredContent cannot disagree (#574). A
-        // FAILED payload keeps isError:true (with the real message in the text channel) -
-        // suppressing the structured payload must never make a failure look like a success.
-        if (!emitsStructuredContent(plainTextMode, capabilities))
+        // Which channels carry the payload. The only case that drops structuredContent is the
+        // client's own opt-out, which tools/list reads too - see jsonDeliveryFor.
+        switch (jsonDeliveryFor(plainTextMode, capabilities))
         {
-            return buildTextOnlyJsonResponse(result, requestId);
+            case TEXT_ONLY:
+                return buildTextOnlyJsonResponse(result, requestId);
+            case TEXT_PAYLOAD_AND_STRUCTURED:
+                return buildPlainTextJsonResponse(result, requestId);
+            case STRUCTURED:
+            default:
+                return buildToolCallJsonResponse(result, requestId, tool.getName());
         }
-        return buildToolCallJsonResponse(result, requestId, tool.getName());
     }
 
     /**
@@ -769,32 +772,84 @@ public class McpProtocolHandler
         ToolCallResult errorResult = ToolCallResult.errorText(JsonParser.parseString(result));
         return GsonProvider.toJson(JsonRpcResponse.success(requestId, errorResult));
     }
-    
+
     /**
-     * Whether a JSON tool's payload will be delivered in {@code structuredContent} on this call.
+     * Delivers a JSON tool payload in BOTH channels: the whole payload as text, for a client that
+     * reads only {@code content[0].text}, and the same payload as {@code structuredContent}, for a
+     * client that enforces the declared {@code outputSchema}. A {@code ToolResult.error} payload
+     * keeps {@code isError:true}, so the text-reading client still sees a failure as one.
+     *
+     * @param result the tool's JSON payload
+     * @param requestId the JSON-RPC request id to echo
+     * @return the serialized JSON-RPC response
+     */
+    private String buildPlainTextJsonResponse(String result, Object requestId)
+    {
+        ToolCallResult payload =
+            ToolCallResult.textWithStructured(JsonParser.parseString(result), isJsonErrorPayload(result));
+        return GsonProvider.toJson(JsonRpcResponse.success(requestId, payload));
+    }
+    
+    /** Which channels a JSON tool's payload is delivered in. See {@link #jsonDeliveryFor}. */
+    enum JsonDelivery
+    {
+        /** structuredContent carries the payload; the text channel gets a bounded digest. */
+        STRUCTURED,
+        /** Both channels carry the whole payload (plain-text mode). */
+        TEXT_PAYLOAD_AND_STRUCTURED,
+        /** Only the text channel; the client refused structuredContent. */
+        TEXT_ONLY
+    }
+
+    /**
+     * How a JSON tool's payload is delivered for this call.
      * <p>
-     * This is the ONE place that decides it, because two responses have to agree: {@code tools/call}
-     * fills {@code structuredContent}, and {@code tools/list} advertises an {@code outputSchema}
-     * declaring its shape. The MCP contract binds them - a tool that declares an output schema must
-     * return structured content - and a client that enforces it rejects the whole call when they
-     * disagree. Cursor does exactly that, with {@code -32600 "has an output schema but did not
-     * return structured content"}, which is how the two settings below silently disabled eight
-     * tools (#574).
+     * Two responses have to agree: {@code tools/call} fills {@code structuredContent}, and
+     * {@code tools/list} advertises an {@code outputSchema} declaring its shape. MCP binds them -
+     * a tool that declares an output schema must return structured content - and a client that
+     * enforces the binding throws the whole call away, which is what Cursor's
+     * {@code -32600 "has an output schema but did not return structured content"} is (#574).
      * </p>
      * <p>
-     * Two settings suppress it, and both are known before {@code tools/list} is answered, so the
-     * schema can be withheld in the same breath: the Cursor-compatibility plain-text preference,
-     * and a client's explicit {@code experimental.structuredContent:false} opt-out. Neither is set
-     * by default, so the default surface is unchanged.
+     * So exactly ONE input may withhold structuredContent, and it is the client's own explicit
+     * {@code experimental.structuredContent:false}: it is declared at initialize and cannot change
+     * for the life of that session, so a schema advertised to that client is never contradicted by
+     * a later call. {@link #advertisesOutputSchema} reads the same input, and nothing else.
+     * </p>
+     * <p>
+     * Plain-text mode is deliberately NOT such an input, though it used to be. It exists because
+     * some clients read only {@code content[0].text} (#39), so it moves the payload INTO the text
+     * channel - it has no reason to take it out of the structured one, and doing so tied the
+     * advertised schema to a preference the user can flip mid-session, which no notification can
+     * make safe for a client that has already been given the list.
      * </p>
      *
      * @param plainTextMode whether Cursor-compatible plain-text mode is enabled
      * @param capabilities the capabilities the client declared, never {@code null}
-     * @return {@code true} when structuredContent (and therefore the outputSchema) is in play
+     * @return the delivery for this call
      */
-    static boolean emitsStructuredContent(boolean plainTextMode, ClientCapabilities capabilities)
+    static JsonDelivery jsonDeliveryFor(boolean plainTextMode, ClientCapabilities capabilities)
     {
-        return !plainTextMode && capabilities.allowsStructuredContent();
+        if (!capabilities.allowsStructuredContent())
+        {
+            return JsonDelivery.TEXT_ONLY;
+        }
+        return plainTextMode ? JsonDelivery.TEXT_PAYLOAD_AND_STRUCTURED : JsonDelivery.STRUCTURED;
+    }
+
+    /**
+     * Whether {@code tools/list} may advertise a JSON tool's {@code outputSchema} to this client.
+     * <p>
+     * True exactly when {@link #jsonDeliveryFor} will produce structuredContent, for every value of
+     * the other input - which is what makes the promise keepable. A test pins that equivalence.
+     * </p>
+     *
+     * @param capabilities the capabilities the client declared, never {@code null}
+     * @return {@code true} when the schema may be advertised
+     */
+    static boolean advertisesOutputSchema(ClientCapabilities capabilities)
+    {
+        return capabilities.allowsStructuredContent();
     }
 
     /**
@@ -1110,9 +1165,10 @@ public class McpProtocolHandler
     private String buildToolsListResponse(Object requestId, ClientCapabilities capabilities)
     {
         ToolsListResult result = new ToolsListResult();
-        // Whether a JSON tool's tools/call will actually carry structuredContent. Decided here,
-        // once, by the same predicate the call path uses - see emitsStructuredContent.
-        boolean structured = emitsStructuredContent(isPlainTextMode(), capabilities);
+        // Whether this client's tools/call will actually carry structuredContent. It depends only
+        // on what the client declared at initialize, which cannot change under it - see
+        // jsonDeliveryFor for why nothing mutable is allowed to reach this decision.
+        boolean structured = advertisesOutputSchema(capabilities);
 
         for (IMcpTool tool : toolRegistry.getVisibleTools())
         {
@@ -1131,9 +1187,9 @@ public class McpProtocolHandler
             // return content (not structured data) and leave outputSchema null, in
             // which case the shared Gson omits the field entirely. The shape goes over
             // the wire but its prose does not — see OutputSchemaCompactor for why.
-            // ... and it is advertised only while the calls this session makes will honour it:
-            // under plain-text mode or a structuredContent opt-out the payload arrives as text,
-            // and a schema promising otherwise makes an enforcing client discard the result (#574).
+            // ... and it is advertised only to a client whose calls will honour it: one that
+            // refused structuredContent gets the payload as text, and a schema promising
+            // otherwise makes an enforcing client discard the whole result (#574).
             String outputSchemaJson = structured ? tool.getOutputSchema() : null;
             JsonElement outputSchema = outputSchemaJson != null
                 ? OutputSchemaCompactor.compact(JsonParser.parseString(outputSchemaJson))
