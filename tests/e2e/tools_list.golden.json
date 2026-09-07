@@ -1676,7 +1676,7 @@
     "inputSchema": {
       "properties": {
         "checkId": {
-          "description": "Check id: the symbolic dash-cased id (e.g. 'begin-transaction', 'ql-temp-table-index') OR the short UID code from get_project_errors (e.g. 'SU23'); a UID is resolved when projectName is also supplied. Precondition: a check-descriptions folder must be configured in MCP preferences, else the tool returns a configuration error.",
+          "description": "Check id: the symbolic dash-cased id (e.g. 'begin-transaction', 'ql-temp-table-index') OR the short UID code from get_project_errors (e.g. 'SU23'); a UID is resolved when projectName is also supplied.",
           "type": "string"
         },
         "projectName": {
@@ -4792,6 +4792,9 @@
             "Module"
           ],
           "type": "string"
+        },
+        "normalizeInvalidCharacters": {
+          "type": "boolean"
         },
         "objectName": {
           "type": "string"
