@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.groups.ui;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.InputStream;
@@ -106,6 +107,17 @@ public class GroupNavigatorContentDeclarationTest
         // leaving the old contribution registered - but "does anything BOUND TO THIS VIEWER
         // declare a priority we do not beat". That is the population whose nodes share a tree with
         // ours, however the platform names them.
+        // CNF keeps ONE Binding per viewer and feeds every viewerContentBinding element into it
+        // (NavigatorViewerDescriptor.consumeContentBinding -> Binding.consumeIncludes/Excludes),
+        // so includes and excludes accumulate viewer-wide and an exclude wins over any include -
+        // which is what contentIdsBoundTo mirrors. The one part of that model it does NOT mirror
+        // is binding inheritance: a viewer may pull another viewer's bindings in wholesale, and
+        // those competitors would be invisible here. Nothing declares it for this viewer today,
+        // and if that changes this fails rather than quietly comparing against too small a set.
+        assertNull("the viewer now inherits bindings from another viewer, which this resolver " //$NON-NLS-1$
+            + "does not follow - contents bound over there would be missing from the comparison", //$NON-NLS-1$
+            inheritedBindingSource(EDT_NAVIGATOR_VIEWER_ID));
+
         Map<String, String> priorities = declaredPriorities();
         Set<String> bound = contentIdsBoundTo(EDT_NAVIGATOR_VIEWER_ID, priorities.keySet());
 
@@ -190,6 +202,34 @@ public class GroupNavigatorContentDeclarationTest
         }
         included.removeAll(excluded);
         return included;
+    }
+
+    /**
+     * The viewer this one inherits its bindings from, or {@code null} when it declares none.
+     *
+     * @param viewerId the viewer to inspect
+     * @return the inherited-from viewer id, or {@code null}
+     */
+    private static String inheritedBindingSource(String viewerId)
+    {
+        IExtensionRegistry registry = Platform.getExtensionRegistry();
+        if (registry == null)
+        {
+            return null;
+        }
+        for (IConfigurationElement viewer : registry
+            .getConfigurationElementsFor("org.eclipse.ui.navigator.viewer")) //$NON-NLS-1$
+        {
+            if ("viewer".equals(viewer.getName()) && viewerId.equals(viewer.getAttribute("viewerId"))) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                String inherited = viewer.getAttribute("inheritBindingsFromViewer"); //$NON-NLS-1$
+                if (inherited != null)
+                {
+                    return inherited;
+                }
+            }
+        }
+        return null;
     }
 
     private static void collectPatternMatches(IConfigurationElement binding, String section,
