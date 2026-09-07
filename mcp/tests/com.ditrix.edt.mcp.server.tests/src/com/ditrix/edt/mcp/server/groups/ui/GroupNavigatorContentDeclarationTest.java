@@ -26,6 +26,7 @@ import java.util.List;
 import javax.xml.parsers.DocumentBuilder;
 
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.core.runtime.IConfigurationElement;
 import org.eclipse.core.runtime.IExtensionRegistry;
 import org.eclipse.core.runtime.Platform;
@@ -360,28 +361,43 @@ public class GroupNavigatorContentDeclarationTest
         // outcome for one reason only: that sorter's compare returns 0 for every pair, leaving the
         // stable sort to preserve the contribution order, which follows the sequence numbers.
         //
-        // That is a property of someone else's code, so it is asserted rather than assumed: every
-        // sorter bound to this viewer must stay neutral about a group node. If one ever starts
-        // taking a position, the placement stops being ours to control by priority and this says
-        // so instead of the tree quietly changing.
-        Object groupNode = new GroupNavigatorAdapter(new Group("g", "/g"), //$NON-NLS-1$ //$NON-NLS-2$
-            ResourcesPlugin.getWorkspace().getRoot().getProject("probe"), null); //$NON-NLS-1$
-        Object ordinaryNode = new Object();
+        // That is a property of someone else's code, so it is asserted rather than assumed. The
+        // siblings a group node is really sorted against are EMF objects and navigator adapters,
+        // so the probe uses those and not only a bare Object: a sorter could be neutral about a
+        // type it has never heard of while ordering the ones it knows.
+        //
+        // What this cannot reach is the live CommonViewer - a sorter that consults viewer state
+        // would answer 0 here and something else there. Nothing bound to this viewer does today
+        // (NavigatorSorter's compare is `return 0`, it reads neither argument nor viewer), and
+        // the tree itself is the visual check on the release.
+        Object groupNode = newGroupNode("first"); //$NON-NLS-1$
+        List<Object> siblings = List.of(EcoreFactory.eINSTANCE.createEAnnotation(),
+            EcoreFactory.eINSTANCE.createEClass(), newGroupNode("second"), new Object()); //$NON-NLS-1$
 
         int sorters = 0;
         for (IConfigurationElement sorter : boundSorters())
         {
             sorters++;
             ViewerComparator comparator = (ViewerComparator)sorter.createExecutableExtension("class"); //$NON-NLS-1$
-            assertEquals("the sorter " + sorter.getAttribute("class") //$NON-NLS-1$ //$NON-NLS-2$
-                + " bound to this viewer orders a group node against an ordinary one, so the " //$NON-NLS-1$
-                + "declared priority no longer decides where group nodes land", //$NON-NLS-1$
-                0, comparator.compare(null, groupNode, ordinaryNode));
-            assertEquals("the same sorter, with the arguments swapped", //$NON-NLS-1$
-                0, comparator.compare(null, ordinaryNode, groupNode));
+            String name = sorter.getAttribute("class"); //$NON-NLS-1$
+            for (Object sibling : siblings)
+            {
+                assertEquals("the sorter " + name + " bound to this viewer orders a group node " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "against a " + sibling.getClass().getName() + ", so the declared priority no " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "longer decides where group nodes land", //$NON-NLS-1$
+                    0, comparator.compare(null, groupNode, sibling));
+                assertEquals("the same sorter and pair, arguments swapped", //$NON-NLS-1$
+                    0, comparator.compare(null, sibling, groupNode));
+            }
         }
         assertTrue("no bound sorter was found at all, so this check proved nothing - the viewer " //$NON-NLS-1$
             + "bindings are not populated in this runtime", sorters > 0); //$NON-NLS-1$
+    }
+
+    private static Object newGroupNode(String name)
+    {
+        return new GroupNavigatorAdapter(new Group(name, "/" + name), //$NON-NLS-1$
+            ResourcesPlugin.getWorkspace().getRoot().getProject("probe"), null); //$NON-NLS-1$
     }
 
     /**
