@@ -25,9 +25,11 @@ import java.util.List;
 
 import javax.xml.parsers.DocumentBuilder;
 
+import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.IConfigurationElement;
 import org.eclipse.core.runtime.IExtensionRegistry;
 import org.eclipse.core.runtime.Platform;
+import org.eclipse.jface.viewers.ViewerComparator;
 import org.eclipse.ui.navigator.Priority;
 import org.junit.Test;
 import org.osgi.framework.Bundle;
@@ -37,6 +39,7 @@ import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
+import com.ditrix.edt.mcp.server.groups.model.Group;
 import com.ditrix.edt.mcp.server.utils.SecureXml;
 
 /**
@@ -68,7 +71,7 @@ public class GroupNavigatorContentDeclarationTest
 
     private static final String EDT_NAVIGATOR_VIEWER_ID = "com._1c.g5.v8.dt.ui2.navigator"; //$NON-NLS-1$
 
-    private static final String GROUP_NODE_TYPE = "com.ditrix.edt.mcp.server.groups.ui.GroupNavigatorAdapter"; //$NON-NLS-1$
+    private static final String GROUP_NODE_TYPE = GroupNavigatorAdapter.class.getName();
 
     @Test
     public void groupNodesTakeTheOnlyPriorityNothingCanOutrank() throws Exception
@@ -312,6 +315,135 @@ public class GroupNavigatorContentDeclarationTest
         assertEquals("the ordering contract must be attached to the provider that actually " //$NON-NLS-1$
             + "creates the group nodes", GroupContentProvider.class.getName(), //$NON-NLS-1$
             groupsNavigatorContent().getAttribute("contentProvider")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void theDeclaredTriggerMatchesTheCollectionAdapterTheNodesHangFrom() throws Exception
+    {
+        // The trigger is checked as a NAME above; here it is checked against the class it has to
+        // match. EDT's collection adapters are what group nodes hang from, and CNF only asks a
+        // provider for children of an element its trigger points match - so if a target upgrade
+        // stopped that base class implementing IWorkbenchAdapter, GroupContentProvider would never
+        // be called for a collection and the groups WOULD disappear, with every string assertion
+        // in this file still green. The class name comes from CollectionAdapterUtils, the matcher
+        // that recognises those adapters at runtime, rather than from a second literal here.
+        Class<?> collectionAdapter = loadPlatformClass(CollectionAdapterUtils.COLLECTION_ADAPTER_CLASS_NAME);
+        assertNotNull("the platform class the group nodes hang from is not loadable: " //$NON-NLS-1$
+            + CollectionAdapterUtils.COLLECTION_ADAPTER_CLASS_NAME //$NON-NLS-1$
+            + " - either it was renamed, or CollectionAdapterUtils is matching a name that no " //$NON-NLS-1$
+            + "longer exists", collectionAdapter); //$NON-NLS-1$
+
+        List<String> triggers = instanceOfValuesUnder(groupsNavigatorContent(), "triggerPoints"); //$NON-NLS-1$
+        boolean matched = false;
+        for (String trigger : triggers)
+        {
+            Class<?> declared = loadPlatformClass(trigger);
+            if (declared != null && declared.isAssignableFrom(collectionAdapter))
+            {
+                matched = true;
+                break;
+            }
+        }
+        assertTrue("no declared trigger point actually matches " //$NON-NLS-1$
+            + collectionAdapter.getName() + " - CNF would never ask GroupContentProvider for the " //$NON-NLS-1$
+            + "children of a collection, and the groups would be absent rather than misplaced. " //$NON-NLS-1$
+            + "Declared: " + triggers, matched); //$NON-NLS-1$
+    }
+
+    @Test
+    public void noSorterBoundToTheViewerTakesAPositionOnGroupNodes() throws Exception
+    {
+        // The one seam the declared priority cannot cover on its own. CommonViewerSorter delegates
+        // to a bound commonSorter when one applies and only falls back to the descriptor category -
+        // the thing the priority decides - when none does. EDT DOES bind one
+        // (com._1c.g5.v8.dt.navigator.ui.NavigatorSorter on v8model), so the priority governs the
+        // outcome for one reason only: that sorter's compare returns 0 for every pair, leaving the
+        // stable sort to preserve the contribution order, which follows the sequence numbers.
+        //
+        // That is a property of someone else's code, so it is asserted rather than assumed: every
+        // sorter bound to this viewer must stay neutral about a group node. If one ever starts
+        // taking a position, the placement stops being ours to control by priority and this says
+        // so instead of the tree quietly changing.
+        Object groupNode = new GroupNavigatorAdapter(new Group("g", "/g"), //$NON-NLS-1$ //$NON-NLS-2$
+            ResourcesPlugin.getWorkspace().getRoot().getProject("probe"), null); //$NON-NLS-1$
+        Object ordinaryNode = new Object();
+
+        int sorters = 0;
+        for (IConfigurationElement sorter : boundSorters())
+        {
+            sorters++;
+            ViewerComparator comparator = (ViewerComparator)sorter.createExecutableExtension("class"); //$NON-NLS-1$
+            assertEquals("the sorter " + sorter.getAttribute("class") //$NON-NLS-1$ //$NON-NLS-2$
+                + " bound to this viewer orders a group node against an ordinary one, so the " //$NON-NLS-1$
+                + "declared priority no longer decides where group nodes land", //$NON-NLS-1$
+                0, comparator.compare(null, groupNode, ordinaryNode));
+            assertEquals("the same sorter, with the arguments swapped", //$NON-NLS-1$
+                0, comparator.compare(null, ordinaryNode, groupNode));
+        }
+        assertTrue("no bound sorter was found at all, so this check proved nothing - the viewer " //$NON-NLS-1$
+            + "bindings are not populated in this runtime", sorters > 0); //$NON-NLS-1$
+    }
+
+    /**
+     * The {@code commonSorter} elements declared by the content extensions bound to the EDT
+     * Navigator.
+     *
+     * @return the bound sorter declarations, never {@code null}
+     * @throws Exception if the registry cannot be read
+     */
+    private static List<IConfigurationElement> boundSorters() throws Exception
+    {
+        List<IConfigurationElement> sorters = new ArrayList<>();
+        IExtensionRegistry registry = Platform.getExtensionRegistry();
+        if (registry == null)
+        {
+            return sorters;
+        }
+        Set<String> bound = contentIdsBoundTo(EDT_NAVIGATOR_VIEWER_ID, declaredPriorities().keySet());
+        for (IConfigurationElement content : registry
+            .getConfigurationElementsFor("org.eclipse.ui.navigator.navigatorContent")) //$NON-NLS-1$
+        {
+            if ("navigatorContent".equals(content.getName()) //$NON-NLS-1$
+                && bound.contains(content.getAttribute("id"))) //$NON-NLS-1$
+            {
+                sorters.addAll(List.of(content.getChildren("commonSorter"))); //$NON-NLS-1$
+            }
+        }
+        return sorters;
+    }
+
+    /**
+     * Loads a class contributed by any resolved bundle, or {@code null} when no bundle exports it.
+     * Used for platform classes this fragment does not import.
+     *
+     * @param className the fully qualified name
+     * @return the class, or {@code null}
+     */
+    private static Class<?> loadPlatformClass(String className)
+    {
+        Bundle self = FrameworkUtil.getBundle(GroupNavigatorContentDeclarationTest.class);
+        if (self != null)
+        {
+            for (Bundle bundle : self.getBundleContext().getBundles())
+            {
+                try
+                {
+                    return bundle.loadClass(className);
+                }
+                catch (ClassNotFoundException | IllegalStateException e)
+                {
+                    // Not this bundle's class; keep looking.
+                }
+            }
+        }
+        try
+        {
+            return Class.forName(className);
+        }
+        catch (ClassNotFoundException e)
+        {
+            return null;
+        }
     }
 
     private static Element groupsNavigatorContent() throws Exception

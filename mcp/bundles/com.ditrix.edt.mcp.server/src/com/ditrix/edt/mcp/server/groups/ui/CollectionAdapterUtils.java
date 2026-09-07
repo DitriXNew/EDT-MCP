@@ -26,7 +26,9 @@ import org.eclipse.ui.model.IWorkbenchAdapter;
  */
 public final class CollectionAdapterUtils {
     
-    private static final String COLLECTION_ADAPTER_CLASS_NAME = 
+    // Package-visible so GroupNavigatorContentDeclarationTest checks the declared trigger against
+    // the SAME class this matcher looks for, instead of a second literal that could drift from it.
+    static final String COLLECTION_ADAPTER_CLASS_NAME = 
         "com._1c.g5.v8.dt.navigator.adapters.CollectionNavigatorAdapterBase";
     
     /**
