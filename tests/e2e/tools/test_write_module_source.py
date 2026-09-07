@@ -358,3 +358,87 @@ def test_genuinely_unbalanced_module_is_still_blocked():
     assert_error_quality(err, names=["Если/If"], suggests=["skipSyntaxCheck"],
                          ctx="the block-balance error names the block and the override")
     assert_no_diff("a blocked write must not touch the project on disk")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# InvalidCharacterInFile (#161): the seven characters the 1C standard forbids in a
+# source file are replaced in the source the caller HANDS the tool.
+#
+# Every one of them is written here as a Python \uXXXX escape, never as a literal:
+# an em dash and a hyphen are the same glyph to a reviewer, so a literal test could
+# assert the wrong character and still read as correct.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_forbidden_characters_are_normalized_and_reported():
+    # A dash, a no-break space and a soft hyphen, all inside one comment line.
+    dirty = "// dash \u2014 nbsp\u00A0here soft\u00ADhyphen\n"
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "append", "source": dirty,
+    })
+    assert_ok(r, "a source carrying forbidden characters is still written")
+
+    # The response must SAY what it replaced - a silent fix would leave the caller
+    # believing it wrote what it sent.
+    assert_contains(r.text, "normalizedCharacters",
+                    "the write must report the characters it replaced")
+    assert_contains(r.text, "EM DASH", "the report must name the em dash")
+    assert_contains(r.text, "NO-BREAK SPACE", "the report must name the no-break space")
+    assert_contains(r.text, "SOFT HYPHEN", "the report must name the soft hyphen")
+
+    # On-disk truth: the ASCII twins are there ...
+    assert_diff_contains("// dash - nbsp here softhyphen",
+                         "the dash became '-', the nbsp a space, the soft hyphen was dropped")
+    # ... and not one of the forbidden characters survived into the file.
+    src = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
+    assert_ok(src, "read-back after a normalized write")
+    for name, ch in (("EM DASH", "\u2014"), ("NO-BREAK SPACE", "\u00A0"),
+                     ("SOFT HYPHEN", "\u00AD"), ("EN DASH", "\u2013"),
+                     ("MINUS SIGN", "\u2212")):
+        assert_not_contains(src.text, ch, "%s must not survive the write" % name)
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_normalization_can_be_turned_off():
+    # The opt-out writes the bytes through untouched - the other direction of the
+    # same switch, without which this feature could not be declined.
+    dirty = "// kept \u2014 verbatim\n"
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "append", "source": dirty,
+        "normalizeInvalidCharacters": False,
+    })
+    assert_ok(r, "normalizeInvalidCharacters=False is accepted")
+    # Nothing was replaced, so nothing is reported.
+    assert_not_contains(r.text, "normalizedCharacters",
+                        "an untouched write must report no normalization")
+    src = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
+    assert_ok(src, "read-back after an opted-out write")
+    assert_contains(src.text, "\u2014",
+                    "the em dash must survive when normalization is off")
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_oldsource_is_matched_against_the_file_not_normalized():
+    # searchReplace matches oldSource against what is ALREADY in the file, so
+    # normalizing it would stop it matching. Seed a line through the opted-out path
+    # (so the file really holds an em dash), then address it by that same text.
+    seeded = "// anchor \u2014 tail\n"
+    seed = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "append", "source": seeded,
+        "normalizeInvalidCharacters": False,
+    })
+    assert_ok(seed, "seed a line that really carries an em dash")
+
+    r = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": MODULE,
+        "mode": "searchReplace",
+        "oldSource": "// anchor \u2014 tail",
+        "source": "// replaced",
+    })
+    assert_ok(r, "oldSource carrying an em dash must still find its line")
+    src = call("read_module_source", {"projectName": PROJECT, "modulePath": MODULE})
+    assert_ok(src, "read-back after the swap")
+    assert_contains(src.text, "// replaced", "the swap happened")
+    assert_not_contains(src.text, "// anchor", "the old line is gone")
