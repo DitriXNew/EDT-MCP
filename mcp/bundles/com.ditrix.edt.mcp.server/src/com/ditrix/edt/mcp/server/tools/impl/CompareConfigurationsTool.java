@@ -378,9 +378,14 @@ public class CompareConfigurationsTool implements IMcpTool
             return scopeError;
         }
         List<String> scope = JsonUtils.extractArrayArgument(params, KEY_SCOPE);
+        // Presence, then value - the same spelling and the same transport-level null caveat as
+        // releaseComparisonId and scope above. McpProtocolHandler.extractToolParams drops a JSON
+        // null before this map is built, so null still arrives as an omission; a blank STRING is
+        // present and must not silently launch without the decisions its caller asked to apply.
+        boolean mergeRulesAsked = params != null && params.containsKey(KEY_MERGE_RULES_FILE);
         String mergeRulesFile =
             trimToNull(JsonUtils.extractStringArgument(params, KEY_MERGE_RULES_FILE));
-        String rulesError = validateMergeRulesFile(mergeRulesFile);
+        String rulesError = validateMergeRulesFile(mergeRulesAsked, mergeRulesFile);
         if (rulesError != null)
         {
             return rulesError;
@@ -739,14 +744,21 @@ public class CompareConfigurationsTool implements IMcpTool
      * zip holds an entry for THIS comparison is therefore asked in the launch, by
      * {@code ComparisonEngine.restoreMergeSettings}, and still before anything is handed to EDT.
      *
-     * @param mergeRulesFile the caller's path, or {@code null}
+     * @param present whether the caller sent the key at all, in the sense this map can answer
+     * @param mergeRulesFile the caller's trimmed path, or {@code null}
      * @return an error result, or {@code null} when the path is usable
      */
-    private static String validateMergeRulesFile(String mergeRulesFile)
+    private static String validateMergeRulesFile(boolean present, String mergeRulesFile)
     {
         if (mergeRulesFile == null)
         {
-            return null;
+            return present
+                ? ToolResult.error("'" + KEY_MERGE_RULES_FILE //$NON-NLS-1$
+                    + "' was sent blank, so it names no merge-rules file. Nothing was started. " //$NON-NLS-1$
+                    + "Pass the absolute path of the '.xml' or '.zip' whose decisions should be " //$NON-NLS-1$
+                    + "applied, or omit the parameter entirely to compare without pre-set " //$NON-NLS-1$
+                    + "rules.").toJson() //$NON-NLS-1$
+                : null;
         }
         Path path;
         try

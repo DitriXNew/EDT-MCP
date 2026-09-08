@@ -451,6 +451,33 @@ public class CompareConfigurationsToolTest
         assertEquals(0, backend.starts());
     }
 
+    /**
+     * An empty string is a supplied merge-rules request, not an omission. Treating it as absent
+     * starts a comparison without the decisions the caller asked to apply and occupies EDT's
+     * single comparison slot with different merge behaviour.
+     */
+    @Test
+    public void testAnEmptyMergeRulesFileIsRefusedRatherThanSilentlyIgnored()
+    {
+        String result = tool.execute(request(Map.of("mergeRulesFile", "", //$NON-NLS-1$ //$NON-NLS-2$
+            "waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("an empty rules path must not start a comparison", 0, backend.starts()); //$NON-NLS-1$
+        assertContains(errorMessage(result), "mergeRulesFile"); //$NON-NLS-1$
+    }
+
+    /** Omission still deliberately starts a comparison without pre-set merge decisions. */
+    @Test
+    public void testAnOmittedMergeRulesFileStillMeansNoPreSetRules()
+    {
+        tool.execute(request(Map.of("waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        LaunchRequest seen = backend.lastRequest();
+        assertNotNull(seen);
+        assertNull("an omitted mergeRulesFile must stay absent", seen.getMergeRulesFile()); //$NON-NLS-1$
+        assertEquals(1, backend.starts());
+    }
+
     // ============ mergeRulesFile is ABSOLUTE, like the two path parameters of merge_rules ============
     //
     // Paths.get(value) never fails on a relative path and Files.isReadable answers for whatever it

@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
@@ -57,6 +58,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.MergeRulesTool.EngineRuleAuthority;
 import com.ditrix.edt.mcp.server.tools.impl.MergeRulesTool.MergeRuleAuthority;
 import com.ditrix.edt.mcp.server.tools.impl.MergeRulesTool.RuleSnapshot;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -83,6 +85,10 @@ public class MergeRulesToolTest
     /** The exact set of input parameters {@code execute()} reads. Keep in lockstep with the schema. */
     private static final String[] EXECUTE_PARAMS =
         {"mode", "filePath", "basedOn", "decisions", "comparisonId", "limit"}; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+
+    /** Existing behavioural tests opt into the destructive same-path update explicitly. */
+    private static final MergeRulesTool.ConsentRequester ALLOW_CONSENT =
+        (toolName, preview) -> ConsentDecision.ALLOW;
 
     private static final String FIXTURE = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" //$NON-NLS-1$
         + "<Settings Format_version=\"2.0\">\n" //$NON-NLS-1$
@@ -890,6 +896,53 @@ public class MergeRulesToolTest
         assertFalse("write mode must not answer with read mode's refusal: " + result, //$NON-NLS-1$
             result.contains("write-only")); //$NON-NLS-1$
         assertFalse("a refused call must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    /**
+     * A sent blank comparisonId is not omission: authority(null) means whichever comparison is
+     * running, so accepting it could validate and write against a comparison the caller did not
+     * name.
+     */
+    @Test
+    public void testAnEmptyComparisonIdIsRefusedInsteadOfUsingTheRunningComparison()
+        throws IOException
+    {
+        Path target = file("empty-comparison-id.xml"); //$NON-NLS-1$
+        AtomicInteger authorityCalls = new AtomicInteger();
+        MergeRulesTool tool = new MergeRulesTool(id -> {
+            authorityCalls.incrementAndGet();
+            return Optional.empty();
+        }, ALLOW_CONSENT);
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "comparisonId", "", //$NON-NLS-1$ //$NON-NLS-2$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "comparisonId", "blank"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("a blank id must not fall back to authority(null)", 0, //$NON-NLS-1$
+            authorityCalls.get());
+        assertFalse("a refused blank id must leave no file behind", Files.exists(target)); //$NON-NLS-1$
+    }
+
+    /** Omission still deliberately permits the tool's unvalidated no-comparison write. */
+    @Test
+    public void testAnOmittedComparisonIdStillMeansNoComparisonWasNamed() throws IOException
+    {
+        Path target = file("omitted-comparison-id.xml"); //$NON-NLS-1$
+        AtomicReference<String> authorityId = new AtomicReference<>("not called"); //$NON-NLS-1$
+        MergeRulesTool tool = new MergeRulesTool(id -> {
+            authorityId.set(id);
+            return Optional.empty();
+        }, ALLOW_CONSENT);
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("an omitted id must still author an unvalidated file: " + result, //$NON-NLS-1$
+            result.contains("NOT VALIDATED")); //$NON-NLS-1$
+        assertNull("omission must ask for the running comparison, not invent an id", //$NON-NLS-1$
+            authorityId.get());
+        assertTrue("the unvalidated file must actually be written", Files.exists(target)); //$NON-NLS-1$
     }
 
     // ==================== read ====================
@@ -1926,7 +1979,7 @@ public class MergeRulesToolTest
         Path archive = file("rules.zip"); //$NON-NLS-1$
         writeArchive(archive, null);
         MergeRulesTool tool = new MergeRulesTool(
-            id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+            id -> Optional.of(authority("cmp-7", EVERY_RULE)), ALLOW_CONSENT); //$NON-NLS-1$
 
         String result = tool.execute(params("mode", "write", "filePath", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "basedOn", archive.toString(), //$NON-NLS-1$
@@ -2003,7 +2056,7 @@ public class MergeRulesToolTest
             out.closeEntry();
         }
         MergeRulesTool tool = new MergeRulesTool(
-            id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+            id -> Optional.of(authority("cmp-7", EVERY_RULE)), ALLOW_CONSENT); //$NON-NLS-1$
 
         String result = tool.execute(params("mode", "write", "filePath", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "basedOn", archive.toString(), //$NON-NLS-1$
@@ -2030,7 +2083,7 @@ public class MergeRulesToolTest
             out.closeEntry();
         }
         MergeRulesTool tool = new MergeRulesTool(
-            id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+            id -> Optional.of(authority("cmp-7", EVERY_RULE)), ALLOW_CONSENT); //$NON-NLS-1$
 
         String result = tool.execute(params("mode", "write", "filePath", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "basedOn", archive.toString(), //$NON-NLS-1$
@@ -2062,7 +2115,7 @@ public class MergeRulesToolTest
             out.closeEntry();
         }
         MergeRulesTool tool = new MergeRulesTool(
-            id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+            id -> Optional.of(authority("cmp-7", EVERY_RULE)), ALLOW_CONSENT); //$NON-NLS-1$
 
         String result = tool.execute(params("mode", "write", "filePath", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "basedOn", archive.toString(), //$NON-NLS-1$
@@ -2081,7 +2134,7 @@ public class MergeRulesToolTest
         // something they never had.
         Path archive = file("source.zip"); //$NON-NLS-1$
         MergeRulesTool tool = new MergeRulesTool(
-            id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+            id -> Optional.of(authority("cmp-7", EVERY_RULE)), ALLOW_CONSENT); //$NON-NLS-1$
         tool.execute(params("mode", "write", "filePath", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
 
@@ -2495,7 +2548,8 @@ public class MergeRulesToolTest
     {
         Path target = seedFixture();
         MergeRulesTool tool = new MergeRulesTool(id -> Optional.of(authority("cmp-7", //$NON-NLS-1$
-            List.of("GetFromOther", "DoNotMerge", "MergePrioritizingMain")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            List.of("GetFromOther", "DoNotMerge", "MergePrioritizingMain"))), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            ALLOW_CONSENT);
 
         String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "basedOn", target.toString(), //$NON-NLS-1$
@@ -3994,6 +4048,120 @@ public class MergeRulesToolTest
             read(target).contains("<Node Key=\"$$Root$$\" MergeRule=\"DoNotMerge\"/>")); //$NON-NLS-1$
     }
 
+    // ============ Only a validated same-path replacement asks for destructive consent ============
+
+    /**
+     * Read mode and a fresh write destroy nothing and therefore never ask. The same file becomes
+     * destructive only when filePath and basedOn name it as the target to replace.
+     */
+    @Test
+    public void testConsentIsAskedOnlyForTheSamePathReplace() throws IOException
+    {
+        AtomicInteger consentCalls = new AtomicInteger();
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.empty(), (toolName, preview) -> {
+            consentCalls.incrementAndGet();
+            return ConsentDecision.ALLOW;
+        });
+        Path readable = seed("consent-read.xml", NO_RULE_AT_ALL); //$NON-NLS-1$
+        tool.execute(params("mode", "read", "filePath", readable.toString())); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        Path target = file("consent-fresh.xml"); //$NON-NLS-1$
+        String fresh = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the fresh write must succeed without consent: " + fresh, //$NON-NLS-1$
+            fresh.startsWith("# Merge rules written:")); //$NON-NLS-1$
+        assertEquals("read and fresh-write paths must not ask", 0, consentCalls.get()); //$NON-NLS-1$
+
+        String replace = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", target.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"GetFromOther\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("the allowed replacement must succeed: " + replace, //$NON-NLS-1$
+            replace.startsWith("# Merge rules written:")); //$NON-NLS-1$
+        assertEquals("the destructive replacement must ask exactly once", 1, //$NON-NLS-1$
+            consentCalls.get());
+    }
+
+    /**
+     * Every refusal verdict is terminal: the caller gets a structured refusal and the existing
+     * bytes remain exact.
+     * <p>
+     * What is asserted here is this TOOL's contract - refused means nothing was written - and not
+     * the wording of each verdict, which is shared by every gated tool and pinned once in
+     * {@code DestructiveConsentGateTest}. Demanding the tool's name in all three texts would only
+     * push this test into rewriting a message that #277 deliberately froze.
+     * </p>
+     */
+    @Test
+    public void testEveryNonAllowConsentVerdictPreventsTheReplacement() throws IOException
+    {
+        for (ConsentDecision decision : List.of(ConsentDecision.REJECT, ConsentDecision.TIMEOUT,
+            ConsentDecision.UNATTENDED))
+        {
+            Path target = seed("consent-" + decision.name() + ".xml", FIXTURE); //$NON-NLS-1$ //$NON-NLS-2$
+            MergeRulesTool tool = new MergeRulesTool(id -> Optional.empty(),
+                (toolName, preview) -> decision);
+
+            String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "basedOn", target.toString(), //$NON-NLS-1$
+                "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertErrorNaming(result);
+            assertEquals(decision + " must leave the original file byte-for-byte unchanged", //$NON-NLS-1$
+                FIXTURE, read(target));
+        }
+    }
+
+    /**
+     * The gate is asked with THIS tool's name, which is what makes the prompt and the audit line
+     * say which tool wants the replacement. Asserted at the call rather than in the message,
+     * because the message is shared and frozen.
+     */
+    @Test
+    public void testTheGateIsAskedUnderTheToolsOwnName() throws IOException
+    {
+        Path target = seed("consent-tool-name.xml", FIXTURE); //$NON-NLS-1$
+        AtomicReference<String> askedFor = new AtomicReference<>();
+        MergeRulesTool tool = new MergeRulesTool(id -> Optional.empty(), (toolName, preview) -> {
+            askedFor.set(toolName);
+            return ConsentDecision.REJECT;
+        });
+
+        tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", target.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[\"catalogs\"],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("the gate must be asked for merge_rules", "merge_rules", askedFor.get()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The prompt follows comparison validation. Asking before this refusal would make a human
+     * authorize a replacement the tool already knows it cannot perform.
+     */
+    @Test
+    public void testComparisonValidationRefusesBeforeConsentIsAsked() throws IOException
+    {
+        Path target = seed("consent-after-validation.xml", NO_RULE_AT_ALL); //$NON-NLS-1$
+        AtomicInteger consentCalls = new AtomicInteger();
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-validate", List.of())), //$NON-NLS-1$
+            (toolName, preview) -> {
+                consentCalls.incrementAndGet();
+                return ConsentDecision.ALLOW;
+            });
+
+        String result = tool.execute(params("mode", "write", "filePath", target.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", target.toString(), "comparisonId", "cmp-validate", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertErrorNaming(result, "offers no merge rule", "Nothing was written"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("a validation refusal must happen before any consent request", 0, //$NON-NLS-1$
+            consentCalls.get());
+        assertEquals("validation refusal must preserve the existing file", NO_RULE_AT_ALL, //$NON-NLS-1$
+            read(target));
+    }
+
     // ============ A same-path rewrite may not detach two names of one file ============
 
     @Test
@@ -4756,7 +4924,7 @@ public class MergeRulesToolTest
                 Thread.currentThread().interrupt();
             }
             return Optional.empty();
-        });
+        }, ALLOW_CONSENT);
 
         AtomicReference<String> firstResult = new AtomicReference<>();
         Thread first = new Thread(() -> firstResult.set(parking.execute(params("mode", "write", //$NON-NLS-1$ //$NON-NLS-2$
@@ -4857,7 +5025,7 @@ public class MergeRulesToolTest
 
     private String call(Map<String, String> params)
     {
-        return new MergeRulesTool().execute(params);
+        return new MergeRulesTool(id -> Optional.empty(), ALLOW_CONSENT).execute(params);
     }
 
     private static Map<String, String> params(String... keyValues)

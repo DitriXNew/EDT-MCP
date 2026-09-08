@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 import org.eclipse.emf.common.util.EList;
@@ -886,7 +887,7 @@ public final class MetadataPropertyIntrospector
             switch (kind)
             {
                 case LOCALIZED_STRING:
-                    return Rendered.of(renderLocalizedString(value));
+                    return renderLocalizedString(value);
                 case TYPE_DESCRIPTION:
                     return value instanceof TypeDescription
                         ? renderTypeDescription((TypeDescription)value) : Rendered.ABSENT;
@@ -925,27 +926,67 @@ public final class MetadataPropertyIntrospector
     }
 
     @SuppressWarnings("unchecked")
-    private static String renderLocalizedString(Object value)
+    private static Rendered renderLocalizedString(Object value)
     {
         if (!(value instanceof EMap<?, ?>))
         {
-            return null;
+            return Rendered.ABSENT;
         }
         EMap<String, String> map = (EMap<String, String>)value;
         if (map.isEmpty())
         {
-            return null;
+            return Rendered.ABSENT;
         }
-        StringBuilder sb = new StringBuilder();
+        StringBuilder display = new StringBuilder();
         for (java.util.Map.Entry<String, String> entry : map.entrySet())
         {
-            if (sb.length() > 0)
+            if (display.length() > 0)
             {
-                sb.append(", "); //$NON-NLS-1$
+                display.append(", "); //$NON-NLS-1$
             }
-            sb.append(entry.getKey()).append('=').append(entry.getValue());
+            display.append(entry.getKey()).append('=').append(entry.getValue());
         }
-        return sb.toString();
+        return Rendered.of(display.toString(), localizedStringIdentity(map));
+    }
+
+    /**
+     * Builds a canonical structural identity for a localized-string map.
+     * <p>
+     * The display deliberately stays the compact {@code language=value, ...} form, but neither
+     * separator is structural there: both are legal inside a localized value. Length-prefixing
+     * every key and value makes the boundary unambiguous, while sorting makes map insertion order
+     * irrelevant to equality. A {@code null} is encoded separately from an empty string.
+     *
+     * @param map the non-empty localized-string map
+     * @return an identity that cannot collide merely because display separators occur in data
+     */
+    private static String localizedStringIdentity(EMap<String, String> map)
+    {
+        List<java.util.Map.Entry<String, String>> entries = new ArrayList<>(map.entrySet());
+        Comparator<String> strings = Comparator.nullsFirst(Comparator.naturalOrder());
+        entries.sort((left, right) -> {
+            int byKey = strings.compare(left.getKey(), right.getKey());
+            return byKey != 0 ? byKey : strings.compare(left.getValue(), right.getValue());
+        });
+
+        StringBuilder identity = new StringBuilder().append(entries.size()).append(':');
+        for (java.util.Map.Entry<String, String> entry : entries)
+        {
+            appendIdentityPart(identity, entry.getKey());
+            appendIdentityPart(identity, entry.getValue());
+        }
+        return identity.toString();
+    }
+
+    /** Appends one nullable string in a self-delimiting form. */
+    private static void appendIdentityPart(StringBuilder identity, String value)
+    {
+        if (value == null)
+        {
+            identity.append("-1:"); //$NON-NLS-1$
+            return;
+        }
+        identity.append(value.length()).append(':').append(value);
     }
 
     /**

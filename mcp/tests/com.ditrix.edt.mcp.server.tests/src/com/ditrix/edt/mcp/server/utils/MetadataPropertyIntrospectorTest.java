@@ -725,6 +725,33 @@ public class MetadataPropertyIntrospectorTest
             "en=Weight".equals(synonym.currentValue)); //$NON-NLS-1$
     }
 
+    /**
+     * Display separators are data too. These two localized maps intentionally render the same
+     * compact text, but one has one language entry and the other has two; their comparison
+     * identities must preserve that structural difference without changing what a reader sees.
+     */
+    @Test
+    public void testLocalizedIdentityCannotCollideThroughDisplaySeparators()
+    {
+        String greeting = "\u041F\u0440\u0438\u0432\u0435\u0442"; //$NON-NLS-1$
+        CatalogAttribute oneEntry = newAttribute();
+        oneEntry.getSynonym().put("en", "Hello, ru=" + greeting); //$NON-NLS-1$ //$NON-NLS-2$
+        CatalogAttribute twoEntries = newAttribute();
+        twoEntries.getSynonym().put("en", "Hello"); //$NON-NLS-1$ //$NON-NLS-2$
+        twoEntries.getSynonym().put("ru", greeting); //$NON-NLS-1$
+
+        PropertyInfo one = MetadataPropertyIntrospector.find(oneEntry, "synonym"); //$NON-NLS-1$
+        PropertyInfo two = MetadataPropertyIntrospector.find(twoEntries, "synonym"); //$NON-NLS-1$
+
+        String unchangedDisplay = "en=Hello, ru=" + greeting; //$NON-NLS-1$
+        assertEquals("the one-entry display must remain compact", unchangedDisplay, //$NON-NLS-1$
+            one.currentValue);
+        assertEquals("the two-entry display must remain compact", unchangedDisplay, //$NON-NLS-1$
+            two.currentValue);
+        assertFalse("structurally different localized maps must not identify alike", //$NON-NLS-1$
+            one.valueIdentity.equals(two.valueIdentity));
+    }
+
     @Test
     public void testEnumCurrentValueSharesAllowedVocabulary()
     {
