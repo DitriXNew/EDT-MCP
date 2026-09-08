@@ -14,10 +14,12 @@ import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNull;
 
 import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
 import java.util.Collections;
 import java.util.Set;
 
 import org.eclipse.jface.dialogs.IDialogConstants;
+import org.eclipse.swt.widgets.Shell;
 import org.junit.After;
 import org.junit.Test;
 
@@ -360,6 +362,74 @@ public class DestructiveConsentGateTest
     // =====================================================================
     // Issue #277 — consentDeniedMessage: REJECT text unchanged, TIMEOUT text actionable
     // =====================================================================
+
+    // =====================================================================
+    // The shell probe is BOUNDED: a wedged UI thread is refused, not waited on
+    // =====================================================================
+
+    /**
+     * The defect this closes: the gate asked the UI thread for a shell with an unbounded
+     * syncExec, from a worker thread that is holding the caller's lock. On a workbench whose UI
+     * thread is wedged the call never returned, so merge_rules kept its path mutex and every
+     * later call for that path queued behind a wait that could not end.
+     * <p>
+     * A latch that is never counted down IS that wedged UI thread as far as the wait is
+     * concerned, which is what makes the deadline testable with no display in the room.
+     * </p>
+     */
+    @Test
+    public void aUiThreadThatNeverAnswersIsGivenUpOnRatherThanWaitedFor()
+    {
+        CountDownLatch neverAnswered = new CountDownLatch(1);
+
+        long startedAt = System.nanoTime();
+        LaunchLifecycleUtils.ShellProbe probe =
+            LaunchLifecycleUtils.awaitShellAnswer(neverAnswered, new Shell[1], 150L);
+        long tookMs = (System.nanoTime() - startedAt) / 1_000_000L;
+
+        assertEquals("a silent UI thread must end as TIMED_OUT", //$NON-NLS-1$
+            LaunchLifecycleUtils.ShellProbeOutcome.TIMED_OUT, probe.outcome());
+        assertNull("and hand back no shell", probe.shell()); //$NON-NLS-1$
+        assertTrue("it must give up near the budget, not hang: took " + tookMs + "ms", //$NON-NLS-1$ //$NON-NLS-2$
+            tookMs < 10_000L);
+    }
+
+    /**
+     * The other edge, and the one that keeps #566 intact: a UI thread that ANSWERS "there is no
+     * shell" must not be reported as a timeout. The two mean different things to the operator -
+     * one says nobody is there, the other says somebody is stuck - and the gate turns them into
+     * different verdicts with different remedies.
+     */
+    @Test
+    public void aUiThreadThatAnswersNoShellIsNotATimeout()
+    {
+        CountDownLatch answered = new CountDownLatch(1);
+        answered.countDown();
+
+        LaunchLifecycleUtils.ShellProbe probe =
+            LaunchLifecycleUtils.awaitShellAnswer(answered, new Shell[1], 150L);
+
+        assertEquals("an answered probe with no shell is NO_SHELL, not TIMED_OUT", //$NON-NLS-1$
+            LaunchLifecycleUtils.ShellProbeOutcome.NO_SHELL, probe.outcome());
+    }
+
+    /**
+     * The probe must not spend its budget when there is simply no display: a headless runtime is
+     * answered from the workbench check, without ever posting to a UI thread.
+     */
+    @Test
+    public void aHeadlessRuntimeIsAnsweredWithoutSpendingTheBudget()
+    {
+        long startedAt = System.nanoTime();
+        LaunchLifecycleUtils.ShellProbe probe =
+            LaunchLifecycleUtils.grabActiveShellWithin(30_000L);
+        long tookMs = (System.nanoTime() - startedAt) / 1_000_000L;
+
+        assertEquals("no workbench means NO_SHELL", //$NON-NLS-1$
+            LaunchLifecycleUtils.ShellProbeOutcome.NO_SHELL, probe.outcome());
+        assertTrue("and it must answer at once, not wait 30s: took " + tookMs + "ms", //$NON-NLS-1$ //$NON-NLS-2$
+            tookMs < 5_000L);
+    }
 
     @Test
     public void consentDeniedMessageKeepsTheOriginalRejectText()

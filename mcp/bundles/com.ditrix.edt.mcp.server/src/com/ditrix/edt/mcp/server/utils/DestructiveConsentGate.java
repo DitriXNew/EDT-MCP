@@ -156,6 +156,19 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         "evaluate_expression" //$NON-NLS-1$
     );
 
+    /**
+     * How long the headless probe waits for the UI thread before giving up on it.
+     * <p>
+     * Short on purpose. This is not the human's thinking time - that is
+     * {@link #CONSENT_PROMPT_TIMEOUT_SECONDS}, and it starts later. This is only "is there a
+     * workbench able to answer at all", a question a healthy UI thread answers in microseconds.
+     * A wedged one never answers, and the wait for it used to be unbounded: the gate is called
+     * from a worker thread that holds the caller's lock, so every later call for the same
+     * resource queued behind a wait with no end.
+     * </p>
+     */
+    static final long SHELL_PROBE_TIMEOUT_MS = 5_000L;
+
     private static final DestructiveConsentGate INSTANCE = new DestructiveConsentGate();
 
     /**
@@ -247,11 +260,33 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
             return ConsentDecision.ALLOW;
         }
 
-        // Step 2 — headless probe: never syncExec / block without a live display+shell. With no
-        // human to ask, the answer is NO. Consent for an unattended run comes from the operator
-        // at launch (step 1), not from the absence of a display.
+        // Step 2 — headless probe: never block forever, and never grant consent because no UI
+        // answered. With no human to ask, the answer is NO; consent for an unattended run comes
+        // from the operator at launch (step 1), not from the absence of a display.
+        //
+        // The probe is BOUNDED. It used to ask the UI thread with an unbounded syncExec, so on a
+        // workbench whose UI thread is wedged this call never returned - and it is reached from a
+        // worker thread that is holding the caller's lock (merge_rules holds its path mutex),
+        // so every later call for the same resource queued behind a wait that could not end.
+        //
+        // The ORDER is deliberately unchanged. Reading the policy first would answer ALLOW on a
+        // display-less EDT for ALLOW_ALL, for a per-tool allowance and for a session allowance -
+        // exactly where #566 decided the gate must refuse - so the reorder that was tried once
+        // (b1180580) had to be reverted (b1d14680). The fix here is the WAIT, not the sequence.
         Display display = LaunchLifecycleUtils.workbenchDisplayOrNull();
-        Shell shell = display != null ? LaunchLifecycleUtils.grabActiveShell() : null;
+        LaunchLifecycleUtils.ShellProbe probe =
+            LaunchLifecycleUtils.grabActiveShellWithin(SHELL_PROBE_TIMEOUT_MS);
+        if (probe.outcome() == LaunchLifecycleUtils.ShellProbeOutcome.TIMED_OUT)
+        {
+            // NOT reported as headless: this workbench exists and simply did not answer, so the
+            // remedy is to free the UI thread. TIMEOUT already says that in words, and says it
+            // without claiming the operator is running without a display.
+            Activator.logInfo("Destructive-consent gate: the UI thread did not answer within " //$NON-NLS-1$
+                + SHELL_PROBE_TIMEOUT_MS + "ms — refusing '" + toolName //$NON-NLS-1$
+                + "' rather than waiting on it."); //$NON-NLS-1$
+            return ConsentDecision.TIMEOUT;
+        }
+        Shell shell = probe.shell();
         if (display == null || display.isDisposed() || shell == null)
         {
             Activator.logInfo("Destructive-consent gate: no active UI session — refusing '" //$NON-NLS-1$
