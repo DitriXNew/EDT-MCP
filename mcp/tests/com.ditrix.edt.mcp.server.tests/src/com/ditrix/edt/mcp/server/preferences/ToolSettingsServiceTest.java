@@ -643,6 +643,40 @@ public class ToolSettingsServiceTest
     }
 
     @Test
+    public void testVersion6AddsTheErrorBreakpointToAStoredNoDebugPreset()
+    {
+        // A store saved before set_error_breakpoint existed cannot name it, and the stored value is
+        // a DENYLIST - so without this migration the upgrade hands a debugging switch to a profile
+        // that promised none.
+        Set<String> stored = new HashSet<>(ToolSettingsService.DEVELOPMENT_RECOGNITION_SHAPE);
+        stored.add("git"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(stored, 5);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue("a no-debug preset must not gain break-on-error: " + disabled,
+            disabled.contains("set_error_breakpoint")); //$NON-NLS-1$
+        assertTrue("the user's own choices must survive: " + disabled,
+            disabled.contains("git") && disabled.contains("set_breakpoint")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+    }
+
+    @Test
+    public void testVersion6LeavesAnAllToolsStoreAlone()
+    {
+        // The mirror direction: a store that disabled nothing debugging-related asked for every
+        // tool, and must not be handed a disable it never chose.
+        PreferenceStore store = storedDisabledTools(Set.of("git", "ask_workmate"), 5); //$NON-NLS-1$ //$NON-NLS-2$
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertFalse("an all-tools store must keep break-on-error enabled: " + disabledTools(store),
+            disabledTools(store).contains("set_error_breakpoint")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testVersion5DoesNotDisableLaunchForAStoreThatNeverDisabledIt()
     {
         PreferenceStore store = storedDisabledTools(Set.of("git", "ask_workmate"), 4); //$NON-NLS-1$ //$NON-NLS-2$

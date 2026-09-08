@@ -151,22 +151,61 @@ public class SetBreakpointTool implements IMcpTool
         try
         {
             IBreakpoint bp = BreakpointUtils.findLineBreakpoint(target.file, lineNumber);
-            String action = bp == null ? "created" : "updated"; //$NON-NLS-1$ //$NON-NLS-2$
-            if (bp == null)
+            boolean created = bp == null;
+            String action = created ? "created" : "updated"; //$NON-NLS-1$ //$NON-NLS-2$
+            if (created)
             {
                 bp = BreakpointUtils.createLineBreakpoint(target.file, lineNumber);
             }
-            BreakpointUtils.LineBreakpointConfiguration configuration =
-                BreakpointUtils.configureLineBreakpoint(bp, effectiveCondition, hitCount, effectiveHitCondition);
-            return buildSuccessResult(bp, target.file, module, lineNumber, action,
-                effectiveCondition, hitCount, effectiveHitCondition, conditionProvided,
-                hitCountProvided, configuration);
+            try
+            {
+                BreakpointUtils.LineBreakpointConfiguration configuration =
+                    BreakpointUtils.configureLineBreakpoint(bp, effectiveCondition, hitCount,
+                        effectiveHitCondition);
+                // A breakpoint reused at this line may have been switched OFF in EDT. Asking for a
+                // breakpoint means "stop here", so leaving it disabled would report success for one
+                // that never fires - and this tool has no 'enabled' parameter to correct that with.
+                bp.setEnabled(true);
+                return buildSuccessResult(bp, target.file, module, lineNumber, action,
+                    effectiveCondition, hitCount, effectiveHitCondition, conditionProvided,
+                    hitCountProvided, configuration);
+            }
+            catch (Exception configurationFailure)
+            {
+                // A breakpoint THIS call created and could not configure must not survive the
+                // failure: it is already registered, so the next attempt would find it and report
+                // 'updated' on the half-configured leftover of a call that said it failed.
+                if (created)
+                {
+                    removeQuietly(bp, configurationFailure);
+                }
+                throw configurationFailure;
+            }
         }
         catch (Exception e)
         {
             Activator.logError("Failed to set breakpoint", e); //$NON-NLS-1$
             return ToolResult.error("Failed to set breakpoint: " + e.getMessage() //$NON-NLS-1$
                 + ". Verify the breakpoint in EDT's Breakpoints view, then retry.").toJson(); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Removes a breakpoint this call created after its configuration failed, without letting the
+     * cleanup replace the failure that caused it.
+     *
+     * @param breakpoint the breakpoint to withdraw
+     * @param failure the configuration failure being reported; cleanup trouble is attached to it
+     */
+    private static void removeQuietly(IBreakpoint breakpoint, Exception failure)
+    {
+        try
+        {
+            BreakpointUtils.removeBreakpointById(breakpoint.getMarker().getId());
+        }
+        catch (Exception cleanupFailure)
+        {
+            failure.addSuppressed(cleanupFailure);
         }
     }
 

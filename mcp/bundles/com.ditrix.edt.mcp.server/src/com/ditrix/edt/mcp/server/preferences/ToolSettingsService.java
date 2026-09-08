@@ -243,6 +243,13 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
                 // whose user deliberately re-enabled it after version 2 without adding it back.
                 changed |= migrateRegroupedToolsIntoPresets(disabled);
             }
+            if (storedVersion < 6)
+            {
+                // set_error_breakpoint is new, so a preset saved before it existed cannot name it.
+                // Without this step an upgraded store that chose a NO-DEBUG preset would silently
+                // gain a debugging tool - the same hazard version 2 and version 4 exist for.
+                changed |= migrateErrorBreakpointIntoNoDebugPresets(disabled);
+            }
             if (changed)
             {
                 store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, serializeDisabledTools(disabled));
@@ -291,6 +298,33 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         if (disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE))
         {
             return disabled.add("apply_quick_fix"); //$NON-NLS-1$
+        }
+        return false;
+    }
+
+    /**
+     * Adds {@code set_error_breakpoint} to a store that already expresses a NO-DEBUG profile.
+     * <p>
+     * The tool did not exist when those presets were saved, so their stored denylist cannot name
+     * it - and a denylist is an allow-by-default list: without this step, upgrading would hand a
+     * debugging switch to a profile that promised none. Recognition is by containment of the same
+     * frozen historical shapes the earlier migrations use, so a hand-tuned custom selection and
+     * All Tools are left alone.
+     *
+     * @param disabled the mutable stored disabled-tools set; modified in place
+     * @return {@code true} when the tool was added
+     */
+    private static boolean migrateErrorBreakpointIntoNoDebugPresets(Set<String> disabled)
+    {
+        if (disabled.contains("set_error_breakpoint")) //$NON-NLS-1$
+        {
+            return false;
+        }
+        if (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE)
+            || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE)
+            || disabled.containsAll(DEVELOPMENT_RECOGNITION_SHAPE))
+        {
+            return disabled.add("set_error_breakpoint"); //$NON-NLS-1$
         }
         return false;
     }
