@@ -144,13 +144,19 @@ public final class HttpTransport
     /**
      * The same decision as a pure function of its inputs, so it is unit-testable without a
      * preference store or an {@link HttpExchange}.
+     * <p>
+     * Public so the preferences page can ask the REAL authorizer what would happen to a client
+     * it is about to hand a configuration to, rather than restating this rule in a second place
+     * that could then drift from it.
+     * </p>
      *
      * @param configuredToken the configured {@code PREF_AUTH_TOKEN} (may be {@code null})
      * @param authorizationHeader the request's {@code Authorization} header (may be {@code null})
      * @param boundRemotely whether the OPEN listener accepts connections from other hosts
      * @return true if authorized (or auth disabled), false otherwise
      */
-    static boolean isAuthorized(String configuredToken, String authorizationHeader, boolean boundRemotely)
+    public static boolean isAuthorized(String configuredToken, String authorizationHeader,
+        boolean boundRemotely)
     {
         String token = normalizeToken(configuredToken);
         if (token.isEmpty())
@@ -172,6 +178,85 @@ public final class HttpTransport
             ? trimmed.substring(7).trim()
             : trimmed;
         return constantTimeEquals(token, presented);
+    }
+
+    /**
+     * Whether a listener would refuse the very client this configuration describes - an endpoint
+     * that is up and advertised, and unusable.
+     * <p>
+     * It reaches that state without anything failing: a remote listener may only be bound while a
+     * token is set, but clearing the token afterwards only stores a preference, and the running
+     * listener is never rebound. {@link #isAuthorized} then fails CLOSED on the empty token rather
+     * than serve the network unauthenticated - correct, and invisible from the outside. So the
+     * question is asked of the authorizer itself, with the exact credential the copied
+     * configuration would present (none, when no token is set), and the answer cannot drift from
+     * the rule it reports on.
+     * </p>
+     *
+     * @param configuredToken the stored {@code PREF_AUTH_TOKEN} (may be {@code null})
+     * @param boundRemotely whether the LIVE listener accepts connections from other hosts
+     * @return true when a client built from this configuration would be refused
+     */
+    public static boolean refusesItsOwnConfiguration(String configuredToken, boolean boundRemotely)
+    {
+        String token = normalizeToken(configuredToken);
+        if (!isTransportSafeToken(token))
+        {
+            // The credential never reaches isAuthorized to be compared - there is no header a
+            // client could build to carry it - so the endpoint refuses every request from the
+            // configuration it describes.
+            return true;
+        }
+        return !isAuthorized(configuredToken, token.isEmpty() ? null : "Bearer " + token, //$NON-NLS-1$
+            boundRemotely);
+    }
+
+    /**
+     * Whether a token can be put into an {@code Authorization} header AT ALL - by any client, not
+     * merely by a well-behaved one.
+     * <p>
+     * Two things, and only two things, make that impossible, so only those two are here:
+     * </p>
+     * <ul>
+     * <li>A code point above {@code U+00FF}. A header field value is bytes and this has none, so
+     * there is no request to send: WHATWG {@code fetch} throws on a header value that is not a
+     * byte string, the JDK's own {@code HttpClient} refuses it, and Python's {@code http.client}
+     * fails to encode it. A Cyrillic token is therefore not a credential anybody can present,
+     * however configured it looks, and the endpoint stays locked with nothing on screen to say
+     * why. That is the case this check exists for.</li>
+     * <li>A bare CR or LF, which every HTTP client blocks outright because it splits the request
+     * - header injection, not a credential.</li>
+     * </ul>
+     * <p>
+     * Everything else stays in, INCLUDING things no careful client would send. Latin-1
+     * round-trips with the clients this page hands a config to ({@code fetch} and Python
+     * {@code requests} serialise a header value as ISO-8859-1, which is how the JDK's server
+     * decodes it back), and a control byte is passed through by Python's {@code http.client},
+     * which blocks only CR and LF - the listener then compares the very same character. Both
+     * would be refused by SOME clients and accepted by others, and "some clients cannot use
+     * this" is a different claim from "no client can". Only the second belongs in a warning
+     * whose advice is to replace the credential; the first belongs in the README, where it is.
+     * </p>
+     *
+     * @param token the token as it is compared, i.e. already {@link #normalizeToken normalized}
+     *            (may be {@code null})
+     * @return true unless no client could carry this token in the header
+     */
+    public static boolean isTransportSafeToken(String token)
+    {
+        if (token == null || token.isEmpty())
+        {
+            return true;
+        }
+        for (int i = 0; i < token.length(); i++)
+        {
+            char c = token.charAt(i);
+            if (c > 0x00FF || c == '\r' || c == '\n')
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

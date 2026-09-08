@@ -158,6 +158,100 @@ public class HttpTransportTest
     }
 
     @Test
+    public void testAnEndpointIsCalledOutExactlyWhenItWouldRefuseItsOwnClient()
+    {
+        // What the preferences page asks before it advertises a URL and hands out a config for
+        // it. The one state that answers yes is the one nothing else on that page can see: the
+        // listener is up on every interface, the token that allowed it to open has been cleared,
+        // and every request now fails closed.
+        for (String erased : new String[] { null, "", "   ", "\t\n" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            assertTrue("a remote listener with no token refuses the client it describes", //$NON-NLS-1$
+                HttpTransport.refusesItsOwnConfiguration(erased, REMOTE));
+            assertFalse("the same missing token on loopback is simply auth turned off", //$NON-NLS-1$
+                HttpTransport.refusesItsOwnConfiguration(erased, LOOPBACK));
+        }
+        assertFalse("a remote listener WITH a token serves the config that carries it", //$NON-NLS-1$
+            HttpTransport.refusesItsOwnConfiguration("s3cret", REMOTE)); //$NON-NLS-1$
+        assertFalse("and so does a loopback one", //$NON-NLS-1$
+            HttpTransport.refusesItsOwnConfiguration("s3cret", LOOPBACK)); //$NON-NLS-1$
+        // The credential it asks about is the one the copy button produces, blanks and all -
+        // a token stored with surrounding whitespace is presented trimmed and must still pass.
+        assertFalse("a padded token is presented as it is compared", //$NON-NLS-1$
+            HttpTransport.refusesItsOwnConfiguration("  s3cret  ", REMOTE)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATokenWithNoBytesIsNotAUsableOne()
+    {
+        // A header field value is BYTES. A code point above U+00FF has none, so no client can
+        // send one: WHATWG fetch throws on a header value that is not a byte string, and the
+        // JDK's own HttpClient refuses it too. Stored, such a token looks configured and locks
+        // the endpoint out with nothing on screen to say why - the state the page must not
+        // advertise as ready to paste.
+        assertFalse("a Cyrillic token has no bytes to send", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("\u043f\u0430\u0440\u043e\u043b\u044c")); //$NON-NLS-1$
+        assertFalse("nor does anything past the last byte-valued code point", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("\u0100")); //$NON-NLS-1$
+        assertFalse("nor a bare CR, which every client blocks as request splitting", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("a\rb")); //$NON-NLS-1$
+        assertFalse("nor a bare LF", HttpTransport.isTransportSafeToken("a\nb")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The printable ASCII range is what a header carries - punctuation and spaces included,
+        // since the credential is everything after "Bearer " and an inner space survives.
+        assertTrue("printable ASCII is exactly what a header carries", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("s3cret-~!@#$%^&*()_+ =/")); //$NON-NLS-1$
+        assertTrue("no token is nothing to send, so nothing can go wrong", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("")); //$NON-NLS-1$
+        assertTrue("and an absent one is the same case", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken(null));
+    }
+
+    @Test
+    public void testALatin1TokenIsNotCondemnedForBeingUnusualLookingAlone()
+    {
+        // The other edge of the same rule, and the one it is easy to get wrong by over-reaching.
+        // Latin-1 IS a byte, and it round-trips with the clients this page hands a config to:
+        // fetch and Python requests both serialise a header value as ISO-8859-1, which is how
+        // the JDK's server decodes it back. Warning here would tell someone to replace a
+        // credential that works, so the rule stops at the byte boundary and not at ASCII.
+        assertTrue("an accented token is a byte a client can send", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("\u00e9")); //$NON-NLS-1$
+        assertTrue("and so is the very last byte-valued code point", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("\u00ff")); //$NON-NLS-1$
+        // A control byte is not something to CHOOSE, but Python's http.client blocks only CR and
+        // LF and passes this through, and the listener then compares the very same character. It
+        // is deliverable, so the page must not tell its owner the credential cannot work.
+        assertTrue("a control byte some client will actually deliver is not our business", //$NON-NLS-1$
+            HttpTransport.isTransportSafeToken("a\u0001b")); //$NON-NLS-1$
+        assertTrue("nor is DEL", HttpTransport.isTransportSafeToken("a\u007fb")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("so the page must not warn about it on loopback", //$NON-NLS-1$
+            HttpTransport.refusesItsOwnConfiguration("\u00e9", LOOPBACK)); //$NON-NLS-1$
+        assertFalse("nor on a remote listener, where it authorizes just the same", //$NON-NLS-1$
+            HttpTransport.refusesItsOwnConfiguration("\u00e9", REMOTE)); //$NON-NLS-1$
+        // Which is only true because the authorizer really does accept it - the gate must not be
+        // deciding something isAuthorized would answer differently.
+        assertTrue("the authorizer itself accepts the header that carries it", //$NON-NLS-1$
+            HttpTransport.isAuthorized("\u00e9", "Bearer \u00e9", REMOTE)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAnUnsendableTokenIsCalledOutOnEveryBind()
+    {
+        // Unlike the empty-token lockout, this one does not depend on where the server is bound:
+        // the client cannot present the credential to a loopback listener either. Both binds must
+        // warn, so the page never labels that configuration ready.
+        assertTrue("a token that cannot be sent refuses a remote listener", //$NON-NLS-1$
+            HttpTransport.refusesItsOwnConfiguration("\u043f\u0430\u0440\u043e\u043b\u044c", REMOTE)); //$NON-NLS-1$
+        assertTrue("and a loopback one, where it is equally unpresentable", //$NON-NLS-1$
+            HttpTransport.refusesItsOwnConfiguration("\u043f\u0430\u0440\u043e\u043b\u044c", LOOPBACK)); //$NON-NLS-1$
+        // The surrounding blanks are dropped before the question is asked, so a padded ASCII
+        // token is still usable and must not be caught by this rule.
+        assertFalse("trimming happens first, so padding is not a foreign character", //$NON-NLS-1$
+            HttpTransport.refusesItsOwnConfiguration("  s3cret  ", LOOPBACK)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testTheLoopbackDefaultStillNeedsNoToken()
     {
         // The other direction of the same rule: the default bind is protected by being loopback,

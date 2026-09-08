@@ -15,6 +15,7 @@ Write BSL source code to a 1C metadata object module. Use to edit a module: sear
 | formName | — | string | Form name; required when moduleType=FormModule (e.g. 'ItemForm'). |
 | commandName | — | string | Command name; required when moduleType=CommandModule (e.g. 'FillByTemplate'). |
 | skipSyntaxCheck | — | boolean | Skip the BSL syntax check (default false). |
+| normalizeInvalidCharacters | — | boolean | Replace the characters the 1C standard InvalidCharacterInFile forbids in the SOURCE you supply - en/em/figure dash, horizontal bar and typographic minus become '-', a no-break space becomes a space, a soft hyphen is dropped (default true). They are invisible in a diff and read exactly like their ASCII twins, so they otherwise land in the module as a marker. Set false to write the source byte-for-byte. |
 | expectedSource | — | string | Lost-update guard for mode=replace: the module content you last read; mismatch rejects. |
 | overwrite | — | boolean | Force mode=replace over an existing module without an expectedSource check (default false). |
 | expectedHash | — | string | Lost-update guard for any mode: the contentHash from your last read; mismatch rejects. |

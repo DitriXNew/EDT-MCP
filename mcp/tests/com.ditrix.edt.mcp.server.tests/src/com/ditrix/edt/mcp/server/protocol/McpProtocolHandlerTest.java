@@ -20,9 +20,11 @@ import org.junit.Test;
 import com.ditrix.edt.mcp.server.UserSignal;
 import com.ditrix.edt.mcp.server.UserSignal.SignalType;
 import com.ditrix.edt.mcp.server.protocol.jsonrpc.JsonRpcRequest;
+import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolCallResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.McpToolRegistry;
 import com.ditrix.edt.mcp.server.utils.OutputSizeGuard;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -624,6 +626,148 @@ public class McpProtocolHandlerTest
             assertNotNull("Tool should have description", tool.get("description"));
             assertNotNull("Tool should have inputSchema", tool.get("inputSchema"));
         }
+    }
+
+    @Test
+    public void testToolsListAdvertisesOutputSchemaWhenTheCallWillCarryStructuredContent()
+    {
+        // NO-REGRESSION and the positive half of the #574 invariant: by default the schema is
+        // advertised AND the call that follows carries the structured payload it describes.
+        registry.register(new StubSchemaJsonTool("schema_tool", "{\"value\":7}"));
+
+        JsonObject listed = firstListedTool(handler.processRequest(
+            buildJsonRpcRequest(1, "tools/list", null)));
+        assertNotNull("the default surface must advertise outputSchema", listed.get("outputSchema"));
+
+        JsonObject called = parseResponse(handler.processRequest(
+            buildToolCallRequest(2, "schema_tool", null))).getAsJsonObject("result");
+        assertNotNull("a declared outputSchema obliges structuredContent",
+            called.get("structuredContent"));
+    }
+
+    @Test
+    public void testToolsListWithholdsOutputSchemaWhenStructuredContentIsSuppressed()
+    {
+        // #574: a client that opted out of structuredContent gets its payload as text - so the
+        // schema describing that payload must NOT be advertised either. A client that enforces
+        // the MCP rule ("declared an output schema but returned no structured content") rejects
+        // the whole call with -32600 when the two disagree, which silently killed eight tools.
+        registry.register(new StubSchemaJsonTool("schema_tool", "{\"value\":7}"));
+
+        String initialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+            + "\"params\":{\"protocolVersion\":\"2025-06-18\","
+            + "\"capabilities\":{\"experimental\":{\"structuredContent\":false}},"
+            + "\"clientInfo\":{\"name\":\"client\",\"version\":\"1.0.0\"}}}";
+        handler.processRequest(initialize);
+
+        JsonObject listed = firstListedTool(handler.processRequest(
+            buildJsonRpcRequest(2, "tools/list", null)));
+        assertNull("outputSchema must not be advertised when the call will not honour it",
+            listed.get("outputSchema"));
+
+        // The other half of the same invariant, asserted on the same session: the call really
+        // does withhold the structured payload, so withholding the schema was right.
+        JsonObject called = parseResponse(handler.processRequest(
+            buildToolCallRequest(3, "schema_tool", null))).getAsJsonObject("result");
+        assertNull("the opt-out must still suppress structuredContent",
+            called.get("structuredContent"));
+        // ... and the data is still delivered, in the text channel.
+        assertTrue("the payload must still be returned as text",
+            called.getAsJsonArray("content").get(0).getAsJsonObject().get("text").getAsString()
+                .contains("value"));
+    }
+
+    @Test
+    public void testAdvertisedSchemaAndDeliveredStructuredContentAgreeOnEveryInput()
+    {
+        // THE invariant of #574, pinned mechanically rather than case by case: for every
+        // combination of the two inputs, tools/list advertises the outputSchema exactly when
+        // tools/call will produce structuredContent. Pinned on the pure functions because the
+        // plain-text half reads a preference store no unit test has (Activator is absent here),
+        // so only the capability half is reachable through processRequest.
+        ClientCapabilities optedOut = ClientCapabilities.from(JsonParser.parseString(
+            "{\"experimental\":{\"structuredContent\":false}}"));
+
+        for (ClientCapabilities caps : new ClientCapabilities[] {ClientCapabilities.ABSENT, optedOut})
+        {
+            for (boolean plainText : new boolean[] {false, true})
+            {
+                boolean delivers =
+                    McpProtocolHandler.jsonDeliveryFor(plainText, caps) != McpProtocolHandler.JsonDelivery.TEXT_ONLY;
+                assertEquals("schema/content disagree for plainText=" + plainText,
+                    McpProtocolHandler.advertisesOutputSchema(caps), delivers);
+            }
+        }
+    }
+
+    @Test
+    public void testPlainTextModeMovesThePayloadIntoTextWithoutTakingItOutOfStructured()
+    {
+        // The fix for the race the invariant above would otherwise still have: plain-text mode is
+        // a MUTABLE global preference, so if it decided the schema, a flip between a client's
+        // tools/list and its next call would break the promise, and no notification can reach a
+        // client that holds no SSE stream. It therefore does not decide it - it only moves the
+        // payload into the text channel, which is all issue #39 ever asked for.
+        assertEquals(McpProtocolHandler.JsonDelivery.TEXT_PAYLOAD_AND_STRUCTURED,
+            McpProtocolHandler.jsonDeliveryFor(true, ClientCapabilities.ABSENT));
+        assertEquals(McpProtocolHandler.JsonDelivery.STRUCTURED,
+            McpProtocolHandler.jsonDeliveryFor(false, ClientCapabilities.ABSENT));
+
+        // ... and the opt-out still wins over it, in both directions.
+        ClientCapabilities optedOut = ClientCapabilities.from(JsonParser.parseString(
+            "{\"experimental\":{\"structuredContent\":false}}"));
+        assertEquals(McpProtocolHandler.JsonDelivery.TEXT_ONLY,
+            McpProtocolHandler.jsonDeliveryFor(true, optedOut));
+        assertEquals(McpProtocolHandler.JsonDelivery.TEXT_ONLY,
+            McpProtocolHandler.jsonDeliveryFor(false, optedOut));
+    }
+
+    @Test
+    public void testPlainTextDeliveryCarriesTheWholePayloadInBothChannels()
+    {
+        // What TEXT_PAYLOAD_AND_STRUCTURED actually produces, asserted on the result builder the
+        // handler uses: the text channel gets the payload itself (not the "OK - keys: ..." digest
+        // that made #39's clients show nothing), and structuredContent carries it too.
+        JsonObject payload = JsonParser.parseString("{\"success\":true,\"value\":7}").getAsJsonObject();
+        ToolCallResult r = ToolCallResult.textWithStructured(payload, false);
+
+        String text = r.getContent().get(0).getText();
+        assertTrue("the text channel must carry the payload, not a digest", text.contains("\"value\""));
+        assertTrue("the text channel must carry the payload, not a digest", text.contains("7"));
+        assertNotNull("structuredContent must still be there", r.getStructuredContent());
+        assertNull("a success must not be flagged as an error", r.getIsError());
+
+        // A failed payload keeps isError, so moving it into the text channel cannot make a
+        // failure read as a success.
+        JsonObject failed = JsonParser.parseString(
+            "{\"success\":false,\"error\":\"bad param\"}").getAsJsonObject();
+        assertEquals(Boolean.TRUE, ToolCallResult.textWithStructured(failed, true).getIsError());
+    }
+
+    @Test
+    public void testARefusalIsFlaggedAsAnErrorAndCarriesNoStructuredContent()
+    {
+        // The shape the disabled-tool branch answers with. It matters to the #574 invariant
+        // because enablement is the one input to the outputSchema promise that can change UNDER
+        // a client: a JSON tool can be listed with its schema and switched off before the next
+        // call, and only an error result is exempt from the obligation the schema created.
+        ToolCallResult r = ToolCallResult.refusal("Tool 'x' is disabled by the user.");
+
+        assertEquals("a refusal must be flagged as an error", Boolean.TRUE, r.getIsError());
+        assertNull("a refusal carries no structured payload - nothing ran", r.getStructuredContent());
+        assertTrue("the reason must reach the text channel",
+            r.getContent().get(0).getText().contains("disabled by the user"));
+    }
+
+    /**
+     * The single tool entry of a tools/list response, so a test can assert what was advertised
+     * for it without restating the envelope.
+     */
+    private JsonObject firstListedTool(String response)
+    {
+        JsonArray tools = parseResponse(response).getAsJsonObject("result").getAsJsonArray("tools");
+        assertEquals("expected exactly one listed tool", 1, tools.size());
+        return tools.get(0).getAsJsonObject();
     }
 
     // === Invalid Requests ===
@@ -1549,6 +1693,45 @@ public class McpProtocolHandlerTest
 
         @Override
         public String getInputSchema() { return "{\"type\":\"object\"}"; }
+
+        @Override
+        public ResponseType getResponseType() { return ResponseType.JSON; }
+
+        @Override
+        public String execute(Map<String, String> params) { return payload; }
+    }
+
+    /**
+     * A JSON stub that also DECLARES an {@code outputSchema}, like every real JSON tool does
+     * (enforced by {@code BuiltInToolOutputSchemaTest}). Needed to assert the tools/list
+     * &lt;-&gt; tools/call agreement of #574: the schema may be advertised only when the call
+     * that follows will actually carry {@code structuredContent}.
+     */
+    private static class StubSchemaJsonTool implements IMcpTool
+    {
+        private final String name;
+        private final String payload;
+
+        StubSchemaJsonTool(String name, String payload)
+        {
+            this.name = name;
+            this.payload = payload;
+        }
+
+        @Override
+        public String getName() { return name; }
+
+        @Override
+        public String getDescription() { return "stub json tool with an output schema"; }
+
+        @Override
+        public String getInputSchema() { return "{\"type\":\"object\"}"; }
+
+        @Override
+        public String getOutputSchema()
+        {
+            return "{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"integer\"}}}";
+        }
 
         @Override
         public ResponseType getResponseType() { return ResponseType.JSON; }

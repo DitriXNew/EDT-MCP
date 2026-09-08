@@ -15,6 +15,9 @@ import org.eclipse.jface.preference.IPreferenceStore;
 import org.eclipse.jface.resource.ImageDescriptor;
 import org.eclipse.osgi.util.NLS;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.events.SelectionEvent;
 import org.eclipse.swt.layout.GridData;
@@ -29,6 +32,9 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Spinner;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.plugin.AbstractUIPlugin;
+
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.McpServer;
@@ -58,6 +64,7 @@ public class GeneralTab
     private Combo consentLevelCombo;
     private Combo updateCheckCombo;
     private Label statusLabel;
+    private Label endpointLabel;
     private Button startButton;
     private Button stopButton;
     private Button restartButton;
@@ -428,14 +435,223 @@ public class GeneralTab
         // Empty placeholder for alignment
         new Label(controlComposite, SWT.NONE);
 
-        // Connection info
-        Label infoLabel = new Label(controlComposite, SWT.NONE);
-        infoLabel.setText(Messages.GeneralTab_Endpoint);
+        // Connection info. The label used to read "http://localhost:<port>/mcp" literally, so the
+        // one thing a user comes here for - the address to paste into their agent - had to be
+        // assembled by hand from the spinner above it (#464). It now shows the real URL and
+        // follows the spinner, and the two buttons put it on the clipboard.
+        endpointLabel = new Label(controlComposite, SWT.NONE);
         GridData infoGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        infoGd.horizontalSpan = 4;
-        infoLabel.setLayoutData(infoGd);
+        infoGd.horizontalSpan = 2;
+        endpointLabel.setLayoutData(infoGd);
+        updateEndpointLabel();
+
+        Button copyUrlButton = new Button(controlComposite, SWT.PUSH);
+        copyUrlButton.setText(Messages.GeneralTab_CopyUrl);
+        copyUrlButton.setToolTipText(Messages.GeneralTab_CopyUrl_Tooltip);
+        copyUrlButton.addSelectionListener(new SelectionAdapter()
+        {
+            @Override
+            public void widgetSelected(SelectionEvent e)
+            {
+                copyToClipboard(serviceUrl());
+            }
+        });
+
+        Button copyConfigButton = new Button(controlComposite, SWT.PUSH);
+        copyConfigButton.setText(Messages.GeneralTab_CopyConfig);
+        copyConfigButton.setToolTipText(Messages.GeneralTab_CopyConfig_Tooltip);
+        copyConfigButton.addSelectionListener(new SelectionAdapter()
+        {
+            @Override
+            public void widgetSelected(SelectionEvent e)
+            {
+                copyToClipboard(mcpClientConfigJson());
+            }
+        });
+
+        // The line follows every input it is derived from while the page is open: the spinner, the
+        // token field (an unsaved edit is called out), and whether a server is running
+        // (updateButtons runs on every start/stop/restart).
+        portSpinner.addModifyListener(e -> updateEndpointLabel());
+        authTokenText.addModifyListener(e -> updateEndpointLabel());
 
         updateButtons();
+    }
+
+    /**
+     * The address an MCP client connects to.
+     * <p>
+     * The port is the one a client can reach RIGHT NOW: a running server keeps serving the port it
+     * was started on, and changing the spinner does not move it - Apply only stores the preference,
+     * and only a manual Restart re-binds. Copying the spinner's value while the server ran on
+     * another port would hand out an endpoint nothing is listening on. When the server is stopped
+     * there is no actual port, so the spinner's value - what the next start will use - is the
+     * honest answer.
+     * </p>
+     * <p>
+     * Always {@code localhost}: the "allow remote access" preference widens what the server BINDS
+     * to, but the address to hand a client on this machine is the loopback one either way, and a
+     * remote client needs this machine's hostname, which this page cannot know.
+     * </p>
+     *
+     * @return the MCP endpoint URL
+     */
+    private String serviceUrl()
+    {
+        return "http://localhost:" + effectivePort() + "/mcp"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The auth token the copy buttons speak for: the SAVED one, not what is currently typed.
+     * <p>
+     * Same rule as the port, for the same reason. {@code HttpTransport} reads this preference on
+     * every request, so a token becomes real the moment it is saved and not a keystroke earlier -
+     * copying an unsaved one would produce an entry the server rejects, which is the exact defect
+     * the header was added to fix. An unsaved edit is not hidden either: the endpoint line says
+     * so.
+     * </p>
+     *
+     * @return the saved token, trimmed; empty when authentication is off
+     */
+    private String effectiveAuthToken()
+    {
+        return store == null ? "" : HttpTransport.normalizeToken( //$NON-NLS-1$
+            store.getString(PreferenceConstants.PREF_AUTH_TOKEN));
+    }
+
+    /**
+     * Whether the URL on this page is one the running server would refuse - so the line can say
+     * so instead of handing out an endpoint and a config that cannot work.
+     * <p>
+     * The reachable case is a remote listener whose token was cleared: the bind stands, the
+     * preference is empty, and {@code isAuthorized} fails closed on every request. Nothing in the
+     * page would otherwise show it - the port is right, the token field agrees with the store,
+     * and the copied entry carries no header because none is configured.
+     * </p>
+     *
+     * @return true when a client built from this page's own values would be refused
+     */
+    private boolean endpointRefusesItsOwnConfiguration()
+    {
+        McpServer server = Activator.getDefault() != null ? Activator.getDefault().getMcpServer() : null;
+        return server != null && server.isRunning()
+            && HttpTransport.refusesItsOwnConfiguration(effectiveAuthToken(), server.isBoundRemotely());
+    }
+
+    /**
+     * The port the endpoint line and the copy buttons speak for: the running server's, or the
+     * spinner's when no server is running.
+     *
+     * @return the port a client should use
+     */
+    private int effectivePort()
+    {
+        McpServer server = Activator.getDefault() != null ? Activator.getDefault().getMcpServer() : null;
+        if (server != null && server.isRunning())
+        {
+            return server.getPort();
+        }
+        return portSpinner.getSelection();
+    }
+
+    /**
+     * The server entry a {@code mcpServers} + {@code type}/{@code url} config file expects, ready
+     * to paste. Some agents have no UI for this at all and are configured only by editing JSON,
+     * which is what #464 asked for.
+     * <p>
+     * This is ONE shape, not a universal one, and the button says so: Cursor, VS Code and Claude
+     * Code take it as written, while Cline wants {@code type: "streamableHttp"}, Antigravity a
+     * {@code serverUrl} field, and OpenCode an {@code mcp} wrapper with {@code type: "remote"} -
+     * see the README's per-client sections. Generating those from a picker would mean guessing
+     * whether each accepts an auth header, which their documented examples do not show, so it
+     * stays out until someone can verify it against the real clients.
+     * </p>
+     * <p>
+     * When an auth token is set the snippet carries the {@code Authorization} header too, because
+     * without it every request to {@code /mcp} is a 401 and "ready to paste" would be a lie - and
+     * a token is mandatory for any remote-access setup, which is exactly when a config is most
+     * likely to be copied. The token is a secret, so this is the ONE place that emits it, on an
+     * explicit button press by the operator who owns it; the tooltip says so, and nothing else on
+     * this page or in any tool response ever reveals it.
+     * </p>
+     *
+     * @return the JSON snippet naming this server, its URL, and its auth header when there is one
+     */
+    private String mcpClientConfigJson()
+    {
+        JsonObject server = new JsonObject();
+        server.addProperty("type", "http"); //$NON-NLS-1$ //$NON-NLS-2$
+        server.addProperty("url", serviceUrl()); //$NON-NLS-1$
+        String token = effectiveAuthToken();
+        if (!token.isEmpty())
+        {
+            JsonObject headers = new JsonObject();
+            headers.addProperty("Authorization", "Bearer " + token); //$NON-NLS-1$ //$NON-NLS-2$
+            server.add("headers", headers); //$NON-NLS-1$
+        }
+        JsonObject servers = new JsonObject();
+        servers.add("EDT.MCP", server); //$NON-NLS-1$
+        JsonObject root = new JsonObject();
+        root.add("mcpServers", servers); //$NON-NLS-1$
+        // Built through Gson rather than string concatenation so a token carrying a quote or a
+        // backslash produces valid JSON instead of a file the agent cannot parse.
+        return new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create().toJson(root);
+    }
+
+    /**
+     * Repaints the endpoint label, and says so when the spinner holds a port the running server is
+     * not on yet - otherwise the line would silently disagree with the number right above it.
+     */
+    private void updateEndpointLabel()
+    {
+        if (endpointLabel == null || endpointLabel.isDisposed())
+        {
+            return;
+        }
+        String text = NLS.bind(Messages.GeneralTab_Endpoint, serviceUrl());
+        if (effectivePort() != portSpinner.getSelection())
+        {
+            text = text + " " + NLS.bind(Messages.GeneralTab_EndpointPending, //$NON-NLS-1$
+                Integer.valueOf(portSpinner.getSelection()));
+        }
+        if (!effectiveAuthToken().equals(HttpTransport.normalizeToken(authTokenText.getText())))
+        {
+            text = text + " " + Messages.GeneralTab_TokenPending; //$NON-NLS-1$
+        }
+        if (!HttpTransport.isTransportSafeToken(effectiveAuthToken()))
+        {
+            // Said separately from the lockout below because the remedy is different: this one
+            // is cured by changing the token, not by restarting or setting one.
+            text = text + " " + Messages.GeneralTab_TokenNotTransportSafe; //$NON-NLS-1$
+        }
+        else if (endpointRefusesItsOwnConfiguration())
+        {
+            text = text + " " + Messages.GeneralTab_EndpointLockedOut; //$NON-NLS-1$
+        }
+        endpointLabel.setText(text);
+        endpointLabel.getParent().layout();
+    }
+
+    /**
+     * Puts {@code text} on the system clipboard.
+     * <p>
+     * The {@link Clipboard} is disposed straight away: it holds an OS resource, and the clipboard
+     * CONTENT outlives it - the text stays available to other applications after this returns.
+     * </p>
+     *
+     * @param text the text to copy
+     */
+    private void copyToClipboard(String text)
+    {
+        Clipboard clipboard = new Clipboard(composite.getDisplay());
+        try
+        {
+            clipboard.setContents(new Object[] {text}, new Transfer[] {TextTransfer.getInstance()});
+        }
+        finally
+        {
+            clipboard.dispose();
+        }
     }
 
     /**
@@ -455,6 +671,8 @@ public class GeneralTab
         String enteredToken = HttpTransport.normalizeToken(authTokenText.getText());
         authTokenText.setText(enteredToken);
         store.setValue(PreferenceConstants.PREF_AUTH_TOKEN, enteredToken);
+        // The token is now saved, so the "not saved yet" note must go.
+        updateEndpointLabel();
         store.setValue(PreferenceConstants.PREF_ENHANCE_NAVIGATOR,
             enhanceNavigatorCheck.getSelection());
         store.setValue(PreferenceConstants.PREF_TAGS_SHOW_IN_NAVIGATOR, showTagsCheck.getSelection());
@@ -546,6 +764,27 @@ public class GeneralTab
         return ConsentSettingsService.Level.ASK_ALWAYS;
     }
 
+    /**
+     * Repaints everything that speaks for the LIVE server - the status line, the start/stop
+     * buttons and the endpoint line.
+     * <p>
+     * The tab repaints itself on the start, stop and restart IT performs, but the preference page
+     * restarts the server too (when tool enablement changed), and it does so AFTER this tab has
+     * already saved and repainted. Everything derived from the live server is stale from that
+     * moment: the port it reports, and the lockout warning, which would go on accusing a remote
+     * listener that the restart has just replaced with a loopback one.
+     * </p>
+     */
+    public void refreshServerState()
+    {
+        if (statusLabel == null || statusLabel.isDisposed())
+        {
+            return;
+        }
+        updateStatusLabel();
+        updateButtons();
+    }
+
     private void updateStatusLabel()
     {
         McpServer server = Activator.getDefault().getMcpServer();
@@ -569,6 +808,9 @@ public class GeneralTab
         startButton.setEnabled(!running);
         stopButton.setEnabled(running);
         restartButton.setEnabled(running);
+        // The endpoint speaks for the RUNNING port, so it changes meaning here too: this runs on
+        // every start, stop and restart.
+        updateEndpointLabel();
     }
 
     private void startServer()

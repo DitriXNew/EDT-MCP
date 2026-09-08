@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -122,6 +123,27 @@ public class McpServerTest
         server.restart(PORT);
 
         assertEquals("stop start ", server.calls());
+    }
+
+    /**
+     * The preferences page warns that the advertised endpoint refuses everything when the live
+     * listener is remote and the token is gone. It asks the server which listener it has, so a
+     * server with NO listener must answer "not remote" - otherwise the page would warn about a
+     * lockout on a stopped server, where there is nothing to be locked out of.
+     */
+    @Test
+    public void testAServerWithNoListenerIsNotARemoteOne()
+    {
+        McpServer neverStarted = new McpServer();
+
+        assertFalse("a server that never started is bound to nothing at all", //$NON-NLS-1$
+            neverStarted.isBoundRemotely());
+        assertFalse("and it is not running either", neverStarted.isRunning()); //$NON-NLS-1$
+
+        // stop() on a server that never bound must not invent a bind to forget.
+        neverStarted.stop();
+        assertFalse("stopping what never started leaves it bound to nothing", //$NON-NLS-1$
+            neverStarted.isBoundRemotely());
     }
 
     /**

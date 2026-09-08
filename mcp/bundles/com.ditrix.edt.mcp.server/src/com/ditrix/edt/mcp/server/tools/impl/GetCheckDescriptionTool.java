@@ -6,30 +6,27 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Map;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.jface.preference.IPreferenceStore;
 
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.preferences.PreferenceConstants;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.CheckDescriptionLoader;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
  * Tool to get check description by check ID.
- * Reads markdown files from the configured checks folder.
+ * <p>
+ * The descriptions ship with the plugin; see {@link CheckDescriptionLoader}, which also honours
+ * the optional checks-folder preference as a per-file override.
+ * </p>
  */
 public class GetCheckDescriptionTool implements IMcpTool
 {
@@ -58,9 +55,7 @@ public class GetCheckDescriptionTool implements IMcpTool
             .stringProperty(KEY_CHECK_ID,
                 "Check id: the symbolic dash-cased id (e.g. 'begin-transaction', " //$NON-NLS-1$
                 + "'ql-temp-table-index') OR the short UID code from get_project_errors " //$NON-NLS-1$
-                + "(e.g. 'SU23'); a UID is resolved when projectName is also supplied. " //$NON-NLS-1$
-                + "Precondition: a check-descriptions folder must be configured in MCP " //$NON-NLS-1$
-                + "preferences, else the tool returns a configuration error.", true) //$NON-NLS-1$
+                + "(e.g. 'SU23'); a UID is resolved when projectName is also supplied.", true) //$NON-NLS-1$
             .stringProperty("projectName", //$NON-NLS-1$
                 "Optional EDT project name. Required only to resolve a short UID checkId " //$NON-NLS-1$
                 + "(e.g. 'SU23') to its symbolic id; ignored when checkId is already symbolic.") //$NON-NLS-1$
@@ -87,73 +82,14 @@ public class GetCheckDescriptionTool implements IMcpTool
     }
     
     /**
-     * Finds the documentation file for a given check ID.
-     * 
-     * @param checkId the check ID
-     * @return Path to the documentation file, or null if not found or invalid
-     */
-    private static Path findCheckDocumentationFile(String checkId)
-    {
-        if (checkId == null || checkId.isEmpty())
-        {
-            return null;
-        }
-        
-        try
-        {
-            // Get checks folder from preferences
-            IPreferenceStore store = Activator.getDefault().getPreferenceStore();
-            String checksFolder = store.getString(PreferenceConstants.PREF_CHECKS_FOLDER);
-            
-            if (checksFolder == null || checksFolder.isEmpty())
-            {
-                return null;
-            }
-            
-            Path folderPath = Paths.get(checksFolder);
-            if (!Files.exists(folderPath) || !Files.isDirectory(folderPath))
-            {
-                return null;
-            }
-            
-            // Sanitize checkId to prevent path traversal
-            String sanitizedCheckId = checkId.replaceAll("[^a-zA-Z0-9_-]", ""); //$NON-NLS-1$ //$NON-NLS-2$
-            if (!sanitizedCheckId.equals(checkId))
-            {
-                return null;
-            }
-            
-            // Try to find the file with .md extension
-            Path checkFile = folderPath.resolve(checkId + ".md"); //$NON-NLS-1$
-            if (Files.exists(checkFile))
-            {
-                return checkFile;
-            }
-            
-            // Try lowercase version
-            Path checkFileLower = folderPath.resolve(checkId.toLowerCase() + ".md"); //$NON-NLS-1$
-            if (Files.exists(checkFileLower))
-            {
-                return checkFileLower;
-            }
-            
-            return null;
-        }
-        catch (Exception e)
-        {
-            return null;
-        }
-    }
-    
-    /**
      * Checks if documentation exists for a given check ID.
-     * 
+     *
      * @param checkId the check ID
-     * @return true if documentation file exists, false otherwise
+     * @return true if a description is available (shipped or overridden), false otherwise
      */
     public static boolean hasCheckDocumentation(String checkId)
     {
-        return findCheckDocumentationFile(checkId) != null;
+        return CheckDescriptionLoader.has(checkId);
     }
     
     /**
@@ -190,49 +126,35 @@ public class GetCheckDescriptionTool implements IMcpTool
 
         try
         {
-            // Get checks folder from preferences for error messages
-            IPreferenceStore store = Activator.getDefault().getPreferenceStore();
-            String checksFolder = store.getString(PreferenceConstants.PREF_CHECKS_FOLDER);
+            // Direct lookup, checkId assumed symbolic.
+            String body = CheckDescriptionLoader.load(checkId);
 
-            if (checksFolder == null || checksFolder.isEmpty())
-            {
-                return ToolResult.error("Check descriptions folder is not configured.\n\n" + //$NON-NLS-1$
-                       "Please set it in Preferences -> MCP Server.").toJson(); //$NON-NLS-1$
-            }
-
-            Path folderPath = Paths.get(checksFolder);
-            if (!Files.exists(folderPath) || !Files.isDirectory(folderPath))
-            {
-                return ToolResult.error("Check descriptions folder does not exist: " + checksFolder).toJson(); //$NON-NLS-1$
-            }
-
-            // Find the documentation file (checkId assumed symbolic).
-            Path checkFile = findCheckDocumentationFile(checkId);
-
-            // Direct lookup missed: checkId may be a short UID (e.g. "SU23"). When a
-            // project is known, resolve the UID to its symbolic id and retry, so the
-            // get_project_errors -> get_check_description chain works for UID-only codes.
-            if (checkFile == null && projectName != null && !projectName.isEmpty())
+            // Missed: checkId may be a short UID (e.g. "SU23"). When a project is known,
+            // resolve the UID to its symbolic id and retry, so the get_project_errors ->
+            // get_check_description chain works for UID-only codes.
+            if (body == null && projectName != null && !projectName.isEmpty())
             {
                 String symbolic = resolveSymbolicViaUid(checkId, projectName);
                 if (symbolic != null && !symbolic.equals(checkId))
                 {
-                    checkFile = findCheckDocumentationFile(symbolic);
+                    body = CheckDescriptionLoader.load(symbolic);
                 }
             }
 
-            if (checkFile == null)
+            if (body == null)
             {
-                return ToolResult.error("Check description not found for: " + checkId).toJson(); //$NON-NLS-1$
+                // The descriptions ship with the plugin, so a miss is about THIS id and not
+                // about a setup step the operator skipped - name the id and the two ways to
+                // get a usable one, rather than sending the caller to Preferences.
+                return ToolResult.error("No check description for: " + checkId //$NON-NLS-1$
+                    + ". Use the symbolic dash-cased id (e.g. 'begin-transaction'); a short UID " //$NON-NLS-1$
+                    + "code from get_project_errors (e.g. 'SU23') resolves only when projectName " //$NON-NLS-1$
+                    + "is supplied too. Not every EDT check has a description written for it.") //$NON-NLS-1$
+                    .toJson();
             }
 
-            // Read and return file content directly (it's already Markdown)
-            return Files.readString(checkFile, StandardCharsets.UTF_8);
-        }
-        catch (IOException e)
-        {
-            Activator.logError("Error reading check description for: " + checkId, e); //$NON-NLS-1$
-            return ToolResult.error("Failed to read check description: " + e.getMessage()).toJson(); //$NON-NLS-1$
+            // The body is already Markdown.
+            return body;
         }
         catch (Exception e)
         {

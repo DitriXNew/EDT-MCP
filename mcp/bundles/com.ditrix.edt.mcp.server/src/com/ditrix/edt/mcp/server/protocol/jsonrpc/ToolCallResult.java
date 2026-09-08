@@ -47,6 +47,29 @@ public class ToolCallResult
     }
 
     /**
+     * A refusal: the reason as text, flagged {@code isError:true}, and NO structuredContent.
+     * <p>
+     * For the case where the server declines to run a tool at all - today, a tool the user
+     * switched off. It is a refusal rather than a failure of the tool, but it is NOT a success:
+     * nothing ran, and a client told otherwise records an empty answer as the tool's output.
+     * The flag also matters to the {@code outputSchema} contract, because enablement is a
+     * MUTABLE input - a JSON tool can be listed with its schema and switched off before the next
+     * call - and an error result is exempt from that obligation, which a plain text success is
+     * not (#574).
+     * </p>
+     *
+     * @param message the reason, and what to do about it
+     * @return a text result flagged {@code isError:true}
+     */
+    public static ToolCallResult refusal(String message)
+    {
+        ToolCallResult result = new ToolCallResult();
+        result.content.add(ContentItem.text(message));
+        result.isError = Boolean.TRUE;
+        return result;
+    }
+
+    /**
      * Creates a successful JSON content result with structuredContent.
      */
     public static ToolCallResult json(Object structuredContent)
@@ -81,10 +104,37 @@ public class ToolCallResult
     }
 
     /**
+     * The whole payload in the TEXT channel AND in {@code structuredContent}.
+     * <p>
+     * This is plain-text mode: the setting exists because some clients read only
+     * {@code content[0].text} and never look at {@code structuredContent} (#39), so the payload
+     * has to BE in the text. Taking it out of the structured channel as well was collateral, and
+     * it is what broke the clients that enforce the {@code outputSchema} contract (#574) - a tool
+     * that declares a schema must return structured content. Both channels carry it now, which
+     * satisfies both kinds of client and lets the schema be advertised unconditionally.
+     * </p>
+     *
+     * @param structuredContent the payload (typically a Gson {@link JsonElement})
+     * @param isError whether the payload is a tool-level failure
+     * @return a result carrying the payload in both channels
+     */
+    public static ToolCallResult textWithStructured(Object structuredContent, boolean isError)
+    {
+        ToolCallResult result = new ToolCallResult();
+        // Capped like every other text payload, so the text channel cannot grow unbounded.
+        result.content.add(ContentItem.text(OutputSizeGuard.cap(payloadText(structuredContent))));
+        result.structuredContent = structuredContent;
+        if (isError)
+        {
+            result.isError = Boolean.TRUE;
+        }
+        return result;
+    }
+
+    /**
      * A TEXT-only error result: the whole error payload in the text channel plus {@code isError:true},
-     * and NO {@code structuredContent}. Used on the JSON path when the structured payload must be
-     * suppressed (plain-text mode, or a client that opted out of structuredContent) - suppressing it
-     * must not turn a tool FAILURE into a success-looking result.
+     * and NO {@code structuredContent}. Used on the JSON path for a client that explicitly opted out
+     * of structuredContent - suppressing it must not turn a tool FAILURE into a success-looking result.
      *
      * @param structuredContent the structured error payload (typically a Gson {@link JsonElement})
      * @return a text result flagged {@code isError:true}
@@ -98,21 +148,21 @@ public class ToolCallResult
         // client that cannot read structuredContent would otherwise lose exactly those. Capped like
         // the normal text path, so suppressing the structured channel cannot let a huge payload
         // through unbounded.
-        result.content.add(ContentItem.text(OutputSizeGuard.cap(errorPayloadText(structuredContent))));
+        result.content.add(ContentItem.text(OutputSizeGuard.cap(payloadText(structuredContent))));
         result.isError = Boolean.TRUE;
         return result;
     }
 
     /**
-     * The text form of a failed payload for a client that cannot accept {@code structuredContent}:
-     * the payload itself, so nothing an ordinary client would have read is dropped. A Gson element
-     * is serialized back to JSON, a {@link CharSequence} IS the payload already and is used verbatim,
-     * and anything else falls back to the plain error message.
+     * The text form of a payload for a client that reads the text channel: the payload itself, so
+     * nothing an ordinary client would have read is dropped. A Gson element is serialized back to
+     * JSON, a {@link CharSequence} IS the payload already and is used verbatim, and anything else
+     * falls back to the plain error message.
      *
-     * @param structuredContent the structured error payload (typically a Gson {@link JsonElement})
+     * @param structuredContent the payload (typically a Gson {@link JsonElement})
      * @return the text to put into {@code content[0]}
      */
-    private static String errorPayloadText(Object structuredContent)
+    private static String payloadText(Object structuredContent)
     {
         if (structuredContent instanceof JsonElement || structuredContent instanceof CharSequence)
         {
