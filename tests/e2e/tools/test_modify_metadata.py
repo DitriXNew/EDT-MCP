@@ -1153,9 +1153,15 @@ def test_modify_form_root_auto_title_persists_and_reads_back():
     assert r.structured.get("localesMissing") == [], \
         "the fixture's only in-use locale was filled by this root-title write: %r" % (r.structured,)
 
-    # DISK FIRST: modify_metadata submits and drains this exact Form.form export.
-    assert_diff_contains("<autoTitle>false</autoTitle>",
-                         ctx="the root autoTitle change must reach Form.form before read-back")
+    # DISK FIRST: modify_metadata submits and drains this exact Form.form export. Turning autoTitle
+    # OFF is visible as the REMOVAL of the fixture's <autoTitle>true</autoTitle>, not as an added
+    # <autoTitle>false</autoTitle>: autoTitle is a primitive boolean whose metamodel default is
+    # false, and EMF does not serialize a default-valued attribute. Asserting the added element
+    # would assert a shape the serializer cannot produce.
+    poll_diff_contains("autoTitle",
+                       ctx="the root autoTitle change must reach Form.form before read-back")
+    assert "<autoTitle>" not in read_disk(_ITEM_FORM), \
+        "turning the root autoTitle off must remove the element from Form.form"
     assert_diff_contains(root_title,
                          ctx="the localized root title must reach Form.form before read-back")
 
