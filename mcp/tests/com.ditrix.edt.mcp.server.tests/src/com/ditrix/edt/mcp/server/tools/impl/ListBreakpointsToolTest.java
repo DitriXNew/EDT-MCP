@@ -139,7 +139,7 @@ public class ListBreakpointsToolTest
     }
 
     @Test
-    public void testCatchAllExceptionBreakpointHasEmptyMessage()
+    public void testCatchAllExceptionBreakpointOmitsTheMessageInsteadOfPrintingItEmpty()
         throws Exception
     {
         IBreakpoint breakpoint = mock(IBreakpoint.class);
@@ -149,7 +149,9 @@ public class ListBreakpointsToolTest
         Map<String, Object> dto = ListBreakpointsTool.createExceptionBreakpointDto(breakpoint, marker);
 
         assertEquals(Boolean.TRUE, dto.get("catchAllExceptions")); //$NON-NLS-1$
-        assertEquals("", dto.get("exceptionMessage")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Absent, not "": an empty string reads as "there IS a filter and it matches nothing",
+        // which is the opposite of catch-all. Unset fields are left out, as for line breakpoints.
+        assertFalse(dto.containsKey("exceptionMessage")); //$NON-NLS-1$
     }
 
     private static ILineBreakpoint configuredBreakpoint(String condition, int hitCount,

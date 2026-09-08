@@ -334,23 +334,6 @@ public final class BreakpointUtils
         String configuredMessage = catchAll ? null : exceptionMessage;
         if (!existing.isEmpty())
         {
-            boolean resultCatchAll;
-            String resultMessage;
-            if (updateFilter)
-            {
-                resultCatchAll = catchAll;
-                resultMessage = configuredMessage;
-            }
-            else
-            {
-                Map<String, Object> configured =
-                    readExceptionBreakpointConfiguration(existing.get(0).getMarker());
-                resultCatchAll = Boolean.TRUE.equals(configured.get("catchAllExceptions")); //$NON-NLS-1$
-                Object existingMessage = configured.get("exceptionMessage"); //$NON-NLS-1$
-                resultMessage = existingMessage == null || existingMessage.toString().isEmpty()
-                    ? null
-                    : existingMessage.toString();
-            }
             for (IBreakpoint breakpoint : existing)
             {
                 if (updateFilter)
@@ -359,8 +342,7 @@ public final class BreakpointUtils
                 }
                 breakpoint.setEnabled(true);
             }
-            return ExceptionBreakpointChange.enabled("updated", existing.get(0), resultCatchAll, //$NON-NLS-1$
-                resultMessage);
+            return describe("updated", existing.get(0)); //$NON-NLS-1$
         }
 
         IBreakpoint created = createExceptionBreakpointFromService(configuredMessage);
@@ -369,7 +351,7 @@ public final class BreakpointUtils
             configureExceptionBreakpoint(created, catchAll, configuredMessage);
             created.setEnabled(true);
             manager.addBreakpoint(created);
-            return ExceptionBreakpointChange.enabled("created", created, catchAll, configuredMessage); //$NON-NLS-1$
+            return describe("created", created); //$NON-NLS-1$
         }
         catch (Exception e)
         {
@@ -408,21 +390,60 @@ public final class BreakpointUtils
             "com._1c.g5.v8.dt.debug.core.model.breakpoints.IBslExceptionBreakpoint"); //$NON-NLS-1$
     }
 
+    /**
+     * Describes an exception breakpoint from its MARKER, after the write, never from what the
+     * caller asked for.
+     * <p>
+     * The reason is a defect this code had: the answer echoed the request, so a setter whose
+     * effect never reached the marker was still reported as applied - "the filter is cleared"
+     * while the filter was still there. An answer computed from the request cannot fail; an
+     * answer read back can, and that is the point.
+     *
+     * @param action what happened, {@code created} or {@code updated}
+     * @param breakpoint the registered exception breakpoint
+     * @return the change carrying the state the marker actually holds
+     * @throws Exception when the marker cannot be read
+     */
+    private static ExceptionBreakpointChange describe(String action, IBreakpoint breakpoint)
+        throws Exception
+    {
+        Map<String, Object> configured =
+            readExceptionBreakpointConfiguration(breakpoint.getMarker());
+        Object message = configured.get("exceptionMessage"); //$NON-NLS-1$
+        String storedMessage = message == null || message.toString().isEmpty()
+            ? null
+            : message.toString();
+        return ExceptionBreakpointChange.enabled(action, breakpoint,
+            Boolean.TRUE.equals(configured.get("catchAllExceptions")), storedMessage); //$NON-NLS-1$
+    }
+
     /** Reads the configured exception filter for list_breakpoints without linking its interface. */
     public static Map<String, Object> readExceptionBreakpointConfiguration(IMarker marker)
         throws Exception
     {
         Map<String, Object> configured = new LinkedHashMap<>();
         // The verified public exception interface exposes setters, not a getter contract we can
-        // safely link or guess. Read the backing marker EDT actually persists instead: locate the
-        // attributes by their semantic suffix so no unverified full attribute name is invented.
-        Object catchAll = markerAttributeBySuffix(marker, "catchAllExceptions"); //$NON-NLS-1$
+        // safely link or guess. Read the backing marker EDT actually persists instead.
+        //
+        // The suffix is the platform's OWN spelling, and it is NOT the method name: EDT stores
+        // the catch-all flag under 'com._1c.g5.v8.dt.debug.core.allExceptions' (the constant
+        // IBslExceptionBreakpoint.ALL_EXCEPTIONS) while the setter is setCatchAllExceptions.
+        // Looking for 'catchAllExceptions' matched nothing, and the reader then fell through to
+        // the message-based guess below - which reported a filtered breakpoint as filtered even
+        // after the filter had been cleared.
+        Object catchAll = markerAttributeBySuffix(marker, "allExceptions"); //$NON-NLS-1$
         Object message = markerAttributeBySuffix(marker, "exceptionMessage"); //$NON-NLS-1$
         boolean catchesAll = catchAll instanceof Boolean
             ? ((Boolean)catchAll).booleanValue()
             : message == null || message.toString().isEmpty();
         configured.put("catchAllExceptions", catchesAll); //$NON-NLS-1$
-        configured.put("exceptionMessage", message == null ? "" : message.toString()); //$NON-NLS-1$ //$NON-NLS-2$
+        // An absent filter is left OUT rather than rendered as an empty string: the same rule the
+        // line-breakpoint reader follows, and the difference a caller acts on - "" would read as
+        // "there is a filter, and it matches everything".
+        if (message != null && !message.toString().isEmpty())
+        {
+            configured.put("exceptionMessage", message.toString()); //$NON-NLS-1$
+        }
         return configured;
     }
 
@@ -767,6 +788,40 @@ public final class BreakpointUtils
         }
         invoke(setMessage, breakpoint, exceptionMessage == null ? "" : exceptionMessage); //$NON-NLS-1$
         invoke(setCatchAll, breakpoint, Boolean.valueOf(catchAll));
+        if (exceptionMessage == null || exceptionMessage.isEmpty())
+        {
+            clearMarkerAttributeBySuffix(breakpoint.getMarker(), "exceptionMessage"); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Removes a marker attribute that the platform setter did NOT remove.
+     * <p>
+     * Measured on EDT 2026.2: {@code setCatchAllExceptions(true)} reaches the marker, while
+     * {@code setExceptionMessage("")} - which the platform turns into a null passed to the ARRAY
+     * form of {@code setAttributes} - leaves the old filter in place. Read back after the setter,
+     * the filter was still there. So the clear is finished here, through the single-attribute
+     * form, and only for an attribute that is actually present: the name is taken from the marker
+     * itself rather than invented.
+     *
+     * @param marker the breakpoint's marker, may be {@code null}
+     * @param suffix the semantic suffix of the attribute to remove
+     * @throws Exception when the marker cannot be read or written
+     */
+    private static void clearMarkerAttributeBySuffix(IMarker marker, String suffix)
+        throws Exception
+    {
+        if (marker == null || !marker.exists())
+        {
+            return;
+        }
+        for (Map.Entry<String, Object> attribute : marker.getAttributes().entrySet())
+        {
+            if (attribute.getKey().endsWith(suffix) && attribute.getValue() != null)
+            {
+                marker.setAttribute(attribute.getKey(), null);
+            }
+        }
     }
 
     private static Object markerAttributeBySuffix(IMarker marker, String suffix) throws Exception
