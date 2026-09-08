@@ -50,6 +50,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.LifecycleWaiter;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
+import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils.MetadataTypeInfo;
@@ -129,6 +130,12 @@ public class CreateProjectTool implements IMcpTool
 
     /** Parameter key: optional external-object root to seed during project creation. */
     private static final String KEY_EXTERNAL_OBJECT = "externalObject"; //$NON-NLS-1$
+
+    /** Parameter key: whether Russian yo is normalized in a seeded root Name. */
+    private static final String KEY_NORMALIZE_YO = "normalizeYo"; //$NON-NLS-1$
+
+    /** Output key: whether the requested external-object root was observed after a slow create. */
+    private static final String KEY_EXTERNAL_OBJECT_CONFIRMED = "externalObjectConfirmed"; //$NON-NLS-1$
 
     /** Parameter/output key: extension name prefix. */
     private static final String KEY_PREFIX = "prefix"; //$NON-NLS-1$
@@ -221,8 +228,14 @@ public class CreateProjectTool implements IMcpTool
             .stringProperty(KEY_EXTERNAL_OBJECT,
                 "Optional root to seed for projectKind=externalObjects: " //$NON-NLS-1$
                     + "'ExternalDataProcessor.<Name>' or 'ExternalReport.<Name>'; the TYPE token may be " //$NON-NLS-1$
-                    + "English or Russian, and Name is a programmatic identifier. Omit for an empty project; " //$NON-NLS-1$
+                    + "English or Russian and is not normalized; Name is a programmatic identifier whose " //$NON-NLS-1$
+                    + "'ё'/'Ё' is normalized by default according to normalizeYo. Omit for an empty project; " //$NON-NLS-1$
                     + "REJECTED for other project kinds.") //$NON-NLS-1$
+            .booleanProperty(KEY_NORMALIZE_YO,
+                "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in the seeded externalObject root " //$NON-NLS-1$
+                    + "NAME (default true). 'ё' in a Name is flagged by the 1C standard " //$NON-NLS-1$
+                    + "mdo-ru-name-unallowed-letter, so normalizing on input stores a compliant name. " //$NON-NLS-1$
+                    + "Set false to keep 'ё' exactly as supplied. The TYPE token is never normalized.") //$NON-NLS-1$
             .stringProperty("baseProjectName", //$NON-NLS-1$
                 "Name of the BASE configuration EDT project (required for extension; " //$NON-NLS-1$
                     + "REJECTED for configuration and externalObjects). " //$NON-NLS-1$
@@ -268,8 +281,11 @@ public class CreateProjectTool implements IMcpTool
     public String getOutputSchema()
     {
         return JsonSchemaBuilder.object()
-            .booleanProperty("success", "Whether the project was created", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty(McpKeys.ACTION, "'created' on success") //$NON-NLS-1$
+            .booleanProperty("success", //$NON-NLS-1$
+                "Whether the tool returned project status instead of an immediate error; inspect action and " //$NON-NLS-1$
+                    + "externalObjectConfirmed for a slow seeded create", true)
+            .stringProperty(McpKeys.ACTION,
+                "'created' on completion; 'verificationRequired' for every slow seeded create") //$NON-NLS-1$
             .stringProperty(McpKeys.PROJECT,
                 "EDT workspace project name of the created project (round-trip key for sibling tools)") //$NON-NLS-1$
             .stringProperty(KEY_PROJECT_KIND, "Kind of project created: configuration, extension, or externalObjects") //$NON-NLS-1$
@@ -281,7 +297,15 @@ public class CreateProjectTool implements IMcpTool
             .stringProperty(KEY_PURPOSE, "ConfigurationExtensionPurpose value applied (extension only, conditional)") //$NON-NLS-1$
             .stringProperty(KEY_SCRIPT_VARIANT, "ScriptVariant applied or inherited") //$NON-NLS-1$
             .stringProperty(KEY_VERSION, "Platform version string used for project creation") //$NON-NLS-1$
-            .stringProperty(KEY_STATE, "'ready' when lifecycle STARTED was reached, 'created' otherwise") //$NON-NLS-1$
+            .stringProperty(KEY_EXTERNAL_OBJECT,
+                "Canonical FQN of the seeded external-object root, when requested") //$NON-NLS-1$
+            .booleanProperty(KEY_EXTERNAL_OBJECT_CONFIRMED,
+                "Whether a requested root was observed through metadata scope resolution on the slow path") //$NON-NLS-1$
+            .stringArrayProperty("normalized", //$NON-NLS-1$
+                "Fields whose value was rewritten by the 'ё'->'е' normalization (when any)") //$NON-NLS-1$
+            .stringProperty(KEY_STATE,
+                "'ready' when lifecycle STARTED was reached, 'created' otherwise, or " //$NON-NLS-1$
+                    + "'rootConfirmed'/'rootUnconfirmed' when a slow seeded create requires verification") //$NON-NLS-1$
             .objectProperty(KEY_CODESTYLE,
                 "v8codestyle preference application result: {applied: bool, note: string, autoSortNote: string}") //$NON-NLS-1$
             .stringProperty(KEY_SYNONYM_NOTE,
@@ -320,6 +344,7 @@ public class CreateProjectTool implements IMcpTool
         String purposeStr = JsonUtils.extractStringArgument(params, KEY_PURPOSE);
         String compatModeStr = JsonUtils.extractStringArgument(params, "compatibilityMode"); //$NON-NLS-1$
         String scriptVariantStr = JsonUtils.extractStringArgument(params, KEY_SCRIPT_VARIANT);
+        boolean normalizeYo = JsonUtils.extractBooleanArgument(params, KEY_NORMALIZE_YO, true);
         boolean standardChecks = JsonUtils.extractBooleanArgument(params, PREF_STANDARD_CHECKS, true);
         boolean commonChecks = JsonUtils.extractBooleanArgument(params, PREF_COMMON_CHECKS, true);
         // autoSortTopObjects is read to satisfy schema parity; not yet applied (see class-level doc)
@@ -348,7 +373,7 @@ public class CreateProjectTool implements IMcpTool
         ExternalObjectSpec externalObject = null;
         if (isExternalObjects && externalObjectStr != null)
         {
-            externalObject = resolveExternalObject(externalObjectStr);
+            externalObject = resolveExternalObject(externalObjectStr, normalizeYo);
             if (externalObject.error != null)
             {
                 return externalObject.error;
@@ -594,6 +619,15 @@ public class CreateProjectTool implements IMcpTool
      */
     static ExternalObjectSpec resolveExternalObject(String value)
     {
+        return resolveExternalObject(value, true);
+    }
+
+    /**
+     * Resolves and, by default, yo-normalizes only the root Name. The TYPE token is looked up
+     * exactly as supplied and is never passed through the name normalizer.
+     */
+    static ExternalObjectSpec resolveExternalObject(String value, boolean normalizeYo)
+    {
         String normalized = value == null ? null : value.trim();
         String[] parts = normalized == null ? new String[0] : normalized.split("\\.", -1); //$NON-NLS-1$
         if (parts.length != 2)
@@ -616,7 +650,8 @@ public class CreateProjectTool implements IMcpTool
             return ExternalObjectSpec.failure(invalidExternalObjectShape(value));
         }
 
-        String objectName = parts[1];
+        MdNameNormalizer.Report normReport = new MdNameNormalizer.Report(normalizeYo);
+        String objectName = normReport.apply("name", parts[1]); //$NON-NLS-1$
         if (!isValidIdentifier(objectName))
         {
             return ExternalObjectSpec.failure(ToolResult.error("Invalid externalObject '" + value //$NON-NLS-1$
@@ -625,7 +660,8 @@ public class CreateProjectTool implements IMcpTool
                 + "'ExternalReport.<Name>'.").toJson()); //$NON-NLS-1$
         }
 
-        return ExternalObjectSpec.success(eClass, objectName, info.getEnglishSingular() + "." + objectName); //$NON-NLS-1$
+        return ExternalObjectSpec.success(eClass, objectName, info.getEnglishSingular() + "." + objectName, //$NON-NLS-1$
+            normReport);
     }
 
     /** Returns the common actionable error for a malformed or unsupported root address. */
@@ -1105,9 +1141,10 @@ public class CreateProjectTool implements IMcpTool
         CreateJobResult jobResult = runCreateJob(createJob, finalEffectiveProjectName, KIND_EXTERNAL_OBJECTS);
         if (jobResult.status == CreateStatus.SLOW_EXISTS)
         {
-            // Creation completed past the wait window — build the full externalObjects response
+            // Creation exceeded the wait window. A requested root needs its own read-back:
+            // the project container existing does not prove EDT attached the root before cancel.
             return buildExternalObjectsSlowResponse(finalEffectiveProjectName, configName,
-                finalVersion, scriptVariantStr);
+                finalVersion, scriptVariantStr, req.externalObject);
         }
         if (jobResult.errorJson != null)
         {
@@ -1132,7 +1169,7 @@ public class CreateProjectTool implements IMcpTool
 
         return buildExternalObjectsSuccessResponse(new ExternalObjectsSuccessInputs(extObjMgr,
             finalEffectiveProjectName, configName, finalVersion, createdHolder[0], projectState,
-            scriptVariantStr, codestyleMap));
+            scriptVariantStr, codestyleMap, req.externalObject));
     }
 
     /**
@@ -1194,17 +1231,85 @@ public class CreateProjectTool implements IMcpTool
         {
             result.put(KEY_SCRIPT_VARIANT_NOTE, scriptVariantNote);
         }
+        if (in.externalObject != null)
+        {
+            result.put(KEY_EXTERNAL_OBJECT, in.externalObject.canonicalFqn);
+            in.externalObject.normReport.addTo(result);
+        }
         return result.toJson();
     }
 
     /**
-     * Builds the externalObjects slow-path response (creation completed past the wait window).
+     * Builds the externalObjects slow-path response (creation exceeded the wait window).
      * When a {@code scriptVariantStr} was supplied, emits the canonical ScriptVariant literal
      * and a note that setScriptVariant was skipped.
      *
      * @return the response JSON string
      */
-    private static String buildExternalObjectsSlowResponse(String effectiveProjectName, String configName,
+    static String buildExternalObjectsSlowResponse(String effectiveProjectName, String configName,
+        Version version, String scriptVariantStr, ExternalObjectSpec externalObject)
+    {
+        if (externalObject == null)
+        {
+            // This is the pre-seeded-root response byte-for-byte: project existence is the complete
+            // fact for the intentional empty-project workflow, so its old answer remains correct.
+            return buildEmptyExternalObjectsSlowResponse(effectiveProjectName, configName, version,
+                scriptVariantStr);
+        }
+
+        boolean rootConfirmed = confirmExternalObject(effectiveProjectName, externalObject);
+        String rootState = rootConfirmed ? "rootConfirmed" : "rootUnconfirmed"; //$NON-NLS-1$ //$NON-NLS-2$
+        String typeToken = externalObject.canonicalFqn.substring(0,
+            externalObject.canonicalFqn.indexOf('.'));
+        String verification = " Once indexing finishes, verify the root with " //$NON-NLS-1$
+            + "get_metadata_objects (projectName='" + effectiveProjectName //$NON-NLS-1$
+            + "', metadataType='" + typeToken + "'). Do not repeat create_project: the " //$NON-NLS-1$ //$NON-NLS-2$
+            + "duplicate-project guard will refuse the existing project."; //$NON-NLS-1$
+        String message;
+        if (rootConfirmed)
+        {
+            message = "External objects project '" + effectiveProjectName //$NON-NLS-1$
+                + "' exists after creation exceeded the " + (CREATE_TIMEOUT_MS / 1000) //$NON-NLS-1$
+                + "s wait window; requested root '" + externalObject.canonicalFqn //$NON-NLS-1$
+                + "' was CONFIRMED through metadata scope resolution, but project creation did " //$NON-NLS-1$
+                + "not finish within the wait window." + verification; //$NON-NLS-1$
+        }
+        else
+        {
+            message = "External objects project '" + effectiveProjectName //$NON-NLS-1$
+                + "' exists after creation exceeded the " + (CREATE_TIMEOUT_MS / 1000) //$NON-NLS-1$
+                + "s wait window, but requested root '" + externalObject.canonicalFqn //$NON-NLS-1$
+                + "' was NOT CONFIRMED. EDT may still be indexing the project, or creation may fail " //$NON-NLS-1$
+                + "after creating its container." + verification; //$NON-NLS-1$
+        }
+
+        ToolResult slowResult = ToolResult.success()
+            .put(McpKeys.ACTION, "verificationRequired") //$NON-NLS-1$
+            .put(McpKeys.PROJECT, effectiveProjectName)
+            .put(KEY_PROJECT_KIND, KIND_EXTERNAL_OBJECTS)
+            .put("name", configName) //$NON-NLS-1$
+            .put(KEY_VERSION, version.toString())
+            .put(KEY_STATE, rootState)
+            .put(KEY_EXTERNAL_OBJECT, externalObject.canonicalFqn)
+            .put(KEY_EXTERNAL_OBJECT_CONFIRMED, rootConfirmed)
+            .put(KEY_CODESTYLE, slowPathCodestyleMap())
+            .put(McpKeys.MESSAGE, message);
+        externalObject.normReport.addTo(slowResult);
+        if (scriptVariantStr != null && !scriptVariantStr.isEmpty())
+        {
+            // Emit canonical literal (normalized from user input casing)
+            ScriptVariant slowSv = SCRIPT_RUSSIAN.equalsIgnoreCase(scriptVariantStr)
+                ? ScriptVariant.RUSSIAN : ScriptVariant.ENGLISH;
+            slowResult.put(KEY_SCRIPT_VARIANT, slowSv.getLiteral());
+            String slowScriptNote =
+                "setScriptVariant skipped: creation exceeded the wait window; set the project preferences manually if needed."; //$NON-NLS-1$
+            slowResult.put(KEY_SCRIPT_VARIANT_NOTE, slowScriptNote);
+        }
+        return slowResult.toJson();
+    }
+
+    /** The unchanged slow response for an intentionally empty external-objects project. */
+    private static String buildEmptyExternalObjectsSlowResponse(String effectiveProjectName, String configName,
         Version version, String scriptVariantStr)
     {
         ToolResult slowResult = ToolResult.success()
@@ -1220,7 +1325,6 @@ public class CreateProjectTool implements IMcpTool
                 + (CREATE_TIMEOUT_MS / 1000) + MSG_WAIT_WINDOW_SUFFIX);
         if (scriptVariantStr != null && !scriptVariantStr.isEmpty())
         {
-            // Emit canonical literal (normalized from user input casing)
             ScriptVariant slowSv = SCRIPT_RUSSIAN.equalsIgnoreCase(scriptVariantStr)
                 ? ScriptVariant.RUSSIAN : ScriptVariant.ENGLISH;
             slowResult.put(KEY_SCRIPT_VARIANT, slowSv.getLiteral());
@@ -1229,6 +1333,33 @@ public class CreateProjectTool implements IMcpTool
             slowResult.put(KEY_SCRIPT_VARIANT_NOTE, slowScriptNote);
         }
         return slowResult.toJson();
+    }
+
+    /**
+     * Best-effort read-back through the same metadata scope used by get_metadata_objects. A false
+     * answer includes every transient case (not started, still indexing, or a momentarily failed
+     * root-set read); none is promoted to a second tool error.
+     */
+    private static boolean confirmExternalObject(String effectiveProjectName, ExternalObjectSpec externalObject)
+    {
+        try
+        {
+            ProjectContext.ConfigurationResult resolved =
+                ProjectContext.resolveMetadataRoot(effectiveProjectName);
+            if (!resolved.ok())
+            {
+                return false;
+            }
+            int dot = externalObject.canonicalFqn.indexOf('.');
+            String typeToken = externalObject.canonicalFqn.substring(0, dot);
+            return resolved.scope().findObject(typeToken, externalObject.objectName) != null;
+        }
+        catch (RuntimeException e)
+        {
+            // Indexing may legitimately make the root unreadable here. The structured false is the
+            // caller-visible fact; logging this expected slow-path race as an error would be noise.
+            return false;
+        }
     }
 
     /**
@@ -1343,8 +1474,8 @@ public class CreateProjectTool implements IMcpTool
         OK,
         /**
          * Job timed out but the project already exists in the workspace (slow creation
-         * past the wait window). The caller must build the full kind-specific response
-         * with {@code state="created"} and {@code codestyle.applied=false}.
+         * past the wait window). Existence is the only fact this status carries; the caller
+         * must build a kind-specific response and verify any finer-grained mutation it needs.
          */
         SLOW_EXISTS,
         /** Job timed out and the project does NOT exist — return an error response. */
@@ -1654,23 +1785,27 @@ public class CreateProjectTool implements IMcpTool
         final EClass eClass;
         final String objectName;
         final String canonicalFqn;
+        final MdNameNormalizer.Report normReport;
 
-        private ExternalObjectSpec(String error, EClass eClass, String objectName, String canonicalFqn)
+        private ExternalObjectSpec(String error, EClass eClass, String objectName, String canonicalFqn,
+            MdNameNormalizer.Report normReport)
         {
             this.error = error;
             this.eClass = eClass;
             this.objectName = objectName;
             this.canonicalFqn = canonicalFqn;
+            this.normReport = normReport;
         }
 
         static ExternalObjectSpec failure(String error)
         {
-            return new ExternalObjectSpec(error, null, null, null);
+            return new ExternalObjectSpec(error, null, null, null, null);
         }
 
-        static ExternalObjectSpec success(EClass eClass, String objectName, String canonicalFqn)
+        static ExternalObjectSpec success(EClass eClass, String objectName, String canonicalFqn,
+            MdNameNormalizer.Report normReport)
         {
-            return new ExternalObjectSpec(null, eClass, objectName, canonicalFqn);
+            return new ExternalObjectSpec(null, eClass, objectName, canonicalFqn, normReport);
         }
     }
 
@@ -1688,10 +1823,11 @@ public class CreateProjectTool implements IMcpTool
         final String projectState;
         final String scriptVariantStr;
         final Map<String, Object> codestyleMap;
+        final ExternalObjectSpec externalObject;
 
         private ExternalObjectsSuccessInputs(IExternalObjectProjectManager extObjMgr, String effectiveProjectName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String configName, Version version, IProject createdProject, String projectState,
-            String scriptVariantStr, Map<String, Object> codestyleMap)
+            String scriptVariantStr, Map<String, Object> codestyleMap, ExternalObjectSpec externalObject)
         {
             this.extObjMgr = extObjMgr;
             this.effectiveProjectName = effectiveProjectName;
@@ -1701,6 +1837,7 @@ public class CreateProjectTool implements IMcpTool
             this.projectState = projectState;
             this.scriptVariantStr = scriptVariantStr;
             this.codestyleMap = codestyleMap;
+            this.externalObject = externalObject;
         }
     }
 
@@ -2046,7 +2183,7 @@ public class CreateProjectTool implements IMcpTool
      * <ul>
      *   <li>{@link CreateStatus#OK} — job completed in time; caller checks {@code errorHolder}.</li>
      *   <li>{@link CreateStatus#SLOW_EXISTS} — timed out but project already exists; caller
-     *       builds the full kind-specific success response with {@code state="created"}.</li>
+     *       builds a kind-specific response without inferring any finer-grained mutation.</li>
      *   <li>{@link CreateStatus#TIMED_OUT} — timed out and project absent; {@code errorJson}
      *       is ready to return.</li>
      *   <li>{@link CreateStatus#INTERRUPTED} — job interrupted; {@code errorJson} is ready

@@ -264,8 +264,10 @@ public final class InputSchemaCompactor
         // schema serves three project kinds - the worst case for compaction.
         // externalObject is similarly conditional and its string schema cannot express either
         // the Type.Name shape or that omission deliberately creates an empty import target.
+        // normalizeYo has the same silent-rewrite default as create_metadata below: without its
+        // prose a caller cannot know that a requested root Name may be stored differently.
         keep.put("create_project", asSet("autoSortTopObjects", "scriptVariant", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            "version", "baseProjectName", "externalObject")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "version", "baseProjectName", "externalObject", "normalizeYo")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         // The parameter is ACCEPTED and then discarded (execute() reads it only for schema
         // parity; the class doc reserves it for a future release). Stripped to a bare
         // boolean it reads as a working option, and the response says otherwise only after

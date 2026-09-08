@@ -742,11 +742,15 @@
           "type": "string"
         },
         "externalObject": {
-          "description": "Optional root to seed for projectKind=externalObjects: 'ExternalDataProcessor.<Name>' or 'ExternalReport.<Name>'; the TYPE token may be English or Russian, and Name is a programmatic identifier. Omit for an empty project; REJECTED for other project kinds.",
+          "description": "Optional root to seed for projectKind=externalObjects: 'ExternalDataProcessor.<Name>' or 'ExternalReport.<Name>'; the TYPE token may be English or Russian and is not normalized; Name is a programmatic identifier whose 'ё'/'Ё' is normalized by default according to normalizeYo. Omit for an empty project; REJECTED for other project kinds.",
           "type": "string"
         },
         "name": {
           "type": "string"
+        },
+        "normalizeYo": {
+          "description": "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in the seeded externalObject root NAME (default true). 'ё' in a Name is flagged by the 1C standard mdo-ru-name-unallowed-letter, so normalizing on input stores a compliant name. Set false to keep 'ё' exactly as supplied. The TYPE token is never normalized.",
+          "type": "boolean"
         },
         "prefix": {
           "type": "string"
@@ -807,11 +811,23 @@
         "codestyle": {
           "type": "object"
         },
+        "externalObject": {
+          "type": "string"
+        },
+        "externalObjectConfirmed": {
+          "type": "boolean"
+        },
         "message": {
           "type": "string"
         },
         "name": {
           "type": "string"
+        },
+        "normalized": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "prefix": {
           "type": "string"
