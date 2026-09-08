@@ -93,6 +93,13 @@ public class ListBreakpointsTool implements IMcpTool
                 out.add(createExceptionBreakpointDto(bp, m));
                 continue;
             }
+            // This tool advertises BSL breakpoints. Another Eclipse debug model may contribute a
+            // method, watch or custom breakpoint on a project resource; labelling one of those
+            // 'line' would hand the caller something that is not a BSL source line at all.
+            if (!BreakpointUtils.isBslLineBreakpoint(bp))
+            {
+                continue;
+            }
             // IResource.getProject() is null for a marker on the workspace root —
             // non-exception root markers are outside this tool's BSL breakpoint surface.
             IProject project = m.getResource().getProject();

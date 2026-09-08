@@ -9,7 +9,7 @@ Lists the line breakpoints and workspace-wide BSL exception breakpoints currentl
 - `projectName` - optional filter for line breakpoints; omit to list them across all projects. Exception breakpoints are workspace-wide and are always returned, even when this filter names a project.
 
 ## What you get
-JSON: `breakpoints` and a `count`. A line entry has `kind: "line"`, coordinates, enabled state, and its debug model; non-empty `condition` and positive `hitCount` / `hitCondition` fields appear only when configured. An exception entry has `kind: "exception"`, `workspaceWide: true`, `enabled`, `catchAllExceptions`, and `exceptionMessage` (empty for catch-all).
+JSON: `breakpoints` and a `count`. A line entry has `kind: "line"`, coordinates, enabled state, and its debug model; non-empty `condition` and positive `hitCount` / `hitCondition` fields appear only when configured. An exception entry has `kind: "exception"`, `workspaceWide: true`, `enabled`, `catchAllExceptions`, and `exceptionMessage` only when a filter is set - a catch-all entry OMITS that field rather than sending it empty.
 
 ## Notes & gotchas
 - The `modelId` tells you the breakpoint's debug model - a 1C BSL model id indicates a real, suspend-capable breakpoint (as opposed to a degraded marker-only one from `set_breakpoint`).

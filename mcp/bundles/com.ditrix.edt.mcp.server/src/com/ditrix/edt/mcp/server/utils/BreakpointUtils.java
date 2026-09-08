@@ -81,6 +81,16 @@ public final class BreakpointUtils
     public static final String HIT_CONDITION_ATTRIBUTE =
         "com._1c.g5.v8.dt.debug.core.hitCondition"; //$NON-NLS-1$
 
+    /**
+     * Exception-breakpoint marker attributes, spelled exactly as the platform declares them in
+     * {@code IBslExceptionBreakpoint} ({@code ALL_EXCEPTIONS} / {@code EXCEPTION_MESSAGE}). The
+     * flag's id deliberately does NOT mirror its setter {@code setCatchAllExceptions}.
+     */
+    public static final String ALL_EXCEPTIONS_ATTRIBUTE =
+        "com._1c.g5.v8.dt.debug.core.allExceptions"; //$NON-NLS-1$
+    public static final String EXCEPTION_MESSAGE_ATTRIBUTE =
+        "com._1c.g5.v8.dt.debug.core.exceptionMessage"; //$NON-NLS-1$
+
     private static final String DEFAULT_HIT_CONDITION = "EQUALS"; //$NON-NLS-1$
 
     private static final List<String> VALID_HIT_CONDITIONS = Collections.unmodifiableList(
@@ -222,6 +232,14 @@ public final class BreakpointUtils
             {
                 continue;
             }
+            // Only a BSL breakpoint may be reused. Another Eclipse debug model can hold a line
+            // breakpoint on the very same file and line; writing BSL condition attributes into it
+            // would hijack a foreign breakpoint and leave the BSL session with none at that line,
+            // while the answer said "updated".
+            if (!isBslLineBreakpoint(bp))
+            {
+                continue;
+            }
             IMarker marker = bp.getMarker();
             if (marker != null && file.equals(marker.getResource())
                 && ((ILineBreakpoint)bp).getLineNumber() == lineNumber)
@@ -230,6 +248,29 @@ public final class BreakpointUtils
             }
         }
         return null;
+    }
+
+    /**
+     * Reports whether a line breakpoint belongs to EDT's BSL debug model (or to this plugin's own
+     * degraded stand-in, which reports the same model id).
+     *
+     * @param breakpoint the candidate breakpoint
+     * @return {@code true} when the breakpoint is a BSL one
+     */
+    public static boolean isBslLineBreakpoint(IBreakpoint breakpoint)
+    {
+        if (!(breakpoint instanceof ILineBreakpoint))
+        {
+            return false;
+        }
+        try
+        {
+            return BSL_MODEL_ID.equals(breakpoint.getModelIdentifier());
+        }
+        catch (RuntimeException e) // NOSONAR a breakpoint we cannot identify is not ours
+        {
+            return false;
+        }
     }
 
     /** Returns the four literals accepted by EDT's hit-condition enum. */
@@ -423,16 +464,14 @@ public final class BreakpointUtils
     {
         Map<String, Object> configured = new LinkedHashMap<>();
         // The verified public exception interface exposes setters, not a getter contract we can
-        // safely link or guess. Read the backing marker EDT actually persists instead.
-        //
-        // The suffix is the platform's OWN spelling, and it is NOT the method name: EDT stores
-        // the catch-all flag under 'com._1c.g5.v8.dt.debug.core.allExceptions' (the constant
-        // IBslExceptionBreakpoint.ALL_EXCEPTIONS) while the setter is setCatchAllExceptions.
-        // Looking for 'catchAllExceptions' matched nothing, and the reader then fell through to
-        // the message-based guess below - which reported a filtered breakpoint as filtered even
-        // after the filter had been cleared.
-        Object catchAll = markerAttributeBySuffix(marker, "allExceptions"); //$NON-NLS-1$
-        Object message = markerAttributeBySuffix(marker, "exceptionMessage"); //$NON-NLS-1$
+        // safely link or guess. Read the backing marker EDT actually persists instead, by the
+        // EXACT attribute ids the platform declares as IBslExceptionBreakpoint.ALL_EXCEPTIONS and
+        // .EXCEPTION_MESSAGE. Two traps this spelling avoids: the flag's id is NOT the setter's
+        // name (setCatchAllExceptions writes '...allExceptions'), and a suffix match would also
+        // answer with a foreign attribute such as 'vendor.saved.exceptionMessage', picking one or
+        // the other by map iteration order.
+        Object catchAll = markerAttribute(marker, ALL_EXCEPTIONS_ATTRIBUTE);
+        Object message = markerAttribute(marker, EXCEPTION_MESSAGE_ATTRIBUTE);
         boolean catchesAll = catchAll instanceof Boolean
             ? ((Boolean)catchAll).booleanValue()
             : message == null || message.toString().isEmpty();
@@ -790,54 +829,43 @@ public final class BreakpointUtils
         invoke(setCatchAll, breakpoint, Boolean.valueOf(catchAll));
         if (exceptionMessage == null || exceptionMessage.isEmpty())
         {
-            clearMarkerAttributeBySuffix(breakpoint.getMarker(), "exceptionMessage"); //$NON-NLS-1$
+            clearMarkerAttribute(breakpoint.getMarker(), EXCEPTION_MESSAGE_ATTRIBUTE);
         }
     }
 
     /**
-     * Removes a marker attribute that the platform setter did NOT remove.
+     * Removes one marker attribute that the platform setter did NOT remove.
      * <p>
      * Measured on EDT 2026.2: {@code setCatchAllExceptions(true)} reaches the marker, while
      * {@code setExceptionMessage("")} - which the platform turns into a null passed to the ARRAY
      * form of {@code setAttributes} - leaves the old filter in place. Read back after the setter,
-     * the filter was still there. So the clear is finished here, through the single-attribute
-     * form, and only for an attribute that is actually present: the name is taken from the marker
-     * itself rather than invented.
+     * the filter was still there, so the clear is finished here through the single-attribute form.
+     * <p>
+     * The name is the platform's exact id, never a suffix: a suffix would also delete a foreign
+     * attribute such as {@code vendor.saved.exceptionMessage} that this code has no business
+     * touching.
      *
      * @param marker the breakpoint's marker, may be {@code null}
-     * @param suffix the semantic suffix of the attribute to remove
+     * @param attributeName the exact attribute id to remove
      * @throws Exception when the marker cannot be read or written
      */
-    private static void clearMarkerAttributeBySuffix(IMarker marker, String suffix)
+    private static void clearMarkerAttribute(IMarker marker, String attributeName)
         throws Exception
     {
-        if (marker == null || !marker.exists())
+        if (marker == null || !marker.exists() || marker.getAttribute(attributeName) == null)
         {
             return;
         }
-        for (Map.Entry<String, Object> attribute : marker.getAttributes().entrySet())
-        {
-            if (attribute.getKey().endsWith(suffix) && attribute.getValue() != null)
-            {
-                marker.setAttribute(attribute.getKey(), null);
-            }
-        }
+        marker.setAttribute(attributeName, null);
     }
 
-    private static Object markerAttributeBySuffix(IMarker marker, String suffix) throws Exception
+    private static Object markerAttribute(IMarker marker, String attributeName) throws Exception
     {
-        if (marker == null)
+        if (marker == null || !marker.exists())
         {
             return null;
         }
-        for (Map.Entry<String, Object> attribute : marker.getAttributes().entrySet())
-        {
-            if (attribute.getKey().endsWith(suffix))
-            {
-                return attribute.getValue();
-            }
-        }
-        return null;
+        return marker.getAttribute(attributeName);
     }
 
     private static boolean implementsInterfaceNamed(Class<?> type, String interfaceName)

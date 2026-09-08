@@ -124,10 +124,14 @@ public class ListBreakpointsToolTest
         when(breakpoint.isEnabled()).thenReturn(true);
         when(breakpoint.getModelIdentifier()).thenReturn("com._1c.g5.v8.dt.debug"); //$NON-NLS-1$
         IMarker marker = marker();
-        Map<String, Object> attributes = new HashMap<>();
-        attributes.put("edt.catchAllExceptions", Boolean.FALSE); //$NON-NLS-1$
-        attributes.put("edt.exceptionMessage", "Expected failure"); //$NON-NLS-1$ //$NON-NLS-2$
-        when(marker.getAttributes()).thenReturn(attributes);
+        // The EXACT platform attribute ids, pinned here on purpose: the flag is stored under
+        // 'allExceptions' and not under the setter's name, and reading it by suffix would also
+        // answer with a foreign 'vendor.saved.exceptionMessage'.
+        when(marker.exists()).thenReturn(Boolean.TRUE);
+        when(marker.getAttribute("com._1c.g5.v8.dt.debug.core.allExceptions")) //$NON-NLS-1$
+            .thenReturn(Boolean.FALSE);
+        when(marker.getAttribute("com._1c.g5.v8.dt.debug.core.exceptionMessage")) //$NON-NLS-1$
+            .thenReturn("Expected failure"); //$NON-NLS-1$
 
         Map<String, Object> dto = ListBreakpointsTool.createExceptionBreakpointDto(breakpoint, marker);
 
@@ -144,7 +148,9 @@ public class ListBreakpointsToolTest
     {
         IBreakpoint breakpoint = mock(IBreakpoint.class);
         IMarker marker = marker();
-        when(marker.getAttributes()).thenReturn(new HashMap<>());
+        when(marker.exists()).thenReturn(Boolean.TRUE);
+        when(marker.getAttribute("com._1c.g5.v8.dt.debug.core.allExceptions")) //$NON-NLS-1$
+            .thenReturn(Boolean.TRUE);
 
         Map<String, Object> dto = ListBreakpointsTool.createExceptionBreakpointDto(breakpoint, marker);
 
