@@ -2833,8 +2833,12 @@ def test_dynamic_list_without_authored_settings_is_not_reported_as_a_failed_writ
     assert_not_contains(written.text, "mutationCommitted",
                         "a committed write must not be dressed as a failure")
 
-    # The verdict is only trustworthy if the write actually landed: read the model back.
+    # The verdict is only trustworthy if the write actually landed: read the model back. The
+    # read must be asserted OK first - a dcs failure names the full target FQN, which contains
+    # the catalog name, so the marker check alone would pass on "DCS root target ... was not
+    # found" and prove nothing.
     back = _get(root, "dynamicList")
+    assert_ok(back, "the written dynamic list must read back")
     assert_contains(back.text, catalog_name,
                     "the read-back must show the main table the write asked for")
 
