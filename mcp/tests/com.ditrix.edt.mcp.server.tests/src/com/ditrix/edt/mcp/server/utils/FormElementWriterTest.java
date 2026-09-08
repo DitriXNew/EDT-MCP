@@ -23,6 +23,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import org.eclipse.emf.common.notify.Notification;
 import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.common.util.TreeIterator;
 import org.eclipse.emf.ecore.EAttribute;
@@ -36,6 +37,7 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
+import org.eclipse.emf.ecore.util.EContentAdapter;
 import org.eclipse.emf.ecore.util.EcoreEList;
 import org.junit.Test;
 
@@ -682,6 +684,105 @@ public class FormElementWriterTest
         EObject userVisible = (EObject)button.eGet(feature(button, "userVisible")); //$NON-NLS-1$
         assertNotNull(userVisible);
         assertEquals(Boolean.TRUE, userVisible.eGet(feature(userVisible, "common"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testButtonBindsToRootStandardCommandByEnglishAndRussianName()
+    {
+        EObject form = newForm();
+        EObject standard = newStandardCommand("SaveValues", "СохранитьЗначения"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "commands", standard); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "SaveEn", null, //$NON-NLS-1$
+            "SaveValues", null, null, false, null)); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "SaveRu", null, //$NON-NLS-1$
+            "СохранитьЗначения", null, null, false, null)); //$NON-NLS-1$
+
+        assertSame(standard, buttonCommand(FormElementWriter.findFormItem(form, "SaveEn"))); //$NON-NLS-1$
+        assertSame(standard, buttonCommand(FormElementWriter.findFormItem(form, "SaveRu"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testButtonBindsToQualifiedRootAndOwningItemStandardCommands()
+    {
+        EObject form = newForm();
+        EObject save = newStandardCommand("SaveValues", "СохранитьЗначения"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "commands", save); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "QualifiedRoot", null, //$NON-NLS-1$
+            "StandardCommand.SaveValues", null, null, false, null)); //$NON-NLS-1$
+        assertSame(save, buttonCommand(FormElementWriter.findFormItem(form, "QualifiedRoot"))); //$NON-NLS-1$
+
+        EObject table = newObject(MODEL.table);
+        table.eSet(feature(table, "name"), "ListTable"); //$NON-NLS-1$ //$NON-NLS-2$
+        table.eSet(feature(table, "id"), Integer.valueOf(10)); //$NON-NLS-1$
+        EObject bar = newObject(MODEL.autoCommandBar);
+        bar.eSet(feature(bar, "name"), "ListTableCommandBar"); //$NON-NLS-1$ //$NON-NLS-2$
+        bar.eSet(feature(bar, "id"), Integer.valueOf(11)); //$NON-NLS-1$
+        table.eSet(feature(table, "autoCommandBar"), bar); //$NON-NLS-1$
+        addTo(form, "items", table); //$NON-NLS-1$
+        EObject filter = newStandardCommand("AddFilterItem", "ДобавитьЭлементОтбора"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(table, "commands", filter); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "QualifiedItemLong", //$NON-NLS-1$
+            "ListTable.AutoCommandBar", "Item.ListTable.StandardCommand.AddFilterItem", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "QualifiedItemShort", //$NON-NLS-1$
+            "ListTable.AutoCommandBar", "ListTable.StandardCommand.ДобавитьЭлементОтбора", //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, false, null));
+        assertSame(filter,
+            buttonCommand(FormElementWriter.findFormItem(form, "QualifiedItemLong"))); //$NON-NLS-1$
+        assertSame(filter,
+            buttonCommand(FormElementWriter.findFormItem(form, "QualifiedItemShort"))); //$NON-NLS-1$
+
+        // Naming the source explicitly is what the qualified spelling is FOR: this button sits at
+        // the form ROOT, not inside the table, and still binds the table's command - the shape the
+        // designer produces when a filter button lives beside its list rather than in its own bar.
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "QualifiedFromOutside", //$NON-NLS-1$
+            null, "Item.ListTable.StandardCommand.AddFilterItem", null, null, false, null)); //$NON-NLS-1$
+        assertSame(filter,
+            buttonCommand(FormElementWriter.findFormItem(form, "QualifiedFromOutside"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMissingButtonCommandListsAvailableRootAndItemStandardCommands()
+    {
+        EObject form = newForm();
+        addTo(form, "commands", newStandardCommand("SaveValues", "СохранитьЗначения")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        EObject table = newObject(MODEL.table);
+        table.eSet(feature(table, "name"), "ListTable"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject bar = newObject(MODEL.autoCommandBar);
+        table.eSet(feature(table, "autoCommandBar"), bar); //$NON-NLS-1$
+        addTo(form, "items", table); //$NON-NLS-1$
+        addTo(table, "commands", //$NON-NLS-1$
+            newStandardCommand("AddFilterItem", "ДобавитьЭлементОтбора")); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject button = newObject(modelClass("Button")); //$NON-NLS-1$
+        button.eSet(feature(button, "name"), "Probe"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(bar, "items", button); //$NON-NLS-1$
+
+        String error = FormElementWriter.rebindButtonCommand(form, button, "NoSuchCommand"); //$NON-NLS-1$
+
+        assertNotNull(error);
+        assertTrue(error, error.contains("NoSuchCommand")); //$NON-NLS-1$
+        assertTrue(error, error.contains("Available standard commands")); //$NON-NLS-1$
+        assertTrue(error, error.contains("Item.ListTable.StandardCommand.AddFilterItem")); //$NON-NLS-1$
+        assertTrue(error, error.contains("StandardCommand.SaveValues")); //$NON-NLS-1$
+        assertTrue(error, error.contains("create_metadata")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCustomFormCommandBindingStillWinsAndWorksUnchanged()
+    {
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Refresh", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        EObject custom = FormElementWriter.findFormCommand(form, "Refresh"); //$NON-NLS-1$
+        addTo(form, "commands", newStandardCommand("Refresh", "Обновить")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertNull(FormElementWriter.createMember(form, Kind.BUTTON, "RefreshButton", null, //$NON-NLS-1$
+            "Refresh", null, null, false, null)); //$NON-NLS-1$
+
+        assertSame(custom,
+            buttonCommand(FormElementWriter.findFormItem(form, "RefreshButton"))); //$NON-NLS-1$
     }
 
     @Test
@@ -2057,6 +2158,121 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testAdditionalColumnIdsMayRepeatBetweenGroups()
+    {
+        EObject form = newForm();
+        EObject attribute = newObject(MODEL.formAttribute);
+        attribute.eSet(feature(attribute, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        attribute.eSet(feature(attribute, "id"), Integer.valueOf(10)); //$NON-NLS-1$
+        addTo(form, "attributes", attribute); //$NON-NLS-1$
+
+        List<EObject> columns = new ArrayList<>();
+        for (int groupNumber = 1; groupNumber <= 2; groupNumber++)
+        {
+            EObject group = newObject(modelClass("FormAttributeAdditionalColumns")); //$NON-NLS-1$
+            addTo(attribute, "additionalColumns", group); //$NON-NLS-1$
+            for (int id = 1; id <= 3; id++)
+            {
+                EObject column = newObject(modelClass("FormAttributeColumn")); //$NON-NLS-1$
+                column.eSet(feature(column, "name"), //$NON-NLS-1$
+                    "Group" + groupNumber + "Column" + id); //$NON-NLS-1$ //$NON-NLS-2$
+                column.eSet(feature(column, "id"), Integer.valueOf(id)); //$NON-NLS-1$
+                addTo(group, "columns", column); //$NON-NLS-1$
+                columns.add(column);
+            }
+        }
+
+        FormElementWriter.normalizeFormAttributeIds(form);
+
+        for (int index = 0; index < columns.size(); index++)
+        {
+            assertEquals("each additional-columns group has its own id scope", //$NON-NLS-1$
+                Integer.valueOf(index % 3 + 1),
+                columns.get(index).eGet(feature(columns.get(index), "id"))); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testAttributeColumnIdsMayEqualFormAttributeIds()
+    {
+        EObject form = newForm();
+        List<EObject> attributes = new ArrayList<>();
+        List<EObject> columns = new ArrayList<>();
+        for (int id = 1; id <= 3; id++)
+        {
+            EObject attribute = newObject(MODEL.formAttribute);
+            attribute.eSet(feature(attribute, "name"), "Attribute" + id); //$NON-NLS-1$ //$NON-NLS-2$
+            attribute.eSet(feature(attribute, "id"), Integer.valueOf(id)); //$NON-NLS-1$
+            addTo(form, "attributes", attribute); //$NON-NLS-1$
+            attributes.add(attribute);
+        }
+        for (int id = 1; id <= 3; id++)
+        {
+            EObject column = newObject(modelClass("FormAttributeColumn")); //$NON-NLS-1$
+            column.eSet(feature(column, "name"), "Column" + id); //$NON-NLS-1$ //$NON-NLS-2$
+            column.eSet(feature(column, "id"), Integer.valueOf(id)); //$NON-NLS-1$
+            addTo(attributes.get(0), "columns", column); //$NON-NLS-1$
+            columns.add(column);
+        }
+
+        FormElementWriter.normalizeFormAttributeIds(form);
+
+        for (int index = 0; index < 3; index++)
+        {
+            Integer expected = Integer.valueOf(index + 1);
+            assertEquals(expected, attributes.get(index).eGet(feature(attributes.get(index), "id"))); //$NON-NLS-1$
+            assertEquals(expected, columns.get(index).eGet(feature(columns.get(index), "id"))); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testNormalizeFormAttributeIdsRepairsDuplicatesInsideEachList()
+    {
+        EObject form = newForm();
+        EObject firstAttribute = newObject(MODEL.formAttribute);
+        firstAttribute.eSet(feature(firstAttribute, "name"), "First"); //$NON-NLS-1$ //$NON-NLS-2$
+        firstAttribute.eSet(feature(firstAttribute, "id"), Integer.valueOf(1)); //$NON-NLS-1$
+        addTo(form, "attributes", firstAttribute); //$NON-NLS-1$
+        EObject duplicateAttribute = newObject(MODEL.formAttribute);
+        duplicateAttribute.eSet(feature(duplicateAttribute, "name"), "Duplicate"); //$NON-NLS-1$ //$NON-NLS-2$
+        duplicateAttribute.eSet(feature(duplicateAttribute, "id"), Integer.valueOf(1)); //$NON-NLS-1$
+        addTo(form, "attributes", duplicateAttribute); //$NON-NLS-1$
+
+        EObject firstColumn = newObject(modelClass("FormAttributeColumn")); //$NON-NLS-1$
+        firstColumn.eSet(feature(firstColumn, "name"), "FirstColumn"); //$NON-NLS-1$ //$NON-NLS-2$
+        firstColumn.eSet(feature(firstColumn, "id"), Integer.valueOf(2)); //$NON-NLS-1$
+        addTo(firstAttribute, "columns", firstColumn); //$NON-NLS-1$
+        EObject duplicateColumn = newObject(modelClass("FormAttributeColumn")); //$NON-NLS-1$
+        duplicateColumn.eSet(feature(duplicateColumn, "name"), "DuplicateColumn"); //$NON-NLS-1$ //$NON-NLS-2$
+        duplicateColumn.eSet(feature(duplicateColumn, "id"), Integer.valueOf(2)); //$NON-NLS-1$
+        addTo(firstAttribute, "columns", duplicateColumn); //$NON-NLS-1$
+
+        EObject group = newObject(modelClass("FormAttributeAdditionalColumns")); //$NON-NLS-1$
+        addTo(firstAttribute, "additionalColumns", group); //$NON-NLS-1$
+        EObject firstAdditionalColumn = newObject(modelClass("FormAttributeColumn")); //$NON-NLS-1$
+        firstAdditionalColumn.eSet(feature(firstAdditionalColumn, "name"), //$NON-NLS-1$
+            "FirstAdditional"); //$NON-NLS-1$
+        firstAdditionalColumn.eSet(feature(firstAdditionalColumn, "id"), Integer.valueOf(3)); //$NON-NLS-1$
+        addTo(group, "columns", firstAdditionalColumn); //$NON-NLS-1$
+        EObject duplicateAdditionalColumn = newObject(modelClass("FormAttributeColumn")); //$NON-NLS-1$
+        duplicateAdditionalColumn.eSet(feature(duplicateAdditionalColumn, "name"), //$NON-NLS-1$
+            "DuplicateAdditional"); //$NON-NLS-1$
+        duplicateAdditionalColumn.eSet(feature(duplicateAdditionalColumn, "id"), Integer.valueOf(3)); //$NON-NLS-1$
+        addTo(group, "columns", duplicateAdditionalColumn); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormAttributeIds(form);
+
+        assertEquals(Integer.valueOf(1), firstAttribute.eGet(feature(firstAttribute, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(4), duplicateAttribute.eGet(feature(duplicateAttribute, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(2), firstColumn.eGet(feature(firstColumn, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(5), duplicateColumn.eGet(feature(duplicateColumn, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(3),
+            firstAdditionalColumn.eGet(feature(firstAdditionalColumn, "id"))); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(6),
+            duplicateAdditionalColumn.eGet(feature(duplicateAdditionalColumn, "id"))); //$NON-NLS-1$
+    }
+
+    @Test
     public void testCreateCommandAssignsUniqueIdsInCommandNamespace()
     {
         EObject form = newForm();
@@ -2119,6 +2335,187 @@ public class FormElementWriterTest
         assertTrue(ids.add((Integer)second.eGet(feature(second, "id")))); //$NON-NLS-1$
         assertEquals(Integer.valueOf(7), attribute.eGet(feature(attribute, "id"))); //$NON-NLS-1$
         assertEquals(Integer.valueOf(9), group.eGet(feature(group, "id"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAdoptedAttributeColumnsKeepIdsSharedWithBaseAttributes()
+    {
+        EObject form = newForm();
+        form.eSet(feature(form, "baseForm"), newForm()); //$NON-NLS-1$
+        form.eSet(feature(form, "adopted"), Boolean.TRUE); //$NON-NLS-1$
+
+        List<EObject> baseAttributes = new ArrayList<>();
+        for (int id = 1; id <= 3; id++)
+        {
+            EObject attribute = newObject(MODEL.formAttribute);
+            attribute.eSet(feature(attribute, "name"), "Base" + id); //$NON-NLS-1$ //$NON-NLS-2$
+            attribute.eSet(feature(attribute, "id"), Integer.valueOf(id)); //$NON-NLS-1$
+            attribute.eSet(feature(attribute, "adopted"), Boolean.FALSE); //$NON-NLS-1$
+            addTo(form, "attributes", attribute); //$NON-NLS-1$
+            baseAttributes.add(attribute);
+        }
+
+        EObject adoptedMain = newObject(MODEL.formAttribute);
+        adoptedMain.eSet(feature(adoptedMain, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        adoptedMain.eSet(feature(adoptedMain, "id"), Integer.valueOf(10)); //$NON-NLS-1$
+        adoptedMain.eSet(feature(adoptedMain, "adopted"), Boolean.TRUE); //$NON-NLS-1$
+        adoptedMain.eSet(feature(adoptedMain, "main"), Boolean.TRUE); //$NON-NLS-1$
+        addTo(form, "attributes", adoptedMain); //$NON-NLS-1$
+
+        List<EObject> adoptedColumns = new ArrayList<>();
+        for (int id = 1; id <= 3; id++)
+        {
+            EObject column = newObject(modelClass("FormAttributeColumn")); //$NON-NLS-1$
+            column.eSet(feature(column, "name"), "Column" + id); //$NON-NLS-1$ //$NON-NLS-2$
+            column.eSet(feature(column, "id"), Integer.valueOf(id)); //$NON-NLS-1$
+            addTo(adoptedMain, "columns", column); //$NON-NLS-1$
+            adoptedColumns.add(column);
+        }
+
+        FormElementWriter.normalizeFormAttributeIds(form);
+
+        for (int index = 0; index < 3; index++)
+        {
+            Integer expected = Integer.valueOf(index + 1);
+            assertEquals(expected, baseAttributes.get(index).eGet(feature(baseAttributes.get(index), "id"))); //$NON-NLS-1$
+            assertEquals(expected, adoptedColumns.get(index).eGet(feature(adoptedColumns.get(index), "id"))); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testOwnAttributeDuplicateIsRepairedAroundAdoptedIds()
+    {
+        EObject form = newForm();
+        form.eSet(feature(form, "baseForm"), newForm()); //$NON-NLS-1$
+        form.eSet(feature(form, "adopted"), Boolean.TRUE); //$NON-NLS-1$
+
+        EObject baseAttribute = newObject(MODEL.formAttribute);
+        baseAttribute.eSet(feature(baseAttribute, "name"), "Base"); //$NON-NLS-1$ //$NON-NLS-2$
+        baseAttribute.eSet(feature(baseAttribute, "id"), Integer.valueOf(1)); //$NON-NLS-1$
+        baseAttribute.eSet(feature(baseAttribute, "adopted"), Boolean.FALSE); //$NON-NLS-1$
+        addTo(form, "attributes", baseAttribute); //$NON-NLS-1$
+
+        EObject adoptedAttribute = newObject(MODEL.formAttribute);
+        adoptedAttribute.eSet(feature(adoptedAttribute, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        adoptedAttribute.eSet(feature(adoptedAttribute, "id"), Integer.valueOf(10)); //$NON-NLS-1$
+        adoptedAttribute.eSet(feature(adoptedAttribute, "adopted"), Boolean.TRUE); //$NON-NLS-1$
+        addTo(form, "attributes", adoptedAttribute); //$NON-NLS-1$
+        for (int id = 2; id <= 3; id++)
+        {
+            EObject column = newObject(modelClass("FormAttributeColumn")); //$NON-NLS-1$
+            column.eSet(feature(column, "name"), "Column" + id); //$NON-NLS-1$ //$NON-NLS-2$
+            column.eSet(feature(column, "id"), Integer.valueOf(id)); //$NON-NLS-1$
+            addTo(adoptedAttribute, "columns", column); //$NON-NLS-1$
+        }
+
+        EObject ownAttribute = newObject(MODEL.formAttribute);
+        ownAttribute.eSet(feature(ownAttribute, "name"), "Own"); //$NON-NLS-1$ //$NON-NLS-2$
+        ownAttribute.eSet(feature(ownAttribute, "id"), Integer.valueOf(1)); //$NON-NLS-1$
+        addTo(form, "attributes", ownAttribute); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormAttributeIds(form);
+
+        int repairedId = ((Integer)ownAttribute.eGet(feature(ownAttribute, "id"))).intValue(); //$NON-NLS-1$
+        assertTrue(repairedId > 0);
+        assertTrue("an own id must avoid every base/adopted id", repairedId != 1 && repairedId != 2 //$NON-NLS-1$
+            && repairedId != 3);
+        assertEquals(Integer.valueOf(1), baseAttribute.eGet(feature(baseAttribute, "id"))); //$NON-NLS-1$
+    }
+
+    /**
+     * The order control for the pair above: the OWN attribute is declared BEFORE the adopted one it
+     * collides with. Without the up-front reservation of adopted ids the own attribute would claim
+     * id 1 on first visit and keep it - the collision the pass exists to remove would survive, and
+     * the adopted twin can never be moved out of the way because it must keep the base form's id.
+     */
+    @Test
+    public void testOwnAttributeAvoidsAnAdoptedIdDeclaredAfterIt()
+    {
+        EObject form = newForm();
+        form.eSet(feature(form, "baseForm"), newForm()); //$NON-NLS-1$
+        form.eSet(feature(form, "adopted"), Boolean.TRUE); //$NON-NLS-1$
+
+        EObject ownAttribute = newObject(MODEL.formAttribute);
+        ownAttribute.eSet(feature(ownAttribute, "name"), "Own"); //$NON-NLS-1$ //$NON-NLS-2$
+        ownAttribute.eSet(feature(ownAttribute, "id"), Integer.valueOf(1)); //$NON-NLS-1$
+        addTo(form, "attributes", ownAttribute); //$NON-NLS-1$
+
+        EObject baseAttribute = newObject(MODEL.formAttribute);
+        baseAttribute.eSet(feature(baseAttribute, "name"), "Base"); //$NON-NLS-1$ //$NON-NLS-2$
+        baseAttribute.eSet(feature(baseAttribute, "id"), Integer.valueOf(1)); //$NON-NLS-1$
+        baseAttribute.eSet(feature(baseAttribute, "adopted"), Boolean.FALSE); //$NON-NLS-1$
+        addTo(form, "attributes", baseAttribute); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormAttributeIds(form);
+
+        assertEquals("an adopted id must survive whatever the visit order", Integer.valueOf(1), //$NON-NLS-1$
+            baseAttribute.eGet(feature(baseAttribute, "id"))); //$NON-NLS-1$
+        assertTrue("the own attribute must move off the adopted id", //$NON-NLS-1$
+            ((Integer)ownAttribute.eGet(feature(ownAttribute, "id"))).intValue() != 1); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAdoptedItemsAndCommandsAreNotRenumberedButOwnDuplicatesAre()
+    {
+        EObject form = newForm();
+        form.eSet(feature(form, "baseForm"), newForm()); //$NON-NLS-1$
+        form.eSet(feature(form, "adopted"), Boolean.TRUE); //$NON-NLS-1$
+
+        EObject adoptedCommand = newObject(MODEL.formCommand);
+        adoptedCommand.eSet(feature(adoptedCommand, "name"), "BaseCommand"); //$NON-NLS-1$ //$NON-NLS-2$
+        adoptedCommand.eSet(feature(adoptedCommand, "id"), Integer.valueOf(4)); //$NON-NLS-1$
+        adoptedCommand.eSet(feature(adoptedCommand, "adopted"), Boolean.FALSE); //$NON-NLS-1$
+        addTo(form, "formCommands", adoptedCommand); //$NON-NLS-1$
+        EObject ownCommand = newObject(MODEL.formCommand);
+        ownCommand.eSet(feature(ownCommand, "name"), "OwnCommand"); //$NON-NLS-1$ //$NON-NLS-2$
+        ownCommand.eSet(feature(ownCommand, "id"), Integer.valueOf(4)); //$NON-NLS-1$
+        addTo(form, "formCommands", ownCommand); //$NON-NLS-1$
+
+        EObject adoptedGroup = newObject(MODEL.formGroup);
+        adoptedGroup.eSet(feature(adoptedGroup, "name"), "BaseGroup"); //$NON-NLS-1$ //$NON-NLS-2$
+        adoptedGroup.eSet(feature(adoptedGroup, "id"), Integer.valueOf(6)); //$NON-NLS-1$
+        adoptedGroup.eSet(feature(adoptedGroup, "adopted"), Boolean.TRUE); //$NON-NLS-1$
+        addTo(form, "items", adoptedGroup); //$NON-NLS-1$
+        EObject ownGroup = newObject(MODEL.formGroup);
+        ownGroup.eSet(feature(ownGroup, "name"), "OwnGroup"); //$NON-NLS-1$ //$NON-NLS-2$
+        ownGroup.eSet(feature(ownGroup, "id"), Integer.valueOf(6)); //$NON-NLS-1$
+        addTo(form, "items", ownGroup); //$NON-NLS-1$
+
+        FormElementWriter.normalizeFormCommandIds(form);
+        FormElementWriter.normalizeFormItemIds(form);
+
+        assertEquals(Integer.valueOf(4), adoptedCommand.eGet(feature(adoptedCommand, "id"))); //$NON-NLS-1$
+        assertTrue(((Integer)ownCommand.eGet(feature(ownCommand, "id"))).intValue() != 4); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(6), adoptedGroup.eGet(feature(adoptedGroup, "id"))); //$NON-NLS-1$
+        assertTrue(((Integer)ownGroup.eGet(feature(ownGroup, "id"))).intValue() != 6); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRootAutoCommandBarSentinelDoesNotEmitAnEqualValueNotification()
+    {
+        EObject form = newForm();
+        form.eSet(feature(form, "baseForm"), newForm()); //$NON-NLS-1$
+        form.eSet(feature(form, "adopted"), Boolean.TRUE); //$NON-NLS-1$
+        EObject bar = (EObject)form.eGet(feature(form, "autoCommandBar")); //$NON-NLS-1$
+        EStructuralFeature idFeature = feature(bar, "id"); //$NON-NLS-1$
+        int[] idNotifications = new int[1];
+        form.eAdapters().add(new EContentAdapter()
+        {
+            @Override
+            public void notifyChanged(Notification notification)
+            {
+                super.notifyChanged(notification);
+                if (notification.getNotifier() == bar && notification.getFeature() == idFeature)
+                {
+                    idNotifications[0]++;
+                }
+            }
+        });
+
+        FormElementWriter.normalizeFormItemIds(form);
+
+        assertEquals(Integer.valueOf(-1), bar.eGet(idFeature));
+        assertEquals("setting the existing sentinel must be a true no-op", 0, idNotifications[0]); //$NON-NLS-1$
     }
 
     // ==== the id space: WIDE ceiling, NARROW renumbering targets (issue #373) ====
@@ -3355,6 +3752,19 @@ public class FormElementWriterTest
         return form;
     }
 
+    private static EObject newStandardCommand(String name, String nameRu)
+    {
+        EObject command = newObject(MODEL.formStandardCommand);
+        command.eSet(feature(command, "name"), name); //$NON-NLS-1$
+        command.eSet(feature(command, "nameRu"), nameRu); //$NON-NLS-1$
+        return command;
+    }
+
+    private static EObject buttonCommand(EObject button)
+    {
+        return (EObject)button.eGet(feature(button, "commandName")); //$NON-NLS-1$
+    }
+
     private static EObject newObject(EClass eClass)
     {
         return new DynamicEObjectImpl(eClass);
@@ -3442,6 +3852,7 @@ public class FormElementWriterTest
         final EClass decoration;
         final EClass formAttribute;
         final EClass formCommand;
+        final EClass formStandardCommand;
 
         FormLikeModel()
         {
@@ -3478,6 +3889,14 @@ public class FormElementWriterTest
             // "AdjustableBoolean" would diverge from production exactly where the recognition
             // happens, so the fixture points at the genuine type (issue #382).
             EClass adjustableBoolean = MdClassPackage.Literals.ADJUSTABLE_BOOLEAN;
+
+            EClass extensionAdoptedProperty = f.createEClass();
+            extensionAdoptedProperty.setName("ExtensionAdoptedProperty"); //$NON-NLS-1$
+            extensionAdoptedProperty.setAbstract(true);
+            EAttribute adopted = f.createEAttribute();
+            adopted.setName("adopted"); //$NON-NLS-1$
+            adopted.setEType(EcorePackage.eINSTANCE.getEBooleanObject());
+            extensionAdoptedProperty.getEStructuralFeatures().add(adopted);
 
             // The extInfo family: an abstract base plus the concrete classes the writer resolves by
             // name (group ext-infos, the input-field ext-info and the tooltip's label ext-info).
@@ -3565,8 +3984,14 @@ public class FormElementWriterTest
             formCommandHandlerContainer.getEStructuralFeatures().add(
                 containment(f, "handler", commandHandler, false)); //$NON-NLS-1$
 
+            EClass command = f.createEClass();
+            command.setName("Command"); //$NON-NLS-1$
+            command.setAbstract(true);
+
             formCommand = f.createEClass();
             formCommand.setName("FormCommand"); //$NON-NLS-1$
+            formCommand.getESuperTypes().add(command);
+            formCommand.getESuperTypes().add(extensionAdoptedProperty);
             addString(f, formCommand, "name"); //$NON-NLS-1$
             addInt(f, formCommand, "id"); //$NON-NLS-1$
             formCommand.getEStructuralFeatures().add(
@@ -3574,6 +3999,12 @@ public class FormElementWriterTest
             formCommand.getEStructuralFeatures().add(
                 containment(f, "use", adjustableBoolean, false)); //$NON-NLS-1$
             addEnum(f, formCommand, "currentRowUse", currentRowUse); //$NON-NLS-1$
+
+            formStandardCommand = f.createEClass();
+            formStandardCommand.setName("FormStandardCommand"); //$NON-NLS-1$
+            formStandardCommand.getESuperTypes().add(command);
+            addString(f, formStandardCommand, "name"); //$NON-NLS-1$
+            addString(f, formStandardCommand, "nameRu"); //$NON-NLS-1$
 
             EClass button = f.createEClass();
             button.setName("Button"); //$NON-NLS-1$
@@ -3587,7 +4018,7 @@ public class FormElementWriterTest
             addBoolean(f, button, "commandUniqueness"); //$NON-NLS-1$
             EReference commandName = f.createEReference();
             commandName.setName("commandName"); //$NON-NLS-1$
-            commandName.setEType(formCommand);
+            commandName.setEType(command);
             button.getEStructuralFeatures().add(commandName);
             button.getEStructuralFeatures().add(
                 containment(f, "userVisible", adjustableBoolean, false)); //$NON-NLS-1$
@@ -3597,6 +4028,7 @@ public class FormElementWriterTest
             formGroup = f.createEClass();
             formGroup.setName("FormGroup"); //$NON-NLS-1$
             formGroup.getESuperTypes().add(group);
+            formGroup.getESuperTypes().add(extensionAdoptedProperty);
             addEnum(f, formGroup, "type", groupType); //$NON-NLS-1$
             formGroup.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
             formGroup.getEStructuralFeatures().add(
@@ -3605,6 +4037,7 @@ public class FormElementWriterTest
                 containment(f, "extendedTooltip", extendedTooltip, false)); //$NON-NLS-1$
 
             addEnum(f, decoration, "type", decorationType); //$NON-NLS-1$
+            decoration.getESuperTypes().add(extensionAdoptedProperty);
             addBoolean(f, decoration, "visible"); //$NON-NLS-1$
             addBoolean(f, decoration, "enabled"); //$NON-NLS-1$
             addBoolean(f, decoration, "autoMaxWidth"); //$NON-NLS-1$
@@ -3644,6 +4077,8 @@ public class FormElementWriterTest
                 containment(f, "contextMenu", contextMenu, false)); //$NON-NLS-1$
             formField.getEStructuralFeatures().add(
                 containment(f, "extendedTooltip", extendedTooltip, false)); //$NON-NLS-1$
+            formField.getEStructuralFeatures().add(
+                layouterContainment(f, "commands", formStandardCommand, true)); //$NON-NLS-1$
 
             EClass abstractFormAttribute = f.createEClass();
             abstractFormAttribute.setName("AbstractFormAttribute"); //$NON-NLS-1$
@@ -3663,6 +4098,7 @@ public class FormElementWriterTest
             formAttribute = f.createEClass();
             formAttribute.setName("FormAttribute"); //$NON-NLS-1$
             formAttribute.getESuperTypes().add(abstractFormAttribute);
+            formAttribute.getESuperTypes().add(extensionAdoptedProperty);
             // The seed (issue #208) sets these on the main Object attribute: main/savedData booleans.
             // Declare them so the headless write logic can be exercised and the test can read them back
             // (an absent feature would make the reflective writer a no-op and the eGet(null) read throw).
@@ -3684,18 +4120,27 @@ public class FormElementWriterTest
             formAttributeColumn.getESuperTypes().add(abstractFormAttribute);
             formAttributeColumn.getEStructuralFeatures().add(
                 containment(f, "valueType", typeDescription, false)); //$NON-NLS-1$
+            EClass formAttributeAdditionalColumns = f.createEClass();
+            formAttributeAdditionalColumns.setName("FormAttributeAdditionalColumns"); //$NON-NLS-1$
+            formAttributeAdditionalColumns.getEStructuralFeatures().add(
+                containment(f, "columns", formAttributeColumn, true)); //$NON-NLS-1$
             formAttribute.getEStructuralFeatures().add(
                 containment(f, "valueType", typeDescription, false)); //$NON-NLS-1$
             formAttribute.getEStructuralFeatures().add(
                 containment(f, "columns", formAttributeColumn, true)); //$NON-NLS-1$
+            formAttribute.getEStructuralFeatures().add(
+                containment(f, "additionalColumns", formAttributeAdditionalColumns, true)); //$NON-NLS-1$
             // A dynamic list is an attribute carrying a DynamicListExtInfo - the shape the table
             // binding classifies as DYNAMIC_LIST_ATTRIBUTE (issue #295 review).
             EClass dynamicListExtInfo = f.createEClass();
             dynamicListExtInfo.setName("DynamicListExtInfo"); //$NON-NLS-1$
             formAttribute.getEStructuralFeatures().add(
                 containment(f, "extInfo", dynamicListExtInfo, false)); //$NON-NLS-1$
+            formAttribute.getEStructuralFeatures().add(
+                containment(f, "notDefaultUseAlwaysAttributes", dataPath, true)); //$NON-NLS-1$
             pkg.getEClassifiers().add(typeDescription);
             pkg.getEClassifiers().add(formAttributeColumn);
+            pkg.getEClassifiers().add(formAttributeAdditionalColumns);
             pkg.getEClassifiers().add(dynamicListExtInfo);
 
             autoCommandBar = f.createEClass();
@@ -3710,6 +4155,7 @@ public class FormElementWriterTest
             EClass addition = f.createEClass();
             addition.setName("Addition"); //$NON-NLS-1$
             addition.getESuperTypes().add(formItem);
+            addition.getESuperTypes().add(extensionAdoptedProperty);
             addBoolean(f, addition, "enabled"); //$NON-NLS-1$
             addBoolean(f, addition, "visible"); //$NON-NLS-1$
 
@@ -3729,6 +4175,8 @@ public class FormElementWriterTest
                 containment(f, "viewStatusAddition", addition, false)); //$NON-NLS-1$
             table.getEStructuralFeatures().add(
                 containment(f, "searchControlAddition", addition, false)); //$NON-NLS-1$
+            table.getEStructuralFeatures().add(
+                layouterContainment(f, "commands", formStandardCommand, true)); //$NON-NLS-1$
             pkg.getEClassifiers().add(addition);
 
             // The LAYOUTER-ONLY children (issue #373). In the shipped Form.xcore these sit on
@@ -3746,8 +4194,11 @@ public class FormElementWriterTest
 
             form = f.createEClass();
             form.setName("Form"); //$NON-NLS-1$
+            form.getESuperTypes().add(extensionAdoptedProperty);
             form.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
             form.getEStructuralFeatures().add(containment(f, "formCommands", formCommand, true)); //$NON-NLS-1$
+            form.getEStructuralFeatures().add(
+                layouterContainment(f, "commands", formStandardCommand, true)); //$NON-NLS-1$
             form.getEStructuralFeatures().add(
                 containment(f, "attributes", formAttribute, true)); //$NON-NLS-1$
             form.getEStructuralFeatures().add(
@@ -3762,6 +4213,14 @@ public class FormElementWriterTest
                 layouterContainment(f, "ghostAttributes", formAttribute, true)); //$NON-NLS-1$
             form.getEStructuralFeatures().add(
                 layouterContainment(f, "ghostCommands", formCommand, true)); //$NON-NLS-1$
+            EReference baseForm = f.createEReference();
+            baseForm.setName("baseForm"); //$NON-NLS-1$
+            baseForm.setEType(form);
+            form.getEStructuralFeatures().add(baseForm);
+            EReference extensionForm = f.createEReference();
+            extensionForm.setName("extensionForm"); //$NON-NLS-1$
+            extensionForm.setEType(form);
+            form.getEStructuralFeatures().add(extensionForm);
 
             pkg.getEClassifiers().add(form);
             // The owner that holds several forms: the level the orphan-item scan must NOT climb to,
@@ -3785,6 +4244,7 @@ public class FormElementWriterTest
             // adjustableBoolean is deliberately NOT added: it is the REAL mdclass EClass, and
             // EClassifier containment is single-parent - adding it here would REPARENT it out of
             // MdClassPackage for the whole JVM, corrupting the metamodel for every later test.
+            pkg.getEClassifiers().add(extensionAdoptedProperty);
             pkg.getEClassifiers().add(extInfoBase);
             pkg.getEClassifiers().add(usualGroupExtInfo);
             pkg.getEClassifiers().add(popupGroupExtInfo);
@@ -3804,7 +4264,9 @@ public class FormElementWriterTest
             pkg.getEClassifiers().add(commandHandler);
             pkg.getEClassifiers().add(handlerContainer);
             pkg.getEClassifiers().add(formCommandHandlerContainer);
+            pkg.getEClassifiers().add(command);
             pkg.getEClassifiers().add(formCommand);
+            pkg.getEClassifiers().add(formStandardCommand);
             pkg.getEClassifiers().add(button);
             pkg.getEClassifiers().add(formGroup);
             pkg.getEClassifiers().add(decoration);
@@ -4639,6 +5101,58 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testDynamicListColumnRegistersUseAlwaysPathExactlyOnce()
+    {
+        EObject form = newForm();
+        EObject list = newDynamicListAttribute(form, "List"); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "RefColumn1", null, //$NON-NLS-1$
+            "List.Ref", null, null, false, null)); //$NON-NLS-1$
+        EObject firstItem = FormElementWriter.findFormItem(form, "RefColumn1"); //$NON-NLS-1$
+        EObject firstItemPath = (EObject)firstItem.eGet(feature(firstItem, "dataPath")); //$NON-NLS-1$
+        List<EObject> registered = useAlwaysPaths(list);
+        assertEquals(1, registered.size());
+        assertEquals(Arrays.asList("List", "Ref"), pathSegments(registered.get(0))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotSame("the attribute must own a copy, not the field's contained path", //$NON-NLS-1$
+            firstItemPath, registered.get(0));
+
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "RefColumn2", null, //$NON-NLS-1$
+            "List.Ref", null, null, false, null)); //$NON-NLS-1$
+        assertEquals("an equal path must not be registered twice", 1, useAlwaysPaths(list).size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNonDynamicListPathDoesNotRegisterUseAlways()
+    {
+        EObject form = newForm();
+        EObject rows = newCollectionAttribute(form, "Rows", "Price"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "PriceColumn", null, //$NON-NLS-1$
+            "Rows.Price", null, null, false, null)); //$NON-NLS-1$
+
+        assertTrue("a collection attribute must not receive a dynamic-list registration", //$NON-NLS-1$
+            useAlwaysPaths(rows).isEmpty());
+    }
+
+    @Test
+    public void testRemovingLastDynamicListPathUserPrunesRegistration()
+    {
+        EObject form = newForm();
+        EObject list = newDynamicListAttribute(form, "List"); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "RefColumn1", null, //$NON-NLS-1$
+            "List.Ref", null, null, false, null)); //$NON-NLS-1$
+        assertNull(FormElementWriter.createMember(form, Kind.FIELD, "RefColumn2", null, //$NON-NLS-1$
+            "List.Ref", null, null, false, null)); //$NON-NLS-1$
+        EObject first = FormElementWriter.findFormItem(form, "RefColumn1"); //$NON-NLS-1$
+        EObject second = FormElementWriter.findFormItem(form, "RefColumn2"); //$NON-NLS-1$
+
+        FormElementWriter.removeFormMember(form, first);
+        assertEquals("the other field still needs the registration", 1, useAlwaysPaths(list).size()); //$NON-NLS-1$
+        FormElementWriter.removeFormMember(form, second);
+        assertTrue("the last removal must prune the stale registration", useAlwaysPaths(list).isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testTabularSectionTableKeepsItsLineNumberColumn()
     {
         // The other side of the same branch: a tabular-section table is unchanged.
@@ -4673,6 +5187,28 @@ public class FormElementWriterTest
         }
         EObject dataPath = (EObject)item.eGet(feature(item, "dataPath")); //$NON-NLS-1$
         return (List<?>)dataPath.eGet(feature(dataPath, "segments")); //$NON-NLS-1$
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<EObject> useAlwaysPaths(EObject attribute)
+    {
+        return (List<EObject>)attribute.eGet(feature(attribute, "notDefaultUseAlwaysAttributes")); //$NON-NLS-1$
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<String> pathSegments(EObject dataPath)
+    {
+        return (List<String>)dataPath.eGet(feature(dataPath, "segments")); //$NON-NLS-1$
+    }
+
+    private static EObject newDynamicListAttribute(EObject form, String name)
+    {
+        EObject attribute = newObject(MODEL.formAttribute);
+        attribute.eSet(feature(attribute, "name"), name); //$NON-NLS-1$
+        attribute.eSet(feature(attribute, "extInfo"), //$NON-NLS-1$
+            newObject(modelClass("DynamicListExtInfo"))); //$NON-NLS-1$
+        addTo(form, "attributes", attribute); //$NON-NLS-1$
+        return attribute;
     }
 
     /**

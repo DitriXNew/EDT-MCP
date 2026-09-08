@@ -95,7 +95,7 @@ public final class FormStructureReader
     private static final String FEATURE_TYPE = "type"; //$NON-NLS-1$
     /** EAttribute name (EEnum) carrying the {@code editMode} on a {@code FormField}. */
     private static final String FEATURE_EDIT_MODE = "editMode"; //$NON-NLS-1$
-    /** EAttribute name carrying the bound metadata-command name on a {@code FormButton}. */
+    /** EReference name carrying the bound custom or standard command on a {@code Button}. */
     private static final String FEATURE_COMMAND_NAME = "commandName"; //$NON-NLS-1$
     /** EAttribute name (Boolean) flagging the MAIN form attribute on a {@code FormAttribute}. */
     private static final String FEATURE_MAIN = "main"; //$NON-NLS-1$
@@ -116,6 +116,8 @@ public final class FormStructureReader
      * {@code FormElementWriter.ELEM_BUTTON} and is matched against {@code item.eClass().getName()}.
      */
     private static final String ECLASS_BUTTON = "Button"; //$NON-NLS-1$
+    /** EClass simple-name token identifying an inferred, non-persisted platform command. */
+    private static final String ECLASS_FORM_STANDARD_COMMAND = "FormStandardCommand"; //$NON-NLS-1$
 
     /** The Russian language CODE; selects the {@code nameRu} event name over the English {@code name}. */
     private static final String LANG_RU = "ru"; //$NON-NLS-1$
@@ -1241,7 +1243,8 @@ public final class FormStructureReader
      *         <ul>
      *         <li>group ({@code FormGroup}): {@code "group: <extInfoSimpleName> <group> [behavior]"};</li>
      *         <li>field ({@code FormField}): {@code "field: type=<type> editMode=<editMode>"};</li>
-     *         <li>button ({@code Button}): {@code "command: <commandName>"}.</li>
+     *         <li>button ({@code Button}): {@code "command: <referenced command name>"}; a platform
+     *             platform standard command uses the label {@code "standardCommand: <name>"}.</li>
      *         </ul>
      *         Every enum is read as its literal via {@link Enumerator}; an absent feature is omitted.
      */
@@ -1262,8 +1265,21 @@ public final class FormStructureReader
         }
         if (ECLASS_BUTTON.equals(eClassName))
         {
-            String command = stringValue(getValue(item, FEATURE_COMMAND_NAME));
-            return command.isEmpty() ? "" : "command: " + command; //$NON-NLS-1$ //$NON-NLS-2$
+            EObject command = getSingleReference(item, FEATURE_COMMAND_NAME);
+            if (command == null)
+            {
+                return ""; //$NON-NLS-1$
+            }
+            String name = stringValue(getValue(command, FEATURE_NAME));
+            boolean standard = ECLASS_FORM_STANDARD_COMMAND.equals(command.eClass().getName());
+            if (name.isEmpty() && standard)
+            {
+                name = stringValue(getValue(command, FEATURE_NAME_RU));
+            }
+            // The two kinds are told apart by the LABEL, not by a parenthesised suffix: this string
+            // is escaped as a cell, so brackets would reach the caller as "\(standard\)".
+            return name.isEmpty() ? "" //$NON-NLS-1$
+                : (standard ? "standardCommand: " : "command: ") + name; //$NON-NLS-1$ //$NON-NLS-2$
         }
         return ""; //$NON-NLS-1$
     }

@@ -13,12 +13,16 @@ reset: kind="write-metadata" -> reset_model() after each test. Each seeding test
 catalog name (a created top object is not guaranteed to be reverted, like the StyleItem e2e tests).
 """
 
+import xml.etree.ElementTree as ET
+
 from harness import (
     call,
     assert_ok,
     assert_error,
     assert_error_quality,
     assert_contains,
+    poll_diff_contains,
+    read_disk,
     wait_for_project_ready,
     e2e_test,
     PROJECT,
@@ -126,6 +130,25 @@ def test_set_main_table_and_output_column():
     assert_ok(errs, "read project errors")
     bad = [ln for ln in errs.text.splitlines() if "form-data-path" in ln and "ListForm" in ln]
     assert not bad, "the dynamic-list column must resolve (no form-data-path):\n%s" % "\n".join(bad)
+
+    # ON DISK: the column must also carry the dynamic list's UseAlways registration (issue #551).
+    # Asserted in Form.form and not through the tool's own answer, because the whole defect was the
+    # tool answering success + valid while the file the PLATFORM reads was missing this element:
+    # without it the .epf build fails with 'Неверный путь к данным: "List.Ref"'. EDT's own standard
+    # check form-list-ref-use-always-flag-disabled demands the same entry for a list's Ref field.
+    # The export is async, so poll the working-tree diff rather than reading the file once.
+    poll_diff_contains("<notDefaultUseAlwaysAttributes",
+                       ctx="the dynamic-list attribute must register the column's path")
+    form_xml = read_disk("src/Catalogs/" + base.split(".")[1] + "/Forms/ListForm/Form.form")
+    root = ET.fromstring(form_xml)
+    registered = [
+        ".".join(segment.text or "" for segment in element
+                 if segment.tag.rsplit("}", 1)[-1] == "segments")
+        for element in root.iter()
+        if element.tag.rsplit("}", 1)[-1] == "notDefaultUseAlwaysAttributes"
+    ]
+    assert registered == ["List.Ref"], \
+        "exactly the column's path must be registered, once: %r" % (registered,)
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

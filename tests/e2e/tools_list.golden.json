@@ -2184,7 +2184,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Inspect the properties and structure of a metadata object or member. Parameters and examples: get_tool_guide('get_metadata_details').",
+    "description": "Inspect metadata objects and members, including managed-form root properties and structure. Parameters and examples: get_tool_guide('get_metadata_details').",
     "inputSchema": {
       "properties": {
         "assignable": {
@@ -3387,7 +3387,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Set properties of any metadata node (object or member, including form items, attributes, commands, and handlers). Parameters and examples: get_tool_guide('modify_metadata').",
+    "description": "Set properties of any metadata node, including managed-form roots, items, attributes, commands, and handlers. Parameters and examples: get_tool_guide('modify_metadata').",
     "inputSchema": {
       "properties": {
         "content": {
