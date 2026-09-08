@@ -7,9 +7,22 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
+import java.util.HashMap;
+import java.util.Map;
+
+import org.eclipse.core.resources.IMarker;
+import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.runtime.Path;
+import org.eclipse.debug.core.model.IBreakpoint;
+import org.eclipse.debug.core.model.ILineBreakpoint;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
@@ -19,11 +32,26 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  * <p>
  * This tool performs no argument validation: {@code projectName} is optional
  * and the first action in {@code execute()} is a live {@code DebugPlugin}
- * lookup. So the headless surface is limited to the static contract (name,
- * response type, schema); the listing behaviour is covered by the E2E suite.
+ * lookup. DTO construction is tested through package-visible helpers; manager
+ * enumeration and project-filter behaviour are covered by the E2E suite.
  */
 public class ListBreakpointsToolTest
 {
+    public enum TestHitCondition
+    {
+        EQUALS,
+        MULTIPLIER
+    }
+
+    public interface ExtendedLineConfiguration
+    {
+        String getCondition();
+
+        int getHitCount();
+
+        TestHitCondition getHitCondition();
+    }
+
     @Test
     public void testName()
     {
@@ -56,5 +84,103 @@ public class ListBreakpointsToolTest
         String schema = new ListBreakpointsTool().getInputSchema();
         assertNotNull(schema);
         assertTrue(schema.contains("\"projectName\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConfiguredLineFieldsAppear()
+        throws Exception
+    {
+        ILineBreakpoint breakpoint = configuredBreakpoint("A > 0", 4, TestHitCondition.MULTIPLIER); //$NON-NLS-1$
+        IMarker marker = marker();
+        when(breakpoint.getMarker()).thenReturn(marker);
+        Map<String, Object> dto = ListBreakpointsTool.createLineBreakpointDto(
+            breakpoint, marker, project());
+
+        assertEquals("A > 0", dto.get("condition")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Integer.valueOf(4), dto.get("hitCount")); //$NON-NLS-1$
+        assertEquals("MULTIPLIER", dto.get("hitCondition")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testUnsetLineFieldsAreOmitted()
+        throws Exception
+    {
+        ILineBreakpoint breakpoint = configuredBreakpoint("", -1, TestHitCondition.EQUALS); //$NON-NLS-1$
+        IMarker marker = marker();
+        when(breakpoint.getMarker()).thenReturn(marker);
+        Map<String, Object> dto = ListBreakpointsTool.createLineBreakpointDto(
+            breakpoint, marker, project());
+
+        assertFalse(dto.containsKey("condition")); //$NON-NLS-1$
+        assertFalse(dto.containsKey("hitCount")); //$NON-NLS-1$
+        assertFalse(dto.containsKey("hitCondition")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExceptionBreakpointIsLabelledWorkspaceWide()
+        throws Exception
+    {
+        IBreakpoint breakpoint = mock(IBreakpoint.class);
+        when(breakpoint.isEnabled()).thenReturn(true);
+        when(breakpoint.getModelIdentifier()).thenReturn("com._1c.g5.v8.dt.debug"); //$NON-NLS-1$
+        IMarker marker = marker();
+        Map<String, Object> attributes = new HashMap<>();
+        attributes.put("edt.catchAllExceptions", Boolean.FALSE); //$NON-NLS-1$
+        attributes.put("edt.exceptionMessage", "Expected failure"); //$NON-NLS-1$ //$NON-NLS-2$
+        when(marker.getAttributes()).thenReturn(attributes);
+
+        Map<String, Object> dto = ListBreakpointsTool.createExceptionBreakpointDto(breakpoint, marker);
+
+        assertEquals("exception", dto.get("kind")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Boolean.TRUE, dto.get("workspaceWide")); //$NON-NLS-1$
+        assertEquals(Boolean.FALSE, dto.get("catchAllExceptions")); //$NON-NLS-1$
+        assertEquals("Expected failure", dto.get("exceptionMessage")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Boolean.TRUE, dto.get("enabled")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCatchAllExceptionBreakpointHasEmptyMessage()
+        throws Exception
+    {
+        IBreakpoint breakpoint = mock(IBreakpoint.class);
+        IMarker marker = marker();
+        when(marker.getAttributes()).thenReturn(new HashMap<>());
+
+        Map<String, Object> dto = ListBreakpointsTool.createExceptionBreakpointDto(breakpoint, marker);
+
+        assertEquals(Boolean.TRUE, dto.get("catchAllExceptions")); //$NON-NLS-1$
+        assertEquals("", dto.get("exceptionMessage")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static ILineBreakpoint configuredBreakpoint(String condition, int hitCount,
+        TestHitCondition hitCondition) throws Exception
+    {
+        ILineBreakpoint breakpoint = mock(ILineBreakpoint.class,
+            withSettings().extraInterfaces(ExtendedLineConfiguration.class));
+        ExtendedLineConfiguration configuration = (ExtendedLineConfiguration)breakpoint;
+        when(configuration.getCondition()).thenReturn(condition);
+        when(configuration.getHitCount()).thenReturn(hitCount);
+        when(configuration.getHitCondition()).thenReturn(hitCondition);
+        when(breakpoint.getLineNumber()).thenReturn(2);
+        when(breakpoint.isEnabled()).thenReturn(true);
+        when(breakpoint.getModelIdentifier()).thenReturn("com._1c.g5.v8.dt.debug"); //$NON-NLS-1$
+        return breakpoint;
+    }
+
+    private static IMarker marker()
+    {
+        IMarker marker = mock(IMarker.class);
+        IResource resource = mock(IResource.class);
+        when(marker.getId()).thenReturn(42L);
+        when(marker.getResource()).thenReturn(resource);
+        when(resource.getFullPath()).thenReturn(new Path("/TestConfiguration/src/CommonModules/Calc/Module.bsl")); //$NON-NLS-1$
+        return marker;
+    }
+
+    private static IProject project()
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("TestConfiguration"); //$NON-NLS-1$
+        return project;
     }
 }

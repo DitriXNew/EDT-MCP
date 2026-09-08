@@ -94,6 +94,7 @@ def test_sets_breakpoint_on_calc_module_line_and_does_not_touch_project():
         "projectName": PROJECT,
         "modulePath": CALC_MODULE,
         "lineNumber": 2,
+        "condition": "A > 0",
     })
     assert_ok(r, "set_breakpoint on Calc module line 2")
 
@@ -147,6 +148,42 @@ def test_sets_breakpoint_on_calc_module_line_and_does_not_touch_project():
         % (bp_id, [b.get("breakpointId") for b in bps])
     assert mine[0].get("lineNumber") == 2, \
         "the listed breakpoint must report line 2; got %r" % mine[0].get("lineNumber")
+    assert mine[0].get("condition") == "A > 0", \
+        "the real BSL condition must round-trip through list_breakpoints; got %r" \
+        % mine[0].get("condition")
+
+    # The same coordinates must UPDATE the existing breakpoint, not create a
+    # second independently firing marker. Also exercise all extended settings.
+    updated = call("set_breakpoint", {
+        "projectName": PROJECT,
+        "modulePath": CALC_MODULE,
+        "lineNumber": 2,
+        "condition": "B > 0",
+        "hitCount": 2,
+        "hitCondition": "EQUAL_OR_HIGHER",
+    })
+    assert_ok(updated, "update the existing conditioned breakpoint")
+    usc = updated.structured or {}
+    assert usc.get("action") == "updated", \
+        "same-coordinate set must report action=updated; got %r" % usc
+    assert usc.get("breakpointId") == bp_id, \
+        "updating must preserve the existing marker id; got %r then %r" \
+        % (bp_id, usc.get("breakpointId"))
+
+    relisted = call("list_breakpoints", {"projectName": PROJECT})
+    assert_ok(relisted, "list_breakpoints after in-place update")
+    same_position = [b for b in (relisted.structured or {}).get("breakpoints", [])
+                     if b.get("project") == PROJECT
+                     and b.get("lineNumber") == 2
+                     and "Calc" in str(b.get("file") or "")]
+    assert len(same_position) == 1, \
+        "updating one source position must leave exactly one breakpoint; got %r" % same_position
+    assert same_position[0].get("condition") == "B > 0", \
+        "updated condition must be visible; got %r" % same_position[0]
+    assert same_position[0].get("hitCount") == 2, \
+        "configured hitCount must be visible; got %r" % same_position[0]
+    assert same_position[0].get("hitCondition") == "EQUAL_OR_HIGHER", \
+        "configured hitCondition must be visible; got %r" % same_position[0]
 
     # The whole sequence must NOT have modified the git-tracked project source —
     # breakpoints are a workspace artifact, never a project-tree edit.
@@ -220,6 +257,40 @@ def test_negative_line_number_rejected():
     assert_error_quality(e, names=["lineNumber"], suggests=["lineNumber"],
                          ctx="negative lineNumber rejected at the >=1 boundary")
     assert_no_diff("an invalid call must not touch the project on disk")
+
+
+@e2e_test(tool="set_breakpoint", kind="read")
+def test_extended_breakpoint_validation_refusals_are_actionable():
+    """Negative hit counts, orphan hit conditions, and unknown enum literals
+    are rejected before any workspace lookup or mutation."""
+    negative = call("set_breakpoint", {
+        "projectName": PROJECT, "modulePath": CALC_MODULE, "lineNumber": 2,
+        "hitCount": -2,
+    })
+    error = assert_error(negative, "negative hitCount")
+    assert_error_quality(error, names=["hitCount", "-2"],
+                         suggests=["positive", "0"],
+                         ctx="negative hitCount names the value and clearing rule")
+
+    orphan = call("set_breakpoint", {
+        "projectName": PROJECT, "modulePath": CALC_MODULE, "lineNumber": 2,
+        "hitCondition": "MULTIPLIER",
+    })
+    error = assert_error(orphan, "hitCondition without hitCount")
+    assert_error_quality(error, names=["hitCondition", "MULTIPLIER", "hitCount"],
+                         suggests=["positive", "omit"],
+                         ctx="orphan hitCondition explains the required companion")
+
+    unknown = call("set_breakpoint", {
+        "projectName": PROJECT, "modulePath": CALC_MODULE, "lineNumber": 2,
+        "hitCount": 2, "hitCondition": "AFTER",
+    })
+    error = assert_error(unknown, "unknown hitCondition")
+    assert_error_quality(error, names=["hitCondition", "AFTER"],
+                         suggests=["EQUALS", "EQUAL_OR_LESS",
+                                   "EQUAL_OR_HIGHER", "MULTIPLIER"],
+                         ctx="unknown hitCondition names all exact platform literals")
+    assert_no_diff("extended-option refusals must not touch project source")
 
 
 @e2e_test(tool="set_breakpoint", kind="read")

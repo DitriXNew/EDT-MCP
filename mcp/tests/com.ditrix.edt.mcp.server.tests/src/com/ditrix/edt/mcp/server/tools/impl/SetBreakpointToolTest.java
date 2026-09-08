@@ -62,6 +62,14 @@ public class SetBreakpointToolTest
         assertTrue(schema.contains("\"modulePath\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"module\"")); // legacy alias //$NON-NLS-1$
         assertTrue(schema.contains("\"lineNumber\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"condition\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"hitCount\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"hitCondition\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("EQUALS")); //$NON-NLS-1$
+        assertTrue(schema.contains("EQUAL_OR_LESS")); //$NON-NLS-1$
+        assertTrue(schema.contains("EQUAL_OR_HIGHER")); //$NON-NLS-1$
+        assertTrue(schema.contains("MULTIPLIER")); //$NON-NLS-1$
+        assertTrue(schema.contains("8.3.24")); //$NON-NLS-1$
     }
 
     // ==================== Argument validation (no live workspace needed) ====================
@@ -108,5 +116,40 @@ public class SetBreakpointToolTest
         params.put("lineNumber", "10"); //$NON-NLS-1$ //$NON-NLS-2$
         String result = new SetBreakpointTool().execute(params);
         assertTrue(result.contains("projectName is required when modulePath is given as an EDT module path")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNegativeHitCountIsRejectedActionably()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("hitCount", "-3"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new SetBreakpointTool().execute(params);
+        assertTrue(result.contains("Invalid hitCount -3")); //$NON-NLS-1$
+        assertTrue(result.contains("positive integer")); //$NON-NLS-1$
+        assertTrue(result.contains("0/omit hitCount")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testHitConditionWithoutPositiveHitCountIsRejected()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("hitCondition", "MULTIPLIER"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new SetBreakpointTool().execute(params);
+        assertTrue(result.contains("hitCondition 'MULTIPLIER' requires a positive hitCount")); //$NON-NLS-1$
+        assertTrue(result.contains("omit hitCondition")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnknownHitConditionNamesAllValidLiterals()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("hitCount", "2"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("hitCondition", "AFTER"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new SetBreakpointTool().execute(params);
+        assertTrue(result.contains("Unknown hitCondition 'AFTER'")); //$NON-NLS-1$
+        assertTrue(result.contains("EQUALS")); //$NON-NLS-1$
+        assertTrue(result.contains("EQUAL_OR_LESS")); //$NON-NLS-1$
+        assertTrue(result.contains("EQUAL_OR_HIGHER")); //$NON-NLS-1$
+        assertTrue(result.contains("MULTIPLIER")); //$NON-NLS-1$
     }
 }

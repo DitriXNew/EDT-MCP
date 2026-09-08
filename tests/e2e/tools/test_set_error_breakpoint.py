@@ -1,0 +1,170 @@
+"""Real e2e coverage for the workspace-wide set_error_breakpoint tool."""
+
+from harness import (
+    call,
+    assert_ok,
+    assert_error,
+    assert_error_quality,
+    assert_no_diff,
+    e2e_test,
+)
+
+
+def _exception_breakpoints(project_filter=None):
+    params = {} if project_filter is None else {"projectName": project_filter}
+    result = call("list_breakpoints", params)
+    assert_ok(result, "list workspace-wide exception breakpoints")
+    return [entry for entry in (result.structured or {}).get("breakpoints", [])
+            if entry.get("kind") == "exception" and entry.get("workspaceWide") is True]
+
+
+def _restore(original):
+    _delete_exception_breakpoints()
+    if not original:
+        return
+    params = {"enabled": True}
+    if not original[0].get("catchAllExceptions") and "exceptionMessage" in original[0]:
+        params["exceptionMessage"] = original[0]["exceptionMessage"]
+    call("set_error_breakpoint", params)
+    if original[0].get("enabled") is False:
+        call("set_error_breakpoint", {"enabled": False})
+
+
+def _delete_exception_breakpoints():
+    for entry in _exception_breakpoints():
+        breakpoint_id = entry.get("breakpointId")
+        if isinstance(breakpoint_id, int) and breakpoint_id > 0:
+            result = call("remove_breakpoint", {"breakpointId": breakpoint_id})
+            assert_ok(result, "delete workspace error-breakpoint test state")
+
+
+@e2e_test(tool="set_error_breakpoint", kind="read")
+def test_create_update_disable_and_reenable_workspace_error_breakpoint():
+    """Exercise the real OSGi factory, manager registration, reflective setters,
+    workspace-root listing, in-place update, and configuration-preserving disable."""
+    original = _exception_breakpoints()
+    _delete_exception_breakpoints()
+    breakpoint_id = None
+    try:
+        created = call("set_error_breakpoint", {"enabled": True})
+        assert_ok(created, "create catch-all workspace error breakpoint")
+        created_state = created.structured or {}
+        breakpoint_id = created_state.get("breakpointId")
+        if not isinstance(breakpoint_id, int) or breakpoint_id <= 0:
+            raise AssertionError("factory-created exception breakpoint needs a real marker id: %r"
+                                 % created_state)
+        if created_state.get("catchAllExceptions") is not True:
+            raise AssertionError("omitted exceptionMessage must enable catch-all: %r" % created_state)
+        if created_state.get("workspaceWide") is not True:
+            raise AssertionError("result must label the setting workspace-wide: %r" % created_state)
+
+        # A project filter cannot exclude a workspace-root exception breakpoint.
+        listed = _exception_breakpoints("NoSuchProject_ZZZ_e2e")
+        mine = [entry for entry in listed if entry.get("breakpointId") == breakpoint_id]
+        if not mine:
+            raise AssertionError("projectName filter excluded workspace-wide breakpoint id=%r: %r"
+                                 % (breakpoint_id, listed))
+        if mine[0].get("enabled") is not True or mine[0].get("catchAllExceptions") is not True:
+            raise AssertionError("listed catch-all state is not the real configured state: %r" % mine[0])
+
+        # Remove the catch-all instance so the message-filtered case proves creation,
+        # rather than only an update of an existing breakpoint.
+        removed = call("remove_breakpoint", {"breakpointId": breakpoint_id})
+        assert_ok(removed, "remove catch-all workspace error breakpoint")
+        if (removed.structured or {}).get("removed") is not True:
+            raise AssertionError("catch-all breakpoint was not removed: %r"
+                                 % (removed.structured or {}))
+
+        filtered = call("set_error_breakpoint", {
+            "enabled": True,
+            "exceptionMessage": "Regression sentinel",
+        })
+        assert_ok(filtered, "create workspace error breakpoint with message filter")
+        filtered_state = filtered.structured or {}
+        if filtered_state.get("action") != "created":
+            raise AssertionError("message filter must be tested on a new breakpoint: %r"
+                                 % filtered_state)
+        breakpoint_id = filtered_state.get("breakpointId")
+        if not isinstance(breakpoint_id, int) or breakpoint_id <= 0:
+            raise AssertionError("filtered exception breakpoint needs a real marker id: %r"
+                                 % filtered_state)
+        if filtered_state.get("catchAllExceptions") is not False \
+                or filtered_state.get("exceptionMessage") != "Regression sentinel":
+            raise AssertionError("create with a message did not retain the exact filter: %r"
+                                 % filtered_state)
+
+        listed = _exception_breakpoints()
+        mine = [entry for entry in listed if entry.get("breakpointId") == breakpoint_id]
+        if len(mine) != 1:
+            raise AssertionError("filtered create must leave one workspace exception breakpoint: %r"
+                                 % listed)
+        if mine[0].get("catchAllExceptions") is not False:
+            raise AssertionError("message filter must disable catch-all: %r" % mine[0])
+        if mine[0].get("exceptionMessage") != "Regression sentinel":
+            raise AssertionError("message filter did not round-trip through list_breakpoints: %r" % mine[0])
+
+        disabled = call("set_error_breakpoint", {"enabled": False})
+        assert_ok(disabled, "disable workspace error breakpoint")
+        disabled_state = disabled.structured or {}
+        if disabled_state.get("action") != "disabled" or disabled_state.get("disabledCount", 0) < 1:
+            raise AssertionError("disable must report retained exception breakpoints: %r"
+                                 % disabled_state)
+        mine = [entry for entry in _exception_breakpoints()
+                if entry.get("breakpointId") == breakpoint_id]
+        if len(mine) != 1 or mine[0].get("enabled") is not False:
+            raise AssertionError("disabled exception breakpoint must remain listed: %r" % mine)
+        if mine[0].get("exceptionMessage") != "Regression sentinel":
+            raise AssertionError("disable discarded the exception-message filter: %r" % mine[0])
+
+        reenabled = call("set_error_breakpoint", {"enabled": True})
+        assert_ok(reenabled, "re-enable workspace error breakpoint without repeating filter")
+        reenabled_state = reenabled.structured or {}
+        if reenabled_state.get("breakpointId") != breakpoint_id:
+            raise AssertionError("re-enable must preserve marker id=%r: %r"
+                                 % (breakpoint_id, reenabled_state))
+        mine = [entry for entry in _exception_breakpoints()
+                if entry.get("breakpointId") == breakpoint_id]
+        if len(mine) != 1 or mine[0].get("enabled") is not True:
+            raise AssertionError("re-enabled exception breakpoint is not active: %r" % mine)
+        if mine[0].get("catchAllExceptions") is not False \
+                or mine[0].get("exceptionMessage") != "Regression sentinel":
+            raise AssertionError("re-enable without a message must keep the same filter: %r"
+                                 % mine[0])
+
+        cleared = call("set_error_breakpoint", {
+            "enabled": True,
+            "exceptionMessage": "",
+        })
+        assert_ok(cleared, "explicitly clear workspace error-breakpoint message filter")
+        cleared_state = cleared.structured or {}
+        if cleared_state.get("breakpointId") != breakpoint_id:
+            raise AssertionError("clearing the filter must preserve marker id=%r: %r"
+                                 % (breakpoint_id, cleared_state))
+        if cleared_state.get("catchAllExceptions") is not True \
+                or "exceptionMessage" in cleared_state:
+            raise AssertionError("empty exceptionMessage must explicitly select catch-all: %r"
+                                 % cleared_state)
+        mine = [entry for entry in _exception_breakpoints()
+                if entry.get("breakpointId") == breakpoint_id]
+        if len(mine) != 1 or mine[0].get("catchAllExceptions") is not True:
+            raise AssertionError("cleared filter did not round-trip as catch-all: %r" % mine)
+        if "exceptionMessage" in mine[0]:
+            raise AssertionError("cleared exception-message filter is still listed: %r" % mine[0])
+    finally:
+        _restore(original)
+    assert_no_diff("workspace-wide error-breakpoint changes must not modify project source")
+
+
+@e2e_test(tool="set_error_breakpoint", kind="read")
+def test_required_and_boolean_refusals_are_actionable():
+    missing = call("set_error_breakpoint", {})
+    error = assert_error(missing, "missing enabled")
+    assert_error_quality(error, names=["enabled"], suggests=[],
+                         ctx="required enabled parameter is named")
+
+    invalid = call("set_error_breakpoint", {"enabled": "sometimes"})
+    error = assert_error(invalid, "non-boolean enabled")
+    assert_error_quality(error, names=["enabled", "sometimes"],
+                         suggests=["true", "false"],
+                         ctx="invalid boolean names the value and exact fix")
+    assert_no_diff("set_error_breakpoint refusals must not modify project source")

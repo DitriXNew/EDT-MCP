@@ -7,7 +7,13 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.eclipse.core.resources.IFile;
@@ -21,6 +27,9 @@ import org.eclipse.debug.core.IBreakpointManager;
 import org.eclipse.debug.core.model.IBreakpoint;
 import org.eclipse.debug.core.model.ILineBreakpoint;
 import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.FrameworkUtil;
+import org.osgi.framework.ServiceReference;
 
 import com.ditrix.edt.mcp.server.Activator;
 
@@ -55,6 +64,28 @@ public final class BreakpointUtils
      * restrictions on the {@code internal.*} package.
      */
     private static final String BSL_DEBUG_CORE_BUNDLE = "com._1c.g5.v8.dt.debug.core"; //$NON-NLS-1$
+
+    /** Exported EDT service interface used to create workspace-wide exception breakpoints. */
+    public static final String BSL_BREAKPOINT_FACTORY_SERVICE =
+        "com._1c.g5.v8.dt.debug.core.model.breakpoints.IBslBreakpointFactory"; //$NON-NLS-1$
+
+    /** EDT marker type for a workspace-wide BSL exception breakpoint. */
+    public static final String BSL_EXCEPTION_BREAKPOINT_MARKER =
+        "com._1c.g5.v8.dt.debug.core.bslExceptionBreakpointMarker"; //$NON-NLS-1$
+
+    /** EDT marker attributes used when an older breakpoint implementation lacks public setters. */
+    public static final String CONDITION_ATTRIBUTE =
+        "com._1c.g5.v8.dt.debug.core.condition"; //$NON-NLS-1$
+    public static final String HIT_COUNT_ATTRIBUTE =
+        "com._1c.g5.v8.dt.debug.core.hitCount"; //$NON-NLS-1$
+    public static final String HIT_CONDITION_ATTRIBUTE =
+        "com._1c.g5.v8.dt.debug.core.hitCondition"; //$NON-NLS-1$
+
+    private static final String DEFAULT_HIT_CONDITION = "EQUALS"; //$NON-NLS-1$
+
+    private static final List<String> VALID_HIT_CONDITIONS = Collections.unmodifiableList(
+        java.util.Arrays.asList(DEFAULT_HIT_CONDITION, "EQUAL_OR_LESS", //$NON-NLS-1$
+            "EQUAL_OR_HIGHER", "MULTIPLIER")); //$NON-NLS-1$ //$NON-NLS-2$
 
     /** Candidate fully-qualified class names for the BSL line breakpoint. */
     private static final String[] BSL_BREAKPOINT_CLASSES = {
@@ -173,6 +204,226 @@ public final class BreakpointUtils
         bpManager.addBreakpoint(fallback);
         fallback.registered = true;
         return fallback;
+    }
+
+    /**
+     * Finds the first registered line breakpoint at the exact resource and 1-based line.
+     * Reusing it is important when a caller changes a condition: EDT expects one breakpoint
+     * per source position, and creating another would leave two independently firing markers.
+     *
+     * @return the existing breakpoint, or {@code null} when the position is unused
+     */
+    public static IBreakpoint findLineBreakpoint(IFile file, int lineNumber) throws Exception
+    {
+        IBreakpointManager bpManager = DebugPlugin.getDefault().getBreakpointManager();
+        for (IBreakpoint bp : bpManager.getBreakpoints())
+        {
+            if (!(bp instanceof ILineBreakpoint))
+            {
+                continue;
+            }
+            IMarker marker = bp.getMarker();
+            if (marker != null && file.equals(marker.getResource())
+                && ((ILineBreakpoint)bp).getLineNumber() == lineNumber)
+            {
+                return bp;
+            }
+        }
+        return null;
+    }
+
+    /** Returns the four literals accepted by EDT's hit-condition enum. */
+    public static String[] getValidHitConditions()
+    {
+        return VALID_HIT_CONDITIONS.toArray(new String[0]);
+    }
+
+    /** Headless-testable validation for EDT's exact, case-sensitive hit-condition literals. */
+    public static boolean isValidHitCondition(String value)
+    {
+        return VALID_HIT_CONDITIONS.contains(value);
+    }
+
+    /**
+     * Applies line-breakpoint options through the native breakpoint object's public interface
+     * methods, resolved on the instance so this bundle does not import EDT's breakpoint package.
+     * A missing individual method falls back to the corresponding verified marker attribute.
+     * Marker-only degraded breakpoints deliberately accept none of these options.
+     *
+     * @param breakpoint the native or degraded breakpoint
+     * @param condition condition text; {@code null} and blank both clear it
+     * @param hitCount positive count, or a non-positive value to clear it
+     * @param hitCondition one of {@link #getValidHitConditions()}; normally {@code EQUALS}
+     * @return details needed to report whether marker-attribute fallback was used
+     */
+    public static LineBreakpointConfiguration configureLineBreakpoint(IBreakpoint breakpoint,
+        String condition, int hitCount, String hitCondition) throws Exception
+    {
+        if (breakpoint instanceof MarkerOnlyBreakpoint)
+        {
+            return LineBreakpointConfiguration.notApplied();
+        }
+
+        IMarker marker = breakpoint.getMarker();
+        List<String> markerFallbacks = new ArrayList<>();
+        setStringOption(breakpoint, marker, "setCondition", CONDITION_ATTRIBUTE, //$NON-NLS-1$
+            condition == null ? "" : condition, "condition", markerFallbacks); //$NON-NLS-1$ //$NON-NLS-2$
+        setIntegerOption(breakpoint, marker, "setHitCount", HIT_COUNT_ATTRIBUTE, //$NON-NLS-1$
+            hitCount > 0 ? hitCount : -1, "hitCount", markerFallbacks); //$NON-NLS-1$
+        setEnumOption(breakpoint, marker, "setHitCondition", HIT_CONDITION_ATTRIBUTE, //$NON-NLS-1$
+            hitCondition == null ? DEFAULT_HIT_CONDITION : hitCondition,
+            "hitCondition", markerFallbacks); //$NON-NLS-1$
+        return LineBreakpointConfiguration.applied(markerFallbacks);
+    }
+
+    /**
+     * Reads the line options actually held by the breakpoint, using the native getters first and
+     * their verified marker attributes only when a getter is absent. Unset values are omitted.
+     */
+    public static Map<String, Object> readLineBreakpointConfiguration(IBreakpoint breakpoint,
+        IMarker marker) throws Exception
+    {
+        Map<String, Object> configured = new LinkedHashMap<>();
+        Object condition = getOption(breakpoint, marker, "getCondition", CONDITION_ATTRIBUTE); //$NON-NLS-1$
+        if (condition != null && !condition.toString().isEmpty())
+        {
+            configured.put("condition", condition.toString()); //$NON-NLS-1$
+        }
+
+        Object rawHitCount = getOption(breakpoint, marker, "getHitCount", HIT_COUNT_ATTRIBUTE); //$NON-NLS-1$
+        int hitCount = rawHitCount instanceof Number ? ((Number)rawHitCount).intValue() : -1;
+        if (hitCount > 0)
+        {
+            configured.put("hitCount", hitCount); //$NON-NLS-1$
+            Object rawHitCondition = getOption(breakpoint, marker, "getHitCondition", //$NON-NLS-1$
+                HIT_CONDITION_ATTRIBUTE);
+            String hitCondition = enumName(rawHitCondition);
+            configured.put("hitCondition", hitCondition == null ? DEFAULT_HIT_CONDITION : hitCondition); //$NON-NLS-1$
+        }
+        return configured;
+    }
+
+    /**
+     * Creates, updates, enables, or disables the single workspace-wide BSL exception breakpoint.
+     * A {@code null} message preserves an existing filter, an empty message explicitly selects
+     * catch-all, and non-empty text replaces the filter; creating with no message is catch-all.
+     * The factory is looked up by its interface NAME in the OSGi service registry and is
+     * released after creation; no EDT debug-breakpoint type is linked at compile time.
+     */
+    public static ExceptionBreakpointChange setExceptionBreakpoint(boolean enabled,
+        String exceptionMessage) throws Exception
+    {
+        DebugPlugin debugPlugin = DebugPlugin.getDefault();
+        if (debugPlugin == null)
+        {
+            throw new IllegalStateException("DebugPlugin is unavailable; start this tool inside a running EDT workbench"); //$NON-NLS-1$
+        }
+        IBreakpointManager manager = debugPlugin.getBreakpointManager();
+        List<IBreakpoint> existing = findExceptionBreakpoints(manager);
+        if (!enabled)
+        {
+            for (IBreakpoint breakpoint : existing)
+            {
+                breakpoint.setEnabled(false);
+            }
+            return ExceptionBreakpointChange.disabled(existing.size());
+        }
+
+        boolean updateFilter = exceptionMessage != null;
+        boolean catchAll = exceptionMessage == null || exceptionMessage.isEmpty();
+        String configuredMessage = catchAll ? null : exceptionMessage;
+        if (!existing.isEmpty())
+        {
+            boolean resultCatchAll;
+            String resultMessage;
+            if (updateFilter)
+            {
+                resultCatchAll = catchAll;
+                resultMessage = configuredMessage;
+            }
+            else
+            {
+                Map<String, Object> configured =
+                    readExceptionBreakpointConfiguration(existing.get(0).getMarker());
+                resultCatchAll = Boolean.TRUE.equals(configured.get("catchAllExceptions")); //$NON-NLS-1$
+                Object existingMessage = configured.get("exceptionMessage"); //$NON-NLS-1$
+                resultMessage = existingMessage == null || existingMessage.toString().isEmpty()
+                    ? null
+                    : existingMessage.toString();
+            }
+            for (IBreakpoint breakpoint : existing)
+            {
+                if (updateFilter)
+                {
+                    configureExceptionBreakpoint(breakpoint, catchAll, configuredMessage);
+                }
+                breakpoint.setEnabled(true);
+            }
+            return ExceptionBreakpointChange.enabled("updated", existing.get(0), resultCatchAll, //$NON-NLS-1$
+                resultMessage);
+        }
+
+        IBreakpoint created = createExceptionBreakpointFromService(configuredMessage);
+        try
+        {
+            configureExceptionBreakpoint(created, catchAll, configuredMessage);
+            created.setEnabled(true);
+            manager.addBreakpoint(created);
+            return ExceptionBreakpointChange.enabled("created", created, catchAll, configuredMessage); //$NON-NLS-1$
+        }
+        catch (Exception e)
+        {
+            try
+            {
+                created.delete();
+            }
+            catch (Exception cleanupFailure)
+            {
+                e.addSuppressed(cleanupFailure);
+            }
+            throw e;
+        }
+    }
+
+    /** True for EDT's workspace-root BSL exception breakpoint marker/interface. */
+    public static boolean isExceptionBreakpoint(IBreakpoint breakpoint)
+    {
+        if (breakpoint == null)
+        {
+            return false;
+        }
+        try
+        {
+            IMarker marker = breakpoint.getMarker();
+            if (marker != null && BSL_EXCEPTION_BREAKPOINT_MARKER.equals(marker.getType()))
+            {
+                return true;
+            }
+        }
+        catch (Exception e)
+        {
+            // Fall through to the interface-name check; a stale marker may be inaccessible.
+        }
+        return implementsInterfaceNamed(breakpoint.getClass(),
+            "com._1c.g5.v8.dt.debug.core.model.breakpoints.IBslExceptionBreakpoint"); //$NON-NLS-1$
+    }
+
+    /** Reads the configured exception filter for list_breakpoints without linking its interface. */
+    public static Map<String, Object> readExceptionBreakpointConfiguration(IMarker marker)
+        throws Exception
+    {
+        Map<String, Object> configured = new LinkedHashMap<>();
+        // The verified public exception interface exposes setters, not a getter contract we can
+        // safely link or guess. Read the backing marker EDT actually persists instead: locate the
+        // attributes by their semantic suffix so no unverified full attribute name is invented.
+        Object catchAll = markerAttributeBySuffix(marker, "catchAllExceptions"); //$NON-NLS-1$
+        Object message = markerAttributeBySuffix(marker, "exceptionMessage"); //$NON-NLS-1$
+        boolean catchesAll = catchAll instanceof Boolean
+            ? ((Boolean)catchAll).booleanValue()
+            : message == null || message.toString().isEmpty();
+        configured.put("catchAllExceptions", catchesAll); //$NON-NLS-1$
+        configured.put("exceptionMessage", message == null ? "" : message.toString()); //$NON-NLS-1$ //$NON-NLS-2$
+        return configured;
     }
 
     /**
@@ -320,6 +571,236 @@ public final class BreakpointUtils
         return null;
     }
 
+    private static void setStringOption(Object target, IMarker marker, String methodName,
+        String attributeName, String value, String fieldName, List<String> markerFallbacks)
+        throws Exception
+    {
+        Method method = findMethod(target.getClass(), methodName, 1);
+        if (method != null)
+        {
+            invoke(method, target, value);
+            return;
+        }
+        setMarkerAttribute(marker, attributeName, value, fieldName, markerFallbacks);
+    }
+
+    private static void setIntegerOption(Object target, IMarker marker, String methodName,
+        String attributeName, int value, String fieldName, List<String> markerFallbacks)
+        throws Exception
+    {
+        Method method = findMethod(target.getClass(), methodName, 1);
+        if (method != null)
+        {
+            invoke(method, target, Integer.valueOf(value));
+            return;
+        }
+        setMarkerAttribute(marker, attributeName, Integer.valueOf(value), fieldName, markerFallbacks);
+    }
+
+    private static void setEnumOption(Object target, IMarker marker, String methodName,
+        String attributeName, String value, String fieldName, List<String> markerFallbacks)
+        throws Exception
+    {
+        Method method = findMethod(target.getClass(), methodName, 1);
+        if (method != null)
+        {
+            Class<?> parameterType = method.getParameterTypes()[0];
+            Object enumValue = enumConstant(parameterType, value);
+            invoke(method, target, enumValue);
+            return;
+        }
+        setMarkerAttribute(marker, attributeName, value, fieldName, markerFallbacks);
+    }
+
+    private static void setMarkerAttribute(IMarker marker, String attributeName, Object value,
+        String fieldName, List<String> markerFallbacks) throws Exception
+    {
+        if (marker == null)
+        {
+            throw new IllegalStateException("Cannot apply " + fieldName //$NON-NLS-1$
+                + ": the EDT setter is absent and the breakpoint has no marker"); //$NON-NLS-1$
+        }
+        marker.setAttribute(attributeName, value);
+        markerFallbacks.add(fieldName);
+    }
+
+    private static Object getOption(Object target, IMarker marker, String methodName,
+        String attributeName) throws Exception
+    {
+        Method method = findMethod(target.getClass(), methodName, 0);
+        if (method != null)
+        {
+            return invoke(method, target);
+        }
+        return marker == null ? null : marker.getAttribute(attributeName);
+    }
+
+    private static Method findMethod(Class<?> type, String name, int parameterCount)
+    {
+        for (Method method : type.getMethods())
+        {
+            if (name.equals(method.getName()) && method.getParameterCount() == parameterCount)
+            {
+                return method;
+            }
+        }
+        return null;
+    }
+
+    private static Object invoke(Method method, Object target, Object... arguments) throws Exception
+    {
+        try
+        {
+            return method.invoke(target, arguments);
+        }
+        catch (InvocationTargetException e)
+        {
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception)
+            {
+                throw (Exception)cause;
+            }
+            throw e;
+        }
+    }
+
+    private static Object enumConstant(Class<?> enumType, String value)
+    {
+        if (!enumType.isEnum())
+        {
+            throw new IllegalStateException("EDT setHitCondition parameter is not an enum: " //$NON-NLS-1$
+                + enumType.getName());
+        }
+        for (Object constant : enumType.getEnumConstants())
+        {
+            if (value.equals(((Enum<?>)constant).name()))
+            {
+                return constant;
+            }
+        }
+        throw new IllegalArgumentException("EDT hit condition enum has no value '" + value + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static String enumName(Object value)
+    {
+        if (value instanceof Enum<?>)
+        {
+            return ((Enum<?>)value).name();
+        }
+        return value == null ? null : value.toString();
+    }
+
+    private static List<IBreakpoint> findExceptionBreakpoints(IBreakpointManager manager)
+    {
+        List<IBreakpoint> result = new ArrayList<>();
+        for (IBreakpoint breakpoint : manager.getBreakpoints())
+        {
+            if (isExceptionBreakpoint(breakpoint))
+            {
+                result.add(breakpoint);
+            }
+        }
+        return result;
+    }
+
+    private static IBreakpoint createExceptionBreakpointFromService(String exceptionMessage)
+        throws Exception
+    {
+        Bundle owner = FrameworkUtil.getBundle(BreakpointUtils.class);
+        BundleContext context = owner == null ? null : owner.getBundleContext();
+        ServiceReference<?> reference = context == null
+            ? null
+            : context.getServiceReference(BSL_BREAKPOINT_FACTORY_SERVICE);
+        if (reference == null)
+        {
+            throw new IllegalStateException(breakpointFactoryUnavailableMessage());
+        }
+        Object factory = context.getService(reference);
+        if (factory == null)
+        {
+            context.ungetService(reference);
+            throw new IllegalStateException(breakpointFactoryUnavailableMessage());
+        }
+        try
+        {
+            int parameterCount = exceptionMessage == null ? 0 : 1;
+            Method create = findMethod(factory.getClass(), "createExceptionBreakpoint", parameterCount); //$NON-NLS-1$
+            if (create == null)
+            {
+                throw new IllegalStateException("OSGi service '" + BSL_BREAKPOINT_FACTORY_SERVICE //$NON-NLS-1$
+                    + "' does not expose createExceptionBreakpoint(" //$NON-NLS-1$
+                    + (parameterCount == 0 ? "" : "String") + "); update EDT and retry"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            }
+            Object value = parameterCount == 0
+                ? invoke(create, factory)
+                : invoke(create, factory, exceptionMessage);
+            if (!(value instanceof IBreakpoint))
+            {
+                throw new IllegalStateException("OSGi service '" + BSL_BREAKPOINT_FACTORY_SERVICE //$NON-NLS-1$
+                    + "' returned a non-breakpoint from createExceptionBreakpoint; update EDT and retry"); //$NON-NLS-1$
+            }
+            return (IBreakpoint)value;
+        }
+        finally
+        {
+            context.ungetService(reference);
+        }
+    }
+
+    /** Actionable text used when EDT has not registered its breakpoint factory service. */
+    public static String breakpointFactoryUnavailableMessage()
+    {
+        return "OSGi service '" + BSL_BREAKPOINT_FACTORY_SERVICE //$NON-NLS-1$
+            + "' is unavailable. Ensure bundle '" + BSL_DEBUG_CORE_BUNDLE //$NON-NLS-1$
+            + "' is installed and active, then retry."; //$NON-NLS-1$
+    }
+
+    private static void configureExceptionBreakpoint(IBreakpoint breakpoint, boolean catchAll,
+        String exceptionMessage) throws Exception
+    {
+        Method setMessage = findMethod(breakpoint.getClass(), "setExceptionMessage", 1); //$NON-NLS-1$
+        Method setCatchAll = findMethod(breakpoint.getClass(), "setCatchAllExceptions", 1); //$NON-NLS-1$
+        if (setMessage == null || setCatchAll == null)
+        {
+            throw new IllegalStateException("EDT exception breakpoint does not expose " //$NON-NLS-1$
+                + "setExceptionMessage(String) and setCatchAllExceptions(boolean); update EDT and retry"); //$NON-NLS-1$
+        }
+        invoke(setMessage, breakpoint, exceptionMessage == null ? "" : exceptionMessage); //$NON-NLS-1$
+        invoke(setCatchAll, breakpoint, Boolean.valueOf(catchAll));
+    }
+
+    private static Object markerAttributeBySuffix(IMarker marker, String suffix) throws Exception
+    {
+        if (marker == null)
+        {
+            return null;
+        }
+        for (Map.Entry<String, Object> attribute : marker.getAttributes().entrySet())
+        {
+            if (attribute.getKey().endsWith(suffix))
+            {
+                return attribute.getValue();
+            }
+        }
+        return null;
+    }
+
+    private static boolean implementsInterfaceNamed(Class<?> type, String interfaceName)
+    {
+        if (type == null)
+        {
+            return false;
+        }
+        for (Class<?> iface : type.getInterfaces())
+        {
+            if (interfaceName.equals(iface.getName()) || implementsInterfaceNamed(iface, interfaceName))
+            {
+                return true;
+            }
+        }
+        return implementsInterfaceNamed(type.getSuperclass(), interfaceName);
+    }
+
     /**
      * Removes a breakpoint by id (marker id) on the breakpoint manager.
      *
@@ -360,6 +841,96 @@ public final class BreakpointUtils
             }
         }
         return false;
+    }
+
+    /** Outcome of applying native line-breakpoint options. */
+    public static final class LineBreakpointConfiguration
+    {
+        private final boolean applied;
+        private final List<String> markerFallbacks;
+
+        private LineBreakpointConfiguration(boolean applied, List<String> markerFallbacks)
+        {
+            this.applied = applied;
+            this.markerFallbacks = Collections.unmodifiableList(new ArrayList<>(markerFallbacks));
+        }
+
+        static LineBreakpointConfiguration applied(List<String> markerFallbacks)
+        {
+            return new LineBreakpointConfiguration(true, markerFallbacks);
+        }
+
+        static LineBreakpointConfiguration notApplied()
+        {
+            return new LineBreakpointConfiguration(false, Collections.emptyList());
+        }
+
+        public boolean isApplied()
+        {
+            return applied;
+        }
+
+        public List<String> getMarkerFallbacks()
+        {
+            return markerFallbacks;
+        }
+    }
+
+    /** Outcome of changing the workspace-wide exception breakpoint. */
+    public static final class ExceptionBreakpointChange
+    {
+        private final String action;
+        private final IBreakpoint breakpoint;
+        private final int disabledCount;
+        private final boolean catchAll;
+        private final String exceptionMessage;
+
+        private ExceptionBreakpointChange(String action, IBreakpoint breakpoint, int disabledCount,
+            boolean catchAll, String exceptionMessage)
+        {
+            this.action = action;
+            this.breakpoint = breakpoint;
+            this.disabledCount = disabledCount;
+            this.catchAll = catchAll;
+            this.exceptionMessage = exceptionMessage;
+        }
+
+        static ExceptionBreakpointChange enabled(String action, IBreakpoint breakpoint,
+            boolean catchAll, String exceptionMessage)
+        {
+            return new ExceptionBreakpointChange(action, breakpoint, 0, catchAll, exceptionMessage);
+        }
+
+        public static ExceptionBreakpointChange disabled(int disabledCount)
+        {
+            return new ExceptionBreakpointChange(disabledCount > 0 ? "disabled" : "notFound", //$NON-NLS-1$ //$NON-NLS-2$
+                null, disabledCount, true, null);
+        }
+
+        public String getAction()
+        {
+            return action;
+        }
+
+        public IBreakpoint getBreakpoint()
+        {
+            return breakpoint;
+        }
+
+        public int getDisabledCount()
+        {
+            return disabledCount;
+        }
+
+        public boolean isCatchAll()
+        {
+            return catchAll;
+        }
+
+        public String getExceptionMessage()
+        {
+            return exceptionMessage;
+        }
     }
 
     /**

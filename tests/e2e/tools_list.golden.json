@@ -3062,7 +3062,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Review breakpoints currently set in BSL source code. Parameters and examples: get_tool_guide('list_breakpoints').",
+    "description": "Review configured BSL line breakpoints and workspace-wide break-on-error state. Full parameters and examples: call get_tool_guide('list_breakpoints').",
     "inputSchema": {
       "properties": {
         "projectName": {
@@ -4048,9 +4048,24 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Pause BSL execution at a selected source line during debugging. Parameters and examples: get_tool_guide('set_breakpoint').",
+    "description": "Pause BSL execution at a selected source line during debugging, optionally only while a condition holds or after a number of hits. Parameters and examples: get_tool_guide('set_breakpoint').",
     "inputSchema": {
       "properties": {
+        "condition": {
+          "type": "string"
+        },
+        "hitCondition": {
+          "enum": [
+            "EQUALS",
+            "EQUAL_OR_LESS",
+            "EQUAL_OR_HIGHER",
+            "MULTIPLIER"
+          ],
+          "type": "string"
+        },
+        "hitCount": {
+          "type": "integer"
+        },
         "lineNumber": {
           "type": "integer"
         },
@@ -4074,10 +4089,31 @@
     "name": "set_breakpoint",
     "outputSchema": {
       "properties": {
+        "action": {
+          "type": "string"
+        },
         "breakpointId": {
           "type": "integer"
         },
+        "condition": {
+          "type": "string"
+        },
+        "conditionApplied": {
+          "type": "boolean"
+        },
+        "configurationFallback": {
+          "type": "string"
+        },
         "degraded": {
+          "type": "boolean"
+        },
+        "hitCondition": {
+          "type": "string"
+        },
+        "hitCount": {
+          "type": "integer"
+        },
+        "hitCountApplied": {
           "type": "boolean"
         },
         "lineNumber": {
@@ -4097,6 +4133,61 @@
         },
         "warning": {
           "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Create, update, enable, or disable the workspace-wide BSL break-on-error breakpoint. Full parameters and examples: call get_tool_guide('set_error_breakpoint').",
+    "inputSchema": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "exceptionMessage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "name": "set_error_breakpoint",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "breakpointId": {
+          "type": "integer"
+        },
+        "catchAllExceptions": {
+          "type": "boolean"
+        },
+        "disabledCount": {
+          "type": "integer"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "exceptionMessage": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "workspaceWide": {
+          "type": "boolean"
         }
       },
       "required": [

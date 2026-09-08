@@ -5,9 +5,9 @@ WHAT THIS TOOL ACTUALLY DOES (read ListBreakpointsTool.java):
   It enumerates the Eclipse workspace-level breakpoints via
   DebugPlugin.getDefault().getBreakpointManager().getBreakpoints() and returns a
   JSON result: {"success": true, "breakpoints": [ {...dto...} ], "count": N}.
-  Each DTO carries: breakpointId, project, file, lineNumber (for line
-  breakpoints), enabled, modelId. The OPTIONAL "projectName" argument is a pure
-  client-side filter (kept only when it .equals(project.getName())).
+  Line DTOs carry coordinates plus optional condition/hit-count fields. BSL
+  exception DTOs are labelled workspaceWide and are always included. The
+  OPTIONAL "projectName" argument filters line breakpoints only.
 
   Response type is JSON (getResponseType() == JSON), so the payload is in
   r.structured (NOT r.text — text is only the bounded success digest).
@@ -35,11 +35,10 @@ NEGATIVE / EDGE MATRIX for an argument-free read tool:
   There is no missing-required-param case (no required params), no enum, no XOR.
   The meaningful edges are the FILTER semantics, which MUST be handled gracefully
   (success), not errored or mis-applied:
-    - projectName filter that matches NO project -> success, count 0, our
-      just-set breakpoint absent (a broken filter would error, NPE, or leak ALL
-      breakpoints).
+    - projectName filter that matches NO project -> success, our just-set line
+      breakpoint absent, workspace-wide exception breakpoints retained.
     - projectName filter that matches -> our breakpoint present AND every
-      returned DTO belongs to that project (the filter really filters).
+      non-workspace DTO belongs to that project (the filter really filters).
     - empty-string projectName -> treated as "no filter" (Java guards
       `!projectFilter.isEmpty()`), i.e. same as omitting it.
   See the per-test AUDIT note on why there is no is_error negative to assert.
@@ -158,6 +157,60 @@ def test_lists_a_breakpoint_we_just_set():
 
 
 @e2e_test(tool="list_breakpoints", kind="read")
+def test_reports_extended_fields_and_omits_them_after_clear():
+    """Configured line options must reflect real EDT breakpoint state, and a
+    same-coordinate plain set must clear them so unset sentinel values never
+    leak as empty strings or -1."""
+    configured = call("set_breakpoint", {
+        "projectName": PROJECT,
+        "modulePath": PROBE_MODULE,
+        "lineNumber": PROBE_LINE,
+        "condition": "A > 0",
+        "hitCount": 3,
+        "hitCondition": "MULTIPLIER",
+    })
+    assert_ok(configured, "precondition: configure line breakpoint options")
+    bid = (configured.structured or {}).get("breakpointId")
+    if bid is None:
+        raise AssertionError("configured breakpoint returned no breakpointId: %r" % configured.structured)
+    try:
+        listed = call("list_breakpoints", {"projectName": PROJECT})
+        assert_ok(listed, "list configured breakpoint options")
+        _sc, bps = _breakpoints(listed)
+        mine = [b for b in bps if b.get("breakpointId") == bid]
+        if not mine:
+            raise AssertionError("configured breakpoint id=%r was not listed" % bid)
+        dto = mine[0]
+        if dto.get("condition") != "A > 0":
+            raise AssertionError("condition did not round-trip: %r" % dto)
+        if dto.get("hitCount") != 3 or dto.get("hitCondition") != "MULTIPLIER":
+            raise AssertionError("hit-count settings did not round-trip: %r" % dto)
+
+        cleared = call("set_breakpoint", {
+            "projectName": PROJECT,
+            "modulePath": PROBE_MODULE,
+            "lineNumber": PROBE_LINE,
+        })
+        assert_ok(cleared, "same-coordinate call clears omitted extended settings")
+        if (cleared.structured or {}).get("breakpointId") != bid:
+            raise AssertionError("clear must update the same breakpoint id=%r: %r" % (bid, cleared.structured))
+
+        relisted = call("list_breakpoints", {"projectName": PROJECT})
+        assert_ok(relisted, "list after clearing extended options")
+        _sc, bps = _breakpoints(relisted)
+        mine = [b for b in bps if b.get("breakpointId") == bid]
+        if not mine:
+            raise AssertionError("cleared breakpoint id=%r was not listed" % bid)
+        dto = mine[0]
+        leaked = [key for key in ("condition", "hitCount", "hitCondition") if key in dto]
+        if leaked:
+            raise AssertionError("unset breakpoint fields must be omitted, leaked %r in %r" % (leaked, dto))
+    finally:
+        _remove_probe(bid)
+    assert_no_diff("setting/listing/clearing breakpoint options must not modify project source")
+
+
+@e2e_test(tool="list_breakpoints", kind="read")
 def test_returns_wellformed_json_envelope():
     """With no probe set, list_breakpoints still returns the well-formed success
     envelope: success:true, a breakpoints LIST, and an integer count equal to the
@@ -188,7 +241,7 @@ def test_returns_wellformed_json_envelope():
 @e2e_test(tool="list_breakpoints", kind="read")
 def test_filter_matching_project_returns_only_that_project():
     """projectName filter that DOES match: our just-set breakpoint is present, and
-    EVERY returned DTO belongs to the requested project (the filter truly filters).
+    every non-workspace DTO belongs to the requested project (the filter truly filters).
 
     Mutation thinking: a broken filter that ignored projectName would still pass
     "ours is present" but would FAIL "every entry is TestConfiguration" if any
@@ -206,7 +259,9 @@ def test_filter_matching_project_returns_only_that_project():
             raise AssertionError("filtered-by-%s list must include our breakpoint id=%r; got %r" % (PROJECT, bid, ids))
         # The filter must NOT leak entries from other projects.
         foreign = [b.get("project") for b in bps
-                   if isinstance(b, dict) and b.get("project") != PROJECT]
+                   if isinstance(b, dict)
+                   and not b.get("workspaceWide")
+                   and b.get("project") != PROJECT]
         if foreign:
             raise AssertionError("projectName filter leaked foreign-project entries: %r" % foreign)
     finally:
@@ -215,11 +270,10 @@ def test_filter_matching_project_returns_only_that_project():
 
 
 @e2e_test(tool="list_breakpoints", kind="read")
-def test_filter_matching_no_project_returns_empty_not_error_not_all():
+def test_filter_matching_no_project_returns_only_workspace_wide_entries():
     """EDGE (the closest thing to a 'negative' for an argument-free read tool):
-    a projectName that matches NO project must yield a CLEAN empty success
-    (count 0, our breakpoint absent) — NOT an error, NOT an NPE, and NOT the full
-    unfiltered list.
+    a projectName that matches NO project must exclude every line breakpoint but
+    retain workspace-wide exception breakpoints — NOT error, NPE, or leak lines.
 
     Mutation thinking: three ways the tool could be broken, all caught here —
       (a) it errors on an unknown filter (we assert_ok),
@@ -241,12 +295,13 @@ def test_filter_matching_no_project_returns_empty_not_error_not_all():
     try:
         r = call("list_breakpoints", {"projectName": bad_project})
         # Must be a benign success, not an error sentinel.
-        assert_ok(r, "an unknown projectName filter must be a clean empty success, not an error")
+        assert_ok(r, "an unknown projectName filter must be a clean success, not an error")
         sc, bps = _breakpoints(r)
-        if sc.get("count") != 0:
-            raise AssertionError("unknown-project filter must yield count 0, got %r" % sc.get("count"))
-        if bps:
-            raise AssertionError("unknown-project filter must yield an empty list, got: %r" % bps)
+        non_workspace = [b for b in bps if not b.get("workspaceWide")]
+        if non_workspace:
+            raise AssertionError("unknown-project filter leaked line breakpoints: %r" % non_workspace)
+        if sc.get("count") != len(bps):
+            raise AssertionError("count must include the always-listed workspace entries: %r" % sc)
         # Our breakpoint exists but belongs to TestConfiguration, so it must be filtered out.
         ids = [b.get("breakpointId") for b in bps if isinstance(b, dict)]
         if bid in ids:
