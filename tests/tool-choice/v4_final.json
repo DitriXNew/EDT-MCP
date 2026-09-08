@@ -790,9 +790,10 @@
   "description": "Create or edit BSL source in a metadata module. Parameters and examples: get_tool_guide('write_module_source').",
   "params": {
    "commandName": null,
-   "expectedHash": "Lost-update guard: the hash from the read that produced your edit. The write is rejected if the module changed since.",
+   "expectedHash": "Lost-update guard: the hash from the read that produced your edit. The write is rejected if the module changed since; required for every method-targeted mode.",
    "expectedSource": null,
    "formName": null,
+   "methodName": "Existing anchor method; required for replaceMethod, insertBefore, and insertAfter.",
    "mode": null,
    "modulePath": null,
    "moduleType": null,

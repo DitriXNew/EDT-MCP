@@ -8,7 +8,10 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.*;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.Test;
@@ -111,12 +114,17 @@ public class WriteModuleSourceToolTest
         assertTrue(schema.contains("\"source\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"oldSource\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"mode\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"methodName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"formName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"commandName\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"skipSyntaxCheck\"")); //$NON-NLS-1$
         // Lost-update guard params for mode=replace over an existing module.
         assertTrue(schema.contains("\"expectedSource\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"overwrite\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"expectedHash\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"replaceMethod\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"insertBefore\"")); //$NON-NLS-1$
+        assertTrue(schema.contains("\"insertAfter\"")); //$NON-NLS-1$
         // The new params are OPTIONAL — required stays projectName + source only.
         assertTrue(schema.contains("\"required\":[\"projectName\",\"source\"]")); //$NON-NLS-1$
     }
@@ -368,7 +376,7 @@ public class WriteModuleSourceToolTest
     public void testExecuteOldLineModes()
     {
         WriteModuleSourceTool tool = new WriteModuleSourceTool();
-        String[] removedModes = { "insertBefore", "insertAfter", "replaceLines" }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String[] removedModes = { "replaceLines" }; //$NON-NLS-1$
 
         for (String mode : removedModes)
         {
@@ -381,6 +389,60 @@ public class WriteModuleSourceToolTest
             String result = tool.execute(params);
             assertTrue("mode '" + mode + "' should be rejected", //$NON-NLS-1$ //$NON-NLS-2$
                 result.contains("invalid mode")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testMethodTargetedModesRequireMethodName()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        for (String mode : new String[] { "replaceMethod", "insertBefore", "insertAfter" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            Map<String, String> params = targetedParams(mode);
+            params.remove("methodName"); //$NON-NLS-1$
+            String result = tool.execute(params);
+            assertTrue("mode=" + mode + " must require methodName: " + result, //$NON-NLS-1$ //$NON-NLS-2$
+                result.contains("methodName is required")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testMethodTargetedModesRequireExpectedHash()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        for (String mode : new String[] { "replaceMethod", "insertBefore", "insertAfter" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            Map<String, String> params = targetedParams(mode);
+            params.remove("expectedHash"); //$NON-NLS-1$
+            String result = tool.execute(params);
+            assertTrue("mode=" + mode + " must require expectedHash: " + result, //$NON-NLS-1$ //$NON-NLS-2$
+                result.contains("expectedHash is required")); //$NON-NLS-1$
+            assertTrue(result.contains("read_module_source")); //$NON-NLS-1$
+            assertTrue(result.contains("read_method_source")); //$NON-NLS-1$
+        }
+    }
+
+    private static Map<String, String> targetedParams(String mode)
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "TestProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("modulePath", "CommonModules/MyModule/Module.bsl"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", mode); //$NON-NLS-1$
+        params.put("methodName", "Target"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("expectedHash", "deadbeefdeadbeef"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("source", "Procedure Target()\nEndProcedure\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        return params;
+    }
+
+    @Test
+    public void testMethodTargetedModesReachProjectValidationWithBothGuards()
+    {
+        WriteModuleSourceTool tool = new WriteModuleSourceTool();
+        for (String mode : new String[] { "replaceMethod", "insertBefore", "insertAfter" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            String result = tool.execute(targetedParams(mode));
+            assertTrue("mode=" + mode + " should pass argument validation: " + result, //$NON-NLS-1$ //$NON-NLS-2$
+                result.contains("Project not found")); //$NON-NLS-1$
         }
     }
 
@@ -925,6 +987,239 @@ public class WriteModuleSourceToolTest
             WriteModuleSourceTool.applySearchReplace("A\nB", "A", "Z"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals(1, r.occurrences);
         assertEquals("Z\nB", r.newContent); //$NON-NLS-1$
+    }
+
+    // ===== method-targeted edits: validation, unambiguous addressing, and spans =====
+
+    @Test
+    public void testReplaceMethodChangesOnlyTargetAndOwnsAnnotations()
+    {
+        List<String> current = lines(
+            "Procedure First()\nEndProcedure\n\n" + //$NON-NLS-1$
+            "// old target documentation\n&AtClient\nProcedure Target()\n\tOld = 1;\nEndProcedure\n\n" + //$NON-NLS-1$
+            "Function Last()\nReturn 3;\nEndFunction\n"); //$NON-NLS-1$
+        String replacement =
+            "// new target documentation\n&AtServer\nProcedure Target()\n\tNew = 2;\nEndProcedure\n"; //$NON-NLS-1$
+
+        WriteModuleSourceTool.MethodEditResult result = WriteModuleSourceTool.applyMethodTargetedEdit(
+            current, "replaceMethod", "Target", replacement, null); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull(result.error);
+        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
+        assertTrue(joined.contains("Procedure First()\nEndProcedure")); //$NON-NLS-1$
+        assertTrue(joined.contains("Function Last()\nReturn 3;\nEndFunction")); //$NON-NLS-1$
+        assertTrue(joined.contains("// new target documentation\n&AtServer\nProcedure Target()")); //$NON-NLS-1$
+        assertFalse(joined.contains("old target documentation")); //$NON-NLS-1$
+        assertFalse(joined.contains("&AtClient")); //$NON-NLS-1$
+        assertFalse(joined.contains("Old = 1")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInsertBeforeLandsBeforeDocCommentAndAnnotation()
+    {
+        List<String> current = lines(
+            "// target documentation\n&AtClient\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        String inserted = "Procedure Added()\nEndProcedure\n"; //$NON-NLS-1$
+
+        WriteModuleSourceTool.MethodEditResult result = WriteModuleSourceTool.applyMethodTargetedEdit(
+            current, "insertBefore", "Target", inserted, null); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull(result.error);
+        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
+        assertTrue(joined.startsWith("Procedure Added()\nEndProcedure\n" + //$NON-NLS-1$
+            "// target documentation\n&AtClient\nProcedure Target()")); //$NON-NLS-1$
+        assertTrue("the annotation must remain adjacent to its declaration", //$NON-NLS-1$
+            joined.contains("&AtClient\nProcedure Target()")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInsertBeforeKeepsContiguousDocCommentWithAnchor()
+    {
+        List<String> current = lines(
+            "Procedure First()\nEndProcedure\n// line one\n// line two\n" + //$NON-NLS-1$
+            "Procedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result = WriteModuleSourceTool.applyMethodTargetedEdit(
+            current, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+            "Procedure Added()\nEndProcedure\n", null); //$NON-NLS-1$
+
+        assertNull(result.error);
+        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
+        assertTrue(joined.contains("Procedure Added()\nEndProcedure\n// line one\n// line two\n" + //$NON-NLS-1$
+            "Procedure Target()")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInsertAfterUsesRealTerminatorNotLongerIdentifier()
+    {
+        List<String> current = lines(
+            "Procedure Target()\nEndProcedureResult = 1;\nStillInside = 2;\nEndProcedure\n" + //$NON-NLS-1$
+            "Procedure Tail()\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result = WriteModuleSourceTool.applyMethodTargetedEdit(
+            current, "insertAfter", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+            "Function Added()\nReturn 1;\nEndFunction\n", null); //$NON-NLS-1$
+
+        assertNull(result.error);
+        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
+        assertTrue(joined.contains("EndProcedureResult = 1;\nStillInside = 2;\nEndProcedure\n" + //$NON-NLS-1$
+            "Function Added()\nReturn 1;\nEndFunction\nProcedure Tail()")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMethodSourceWithZeroDeclarationsRejected()
+    {
+        assertMethodEditError("exactly one", WriteModuleSourceTool.applyMethodTargetedEdit( //$NON-NLS-1$
+            simpleModule(), "replaceMethod", "Target", "Value = 1;\n", null)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testMissingMethodTargetRejected()
+    {
+        assertMethodEditError("was not found", WriteModuleSourceTool.applyMethodTargetedEdit( //$NON-NLS-1$
+            simpleModule(), "replaceMethod", "Missing", //$NON-NLS-1$ //$NON-NLS-2$
+            "Procedure Missing()\nEndProcedure\n", null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMethodSourceWithTwoDeclarationsRejected()
+    {
+        String two = "Procedure Target()\nEndProcedure\nFunction Added()\nEndFunction\n"; //$NON-NLS-1$
+        assertMethodEditError("exactly one", WriteModuleSourceTool.applyMethodTargetedEdit( //$NON-NLS-1$
+            simpleModule(), "replaceMethod", "Target", two, null)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMethodSourceWithDetachedModuleCodeRejected()
+    {
+        String extra = "ModuleValue = 1;\nProcedure Target()\nEndProcedure\n"; //$NON-NLS-1$
+        assertMethodEditError("module-level code", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(simpleModule(),
+                "replaceMethod", "Target", extra, null)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMethodSourceWithTerminatorPrefixOnlyRejected()
+    {
+        String incomplete = "Procedure Target()\nEndProcedureResult = 1;\n"; //$NON-NLS-1$
+        assertMethodEditError("no matching method terminator", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(simpleModule(),
+                "replaceMethod", "Target", incomplete, null)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTargetWithTerminatorPrefixOnlyRejected()
+    {
+        List<String> incomplete = lines(
+            "Procedure Target()\nEndProcedureResult = 1;\n"); //$NON-NLS-1$
+        assertMethodEditError("target span is incomplete", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(incomplete,
+                "replaceMethod", "Target", "Procedure Target()\nEndProcedure\n", null)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testReplaceMethodNameMismatchRejected()
+    {
+        assertMethodEditError("replaceMethod targets", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(simpleModule(),
+                "replaceMethod", "Target", "Procedure Added()\nEndProcedure\n", null)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testReplaceMethodCannotUseAnotherExistingMethodName()
+    {
+        List<String> current = lines(
+            "Procedure Target()\nEndProcedure\nProcedure Added()\nEndProcedure\n"); //$NON-NLS-1$
+        assertMethodEditError("replaceMethod targets", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(current,
+                "replaceMethod", "Target", "Procedure Added()\nEndProcedure\n", null)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testInsertExistingMethodNameRejectedForBothModes()
+    {
+        List<String> current = lines(
+            "Procedure Target()\nEndProcedure\nProcedure Existing()\nEndProcedure\n"); //$NON-NLS-1$
+        for (String mode : new String[] { "insertBefore", "insertAfter" }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            assertMethodEditError("already exists", //$NON-NLS-1$
+                WriteModuleSourceTool.applyMethodTargetedEdit(current, mode, "Target", //$NON-NLS-1$
+                    "Procedure Existing()\nEndProcedure\n", null)); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testRepeatedInsertIsRejectedWithoutDuplicate()
+    {
+        WriteModuleSourceTool.MethodEditResult first = WriteModuleSourceTool.applyMethodTargetedEdit(
+            simpleModule(), "insertAfter", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+            "Procedure Once()\nEndProcedure\n", null); //$NON-NLS-1$
+        assertNull(first.error);
+        WriteModuleSourceTool.MethodEditResult repeated =
+            WriteModuleSourceTool.applyMethodTargetedEdit(first.newLines, "insertAfter", //$NON-NLS-1$
+                "Target", "Procedure Once()\nEndProcedure\n", null); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertMethodEditError("already exists", repeated); //$NON-NLS-1$
+        assertEquals(1, countLinesContaining(first.newLines, "Procedure Once()")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAmbiguousMethodTargetInPreprocessorBranchesRejected()
+    {
+        List<String> current = lines(
+            "#If Client Then\nProcedure Target()\nEndProcedure\n#Else\n" + //$NON-NLS-1$
+            "Procedure Target()\nEndProcedure\n#EndIf\n"); //$NON-NLS-1$
+        assertMethodEditError("ambiguous", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(current, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\nEndProcedure\n", null)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRussianFunctionCanBeReplacedWithRussianKeywords()
+    {
+        List<String> current = lines(
+            "Функция Цель()\nВозврат 1;\nКонецФункции\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result = WriteModuleSourceTool.applyMethodTargetedEdit(
+            current, "replaceMethod", "Цель", //$NON-NLS-1$ //$NON-NLS-2$
+            "Функция Цель()\nВозврат 2;\nКонецФункции\n", null); //$NON-NLS-1$
+        assertNull(result.error);
+        assertTrue(result.newLines.contains("Возврат 2;")); //$NON-NLS-1$
+        assertFalse(result.newLines.contains("Возврат 1;")); //$NON-NLS-1$
+    }
+
+    private static List<String> simpleModule()
+    {
+        return lines("Procedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+    }
+
+    private static List<String> lines(String source)
+    {
+        List<String> result = new ArrayList<>(Arrays.asList(source.split("\n", -1))); //$NON-NLS-1$
+        if (source.endsWith("\n") && result.size() > 1 && result.get(result.size() - 1).isEmpty()) //$NON-NLS-1$
+        {
+            result.remove(result.size() - 1);
+        }
+        return result;
+    }
+
+    private static void assertMethodEditError(String expected,
+        WriteModuleSourceTool.MethodEditResult result)
+    {
+        assertNotNull("expected method edit refusal", result.error); //$NON-NLS-1$
+        assertNull(result.newLines);
+        assertTrue(result.error, result.error.contains(expected));
+        assertTrue(result.error, result.error.contains("\"success\":false")); //$NON-NLS-1$
+    }
+
+    private static int countLinesContaining(List<String> lines, String fragment)
+    {
+        int count = 0;
+        for (String line : lines)
+        {
+            if (line.contains(fragment))
+            {
+                count++;
+            }
+        }
+        return count;
     }
 
     // ===== evaluateReplacePrecondition: mode=replace lost-update guard (pure) =====

@@ -245,6 +245,67 @@ public class BslModuleUtilsTest
     // ========== findMethodViaText / buildTextMethodNotFoundResponse ==========
 
     @Test
+    public void testMethodEndPatternRequiresKeywordBoundary()
+    {
+        assertTrue(BslModuleUtils.METHOD_END_PATTERN.matcher("EndProcedure;").find()); //$NON-NLS-1$
+        assertTrue(BslModuleUtils.METHOD_END_PATTERN.matcher(
+            "\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438 // done").find()); //$NON-NLS-1$
+        assertFalse(BslModuleUtils.METHOD_END_PATTERN.matcher("EndProcedureResult = 1;").find()); //$NON-NLS-1$
+        assertFalse(BslModuleUtils.METHOD_END_PATTERN.matcher("EndFunctionValue = 1;").find()); //$NON-NLS-1$
+        assertFalse(BslModuleUtils.METHOD_END_PATTERN.matcher(
+            "\u041a\u043e\u043d\u0435\u0446\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u044b\u0420\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442 = 1;").find()); //$NON-NLS-1$
+        assertFalse(BslModuleUtils.METHOD_END_PATTERN.matcher(
+            "\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438\u0417\u043d\u0430\u0447\u0435\u043d\u0438\u0435 = 1;").find()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMethodSpanIncludesContiguousDocCommentAndAnnotations()
+    {
+        List<String> lines = List.of(
+            "// unrelated", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "// owned documentation", //$NON-NLS-1$
+            "&AtClient", //$NON-NLS-1$
+            "&Before(\"Base\")", //$NON-NLS-1$
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        List<BslModuleUtils.MethodSpan> spans = BslModuleUtils.findMethodSpansViaText(lines);
+        assertEquals(1, spans.size());
+        BslModuleUtils.MethodSpan span = spans.get(0);
+        assertEquals(2, span.startLine);
+        assertEquals(5, span.declarationLine);
+        assertEquals(6, span.endLine);
+        assertTrue(span.complete);
+    }
+
+    @Test
+    public void testMethodSpanDoesNotStopAtTerminatorPrefixIdentifier()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedureResult = 1;", //$NON-NLS-1$
+            "StillInside = 2;", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue(span.complete);
+        assertEquals(3, span.endLine);
+    }
+
+    @Test
+    public void testMethodSpanReportsMissingRealTerminator()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedureResult = 1;"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertFalse(span.complete);
+        assertEquals(1, span.endLine);
+    }
+
+    @Test
     public void testFindMethodViaTextLocatesFunctionWithDocComment()
     {
         List<String> lines = List.of(

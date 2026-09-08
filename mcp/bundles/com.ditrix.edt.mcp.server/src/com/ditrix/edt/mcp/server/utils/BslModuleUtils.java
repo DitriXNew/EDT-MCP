@@ -61,9 +61,20 @@ public final class BslModuleUtils
         "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\s+([^\\s(]+)\\s*\\((.*)$", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
-    /** Regex for BSL method end (КонецПроцедуры/КонецФункции / EndProcedure/EndFunction) */
+    /** Regex for a BSL procedure end. The right boundary prevents an identifier such as
+     * {@code EndProcedureResult} from being mistaken for the terminator. */
+    public static final Pattern PROCEDURE_END_PATTERN = Pattern.compile(
+        "^\\s*(?:\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B|EndProcedure)(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /** Regex for a BSL function end, with the same identifier boundary as procedures. */
+    public static final Pattern FUNCTION_END_PATTERN = Pattern.compile(
+        "^\\s*(?:\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438|EndFunction)(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /** Regex for either BSL method terminator, kept for existing fallback consumers. */
     public static final Pattern METHOD_END_PATTERN = Pattern.compile(
-        "^\\s*(?:\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B|\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438|EndProcedure|EndFunction)", //$NON-NLS-1$
+        "^\\s*(?:\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B|\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438|EndProcedure|EndFunction)(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /** Regex for function keyword check (Функция / Function, optional leading Асинх/Async) */
@@ -286,6 +297,141 @@ public final class BslModuleUtils
     }
 
     /**
+     * Full line span of one BSL method. Line numbers are 0-based and inclusive.
+     * {@link #startLine} includes the contiguous documentation comments and
+     * ampersand annotations/directives owned by the declaration;
+     * {@link #declarationLine} points at Procedure/Function itself.
+     */
+    public static final class MethodSpan
+    {
+        public final int startLine;
+        public final int declarationLine;
+        public final int endLine;
+        public final String name;
+        public final boolean isFunction;
+        public final boolean complete;
+
+        MethodSpan(int startLine, int declarationLine, int endLine, String name,
+            boolean isFunction, boolean complete)
+        {
+            this.startLine = startLine;
+            this.declarationLine = declarationLine;
+            this.endLine = endLine;
+            this.name = name;
+            this.isFunction = isFunction;
+            this.complete = complete;
+        }
+    }
+
+    /**
+     * Finds every method declaration in source order using the shared bilingual
+     * fallback patterns. Each declaration is paired only with its matching kind of
+     * terminator. An unterminated declaration is returned with {@code complete=false}
+     * and an end line clamped to the final source line.
+     *
+     * @param lines BSL module or fragment lines
+     * @return all discovered method spans
+     */
+    public static List<MethodSpan> findMethodSpansViaText(List<String> lines)
+    {
+        List<MethodSpan> spans = new ArrayList<>();
+        if (lines == null)
+        {
+            return spans;
+        }
+
+        for (int declarationLine = 0; declarationLine < lines.size(); declarationLine++)
+        {
+            Matcher startMatcher = METHOD_START_PATTERN.matcher(lines.get(declarationLine));
+            if (!startMatcher.find())
+            {
+                continue;
+            }
+
+            boolean isFunction = FUNC_KEYWORD_PATTERN.matcher(lines.get(declarationLine)).find();
+            Pattern terminator = isFunction ? FUNCTION_END_PATTERN : PROCEDURE_END_PATTERN;
+            int endLine = findTerminatorLine(lines, declarationLine, lines.size() - 1, terminator);
+            boolean complete = endLine >= 0;
+            if (!complete)
+            {
+                endLine = lines.isEmpty() ? declarationLine : lines.size() - 1;
+            }
+            int startLine = findMethodPreambleStartLine(lines, declarationLine + 1) - 1;
+            spans.add(new MethodSpan(startLine, declarationLine, endLine,
+                startMatcher.group(1), isFunction, complete));
+        }
+        return spans;
+    }
+
+    /**
+     * Resolves a method span from the EDT node model. The node supplies the safe
+     * search bounds; the declaration and matching terminator are then verified
+     * against the current file lines so a stale model is never used for a splice.
+     *
+     * @param method EDT BSL method model
+     * @param lines current module source lines
+     * @return verified span, or {@code null} when the node is missing/stale
+     */
+    public static MethodSpan findMethodSpanFromModel(Method method, List<String> lines)
+    {
+        if (method == null || lines == null || lines.isEmpty())
+        {
+            return null;
+        }
+        INode node = NodeModelUtils.findActualNodeFor(method);
+        if (node == null)
+        {
+            return null;
+        }
+
+        int nodeStart = Math.max(0, node.getStartLine() - 1);
+        int nodeEnd = Math.min(lines.size() - 1, node.getEndLine() - 1);
+        if (nodeStart > nodeEnd)
+        {
+            return null;
+        }
+
+        int declarationLine = -1;
+        boolean isFunction = method instanceof Function;
+        for (int i = nodeStart; i <= nodeEnd; i++)
+        {
+            Matcher matcher = METHOD_START_PATTERN.matcher(lines.get(i));
+            if (matcher.find() && method.getName().equalsIgnoreCase(matcher.group(1)))
+            {
+                declarationLine = i;
+                isFunction = FUNC_KEYWORD_PATTERN.matcher(lines.get(i)).find();
+                break;
+            }
+        }
+        if (declarationLine < 0)
+        {
+            return null;
+        }
+
+        Pattern terminator = isFunction ? FUNCTION_END_PATTERN : PROCEDURE_END_PATTERN;
+        int endLine = findTerminatorLine(lines, declarationLine, nodeEnd, terminator);
+        if (endLine < 0)
+        {
+            return null;
+        }
+        int startLine = findMethodPreambleStartLine(lines, declarationLine + 1) - 1;
+        return new MethodSpan(startLine, declarationLine, endLine, method.getName(),
+            isFunction, true);
+    }
+
+    private static int findTerminatorLine(List<String> lines, int from, int to, Pattern terminator)
+    {
+        for (int i = from; i <= to; i++)
+        {
+            if (terminator.matcher(lines.get(i)).find())
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
      * Location of a method found by text/regex scan (the fallback used when the
      * EMF model is unavailable). Line numbers are 0-indexed; {@link #startLine}
      * already includes any adjacent doc-comment block.
@@ -325,50 +471,24 @@ public final class BslModuleUtils
      */
     public static TextMethod findMethodViaText(List<String> allLines, String methodName)
     {
-        int methodStart = -1;
-        int methodEnd = -1;
-        String matchedName = null;
-        boolean isFunction = false;
+        MethodSpan found = null;
         List<String> allMethodNames = new ArrayList<>();
 
-        for (int i = 0; i < allLines.size(); i++)
+        for (MethodSpan span : findMethodSpansViaText(allLines))
         {
-            Matcher startMatcher = METHOD_START_PATTERN.matcher(allLines.get(i));
-            if (startMatcher.find())
+            allMethodNames.add(span.name);
+            if (found == null && span.name.equalsIgnoreCase(methodName))
             {
-                String foundName = startMatcher.group(1);
-                allMethodNames.add(foundName);
-
-                if (foundName.equalsIgnoreCase(methodName))
-                {
-                    methodStart = i;
-                    matchedName = foundName;
-                    isFunction = FUNC_KEYWORD_PATTERN.matcher(allLines.get(i)).find();
-                }
-            }
-
-            if (methodStart >= 0 && methodEnd < 0)
-            {
-                if (METHOD_END_PATTERN.matcher(allLines.get(i)).find())
-                {
-                    methodEnd = i;
-                    break;
-                }
+                found = span;
             }
         }
 
-        if (methodStart < 0)
+        if (found == null)
         {
             return new TextMethod(false, -1, -1, null, false, allMethodNames);
         }
-        if (methodEnd < 0)
-        {
-            methodEnd = allLines.size() - 1;
-        }
-
-        // Include the doc-comment block preceding the method keyword.
-        int docStart = findDocCommentStartLine(allLines, methodStart + 1) - 1;
-        return new TextMethod(true, docStart, methodEnd, matchedName, isFunction, allMethodNames);
+        return new TextMethod(true, found.startLine, found.endLine, found.name,
+            found.isFunction, allMethodNames);
     }
 
     /**
@@ -913,6 +1033,37 @@ public final class BslModuleUtils
 
         int docStart = idx + 2; // convert back to 1-based
         return docStart < declarationLine1Based ? docStart : declarationLine1Based;
+    }
+
+    /**
+     * Finds the beginning of the contiguous preamble owned by a BSL method:
+     * documentation-comment lines and ampersand annotations/directives immediately
+     * above the Procedure/Function declaration. A blank or any other line ends the
+     * preamble, so a branch/region directive is never absorbed into the method.
+     *
+     * @param sourceLines all file lines (0-indexed list)
+     * @param declarationLine1Based 1-based declaration line
+     * @return 1-based first owned line, or the declaration line itself
+     */
+    public static int findMethodPreambleStartLine(List<String> sourceLines,
+        int declarationLine1Based)
+    {
+        if (sourceLines == null || declarationLine1Based <= 1)
+        {
+            return declarationLine1Based;
+        }
+
+        int idx = declarationLine1Based - 2;
+        while (idx >= 0)
+        {
+            String trimmed = sourceLines.get(idx).trim();
+            if (!trimmed.startsWith("//") && !trimmed.startsWith("&")) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                break;
+            }
+            idx--;
+        }
+        return idx + 2;
     }
 
     /**

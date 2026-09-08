@@ -4759,7 +4759,7 @@
           "type": "string"
         },
         "expectedHash": {
-          "description": "Lost-update guard: the hash from the read that produced your edit. The write is rejected if the module changed since.",
+          "description": "Lost-update guard: the hash from the read that produced your edit. The write is rejected if the module changed since; required for every method-targeted mode.",
           "type": "string"
         },
         "expectedSource": {
@@ -4769,12 +4769,19 @@
           "description": "Form name; required when moduleType=FormModule (e.g. 'ItemForm').",
           "type": "string"
         },
+        "methodName": {
+          "description": "Existing anchor method; required for replaceMethod, insertBefore, and insertAfter.",
+          "type": "string"
+        },
         "mode": {
           "description": "Write mode (default searchReplace).",
           "enum": [
             "searchReplace",
             "replace",
-            "append"
+            "append",
+            "replaceMethod",
+            "insertBefore",
+            "insertAfter"
           ],
           "type": "string"
         },
