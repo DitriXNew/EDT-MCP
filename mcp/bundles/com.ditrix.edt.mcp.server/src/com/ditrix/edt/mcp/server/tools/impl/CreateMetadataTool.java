@@ -514,17 +514,17 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      * {@code ExternalReport}, which is the ROOT of an external-objects project rather than an entry
      * in a {@code Configuration} collection.
      *
-     * <p>Such an object is created together with its project (an EDT wizard action, or an
-     * {@code .epf} import), not by adding a row to a configuration collection, so this tool cannot
-     * make one - and says which tool does what instead of leaving the caller with the generic
-     * "cannot resolve a create target". Its MEMBERS (attributes, tabular sections, forms and their
-     * content) ARE creatable once the object exists; that is the rest of issue #309.</p>
+     * <p>Such an object is created together with its project (or supplied by an {@code .epf}/{@code
+     * .erf} import), not by adding a row to a configuration collection, so this tool cannot make one
+     * - and says which tool does what instead of leaving the caller with the generic "cannot resolve
+     * a create target". Its MEMBERS (attributes, tabular sections, forms and their content) ARE
+     * creatable once the object exists; that is the rest of issue #309.</p>
      *
      * @param normFqn the normalized FQN
      * @return the ready-to-return JSON error, or {@code null} when the FQN is not a standalone
      *     top-level address (the caller then falls through to the generic message)
      */
-    private static String standaloneTopLevelRefusal(String normFqn)
+    static String standaloneTopLevelRefusal(String normFqn)
     {
         String[] parts = normFqn.split("\\."); //$NON-NLS-1$
         if (parts.length != 2)
@@ -538,9 +538,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         return ToolResult.error("create_metadata cannot create a top-level '" //$NON-NLS-1$
             + info.getEnglishSingular() + "': it is the ROOT object of an external-objects project, " //$NON-NLS-1$
-            + "not an entry in a configuration collection. Create it in EDT (New > External data " //$NON-NLS-1$
-            + "processor / report) or import an existing .epf/.erf; create_project " //$NON-NLS-1$
-            + "(projectKind=externalObjects) makes the empty PROJECT only. Its members " //$NON-NLS-1$
+            + "not an entry in a configuration collection. Call create_project with " //$NON-NLS-1$
+            + "projectKind=externalObjects and externalObject='" + normFqn //$NON-NLS-1$
+            + "' to seed it, or import an existing .epf/.erf. Its members " //$NON-NLS-1$
             + "('" + normFqn + ".Attribute.X', '" + normFqn + ".Form.Y', form content) can be " //$NON-NLS-1$ //$NON-NLS-2$
             + "created here once the object exists.").toJson(); //$NON-NLS-1$
     }

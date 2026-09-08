@@ -11,8 +11,9 @@ a base project, or an external data processors/reports project.
   Use this to override metadata objects (`adopt_metadata_object`) or add BSL interceptors
   without modifying the base configuration.
 - **externalObjects** — create an external data processors/reports project. The project
-  will be empty and ready for adding external data processors or external reports via
-  `create_metadata`.
+  may be seeded with its root `ExternalDataProcessor` / `ExternalReport` in the same call,
+  after which its members are ready for authoring via `create_metadata`. Omit the root when
+  creating an empty project for a later `.epf` / `.erf` import.
 
 The `name` must not already exist as a workspace project (the tool rejects duplicates).
 
@@ -57,6 +58,11 @@ The `name` must not already exist as a workspace project (the tool rejects dupli
 ### externalObjects kind
 
 - **version** (optional): platform version string. Default: `Version.LATEST`.
+- **externalObject** (optional): root object to seed, addressed as
+  `ExternalDataProcessor.<Name>` or `ExternalReport.<Name>`. The TYPE token is resolved by
+  the shared bilingual metadata resolver, so its registered Russian spellings work too;
+  `<Name>` is the programmatic 1C identifier, not a synonym. A bare Name is rejected rather
+  than guessed. Omit this parameter to preserve an empty project for the import workflow.
 - **scriptVariant** (optional, `Russian` or `English`): applied post-create via
   `IExternalObjectProjectManager.setScriptVariant`. Non-fatal on failure (see
   `scriptVariantNote` in response).
@@ -110,6 +116,16 @@ External objects project:
 {"projectKind": "externalObjects", "name": "MyExternal"}
 ```
 
+External data processor project with its root object:
+
+```json
+{
+  "projectKind": "externalObjects",
+  "name": "MyExternal",
+  "externalObject": "ExternalDataProcessor.MyProcessor"
+}
+```
+
 External objects with version:
 
 ```json
@@ -129,6 +145,16 @@ External objects with version:
 2. `create_metadata` — add metadata objects (Catalog, Document, CommonModule, etc.).
 3. `write_module_source` — fill module BSL code.
 4. `update_database` — start the first infobase from the configuration.
+
+## Workflow (external object)
+
+1. `create_project` with `projectKind=externalObjects` and an `externalObject` FQN — create
+   the project and its root in one operation. Omit `externalObject` only when a later import
+   will supply the root.
+2. `create_metadata` — add attributes, tabular sections, forms, templates, and form content
+   below that root FQN.
+3. `write_module_source` — fill the root and form modules.
+4. `build_external_objects` — produce the `.epf` / `.erf` artifact.
 
 ## Response fields
 
@@ -169,3 +195,5 @@ On success the response includes:
 - **externalObjects scriptVariant is post-create and non-fatal.** If `setScriptVariant`
   fails after lifecycle wait, the project is still created. Check `scriptVariantNote` in
   the response for details.
+- **Omitting externalObject is intentional.** It creates the same empty external-objects
+  project as before, ready for an import that supplies its root object.

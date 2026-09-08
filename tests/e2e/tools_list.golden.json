@@ -741,6 +741,10 @@
         "compatibilityMode": {
           "type": "string"
         },
+        "externalObject": {
+          "description": "Optional root to seed for projectKind=externalObjects: 'ExternalDataProcessor.<Name>' or 'ExternalReport.<Name>'; the TYPE token may be English or Russian, and Name is a programmatic identifier. Omit for an empty project; REJECTED for other project kinds.",
+          "type": "string"
+        },
         "name": {
           "type": "string"
         },

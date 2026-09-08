@@ -56,6 +56,21 @@ public class CreateMetadataToolTest
     }
 
     @Test
+    public void testStandaloneRootRefusalPointsToCreateProjectExternalObject()
+    {
+        String fqn = "ExternalDataProcessor.MyProc"; //$NON-NLS-1$
+        String result = CreateMetadataTool.standaloneTopLevelRefusal(fqn);
+        assertNotNull(result);
+        assertTrue("refusal must point to create_project", result.contains("create_project")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("refusal must name the externalObjects project kind", //$NON-NLS-1$
+            result.contains("projectKind=externalObjects")); //$NON-NLS-1$
+        assertTrue("refusal must give the new externalObject parameter value", //$NON-NLS-1$
+            result.contains("externalObject='" + fqn + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("refusal must no longer send the caller to the EDT UI", //$NON-NLS-1$
+            result.contains("Create it in EDT")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testInputSchemaContainsAllParameters()
     {
         String schema = new CreateMetadataTool().getInputSchema();

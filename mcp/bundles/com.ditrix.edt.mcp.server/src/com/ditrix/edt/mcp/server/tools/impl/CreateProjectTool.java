@@ -19,6 +19,7 @@ import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.emf.common.util.EMap;
+import org.eclipse.emf.ecore.EClass;
 import org.osgi.framework.Bundle;
 import org.osgi.service.prefs.BackingStoreException;
 
@@ -37,6 +38,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.ConfigurationExtensionPurpose;
 import com._1c.g5.v8.dt.metadata.mdclass.Language;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.metadata.mdclass.ScriptVariant;
 import com._1c.g5.v8.dt.platform.version.Version;
@@ -49,6 +51,8 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.LifecycleWaiter;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils.MetadataTypeInfo;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -63,7 +67,8 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  * fully reviewed machinery from the former extension-only tool:
  * <ol>
  *   <li>Validates inputs and checks that neither the new project nor the base are missing.</li>
- *   <li>Constructs a {@link Configuration} object (or not, for externalObjects).</li>
+ *   <li>Constructs a {@link Configuration}, or an optional external-object root, through the
+ *       version-aware {@link IModelObjectFactory}.</li>
  *   <li>Calls the appropriate project manager's {@code create()} method in a background
  *       {@link Job} (never on the UI thread — unattended-safety rule) via the shared
  *       {@link #runCreateJob} helper, and joins with a {@link #CREATE_TIMEOUT_MS} timeout.</li>
@@ -121,6 +126,9 @@ public class CreateProjectTool implements IMcpTool
 
     /** Parameter/output key: platform version string. */
     private static final String KEY_VERSION = "version"; //$NON-NLS-1$
+
+    /** Parameter key: optional external-object root to seed during project creation. */
+    private static final String KEY_EXTERNAL_OBJECT = "externalObject"; //$NON-NLS-1$
 
     /** Parameter/output key: extension name prefix. */
     private static final String KEY_PREFIX = "prefix"; //$NON-NLS-1$
@@ -210,6 +218,11 @@ public class CreateProjectTool implements IMcpTool
                 "Platform version string, e.g. '8.3.27' (configuration and externalObjects only; " //$NON-NLS-1$
                     + "for extension: REJECTED — version is always inherited from the base configuration). " //$NON-NLS-1$
                     + "Default: Version.LATEST when omitted.") //$NON-NLS-1$
+            .stringProperty(KEY_EXTERNAL_OBJECT,
+                "Optional root to seed for projectKind=externalObjects: " //$NON-NLS-1$
+                    + "'ExternalDataProcessor.<Name>' or 'ExternalReport.<Name>'; the TYPE token may be " //$NON-NLS-1$
+                    + "English or Russian, and Name is a programmatic identifier. Omit for an empty project; " //$NON-NLS-1$
+                    + "REJECTED for other project kinds.") //$NON-NLS-1$
             .stringProperty("baseProjectName", //$NON-NLS-1$
                 "Name of the BASE configuration EDT project (required for extension; " //$NON-NLS-1$
                     + "REJECTED for configuration and externalObjects). " //$NON-NLS-1$
@@ -299,6 +312,7 @@ public class CreateProjectTool implements IMcpTool
         String configName = JsonUtils.extractStringArgument(params, "name"); //$NON-NLS-1$
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String versionStr = JsonUtils.extractStringArgument(params, KEY_VERSION);
+        String externalObjectStr = JsonUtils.extractStringArgument(params, KEY_EXTERNAL_OBJECT);
         String baseProjectName = JsonUtils.extractStringArgument(params, "baseProjectName"); //$NON-NLS-1$
         String prefix = JsonUtils.extractStringArgument(params, KEY_PREFIX);
         String synonym = JsonUtils.extractStringArgument(params, "synonym"); //$NON-NLS-1$
@@ -325,10 +339,20 @@ public class CreateProjectTool implements IMcpTool
         // 3. Validate kind-specific parameter constraints
         String constraintErr = validateKindConstraints(new KindConstraintInputs(projectKind, isExtension,
             isExternalObjects, versionStr, baseProjectName, prefix, purposeStr, compatModeStr, synonym, comment,
-            scriptVariantStr));
+            scriptVariantStr, externalObjectStr));
         if (constraintErr != null)
         {
             return constraintErr;
+        }
+
+        ExternalObjectSpec externalObject = null;
+        if (isExternalObjects && externalObjectStr != null)
+        {
+            externalObject = resolveExternalObject(externalObjectStr);
+            if (externalObject.error != null)
+            {
+                return externalObject.error;
+            }
         }
 
         // 4. Validate 'name'
@@ -361,7 +385,8 @@ public class CreateProjectTool implements IMcpTool
 
         // Dispatch to kind-specific handler
         CreateRequest request = new CreateRequest(configName, projectName, versionStr, baseProjectName, prefix,
-            synonym, comment, purposeStr, compatModeStr, scriptVariantStr, standardChecks, commonChecks);
+            synonym, comment, purposeStr, compatModeStr, scriptVariantStr, externalObject, standardChecks,
+            commonChecks);
         if (isExtension)
         {
             return executeExtension(request);
@@ -443,6 +468,11 @@ public class CreateProjectTool implements IMcpTool
         {
             return err;
         }
+        err = validateExternalObjectParam(in);
+        if (err != null)
+        {
+            return err;
+        }
         return validateScriptVariantValue(in);
     }
 
@@ -520,6 +550,22 @@ public class CreateProjectTool implements IMcpTool
     }
 
     /**
+     * Rejects {@code externalObject} outside the one project kind whose create API accepts it.
+     *
+     * @return a ready-to-return JSON error string, or {@code null} when valid
+     */
+    private static String validateExternalObjectParam(KindConstraintInputs in)
+    {
+        if (!in.isExternalObjects && in.externalObjectStr != null)
+        {
+            return ToolResult.error("externalObject '" + in.externalObjectStr //$NON-NLS-1$
+                + "' is only valid for projectKind=externalObjects. Remove externalObject or set " //$NON-NLS-1$
+                + "projectKind=externalObjects.").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
      * Strict scriptVariant value validation: must be exactly {@code "Russian"} or {@code "English"}
      * (case-insensitive) when supplied for configuration or externalObjects.
      *
@@ -535,6 +581,59 @@ public class CreateProjectTool implements IMcpTool
                 + "'. Allowed values: 'Russian', 'English'.").toJson(); //$NON-NLS-1$
         }
         return null;
+    }
+
+    /**
+     * Resolves an optional external-object root address without touching the workbench. The TYPE
+     * token is interpreted only by the shared bilingual {@link MetadataTypeUtils} catalogue; the
+     * resolved kind then selects one of the two root EClasses accepted by EDT's external-project
+     * creation API.
+     *
+     * @param value external-object FQN supplied by the caller
+     * @return the resolved EClass/name pair, or a ready-to-return validation error
+     */
+    static ExternalObjectSpec resolveExternalObject(String value)
+    {
+        String normalized = value == null ? null : value.trim();
+        String[] parts = normalized == null ? new String[0] : normalized.split("\\.", -1); //$NON-NLS-1$
+        if (parts.length != 2)
+        {
+            return ExternalObjectSpec.failure(invalidExternalObjectShape(value));
+        }
+
+        MetadataTypeInfo info = MetadataTypeUtils.resolve(parts[0]);
+        EClass eClass;
+        if (info == MetadataTypeInfo.EXTERNAL_DATA_PROCESSOR)
+        {
+            eClass = MdClassPackage.Literals.EXTERNAL_DATA_PROCESSOR;
+        }
+        else if (info == MetadataTypeInfo.EXTERNAL_REPORT)
+        {
+            eClass = MdClassPackage.Literals.EXTERNAL_REPORT;
+        }
+        else
+        {
+            return ExternalObjectSpec.failure(invalidExternalObjectShape(value));
+        }
+
+        String objectName = parts[1];
+        if (!isValidIdentifier(objectName))
+        {
+            return ExternalObjectSpec.failure(ToolResult.error("Invalid externalObject '" + value //$NON-NLS-1$
+                + "': root Name '" + objectName + "' must start with a letter or underscore and contain only " //$NON-NLS-1$ //$NON-NLS-2$
+                + "letters, digits and underscores. Use 'ExternalDataProcessor.<Name>' or " //$NON-NLS-1$
+                + "'ExternalReport.<Name>'.").toJson()); //$NON-NLS-1$
+        }
+
+        return ExternalObjectSpec.success(eClass, objectName, info.getEnglishSingular() + "." + objectName); //$NON-NLS-1$
+    }
+
+    /** Returns the common actionable error for a malformed or unsupported root address. */
+    private static String invalidExternalObjectShape(String value)
+    {
+        return ToolResult.error("Invalid externalObject '" + value //$NON-NLS-1$
+            + "'. Expected 'ExternalDataProcessor.<Name>' or 'ExternalReport.<Name>'; " //$NON-NLS-1$
+            + "the TYPE token may also be Russian.").toJson(); //$NON-NLS-1$
     }
 
     // ─────────────────────── EXTENSION path ──────────────────────────────────
@@ -948,11 +1047,40 @@ public class CreateProjectTool implements IMcpTool
                 "IExternalObjectProjectManager service not available. The EDT platform may not be ready.").toJson(); //$NON-NLS-1$
         }
 
+        MdObject externalObject = null;
+        if (req.externalObject != null)
+        {
+            IModelObjectFactory factory = Activator.getDefault().getModelObjectFactory();
+            if (factory == null)
+            {
+                return ToolResult.error("IModelObjectFactory service not available; cannot seed externalObject '" //$NON-NLS-1$
+                    + req.externalObject.canonicalFqn + "'. Retry after EDT finishes starting, or omit " //$NON-NLS-1$
+                    + "externalObject to create an empty project.").toJson(); //$NON-NLS-1$
+            }
+            try
+            {
+                externalObject = createExternalObjectRoot(factory, req.externalObject, version);
+            }
+            catch (RuntimeException e)
+            {
+                return ToolResult.error("Failed to initialize externalObject '" + req.externalObject.canonicalFqn //$NON-NLS-1$
+                    + "': " + e.getMessage() + ". Retry after EDT finishes starting, or omit externalObject " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "to create an empty project.").toJson(); //$NON-NLS-1$
+            }
+            if (externalObject == null)
+            {
+                return ToolResult.error("Failed to initialize externalObject '" + req.externalObject.canonicalFqn //$NON-NLS-1$
+                    + "'. Retry after EDT finishes starting, or omit externalObject to create an empty project.") //$NON-NLS-1$
+                    .toJson();
+            }
+        }
+
         // Create the external objects project in a background Job
         final IProject[] createdHolder = new IProject[1];
         final Throwable[] errorHolder = new Throwable[1];
         final String finalEffectiveProjectName = effectiveProjectName;
         final Version finalVersion = version;
+        final MdObject finalExternalObject = externalObject;
 
         Job createJob = new Job(LOG_PREFIX + finalEffectiveProjectName)
         {
@@ -961,9 +1089,10 @@ public class CreateProjectTool implements IMcpTool
             {
                 try
                 {
-                    // null, null = empty project (no pre-seeded MdObject, no parent)
+                    // A null external object preserves the legitimate empty-project/import workflow;
+                    // the second null means the project has no parent configuration.
                     createdHolder[0] = extObjMgr.create(
-                        finalEffectiveProjectName, finalVersion, null, null, monitor);
+                        finalEffectiveProjectName, finalVersion, finalExternalObject, null, monitor);
                 }
                 catch (Throwable t)
                 {
@@ -1004,6 +1133,21 @@ public class CreateProjectTool implements IMcpTool
         return buildExternalObjectsSuccessResponse(new ExternalObjectsSuccessInputs(extObjMgr,
             finalEffectiveProjectName, configName, finalVersion, createdHolder[0], projectState,
             scriptVariantStr, codestyleMap));
+    }
+
+    /**
+     * Creates the detached root exactly like the Configuration paths: version-aware factory first,
+     * then default-reference filling, then the caller's programmatic Name.
+     */
+    static MdObject createExternalObjectRoot(IModelObjectFactory factory, ExternalObjectSpec spec, Version version)
+    {
+        MdObject root = factory.create(spec.eClass, version);
+        if (root != null)
+        {
+            factory.fillDefaultReferences(root);
+            root.setName(spec.objectName);
+        }
+        return root;
     }
 
     /**
@@ -1347,10 +1491,11 @@ public class CreateProjectTool implements IMcpTool
         final String synonym;
         final String comment;
         final String scriptVariantStr;
+        final String externalObjectStr;
 
         private KindConstraintInputs(String projectKind, boolean isExtension, boolean isExternalObjects, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String versionStr, String baseProjectName, String prefix, String purposeStr, String compatModeStr,
-            String synonym, String comment, String scriptVariantStr)
+            String synonym, String comment, String scriptVariantStr, String externalObjectStr)
         {
             this.projectKind = projectKind;
             this.isExtension = isExtension;
@@ -1363,6 +1508,7 @@ public class CreateProjectTool implements IMcpTool
             this.synonym = synonym;
             this.comment = comment;
             this.scriptVariantStr = scriptVariantStr;
+            this.externalObjectStr = externalObjectStr;
         }
     }
 
@@ -1383,12 +1529,13 @@ public class CreateProjectTool implements IMcpTool
         final String purposeStr;
         final String compatModeStr;
         final String scriptVariantStr;
+        final ExternalObjectSpec externalObject;
         final boolean standardChecks;
         final boolean commonChecks;
 
         private CreateRequest(String configName, String projectName, String versionStr, String baseProjectName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String prefix, String synonym, String comment, String purposeStr, String compatModeStr,
-            String scriptVariantStr, boolean standardChecks, boolean commonChecks)
+            String scriptVariantStr, ExternalObjectSpec externalObject, boolean standardChecks, boolean commonChecks)
         {
             this.configName = configName;
             this.projectName = projectName;
@@ -1400,6 +1547,7 @@ public class CreateProjectTool implements IMcpTool
             this.purposeStr = purposeStr;
             this.compatModeStr = compatModeStr;
             this.scriptVariantStr = scriptVariantStr;
+            this.externalObject = externalObject;
             this.standardChecks = standardChecks;
             this.commonChecks = commonChecks;
         }
@@ -1496,6 +1644,33 @@ public class CreateProjectTool implements IMcpTool
             this.scriptVariant = scriptVariant;
             this.langCode = langCode;
             this.langName = langName;
+        }
+    }
+
+    /** Headless-safe resolution of an external-object root parameter. */
+    static final class ExternalObjectSpec
+    {
+        final String error;
+        final EClass eClass;
+        final String objectName;
+        final String canonicalFqn;
+
+        private ExternalObjectSpec(String error, EClass eClass, String objectName, String canonicalFqn)
+        {
+            this.error = error;
+            this.eClass = eClass;
+            this.objectName = objectName;
+            this.canonicalFqn = canonicalFqn;
+        }
+
+        static ExternalObjectSpec failure(String error)
+        {
+            return new ExternalObjectSpec(error, null, null, null);
+        }
+
+        static ExternalObjectSpec success(EClass eClass, String objectName, String canonicalFqn)
+        {
+            return new ExternalObjectSpec(null, eClass, objectName, canonicalFqn);
         }
     }
 
