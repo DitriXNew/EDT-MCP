@@ -136,13 +136,13 @@ Go to **Window → Preferences → MCP Server**. The settings page has two tabs:
 #### General Tab
 
 - **Server Port**: HTTP port (default: 8765)
-- **Check descriptions folder**: Path to check description markdown files
+- **Check descriptions folder**: Optional override for the check descriptions that ship with the plugin. Leave it empty to use the bundled ones; point it at a folder to replace or translate individual checks (a file found there wins, per check)
 - **Auto-start**: Start server on EDT launch
 - **Plain text mode (Cursor compatibility)**: Returns results as plain text instead of embedded resources (for AI clients that don't support MCP resources)
 - **Enhance Navigator**: Controls this plugin’s contributions to the Navigator tree (groups and their filter). Turn it off to resolve conflicts with another plugin that patches the same panel
 - **Show tags in Navigator**: Display tags as decorations in the Navigator tree
 - **Tag decoration style**: How tags are displayed — all tags as suffix, first tag only, or tag count
-- **Server control**: Start, stop, and restart the MCP server directly from preferences
+- **Server control**: Start, stop, and restart the MCP server directly from preferences. The endpoint line shows the real URL for the port the server is actually serving, with **Copy URL** and **Copy config (type/url)** buttons — the latter puts a ready `mcpServers` JSON entry on the clipboard for agents that are configured only by editing a file. That entry is the `type`/`url` form (Cursor, VS Code, Claude Code); **Cline**, **Antigravity** and **OpenCode** need the different shapes shown in their sections below. If an auth token is saved, the entry carries it as an `Authorization` header (it would get a 401 otherwise), so treat the copied text as a secret
 
 #### Tools Tab
 
@@ -300,7 +300,7 @@ Create `.vscode/mcp.json`:
 
 ### Cursor IDE
 
-> **Note:** Cursor doesn't support MCP embedded resources. Enable **"Plain text mode (Cursor compatibility)"** in EDT preferences: **Window → Preferences → MCP Server**.
+> **Note:** Cursor doesn't support MCP embedded resources. Enable **"Plain text mode (Cursor compatibility)"** in EDT preferences: **Window → Preferences → MCP Server**. It moves a result into `content[0].text`; a JSON tool still returns its `structuredContent` as well, so a client that enforces the declared `outputSchema` is satisfied too.
 
 Create `.cursor/mcp.json`:
 ```json
@@ -832,7 +832,8 @@ Only hints that apply are emitted; unset hints are omitted from the JSON. Tools 
 The MCP server is a **local developer tool** and is secured for that model:
 
 - **Loopback bind by default.** The server listens on `127.0.0.1` only. To expose it on all interfaces, enable **Allow remote (non-loopback) access** in MCP preferences — which **requires an auth token**: with remote access on and the token empty the server refuses to start rather than listening unauthenticated on every interface.
-- **Optional shared-token auth.** Set an **Auth token** in MCP preferences to require `Authorization: Bearer <token>` (scheme case-insensitive, or the raw token) on every `/mcp` request. An **empty token disables authentication** — the default, and allowed only for the loopback bind. `/health` is always unauthenticated (liveness only).
+- **Optional shared-token auth.** Set an **Auth token** in MCP preferences to require `Authorization: Bearer <token>` (scheme case-insensitive, or the raw token) on every `/mcp` request. An **empty token disables authentication** — the default, and allowed only for the loopback bind. `/health` is always unauthenticated (liveness only). Prefer **printable ASCII** for the token. A header value is bytes: a code point above U+00FF has none, so **no** client can send it — preferences warn about such a token (a Cyrillic one, say) rather than leaving you a run of unexplained 401s. Latin-1 characters are deliverable but not portable: they work with clients that serialise header values as ISO-8859-1 (`fetch`, Python `requests`) and not with one that writes the string UTF-8. Control characters are likewise accepted by some clients and rejected by others. Neither is warned about, because both can be made to work; ASCII is simply the choice that works everywhere.
+- **Clearing the token does not reopen a remote listener.** Saving preferences does not rebind the running server, so a listener that was opened on all interfaces stays open. Rather than serve the network unauthenticated, it then refuses **every** request until a token is set again or the server is restarted onto loopback. The endpoint line in preferences says so while that is the case, so the URL it shows is never one it knows to be unusable.
 - **Bounded request bodies.** A `/mcp` request body larger than 4 MiB is refused with `413` instead of being buffered, matching the cap the [proxy](#multi-edt-proxy) already applies.
 - **Loopback origins only.** A browser request whose `Origin` is not `localhost` / `127.0.0.1` / `[::1]` (http or https, any port) is refused with `403` before anything runs — this is the whole browser-CSRF defence, since a default install has no token. The literal `null` (what a sandboxed iframe, a `data:` URL and a cross-origin redirect all send), `file://` and `vscode-webview://` are **not** accepted: each is producible by a hostile page, and a VS Code extension reaches the server from its extension host, which sends no `Origin` at all. A request with no `Origin` is a non-browser client and is admitted; access control for those is the loopback bind plus the optional token.
 - **Sessions are validated.** `initialize` issues an `Mcp-Session-Id`; every later `/mcp` POST must send it back (`400` without one, `404` for an unknown or terminated one), and `DELETE /mcp` terminates it. A drive-by POST is therefore never a valid first request. The standalone SSE `GET` stream is exempt — it carries no method call, and clients open it before they initialize.

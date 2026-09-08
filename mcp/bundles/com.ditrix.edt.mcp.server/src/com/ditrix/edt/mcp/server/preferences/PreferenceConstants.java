@@ -43,7 +43,7 @@ public final class PreferenceConstants
     /** Default auto-start */
     public static final boolean DEFAULT_AUTO_START = false;
     
-    /** Default checks folder (empty - feature disabled) */
+    /** Default checks folder (empty - the descriptions shipped in the plugin are used) */
     public static final String DEFAULT_CHECKS_FOLDER = ""; //$NON-NLS-1$
     
     /** Default plain text mode (disabled - use embedded resources by default) */

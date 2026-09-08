@@ -4,11 +4,14 @@ e2e tests for get_check_description (kind: read).
 WHAT THE TOOL DOES
 ------------------
 get_check_description expands an EDT *check ID* (e.g. the dash-cased code seen in
-get_project_errors' "Check code" column, like "module-structure-method-in-regions")
-into its human-readable documentation. It is NOT a model query: it reads a
-`<checkId>.md` file from a folder configured in MCP preferences
-(PreferenceConstants.PREF_CHECKS_FOLDER) and returns the file body verbatim.
-Source: GetCheckDescriptionTool.getCheckDescription(checkId).
+get_project_errors' "Check code" column, like "begin-transaction") into its
+human-readable documentation. It is NOT a model query: it reads a `<checkId>.md`
+file and returns the body verbatim. Since #31 those files SHIP WITH THE PLUGIN
+(bundle resource `checks/`), so the tool answers on a fresh install with nothing
+configured; PreferenceConstants.PREF_CHECKS_FOLDER is now an optional per-file
+OVERRIDE, consulted first when set.
+Source: GetCheckDescriptionTool.getCheckDescription(checkId) ->
+CheckDescriptionLoader.load(checkId).
 
 Parameters: `checkId` (string, required) and `projectName` (string, OPTIONAL). The
 checkId may be the symbolic dash-cased id OR a short UID code (e.g. "SU23") as shown
@@ -19,13 +22,12 @@ ONLY for that resolution — the tool still never mutates TestConfiguration or t
 model, so EVERY test below ends with assert_no_diff() (a read tool that mutated the
 project would be a bug, and this is the guardrail that catches it).
 
-NOTE on validating the UID happy path: it requires BOTH a configured checks-docs
-folder (off by default in the e2e workspace) AND a UID whose symbolic doc exists, so
-the UID->doc resolution is a verify-in-EDT path (like the LanguageTool tools). The
-pure UID->symbolic mapping is unit-tested with a mocked ICheckRepository
-(GetCheckDescriptionToolTest.testResolveSymbolicCheckUid*). The test below proves the
-new projectName param does not break the validation order or crash in the
-unconfigured fixture.
+NOTE on validating the UID happy path: it needs a UID that BOTH resolves against the
+fixture's check repository AND whose symbolic id has a shipped .md. Which UIDs a given
+EDT build issues is not fixture-controlled, so the UID->doc resolution stays a
+verify-in-EDT path. The pure UID->symbolic mapping is unit-tested with a mocked
+ICheckRepository (GetCheckDescriptionToolTest.testResolveSymbolicCheckUid*). The test
+below proves the projectName param does not break the validation order or crash.
 
 RESPONSE / ERROR CONTRACT (verified against current source, 2026-06-03)
 ----------------------------------------------------------------------
@@ -44,26 +46,18 @@ source is authoritative; these tests follow it.)
 
 Real execute() error messages (GetCheckDescriptionTool):
   - checkId null/empty       -> "checkId is required"
-  - folder pref unset/empty  -> "Check descriptions folder is not configured.\n\n
-                                 Please set it in Preferences -> MCP Server."
-  - folder does not exist     -> "Check descriptions folder does not exist: <folder>"
-  - file not found/sanitized -> "Check description not found for: <checkId>"
+  - no description for id    -> "No check description for: <checkId>. Use the symbolic
+                                 dash-cased id ..." (also the sanitizer-reject path:
+                                 an id carrying anything outside [a-zA-Z0-9_-] never
+                                 reaches a lookup)
 
-WHY THERE IS NO assert_ok HAPPY PATH HERE (and why that is correct, not a gap)
------------------------------------------------------------------------------
-A *successful* (file-body) response requires an operator-configured external
-preference folder containing a matching `<checkId>.md`. That folder is:
-  - NOT part of the git fixture (no `*.md` exists under TestConfiguration/), and
-  - OFF BY DEFAULT (DEFAULT_CHECKS_FOLDER == ""), and the e2e workspace leaves it
-    unset.
-So there is no fixture-independent, deterministic input that yields assert_ok.
-Fabricating an assert_ok that only passes if some operator happened to point the
-preference at a real docs folder would be FLAKY and would not reliably FAIL when
-the tool is broken — exactly the anti-cheat trap (§6). Instead, the tool's correct,
-deterministic baseline behaviour in the (unconfigured) fixture environment is a
-*well-formed structured error*; the "happy" slot below asserts that baseline
-response is well-formed and actionable (not a bare "Error"/blank/stacktrace) — a
-real positive signal that the tool ran its validation/lookup pipeline end to end.
+THE HAPPY PATH IS NOW FIXTURE-INDEPENDENT (it was not, before #31)
+------------------------------------------------------------------
+The descriptions ship inside the plugin jar, so a shipped check id yields the file
+body with nothing configured — the same on CI, on a fresh install and on a developer
+stand. That is what makes the assert_ok below deterministic rather than flaky, and it
+is exactly the behaviour #31 asked for: before it, this file could only assert that
+the tool produced a well-formed "folder is not configured" error.
 
 The negative matrix is otherwise minimal-by-nature: the only required param is
 `checkId` and there is no enum/XOR/conditional parameter, so the reachable
@@ -71,75 +65,59 @@ client-input errors are "missing checkId" and "bad/unknown checkId".
 """
 
 from harness import (
-    call, assert_error, assert_error_quality,
+    call, assert_ok, assert_error, assert_error_quality,
     assert_contains, assert_not_contains, assert_no_diff, e2e_test,
     PROJECT,
 )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Happy path — the well-formed baseline response in the unconfigured fixture env.
+# Happy path — a check the plugin SHIPS a description for resolves with nothing
+# configured (#31). This is the assert_ok this file could not have before: the
+# .md files now live in the plugin jar, so the same input succeeds on CI, on a
+# fresh install and on a developer stand.
 #
-# In the committed/e2e environment the check-descriptions folder is unset (OFF by
-# default), so a valid-looking checkId resolves to the tool's deterministic
-# baseline: a structured, actionable error. There is no fixture-independent
-# assert_ok input (success needs an out-of-band preference folder that the fixture
-# deliberately lacks — see the module docstring). We therefore assert the baseline
-# is a GOOD, well-formed response rather than a bare/blank/garbled one.
-#
-# Mutation thinking: if the tool were broken (returned an empty body, a bare
-# "Error", a raw stack trace, or silently "succeeded" with no validation), this
-# would FAIL — the message must name a concrete remedy AND it must not mutate disk.
+# Mutation thinking: a broken lookup (wrong resource path, a checks/ folder left
+# out of build.properties, a sanitizer that rejects a legal id, or a tool that
+# still demanded the preference) FAILS here — the call would come back isError.
 # ──────────────────────────────────────────────────────────────────────────────
 
 @e2e_test(tool="get_check_description", kind="read")
-def test_known_check_id_returns_wellformed_baseline_and_does_not_mutate():
-    # A real, simple dash-cased check code (as emitted by get_project_errors). With
-    # the docs folder unset (default) this deterministically hits one of two
-    # baseline branches: "Check descriptions folder is not configured" (folder unset
-    # -> directs the user to Preferences -> MCP Server) OR, if an operator DID
-    # configure a folder, "Check description not found for: <checkId>". Either way
-    # the response must be a well-formed, actionable error — never bare/blank.
-    check_id = "module-structure-method-in-regions"
+def test_shipped_check_id_returns_its_description_and_does_not_mutate():
+    # A real dash-cased check code that the plugin ships a description for.
+    check_id = "begin-transaction"
     r = call("get_check_description", {"checkId": check_id})
+    assert_ok(r, "a shipped check id must resolve with no folder configured")
 
-    # The tool ran its lookup pipeline and reported a structured failure (folder
-    # unset / file absent) — both are the correct deterministic baseline here.
-    err = assert_error(r, "valid-looking checkId in an unconfigured docs environment")
-
-    # The baseline must be the actionable not-configured message in the default
-    # (unset-folder) e2e workspace. This is the discriminating signal: a broken tool
-    # that skipped the folder-config check, returned an empty body, or leaked a
-    # stack trace would NOT contain this phrase. "Preferences" is the concrete
-    # next-step the message points the operator at.
-    #
-    # NOTE: if the test environment HAS a configured folder, the baseline becomes
-    # "Check description not found for: <checkId>" instead. Assert quality against
-    # whichever applies so the test stays meaningful without being flaky.
-    msg = err or ""
-    if "not configured" in msg.lower() or "preferences" in msg.lower():
-        assert_error_quality(
-            err,
-            names=[],  # the not-configured message is folder-state, not about checkId
-            suggests=["Preferences"],
-            ctx="unconfigured docs folder -> actionable 'set it in Preferences' remedy",
-        )
-    else:
-        # Folder configured but this checkId has no .md -> must name the checkId and
-        # be a clear not-found message (not a bare error).
-        # AUDIT: the "not found" message names the checkId but offers no next step
-        #   (no pointer to get_project_errors' "Check code" column to find a valid
-        #   id, and no listing of available check docs). suggests=[] is deliberate;
-        #   this is a fix-card to add an actionable hint.
-        assert_contains(msg, "not found", "configured folder, missing doc -> 'not found'")
-        assert_error_quality(
-            err,
-            names=[check_id],
-            suggests=[],
-            ctx="configured folder, unknown checkId -> names the bad checkId",
-        )
-
+    body = r.text or ""
+    # Not merely non-empty: it must be THIS check's document. A tool that returned
+    # some other file (a wrong-resource bug the mere presence of text would hide)
+    # would not carry the check's own name.
+    assert len(body.strip()) > 100, (
+        "expected a real description body, got %r" % body[:200])
+    assert_contains(body.lower(), "transaction",
+                    "the body must be the begin-transaction document")
+    # And it must be the Markdown file verbatim, not a JSON envelope around it.
+    assert_not_contains(body, '"success"',
+                        "the body is returned as-is, not wrapped in a result envelope")
     assert_no_diff("a read tool must not touch the project on disk")
+
+
+@e2e_test(tool="get_check_description", kind="read")
+def test_unknown_check_id_errors_and_names_the_id():
+    # The other side of the same lookup: an id the plugin ships nothing for must be
+    # a structured error that NAMES the id, not an empty body or a bare "Error". The
+    # id is synthetic so no future addition to checks/ can turn this green-by-accident.
+    check_id = "no-such-check-e2e-xyz"
+    r = call("get_check_description", {"checkId": check_id})
+    err = assert_error(r, "an id with no shipped description")
+    assert_error_quality(
+        err,
+        names=[check_id],
+        suggests=["symbolic", "get_project_errors"],
+        ctx="unknown checkId names the bad value and says where a good one comes from",
+    )
+    assert_no_diff("an invalid call must not touch the project on disk")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -196,11 +174,10 @@ def test_path_traversal_shaped_checkid_is_rejected_not_resolved():
     # (findCheckDocumentationFile returns null). A traversal-shaped id must therefore
     # NEVER resolve to a file outside the docs folder; it must come back as an error.
     #
-    # Because the docs folder is unset by default, the deterministic baseline here is
-    # the "not configured" branch (validated BEFORE the sanitizer runs). When a
-    # folder IS configured, the sanitizer mismatch yields "Check description not
-    # found for: <checkId>". Either way the result MUST be a structured error and
-    # MUST NOT leak a file from outside the folder.
+    # Since #31 the descriptions are bundle resources and there is no preference to
+    # be unset, so the sanitizer IS the branch this reaches: the id differs from its
+    # sanitized form, the lookup is refused, and the result is the "no description
+    # for" error. It MUST NOT be a file from outside checks/.
     evil = "../../../../etc/passwd"
     r = call("get_check_description", {"checkId": evil})
     err = assert_error(r, "path-traversal-shaped checkId")
@@ -208,26 +185,26 @@ def test_path_traversal_shaped_checkid_is_rejected_not_resolved():
 
     # Mutation guard: a broken sanitizer that resolved the traversal would return
     # foreign FILE CONTENT (success, no isError). assert_error already proves the
-    # call failed; now prove it failed for a SAFE reason (a known error branch),
+    # call failed; now prove it failed for a SAFE reason (the known refusal branch),
     # not by leaking an unrelated file body.
     low = msg.lower()
-    assert ("not configured" in low) or ("not found" in low) or ("preferences" in low), \
-        "traversal-shaped checkId must hit a known error branch, not resolve a file: %r" % msg
+    assert "no check description for" in low, \
+        "traversal-shaped checkId must hit the refusal branch, not resolve a file: %r" % msg
     # And it must NOT have returned the contents of a traversed file (e.g. /etc/passwd
     # starts with a "root:" line). assert_not_contains is the harness guardrail for
     # "this string must be absent" — here, no leaked file body.
     assert_not_contains(msg, "root:",
                         "path traversal must be blocked: no external file content may leak")
 
-    # AUDIT: the not-configured / not-found messages do not explicitly state that the
-    #   id was rejected for containing illegal characters; a client passing a dotted
-    #   Xtext code (e.g. org.eclipse.xtext...Syntax) just sees a generic 'not found'.
-    #   suggests=[] flags the missing actionable hint about the [a-zA-Z0-9_-] rule.
+    # AUDIT: the refusal message does not state that the id was rejected for carrying
+    #   illegal characters; a client passing a dotted Xtext code (e.g.
+    #   org.eclipse.xtext...Syntax) sees the generic "no description" wording instead
+    #   of the [a-zA-Z0-9_-] rule. suggests names what the message DOES offer.
     assert_error_quality(
         err,
-        names=[],  # the unset-folder baseline does not echo the (illegal) checkId
-        suggests=[],
-        ctx="traversal-shaped checkId rejected via a known error branch (no file leak)",
+        names=[evil],
+        suggests=["symbolic"],
+        ctx="traversal-shaped checkId rejected via the refusal branch (no file leak)",
     )
     assert_no_diff("an invalid call must not touch the project on disk")
 
@@ -235,16 +212,17 @@ def test_path_traversal_shaped_checkid_is_rejected_not_resolved():
 @e2e_test(tool="get_check_description", kind="read")
 def test_uid_shaped_checkid_with_project_name_does_not_crash_or_mutate():
     # A short UID-shaped checkId ("SU23") together with the optional projectName
-    # exercises the NEW UID-resolution branch. In the e2e workspace the checks-docs
-    # folder is unset, so resolution is never reached: the folder check fires first
-    # and the deterministic baseline is "not configured" (or "not found" if an
-    # operator configured a folder but this UID has no .md). The point of this test
-    # is the GUARDRAIL: passing projectName must not crash, must not mutate the
-    # project, and must still return a well-formed structured error — the actual
-    # UID->doc resolution is a verify-in-EDT path (needs a configured docs folder).
+    # exercises the UID-resolution branch. Whether THIS UID resolves to a check with a
+    # shipped description depends on the EDT build's check registry, which the fixture
+    # does not control - so the test asserts the GUARDRAIL either way: passing
+    # projectName must not crash and must not mutate the project, and when the id does
+    # not resolve the answer must be the well-formed refusal, never a bare error.
     r = call("get_check_description", {"checkId": "SU23", "projectName": PROJECT})
-    err = assert_error(r, "UID-shaped checkId with projectName, unconfigured folder")
-    low = (err or "").lower()
-    assert ("not configured" in low) or ("not found" in low) or ("preferences" in low), \
-        "UID checkId must hit a known error branch in the unconfigured fixture: %r" % err
+    if r.is_error:
+        low = (r.error_text() or "").lower()
+        assert "no check description for" in low, \
+            "an unresolved UID must hit the refusal branch: %r" % r.error_text()
+    else:
+        assert len((r.text or "").strip()) > 100, \
+            "a resolved UID must return a real description body, got %r" % (r.text or "")[:200]
     assert_no_diff("supplying projectName must not let a read tool mutate the project")

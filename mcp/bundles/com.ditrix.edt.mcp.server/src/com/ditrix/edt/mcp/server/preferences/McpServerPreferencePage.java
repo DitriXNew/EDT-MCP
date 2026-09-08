@@ -123,6 +123,12 @@ public class McpServerPreferencePage extends PreferencePage implements IWorkbenc
                 {
                     Activator.logError("Failed to restart MCP Server after tool change", e); //$NON-NLS-1$
                 }
+                // The General tab saved and repainted BEFORE this restart, so everything it says
+                // about the live server is now one bind out of date - including the warning that
+                // the endpoint refuses every request, which this restart may have just cured.
+                // Repaint after the catch as well: a failed restart leaves the server stopped,
+                // which the tab must also show.
+                generalTab.refreshServerState();
             }
         }
 
