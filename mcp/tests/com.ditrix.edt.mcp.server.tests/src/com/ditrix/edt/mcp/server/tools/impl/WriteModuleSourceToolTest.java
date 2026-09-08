@@ -1116,6 +1116,69 @@ public class WriteModuleSourceToolTest
     }
 
     @Test
+    public void testUnterminatedTargetDoesNotBorrowTheNextMethodTerminator()
+    {
+        // Unbounded, the search past a missing EndProcedure finds the NEXT method's
+        // terminator, calls Target complete, and replaceMethod then deletes Other and
+        // its documentation along with the target.
+        List<String> current = lines("Procedure Target()\n\tOld = 1;\n" //$NON-NLS-1$
+            + "// Other documentation\nProcedure Other()\nEndProcedure\n"); //$NON-NLS-1$
+        assertMethodEditError("target span is incomplete", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(current,
+                "replaceMethod", "Target", "Procedure Target()\nEndProcedure\n", null)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testTargetTerminatorSharingItsLineWithModuleCodeRejected()
+    {
+        // BSL allows module-level statements after the methods, so this terminator does
+        // not end the line and the span cannot be measured in whole lines.
+        List<String> current = lines("Procedure Target()\nEndProcedure; ModuleValue = 1;\n"); //$NON-NLS-1$
+        assertMethodEditError("target span is incomplete", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(current,
+                "replaceMethod", "Target", "Procedure Target()\nEndProcedure\n", null)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testMethodSourceSmugglingCodeOnTheTerminatorLineRejected()
+    {
+        // The exactly-one-method contract has to hold for the payload too: the module-level
+        // statement rides on the terminator line, where a line-based outside check misses it.
+        String smuggled = "Procedure Target()\nEndProcedure; ModuleValue = DangerousCall();\n"; //$NON-NLS-1$
+        assertMethodEditError("no matching method terminator", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(simpleModule(),
+                "replaceMethod", "Target", smuggled, null)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testInsertBeforeKeepsABlankSeparatedAnnotationWithItsDeclaration()
+    {
+        List<String> current = lines("&AtClient\n\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result = WriteModuleSourceTool.applyMethodTargetedEdit(
+            current, "insertBefore", "Target", "Procedure Added()\nEndProcedure\n", null); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertNull(result.error);
+        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
+        assertTrue(joined, joined.startsWith("Procedure Added()\nEndProcedure\n&AtClient")); //$NON-NLS-1$
+        assertFalse("the inserted method must not capture Target's execution-context directive", //$NON-NLS-1$
+            joined.contains("&AtClient\n\nProcedure Added()")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInsertBeforeDoesNotAbsorbABlankSeparatedCommentBlock()
+    {
+        // The mirror direction: a blank line carries a directive but still detaches
+        // documentation, so the comment block stays where it is.
+        List<String> current = lines("// detached documentation\n\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result = WriteModuleSourceTool.applyMethodTargetedEdit(
+            current, "insertBefore", "Target", "Procedure Added()\nEndProcedure\n", null); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertNull(result.error);
+        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
+        assertTrue(joined, joined.startsWith("// detached documentation\n\nProcedure Added()")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testReplaceMethodNameMismatchRejected()
     {
         assertMethodEditError("replaceMethod targets", //$NON-NLS-1$

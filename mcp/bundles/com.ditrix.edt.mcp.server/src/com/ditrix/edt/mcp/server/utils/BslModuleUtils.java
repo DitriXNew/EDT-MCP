@@ -350,11 +350,15 @@ public final class BslModuleUtils
 
             boolean isFunction = FUNC_KEYWORD_PATTERN.matcher(lines.get(declarationLine)).find();
             Pattern terminator = isFunction ? FUNCTION_END_PATTERN : PROCEDURE_END_PATTERN;
-            int endLine = findTerminatorLine(lines, declarationLine, lines.size() - 1, terminator);
+            // The search stops at the NEXT declaration: unbounded, an unterminated method
+            // borrows its neighbour's terminator, reports itself complete, and a
+            // replaceMethod on it would delete that neighbour and its documentation.
+            int searchLimit = nextDeclarationLine(lines, declarationLine + 1) - 1;
+            int endLine = findTerminatorLine(lines, declarationLine, searchLimit, terminator);
             boolean complete = endLine >= 0;
             if (!complete)
             {
-                endLine = lines.isEmpty() ? declarationLine : lines.size() - 1;
+                endLine = searchLimit;
             }
             int startLine = findMethodPreambleStartLine(lines, declarationLine + 1) - 1;
             spans.add(new MethodSpan(startLine, declarationLine, endLine,
@@ -419,11 +423,60 @@ public final class BslModuleUtils
             isFunction, true);
     }
 
+    /**
+     * The tail a terminator line may carry and still be owned entirely by the method:
+     * whitespace, at most one statement separator, and an end-of-line comment. BSL puts
+     * module-level statements AFTER the methods (Bsl.xtext {@code Module} rule), so
+     * {@code EndProcedure; ModuleValue = Call();} is valid code whose terminator does NOT
+     * end the line - and every span here is measured in whole lines, so without this the
+     * statement would ride along inside the method span.
+     */
+    private static final Pattern METHOD_END_TAIL_PATTERN = Pattern.compile("^\\s*;?\\s*(?://.*)?$"); //$NON-NLS-1$
+
+    /**
+     * Reports whether the line is a method terminator that owns its whole line.
+     *
+     * @param line source line to test (may be {@code null})
+     * @param terminator {@link #PROCEDURE_END_PATTERN} or {@link #FUNCTION_END_PATTERN}
+     * @return {@code true} when the line holds only that terminator (plus an optional
+     *         separator/comment tail)
+     */
+    public static boolean isMethodTerminatorLine(String line, Pattern terminator)
+    {
+        if (line == null)
+        {
+            return false;
+        }
+        Matcher matcher = terminator.matcher(line);
+        if (!matcher.find())
+        {
+            return false;
+        }
+        return METHOD_END_TAIL_PATTERN.matcher(line.substring(matcher.end())).matches();
+    }
+
+    /**
+     * Index of the first method declaration at or after {@code from}, or the line count
+     * when there is none. A method cannot contain another declaration, so this is the
+     * hard upper bound of a method's terminator search.
+     */
+    private static int nextDeclarationLine(List<String> lines, int from)
+    {
+        for (int i = Math.max(0, from); i < lines.size(); i++)
+        {
+            if (METHOD_START_PATTERN.matcher(lines.get(i)).find())
+            {
+                return i;
+            }
+        }
+        return lines.size();
+    }
+
     private static int findTerminatorLine(List<String> lines, int from, int to, Pattern terminator)
     {
         for (int i = from; i <= to; i++)
         {
-            if (terminator.matcher(lines.get(i)).find())
+            if (isMethodTerminatorLine(lines.get(i), terminator))
             {
                 return i;
             }
@@ -1038,8 +1091,14 @@ public final class BslModuleUtils
     /**
      * Finds the beginning of the contiguous preamble owned by a BSL method:
      * documentation-comment lines and ampersand annotations/directives immediately
-     * above the Procedure/Function declaration. A blank or any other line ends the
-     * preamble, so a branch/region directive is never absorbed into the method.
+     * above the Procedure/Function declaration. Code ends the preamble, so a
+     * branch/region directive is never absorbed into the method.
+     *
+     * <p>Blank lines are crossed only to reach an annotation. Whitespace is a hidden
+     * terminal in the BSL grammar and {@code Procedure} carries its {@code pragmas}
+     * directly, so {@code &AtClient}, a blank line and the declaration are one unit -
+     * inserting between them would rebind the directive to the inserted method. A blank
+     * line still detaches a comment block, keeping the documentation adjacency policy.
      *
      * @param sourceLines all file lines (0-indexed list)
      * @param declarationLine1Based 1-based declaration line
@@ -1054,16 +1113,32 @@ public final class BslModuleUtils
         }
 
         int idx = declarationLine1Based - 2;
+        int owned = declarationLine1Based;
         while (idx >= 0)
         {
             String trimmed = sourceLines.get(idx).trim();
-            if (!trimmed.startsWith("//") && !trimmed.startsWith("&")) //$NON-NLS-1$ //$NON-NLS-2$
+            if (trimmed.startsWith("//") || trimmed.startsWith("&")) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                owned = idx + 1;
+                idx--;
+                continue;
+            }
+            if (!trimmed.isEmpty())
             {
                 break;
             }
-            idx--;
+            int probe = idx;
+            while (probe >= 0 && sourceLines.get(probe).trim().isEmpty())
+            {
+                probe--;
+            }
+            if (probe < 0 || !sourceLines.get(probe).trim().startsWith("&")) //$NON-NLS-1$
+            {
+                break;
+            }
+            idx = probe;
         }
-        return idx + 2;
+        return owned;
     }
 
     /**

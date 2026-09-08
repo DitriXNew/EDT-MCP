@@ -19,7 +19,10 @@ import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.resources.ProjectScope;
+import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.ICoreRunnable;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.preferences.IScopeContext;
 import org.eclipse.core.runtime.preferences.InstanceScope;
@@ -341,24 +344,55 @@ public class WriteModuleSourceTool implements IMcpTool
             }
         }
 
-        // Method-targeted writes always carry a hash and build a whole replacement
-        // module in memory. Re-check immediately before the workspace mutation so a
-        // change made while the target/source/syntax checks ran cannot be clobbered.
-        if (isMethodTargetedMode(req.mode))
+        // Method-targeted writes always carry a hash and build a whole replacement module in
+        // memory, so a concurrent change must not be overwritten. Re-reading the hash and then
+        // writing as two operations leaves a window between them; the two run inside ONE
+        // workspace operation holding the file's modify rule, which is what actually excludes
+        // another workspace writer (an editor save, another tool) for the whole compare-and-write.
+        // A process writing the file outside Eclipse is not covered - IFile.setContents(FORCE)
+        // has no compare-and-swap - but it IS seen by the guard's own read.
+        if (isMethodTargetedMode(req.mode) && fileExists)
         {
-            String lateHashError = checkExpectedHashGuard(req, file, fileExists);
-            if (lateHashError != null)
+            String[] lateHashError = new String[1];
+            Exception[] failure = new Exception[1];
+            ICoreRunnable operation = monitor -> {
+                try
+                {
+                    lateHashError[0] = checkExpectedHashGuard(req, file, fileExists);
+                    if (lateHashError[0] != null)
+                    {
+                        return;
+                    }
+                    mutationEntered.set(true);
+                    writeFile(file, newLines, hasBom, fileExists, lineDelimiter);
+                    mutationCommitted.set(true);
+                }
+                catch (Exception e)
+                {
+                    failure[0] = e;
+                }
+            };
+            IWorkspace workspace = ResourcesPlugin.getWorkspace();
+            workspace.run(operation, workspace.getRuleFactory().modifyRule(file),
+                IWorkspace.AVOID_UPDATE, null);
+            if (failure[0] != null)
             {
-                return lateHashError;
+                throw failure[0];
+            }
+            if (lateHashError[0] != null)
+            {
+                return lateHashError[0];
             }
         }
-
-        // Write file (the mutating step — kept inline under the passed guards)
-        mutationEntered.set(true);
-        writeFile(file, newLines, hasBom, fileExists, lineDelimiter);
-        // IFile.setContents/create has returned: any later exception is response work after the
-        // workspace mutation, not a refusal that left the module untouched.
-        mutationCommitted.set(true);
+        else
+        {
+            // Write file (the mutating step — kept inline under the passed guards)
+            mutationEntered.set(true);
+            writeFile(file, newLines, hasBom, fileExists, lineDelimiter);
+            // IFile.setContents/create has returned: any later exception is response work after the
+            // workspace mutation, not a refusal that left the module untouched.
+            mutationCommitted.set(true);
+        }
 
         // Return success
         return buildSuccessResponse(req.projectName, req.modulePath, req.mode, req.skipSyntaxCheck,

@@ -259,6 +259,86 @@ public class BslModuleUtilsTest
     }
 
     @Test
+    public void testTerminatorMustOwnItsWholeLine()
+    {
+        assertTrue(BslModuleUtils.isMethodTerminatorLine(
+            "EndProcedure", BslModuleUtils.PROCEDURE_END_PATTERN)); //$NON-NLS-1$
+        assertTrue(BslModuleUtils.isMethodTerminatorLine(
+            "\tEndProcedure;", BslModuleUtils.PROCEDURE_END_PATTERN)); //$NON-NLS-1$
+        assertTrue(BslModuleUtils.isMethodTerminatorLine(
+            "EndProcedure // done", BslModuleUtils.PROCEDURE_END_PATTERN)); //$NON-NLS-1$
+        assertTrue(BslModuleUtils.isMethodTerminatorLine(
+            "\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438 // done", //$NON-NLS-1$
+            BslModuleUtils.FUNCTION_END_PATTERN));
+        // BSL puts module-level statements after the methods, so this line is valid code in
+        // which the terminator does NOT end the line - and a whole-line span would carry it.
+        assertFalse(BslModuleUtils.isMethodTerminatorLine(
+            "EndProcedure; ModuleValue = DangerousCall();", //$NON-NLS-1$
+            BslModuleUtils.PROCEDURE_END_PATTERN));
+        assertFalse(BslModuleUtils.isMethodTerminatorLine(
+            "EndProcedureResult = 1;", BslModuleUtils.PROCEDURE_END_PATTERN)); //$NON-NLS-1$
+        assertFalse(BslModuleUtils.isMethodTerminatorLine(
+            null, BslModuleUtils.PROCEDURE_END_PATTERN));
+    }
+
+    @Test
+    public void testMethodSpanStopsAtTheNextDeclaration()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "// Other documentation", //$NON-NLS-1$
+            "Procedure Other()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        List<BslModuleUtils.MethodSpan> spans = BslModuleUtils.findMethodSpansViaText(lines);
+        assertEquals(2, spans.size());
+        assertFalse("an unterminated method must not borrow the next method's terminator", //$NON-NLS-1$
+            spans.get(0).complete);
+        assertEquals(1, spans.get(0).endLine);
+        assertTrue(spans.get(1).complete);
+        assertEquals(1, spans.get(1).startLine);
+        assertEquals(3, spans.get(1).endLine);
+    }
+
+    @Test
+    public void testAnnotationSeparatedByBlankLineStaysWithTheDeclaration()
+    {
+        // Whitespace is a hidden terminal in the BSL grammar and Procedure carries its
+        // pragmas directly, so the directive still binds across the blank line.
+        List<String> lines = List.of(
+            "&AtClient", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(0, BslModuleUtils.findMethodSpansViaText(lines).get(0).startLine);
+    }
+
+    @Test
+    public void testBlankLineStillDetachesACommentBlock()
+    {
+        List<String> lines = List.of(
+            "// detached documentation", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(2, BslModuleUtils.findMethodSpansViaText(lines).get(0).startLine);
+    }
+
+    @Test
+    public void testBlankRunOverCodeDoesNotExtendThePreamble()
+    {
+        List<String> lines = List.of(
+            "ModuleValue = 1;", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(2, BslModuleUtils.findMethodSpansViaText(lines).get(0).startLine);
+    }
+
+    @Test
     public void testMethodSpanIncludesContiguousDocCommentAndAnnotations()
     {
         List<String> lines = List.of(
@@ -378,15 +458,15 @@ public class BslModuleUtilsTest
     @Test
     public void testFindMethodViaTextRussianKeywordsAndExportFunction()
     {
-        // exercises the Cyrillic Функция/КонецФункции alternations and the Export flag
+        // exercises the Cyrillic \u0424\u0443\u043d\u043a\u0446\u0438\u044f/\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438 alternations and the Export flag
         List<String> lines = List.of(
-            "Функция Сумма(А, Б) Экспорт", // Функция Сумма(А, Б) Экспорт //$NON-NLS-1$
-            "  Возврат А + Б;", // Возврат А + Б; //$NON-NLS-1$
-            "КонецФункции"); // КонецФункции //$NON-NLS-1$
-        BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(lines, "Сумма"); // Сумма //$NON-NLS-1$
+            "\u0424\u0443\u043d\u043a\u0446\u0438\u044f \u0421\u0443\u043c\u043c\u0430(\u0410, \u0411) \u042d\u043a\u0441\u043f\u043e\u0440\u0442", // \u0424\u0443\u043d\u043a\u0446\u0438\u044f \u0421\u0443\u043c\u043c\u0430(\u0410, \u0411) \u042d\u043a\u0441\u043f\u043e\u0440\u0442 //$NON-NLS-1$
+            "  \u0412\u043e\u0437\u0432\u0440\u0430\u0442 \u0410 + \u0411;", // \u0412\u043e\u0437\u0432\u0440\u0430\u0442 \u0410 + \u0411; //$NON-NLS-1$
+            "\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438"); // \u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438 //$NON-NLS-1$
+        BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(lines, "\u0421\u0443\u043c\u043c\u0430"); // \u0421\u0443\u043c\u043c\u0430 //$NON-NLS-1$
         assertTrue(tm.found);
         assertTrue(tm.isFunction);
-        assertEquals("Сумма", tm.matchedName); // Сумма //$NON-NLS-1$
+        assertEquals("\u0421\u0443\u043c\u043c\u0430", tm.matchedName); // \u0421\u0443\u043c\u043c\u0430 //$NON-NLS-1$
         assertEquals(0, tm.startLine);
         assertEquals(2, tm.endLine);
     }
@@ -729,10 +809,10 @@ public class BslModuleUtilsTest
     public void testFindRegionRussianDirectivesAndIndentation()
     {
         List<String> lines = List.of(
-            "  #Область ПрограммныйИнтерфейс", // 1 #Область ПрограммныйИнтерфейс //$NON-NLS-1$
+            "  #\u041e\u0431\u043b\u0430\u0441\u0442\u044c \u041f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u043d\u044b\u0439\u0418\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441", // 1 #\u041e\u0431\u043b\u0430\u0441\u0442\u044c \u041f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u043d\u044b\u0439\u0418\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441 //$NON-NLS-1$
             "Code();",                      // 2 //$NON-NLS-1$
-            "  #КонецОбласти"); // 3 #КонецОбласти //$NON-NLS-1$
-        assertEquals("ПрограммныйИнтерфейс", //$NON-NLS-1$
+            "  #\u041a\u043e\u043d\u0435\u0446\u041e\u0431\u043b\u0430\u0441\u0442\u0438"); // 3 #\u041a\u043e\u043d\u0435\u0446\u041e\u0431\u043b\u0430\u0441\u0442\u0438 //$NON-NLS-1$
+        assertEquals("\u041f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u043d\u044b\u0439\u0418\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441", //$NON-NLS-1$
             BslModuleUtils.findRegionForLine(lines, 2));
     }
 
