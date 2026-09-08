@@ -96,6 +96,11 @@ public class AskWorkmateToolTest
         assertTrue(properties.has("shareMcpTools")); //$NON-NLS-1$
         assertEquals(10, properties.size());
 
+        String projectDescription = properties.getAsJsonObject("projectName") //$NON-NLS-1$
+            .get("description").getAsString(); //$NON-NLS-1$
+        assertTrue(projectDescription.contains("default project context")); //$NON-NLS-1$
+        assertTrue(projectDescription.contains("newer builds require it")); //$NON-NLS-1$
+
         // The mode description must warn that chat answers never come back through
         // MCP, otherwise a caller picks 'chat' expecting a returned answer.
         String modeDescription = properties.getAsJsonObject("mode") //$NON-NLS-1$
@@ -305,7 +310,20 @@ public class AskWorkmateToolTest
         String missing = "field 'com.e1c.edt.ai.ui.BaseActivator.injectorRef' was not found"; //$NON-NLS-1$
         String result = executeWithFailure(GatewayException.incompatible(missing));
         assertJobFailedContains(result, "Incompatible 1C:Workmate version or structure", //$NON-NLS-1$
-            missing, "compatible with 1.0.5", "update EDT-MCP's Workmate adapter"); //$NON-NLS-1$ //$NON-NLS-2$
+            missing, "1.0.5 or 1.0.7", "update EDT-MCP's Workmate adapter", //$NON-NLS-1$ //$NON-NLS-2$
+            "retry ask_workmate"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testProjectRequiredNamesDiscoveryAndDoesNotAdviseReinstallingWorkmate()
+    {
+        String detail = "This 1C:Workmate build binds every conversation to an EDT project " //$NON-NLS-1$
+            + "('SendUserMessageRequest' takes an org.eclipse.core.resources.IProject)."; //$NON-NLS-1$
+        String result = executeWithFailure(GatewayException.projectRequired(detail));
+        assertJobFailedContains(result, "binds every conversation to an EDT project", //$NON-NLS-1$
+            "projectName", "open EDT project", "list_projects", "retry ask_workmate"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertFalse("a missing project is fixed by naming one, not by reinstalling Workmate", //$NON-NLS-1$
+            result.contains("Install New Software") || result.contains("Install a supported")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

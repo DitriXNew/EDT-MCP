@@ -137,8 +137,18 @@ def test_ask_workmate_real_answer_or_actionable_environment_error():
             assert_error_quality(
                 error,
                 names=["1C:Workmate"],
-                suggests=["compatible with 1.0.5", "update EDT-MCP", "retry"],
+                suggests=["1.0.5", "1.0.7", "update EDT-MCP", "retry ask_workmate"],
             )
+        elif "binds every conversation to an EDT project" in error:
+            assert_error_quality(
+                error,
+                names=["projectName", "open EDT project"],
+                suggests=["list_projects", "retry ask_workmate"],
+            )
+            if "Install New Software" in error or "Install a supported" in error:
+                raise AssertionError(
+                    "PROJECT_REQUIRED must not advise reinstalling Workmate: " + error
+                )
         elif "installed but not initialized" in error:
             assert_error_quality(
                 error,

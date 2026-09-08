@@ -371,8 +371,14 @@ Add to `.claude.json` (in Windows `%USERPROFILE%\.claude.json`):
 
 ## 1C:Workmate in-process bridge
 
-When 1C:Workmate (`com.e1c.edt.ai*` 1.0.5) runs in the same EDT JVM, integration
-works in both directions:
+When 1C:Workmate (`com.e1c.edt.ai*` 1.0.5 or 1.0.7) runs in the same EDT JVM,
+integration works in both directions. The two builds differ in the conversation
+API — 1.0.5 wraps the project in `ProjectId`, 1.0.7 takes the Eclipse `IProject`
+and adds a progress-listener argument — and the adapter picks the layout by
+probing the installed classes, so no version has to be configured. One behaviour
+follows from that difference: on 1.0.7 a conversation is bound to a project, so
+`projectName` is required there and omitting it is refused before the question is
+sent.
 
 - `ask_workmate` starts Workmate's full conversation/tool loop in a bounded
   background job and returns a pollable `jobId`, so the MCP transport request
