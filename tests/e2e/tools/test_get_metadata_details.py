@@ -292,7 +292,7 @@ def test_assignable_on_form_root_lists_root_properties():
     assert_contains(r.text, "## Assignable properties: " + fqn,
                     "assignable mode must render the form-root schema heading")
     for property_name in ("title", "autoTitle", "windowOpeningMode",
-                          "saveDataInSettings", "automaticSaveDataInSettings"):
+                          "saveDataInSettings", "autoSaveDataInSettings"):
         assert_contains(r.text, "| %s |" % property_name,
                         "the form root must expose %s" % property_name)
     assert_no_diff("reading a form root's assignable schema must not touch Form.form")
