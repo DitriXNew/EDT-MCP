@@ -1,6 +1,6 @@
 # modify_metadata
 
-Set properties of any metadata node (object or member, including form items, attributes, commands, and handlers). Parameters and examples: get_tool_guide('modify_metadata').
+Set properties of any metadata node, including managed-form roots, items, attributes, commands, and handlers. Parameters and examples: get_tool_guide('modify_metadata').
 
 ## Parameters
 | Parameter | Required | Type | Description |
