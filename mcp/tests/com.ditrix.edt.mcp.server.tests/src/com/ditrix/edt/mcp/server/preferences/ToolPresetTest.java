@@ -167,6 +167,20 @@ public class ToolPresetTest
             ToolPreset.CODE_REVIEW.getDisabledTools().contains("get_project_errors"));
     }
 
+    /**
+     * merge_rules is not a read-only comparison helper: write mode creates files and can replace
+     * the file named by basedOn. Both presets promise no writing, so leaving it enabled would make
+     * the preset description false even though the comparison tools around it are analytical.
+     */
+    @Test
+    public void testBothReadOnlyPresetsDisableMergeRules()
+    {
+        assertTrue("ANALYSIS_ONLY should disable merge_rules", //$NON-NLS-1$
+            ToolPreset.ANALYSIS_ONLY.getDisabledTools().contains("merge_rules")); //$NON-NLS-1$
+        assertTrue("CODE_REVIEW should disable merge_rules", //$NON-NLS-1$
+            ToolPreset.CODE_REVIEW.getDisabledTools().contains("merge_rules")); //$NON-NLS-1$
+    }
+
     // === Preset matching ===
 
     @Test

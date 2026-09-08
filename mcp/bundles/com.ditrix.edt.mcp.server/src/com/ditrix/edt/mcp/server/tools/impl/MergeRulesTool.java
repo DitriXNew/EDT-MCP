@@ -41,6 +41,8 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
@@ -183,7 +185,24 @@ public class MergeRulesTool implements IMcpTool
     private static final List<String> WRITE_ONLY_PARAMETERS =
         List.of(KEY_BASED_ON, KEY_DECISIONS, KEY_COMPARISON_ID);
 
+    /**
+     * Asks the destructive-consent gate. A package-private seam: production delegates to the
+     * singleton gate, while a unit test substitutes REJECT / TIMEOUT / UNATTENDED to prove the
+     * replacement never reaches the codec.
+     */
+    @FunctionalInterface
+    interface ConsentRequester
+    {
+        /**
+         * @param toolName the gated tool's name
+         * @param preview what the user is being asked to authorize
+         * @return the verdict
+         */
+        DestructiveConsentGate.ConsentDecision request(String toolName, ConsentPreview preview);
+    }
+
     private final MergeRuleAuthoritySupplier authoritySupplier;
+    private final ConsentRequester consentRequester;
 
     /**
      * Creates the tool with the production authority - the one that asks a live comparison, over
@@ -211,7 +230,15 @@ public class MergeRulesTool implements IMcpTool
      */
     public MergeRulesTool(MergeRuleAuthoritySupplier authoritySupplier)
     {
+        this(authoritySupplier,
+            (tool, preview) -> DestructiveConsentGate.getInstance().requireConsent(tool, preview));
+    }
+
+    /** Test seam constructor for the comparison authority and destructive-consent verdict. */
+    MergeRulesTool(MergeRuleAuthoritySupplier authoritySupplier, ConsentRequester consentRequester)
+    {
         this.authoritySupplier = authoritySupplier;
+        this.consentRequester = consentRequester;
     }
 
     /**
@@ -308,6 +335,7 @@ public class MergeRulesTool implements IMcpTool
         String mode = JsonUtils.extractStringArgument(params, KEY_MODE);
         String filePath = JsonUtils.extractStringArgument(params, KEY_FILE_PATH);
         String basedOn = JsonUtils.extractStringArgument(params, KEY_BASED_ON);
+        boolean comparisonAsked = params != null && params.containsKey(KEY_COMPARISON_ID);
         String comparisonId = JsonUtils.extractStringArgument(params, KEY_COMPARISON_ID);
         List<JsonObject> decisions = JsonUtils.extractObjectArray(params, KEY_DECISIONS);
         int limit = Pagination.clampLimit(JsonUtils.extractIntArgument(params, McpKeys.LIMIT, DEFAULT_LIMIT),
@@ -354,6 +382,19 @@ public class MergeRulesTool implements IMcpTool
         }
         if (MODE_WRITE.equals(mode))
         {
+            // Presence, then value - exactly the boundary releaseComparisonId and scope use in
+            // compare_configurations. McpProtocolHandler.extractToolParams drops a JSON null before
+            // this map is built, so null still arrives as an omission; a blank STRING is present
+            // and must not fall through to authority(null), which means "whichever comparison is
+            // running" and can validate against a comparison the caller never named.
+            if (comparisonAsked && !isSet(comparisonId))
+            {
+                return ToolResult.error("'" + KEY_COMPARISON_ID //$NON-NLS-1$
+                    + "' was sent blank, so it names no comparison. Nothing was written. Pass the " //$NON-NLS-1$
+                    + "comparisonId returned by compare_configurations, or omit the parameter " //$NON-NLS-1$
+                    + "entirely to use the running comparison when one is available and report " //$NON-NLS-1$
+                    + "the write as NOT VALIDATED otherwise.").toJson(); //$NON-NLS-1$
+            }
             // The shared extractor keeps only JSON objects and discards the rest without a word, so
             // a malformed element would be written off silently and the report would state a
             // decision count lower than what the caller sent - this tool's whole contract is that
@@ -965,6 +1006,25 @@ public class MergeRulesTool implements IMcpTool
         if (refusal != null)
         {
             return refusal;
+        }
+
+        // The destructive gate is the LAST check before the codec replaces the existing file. It
+        // is asked only for the one destructive call shape: the target existed and basedOn named
+        // that same file, so Target.MAY_BE_REPLACED was earned. Fresh writes and replacement
+        // attempts refused above never prompt.
+        if (targetPolicy == MergeRulesCodec.Target.MAY_BE_REPLACED)
+        {
+            ConsentPreview preview = new ConsentPreview("Replace merge-rules file", //$NON-NLS-1$
+                "This replaces the existing merge-rules file at '" + file //$NON-NLS-1$
+                    + "' after carrying its decisions into the new file.", //$NON-NLS-1$
+                1, Collections.singletonList(file.toString()));
+            DestructiveConsentGate.ConsentDecision decision =
+                consentRequester.request(NAME, preview);
+            if (decision != DestructiveConsentGate.ConsentDecision.ALLOW)
+            {
+                return ToolResult.error(
+                    DestructiveConsentGate.consentDeniedMessage(decision, NAME)).toJson();
+            }
         }
 
         try

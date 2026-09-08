@@ -184,7 +184,7 @@ public class DestructiveConsentGateTest
         assertEquals("GATED_TOOLS must be exactly the frozen set", //$NON-NLS-1$
             Set.of("delete_metadata", "rename_metadata_object", "delete_project", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 "delete_infobase", "update_database", "modify_metadata", "dcs", "git", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
-                "evaluate_expression"), //$NON-NLS-1$
+                "merge_rules", "evaluate_expression"), //$NON-NLS-1$ //$NON-NLS-2$
             DestructiveConsentGate.GATED_TOOLS);
     }
 
@@ -197,7 +197,9 @@ public class DestructiveConsentGateTest
         // evaluate_expression (arbitrary BSL: usually a read, occasionally a mutation, and nothing
         // in the call says which - which is exactly why the GATE asks every time while the HINT,
         // one per tool, keeps describing the typical read). Those four carry their own annotations
-        // and are deliberately NOT in the always-destructive classifier list.
+        // and are deliberately NOT in the always-destructive classifier list. merge_rules is also
+        // gated conditionally, but its per-tool hint stays destructive because replacing a rules
+        // file is a primary capability of its write mode.
         Set<String> conditionallyDestructive =
             Set.of("modify_metadata", "dcs", "git", "evaluate_expression"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         for (String tool : DestructiveConsentGate.GATED_TOOLS)
