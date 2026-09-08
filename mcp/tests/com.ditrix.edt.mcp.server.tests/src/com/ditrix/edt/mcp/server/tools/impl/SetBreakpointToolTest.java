@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -127,6 +128,39 @@ public class SetBreakpointToolTest
         assertTrue(result.contains("Invalid hitCount -3")); //$NON-NLS-1$
         assertTrue(result.contains("positive integer")); //$NON-NLS-1$
         assertTrue(result.contains("0/omit hitCount")); //$NON-NLS-1$
+    }
+
+    /**
+     * A value the shared parser cannot read comes back as the DEFAULT, and the default here means
+     * "clear the hit count" - so without this refusal a malformed raw call would quietly
+     * reconfigure an existing breakpoint and be answered with success. Dispatch does not validate
+     * arguments against the advertised schema, so nothing upstream catches it either.
+     */
+    @Test
+    public void testUnparseableHitCountIsRejectedInsteadOfClearingTheSetting()
+    {
+        for (String malformed : new String[] {"abc", "1.5", "12abc"}) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            Map<String, String> params = new HashMap<>();
+            params.put("hitCount", malformed); //$NON-NLS-1$
+            String result = new SetBreakpointTool().execute(params);
+            assertTrue("a malformed hitCount must be named back: " + result,
+                result.contains("Invalid hitCount '" + malformed + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue("and the fix must be stated: " + result,
+                result.contains("whole number")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testExplicitZeroHitCountIsNotMistakenForAParseFailure()
+    {
+        // The mirror direction: 0 is the documented way to CLEAR the hit count, so it must not be
+        // rejected as malformed. It gets past this validation and fails later, on the module.
+        Map<String, String> params = new HashMap<>();
+        params.put("hitCount", "0"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new SetBreakpointTool().execute(params);
+        assertFalse("0 is a valid value, not a malformed one: " + result,
+            result.contains("Invalid hitCount")); //$NON-NLS-1$
     }
 
     @Test

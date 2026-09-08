@@ -1,6 +1,7 @@
 """Real e2e coverage for the workspace-wide set_error_breakpoint tool."""
 
 from harness import (
+    E2ESkip,
     call,
     assert_ok,
     assert_error,
@@ -43,6 +44,15 @@ def test_create_update_disable_and_reenable_workspace_error_breakpoint():
     """Exercise the real OSGi factory, manager registration, reflective setters,
     workspace-root listing, in-place update, and configuration-preserving disable."""
     original = _exception_breakpoints()
+    if len(original) > 1:
+        # This test deletes the workspace's exception breakpoints and puts ONE back, because
+        # set_error_breakpoint configures every registered one rather than creating a second.
+        # More than one pre-existing entry therefore cannot be reconstructed, and destroying
+        # someone's state to run a test is not a trade this suite makes.
+        raise E2ESkip(
+            "the workspace already has %d exception breakpoints; this test would not be able "
+            "to restore them all afterwards" % len(original)
+        )
     _delete_exception_breakpoints()
     breakpoint_id = None
     try:

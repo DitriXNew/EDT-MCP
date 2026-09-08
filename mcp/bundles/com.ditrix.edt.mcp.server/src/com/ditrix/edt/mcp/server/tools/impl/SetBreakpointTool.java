@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 import org.eclipse.core.resources.IFile;
@@ -95,6 +97,9 @@ public class SetBreakpointTool implements IMcpTool
             .booleanProperty("hitCountApplied", "Whether a requested hit count was applied") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("configurationFallback", //$NON-NLS-1$
                 "Marker attributes written because native EDT setter methods were absent") //$NON-NLS-1$
+            .integerProperty("reconciledBreakpoints", //$NON-NLS-1$
+                "Present only when this line carried more than one registered BSL breakpoint; all " //$NON-NLS-1$
+                    + "of them were configured identically") //$NON-NLS-1$
             .booleanProperty("degraded", "True when only a marker-only breakpoint could be created") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("warning", "Warning text when the breakpoint is degraded/marker-only") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
@@ -124,6 +129,20 @@ public class SetBreakpointTool implements IMcpTool
         boolean hitCountProvided = params.containsKey(KEY_HIT_COUNT);
         String effectiveCondition = condition == null || condition.isBlank() ? "" : condition; //$NON-NLS-1$
 
+        // A value the parser could not read comes back as the DEFAULT, which here would mean
+        // "clear the hit count" - so 'abc' or 1.5 would silently reconfigure an existing
+        // breakpoint and be reported as success. MCP dispatch does not validate arguments against
+        // the advertised schema, so the refusal has to happen here. The sentinel is outside the
+        // range this parameter accepts, so it cannot collide with a real value.
+        String rawHitCount = JsonUtils.extractStringArgument(params, KEY_HIT_COUNT);
+        if (hitCountProvided && rawHitCount != null && !rawHitCount.trim().isEmpty()
+            && JsonUtils.extractIntArgument(params, KEY_HIT_COUNT, Integer.MIN_VALUE)
+                == Integer.MIN_VALUE)
+        {
+            return ToolResult.error("Invalid hitCount '" + rawHitCount //$NON-NLS-1$
+                + "': it must be a whole number. Use a positive integer, or 0/omit hitCount " //$NON-NLS-1$
+                + "to clear it.").toJson(); //$NON-NLS-1$
+        }
         if (hitCount < 0)
         {
             return ToolResult.error("Invalid hitCount " + hitCount //$NON-NLS-1$
@@ -150,25 +169,33 @@ public class SetBreakpointTool implements IMcpTool
 
         try
         {
-            IBreakpoint bp = BreakpointUtils.findLineBreakpoint(target.file, lineNumber);
-            boolean created = bp == null;
+            // ALL of them, not the first: an upgraded workspace can hold duplicates at one line,
+            // because an earlier build created a new marker on every call. Configuring one and
+            // leaving its twin unconditional would defeat the very condition just requested.
+            List<IBreakpoint> existing = BreakpointUtils.findLineBreakpoints(target.file, lineNumber);
+            boolean created = existing.isEmpty();
             String action = created ? "created" : "updated"; //$NON-NLS-1$ //$NON-NLS-2$
             if (created)
             {
-                bp = BreakpointUtils.createLineBreakpoint(target.file, lineNumber);
+                existing = Collections.singletonList(
+                    BreakpointUtils.createLineBreakpoint(target.file, lineNumber));
             }
+            IBreakpoint bp = existing.get(0);
             try
             {
-                BreakpointUtils.LineBreakpointConfiguration configuration =
-                    BreakpointUtils.configureLineBreakpoint(bp, effectiveCondition, hitCount,
-                        effectiveHitCondition);
-                // A breakpoint reused at this line may have been switched OFF in EDT. Asking for a
-                // breakpoint means "stop here", so leaving it disabled would report success for one
-                // that never fires - and this tool has no 'enabled' parameter to correct that with.
-                bp.setEnabled(true);
+                BreakpointUtils.LineBreakpointConfiguration configuration = null;
+                for (IBreakpoint each : existing)
+                {
+                    configuration = BreakpointUtils.configureLineBreakpoint(each, effectiveCondition,
+                        hitCount, effectiveHitCondition);
+                    // A breakpoint reused at this line may have been switched OFF in EDT. Asking for
+                    // a breakpoint means "stop here", so leaving it disabled would report success for
+                    // one that never fires - and this tool has no 'enabled' parameter to fix that.
+                    each.setEnabled(true);
+                }
                 return buildSuccessResult(bp, target.file, module, lineNumber, action,
                     effectiveCondition, hitCount, effectiveHitCondition, conditionProvided,
-                    hitCountProvided, configuration);
+                    hitCountProvided, configuration, existing.size());
             }
             catch (Exception configurationFailure)
             {
@@ -303,7 +330,7 @@ public class SetBreakpointTool implements IMcpTool
     private static String buildSuccessResult(IBreakpoint bp, IFile file, String module, int lineNumber,
         String action, String condition, int hitCount, String hitCondition,
         boolean conditionProvided, boolean hitCountProvided,
-        BreakpointUtils.LineBreakpointConfiguration configuration)
+        BreakpointUtils.LineBreakpointConfiguration configuration, int reconciledCount)
     {
         long markerId = bp.getMarker() != null ? bp.getMarker().getId() : -1L;
         boolean degraded = bp instanceof BreakpointUtils.MarkerOnlyBreakpoint;
@@ -316,6 +343,13 @@ public class SetBreakpointTool implements IMcpTool
             .put("resolvedFile", file.getFullPath().toString()) //$NON-NLS-1$
             .put(KEY_LINE_NUMBER, lineNumber)
             .put("action", action); //$NON-NLS-1$
+        if (reconciledCount > 1)
+        {
+            // Said out loud, because the caller could not have known: this line carried more than
+            // one registered BSL breakpoint (an upgraded workspace from a build that created a new
+            // one per call), and all of them were configured the same way.
+            res.put("reconciledBreakpoints", reconciledCount); //$NON-NLS-1$
+        }
         if (configuration.isApplied())
         {
             if (conditionProvided)

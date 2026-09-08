@@ -225,6 +225,26 @@ public final class BreakpointUtils
      */
     public static IBreakpoint findLineBreakpoint(IFile file, int lineNumber) throws Exception
     {
+        List<IBreakpoint> found = findLineBreakpoints(file, lineNumber);
+        return found.isEmpty() ? null : found.get(0);
+    }
+
+    /**
+     * Every BSL line breakpoint registered at the exact resource and 1-based line.
+     * <p>
+     * More than one can exist on an upgraded workspace: an earlier build of {@code set_breakpoint}
+     * created a new marker on every call instead of reusing the one already there. Configuring
+     * only the first would leave a legacy duplicate firing unconditionally and quietly defeat the
+     * condition the caller just asked for, so the caller configures them ALL.
+     *
+     * @param file the module file
+     * @param lineNumber the 1-based line
+     * @return the matching BSL breakpoints, in registration order; never {@code null}
+     * @throws Exception when a breakpoint cannot be inspected
+     */
+    public static List<IBreakpoint> findLineBreakpoints(IFile file, int lineNumber) throws Exception
+    {
+        List<IBreakpoint> found = new ArrayList<>();
         IBreakpointManager bpManager = DebugPlugin.getDefault().getBreakpointManager();
         for (IBreakpoint bp : bpManager.getBreakpoints())
         {
@@ -244,10 +264,10 @@ public final class BreakpointUtils
             if (marker != null && file.equals(marker.getResource())
                 && ((ILineBreakpoint)bp).getLineNumber() == lineNumber)
             {
-                return bp;
+                found.add(bp);
             }
         }
-        return null;
+        return found;
     }
 
     /**
