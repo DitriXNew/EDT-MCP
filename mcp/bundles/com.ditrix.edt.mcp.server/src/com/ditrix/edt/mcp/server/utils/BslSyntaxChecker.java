@@ -67,6 +67,23 @@ public final class BslSyntaxChecker
     /** One alternation over all spellings in {@link #KEYWORDS}, in registration order. */
     private static final Pattern BLOCK_KEYWORD;
 
+    /**
+     * Whether the word is one of the BLOCK keywords this checker knows, in either spelling.
+     * <p>
+     * Lent to the module scanner so a method named after one - {@code Procedure If()} - is not
+     * taken for a declaration it can address. This set is block keywords ONLY: the operator
+     * words are not in it, because this class has no authoritative list of them and inventing
+     * one would refuse valid names while still missing others.
+     * </p>
+     *
+     * @param word the word to test
+     * @return whether it is a block keyword
+     */
+    public static boolean isBlockKeyword(String word)
+    {
+        return word != null && KEYWORDS.containsKey(word.toLowerCase(Locale.ROOT));
+    }
+
     static
     {
         List<String> spellings = new ArrayList<>();
@@ -208,7 +225,16 @@ public final class BslSyntaxChecker
             // continuation, the literal was not a valid multi-line string (a mis-tracked quote or a
             // genuinely unclosed string) - reset so it does not mask the real code that follows,
             // which would hide real block keywords (and their imbalance).
-            if (stringState.insideString && !lines.get(i).trim().startsWith("|")) //$NON-NLS-1$
+            String trimmedLine = lines.get(i).trim();
+            boolean ignorableTrivia = (trimmedLine.isEmpty() || trimmedLine.startsWith("//")) //$NON-NLS-1$
+                && lines.get(i).indexOf('\r') < 0;
+            if (stringState.insideString && ignorableTrivia)
+            {
+                // Hidden between two parts of a literal: it carries no code, and lexing it would
+                // let a quote inside the comment close the literal early.
+                continue;
+            }
+            if (stringState.insideString && !trimmedLine.startsWith("|")) //$NON-NLS-1$
             {
                 stringState.insideString = false;
             }
@@ -379,6 +405,55 @@ public final class BslSyntaxChecker
     }
 
     /**
+     * Masks string literals and comments across a whole module, carrying the multi-line string
+     * state from one line to the next.
+     * <p>
+     * Shared so that every line-based rule reads the same text this checker does: a keyword
+     * inside a default value ({@code Procedure Target(Mode = "EndProcedure")}) or behind a
+     * trailing comment is not code, and a rule that reads the raw line either refuses valid
+     * source or misses a declaration hiding behind one.
+     * </p>
+     *
+     * @param lines raw module or fragment lines
+     * @return a same-sized list with literal and comment content blanked out
+     */
+    public static List<String> maskLiteralsAndComments(List<String> lines)
+    {
+        // NOTE for the loop below: it applies the same continuation reset check() does. A literal
+        // only continues onto the next physical line through a leading '|', so a quote left open
+        // by broken source must not go on masking the real code underneath it - that is exactly
+        // how an unterminated string could hide a method's own terminator from a span scan.
+        List<String> masked = new ArrayList<>(lines.size());
+        StringLiteralState state = new StringLiteralState();
+        for (String line : lines)
+        {
+            String trimmed = line.trim();
+            // Ignorable trivia does NOT end a literal: the lexer splits a multi-line string into
+            // "-opened, |-continued parts, and whitespace (a blank line included) plus a comment
+            // are hidden between them. Resetting there would expose a continuation as code.
+            // A bare carriage return can pack SEVERAL physical lines into one element (the
+            // splitter cuts on the newline only), so a line that merely STARTS with a
+            // comment may carry real code after it. Such an element is not ignorable trivia.
+            boolean ignorable = (trimmed.isEmpty() || trimmed.startsWith("//")) //$NON-NLS-1$
+                && line.indexOf('\r') < 0;
+            if (state.insideString && ignorable)
+            {
+                // And it is not MASKED either: a quote inside such a comment would toggle the
+                // literal state, after which the real closing quote reads as an opener and the
+                // code following it disappears from the mask. The line carries no code, so a
+                // blank one preserves both the line count and the truth.
+                masked.add(""); //$NON-NLS-1$
+                continue;
+            }
+            if (state.insideString && !trimmed.startsWith("|")) //$NON-NLS-1$
+            {
+                state.insideString = false;
+            }
+            masked.add(maskStringLiterals(line, state));
+        }
+        return masked;
+    }
+    /**
      * Normalize a source line for keyword matching by masking any string-literal
      * (and comment) content via {@link #maskStringLiterals}.
      *
@@ -470,7 +545,22 @@ public final class BslSyntaxChecker
             }
             if (c == '/' && i + 1 < len && line.charAt(i + 1) == '/')
             {
-                break; // inline comment - the rest of the line is not code
+                // An inline comment runs to the end of the LINE - and a bare carriage return is
+                // a line end too. Source that mixes separators can pack several physical lines
+                // into one element, and dropping everything after the slashes would hide the
+                // code that follows the CR from this gate.
+                int carriageReturn = line.indexOf('\r', i);
+                if (carriageReturn < 0)
+                {
+                    break;
+                }
+                while (i < carriageReturn)
+                {
+                    masked.append(' ');
+                    i++;
+                }
+                masked.append('\r');
+                continue;
             }
             masked.append(c);
         }

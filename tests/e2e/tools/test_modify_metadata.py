@@ -1,7 +1,7 @@
 """
 e2e tests for modify_metadata (kind: write-metadata).
 
-modify_metadata sets properties of a metadata node (object or member) addressed by a
+modify_metadata sets properties of a metadata node (object, member, or managed-form root) addressed by a
 1C full-name FQN, as properties=[{name, value, language?}]. It folds the former
 set_metadata_property and adds VALIDATION: a non-assignable property is rejected WITH
 the list of assignable properties; an out-of-range enum value is rejected WITH the
@@ -574,6 +574,23 @@ def test_common_form_use_purposes_array_and_scalar_replace_the_whole_list():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_common_form_root_fallback_unknown_property_names_both_surfaces():
+    bad = "usePurpose"
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": "CommonForm.Form",
+        "properties": [{"name": bad, "value": "MobileDevice"}],
+    })
+    e = assert_error(r, "property absent from both common-form surfaces")
+    assert_error_quality(e, names=[bad],
+                         suggests=["not assignable", "Assignable properties", "autoTitle",
+                                   "common form's own metadata properties",
+                                   "get_metadata_details", "same FQN"],
+                         ctx="the fallback refusal must identify both assignable surfaces")
+    assert_no_diff("a property rejected by both common-form surfaces must change nothing")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_bad_web_service_xdto_package_entry_is_actionable_and_atomic():
     service_fqn, _ = _seed_web_service("E2EXdtoPackagesBad")
     before = tree_snapshot()
@@ -1104,6 +1121,74 @@ def test_set_type_malformed_spec_is_error():
     e = assert_error(r, "malformed type spec")
     assert_error_quality(e, suggests=["types", "kind"],
                          ctx="a non-structured type value is rejected with the expected shape")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Happy — FORM MODEL ROOT (the form:Form object serialized in Form.form)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_root_auto_title_persists_and_reads_back():
+    fqn = "Catalog.Catalog.Form.ItemForm"
+    root_title = "E2E managed form root"
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": fqn,
+        "properties": [
+            {"name": "autoTitle", "value": False},
+            {"name": "title", "value": root_title, "language": "en"},
+        ],
+    })
+    assert_ok(r, "set autoTitle on the managed-form model root")
+    assert r.structured.get("action") == "modified", \
+        "the root write must use the ordinary modified result shape: %r" % (r.structured,)
+    assert r.structured.get("fqn") == fqn, \
+        "the root write must echo its normalized FQN: %r" % (r.structured,)
+    assert "autoTitle" in (r.structured.get("applied") or []), \
+        "autoTitle must be reported as applied: %r" % (r.structured,)
+    assert "title" in (r.structured.get("applied") or []), \
+        "the localized root title must be reported as applied: %r" % (r.structured,)
+    assert r.structured.get("language") == "en", \
+        "the root title must report the language CODE used: %r" % (r.structured,)
+    assert r.structured.get("localesMissing") == [], \
+        "the fixture's only in-use locale was filled by this root-title write: %r" % (r.structured,)
+
+    # DISK FIRST: modify_metadata submits and drains this exact Form.form export. Turning autoTitle
+    # OFF is visible as the REMOVAL of the fixture's <autoTitle>true</autoTitle>, not as an added
+    # <autoTitle>false</autoTitle>: autoTitle is a primitive boolean whose metamodel default is
+    # false, and EMF does not serialize a default-valued attribute. Asserting the added element
+    # would assert a shape the serializer cannot produce.
+    poll_diff_contains("autoTitle",
+                       ctx="the root autoTitle change must reach Form.form before read-back")
+    assert "<autoTitle>" not in read_disk(_ITEM_FORM), \
+        "turning the root autoTitle off must remove the element from Form.form"
+    assert_diff_contains(root_title,
+                         ctx="the localized root title must reach Form.form before read-back")
+
+    row = _assignable_row(fqn, "autoTitle")
+    assert row is not None, "the form-root assignable view must list autoTitle"
+    assert_contains(row, "| BOOLEAN | false |",
+                    "get_metadata_details(assignable) must read the changed root value back")
+    title_row = _assignable_row(fqn, "title")
+    assert title_row is not None, "the form-root assignable view must list title"
+    assert_contains(title_row, root_title,
+                    "get_metadata_details(assignable) must read the localized root title back")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_root_unknown_property_lists_assignable_root_properties():
+    bad = "definitelyNotARootProp_zz549"
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm",
+        "properties": [{"name": bad, "value": True}],
+    })
+    e = assert_error(r, "unknown managed-form root property")
+    assert_error_quality(e, names=[bad],
+                         suggests=["not assignable", "Assignable properties",
+                                   "autoTitle", "assignable:true"],
+                         ctx="an unknown root property must name the real form-root surface")
+    assert_no_diff("a rejected form-root property must not touch Form.form")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

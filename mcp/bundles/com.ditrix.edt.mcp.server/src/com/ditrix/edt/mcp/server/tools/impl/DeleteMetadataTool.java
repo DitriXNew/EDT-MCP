@@ -1910,7 +1910,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .toJson();
     }
 
-    /** Delete inside a WRITE transaction: EcoreUtil.remove the target, then export the content form. */
+    /** Delete inside a WRITE transaction, including symmetric form-binding cleanup, then export. */
     private String performFormDelete(FormElementWriter.FormEditContext fctx, String normFqn,
         FormElementWriter.FormMemberRef ref, boolean handler, Version version)
     {
@@ -1926,8 +1926,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                         formTargetAdvice(formModel, ref, handler, normFqn, version)));
                 }
                 capturedType[0] = target.eClass().getName();
-                // items is containment, so removing a Group/Table cascades its contained subtree.
-                EcoreUtil.remove(target);
+                // Items are containments, so removing a Group/Table cascades its contained subtree.
+                // The writer also prunes dynamic-list UseAlways paths no remaining item references.
+                FormElementWriter.removeFormMember(formModel, target);
             });
 
         return ToolResult.success()

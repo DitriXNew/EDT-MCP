@@ -41,8 +41,11 @@ import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.QName;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
+import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
+import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommandGroup;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -123,6 +126,73 @@ public class ModifyMetadataToolTest
         assertNotNull(desc);
         assertTrue("description should point to get_tool_guide", //$NON-NLS-1$
             desc.contains("get_tool_guide('modify_metadata')")); //$NON-NLS-1$
+        assertTrue("description should advertise managed-form roots", //$NON-NLS-1$
+            desc.contains("managed-form roots")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testManagedFormRootDispatchUsesOwnedAndCommonFallbackRules()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName("X"); //$NON-NLS-1$
+        CatalogForm owned = MdClassFactory.eINSTANCE.createCatalogForm();
+        owned.setName("Y"); //$NON-NLS-1$
+        catalog.getForms().add(owned);
+        config.getCatalogs().add(catalog);
+        CommonForm common = MdClassFactory.eINSTANCE.createCommonForm();
+        common.setName("Y"); //$NON-NLS-1$
+        config.getCommonForms().add(common);
+        MetadataScope scope = MetadataScope.ofConfiguration(config);
+
+        String englishOwned = MetadataTypeUtils.normalizeFqn("Catalog.X.Form.Y"); //$NON-NLS-1$
+        String russianOwned = MetadataTypeUtils.normalizeFqn("Справочник.X.Форма.Y"); //$NON-NLS-1$
+        String commonPath = MetadataTypeUtils.normalizeFqn("CommonForm.Y"); //$NON-NLS-1$
+
+        assertSame(owned, ModifyMetadataTool.resolveFormRootForDispatch(scope, englishOwned));
+        assertSame(owned, ModifyMetadataTool.resolveFormRootForDispatch(scope, russianOwned));
+        assertTrue("an English owned-form address always takes the content-root path", //$NON-NLS-1$
+            ModifyMetadataTool.shouldDispatchFormRoot(
+                FormElementWriter.parseFormPath(englishOwned), null,
+                Collections.singletonList(prop("comment", "x")))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a Russian owned-form address always takes the content-root path", //$NON-NLS-1$
+            ModifyMetadataTool.shouldDispatchFormRoot(
+                FormElementWriter.parseFormPath(russianOwned), null,
+                Collections.singletonList(prop("comment", "x")))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertSame(common, ModifyMetadataTool.resolveFormRootForDispatch(scope, commonPath));
+        assertFalse("an mdclass-assignable property keeps CommonForm.Y on the mdclass path", //$NON-NLS-1$
+            ModifyMetadataTool.shouldDispatchFormRoot(
+                FormElementWriter.parseFormPath(commonPath), common,
+                Collections.singletonList(prop("usePurposes", "PersonalComputer")))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("root-only properties make CommonForm.Y fall back to the content root", //$NON-NLS-1$
+            ModifyMetadataTool.shouldDispatchFormRoot(
+                FormElementWriter.parseFormPath(commonPath), common,
+                Collections.singletonList(prop("autoTitle", "false")))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a mixed CommonForm.Y call stays wholly on the mdclass path", //$NON-NLS-1$
+            ModifyMetadataTool.shouldDispatchFormRoot(
+                FormElementWriter.parseFormPath(commonPath), common,
+                Arrays.asList(prop("autoTitle", "false"), //$NON-NLS-1$ //$NON-NLS-2$
+                    prop("comment", "x")))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testMissingManagedFormRootUsesFormSpecificOwnerError()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName("X"); //$NON-NLS-1$
+        config.getCatalogs().add(catalog);
+        MetadataScope scope = MetadataScope.ofConfiguration(config);
+        String normFqn = MetadataTypeUtils.normalizeFqn("Catalog.X.Form.Nope"); //$NON-NLS-1$
+
+        assertNull(ModifyMetadataTool.resolveFormRootForDispatch(scope, normFqn));
+        String error = ModifyMetadataTool.formRootNotFoundError(
+            FormElementWriter.parseFormPath(normFqn));
+        assertTrue(error, error.contains("Form 'Nope' not found")); //$NON-NLS-1$
+        assertTrue(error, error.contains("Catalog.X")); //$NON-NLS-1$
+        assertTrue(error, error.contains("get_metadata_details")); //$NON-NLS-1$
+        assertFalse(error, error.contains("Node not found")); //$NON-NLS-1$
     }
 
     @Test

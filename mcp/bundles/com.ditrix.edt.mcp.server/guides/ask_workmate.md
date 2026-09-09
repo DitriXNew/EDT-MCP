@@ -4,8 +4,9 @@
   non-whitespace text. It is required unless `workmateTool` selects direct tool
   mode.
 - `projectName` applies only when starting. When present, it must name an open
-  EDT project; use `list_projects` to discover valid names. When omitted,
-  Workmate receives its `ProjectId.Default` context.
+  EDT project; use `list_projects` to discover valid names. When omitted, the
+  1.0.5 API uses `ProjectId.Default`; the 1.0.7 API requires a project for
+  conversation modes and refuses the request before dispatch.
 - `maxToolRounds` applies only when starting and optionally limits Workmate's
   internal tool-call rounds. It must be a positive integer. Omit it to use
   Workmate's own default. The limit is **per assistant turn**, which is how the

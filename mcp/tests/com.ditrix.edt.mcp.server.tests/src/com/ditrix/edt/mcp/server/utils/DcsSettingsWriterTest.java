@@ -684,6 +684,76 @@ public class DcsSettingsWriterTest
         assertTrue(difference, difference.contains("root/selection")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testDynamicListComparisonAllowsMaterializedDefaultListSettings()
+    {
+        DynamicListExtInfo expected = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        DynamicListExtInfo actual = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        actual.setListSettings(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings());
+
+        assertNull(expected.getListSettings());
+        assertNotNull(actual.getListSettings());
+        assertNull(DcsModelComparison.firstDifference(expected, actual));
+    }
+
+    @Test
+    public void testDynamicListComparisonRejectsMissingAuthoredListSettings()
+    {
+        DynamicListExtInfo expected = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        expected.setListSettings(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSettings());
+        DynamicListExtInfo actual = FormFactory.eINSTANCE.createDynamicListExtInfo();
+
+        String difference = DcsModelComparison.firstDifference(expected, actual);
+
+        assertNotNull(difference);
+        assertTrue(difference, difference.contains("root/listSettings")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDynamicListComparisonStillDescendsIntoAuthoredListSettings()
+    {
+        DynamicListExtInfo expected = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        DataCompositionSettings expectedSettings =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createDataCompositionSettings();
+        expectedSettings.setItemsUserSettingID("expected"); //$NON-NLS-1$
+        expected.setListSettings(expectedSettings);
+        DynamicListExtInfo actual = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        DataCompositionSettings actualSettings =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createDataCompositionSettings();
+        actualSettings.setItemsUserSettingID("actual"); //$NON-NLS-1$
+        actual.setListSettings(actualSettings);
+
+        String difference = DcsModelComparison.firstDifference(expected, actual);
+
+        assertNotNull(difference);
+        assertTrue(difference, difference.contains(
+            "root/listSettings/itemsUserSettingID")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testComparisonRejectsUnexpectedValueOnOtherFeature()
+    {
+        DataCompositionSettings expected =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createDataCompositionSettings();
+        DataCompositionSettings actual =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+                .createDataCompositionSettings();
+        actual.setSelection(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionSelectedFields());
+
+        assertNull(expected.getSelection());
+        assertNotNull(actual.getSelection());
+        String difference = DcsModelComparison.firstDifference(expected, actual);
+
+        assertNotNull(difference);
+        assertTrue(difference, difference.contains("root/selection")); //$NON-NLS-1$
+    }
+
     private static DataCompositionSchema schemaWithVariant()
     {
         DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();

@@ -334,6 +334,27 @@ public class FormStructureReaderTest
     }
 
     @Test
+    public void testRenderButtonCommandReferenceDistinguishesCustomAndStandard()
+    {
+        EObject form = newForm();
+        EObject custom = newCommand("Refresh", null, null); //$NON-NLS-1$
+        addCommand(form, custom);
+        EObject customButton = newItem(MODEL.formButton, "RefreshButton", 10); //$NON-NLS-1$
+        customButton.eSet(customButton.eClass().getEStructuralFeature("commandName"), custom); //$NON-NLS-1$
+        addItem(form, customButton);
+
+        EObject standard = newStandardCommand("SaveValues", "СохранитьЗначения"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject standardButton = newItem(MODEL.formButton, "SaveButton", 11); //$NON-NLS-1$
+        standardButton.eSet(standardButton.eClass().getEStructuralFeature("commandName"), standard); //$NON-NLS-1$
+        addItem(form, standardButton);
+
+        String md = FormStructureReader.render("CommonForm.F", form, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(md, md.contains("command: Refresh")); //$NON-NLS-1$
+        assertTrue(md, md.contains("standardCommand: SaveValues")); //$NON-NLS-1$
+        assertFalse(md, md.contains("command: SaveValues")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testRenderDetailedVisibleTrueOmitted()
     {
         // A visible (default) field must NOT carry the 'visible: false' note.
@@ -1280,7 +1301,9 @@ public class FormStructureReaderTest
         addItem(form, group);
 
         EObject button = newItem(MODEL.formButton, "PostButton", 4); //$NON-NLS-1$
-        button.eSet(button.eClass().getEStructuralFeature("commandName"), "Post"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject postCommand = newCommand("Post", null, null); //$NON-NLS-1$
+        addCommand(form, postCommand);
+        button.eSet(button.eClass().getEStructuralFeature("commandName"), postCommand); //$NON-NLS-1$
         addItem(form, button);
 
         EObject attribute = newAttribute("Goods"); //$NON-NLS-1$
@@ -1942,6 +1965,14 @@ public class FormStructureReaderTest
         return command;
     }
 
+    private static EObject newStandardCommand(String name, String nameRu)
+    {
+        EObject command = new DynamicEObjectImpl(MODEL.formStandardCommand);
+        command.eSet(command.eClass().getEStructuralFeature("name"), name); //$NON-NLS-1$
+        command.eSet(command.eClass().getEStructuralFeature("nameRu"), nameRu); //$NON-NLS-1$
+        return command;
+    }
+
     private static void addItem(EObject container, EObject child)
     {
         addTo(container, "items", child); //$NON-NLS-1$
@@ -2038,6 +2069,7 @@ public class FormStructureReaderTest
         final EClass formButton;
         final EClass formAttribute;
         final EClass formCommand;
+        final EClass formStandardCommand;
         final EClass commandHandler;
         final EClass handlerContainer;
         final EClass autoCommandBar;
@@ -2163,15 +2195,19 @@ public class FormStructureReaderTest
             fieldEditMode.setEType(editModeEnum);
             formField.getEStructuralFeatures().add(fieldEditMode);
 
-            // Button-like leaf: a FormItem carrying the bound metadata 'commandName'. The concrete
+            EClass command = factory.createEClass();
+            command.setName("Command"); //$NON-NLS-1$
+            command.setAbstract(true);
+
+            // Button-like leaf: a FormItem carrying the bound command reference. The concrete
             // form-model button EClass is named "Button" (NOT "FormButton", its platform-type name), so
             // the dynamic EClass must use that name for kindExtrasOf's eClass()-name match to fire.
             formButton = factory.createEClass();
             formButton.setName("Button"); //$NON-NLS-1$
             formButton.getESuperTypes().add(formItem);
-            EAttribute buttonCommand = factory.createEAttribute();
+            EReference buttonCommand = factory.createEReference();
             buttonCommand.setName("commandName"); //$NON-NLS-1$
-            buttonCommand.setEType(EcorePackage.Literals.ESTRING);
+            buttonCommand.setEType(command);
             formButton.getEStructuralFeatures().add(buttonCommand);
 
             // FormAttribute-like: name + title (EMap by language code) + main + savedData flags.
@@ -2223,6 +2259,7 @@ public class FormStructureReaderTest
             // FormCommand-like: name + title (EMap by language code) + the action containment.
             formCommand = factory.createEClass();
             formCommand.setName("FormCommand"); //$NON-NLS-1$
+            formCommand.getESuperTypes().add(command);
             commandName = factory.createEAttribute();
             commandName.setName("name"); //$NON-NLS-1$
             commandName.setEType(EcorePackage.Literals.ESTRING);
@@ -2238,6 +2275,18 @@ public class FormStructureReaderTest
             action.setEType(handlerContainer);
             action.setContainment(true);
             formCommand.getEStructuralFeatures().add(action);
+
+            formStandardCommand = factory.createEClass();
+            formStandardCommand.setName("FormStandardCommand"); //$NON-NLS-1$
+            formStandardCommand.getESuperTypes().add(command);
+            EAttribute standardName = factory.createEAttribute();
+            standardName.setName("name"); //$NON-NLS-1$
+            standardName.setEType(EcorePackage.Literals.ESTRING);
+            formStandardCommand.getEStructuralFeatures().add(standardName);
+            EAttribute standardNameRu = factory.createEAttribute();
+            standardNameRu.setName("nameRu"); //$NON-NLS-1$
+            standardNameRu.setEType(EcorePackage.Literals.ESTRING);
+            formStandardCommand.getEStructuralFeatures().add(standardNameRu);
 
             // AutoCommandBar-like: a FormItem container OUTSIDE the items tree.
             autoCommandBar = factory.createEClass();
@@ -2294,7 +2343,9 @@ public class FormStructureReaderTest
             pkg.getEClassifiers().add(formField);
             pkg.getEClassifiers().add(formButton);
             pkg.getEClassifiers().add(formAttribute);
+            pkg.getEClassifiers().add(command);
             pkg.getEClassifiers().add(formCommand);
+            pkg.getEClassifiers().add(formStandardCommand);
             pkg.getEClassifiers().add(commandHandler);
             pkg.getEClassifiers().add(handlerContainer);
             pkg.getEClassifiers().add(autoCommandBar);

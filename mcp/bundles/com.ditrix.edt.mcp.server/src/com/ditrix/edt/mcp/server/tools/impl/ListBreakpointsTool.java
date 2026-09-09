@@ -22,9 +22,10 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.BreakpointUtils;
 
 /**
- * Lists currently registered line breakpoints, optionally filtered by project.
+ * Lists registered line and workspace-wide exception breakpoints.
  */
 public class ListBreakpointsTool implements IMcpTool
 {
@@ -39,8 +40,8 @@ public class ListBreakpointsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Review breakpoints currently set in BSL source code. Parameters and examples: " //$NON-NLS-1$
-            + "get_tool_guide('list_breakpoints')."; //$NON-NLS-1$
+        return "Review configured BSL line breakpoints and workspace-wide break-on-error state. " //$NON-NLS-1$
+            + "Full parameters and examples: call get_tool_guide('list_breakpoints')."; //$NON-NLS-1$
     }
 
     @Override
@@ -56,7 +57,7 @@ public class ListBreakpointsTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .objectArrayProperty("breakpoints", "List of active line breakpoints") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("breakpoints", "Configured line and workspace-wide exception breakpoints") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("count", "Number of breakpoints returned") //$NON-NLS-1$ //$NON-NLS-2$
             .build();
     }
@@ -82,13 +83,37 @@ public class ListBreakpointsTool implements IMcpTool
 
         for (IBreakpoint bp : bpManager.getBreakpoints()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
-            IMarker m = bp.getMarker();
+            // GUARDED, because this lookup can throw: the platform recognises a breakpoint by
+            // interface, and its marker may be stale by the time the listing runs. Unguarded,
+            // one such entry threw out of the loop and the whole call failed - the caller lost
+            // every OTHER breakpoint over one it could not have named anyway.
+            IMarker m;
+            try
+            {
+                m = bp.getMarker();
+            }
+            catch (Exception unreadable) // NOSONAR: an entry this tool cannot name is skipped
+            {
+                continue;
+            }
             if (m == null || m.getResource() == null)
             {
                 continue;
             }
+            if (BreakpointUtils.isExceptionBreakpoint(bp))
+            {
+                out.add(createExceptionBreakpointDto(bp, m));
+                continue;
+            }
+            // This tool advertises BSL breakpoints. Another Eclipse debug model may contribute a
+            // method, watch or custom breakpoint on a project resource; labelling one of those
+            // 'line' would hand the caller something that is not a BSL source line at all.
+            if (!BreakpointUtils.isBslLineBreakpoint(bp))
+            {
+                continue;
+            }
             // IResource.getProject() is null for a marker on the workspace root —
-            // skip such markers to avoid an NPE on getName() below.
+            // non-exception root markers are outside this tool's BSL breakpoint surface.
             IProject project = m.getResource().getProject();
             if (project == null)
             {
@@ -99,25 +124,69 @@ public class ListBreakpointsTool implements IMcpTool
             {
                 continue;
             }
-            Map<String, Object> dto = new LinkedHashMap<>();
-            dto.put("breakpointId", m.getId()); //$NON-NLS-1$
-            dto.put("project", project.getName()); //$NON-NLS-1$
-            dto.put("file", m.getResource().getFullPath().toString()); //$NON-NLS-1$
-            try
-            {
-                if (bp instanceof ILineBreakpoint)
-                {
-                    dto.put("lineNumber", ((ILineBreakpoint) bp).getLineNumber()); //$NON-NLS-1$
-                }
-                dto.put("enabled", bp.isEnabled()); //$NON-NLS-1$
-                dto.put("modelId", bp.getModelIdentifier()); //$NON-NLS-1$
-            }
-            catch (Exception ex)
-            {
-                dto.put("error", ex.getMessage()); //$NON-NLS-1$
-            }
-            out.add(dto);
+            out.add(createLineBreakpointDto(bp, m, project));
         }
         return ToolResult.success().put("breakpoints", out).put("count", out.size()).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    static Map<String, Object> createLineBreakpointDto(IBreakpoint bp, IMarker marker,
+        IProject project)
+    {
+        Map<String, Object> dto = baseDto(marker);
+        dto.put("kind", "line"); //$NON-NLS-1$ //$NON-NLS-2$
+        dto.put("project", project.getName()); //$NON-NLS-1$
+        dto.put("file", marker.getResource().getFullPath().toString()); //$NON-NLS-1$
+        try
+        {
+            if (bp instanceof ILineBreakpoint)
+            {
+                dto.put("lineNumber", ((ILineBreakpoint)bp).getLineNumber()); //$NON-NLS-1$
+                dto.putAll(BreakpointUtils.readLineBreakpointConfiguration(bp, marker));
+            }
+            addCommonState(dto, bp);
+        }
+        catch (Exception ex)
+        {
+            // An exception with a NO message would store null, which the shared Gson drops - the entry
+                                // would then look ordinary while its state was never read. Fall back to the type.
+                dto.put("error", ex.getMessage() != null && !ex.getMessage().isEmpty() //$NON-NLS-1$
+                                    ? ex.getMessage()
+                                    : ex.getClass().getSimpleName());
+        }
+        return dto;
+    }
+
+    static Map<String, Object> createExceptionBreakpointDto(IBreakpoint bp, IMarker marker)
+    {
+        Map<String, Object> dto = baseDto(marker);
+        dto.put("kind", "exception"); //$NON-NLS-1$ //$NON-NLS-2$
+        dto.put("workspaceWide", true); //$NON-NLS-1$
+        try
+        {
+            dto.putAll(BreakpointUtils.readExceptionBreakpointConfiguration(marker));
+            addCommonState(dto, bp);
+        }
+        catch (Exception ex)
+        {
+            // An exception with a NO message would store null, which the shared Gson drops - the entry
+                                // would then look ordinary while its state was never read. Fall back to the type.
+                dto.put("error", ex.getMessage() != null && !ex.getMessage().isEmpty() //$NON-NLS-1$
+                                    ? ex.getMessage()
+                                    : ex.getClass().getSimpleName());
+        }
+        return dto;
+    }
+
+    private static Map<String, Object> baseDto(IMarker marker)
+    {
+        Map<String, Object> dto = new LinkedHashMap<>();
+        dto.put("breakpointId", marker.getId()); //$NON-NLS-1$
+        return dto;
+    }
+
+    private static void addCommonState(Map<String, Object> dto, IBreakpoint bp) throws Exception
+    {
+        dto.put("enabled", bp.isEnabled()); //$NON-NLS-1$
+        dto.put("modelId", bp.getModelIdentifier()); //$NON-NLS-1$
     }
 }

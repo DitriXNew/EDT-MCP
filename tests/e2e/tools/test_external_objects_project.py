@@ -263,7 +263,7 @@ def test_extobj_top_level_create_is_refused_with_the_way_to_do_it():
     r = call("create_metadata",
              {"projectName": EXT_OBJECTS_PROJECT, "fqn": "ExternalDataProcessor.E2eNewProc"})
     e = assert_error(r, "a top-level external data processor")
-    assert_error_quality(e, names=["ExternalDataProcessor", "create_project"],
+    assert_error_quality(e, names=["ExternalDataProcessor", "create_project", "externalObject"],
                          ctx="the refusal must say what DOES create such an object")
     assert_no_diff_rel(EXT_OBJECTS_REL, "a refused call must not touch the fixture")
 

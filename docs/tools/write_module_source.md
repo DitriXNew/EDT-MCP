@@ -1,6 +1,6 @@
 # write_module_source
 
-Write BSL source code to a 1C metadata object module. Use to edit a module: searchReplace a fragment (default, needs oldSource), replace the whole file, or append. Target the module by EITHER modulePath OR objectName (mutually exclusive — pass exactly one). Runs a BSL syntax check before writing (skipSyntaxCheck=true to force). Full parameters and examples: call get_tool_guide('write_module_source').
+Create or edit BSL source in a metadata module. Parameters and examples: get_tool_guide('write_module_source').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -9,23 +9,26 @@ Write BSL source code to a 1C metadata object module. Use to edit a module: sear
 | modulePath | — | string | src/-relative module path, e.g. 'CommonModules/MyModule/Module.bsl'. Alternative to objectName (pass exactly one). |
 | objectName | — | string | Object name 'Type.Name', e.g. 'Document.MyDoc'. Resolved with moduleType. Alternative to modulePath. |
 | moduleType | — | string (one of: ObjectModule, ManagerModule, FormModule, CommandModule, RecordSetModule, Module) | Module type for objectName resolution (default ObjectModule). |
-| source | yes | string | BSL source to write (required): full file for replace, new fragment for searchReplace, text to add for append. |
+| source | yes | string | BSL source to write (required): full file for replace, new fragment for searchReplace, text to add for append, or exactly one complete method for a method-targeted mode. |
 | oldSource | — | string | Fragment to find and replace; required for searchReplace, must match exactly once. |
-| mode | — | string (one of: searchReplace, replace, append) | Write mode (default searchReplace). |
+| mode | — | string (one of: searchReplace, replace, append, replaceMethod, insertBefore, insertAfter) | Write mode (default searchReplace). |
+| methodName | — | string | Existing anchor method; required for replaceMethod, insertBefore, and insertAfter. |
 | formName | — | string | Form name; required when moduleType=FormModule (e.g. 'ItemForm'). |
 | commandName | — | string | Command name; required when moduleType=CommandModule (e.g. 'FillByTemplate'). |
 | skipSyntaxCheck | — | boolean | Skip the BSL syntax check (default false). |
 | normalizeInvalidCharacters | — | boolean | Replace the characters the 1C standard InvalidCharacterInFile forbids in the SOURCE you supply - en/em/figure dash, horizontal bar and typographic minus become '-', a no-break space becomes a space, a soft hyphen is dropped (default true). They are invisible in a diff and read exactly like their ASCII twins, so they otherwise land in the module as a marker. Set false to write the source byte-for-byte. |
 | expectedSource | — | string | Lost-update guard for mode=replace: the module content you last read; mismatch rejects. |
 | overwrite | — | boolean | Force mode=replace over an existing module without an expectedSource check (default false). |
-| expectedHash | — | string | Lost-update guard for any mode: the contentHash from your last read; mismatch rejects. |
+| expectedHash | — | string | Lost-update guard: the hash from the read that produced your edit. The write is rejected if the module changed since; required for every method-targeted mode. |
 
 ## Guide
-Writes BSL source to a single 1C metadata object module (a `.bsl` file under `src/`). Three edit modes, a mandatory BSL syntax check, and optional lost-update guards.
+Writes BSL source to a single 1C metadata object module (a `.bsl` file under `src/`). Six edit modes, a mandatory BSL syntax check, and lost-update guards.
 
 ## When to use
 
 - Editing existing BSL: prefer `searchReplace` (the default) — surgical and safe.
+- Replacing one complete procedure/function: `replaceMethod`.
+- Adding one complete procedure/function next to an existing anchor: `insertBefore` or `insertAfter`.
 - Rewriting or creating a whole module: `replace` (the only mode that can create a new file).
 - Adding code at the end of a module: `append`.
 
@@ -45,15 +48,16 @@ Passing both is rejected; passing neither is rejected. `moduleType` is meaningfu
 | `modulePath` | XOR objectName | `src/`-relative `.bsl` path; no `..`. |
 | `objectName` | XOR modulePath | `Type.Name`; see Bilingual. |
 | `moduleType` | with objectName | default `ObjectModule`. |
-| `source` | always | the BSL to write (max 500000 chars). |
+| `source` | always | the BSL to write (max 500000 chars); exactly one complete method for a method-targeted mode. |
 | `oldSource` | mode=searchReplace | must match exactly once. |
-| `mode` | optional | `searchReplace` (default), `replace`, `append`. |
+| `mode` | optional | `searchReplace` (default), `replace`, `append`, `replaceMethod`, `insertBefore`, `insertAfter`. |
+| `methodName` | method-targeted modes | existing unambiguous method anchor; REQUIRED. |
 | `formName` | moduleType=FormModule | except CommonForm. |
 | `commandName` | moduleType=CommandModule | except CommonCommand. |
 | `skipSyntaxCheck` | optional | default false. |
 | `expectedSource` | mode=replace | lost-update guard. |
 | `overwrite` | mode=replace | force without expectedSource. |
-| `expectedHash` | any mode | cheap lost-update guard. |
+| `expectedHash` | any mode | cheap lost-update guard; REQUIRED for all method-targeted modes. |
 
 ## moduleType to path
 
@@ -64,11 +68,18 @@ Passing both is rejected; passing neither is rejected. `moduleType` is meaningfu
 - `searchReplace` (default): finds `oldSource` and replaces it with `source`. `oldSource` is REQUIRED and must match EXACTLY ONE location — zero matches or multiple matches are rejected with a steer to read again / give a larger fragment. The match runs on the raw file content (trailing newline preserved), so a fragment ending at EOF including its final newline is found. The file must already exist.
 - `replace`: replaces the entire file. The ONLY mode that can CREATE a new module (creates parent folders). Over an EXISTING module it is guarded (see Lost-update guards).
 - `append`: adds `source` to the end. The file must already exist.
+- `replaceMethod`: replaces the complete `methodName` definition. Its span includes the contiguous `//` documentation and `&...` annotations/directives immediately above the declaration. `source` must declare exactly one complete procedure/function with the same name AND the same kind; a rename is rejected, and so is turning a Function into a Procedure or back - callers of a Function consume its return value, and the block-balance check cannot see the difference.
+- `insertBefore`: inserts the one complete method in `source` before the anchor's documentation/annotations, never between an annotation and its declaration - a blank line between them does not detach the directive.
+- `insertAfter`: inserts the one complete method in `source` after the anchor's complete terminator.
+
+For all three method-targeted modes, `methodName` and `expectedHash` are REQUIRED. The anchor must resolve to exactly one declaration; duplicate declarations in preprocessor branches are rejected as ambiguous. For insert modes, the incoming method name must not already exist anywhere in the module, so repeating an insert is refused instead of creating a duplicate.
+
+The method parser recognizes `Procedure`/`Function` and `Процедура`/`Функция`, with matching `EndProcedure`/`EndFunction` and `КонецПроцедуры`/`КонецФункции` terminators. A terminator must end on a keyword boundary: identifiers such as `EndProcedureResult` and `КонецПроцедурыРезультат` do not close a method, and a terminator must own its line - `EndProcedure; ModuleValue = Call();` is module-level code after the method, not a method end. An unterminated method is reported incomplete rather than borrowing the next method terminator. Some shapes cannot be addressed by a whole-line scanner at all. The module is REFUSED, naming the line and what to change, rather than edited around the shape: a declaration split across lines, or holding only the keyword with its name on the next line; a parameter list that does not close before the method ends (one WRAPPED onto continuation lines is ordinary formatting and is addressed normally); a method named after a block keyword; a terminator sharing its line with other code; a declaration written after something else on its line; a pragma sharing the declaration line; and a pragma whose arguments do not close on its own line. A whole method written on ONE line (declaration and terminator together) is refused for the same reason. The shapes this cost was measured for do not occur in real configurations: zero next-line parentheses and zero one-line methods in 1C:ERP 2.5.16.41, and zero multi-line pragmas across its 22,786 modules.
 
 ## Lost-update guards
 
 Concurrent edits between your read and write are caught by:
-- `expectedHash` (ANY mode): pass the opaque `contentHash` from your last `read_module_source` / `read_method_source`. If the module changed, the write is rejected. Cheapest (a fixed-size token, not the whole file). Ignored when creating a new module.
+- `expectedHash` (ANY mode; REQUIRED for method-targeted modes): pass the opaque `contentHash` from your last `read_module_source` / `read_method_source`. If the module changed, the write is rejected. Cheapest (a fixed-size token, not the whole file). Omit it when creating a new module, because there is no existing content to match.
 - `expectedSource` (mode=replace): pass the exact content you last read. Mismatch is rejected.
 - `overwrite=true` (mode=replace): force the overwrite with no content check.
 A bare `replace` over an existing module with none of these is rejected and steers you toward expectedSource / overwrite / searchReplace. A matching `expectedHash` already satisfies the replace precondition. All comparisons are `\n`-normalized, so a CRLF/LF-only difference is not a spurious mismatch.
@@ -120,12 +131,32 @@ Extension method interception (append an annotated procedure to an adopted exten
   "source": "\n&After(\"Add\")\nProcedure ext_AddAfter(A, B, Result) Export\n\t// runs after CommonModule.Calc.Add\nEndProcedure\n" }
 ```
 
+Replace one method using the revision token returned by a read:
+```
+{ "projectName": "MyProj", "modulePath": "CommonModules/MyModule/Module.bsl",
+  "mode": "replaceMethod", "methodName": "Calculate",
+  "expectedHash": "<contentHash from read_method_source>",
+  "source": "Function Calculate() Export\n    Return 2;\nEndFunction\n" }
+```
+
+Insert a new method before an existing anchor:
+```
+{ "projectName": "MyProj", "modulePath": "CommonModules/MyModule/Module.bsl",
+  "mode": "insertBefore", "methodName": "Calculate",
+  "expectedHash": "<contentHash from read_module_source>",
+  "source": "Procedure Prepare() Export\nEndProcedure\n" }
+```
+
 ## Gotchas
 
 - Only `.bsl` files; `modulePath` may not contain `..`.
-- `searchReplace`/`append` need an EXISTING file; only `replace` creates one.
+- `searchReplace`/`append` and all method-targeted modes need an EXISTING file; only `replace` creates one.
 - New BSL files are written with a UTF-8 BOM; existing files keep their BOM state.
 - `source` is `\r\n`->`\n` normalized and the file always ends with a newline.
+
+## Addressing the module
+
+`modulePath` and the `objectName` + `moduleType` pair are mutually exclusive - give one shape or the other, never both.
 
 ---
 *Generated from the live MCP server (`get_tool_guide`) by `docs/generate_tool_docs.py`. Do not edit this file. Edit the tool's description/schema in its Java source and its guide body in `mcp/bundles/com.ditrix.edt.mcp.server/guides/<tool>.md`.*

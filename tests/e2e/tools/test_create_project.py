@@ -9,11 +9,12 @@ HAPPY PATH:
   verifies it appears in list_projects, then deletes it via delete_project (cleanup).
 - configuration round-trip: creates a fresh standalone configuration, verifies it
   appears in list_projects, then deletes it.
-- externalObjects round-trip: creates a fresh external objects project, verifies it
-  appears in list_projects, then deletes it.
+- externalObjects round-trips: a seeded project exposes its root through the metadata
+  read tools, while omitting externalObject still creates an empty import target.
 
 NEGATIVE: missing projectKind, invalid projectKind, missing baseProjectName for
-extension, baseProjectName rejected for configuration, duplicate name guard.
+extension, baseProjectName rejected for configuration, invalid externalObject shapes,
+duplicate name guard.
 """
 
 from harness import (
@@ -23,6 +24,7 @@ from harness import (
     assert_error_quality,
     assert_contains,
     assert_no_diff,
+    settle_or_fail,
     wait_for_project_ready,
     e2e_test,
     PROJECT,
@@ -32,6 +34,8 @@ from harness import (
 NEW_EXT = "CreateProjTest_Ext_e2e"
 NEW_CONFIG = "CreateProjTest_Config_e2e"
 NEW_EXT_OBJ = "CreateProjTest_ExtObj_e2e"
+NEW_EXT_OBJ_SEEDED = "CreateProjTest_ExtObjSeeded_e2e"
+SEEDED_ROOT = "ExternalDataProcessor.CreateProjSeededRoot_e2e"
 
 
 def _ensure_absent(name):
@@ -104,6 +108,38 @@ def test_nonexistent_base_project_errors():
     e = assert_error(r, "nonexistent base project")
     assert_error_quality(e, names=[bad], suggests=["list_projects"],
                          ctx="nonexistent base project named + list_projects hint")
+    assert_no_diff("a rejected call must not touch the fixture")
+
+
+@e2e_test(tool="create_project", kind="action")
+def test_external_object_bare_name_errors_with_expected_shape():
+    """A root must include its bilingual type token; a bare Name is never guessed."""
+    bad = "BareExternalRoot"
+    r = call("create_project", {
+        "projectKind": "externalObjects",
+        "name": NEW_EXT_OBJ,
+        "externalObject": bad,
+    })
+    e = assert_error(r, "bare externalObject Name")
+    assert_error_quality(e, names=[bad],
+                         suggests=["ExternalDataProcessor.<Name>", "ExternalReport.<Name>"],
+                         ctx="bare root error names the value and both accepted shapes")
+    assert_no_diff("a rejected call must not touch the fixture")
+
+
+@e2e_test(tool="create_project", kind="action")
+def test_external_object_unknown_type_errors_with_valid_kinds():
+    """An unknown root type is rejected with the two kinds EDT can attach."""
+    bad = "UnknownExternalRoot.MyObject"
+    r = call("create_project", {
+        "projectKind": "externalObjects",
+        "name": NEW_EXT_OBJ,
+        "externalObject": bad,
+    })
+    e = assert_error(r, "unknown externalObject type")
+    assert_error_quality(e, names=[bad],
+                         suggests=["ExternalDataProcessor", "ExternalReport"],
+                         ctx="unknown root type names the value and both valid kinds")
     assert_no_diff("a rejected call must not touch the fixture")
 
 
@@ -183,8 +219,43 @@ def test_create_configuration_then_delete():
 # ── HAPPY PATH (externalObjects) ──────────────────────────────────────────────
 
 @e2e_test(tool="create_project", kind="action")
+def test_create_external_objects_with_seeded_root_then_delete():
+    """Seed the project root and resolve it through both metadata read routes."""
+    _ensure_absent(NEW_EXT_OBJ_SEEDED)
+    try:
+        r = call("create_project", {
+            "projectKind": "externalObjects",
+            "name": NEW_EXT_OBJ_SEEDED,
+            "externalObject": SEEDED_ROOT,
+        })
+        assert_ok(r, "create_project externalObjects with seeded root")
+        assert r.structured is not None, "response must carry structuredContent"
+        assert r.structured.get("project") == NEW_EXT_OBJ_SEEDED, \
+            "seeded project must use the requested project name, got %r" % r.structured
+        settle_or_fail("reading the root seeded by create_project")
+
+        roots = call("get_metadata_objects", {"projectName": NEW_EXT_OBJ_SEEDED})
+        assert_ok(roots, "list the newly seeded external-object root")
+        assert_contains(roots.text, "CreateProjSeededRoot_e2e",
+                        "get_metadata_objects must see the seeded root Name")
+        assert_contains(roots.text, "ExternalDataProcessor",
+                        "get_metadata_objects must see the seeded root type")
+
+        details = call("get_metadata_details", {
+            "projectName": NEW_EXT_OBJ_SEEDED,
+            "objectFqns": [SEEDED_ROOT],
+        })
+        assert_ok(details, "read the newly seeded external-object root")
+        assert_contains(details.text, "ExternalDataProcessor: CreateProjSeededRoot_e2e",
+                        "get_metadata_details must resolve the seeded root FQN")
+    finally:
+        _ensure_absent(NEW_EXT_OBJ_SEEDED)
+
+    assert_no_diff("the fixture must be untouched after the seeded-project round-trip")
+
+@e2e_test(tool="create_project", kind="action")
 def test_create_external_objects_then_delete():
-    """Create a fresh external objects project, verify it, then clean up."""
+    """Omitting externalObject must preserve the empty-project import workflow."""
     _ensure_absent(NEW_EXT_OBJ)
     try:
         r = call("create_project", {"projectKind": "externalObjects", "name": NEW_EXT_OBJ})
@@ -198,11 +269,18 @@ def test_create_external_objects_then_delete():
         assert proj_name == NEW_EXT_OBJ, \
             "project must default to 'name', got %r" % proj_name
 
-        # Verify it appears in list_projects
-        wait_for_project_ready()
+        # Verify it appears in list_projects and that the model remains empty.
+        settle_or_fail("checking an unseeded external-objects project")
         lp = call("list_projects", {})
         assert_contains(lp.text, NEW_EXT_OBJ,
                         "new externalObjects project must appear in list_projects")
+
+        roots = call("get_metadata_objects", {"projectName": NEW_EXT_OBJ})
+        assert_ok(roots, "list roots of an unseeded external-objects project")
+        assert_contains(roots.text, "**Total:** 0 objects",
+                        "omitting externalObject must leave the project empty")
+        assert_contains(roots.text, "No metadata objects found.",
+                        "the empty project must report that it has no roots")
 
     finally:
         _ensure_absent(NEW_EXT_OBJ)

@@ -1,6 +1,6 @@
 # get_metadata_details
 
-Inspect the properties and structure of a metadata object or member. Parameters and examples: get_tool_guide('get_metadata_details').
+Inspect metadata objects and members, including managed-form root properties and structure. Parameters and examples: get_tool_guide('get_metadata_details').
 
 ## Parameters
 | Parameter | Required | Type | Description |

@@ -99,9 +99,9 @@ A `language` CODE must be one the configuration DECLARES (`get_configuration_pro
 Members of an external data processor / report are created the same way as a configuration
 object's - `ExternalDataProcessor.<Name>.Attribute.<Attr>`, `....Form.<F>`, and the
 form content under it. Two limits are structural, not gaps in addressing:
-- the ROOT object itself cannot be created here (it is created with its project, in EDT or by
-  importing an .epf/.erf; `create_project` with `projectKind=externalObjects` makes the empty
-  project only);
+- the ROOT object itself cannot be created here; seed it with `create_project` using
+  `projectKind=externalObjects` and `externalObject='ExternalDataProcessor.<Name>'` (or
+  `ExternalReport.<Name>`), or import an existing `.epf` / `.erf`;
 - an external data processor / report has no `Command` collection in the platform model, so
   `....Command.<Name>` is refused with the list of kinds the object does accept.
 

@@ -58,12 +58,23 @@ public final class BslModuleUtils
     /** Regex for BSL method start (Процедура/Функция / Procedure/Function, with an optional leading
      * Асинх/Async modifier - platform async methods). Group 1 = method name, group 2 = params text after '(' */
     public static final Pattern METHOD_START_PATTERN = Pattern.compile(
-        "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\s+([^\\s(]+)\\s*\\((.*)$", //$NON-NLS-1$
+        "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)\\s*\\((.*)$", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
-    /** Regex for BSL method end (КонецПроцедуры/КонецФункции / EndProcedure/EndFunction) */
+    /** Regex for a BSL procedure end. The right boundary prevents an identifier such as
+     * {@code EndProcedureResult} from being mistaken for the terminator. */
+    public static final Pattern PROCEDURE_END_PATTERN = Pattern.compile(
+        "^\\s*(?:\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B|EndProcedure)(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /** Regex for a BSL function end, with the same identifier boundary as procedures. */
+    public static final Pattern FUNCTION_END_PATTERN = Pattern.compile(
+        "^\\s*(?:\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438|EndFunction)(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /** Regex for either BSL method terminator, kept for existing fallback consumers. */
     public static final Pattern METHOD_END_PATTERN = Pattern.compile(
-        "^\\s*(?:\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B|\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438|EndProcedure|EndFunction)", //$NON-NLS-1$
+        "^\\s*(?:\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B|\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438|EndProcedure|EndFunction)(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /** Regex for function keyword check (Функция / Function, optional leading Асинх/Async) */
@@ -71,6 +82,55 @@ public final class BslModuleUtils
         "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Function)\\s", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
+    /**
+     * A method declaration this line-based scanner cannot ADDRESS: the keyword and a name with
+     * the opening parenthesis on a later line.
+     * <p>
+     * BSL hides the newline, so such a declaration is real - and everything here is measured in
+     * whole lines, so it can be neither located nor bounded. A module holding one is therefore
+     * REFUSED for method-targeted edits rather than guessed at: guessing produced a span that
+     * ran through the hidden method and a duplicate-name check that did not see it.
+     * </p>
+     */
+    public static final Pattern UNADDRESSABLE_DECLARATION_PATTERN = Pattern.compile(
+        "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)"
+            + "(?!\\p{L}|\\p{N}|_)\\s+[\\p{L}_][\\p{L}\\p{N}_]*\\s*$", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /**
+     * A bare {@code Async}/{@code Асинх} modifier on its own line, directly above the
+     * declaration it applies to. It is part of the method - replacing the method without it
+     * would leave the modifier behind, binding to whatever is written in its place.
+     */
+    private static final Pattern ASYNC_MODIFIER_LINE_PATTERN = Pattern.compile(
+        "^\\s*(?:\u0410\u0441\u0438\u043D\u0445|Async)\\s*$", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    /**
+     * A declaration line that also carries a method TERMINATOR: a whole method written on one
+     * physical line, and anything hiding behind it on that line.
+     * <p>
+     * Legal under the hidden-whitespace grammar and equally unaddressable by a whole-line
+     * scanner: the closer cannot be seen by a matcher that reads a terminator only at the start
+     * of a line, so the method silently borrows a later one. Named and refused instead.
+     * </p>
+     */
+    private static final Pattern INLINE_TERMINATOR_PATTERN = Pattern.compile(
+        "(?<![.\\p{L}\\p{N}_])(?:\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B|\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438|EndProcedure|EndFunction)(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    /**
+     * A declaration sharing its line with the pragma(s) that annotate it
+     * ({@code &AtClient Procedure Added()}).
+     * <p>
+     * Legal, and equally unaddressable by a scan anchored on the keyword at line start: the
+     * method is invisible to the span search AND to the duplicate-name check, so an insert could
+     * add a second declaration of the same name. Refused by name instead of guessed at.
+     * </p>
+     */
+    private static final Pattern PRAGMA_ON_DECLARATION_LINE_PATTERN = Pattern.compile(
+        "^\\s*(?:&[\\p{L}\\p{N}_]+(?:\\([^)]*\\))?\\s+)+"
+            + "(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)"
+            + "(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     /** Regex for region start (#Область / #Region) */
     public static final Pattern REGION_START_PATTERN = Pattern.compile(
         "^\\s*#(?:\u041e\u0431\u043b\u0430\u0441\u0442\u044c|Region)\\s+(\\S+)", //$NON-NLS-1$
@@ -286,6 +346,753 @@ public final class BslModuleUtils
     }
 
     /**
+     * Full line span of one BSL method. Line numbers are 0-based and inclusive.
+     * {@link #startLine} includes the contiguous documentation comments and
+     * ampersand annotations/directives owned by the declaration;
+     * {@link #declarationLine} points at Procedure/Function itself.
+     */
+    public static final class MethodSpan
+    {
+        public final int startLine;
+        public final int declarationLine;
+        public final int endLine;
+        public final String name;
+        public final boolean isFunction;
+        public final boolean complete;
+
+        MethodSpan(int startLine, int declarationLine, int endLine, String name,
+            boolean isFunction, boolean complete)
+        {
+            this.startLine = startLine;
+            this.declarationLine = declarationLine;
+            this.endLine = endLine;
+            this.name = name;
+            this.isFunction = isFunction;
+            this.complete = complete;
+        }
+    }
+
+    /**
+     * Finds every method declaration in source order using the shared bilingual
+     * fallback patterns. Each declaration is paired only with its matching kind of
+     * terminator. An unterminated declaration is returned with {@code complete=false}
+     * and an end line clamped to the final source line.
+     *
+     * @param lines BSL module or fragment lines
+     * @return all discovered method spans
+     */
+    public static List<MethodSpan> findMethodSpansViaText(List<String> lines)
+    {
+        List<MethodSpan> spans = new ArrayList<>();
+        if (lines == null)
+        {
+            return spans;
+        }
+
+        // Every rule below reads text whose string literals and comments are blanked out: a
+        // keyword inside a default value or behind a trailing comment is not code, and the
+        // splice still uses the ORIGINAL lines.
+        List<String> scan = BslSyntaxChecker.maskLiteralsAndComments(lines);
+        for (int declarationLine = 0; declarationLine < scan.size(); declarationLine++)
+        {
+            Matcher startMatcher = METHOD_START_PATTERN.matcher(scan.get(declarationLine));
+            if (!startMatcher.find())
+            {
+                continue;
+            }
+            // Not a declaration at all when the line above left a dangling member dot: newlines
+            // are hidden, so "X = Object." and "Function And (Condition);" is the single
+            // expression Object.Function - and reading it as a declaration bounds the enclosing
+            // method before its real terminator, which refuses every edit of a valid module.
+            if (previousMeaningfulLineEndsWithMemberDot(scan, declarationLine))
+            {
+                continue;
+            }
+
+            boolean isFunction = FUNC_KEYWORD_PATTERN.matcher(scan.get(declarationLine)).find();
+            Pattern terminator = isFunction ? FUNCTION_END_PATTERN : PROCEDURE_END_PATTERN;
+            Pattern wrongKind = isFunction ? PROCEDURE_END_PATTERN : FUNCTION_END_PATTERN;
+            // The search stops at the NEXT declaration: unbounded, an unterminated method
+            // borrows its neighbour's terminator, reports itself complete, and a
+            // replaceMethod on it would delete that neighbour and its documentation.
+            int searchLimit = nextDeclarationLine(scan, declarationLine + 1) - 1;
+            int endLine =
+                findTerminatorLine(scan, declarationLine, searchLimit, terminator, wrongKind);
+            boolean complete = endLine >= 0;
+            if (!complete)
+            {
+                endLine = searchLimit;
+            }
+            int startLine = findMethodPreambleStartLine(lines, scan, declarationLine + 1) - 1;
+            spans.add(new MethodSpan(startLine, declarationLine, endLine,
+                startMatcher.group(1), isFunction, complete));
+        }
+        return spans;
+    }
+
+    /**
+     * The tail a terminator line may carry and still be owned entirely by the method:
+     * whitespace, at most one statement separator, and an end-of-line comment. BSL puts
+     * module-level statements AFTER the methods (Bsl.xtext {@code Module} rule), so
+     * {@code EndProcedure; ModuleValue = Call();} is valid code whose terminator does NOT
+     * end the line - and every span here is measured in whole lines, so without this the
+     * statement would ride along inside the method span.
+     */
+    private static final Pattern METHOD_END_TAIL_PATTERN = Pattern.compile("^\\s*;?\\s*(?://.*)?$"); //$NON-NLS-1$
+
+    /**
+     * Where a real method DECLARATION begins at or after {@code from}, or -1.
+     * <p>
+     * The regex answers the shape; this answers whether the keyword is a keyword at all, by the
+     * same lexical rule the terminator uses. Whitespace after a dot is hidden, so
+     * {@code X = Object. Function + (1);} is a member expression and not a declaration - a
+     * fixed-width lookbehind sees the space and takes the "+" for a method name.
+     * </p>
+     *
+     * @param maskedLine the line with its literals and comments blanked
+     * @param from where to start looking
+     * @return the index of the keyword, or -1
+     */
+    private static int declarationShapeAt(String maskedLine, int from)
+    {
+        Matcher shape = ANY_DECLARATION_KEYWORD_PATTERN.matcher(maskedLine);
+        int at = from;
+        while (shape.find(at))
+        {
+            if (!precededByMemberDot(maskedLine, shape.start()))
+            {
+                return shape.start();
+            }
+            at = shape.start() + 1;
+        }
+        return -1;
+    }
+
+    /**
+     * Whether the parameter list opened at or after {@code from} ever closes.
+     * <p>
+     * A declaration whose list never closes - {@code Procedure Added(} with a terminator and
+     * nothing else - was emitted as a complete span, and the balance check only counts block
+     * keywords, so invalid BSL went to disk under the exactly-one-method contract.
+     * </p>
+     * <p>
+     * Followed ACROSS lines, because wrapping a long signature is ordinary formatting and not a
+     * broken declaration: the newline inside the list is hidden trivia. Judged on the first line
+     * alone, this refused every method-targeted edit in 2 140 of 1C:ERP 2.5.16.41's 22 786
+     * modules - 8 517 declarations wrap their parameters - which is not a shape a scanner may
+     * decline to address.
+     * </p>
+     *
+     * @param scan the module lines with their literals and comments blanked
+     * @param lineIndex the declaration line
+     * @param from where the name ended
+     * @return whether the list closes, here or on a continuation line
+     */
+    private static boolean parameterListCloses(List<String> scan, int lineIndex, int from)
+    {
+        int depth = 0;
+        for (int line = lineIndex; line < scan.size(); line++)
+        {
+            String text = scan.get(line);
+            // BOUNDED by the method it belongs to. A list that only closes after the terminator
+            // has not closed inside this method: the span still ends at that terminator, so
+            // replaceMethod left the stray ")" behind - and the balance check counts block
+            // keywords, not parentheses, so it called the result healthy.
+            if (line > lineIndex && (isMethodTerminatorLine(text, METHOD_END_PATTERN)
+                || METHOD_START_PATTERN.matcher(text).find()))
+            {
+                return false;
+            }
+            for (int i = line == lineIndex ? from : 0; i < text.length(); i++)
+            {
+                char ch = text.charAt(i);
+                depth += ch == '(' ? 1 : 0;
+                depth -= ch == ')' ? 1 : 0;
+                if (depth == 0 && ch == ')')
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether the line is nothing but complete pragmas: an ampersand name, optionally followed by
+     * a closed argument list, repeated.
+     * <p>
+     * Walked rather than matched. The regex that did this repeated a group containing two runs of
+     * optional whitespace, which CodeQL flagged as exponential backtracking on a line of many
+     * "&x" - and it was right: nothing decides which run a space belongs to. A walk has one
+     * answer per character and no backtracking at all.
+     * </p>
+     *
+     * @param trimmed the trimmed, masked line
+     * @return whether it holds only complete pragmas
+     */
+    private static boolean pragmasOnly(String trimmed)
+    {
+        int i = 0;
+        while (i < trimmed.length())
+        {
+            if (trimmed.charAt(i) != '&')
+            {
+                return false;
+            }
+            i++;
+            int nameStart = i;
+            while (i < trimmed.length())
+            {
+                int codePoint = trimmed.codePointAt(i);
+                if (!isIdentifierCharacter(codePoint))
+                {
+                    break;
+                }
+                i += Character.charCount(codePoint);
+            }
+            if (i == nameStart)
+            {
+                return false;
+            }
+            i = skipWhitespace(trimmed, i);
+            if (i < trimmed.length() && trimmed.charAt(i) == '(')
+            {
+                // Scanned rather than indexOf(")"): a nested opener has to be REJECTED, the way
+                // the [^()]* this walk replaced rejected it. Taking the first close for the
+                // matching one accepts "&Instead((...)", which is not a pragma this scanner can
+                // delimit either.
+                int close = i + 1;
+                while (close < trimmed.length() && trimmed.charAt(close) != ')'
+                    && trimmed.charAt(close) != '(')
+                {
+                    close++;
+                }
+                if (close >= trimmed.length() || trimmed.charAt(close) != ')')
+                {
+                    return false;
+                }
+                i = close + 1;
+            }
+            i = skipWhitespace(trimmed, i);
+        }
+        return true;
+    }
+
+    /**
+     * Whether the code point may stand in an identifier or a pragma name - the same class as the
+     * {@code [\p{L}\p{N}_]} this walk replaced.
+     * <p>
+     * Two ways the obvious test is narrower than that class, and both were wrong here:
+     * {@code Character.isLetterOrDigit} covers only Nd while {@code \p{N}} is Nd, Nl and No, so a
+     * name ending in a superscript two (U+00B2) was rejected; and reading CHARS rather than code
+     * points cuts a supplementary letter into two halves that are neither.
+     * </p>
+     *
+     * @param codePoint the code point to test
+     * @return whether it belongs in a pragma name
+     */
+    private static boolean isIdentifierCharacter(int codePoint)
+    {
+        if (codePoint == '_')
+        {
+            return true;
+        }
+        int type = Character.getType(codePoint);
+        return Character.isLetter(codePoint)
+            || type == Character.DECIMAL_DIGIT_NUMBER
+            || type == Character.LETTER_NUMBER
+            || type == Character.OTHER_NUMBER;
+    }
+
+    private static boolean isBslSpace(char ch)
+    {
+        // The same characters Java's \s matches, and deliberately NOT
+        // Character.isWhitespace: that one accepts the C0 separators (U+001C..U+001F), so a
+        // pragma line glued together with a FILE SEPARATOR would pass a walk written to replace
+        // a \s pattern that rejected it.
+        return ch == ' ' || ch == '\t' || ch == '\n'
+            || ch == 0x0B || ch == '\f' || ch == '\r';
+    }
+
+    /**
+     * @param text the text to walk
+     * @param from where to start
+     * @return the first index at or after {@code from} that is not BSL whitespace
+     */
+    private static int skipWhitespace(String text, int from)
+    {
+        int i = from;
+        while (i < text.length() && isBslSpace(text.charAt(i)))
+        {
+            i++;
+        }
+        return i;
+    }
+
+    /**
+     * Whether the ampersand line cannot be owned as a whole line of pragmas.
+     * <p>
+     * Three ways it cannot: its argument list stays open, its arguments continue on the line
+     * below - {@code &Instead} then {@code (} - or it carries something after the pragma that is
+     * not one. All three are boundaries a whole-line scanner would have to guess, and both wrong
+     * guesses destroy something: the annotation moves to an inserted method, or the code riding
+     * on the line is deleted with the target.
+     * </p>
+     *
+     * @param masked all lines with their literals and comments blanked
+     * @param index the line to judge
+     * @return whether it must be refused
+     */
+    private static boolean unaddressablePragmaLine(List<String> masked, int index)
+    {
+        String trimmed = masked.get(index).trim();
+        if (!trimmed.startsWith("&")) //$NON-NLS-1$
+        {
+            return false;
+        }
+        if (!pragmasOnly(trimmed))
+        {
+            // Either an open argument list or something else riding along. A declaration after
+            // the pragma has its own refusal and message, so it is left to that one.
+            return !PRAGMA_ON_DECLARATION_LINE_PATTERN.matcher(trimmed).find();
+        }
+        for (int next = index + 1; next < masked.size(); next++)
+        {
+            String below = masked.get(next).trim();
+            if (below.isEmpty())
+            {
+                continue;
+            }
+            // A complete-looking pragma whose arguments were put on the NEXT line.
+            return below.startsWith("("); //$NON-NLS-1$
+        }
+        return false;
+    }
+
+    /**
+     * A line holding nothing but a declaration keyword, its name having been put on the next
+     * line. Hidden whitespace makes that a real method, and no anchored rule here can see it.
+     */
+    private static final Pattern BARE_DECLARATION_KEYWORD_PATTERN = Pattern.compile(
+        "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\s*$", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /**
+     * A method DECLARATION anywhere on a line, used only to look PAST the opener of a
+     * declaration line.
+     * <p>
+     * The shape matters, not the keyword: BSL hides line breaks, so a body may begin on the
+     * declaration line, and a reserved word is a legal member name after a dot (grammar rule
+     * {@code ExtName}) - {@code Procedure Target() X = Object.Function();} is one ordinary
+     * method. So the keyword must not be preceded by a dot or by word characters, and must be
+     * followed by a name and an opening parenthesis, the way a declaration is written.
+     * </p>
+     */
+    private static final Pattern ANY_DECLARATION_KEYWORD_PATTERN = Pattern.compile(
+        "(?<![\\p{L}\\p{N}_])(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\s+[\\p{L}_][\\p{L}\\p{N}_]*\\s*(?:\\(|$)", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /**
+     * The first line that declares a SECOND method after the one it opens with, or -1.
+     * <p>
+     * Every rule here is anchored at the start of a line, so a declaration written after the
+     * opener - {@code Procedure A() Function B()} - is invisible to all of them: the scan reports
+     * one method, the balance check sees matching pairs, and a method nested inside another
+     * method gets written as if it were valid. Such a line is refused instead.
+     * </p>
+     *
+     * @param lines BSL module or fragment lines
+     * @return the 0-based line index, or -1 when every declaration line opens exactly one
+     */
+    public static int secondDeclarationOnLine(List<String> lines)
+    {
+        if (lines == null)
+        {
+            return -1;
+        }
+        List<String> scan = BslSyntaxChecker.maskLiteralsAndComments(lines);
+        for (int i = 0; i < scan.size(); i++)
+        {
+            Matcher opener = METHOD_START_PATTERN.matcher(scan.get(i));
+            // Only a DECLARATION line is examined, and only past its own opener: a statement
+            // line may legitimately carry the keyword twice, since a reserved word is a legal
+            // member name after a dot (grammar rule ExtName).
+            if (!opener.find())
+            {
+                continue;
+            }
+            if (declarationShapeAt(scan.get(i), opener.end(1)) >= 0)
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Reports whether the line is a method terminator that owns its whole line.
+     *
+     * @param line source line to test (may be {@code null})
+     * @param terminator {@link #PROCEDURE_END_PATTERN} or {@link #FUNCTION_END_PATTERN}
+     * @return {@code true} when the line holds only that terminator (plus an optional
+     *         separator/comment tail)
+     */
+    public static boolean isMethodTerminatorLine(String line, Pattern terminator)
+    {
+        if (line == null)
+        {
+            return false;
+        }
+        Matcher matcher = terminator.matcher(line);
+        if (!matcher.find())
+        {
+            return false;
+        }
+        return METHOD_END_TAIL_PATTERN.matcher(line.substring(matcher.end())).matches();
+    }
+
+    /**
+     * Index of the first method declaration at or after {@code from}, or the line count
+     * when there is none. A method cannot contain another declaration, so this is the
+     * hard upper bound of a method's terminator search.
+     * <p>
+     * A keyword that opens a line right after one ending in a member-access dot is NOT a
+     * declaration: the grammar's {@code ExtName} rule lists the reserved words legal as member
+     * names - {@code Процедура} and {@code Функция} among them - and whitespace after the dot
+     * includes a line break, so {@code Объект.} followed by {@code Функция()} is one expression.
+     * Bounding there would end the enclosing method before its terminator and refuse a legal
+     * write. Same reasoning, and the same helper shape, as {@code BslSyntaxChecker.isMemberName}.
+     * </p>
+     */
+    private static int nextDeclarationLine(List<String> lines, int from)
+    {
+        for (int i = Math.max(0, from); i < lines.size(); i++)
+        {
+            // The same exemption the span scan makes: a reserved member reached across a line
+            // break is not a declaration, and taking it for one shortens the search window and
+            // leaves the real method looking unterminated.
+            if (METHOD_START_PATTERN.matcher(lines.get(i)).find()
+                && !previousMeaningfulLineEndsWithMemberDot(lines, i))
+            {
+                return i;
+            }
+        }
+        return lines.size();
+    }
+
+    /**
+     * The first line holding a declaration this scanner cannot address, or {@code -1}: one whose
+     * opening parenthesis is on a later line, or one sharing its line with a terminator.
+     *
+     * @param lines module or fragment lines
+     * @return the 0-based line index, or {@code -1} when there is none
+     */
+    public static int unaddressableDeclarationLine(List<String> lines)
+    {
+        Unaddressable found = unaddressable(lines);
+        return found == null ? -1 : found.line;
+    }
+
+    /** A line a whole-line scanner cannot address, and the reason it cannot. */
+    public static final class Unaddressable
+    {
+        /** The 0-based line. */
+        public final int line;
+
+        /** What is wrong with it, as a phrase that completes "the module has ...". */
+        public final String what;
+
+        /** What the caller has to change, as an imperative sentence. */
+        public final String fix;
+
+        Unaddressable(int line, String what, String fix)
+        {
+            this.line = line;
+            this.what = what;
+            this.fix = fix;
+        }
+    }
+
+    /**
+     * The first line this scanner cannot address, with the reason - or {@code null}.
+     * <p>
+     * Eight shapes, one rule: a whole-line scanner may only edit what it can DELIMIT. Each of
+     * these hides a declaration or a terminator from every anchored rule in this class, and a
+     * span that guesses past one either rebinds an annotation or deletes code that belongs to
+     * somebody else. The reason travels with the line because the eight need eight different
+     * fixes.
+     * </p>
+     * <p>
+     * The bar for ADDING one: a shape must be absent from real code, measured, not assumed. A
+     * rule written from reasoning alone refused a wrapped parameter list - 2 140 of 1C:ERP
+     * 2.5.16.41's 22 786 modules.
+     * </p>
+     *
+     * @param lines BSL module or fragment lines
+     * @return the finding, or {@code null} when every line can be addressed
+     */
+    public static Unaddressable unaddressable(List<String> lines)
+    {
+        if (lines == null)
+        {
+            return null;
+        }
+        List<String> scan = BslSyntaxChecker.maskLiteralsAndComments(lines);
+        for (int i = 0; i < scan.size(); i++)
+        {
+            String line = scan.get(i);
+            // NONE of the rules below apply when the line above left a dangling member dot: the
+            // newline is hidden, so this line continues an expression - "Value = Object." then
+            // "EndFunction(Arg);" is one member call, and "Function And" is one member name. Each
+            // rule judged that line on its own and refused a valid module.
+            if (previousMeaningfulLineEndsWithMemberDot(scan, i))
+            {
+                continue;
+            }
+            if (UNADDRESSABLE_DECLARATION_PATTERN.matcher(line).find())
+            {
+                return new Unaddressable(i, "a method declaration split across lines", //$NON-NLS-1$
+                    "put the declaration and its opening parenthesis on one line"); //$NON-NLS-1$
+            }
+            // A terminator that does NOT own its line, wherever it stands: on the declaration
+            // line or after a body statement. The span scan only recognises a closer that owns
+            // its line, so an inline one is invisible to it - the span reads past it, borrows a
+            // later closer, and a replaceMethod deletes everything in between while the balance
+            // check sees a healed result.
+            Matcher opener = METHOD_START_PATTERN.matcher(line);
+            if (opener.find())
+            {
+                if (BslSyntaxChecker.isBlockKeyword(opener.group(1)))
+                {
+                    return new Unaddressable(i, "a method named after a block keyword", //$NON-NLS-1$
+                        "give the method a name that is not " + opener.group(1)); //$NON-NLS-1$
+                }
+                if (!parameterListCloses(scan, i, opener.end(1)))
+                {
+                    return new Unaddressable(i, "a declaration whose parameter list does not close", //$NON-NLS-1$
+                        "close the parameter list of this declaration"); //$NON-NLS-1$
+                }
+            }
+            if (hasInlineTerminator(line) && !isMethodTerminatorLine(line, METHOD_END_PATTERN))
+            {
+                return new Unaddressable(i, "a method terminator sharing its line with other code", //$NON-NLS-1$
+                    "keep the terminator on a line of its own"); //$NON-NLS-1$
+            }
+            // A pragma whose argument list does not close on its own line. A whole-line scanner
+            // cannot say where such a pragma ends - four different shapes of it have each been
+            // delimited wrongly here - and getting the boundary wrong either rebinds the
+            // annotation to an inserted method or deletes the code above it. Refused instead.
+            if (unaddressablePragmaLine(scan, i))
+            {
+                return new Unaddressable(i, "a pragma this scanner cannot delimit", //$NON-NLS-1$
+                    "put the pragma and its arguments on one line of their own"); //$NON-NLS-1$
+            }
+            if (PRAGMA_ON_DECLARATION_LINE_PATTERN.matcher(line).find())
+            {
+                return new Unaddressable(i, "a pragma sharing its line with the declaration", //$NON-NLS-1$
+                    "put the pragma on the line above the declaration"); //$NON-NLS-1$
+            }
+            // A declaration the ANCHORED scan cannot see: written after something else on the
+            // line - the tail of a split pragma, say - it is invisible to every rule here, so
+            // the module holds a method this tool cannot count, address or check for duplicate
+            // names. Refusing is the only honest answer a whole-line scanner has.
+            if (declarationShapeAt(line, 0) >= 0 && !METHOD_START_PATTERN.matcher(line).find())
+            {
+                return new Unaddressable(i, "a declaration written after something else on the line", //$NON-NLS-1$
+                    "start the declaration on a line of its own"); //$NON-NLS-1$
+            }
+            // The keyword ALONE, with its name on the next line. The dangling-dot case - where
+            // "Value = Object." and "Procedure" are one expression rather than a declaration,
+            // because a reserved word is a legal member name - is already excluded by the shared
+            // guard at the top of this loop.
+            if (BARE_DECLARATION_KEYWORD_PATTERN.matcher(line).matches())
+            {
+                return new Unaddressable(i, "a declaration whose name is on the next line", //$NON-NLS-1$
+                    "put the declaration and its name on one line"); //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+    private static int findTerminatorLine(List<String> lines, int from, int to, Pattern terminator,
+        Pattern wrongKind)
+    {
+        for (int i = from; i <= to; i++)
+        {
+            // A reserved word is a legal MEMBER name (grammar rule ExtName), and the newline
+            // after the dot is hidden, so "Object." on one line and "EndProcedure" on the next is
+            // one expression rather than a method end. Skipping it here fails SAFE, unlike the
+            // same exemption on the declaration side: a terminator missed by mistake ends the
+            // span later or leaves it incomplete, and an incomplete span is a refusal.
+            if (previousMeaningfulLineEndsWithMemberDot(lines, i))
+            {
+                continue;
+            }
+            if (isMethodTerminatorLine(lines.get(i), terminator))
+            {
+                return i;
+            }
+            if (i > from && isMethodTerminatorLine(lines.get(i), wrongKind))
+            {
+                // The WRONG closer, reached before the right one: the declaration is malformed,
+                // and reading past it would hand this span a terminator belonging to nothing -
+                // with whatever stands between them, module-level statements included, deleted
+                // by a replaceMethod. An incomplete span is a refusal, which is the safe end.
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Whether the line ends a method ON that line, as opposed to merely naming a terminator.
+     * <p>
+     * A reserved word is a legal MEMBER name and whitespace around the dot is hidden trivia, so
+     * {@code Procedure Target() X = Object. EndProcedure;} names one and ends nothing. Judged
+     * lexically - the nearest non-space character before the word - rather than by a
+     * fixed-width lookbehind, which sees the space and not the dot.
+     * </p>
+     *
+     * @param line the line, with literals and comments already masked
+     * @return whether a real inline terminator stands on it
+     */
+    private static boolean hasInlineTerminator(String line)
+    {
+        Matcher terminator = INLINE_TERMINATOR_PATTERN.matcher(line);
+        while (terminator.find())
+        {
+            if (!precededByMemberDot(line, terminator.start()))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether the nearest non-space character before {@code index} is a member-access dot.
+     *
+     * @param line the line
+     * @param index where the word begins
+     * @return whether the word is a member name
+     */
+    private static boolean precededByMemberDot(String line, int index)
+    {
+        int i = index - 1;
+        while (i >= 0 && Character.isWhitespace(line.charAt(i)))
+        {
+            i--;
+        }
+        return i >= 0 && line.charAt(i) == '.' && isMemberAccessDot(line, i);
+    }
+
+    /**
+     * Whether the dot at {@code dot} takes a member from something, as opposed to ending a
+     * numeric literal.
+     * <p>
+     * One rule for both directions of this question - the dangling dot at the end of a line and
+     * the dot in front of a word on it - because they are the same question. "Value = 1." ends
+     * in a dot and takes a member from nothing, and reading it as an access suppressed a real
+     * terminator.
+     * </p>
+     *
+     * @param line the line
+     * @param dot the index of the dot
+     * @return whether it is a member access
+     */
+    private static boolean isMemberAccessDot(String line, int dot)
+    {
+        int base = dot - 1;
+        while (base >= 0 && Character.isWhitespace(line.charAt(base)))
+        {
+            base--;
+        }
+        if (base < 0)
+        {
+            return false;
+        }
+        char before = line.charAt(base);
+        if (before == ')' || before == ']')
+        {
+            return true;
+        }
+        // An identifier may END in a digit (Object1.), so walk the token back and judge it by
+        // its FIRST character: a run that starts with a digit is a numeric literal. Walked by
+        // CODE POINT and through the same class as the identifier patterns - judged char-wise
+        // with isLetterOrDigit, a base ending in a non-Nd number stopped the walk, the dot was
+        // read as ending a literal, and the member below it was accepted as a real terminator.
+        int end = base + 1;
+        while (end > 0)
+        {
+            int codePoint = line.codePointBefore(end);
+            if (!isIdentifierCharacter(codePoint))
+            {
+                break;
+            }
+            end -= Character.charCount(codePoint);
+        }
+        if (end == base + 1)
+        {
+            return false;
+        }
+        int first = line.codePointAt(end);
+        return Character.isLetter(first) || first == '_';
+    }
+
+    /**
+     * Whether the last line that carries anything before {@code index} ends in a member-access
+     * dot.
+     * <p>
+     * Blank and comment-only lines are crossed, because whitespace and comments are hidden
+     * terminals: {@code Value = Object.}, a comment line, then {@code EndFunction;} is the one
+     * expression {@code Object.EndFunction} and not a method end. Looking only at the line
+     * immediately above would read the blank and conclude the dot was gone.
+     * </p>
+     *
+     * @param lines the lines being scanned, with literals and comments already masked
+     * @param index the line under examination
+     * @return whether the preceding code line left a dangling member dot
+     */
+    private static boolean previousMeaningfulLineEndsWithMemberDot(List<String> lines, int index)
+    {
+        for (int i = index - 1; i >= 0; i--)
+        {
+            String line = lines.get(i);
+            if (line != null && !line.trim().isEmpty())
+            {
+                return endsWithMemberDot(line);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether the line's last meaningful character is a member-access dot. An end-of-line
+     * comment is dropped first; everything else is judged as written.
+     */
+    private static boolean endsWithMemberDot(String line)
+    {
+        if (line == null)
+        {
+            return false;
+        }
+        int comment = line.indexOf("//"); //$NON-NLS-1$
+        String code = comment >= 0 ? line.substring(0, comment) : line;
+        // Trimmed with the BSL class, not String.stripTrailing(): that one strips by
+        // Character.isWhitespace, which accepts the C0 separators (U+001C..U+001F) the lexer does
+        // not. A line ending "Object." plus a FILE SEPARATOR was read as a dangling dot, the real
+        // terminator below it was taken for a member name, and the span borrowed a later closer -
+        // deleting whatever stood between them.
+        int end = code.length();
+        while (end > 0 && isBslSpace(code.charAt(end - 1)))
+        {
+            end--;
+        }
+        String trimmed = code.substring(0, end);
+        return trimmed.endsWith(".") //$NON-NLS-1$
+            && isMemberAccessDot(trimmed, trimmed.length() - 1);
+    }
+
+    /**
      * Location of a method found by text/regex scan (the fallback used when the
      * EMF model is unavailable). Line numbers are 0-indexed; {@link #startLine}
      * already includes any adjacent doc-comment block.
@@ -325,50 +1132,24 @@ public final class BslModuleUtils
      */
     public static TextMethod findMethodViaText(List<String> allLines, String methodName)
     {
-        int methodStart = -1;
-        int methodEnd = -1;
-        String matchedName = null;
-        boolean isFunction = false;
+        MethodSpan found = null;
         List<String> allMethodNames = new ArrayList<>();
 
-        for (int i = 0; i < allLines.size(); i++)
+        for (MethodSpan span : findMethodSpansViaText(allLines))
         {
-            Matcher startMatcher = METHOD_START_PATTERN.matcher(allLines.get(i));
-            if (startMatcher.find())
+            allMethodNames.add(span.name);
+            if (found == null && span.name.equalsIgnoreCase(methodName))
             {
-                String foundName = startMatcher.group(1);
-                allMethodNames.add(foundName);
-
-                if (foundName.equalsIgnoreCase(methodName))
-                {
-                    methodStart = i;
-                    matchedName = foundName;
-                    isFunction = FUNC_KEYWORD_PATTERN.matcher(allLines.get(i)).find();
-                }
-            }
-
-            if (methodStart >= 0 && methodEnd < 0)
-            {
-                if (METHOD_END_PATTERN.matcher(allLines.get(i)).find())
-                {
-                    methodEnd = i;
-                    break;
-                }
+                found = span;
             }
         }
 
-        if (methodStart < 0)
+        if (found == null)
         {
             return new TextMethod(false, -1, -1, null, false, allMethodNames);
         }
-        if (methodEnd < 0)
-        {
-            methodEnd = allLines.size() - 1;
-        }
-
-        // Include the doc-comment block preceding the method keyword.
-        int docStart = findDocCommentStartLine(allLines, methodStart + 1) - 1;
-        return new TextMethod(true, docStart, methodEnd, matchedName, isFunction, allMethodNames);
+        return new TextMethod(true, found.startLine, found.endLine, found.name,
+            found.isFunction, allMethodNames);
     }
 
     /**
@@ -913,6 +1694,162 @@ public final class BslModuleUtils
 
         int docStart = idx + 2; // convert back to 1-based
         return docStart < declarationLine1Based ? docStart : declarationLine1Based;
+    }
+
+    /**
+     * Finds the beginning of the contiguous preamble owned by a BSL method:
+     * documentation-comment lines and ampersand annotations/directives immediately
+     * above the Procedure/Function declaration. Code ends the preamble, so a
+     * branch/region directive is never absorbed into the method.
+     *
+     * <p>Blank lines are crossed only to reach a comment/annotation group that CONTAINS an
+     * annotation, wherever in the group it sits. Whitespace and comments are hidden terminals
+     * in the BSL grammar and {@code Procedure} carries its {@code pragmas} directly, so
+     * {@code &AtClient}, an explaining comment, a blank line and the declaration are one unit -
+     * inserting between them would rebind the directive to the inserted method. A group of
+     * comments alone stays detached, keeping the documentation adjacency policy.
+     *
+     * @param sourceLines all file lines (0-indexed list)
+     * @param declarationLine1Based 1-based declaration line
+     * @return 1-based first owned line, or the declaration line itself
+     */
+    public static int findMethodPreambleStartLine(List<String> sourceLines,
+        int declarationLine1Based)
+    {
+        return findMethodPreambleStartLine(sourceLines,
+            sourceLines == null ? null : BslSyntaxChecker.maskLiteralsAndComments(sourceLines),
+            declarationLine1Based);
+    }
+
+    /**
+     * The same walk, told what the lines look like with their literals and comments blanked.
+     * <p>
+     * Two views on purpose: the COMMENT policy above needs the raw text - a comment above a
+     * declaration is documentation and must stay recognisable - while everything that is really
+     * a lexical question (a pragma's parentheses, a bare async modifier carrying a trailing
+     * comment) has to be asked of the masked text, or punctuation inside a comment or a literal
+     * decides it.
+     * </p>
+     *
+     * @param sourceLines all file lines (0-indexed list)
+     * @param masked those lines with literals and comments blanked
+     * @param declarationLine1Based 1-based declaration line
+     * @return 1-based first owned line, or the declaration line itself
+     */
+    private static int findMethodPreambleStartLine(List<String> sourceLines, List<String> masked,
+        int declarationLine1Based)
+    {
+        if (sourceLines == null || declarationLine1Based <= 1)
+        {
+            return declarationLine1Based;
+        }
+
+        int idx = declarationLine1Based - 2;
+        int owned = declarationLine1Based;
+        while (idx >= 0)
+        {
+            String trimmed = sourceLines.get(idx).trim();
+            if (isTrivia(trimmed, masked.get(idx).trim()))
+            {
+                owned = idx + 1;
+                idx--;
+                continue;
+            }
+            if (!trimmed.isEmpty())
+            {
+                // Code ends the preamble. A pragma with arguments split across lines would end
+                // it here too - its tail looks like code - but such a module never reaches this
+                // point: unaddressableDeclarationLine refuses it, because a whole-line scanner
+                // cannot say where that pragma ends and both wrong answers destroy something.
+                break;
+            }
+            // A blank run: cross it only to an ANNOTATION above it - "&AtClient", an explaining
+            // comment, a blank line and the declaration are one unit. Ownership then starts at
+            // that annotation and stops: a comment ABOVE it, on the far side of a blank line, is
+            // as likely to be the previous method's footer, and claiming it would let
+            // replaceMethod delete a note that belongs to somebody else. A group of comments
+            // alone is not crossed at all, which is the documentation adjacency policy.
+            int annotation = topAnnotationAboveBlankRun(sourceLines, masked, idx);
+            if (annotation < 0)
+            {
+                break;
+            }
+            owned = annotation + 1;
+            break;
+        }
+        return owned;
+    }
+
+    /**
+     * A line that binds to the declaration below it: a comment, an ampersand annotation, or a
+     * bare async modifier (which is part of the declaration itself, not decoration around it).
+     */
+    private static boolean isTrivia(String trimmedLine, String trimmedMasked)
+    {
+        // The async modifier is asked of the MASKED line: "Async // explanation" is still one
+        // async declaration, and an end-anchored pattern on the raw text fails on the comment -
+        // which would let an insertBefore land between the modifier and its method, binding the
+        // modifier to the inserted one and making the target synchronous.
+        return trimmedLine.startsWith("//") || trimmedLine.startsWith("&") //$NON-NLS-1$ //$NON-NLS-2$
+            || ASYNC_MODIFIER_LINE_PATTERN.matcher(trimmedMasked).matches();
+    }
+
+    /**
+     * Given the index of a blank line, finds the TOPMOST annotation in the contiguous
+     * comment/annotation group directly above the blank run.
+     * <p>
+     * The annotation is what may be crossed to, because a directive keeps binding to its
+     * declaration across hidden trivia; the comments above it are not, because on the far side of
+     * a blank line they read as the previous method's trailing note just as easily.
+     * </p>
+     *
+     * @return the 0-based index of that annotation, or {@code -1} when the group has none and the
+     *         blank run must not be crossed
+     */
+    private static int topAnnotationAboveBlankRun(List<String> sourceLines, List<String> masked,
+        int blankIndex)
+    {
+        int probe = blankIndex;
+        int topAnnotation = -1;
+        // Group by group, not once: "&AtServer", blank, "&Around(...)", blank, declaration is ONE
+        // unit - every one of those directives binds to the declaration, because the whitespace
+        // between them is hidden. Stopping at the first blank run above the nearer annotation
+        // started the span below the further one, so replaceMethod kept a stale directive and
+        // insertBefore rebound it to the method being inserted. A group that holds no annotation
+        // is still not crossed: that is the documentation adjacency policy, unchanged.
+        while (probe >= 0)
+        {
+            while (probe >= 0 && sourceLines.get(probe).trim().isEmpty())
+            {
+                probe--;
+            }
+            boolean annotationInThisGroup = false;
+            while (probe >= 0)
+            {
+                String trimmed = sourceLines.get(probe).trim();
+                String trimmedMasked = masked.get(probe).trim();
+                if (trimmed.isEmpty())
+                {
+                    break;
+                }
+                if (!isTrivia(trimmed, trimmedMasked))
+                {
+                    return topAnnotation;
+                }
+                if (trimmed.startsWith("&") //$NON-NLS-1$
+                    || ASYNC_MODIFIER_LINE_PATTERN.matcher(trimmedMasked).matches())
+                {
+                    topAnnotation = probe;
+                    annotationInThisGroup = true;
+                }
+                probe--;
+            }
+            if (!annotationInThisGroup)
+            {
+                return topAnnotation;
+            }
+        }
+        return topAnnotation;
     }
 
     /**

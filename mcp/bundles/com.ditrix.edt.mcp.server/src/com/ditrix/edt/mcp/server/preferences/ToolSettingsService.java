@@ -47,7 +47,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * read-only presets since they existed. Both read-only presets get the same two names, so one
      * set answers for both.
      */
-    private static final Set<String> READ_ONLY_V6_ADDITIONS = Set.of(
+    private static final Set<String> READ_ONLY_V7_ADDITIONS = Set.of(
         "merge_rules", //$NON-NLS-1$
         "delete_project"); //$NON-NLS-1$
 
@@ -264,6 +264,18 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             }
             if (storedVersion < 6)
             {
+                // set_error_breakpoint is new, so a preset saved before it existed cannot name it.
+                // Without this step an upgraded store that chose a NO-DEBUG preset would silently
+                // gain a debugging tool - the same hazard version 2 and version 4 exist for.
+                changed |= migrateErrorBreakpointIntoNoDebugPresets(disabled);
+            }
+            if (storedVersion < 7)
+            {
+                // Its own version rather than sharing 6: a store that already ran the step above
+                // records 6, and reusing that number would skip this one on exactly those stores.
+                // Order against it does not matter - every step here only ADDS to the disabled
+                // list, and the recognition below is a containment test, which more disabled
+                // entries can never break.
                 changed |= migrateDestructiveToolsIntoReadOnlyPresets(disabled);
             }
             if (changed)
@@ -319,6 +331,33 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     }
 
     /**
+     * Adds {@code set_error_breakpoint} to a store that already expresses a NO-DEBUG profile.
+     * <p>
+     * The tool did not exist when those presets were saved, so their stored denylist cannot name
+     * it - and a denylist is an allow-by-default list: without this step, upgrading would hand a
+     * debugging switch to a profile that promised none. Recognition is by containment of the same
+     * frozen historical shapes the earlier migrations use, so a hand-tuned custom selection and
+     * All Tools are left alone.
+     *
+     * @param disabled the mutable stored disabled-tools set; modified in place
+     * @return {@code true} when the tool was added
+     */
+    private static boolean migrateErrorBreakpointIntoNoDebugPresets(Set<String> disabled)
+    {
+        if (disabled.contains("set_error_breakpoint")) //$NON-NLS-1$
+        {
+            return false;
+        }
+        if (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE)
+            || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE)
+            || disabled.containsAll(DEVELOPMENT_RECOGNITION_SHAPE))
+        {
+            return disabled.add("set_error_breakpoint"); //$NON-NLS-1$
+        }
+        return false;
+    }
+
+    /**
      * Adds the version 4 group-inherited disabled names to the first stored preset shape that
      * contains all of its older asserted tools.
      *
@@ -367,7 +406,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         if (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE)
             || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE))
         {
-            return disabled.addAll(READ_ONLY_V6_ADDITIONS);
+            return disabled.addAll(READ_ONLY_V7_ADDITIONS);
         }
         return false;
     }

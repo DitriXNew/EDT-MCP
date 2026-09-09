@@ -39,7 +39,7 @@ public class ToolSettingsServiceTest
         "stop_profiling"); //$NON-NLS-1$
 
     /* Written out here rather than read off the production constant, which is private. */
-    private static final Set<String> READ_ONLY_V6_ADDITIONS = Set.of(
+    private static final Set<String> READ_ONLY_V7_ADDITIONS = Set.of(
         "merge_rules", //$NON-NLS-1$
         "delete_project"); //$NON-NLS-1$
 
@@ -431,7 +431,7 @@ public class ToolSettingsServiceTest
         assertTrue("version 4 must add every Code Review addition: " + disabled,
             disabled.containsAll(CODE_REVIEW_V4_ADDITIONS));
         assertTrue("version 6 must add the destructive tools it missed: " + disabled,
-            disabled.containsAll(READ_ONLY_V6_ADDITIONS));
+            disabled.containsAll(READ_ONLY_V7_ADDITIONS));
         // matchPreset is deliberately not asserted: migration is minimal and the live preset has
         // grown, so this safely migrated first-release store is legitimately CUSTOM.
     }
@@ -454,7 +454,7 @@ public class ToolSettingsServiceTest
         assertTrue("version 4 must add every Analysis Only addition: " + disabled,
             disabled.containsAll(ANALYSIS_ONLY_V4_ADDITIONS));
         assertTrue("version 6 must add the destructive tools it missed: " + disabled,
-            disabled.containsAll(READ_ONLY_V6_ADDITIONS));
+            disabled.containsAll(READ_ONLY_V7_ADDITIONS));
         // matchPreset is deliberately not asserted: migration is minimal and the live preset has
         // grown, so this safely migrated first-release store is legitimately CUSTOM.
     }
@@ -654,6 +654,40 @@ public class ToolSettingsServiceTest
     }
 
     @Test
+    public void testVersion6AddsTheErrorBreakpointToAStoredNoDebugPreset()
+    {
+        // A store saved before set_error_breakpoint existed cannot name it, and the stored value is
+        // a DENYLIST - so without this migration the upgrade hands a debugging switch to a profile
+        // that promised none.
+        Set<String> stored = new HashSet<>(ToolSettingsService.DEVELOPMENT_RECOGNITION_SHAPE);
+        stored.add("git"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(stored, 5);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue("a no-debug preset must not gain break-on-error: " + disabled,
+            disabled.contains("set_error_breakpoint")); //$NON-NLS-1$
+        assertTrue("the user's own choices must survive: " + disabled,
+            disabled.contains("git") && disabled.contains("set_breakpoint")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+    }
+
+    @Test
+    public void testVersion6LeavesAnAllToolsStoreAlone()
+    {
+        // The mirror direction: a store that disabled nothing debugging-related asked for every
+        // tool, and must not be handed a disable it never chose.
+        PreferenceStore store = storedDisabledTools(Set.of("git", "ask_workmate"), 5); //$NON-NLS-1$ //$NON-NLS-2$
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertFalse("an all-tools store must keep break-on-error enabled: " + disabledTools(store),
+            disabledTools(store).contains("set_error_breakpoint")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testVersion5DoesNotDisableLaunchForAStoreThatNeverDisabledIt()
     {
         PreferenceStore store = storedDisabledTools(Set.of("git", "ask_workmate"), 4); //$NON-NLS-1$ //$NON-NLS-2$
@@ -674,13 +708,13 @@ public class ToolSettingsServiceTest
     @Test
     public void testVersion6RestoresCurrentAnalysisOnlyPreset()
     {
-        assertVersion6RestoresCurrentPreset(ToolPreset.ANALYSIS_ONLY);
+        assertVersion7RestoresCurrentPreset(ToolPreset.ANALYSIS_ONLY);
     }
 
     @Test
     public void testVersion6RestoresCurrentCodeReviewPreset()
     {
-        assertVersion6RestoresCurrentPreset(ToolPreset.CODE_REVIEW);
+        assertVersion7RestoresCurrentPreset(ToolPreset.CODE_REVIEW);
     }
 
     @Test
@@ -705,7 +739,7 @@ public class ToolSettingsServiceTest
         // frozen Analysis Only shape, so removing it breaks containment.
         Set<String> custom = new HashSet<>(ToolPreset.ANALYSIS_ONLY.getDisabledTools());
         custom.remove("write_module_source"); //$NON-NLS-1$
-        custom.removeAll(READ_ONLY_V6_ADDITIONS);
+        custom.removeAll(READ_ONLY_V7_ADDITIONS);
         PreferenceStore store = storedDisabledTools(custom, 5);
 
         ToolSettingsService.ensureMigratedForTest(store);
@@ -725,7 +759,7 @@ public class ToolSettingsServiceTest
         // tools exactly as it has them today - and both remain behind the consent gate.
         Set<String> loosened = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
         loosened.remove("get_applications"); //$NON-NLS-1$
-        loosened.removeAll(READ_ONLY_V6_ADDITIONS);
+        loosened.removeAll(READ_ONLY_V7_ADDITIONS);
         PreferenceStore store = storedDisabledTools(loosened, 5);
 
         ToolSettingsService.ensureMigratedForTest(store);
@@ -735,34 +769,53 @@ public class ToolSettingsServiceTest
     }
 
     @Test
-    public void testVersion6StillRecognizesAReadOnlyProfileThatReEnabledApplyQuickFix()
+    public void testVersion7StillRecognizesAReadOnlyProfileThatReEnabledApplyQuickFix()
     {
         // apply_quick_fix is in NEITHER frozen shape, precisely so a user who deliberately turned
         // it back on after version 2 is still recognized as read-only here.
-        Set<String> beforeVersion6 = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
-        beforeVersion6.remove("apply_quick_fix"); //$NON-NLS-1$
-        beforeVersion6.removeAll(READ_ONLY_V6_ADDITIONS);
-        PreferenceStore store = storedDisabledTools(beforeVersion6, 5);
+        Set<String> beforeVersion7 = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        beforeVersion7.remove("apply_quick_fix"); //$NON-NLS-1$
+        beforeVersion7.removeAll(READ_ONLY_V7_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(beforeVersion7, 5);
 
         ToolSettingsService.ensureMigratedForTest(store);
 
         Set<String> disabled = disabledTools(store);
-        assertTrue("version 6 must still add its names: " + disabled,
-            disabled.containsAll(READ_ONLY_V6_ADDITIONS));
-        assertFalse("version 6 must not re-disable apply_quick_fix: " + disabled,
+        assertTrue("version 7 must still add its names: " + disabled,
+            disabled.containsAll(READ_ONLY_V7_ADDITIONS));
+        assertFalse("version 7 must not re-disable apply_quick_fix: " + disabled,
             disabled.contains("apply_quick_fix")); //$NON-NLS-1$
     }
 
-    private static void assertVersion6RestoresCurrentPreset(ToolPreset preset)
+    @Test
+    public void testAStoreAlreadyAtTheErrorBreakpointVersionStillGainsTheDestructiveTools()
     {
-        Set<String> beforeVersion6 = new HashSet<>(preset.getDisabledTools());
-        beforeVersion6.removeAll(READ_ONLY_V6_ADDITIONS);
-        PreferenceStore store = storedDisabledTools(beforeVersion6, 5);
+        // The step that adds set_error_breakpoint took version 6 on master while this one was in
+        // flight, so this one is 7. A store that already ran THAT step records 6, and sharing the
+        // number would skip this step on exactly those stores - the upgraded ones. Stored at 6 on
+        // purpose: under the old numbering this call migrates nothing and the assertion below is
+        // what says so.
+        Set<String> alreadyAtSix = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        alreadyAtSix.removeAll(READ_ONLY_V7_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(alreadyAtSix, 6);
 
         ToolSettingsService.ensureMigratedForTest(store);
 
         Set<String> disabled = disabledTools(store);
-        assertEquals("version 6 must restore the current disabled set for " + preset,
+        assertTrue("a store at the previous version must still gain the destructive names: "
+            + disabled, disabled.containsAll(READ_ONLY_V7_ADDITIONS));
+    }
+
+    private static void assertVersion7RestoresCurrentPreset(ToolPreset preset)
+    {
+        Set<String> beforeVersion7 = new HashSet<>(preset.getDisabledTools());
+        beforeVersion7.removeAll(READ_ONLY_V7_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(beforeVersion7, 5);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertEquals("version 7 must restore the current disabled set for " + preset,
             preset.getDisabledTools(), disabled);
         assertEquals("the restored set must match " + preset,
             preset, ToolPreset.matchPreset(disabled));
