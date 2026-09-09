@@ -2031,4 +2031,49 @@ public class WriteModuleSourceToolTest
         assertTrue("the new method must go above both pragmas: " + joined, //$NON-NLS-1$
             joined.indexOf("Procedure Added()") < joined.indexOf("&Instead(")); //$NON-NLS-1$ //$NON-NLS-2$
     }
+
+    /**
+     * Whitespace between a pragma name and its arguments is hidden trivia, so "&Instead (...)" is
+     * an ordinary one-line pragma and must stay addressable.
+     */
+    @Test
+    public void testAPragmaWithSpaceBeforeItsArgumentsIsStillOwned()
+    {
+        List<String> module = lines(
+            "&Instead (\"Original\")\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("a spaced one-line pragma must stay addressable: " + result.error, result.error); //$NON-NLS-1$
+    }
+
+    /**
+     * A reserved member reached ACROSS a line break is not a declaration: "X = Object." then
+     * "Function And (Condition);" is the single expression Object.Function, and reading it as a
+     * declaration named "And" bounded the enclosing method before its real terminator.
+     */
+    @Test
+    public void testAMemberReachedAcrossALineBreakIsNotADeclaration()
+    {
+        List<String> module = lines(
+            "Procedure Target()\n\tX = Object.\n\tFunction And (Condition);\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\n\tNew = 1;\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("a member across a line break is not a declaration: " + result.error, //$NON-NLS-1$
+            result.error);
+    }
+
+    /**
+     * A method NAME has to be an identifier. "Procedure +()" was accepted as one complete method,
+     * so the payload satisfied the exactly-one-method contract and invalid BSL was written - the
+     * balance check only counts block keywords.
+     */
+    @Test
+    public void testAPayloadWhoseMethodNameIsNotAnIdentifierIsRejected()
+    {
+        assertMethodEditError("exactly one", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(simpleModule(), "insertAfter", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure +()\nEndProcedure\n")); //$NON-NLS-1$
+    }
 }

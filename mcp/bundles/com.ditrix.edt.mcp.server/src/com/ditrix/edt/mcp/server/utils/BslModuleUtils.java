@@ -58,7 +58,7 @@ public final class BslModuleUtils
     /** Regex for BSL method start (Процедура/Функция / Procedure/Function, with an optional leading
      * Асинх/Async modifier - platform async methods). Group 1 = method name, group 2 = params text after '(' */
     public static final Pattern METHOD_START_PATTERN = Pattern.compile(
-        "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\s+([^\\s(]+)\\s*\\((.*)$", //$NON-NLS-1$
+        "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)\\s*\\((.*)$", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /** Regex for a BSL procedure end. The right boundary prevents an identifier such as
@@ -400,6 +400,14 @@ public final class BslModuleUtils
             {
                 continue;
             }
+            // Not a declaration at all when the line above left a dangling member dot: newlines
+            // are hidden, so "X = Object." and "Function And (Condition);" is the single
+            // expression Object.Function - and reading it as a declaration bounds the enclosing
+            // method before its real terminator, which refuses every edit of a valid module.
+            if (previousMeaningfulLineEndsWithMemberDot(scan, declarationLine))
+            {
+                continue;
+            }
 
             boolean isFunction = FUNC_KEYWORD_PATTERN.matcher(scan.get(declarationLine)).find();
             Pattern terminator = isFunction ? FUNCTION_END_PATTERN : PROCEDURE_END_PATTERN;
@@ -462,7 +470,7 @@ public final class BslModuleUtils
 
     /** A complete pragma: an ampersand name, optionally with a closed argument list. */
     private static final Pattern PRAGMA_ONLY_LINE_PATTERN = Pattern.compile(
-        "^(?:&[\\p{L}\\p{N}_]+(?:\\([^()]*\\))?\\s*)+$", //$NON-NLS-1$
+        "^(?:&[\\p{L}\\p{N}_]+\\s*(?:\\([^()]*\\))?\\s*)+$", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /**
@@ -604,7 +612,11 @@ public final class BslModuleUtils
     {
         for (int i = Math.max(0, from); i < lines.size(); i++)
         {
-            if (METHOD_START_PATTERN.matcher(lines.get(i)).find())
+            // The same exemption the span scan makes: a reserved member reached across a line
+            // break is not a declaration, and taking it for one shortens the search window and
+            // leaves the real method looking unterminated.
+            if (METHOD_START_PATTERN.matcher(lines.get(i)).find()
+                && !previousMeaningfulLineEndsWithMemberDot(lines, i))
             {
                 return i;
             }
