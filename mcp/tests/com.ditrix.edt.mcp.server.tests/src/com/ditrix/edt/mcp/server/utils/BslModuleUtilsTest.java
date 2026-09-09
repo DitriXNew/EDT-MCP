@@ -361,6 +361,38 @@ public class BslModuleUtilsTest
      * alone on a line, and the rule used to read that as a nameless declaration and refuse the
      * whole module. A declaration only counts as unaddressable when it names something.
      */
+    /**
+     * The mirror of the member-name exemption: a NUMERIC literal ends in a dot too, and reading
+     * that as a member access would suppress the real terminator on the next line - the span
+     * would then run to a later closer and a replace would delete everything in between.
+     */
+    @Test
+    public void testADotEndingANumberDoesNotSuppressTheTerminator()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "\tValue = 1.", //$NON-NLS-1$
+            "EndProcedure", //$NON-NLS-1$
+            "ModuleValue = Call();", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue(span.complete);
+        assertEquals("the method must end at ITS terminator, not a later one", 2, span.endLine); //$NON-NLS-1$
+    }
+
+    /**
+     * A whole method on one physical line is legal and equally unaddressable by a whole-line
+     * scanner - the closer cannot be seen by a matcher that reads terminators at line start - so
+     * it is named and refused rather than silently borrowing a later terminator.
+     */
+    @Test
+    public void testAMethodWrittenOnOneLineIsReportedAsUnaddressable()
+    {
+        assertEquals(0, BslModuleUtils.unaddressableDeclarationLine(List.of(
+            "Procedure Target() EndProcedure Procedure Other()", //$NON-NLS-1$
+            "EndProcedure"))); //$NON-NLS-1$
+    }
     @Test
     public void testASplitMemberCallIsNotAnUnaddressableDeclaration()
     {

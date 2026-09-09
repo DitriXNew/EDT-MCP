@@ -1182,6 +1182,19 @@ public class WriteModuleSourceToolTest
      * nor bound, so the module is REFUSED by name and line rather than edited around: the hidden
      * method is invisible both to the span search and to the duplicate-name check.
      */
+    /**
+     * The payload gets the same guard as the module: a declaration the scanner cannot address
+     * hides INSIDE an otherwise one-method source, the outer method borrows the hidden one's
+     * terminator, and the exactly-one-method contract would be satisfied by text that is not.
+     */
+    @Test
+    public void testSourceHidingASplitDeclarationIsRefused()
+    {
+        String smuggled = "Procedure Added()\nFunction Hidden\n()\nEndFunction\nEndProcedure\n"; //$NON-NLS-1$
+        assertMethodEditError("source has a method declaration this mode cannot address", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(simpleModule(), "insertAfter", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                smuggled, null));
+    }
     @Test
     public void testAModuleWithASplitDeclarationIsRefusedByName()
     {

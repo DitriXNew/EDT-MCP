@@ -742,6 +742,17 @@ public class WriteModuleSourceTool implements IMcpTool
         }
 
         List<String> sourceLines = splitSourceLines(source);
+        // The same guard on the PAYLOAD: a declaration the scanner cannot address hides inside an
+        // otherwise one-method source, and the outer method then borrows the hidden one's
+        // terminator - the exactly-one-method contract would be satisfied by text that is not.
+        int hiddenInSource = BslModuleUtils.unaddressableDeclarationLine(sourceLines);
+        if (hiddenInSource >= 0)
+        {
+            return methodEditError("source has a method declaration this mode cannot address at " //$NON-NLS-1$
+                + "line " + (hiddenInSource + 1) + " ('" + sourceLines.get(hiddenInSource).trim() //$NON-NLS-1$ //$NON-NLS-2$
+                + "'): put the declaration and its opening parenthesis on one line, and keep the " //$NON-NLS-1$
+                + "terminator on a line of its own."); //$NON-NLS-1$
+        }
         List<BslModuleUtils.MethodSpan> sourceSpans =
             BslModuleUtils.findMethodSpansViaText(sourceLines);
         if (sourceSpans.size() != 1)

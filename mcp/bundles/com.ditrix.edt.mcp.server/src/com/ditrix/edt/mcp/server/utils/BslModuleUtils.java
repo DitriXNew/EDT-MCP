@@ -105,6 +105,18 @@ public final class BslModuleUtils
     private static final Pattern ASYNC_MODIFIER_LINE_PATTERN = Pattern.compile(
         "^\\s*(?:\u0410\u0441\u0438\u043D\u0445|Async)\\s*$", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    /**
+     * A declaration line that also carries a method TERMINATOR: a whole method written on one
+     * physical line, and anything hiding behind it on that line.
+     * <p>
+     * Legal under the hidden-whitespace grammar and equally unaddressable by a whole-line
+     * scanner: the closer cannot be seen by a matcher that reads a terminator only at the start
+     * of a line, so the method silently borrows a later one. Named and refused instead.
+     * </p>
+     */
+    private static final Pattern INLINE_TERMINATOR_PATTERN = Pattern.compile(
+        "(?<![\\p{L}\\p{N}_])(?:\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B|\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438|EndProcedure|EndFunction)(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     /** Regex for region start (#Область / #Region) */
     public static final Pattern REGION_START_PATTERN = Pattern.compile(
         "^\\s*#(?:\u041e\u0431\u043b\u0430\u0441\u0442\u044c|Region)\\s+(\\S+)", //$NON-NLS-1$
@@ -504,7 +516,8 @@ public final class BslModuleUtils
     }
 
     /**
-     * The first line holding a declaration this scanner cannot address, or {@code -1}.
+     * The first line holding a declaration this scanner cannot address, or {@code -1}: one whose
+     * opening parenthesis is on a later line, or one sharing its line with a terminator.
      *
      * @param lines module or fragment lines
      * @return the 0-based line index, or {@code -1} when there is none
@@ -517,7 +530,13 @@ public final class BslModuleUtils
         }
         for (int i = 0; i < lines.size(); i++)
         {
-            if (UNADDRESSABLE_DECLARATION_PATTERN.matcher(lines.get(i)).find())
+            String line = lines.get(i);
+            if (UNADDRESSABLE_DECLARATION_PATTERN.matcher(line).find())
+            {
+                return i;
+            }
+            if (METHOD_START_PATTERN.matcher(line).find()
+                && INLINE_TERMINATOR_PATTERN.matcher(line).find())
             {
                 return i;
             }
@@ -557,7 +576,20 @@ public final class BslModuleUtils
         }
         int comment = line.indexOf("//"); //$NON-NLS-1$
         String code = comment >= 0 ? line.substring(0, comment) : line;
-        return code.stripTrailing().endsWith("."); //$NON-NLS-1$
+        String trimmed = code.stripTrailing();
+        if (!trimmed.endsWith(".")) //$NON-NLS-1$
+        {
+            return false;
+        }
+        // A member ACCESS, not any dot: what precedes it has to be something a member can be
+        // taken from. A numeric literal ends in a dot too ("Value = 1."), and reading that as a
+        // member access would suppress the real terminator on the next line.
+        if (trimmed.length() < 2)
+        {
+            return false;
+        }
+        char before = trimmed.charAt(trimmed.length() - 2);
+        return Character.isLetter(before) || before == '_' || before == ')' || before == ']';
     }
 
     /**
