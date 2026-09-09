@@ -1134,7 +1134,9 @@ public class WriteModuleSourceToolTest
         // BSL allows module-level statements after the methods, so this terminator does
         // not end the line and the span cannot be measured in whole lines.
         List<String> current = lines("Procedure Target()\nEndProcedure; ModuleValue = 1;\n"); //$NON-NLS-1$
-        assertMethodEditError("target span is incomplete", //$NON-NLS-1$
+        // Refused by the unaddressable scan now, which names the shape instead of reporting the
+        // symptom ("the span is incomplete") a line further on.
+        assertMethodEditError("terminator sharing its line", //$NON-NLS-1$
             WriteModuleSourceTool.applyMethodTargetedEdit(current,
                 "replaceMethod", "Target", "Procedure Target()\nEndProcedure\n")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
@@ -1145,7 +1147,7 @@ public class WriteModuleSourceToolTest
         // The exactly-one-method contract has to hold for the payload too: the module-level
         // statement rides on the terminator line, where a line-based outside check misses it.
         String smuggled = "Procedure Target()\nEndProcedure; ModuleValue = DangerousCall();\n"; //$NON-NLS-1$
-        assertMethodEditError("no matching method terminator", //$NON-NLS-1$
+        assertMethodEditError("terminator sharing its line", //$NON-NLS-1$
             WriteModuleSourceTool.applyMethodTargetedEdit(simpleModule(),
                 "replaceMethod", "Target", smuggled)); //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -1191,7 +1193,7 @@ public class WriteModuleSourceToolTest
     public void testSourceHidingASplitDeclarationIsRefused()
     {
         String smuggled = "Procedure Added()\nFunction Hidden\n()\nEndFunction\nEndProcedure\n"; //$NON-NLS-1$
-        assertMethodEditError("source has a method declaration this mode cannot address", //$NON-NLS-1$
+        assertMethodEditError("cannot address", //$NON-NLS-1$
             WriteModuleSourceTool.applyMethodTargetedEdit(simpleModule(), "insertAfter", "Target", //$NON-NLS-1$ //$NON-NLS-2$
                 smuggled));
     }
@@ -1773,24 +1775,20 @@ public class WriteModuleSourceToolTest
     }
 
     /**
-     * A pragma whose ARGUMENTS are split across lines belongs to the declaration below it. Walking
-     * back from the declaration used to stop at the argument-closing line, so an insertBefore
-     * landed between the pragma and its method - silently rebinding &Instead to the new one.
+     * A pragma whose ARGUMENTS are split across lines is REFUSED, not delimited. Four different
+     * shapes of it were each delimited wrongly here - a blank line before the declaration, the
+     * parenthesis on its own line, a code line whose own balance is negative - and every wrong
+     * boundary either rebinds the annotation to an inserted method or deletes the code above it.
+     * A whole-line scanner may only edit what it can delimit.
      */
     @Test
-    public void testASplitPragmaStaysWithItsDeclaration()
+    public void testASplitPragmaIsRefusedRatherThanDelimited()
     {
         List<String> module = lines(
             "&Instead(\n\t\"Original\")\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
-        WriteModuleSourceTool.MethodEditResult result =
+        assertMethodEditError("pragma whose arguments continue", //$NON-NLS-1$
             WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
-                "Procedure Added()\nEndProcedure\n"); //$NON-NLS-1$
-        assertNull("the insert must be accepted: " + result.error, result.error); //$NON-NLS-1$
-        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
-        assertTrue("the pragma must still stand directly above its own method: " + joined, //$NON-NLS-1$
-            joined.contains("&Instead(\n\t\"Original\")\nProcedure Target()")); //$NON-NLS-1$
-        assertTrue("and the new method must go above the pragma, not inside it: " + joined, //$NON-NLS-1$
-            joined.indexOf("Procedure Added()") < joined.indexOf("&Instead(")); //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n")); //$NON-NLS-1$
     }
 
     /**
@@ -1872,22 +1870,18 @@ public class WriteModuleSourceToolTest
     }
 
     /**
-     * A pragma may carry an explanation between its opener and its argument tail, because comments
-     * are hidden trivia. The backward walk must cross that comment, or the pragma falls out of the
-     * preamble and an insertBefore rebinds it to the inserted method.
+     * The same refusal with a comment inside the pragma - and the reason it is a refusal rather
+     * than another special case: the comment is one more shape the boundary has to be guessed
+     * through, and a wrong guess here silently rebinds the annotation.
      */
     @Test
-    public void testASplitPragmaWithACommentInsideStaysWithItsDeclaration()
+    public void testASplitPragmaWithACommentInsideIsRefusedToo()
     {
         List<String> module = lines(
             "&Instead(\n\t// why\n\t\"Original\")\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
-        WriteModuleSourceTool.MethodEditResult result =
+        assertMethodEditError("pragma whose arguments continue", //$NON-NLS-1$
             WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
-                "Procedure Added()\nEndProcedure\n"); //$NON-NLS-1$
-        assertNull("the insert must be accepted: " + result.error, result.error); //$NON-NLS-1$
-        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
-        assertTrue("the new method must go above the whole pragma: " + joined, //$NON-NLS-1$
-            joined.indexOf("Procedure Added()") < joined.indexOf("&Instead(")); //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n")); //$NON-NLS-1$
     }
 
     /**
@@ -1911,21 +1905,17 @@ public class WriteModuleSourceToolTest
     }
 
     /**
-     * Punctuation inside a comment is not syntax: a pragma whose explanation carries an unbalanced
-     * parenthesis is still one pragma, and must stay with the declaration it binds to.
+     * Punctuation inside a comment is not syntax, so the refusal must fire on the PRAGMA and not
+     * on the comment's stray parenthesis - the reason has to name what is really wrong.
      */
     @Test
-    public void testAParenthesisInsideAPragmaCommentDoesNotUnbalanceIt()
+    public void testAPragmaWithAParenthesisInItsCommentIsRefusedForTheRightReason()
     {
         List<String> module = lines(
             "&Instead(\n\t// why )\n\t\"Original\")\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
-        WriteModuleSourceTool.MethodEditResult result =
+        assertMethodEditError("pragma whose arguments continue", //$NON-NLS-1$
             WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
-                "Procedure Added()\nEndProcedure\n"); //$NON-NLS-1$
-        assertNull("the insert must be accepted: " + result.error, result.error); //$NON-NLS-1$
-        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
-        assertTrue("the new method must go above the whole pragma: " + joined, //$NON-NLS-1$
-            joined.indexOf("Procedure Added()") < joined.indexOf("&Instead(")); //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n")); //$NON-NLS-1$
     }
 
     /**
@@ -1944,22 +1934,19 @@ public class WriteModuleSourceToolTest
     }
 
     /**
-     * The pragma search must stop at real CODE. A target standing after a method that carries a
-     * split pragma used to be handed that whole method as its preamble, and replaceMethod then
-     * deleted it.
+     * The module that used to lose its previous method: a target standing after a method carrying
+     * a split pragma was handed that whole method as its preamble and replaceMethod deleted it.
+     * Now the module is refused before any of that, which is the outcome that cannot destroy
+     * anything.
      */
     @Test
-    public void testAPreviousMethodIsNotSwallowedIntoTheTargetsPreamble()
+    public void testAModuleWhosePreviousMethodCarriesASplitPragmaIsRefused()
     {
         List<String> module = lines(
             "&Instead(\n\t\"Original\")\nProcedure Other()\nEndProcedure\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
-        WriteModuleSourceTool.MethodEditResult result =
+        assertMethodEditError("pragma whose arguments continue", //$NON-NLS-1$
             WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
-                "Procedure Target()\n\tNew = 1;\nEndProcedure\n"); //$NON-NLS-1$
-        assertNull("the replace must be accepted: " + result.error, result.error); //$NON-NLS-1$
-        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
-        assertTrue("the previous method and its pragma must survive: " + joined, //$NON-NLS-1$
-            joined.contains("&Instead(") && joined.contains("Procedure Other()")); //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\n\tNew = 1;\nEndProcedure\n")); //$NON-NLS-1$
     }
 
     /**

@@ -433,6 +433,32 @@ public final class BslModuleUtils
     private static final Pattern METHOD_END_TAIL_PATTERN = Pattern.compile("^\\s*;?\\s*(?://.*)?$"); //$NON-NLS-1$
 
     /**
+     * Whether the line opens a pragma whose argument list is still open at its end.
+     * <p>
+     * Read on masked text, so a parenthesis inside a comment or a literal is not counted.
+     * </p>
+     *
+     * @param maskedLine the line with its literals and comments blanked
+     * @return whether a pragma starts here and does not finish
+     */
+    private static boolean unclosedPragmaLine(String maskedLine)
+    {
+        String trimmed = maskedLine.trim();
+        if (!trimmed.startsWith("&")) //$NON-NLS-1$
+        {
+            return false;
+        }
+        int balance = 0;
+        for (int i = 0; i < trimmed.length(); i++)
+        {
+            char ch = trimmed.charAt(i);
+            balance += ch == '(' ? 1 : 0;
+            balance -= ch == ')' ? 1 : 0;
+        }
+        return balance != 0;
+    }
+
+    /**
      * A line holding nothing but a declaration keyword, its name having been put on the next
      * line. Hidden whitespace makes that a real method, and no anchored rule here can see it.
      */
@@ -548,9 +574,47 @@ public final class BslModuleUtils
      */
     public static int unaddressableDeclarationLine(List<String> lines)
     {
+        Unaddressable found = unaddressable(lines);
+        return found == null ? -1 : found.line;
+    }
+
+    /** A line a whole-line scanner cannot address, and the reason it cannot. */
+    public static final class Unaddressable
+    {
+        /** The 0-based line. */
+        public final int line;
+
+        /** What is wrong with it, as a phrase that completes "the module has ...". */
+        public final String what;
+
+        /** What the caller has to change, as an imperative sentence. */
+        public final String fix;
+
+        Unaddressable(int line, String what, String fix)
+        {
+            this.line = line;
+            this.what = what;
+            this.fix = fix;
+        }
+    }
+
+    /**
+     * The first line this scanner cannot address, with the reason - or {@code null}.
+     * <p>
+     * Six shapes, one rule: a whole-line scanner may only edit what it can DELIMIT. Each of
+     * these hides a declaration or a terminator from every anchored rule in this class, and a
+     * span that guesses past one either rebinds an annotation or deletes code that belongs to
+     * somebody else. The reason travels with the line because the six need six different fixes.
+     * </p>
+     *
+     * @param lines BSL module or fragment lines
+     * @return the finding, or {@code null} when every line can be addressed
+     */
+    public static Unaddressable unaddressable(List<String> lines)
+    {
         if (lines == null)
         {
-            return -1;
+            return null;
         }
         List<String> scan = BslSyntaxChecker.maskLiteralsAndComments(lines);
         for (int i = 0; i < scan.size(); i++)
@@ -558,15 +622,32 @@ public final class BslModuleUtils
             String line = scan.get(i);
             if (UNADDRESSABLE_DECLARATION_PATTERN.matcher(line).find())
             {
-                return i;
+                return new Unaddressable(i, "a method declaration split across lines", //$NON-NLS-1$
+                    "put the declaration and its opening parenthesis on one line"); //$NON-NLS-1$
             }
-            if (METHOD_START_PATTERN.matcher(line).find() && hasInlineTerminator(line))
+            // A terminator that does NOT own its line, wherever it stands: on the declaration
+            // line or after a body statement. The span scan only recognises a closer that owns
+            // its line, so an inline one is invisible to it - the span reads past it, borrows a
+            // later closer, and a replaceMethod deletes everything in between while the balance
+            // check sees a healed result.
+            if (hasInlineTerminator(line) && !isMethodTerminatorLine(line, METHOD_END_PATTERN))
             {
-                return i;
+                return new Unaddressable(i, "a method terminator sharing its line with other code", //$NON-NLS-1$
+                    "keep the terminator on a line of its own"); //$NON-NLS-1$
+            }
+            // A pragma whose argument list does not close on its own line. A whole-line scanner
+            // cannot say where such a pragma ends - four different shapes of it have each been
+            // delimited wrongly here - and getting the boundary wrong either rebinds the
+            // annotation to an inserted method or deletes the code above it. Refused instead.
+            if (unclosedPragmaLine(line))
+            {
+                return new Unaddressable(i, "a pragma whose arguments continue on the next line", //$NON-NLS-1$
+                    "put the pragma and its arguments on one line"); //$NON-NLS-1$
             }
             if (PRAGMA_ON_DECLARATION_LINE_PATTERN.matcher(line).find())
             {
-                return i;
+                return new Unaddressable(i, "a pragma sharing its line with the declaration", //$NON-NLS-1$
+                    "put the pragma on the line above the declaration"); //$NON-NLS-1$
             }
             // A declaration the ANCHORED scan cannot see: written after something else on the
             // line - the tail of a split pragma, say - it is invisible to every rule here, so
@@ -575,7 +656,8 @@ public final class BslModuleUtils
             if (ANY_DECLARATION_KEYWORD_PATTERN.matcher(line).find()
                 && !METHOD_START_PATTERN.matcher(line).find())
             {
-                return i;
+                return new Unaddressable(i, "a declaration written after something else on the line", //$NON-NLS-1$
+                    "start the declaration on a line of its own"); //$NON-NLS-1$
             }
             // The keyword ALONE, with its name on the next line. Not refused when the line
             // above left a dangling member dot: a reserved word is a legal member name, so
@@ -583,10 +665,11 @@ public final class BslModuleUtils
             if (BARE_DECLARATION_KEYWORD_PATTERN.matcher(line).matches()
                 && !previousMeaningfulLineEndsWithMemberDot(scan, i))
             {
-                return i;
+                return new Unaddressable(i, "a declaration whose name is on the next line", //$NON-NLS-1$
+                    "put the declaration and its name on one line"); //$NON-NLS-1$
             }
         }
-        return -1;
+        return null;
     }
     private static int findTerminatorLine(List<String> lines, int from, int to, Pattern terminator,
         Pattern wrongKind)
@@ -1414,17 +1497,10 @@ public final class BslModuleUtils
             }
             if (!trimmed.isEmpty())
             {
-                // A pragma may carry ARGUMENTS split across lines - "&Instead(" on one and
-                // '"Original")' on the next - and the tail looks like ordinary code. Breaking
-                // here left the pragma above the owned range, so an insertBefore landed between
-                // the pragma and its declaration and silently rebound it to the new method.
-                int pragmaStart = splitPragmaOpeningAbove(masked, idx);
-                if (pragmaStart >= 0)
-                {
-                    owned = pragmaStart + 1;
-                    idx = pragmaStart - 1;
-                    continue;
-                }
+                // Code ends the preamble. A pragma with arguments split across lines would end
+                // it here too - its tail looks like code - but such a module never reaches this
+                // point: unaddressableDeclarationLine refuses it, because a whole-line scanner
+                // cannot say where that pragma ends and both wrong answers destroy something.
                 break;
             }
             // A blank run: cross it only to an ANNOTATION above it - "&AtClient", an explaining
@@ -1442,91 +1518,6 @@ public final class BslModuleUtils
             break;
         }
         return owned;
-    }
-
-    /**
-     * When the line at {@code idx} completes a pragma whose arguments were split across lines,
-     * the index of the line that OPENS that pragma; -1 when it is ordinary code.
-     * <p>
-     * The opener has to leave a parenthesis unclosed and the run down to {@code idx} has to
-     * close it exactly: an annotation without arguments, or a statement standing under one,
-     * balances at zero from the start and is not claimed.
-     * </p>
-     *
-     * @param lines all file lines
-     * @param idx the line under examination
-     * @return the opening line index, or -1
-     */
-    private static int splitPragmaOpeningAbove(List<String> lines, int idx)
-    {
-        for (int start = idx; start >= 0; start--)
-        {
-            String trimmed = lines.get(start).trim();
-            if (trimmed.isEmpty())
-            {
-                // CROSSED, not stopped at: whitespace and comments are hidden terminals (and a
-                // comment is already blank in this masked view), so a pragma may carry an
-                // explanation between its opener and its argument tail and still be one pragma.
-                continue;
-            }
-            if (trimmed.startsWith("&")) //$NON-NLS-1$
-            {
-                return parenthesisBalance(lines, start, start) > 0
-                    && parenthesisBalance(lines, start, idx) == 0 ? start : -1;
-            }
-            // Real CODE below the candidate opener ends the search. Without this the walk ran on
-            // until it met any "&" line at all, so a target standing after a method that carries
-            // a split pragma was handed that whole method as its preamble - and replaceMethod
-            // deleted it. An argument list still open leaves the balance negative from here to
-            // the tail; anything else is code that belongs to nobody above.
-            if (parenthesisBalance(lines, start, idx) >= 0)
-            {
-                return -1;
-            }
-        }
-        return -1;
-    }
-
-    /**
-     * The parenthesis balance over a range of lines, ignoring anything inside a string literal.
-     *
-     * @param lines all file lines
-     * @param from the first line of the range
-     * @param to the last line of the range
-     * @return opening parentheses minus closing ones
-     */
-    private static int parenthesisBalance(List<String> lines, int from, int to)
-    {
-        int balance = 0;
-        boolean inLiteral = false;
-        for (int i = from; i <= to; i++)
-        {
-            String line = lines.get(i);
-            for (int c = 0; c < line.length(); c++)
-            {
-                char ch = line.charAt(c);
-                // A comment is trivia, and its punctuation is not syntax: "// why )" inside a
-                // pragma would otherwise close a parenthesis nobody opened, leave the run
-                // unbalanced, and drop the pragma out of the preamble it belongs to.
-                if (!inLiteral && ch == '/' && c + 1 < line.length() && line.charAt(c + 1) == '/')
-                {
-                    break;
-                }
-                if (ch == '"')
-                {
-                    inLiteral = !inLiteral;
-                }
-                else if (!inLiteral && ch == '(')
-                {
-                    balance++;
-                }
-                else if (!inLiteral && ch == ')')
-                {
-                    balance--;
-                }
-            }
-        }
-        return balance;
     }
 
     /**

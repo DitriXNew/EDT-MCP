@@ -703,14 +703,13 @@ public class WriteModuleSourceTool implements IMcpTool
         // rather than merely incomplete: the method is invisible, so a span can run straight
         // through it and the duplicate-name check cannot see the name it declares. Naming the
         // line and refusing is the only honest outcome for a whole-line scanner.
-        int hidden = BslModuleUtils.unaddressableDeclarationLine(originalLines);
-        if (hidden >= 0)
+        BslModuleUtils.Unaddressable hidden = BslModuleUtils.unaddressable(originalLines);
+        if (hidden != null)
         {
-            return methodEditError("the module has a method declaration split across lines at line " //$NON-NLS-1$
-                + (hidden + 1) + " ('" + originalLines.get(hidden).trim() //$NON-NLS-1$ //$NON-NLS-2$
-                + "'), which method-targeted modes cannot address: the opening parenthesis has to " //$NON-NLS-1$
-                + "be on the declaration line. Put that declaration on one line, or edit with " //$NON-NLS-1$
-                + "mode 'searchReplace'."); //$NON-NLS-1$
+            return methodEditError("the module has " + hidden.what + " at line " //$NON-NLS-1$ //$NON-NLS-2$
+                + (hidden.line + 1) + " ('" + originalLines.get(hidden.line).trim() //$NON-NLS-1$ //$NON-NLS-2$
+                + "'), which method-targeted modes cannot address: " + hidden.fix //$NON-NLS-1$
+                + ", or edit with mode 'searchReplace'."); //$NON-NLS-1$
         }
         // The mirror of the same blindness: a SECOND declaration written after the opener on
         // one line is invisible to every anchored rule here, so the scan counts one method
@@ -756,13 +755,13 @@ public class WriteModuleSourceTool implements IMcpTool
         // The same guard on the PAYLOAD: a declaration the scanner cannot address hides inside an
         // otherwise one-method source, and the outer method then borrows the hidden one's
         // terminator - the exactly-one-method contract would be satisfied by text that is not.
-        int hiddenInSource = BslModuleUtils.unaddressableDeclarationLine(sourceLines);
-        if (hiddenInSource >= 0)
+        BslModuleUtils.Unaddressable hiddenInSource = BslModuleUtils.unaddressable(sourceLines);
+        if (hiddenInSource != null)
         {
-            return methodEditError("source has a method declaration this mode cannot address at " //$NON-NLS-1$
-                + "line " + (hiddenInSource + 1) + " ('" + sourceLines.get(hiddenInSource).trim() //$NON-NLS-1$ //$NON-NLS-2$
-                + "'): put the declaration and its opening parenthesis on one line, and keep the " //$NON-NLS-1$
-                + "terminator on a line of its own."); //$NON-NLS-1$
+            return methodEditError("source has " + hiddenInSource.what + " at line " //$NON-NLS-1$ //$NON-NLS-2$
+                + (hiddenInSource.line + 1) + " ('" //$NON-NLS-1$
+                + sourceLines.get(hiddenInSource.line).trim()
+                + "'), which this mode cannot address: " + hiddenInSource.fix + "."); //$NON-NLS-1$ //$NON-NLS-2$
         }
         // And on the payload: "Procedure A() Function B()" reads as ONE method to the scan and
         // as balanced pairs to the syntax check, so without this it would be written as a
