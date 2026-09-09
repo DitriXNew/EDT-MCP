@@ -245,6 +245,461 @@ public class BslModuleUtilsTest
     // ========== findMethodViaText / buildTextMethodNotFoundResponse ==========
 
     @Test
+    public void testMethodEndPatternRequiresKeywordBoundary()
+    {
+        assertTrue(BslModuleUtils.METHOD_END_PATTERN.matcher("EndProcedure;").find()); //$NON-NLS-1$
+        assertTrue(BslModuleUtils.METHOD_END_PATTERN.matcher(
+            "\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438 // done").find()); //$NON-NLS-1$
+        assertFalse(BslModuleUtils.METHOD_END_PATTERN.matcher("EndProcedureResult = 1;").find()); //$NON-NLS-1$
+        assertFalse(BslModuleUtils.METHOD_END_PATTERN.matcher("EndFunctionValue = 1;").find()); //$NON-NLS-1$
+        assertFalse(BslModuleUtils.METHOD_END_PATTERN.matcher(
+            "\u041a\u043e\u043d\u0435\u0446\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u044b\u0420\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442 = 1;").find()); //$NON-NLS-1$
+        assertFalse(BslModuleUtils.METHOD_END_PATTERN.matcher(
+            "\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438\u0417\u043d\u0430\u0447\u0435\u043d\u0438\u0435 = 1;").find()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTerminatorMustOwnItsWholeLine()
+    {
+        assertTrue(BslModuleUtils.isMethodTerminatorLine(
+            "EndProcedure", BslModuleUtils.PROCEDURE_END_PATTERN)); //$NON-NLS-1$
+        assertTrue(BslModuleUtils.isMethodTerminatorLine(
+            "\tEndProcedure;", BslModuleUtils.PROCEDURE_END_PATTERN)); //$NON-NLS-1$
+        assertTrue(BslModuleUtils.isMethodTerminatorLine(
+            "EndProcedure // done", BslModuleUtils.PROCEDURE_END_PATTERN)); //$NON-NLS-1$
+        assertTrue(BslModuleUtils.isMethodTerminatorLine(
+            "\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438 // done", //$NON-NLS-1$
+            BslModuleUtils.FUNCTION_END_PATTERN));
+        // BSL puts module-level statements after the methods, so this line is valid code in
+        // which the terminator does NOT end the line - and a whole-line span would carry it.
+        assertFalse(BslModuleUtils.isMethodTerminatorLine(
+            "EndProcedure; ModuleValue = DangerousCall();", //$NON-NLS-1$
+            BslModuleUtils.PROCEDURE_END_PATTERN));
+        assertFalse(BslModuleUtils.isMethodTerminatorLine(
+            "EndProcedureResult = 1;", BslModuleUtils.PROCEDURE_END_PATTERN)); //$NON-NLS-1$
+        assertFalse(BslModuleUtils.isMethodTerminatorLine(
+            null, BslModuleUtils.PROCEDURE_END_PATTERN));
+    }
+
+    @Test
+    public void testMethodSpanStopsAtTheNextDeclaration()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "// Other documentation", //$NON-NLS-1$
+            "Procedure Other()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        List<BslModuleUtils.MethodSpan> spans = BslModuleUtils.findMethodSpansViaText(lines);
+        assertEquals(2, spans.size());
+        assertFalse("an unterminated method must not borrow the next method's terminator", //$NON-NLS-1$
+            spans.get(0).complete);
+        assertEquals(1, spans.get(0).endLine);
+        assertTrue(spans.get(1).complete);
+        assertEquals(1, spans.get(1).startLine);
+        assertEquals(3, spans.get(1).endLine);
+    }
+
+    @Test
+    public void testAnnotationSeparatedByBlankLineStaysWithTheDeclaration()
+    {
+        // Whitespace is a hidden terminal in the BSL grammar and Procedure carries its
+        // pragmas directly, so the directive still binds across the blank line.
+        List<String> lines = List.of(
+            "&AtClient", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(0, BslModuleUtils.findMethodSpansViaText(lines).get(0).startLine);
+    }
+
+    /**
+     * Comments are hidden trivia too, so a comment between the directive and the blank line does
+     * not detach the directive either: the whole group belongs to the declaration below it.
+     */
+    @Test
+    public void testAnnotationAboveACommentAndABlankLineIsStillOwned()
+    {
+        List<String> lines = List.of(
+            "&AtClient", //$NON-NLS-1$
+            "// explanation", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(0, BslModuleUtils.findMethodSpansViaText(lines).get(0).startLine);
+    }
+
+    /**
+     * Crossing a blank line reaches the ANNOTATION, not everything above it: a comment on the far
+     * side of the blank reads as the previous method's trailing note just as easily, and claiming
+     * it would let replaceMethod delete somebody else's line.
+     */
+    @Test
+    public void testACommentAboveACrossedAnnotationIsNotClaimed()
+    {
+        List<String> lines = List.of(
+            "// footer for the previous method", //$NON-NLS-1$
+            "&AtClient", //$NON-NLS-1$
+            "// explanation", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(1, BslModuleUtils.findMethodSpansViaText(lines).get(0).startLine);
+    }
+
+    /**
+     * A declaration whose opening parenthesis sits on the NEXT line is real BSL (the newline is
+     * hidden) and this whole-line scanner can neither locate nor bound it. It is therefore
+     * DETECTED so the caller can refuse, rather than guessed at - guessing produced a span that
+     * ran through the hidden method and a duplicate-name check that could not see it.
+     */
+    /**
+     * The false refusal this closes: a member call split after its dot puts a reserved word
+     * alone on a line, and the rule used to read that as a nameless declaration and refuse the
+     * whole module. A declaration only counts as unaddressable when it names something.
+     */
+    /**
+     * The mirror of the member-name exemption: a NUMERIC literal ends in a dot too, and reading
+     * that as a member access would suppress the real terminator on the next line - the span
+     * would then run to a later closer and a replace would delete everything in between.
+     */
+    @Test
+    public void testADotEndingANumberDoesNotSuppressTheTerminator()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "\tValue = 1.", //$NON-NLS-1$
+            "EndProcedure", //$NON-NLS-1$
+            "ModuleValue = Call();", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue(span.complete);
+        assertEquals("the method must end at ITS terminator, not a later one", 2, span.endLine); //$NON-NLS-1$
+    }
+
+    /**
+     * A whole method on one physical line is legal and equally unaddressable by a whole-line
+     * scanner - the closer cannot be seen by a matcher that reads terminators at line start - so
+     * it is named and refused rather than silently borrowing a later terminator.
+     */
+    @Test
+    public void testAMethodWrittenOnOneLineIsReportedAsUnaddressable()
+    {
+        assertEquals(0, BslModuleUtils.unaddressableDeclarationLine(List.of(
+            "Procedure Target() EndProcedure Procedure Other()", //$NON-NLS-1$
+            "EndProcedure"))); //$NON-NLS-1$
+    }
+    /**
+     * Every line rule reads text with literals and comments masked, so a keyword inside a DEFAULT
+     * VALUE is not code: this declaration is ordinary and must not make the module unaddressable.
+     */
+    /**
+     * A literal continues onto the next physical line only through a leading "|", so a quote left
+     * open by BROKEN source must not keep masking the code underneath it - otherwise the mask
+     * hides the method's own terminator and the span runs on to an unrelated one.
+     */
+    @Test
+    public void testAnUnterminatedStringDoesNotMaskTheTerminatorBelowIt()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "\tValue = \"broken", //$NON-NLS-1$
+            "EndProcedure", //$NON-NLS-1$
+            "ModuleValue = \"also broken", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue(span.complete);
+        assertEquals("the method must end at its OWN terminator", 2, span.endLine); //$NON-NLS-1$
+    }
+    /**
+     * A multi-line literal is lexed as a "-opened part and |-continued parts, with whitespace and
+     * comments hidden BETWEEN them - so a blank line inside one does not end it. Resetting the
+     * mask there exposed the continuation as code, and "Object." on it then suppressed the
+     * method's real terminator.
+     */
+    @Test
+    public void testABlankLineInsideAMultiLineLiteralDoesNotEndIt()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "\tText = \"first", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "|Object.\";", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue("the literal continues across the blank line, so the terminator is real", //$NON-NLS-1$
+            span.complete);
+        assertEquals(4, span.endLine);
+    }
+
+    /**
+     * A declaration sharing its line with its pragma is legal and invisible to a scan anchored on
+     * the keyword at line start - invisible to the span search AND to the duplicate-name check -
+     * so it is reported unaddressable instead of being silently skipped.
+     */
+    /**
+     * A comment hidden between two parts of a literal may itself contain a quote. Lexing it would
+     * close the literal early, after which the REAL closing quote reads as an opener and the code
+     * following it vanishes from the mask - taking a method terminator with it.
+     */
+    @Test
+    public void testAQuoteInsideTriviaDoesNotCloseTheLiteral()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "\tText = \"first", //$NON-NLS-1$
+            "\t// comment with a \" quote", //$NON-NLS-1$
+            "|last\";", //$NON-NLS-1$
+            "\tValue = 1;", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue("the code after the literal must stay visible", span.complete); //$NON-NLS-1$
+        assertEquals(5, span.endLine);
+    }
+
+    /** The grammar allows a RUN of pragmas, and a run hides a declaration just as well as one. */
+    @Test
+    public void testSeveralPragmasOnTheDeclarationLineAreAlsoUnaddressable()
+    {
+        assertEquals(0, BslModuleUtils.unaddressableDeclarationLine(List.of(
+            "&AtClient &Deprecated Procedure Added()", //$NON-NLS-1$
+            "EndProcedure"))); //$NON-NLS-1$
+    }
+    @Test
+    public void testAPragmaOnTheDeclarationLineIsReportedAsUnaddressable()
+    {
+        assertEquals(0, BslModuleUtils.unaddressableDeclarationLine(List.of(
+            "&AtClient Procedure Added()", //$NON-NLS-1$
+            "EndProcedure"))); //$NON-NLS-1$
+    }
+
+    /** The mirror: a pragma on its OWN line is ordinary and stays addressable. */
+    @Test
+    public void testAPragmaOnItsOwnLineStaysAddressable()
+    {
+        assertEquals(-1, BslModuleUtils.unaddressableDeclarationLine(List.of(
+            "&AtClient", //$NON-NLS-1$
+            "Procedure Added()", //$NON-NLS-1$
+            "EndProcedure"))); //$NON-NLS-1$
+    }
+    @Test
+    public void testATerminatorWordInsideADefaultValueIsNotCode()
+    {
+        List<String> lines = List.of(
+            "Procedure Target(Mode = \"EndProcedure\")", //$NON-NLS-1$
+            "\tValue = 1;", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(-1, BslModuleUtils.unaddressableDeclarationLine(lines));
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue("a literal must not end the method early", span.complete); //$NON-NLS-1$
+        assertEquals(2, span.endLine);
+    }
+
+    /**
+     * The mirror: masking must not HIDE a split declaration either. A trailing comment after the
+     * name used to defeat the end-of-line requirement, leaving the method invisible to the
+     * duplicate-name check.
+     */
+    @Test
+    public void testACommentAfterASplitDeclarationNameStillCounts()
+    {
+        assertEquals(0, BslModuleUtils.unaddressableDeclarationLine(List.of(
+            "Procedure Added // explanation", //$NON-NLS-1$
+            "()", //$NON-NLS-1$
+            "EndProcedure"))); //$NON-NLS-1$
+    }
+
+    /**
+     * An identifier may end in a DIGIT, and the member-access test judges the token by its first
+     * character rather than its last - otherwise "Object1." looked like a numeric literal and the
+     * reserved word on the next line was taken for the method end.
+     */
+    @Test
+    public void testAMemberAccessBaseEndingInADigitIsStillAMemberAccess()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "\tValue = Object1.", //$NON-NLS-1$
+            "\t\tEndProcedure;", //$NON-NLS-1$
+            "\tOther = 2;", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue(span.complete);
+        assertEquals(4, span.endLine);
+    }
+
+    /**
+     * Hidden whitespace includes a blank line, so an async modifier separated from its
+     * declaration still belongs to it - inserting between them would make the target
+     * synchronous and hand the modifier to the inserted method.
+     */
+    @Test
+    public void testABareAsyncModifierBindsAcrossABlankLine()
+    {
+        List<String> lines = List.of(
+            "Async", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(0, BslModuleUtils.findMethodSpansViaText(lines).get(0).startLine);
+    }
+    @Test
+    public void testASplitMemberCallIsNotAnUnaddressableDeclaration()
+    {
+        assertEquals(-1, BslModuleUtils.unaddressableDeclarationLine(List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "\tValue = Object.", //$NON-NLS-1$
+            "\t\tFunction;", //$NON-NLS-1$
+            "EndProcedure"))); //$NON-NLS-1$
+    }
+
+    /**
+     * A terminator keyword is a legal MEMBER name too, so "Object." on one line and
+     * "EndProcedure" on the next is one expression - the method continues to its real end. The
+     * exemption is safe HERE, unlike on the declaration side: a terminator missed by mistake
+     * leaves the span incomplete, which is a refusal, never a shorter splice.
+     */
+    @Test
+    public void testATerminatorKeywordUsedAsAMemberNameDoesNotEndTheMethod()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "\tValue = Object.", //$NON-NLS-1$
+            "\t\tEndProcedure;", //$NON-NLS-1$
+            "\tOther = 2;", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue("the member name must not be taken for the method end", span.complete); //$NON-NLS-1$
+        assertEquals(4, span.endLine);
+    }
+
+    /**
+     * A bare async modifier belongs to the declaration below it: replacing the method without it
+     * would leave the modifier behind, bound to whatever is written in its place.
+     */
+    @Test
+    public void testABareAsyncModifierLineIsPartOfTheMethod()
+    {
+        List<String> lines = List.of(
+            "Async", //$NON-NLS-1$
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(0, BslModuleUtils.findMethodSpansViaText(lines).get(0).startLine);
+    }
+    @Test
+    public void testADeclarationSplitAcrossLinesIsReportedAsUnaddressable()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "Procedure Other", //$NON-NLS-1$
+            "()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(1, BslModuleUtils.unaddressableDeclarationLine(lines));
+    }
+
+    /**
+     * The mirror: ordinary code must not be mistaken for one. A member access split after its dot
+     * opens a line with a reserved word (the grammar rule ExtName allows it), and a whole method
+     * on one line is addressable - neither is a hidden declaration.
+     */
+    @Test
+    public void testOrdinaryLinesAreNotReportedAsUnaddressableDeclarations()
+    {
+        assertEquals(-1, BslModuleUtils.unaddressableDeclarationLine(List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "	Value = Object.", //$NON-NLS-1$
+            "		Function();", //$NON-NLS-1$
+            "EndProcedure"))); //$NON-NLS-1$
+        assertEquals(-1, BslModuleUtils.unaddressableDeclarationLine(List.of(
+            "Function Value() Export", //$NON-NLS-1$
+            "	Return 1;", //$NON-NLS-1$
+            "EndFunction"))); //$NON-NLS-1$
+    }
+    @Test
+    public void testBlankLineStillDetachesACommentBlock()
+    {
+        List<String> lines = List.of(
+            "// detached documentation", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(2, BslModuleUtils.findMethodSpansViaText(lines).get(0).startLine);
+    }
+
+    @Test
+    public void testBlankRunOverCodeDoesNotExtendThePreamble()
+    {
+        List<String> lines = List.of(
+            "ModuleValue = 1;", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(2, BslModuleUtils.findMethodSpansViaText(lines).get(0).startLine);
+    }
+
+    @Test
+    public void testMethodSpanIncludesContiguousDocCommentAndAnnotations()
+    {
+        List<String> lines = List.of(
+            "// unrelated", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "// owned documentation", //$NON-NLS-1$
+            "&AtClient", //$NON-NLS-1$
+            "&Before(\"Base\")", //$NON-NLS-1$
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        List<BslModuleUtils.MethodSpan> spans = BslModuleUtils.findMethodSpansViaText(lines);
+        assertEquals(1, spans.size());
+        BslModuleUtils.MethodSpan span = spans.get(0);
+        assertEquals(2, span.startLine);
+        assertEquals(5, span.declarationLine);
+        assertEquals(6, span.endLine);
+        assertTrue(span.complete);
+    }
+
+    @Test
+    public void testMethodSpanDoesNotStopAtTerminatorPrefixIdentifier()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedureResult = 1;", //$NON-NLS-1$
+            "StillInside = 2;", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue(span.complete);
+        assertEquals(3, span.endLine);
+    }
+
+    @Test
+    public void testMethodSpanReportsMissingRealTerminator()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedureResult = 1;"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertFalse(span.complete);
+        assertEquals(1, span.endLine);
+    }
+
+    @Test
     public void testFindMethodViaTextLocatesFunctionWithDocComment()
     {
         List<String> lines = List.of(
@@ -317,15 +772,15 @@ public class BslModuleUtilsTest
     @Test
     public void testFindMethodViaTextRussianKeywordsAndExportFunction()
     {
-        // exercises the Cyrillic Функция/КонецФункции alternations and the Export flag
+        // exercises the Cyrillic \u0424\u0443\u043d\u043a\u0446\u0438\u044f/\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438 alternations and the Export flag
         List<String> lines = List.of(
-            "Функция Сумма(А, Б) Экспорт", // Функция Сумма(А, Б) Экспорт //$NON-NLS-1$
-            "  Возврат А + Б;", // Возврат А + Б; //$NON-NLS-1$
-            "КонецФункции"); // КонецФункции //$NON-NLS-1$
-        BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(lines, "Сумма"); // Сумма //$NON-NLS-1$
+            "\u0424\u0443\u043d\u043a\u0446\u0438\u044f \u0421\u0443\u043c\u043c\u0430(\u0410, \u0411) \u042d\u043a\u0441\u043f\u043e\u0440\u0442", // \u0424\u0443\u043d\u043a\u0446\u0438\u044f \u0421\u0443\u043c\u043c\u0430(\u0410, \u0411) \u042d\u043a\u0441\u043f\u043e\u0440\u0442 //$NON-NLS-1$
+            "  \u0412\u043e\u0437\u0432\u0440\u0430\u0442 \u0410 + \u0411;", // \u0412\u043e\u0437\u0432\u0440\u0430\u0442 \u0410 + \u0411; //$NON-NLS-1$
+            "\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438"); // \u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438 //$NON-NLS-1$
+        BslModuleUtils.TextMethod tm = BslModuleUtils.findMethodViaText(lines, "\u0421\u0443\u043c\u043c\u0430"); // \u0421\u0443\u043c\u043c\u0430 //$NON-NLS-1$
         assertTrue(tm.found);
         assertTrue(tm.isFunction);
-        assertEquals("Сумма", tm.matchedName); // Сумма //$NON-NLS-1$
+        assertEquals("\u0421\u0443\u043c\u043c\u0430", tm.matchedName); // \u0421\u0443\u043c\u043c\u0430 //$NON-NLS-1$
         assertEquals(0, tm.startLine);
         assertEquals(2, tm.endLine);
     }
@@ -668,10 +1123,10 @@ public class BslModuleUtilsTest
     public void testFindRegionRussianDirectivesAndIndentation()
     {
         List<String> lines = List.of(
-            "  #Область ПрограммныйИнтерфейс", // 1 #Область ПрограммныйИнтерфейс //$NON-NLS-1$
+            "  #\u041e\u0431\u043b\u0430\u0441\u0442\u044c \u041f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u043d\u044b\u0439\u0418\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441", // 1 #\u041e\u0431\u043b\u0430\u0441\u0442\u044c \u041f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u043d\u044b\u0439\u0418\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441 //$NON-NLS-1$
             "Code();",                      // 2 //$NON-NLS-1$
-            "  #КонецОбласти"); // 3 #КонецОбласти //$NON-NLS-1$
-        assertEquals("ПрограммныйИнтерфейс", //$NON-NLS-1$
+            "  #\u041a\u043e\u043d\u0435\u0446\u041e\u0431\u043b\u0430\u0441\u0442\u0438"); // 3 #\u041a\u043e\u043d\u0435\u0446\u041e\u0431\u043b\u0430\u0441\u0442\u0438 //$NON-NLS-1$
+        assertEquals("\u041f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u043d\u044b\u0439\u0418\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441", //$NON-NLS-1$
             BslModuleUtils.findRegionForLine(lines, 2));
     }
 

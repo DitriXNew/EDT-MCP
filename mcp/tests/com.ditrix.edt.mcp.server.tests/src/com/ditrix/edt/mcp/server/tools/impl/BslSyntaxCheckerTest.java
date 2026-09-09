@@ -1389,4 +1389,23 @@ public class BslSyntaxCheckerTest
         CheckResult result = BslSyntaxChecker.check(lines);
         assertFalse("an unclosed block inside a branch must still be reported", result.isValid()); //$NON-NLS-1$
     }
+
+    /**
+     * Source can mix separators and the splitter cuts on the newline only, so ONE element may
+     * hold a comment followed by real code after a bare carriage return. Skipping such an element
+     * as trivia inside an open literal would hide that code from this gate - and a method
+     * declared there would pass the balance check unseen.
+     */
+    @Test
+    public void testCodeAfterABareCarriageReturnIsStillChecked()
+    {
+        List<String> lines = List.of(
+            "Text = \"first", //$NON-NLS-1$
+            "// comment\rProcedure Orphan()", //$NON-NLS-1$
+            "|last\";"); //$NON-NLS-1$
+
+        BslSyntaxChecker.CheckResult result = BslSyntaxChecker.check(lines);
+        assertFalse("the procedure packed after the carriage return must be seen: " //$NON-NLS-1$
+            + result.getErrors(), result.isValid());
+    }
 }

@@ -149,11 +149,13 @@ public final class InputSchemaCompactor
         // The lost-update guard: what the hash is and where it comes from.
         // mode defaults to searchReplace, and THAT mode requires oldSource - so a call carrying
         // only the two declared required parameters looks schema-valid and fails at runtime.
+        // methodName is required by all three method-targeted modes; expectedHash becomes
+        // mandatory for the same modes instead of merely being an optional any-mode guard.
         // formName / commandName: with objectName on a NON-common object and
         // moduleType=FormModule / CommandModule, path resolution refuses the write without
         // them. Same conditional shape as mode->oldSource, one step further out.
         keep.put("write_module_source", asSet("expectedHash", "mode", "oldSource", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            "formName", "commandName")); //$NON-NLS-1$ //$NON-NLS-2$
+            "methodName", "formName", "commandName")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // The enum cannot express either fact: md is the default, and xml is legal only for
         // action=get + type=schema + a bare root. Without this one clause a schema-valid
         // format=xml call can select a fragment, dynamic-list type, or mutation and be refused.

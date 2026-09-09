@@ -1951,7 +1951,10 @@
    "mode": [
     "searchReplace",
     "replace",
-    "append"
+    "append",
+    "replaceMethod",
+    "insertBefore",
+    "insertAfter"
    ],
    "moduleType": [
     "ObjectModule",
@@ -1968,6 +1971,7 @@
    "expectedHash",
    "expectedSource",
    "formName",
+   "methodName",
    "mode",
    "modulePath",
    "moduleType",
@@ -1987,6 +1991,7 @@
    "expectedHash": "string",
    "expectedSource": "string",
    "formName": "string",
+   "methodName": "string",
    "mode": "string",
    "modulePath": "string",
    "moduleType": "string",

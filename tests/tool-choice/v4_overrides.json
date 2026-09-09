@@ -36,7 +36,8 @@
       "debug": "true launches in DEBUG mode so breakpoints fire and returns a launch handle immediately - call wait_for_break next. Default false polls and returns the report."
     },
     "write_module_source": {
-      "expectedHash": "Lost-update guard: the hash from the read that produced your edit. The write is rejected if the module changed since."
+      "expectedHash": "Lost-update guard: the hash from the read that produced your edit. The write is rejected if the module changed since; required for every method-targeted mode.",
+      "methodName": "Existing anchor method; required for replaceMethod, insertBefore, and insertAfter."
     }
   },
   "_not_measured": "git and ask_workmate postdate the golden snapshot, so they were not in the 500-question run. Their texts follow the same rule by review, not by measurement: purpose line + the clauses that are load-bearing (git: real CLI, whitelist, write-capable subcommands, disabled by default and NOT reachable through enable_toolset; ask_workmate: the start-then-poll protocol and the Workmate precondition).",
