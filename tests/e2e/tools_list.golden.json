@@ -4125,6 +4125,9 @@
         "modulePath": {
           "type": "string"
         },
+        "reconciledBreakpoints": {
+          "type": "integer"
+        },
         "resolvedFile": {
           "type": "string"
         },
