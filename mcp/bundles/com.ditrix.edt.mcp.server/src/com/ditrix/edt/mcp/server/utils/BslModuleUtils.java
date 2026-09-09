@@ -433,29 +433,76 @@ public final class BslModuleUtils
     private static final Pattern METHOD_END_TAIL_PATTERN = Pattern.compile("^\\s*;?\\s*(?://.*)?$"); //$NON-NLS-1$
 
     /**
-     * Whether the line opens a pragma whose argument list is still open at its end.
+     * Where a real method DECLARATION begins at or after {@code from}, or -1.
      * <p>
-     * Read on masked text, so a parenthesis inside a comment or a literal is not counted.
+     * The regex answers the shape; this answers whether the keyword is a keyword at all, by the
+     * same lexical rule the terminator uses. Whitespace after a dot is hidden, so
+     * {@code X = Object. Function + (1);} is a member expression and not a declaration - a
+     * fixed-width lookbehind sees the space and takes the "+" for a method name.
      * </p>
      *
      * @param maskedLine the line with its literals and comments blanked
-     * @return whether a pragma starts here and does not finish
+     * @param from where to start looking
+     * @return the index of the keyword, or -1
      */
-    private static boolean unclosedPragmaLine(String maskedLine)
+    private static int declarationShapeAt(String maskedLine, int from)
     {
-        String trimmed = maskedLine.trim();
+        Matcher shape = ANY_DECLARATION_KEYWORD_PATTERN.matcher(maskedLine);
+        int at = from;
+        while (shape.find(at))
+        {
+            if (!precededByMemberDot(maskedLine, shape.start()))
+            {
+                return shape.start();
+            }
+            at = shape.start() + 1;
+        }
+        return -1;
+    }
+
+    /** A complete pragma: an ampersand name, optionally with a closed argument list. */
+    private static final Pattern PRAGMA_ONLY_LINE_PATTERN = Pattern.compile(
+        "^(?:&[\\p{L}\\p{N}_]+(?:\\([^()]*\\))?\\s*)+$", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /**
+     * Whether the ampersand line cannot be owned as a whole line of pragmas.
+     * <p>
+     * Three ways it cannot: its argument list stays open, its arguments continue on the line
+     * below - {@code &Instead} then {@code (} - or it carries something after the pragma that is
+     * not one. All three are boundaries a whole-line scanner would have to guess, and both wrong
+     * guesses destroy something: the annotation moves to an inserted method, or the code riding
+     * on the line is deleted with the target.
+     * </p>
+     *
+     * @param masked all lines with their literals and comments blanked
+     * @param index the line to judge
+     * @return whether it must be refused
+     */
+    private static boolean unaddressablePragmaLine(List<String> masked, int index)
+    {
+        String trimmed = masked.get(index).trim();
         if (!trimmed.startsWith("&")) //$NON-NLS-1$
         {
             return false;
         }
-        int balance = 0;
-        for (int i = 0; i < trimmed.length(); i++)
+        if (!PRAGMA_ONLY_LINE_PATTERN.matcher(trimmed).matches())
         {
-            char ch = trimmed.charAt(i);
-            balance += ch == '(' ? 1 : 0;
-            balance -= ch == ')' ? 1 : 0;
+            // Either an open argument list or something else riding along. A declaration after
+            // the pragma has its own refusal and message, so it is left to that one.
+            return !PRAGMA_ON_DECLARATION_LINE_PATTERN.matcher(trimmed).find();
         }
-        return balance != 0;
+        for (int next = index + 1; next < masked.size(); next++)
+        {
+            String below = masked.get(next).trim();
+            if (below.isEmpty())
+            {
+                continue;
+            }
+            // A complete-looking pragma whose arguments were put on the NEXT line.
+            return below.startsWith("("); //$NON-NLS-1$
+        }
+        return false;
     }
 
     /**
@@ -478,7 +525,7 @@ public final class BslModuleUtils
      * </p>
      */
     private static final Pattern ANY_DECLARATION_KEYWORD_PATTERN = Pattern.compile(
-        "(?<![.\\p{L}\\p{N}_])(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\s+[^\\s(]+\\s*(?:\\(|$)", //$NON-NLS-1$
+        "(?<![\\p{L}\\p{N}_])(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\s+[\\p{L}_][\\p{L}\\p{N}_]*\\s*(?:\\(|$)", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /**
@@ -510,7 +557,7 @@ public final class BslModuleUtils
             {
                 continue;
             }
-            if (ANY_DECLARATION_KEYWORD_PATTERN.matcher(scan.get(i)).find(opener.end(1)))
+            if (declarationShapeAt(scan.get(i), opener.end(1)) >= 0)
             {
                 return i;
             }
@@ -639,10 +686,10 @@ public final class BslModuleUtils
             // cannot say where such a pragma ends - four different shapes of it have each been
             // delimited wrongly here - and getting the boundary wrong either rebinds the
             // annotation to an inserted method or deletes the code above it. Refused instead.
-            if (unclosedPragmaLine(line))
+            if (unaddressablePragmaLine(scan, i))
             {
-                return new Unaddressable(i, "a pragma whose arguments continue on the next line", //$NON-NLS-1$
-                    "put the pragma and its arguments on one line"); //$NON-NLS-1$
+                return new Unaddressable(i, "a pragma this scanner cannot delimit", //$NON-NLS-1$
+                    "put the pragma and its arguments on one line of their own"); //$NON-NLS-1$
             }
             if (PRAGMA_ON_DECLARATION_LINE_PATTERN.matcher(line).find())
             {
@@ -653,8 +700,7 @@ public final class BslModuleUtils
             // line - the tail of a split pragma, say - it is invisible to every rule here, so
             // the module holds a method this tool cannot count, address or check for duplicate
             // names. Refusing is the only honest answer a whole-line scanner has.
-            if (ANY_DECLARATION_KEYWORD_PATTERN.matcher(line).find()
-                && !METHOD_START_PATTERN.matcher(line).find())
+            if (declarationShapeAt(line, 0) >= 0 && !METHOD_START_PATTERN.matcher(line).find())
             {
                 return new Unaddressable(i, "a declaration written after something else on the line", //$NON-NLS-1$
                     "start the declaration on a line of its own"); //$NON-NLS-1$

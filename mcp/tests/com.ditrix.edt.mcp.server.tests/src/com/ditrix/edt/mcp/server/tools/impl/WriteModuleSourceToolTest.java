@@ -1786,7 +1786,7 @@ public class WriteModuleSourceToolTest
     {
         List<String> module = lines(
             "&Instead(\n\t\"Original\")\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
-        assertMethodEditError("pragma whose arguments continue", //$NON-NLS-1$
+        assertMethodEditError("pragma this scanner cannot delimit", //$NON-NLS-1$
             WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
                 "Procedure Added()\nEndProcedure\n")); //$NON-NLS-1$
     }
@@ -1879,7 +1879,7 @@ public class WriteModuleSourceToolTest
     {
         List<String> module = lines(
             "&Instead(\n\t// why\n\t\"Original\")\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
-        assertMethodEditError("pragma whose arguments continue", //$NON-NLS-1$
+        assertMethodEditError("pragma this scanner cannot delimit", //$NON-NLS-1$
             WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
                 "Procedure Added()\nEndProcedure\n")); //$NON-NLS-1$
     }
@@ -1913,7 +1913,7 @@ public class WriteModuleSourceToolTest
     {
         List<String> module = lines(
             "&Instead(\n\t// why )\n\t\"Original\")\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
-        assertMethodEditError("pragma whose arguments continue", //$NON-NLS-1$
+        assertMethodEditError("pragma this scanner cannot delimit", //$NON-NLS-1$
             WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
                 "Procedure Added()\nEndProcedure\n")); //$NON-NLS-1$
     }
@@ -1944,7 +1944,7 @@ public class WriteModuleSourceToolTest
     {
         List<String> module = lines(
             "&Instead(\n\t\"Original\")\nProcedure Other()\nEndProcedure\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
-        assertMethodEditError("pragma whose arguments continue", //$NON-NLS-1$
+        assertMethodEditError("pragma this scanner cannot delimit", //$NON-NLS-1$
             WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
                 "Procedure Target()\n\tNew = 1;\nEndProcedure\n")); //$NON-NLS-1$
     }
@@ -1966,5 +1966,69 @@ public class WriteModuleSourceToolTest
         String joined = String.join("\n", result.newLines); //$NON-NLS-1$
         assertTrue("the new method must go above the modifier: " + joined, //$NON-NLS-1$
             joined.indexOf("Procedure Added()") < joined.indexOf("Async")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * A pragma whose arguments were put on the line BELOW it looks complete on its own line, so a
+     * per-line balance admits it - and the preamble then stops at the argument tail, leaving the
+     * pragma outside the method it binds to.
+     */
+    @Test
+    public void testAPragmaWhoseArgumentsStartOnTheNextLineIsRefused()
+    {
+        List<String> module = lines(
+            "&Instead\n(\n\t\"Original\")\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        assertMethodEditError("pragma this scanner cannot delimit", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n")); //$NON-NLS-1$
+    }
+
+    /**
+     * A pragma line carrying CODE after it: the walk owned the whole line as preamble, so a
+     * replaceMethod cleared the statement riding on it together with the target - and the balance
+     * check saw a healed result.
+     */
+    @Test
+    public void testAPragmaLineCarryingCodeIsRefused()
+    {
+        List<String> module = lines(
+            "&AtClient ModuleValue = DangerousCall();\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        assertMethodEditError("pragma this scanner cannot delimit", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\n\tNew = 1;\nEndProcedure\n")); //$NON-NLS-1$
+    }
+
+    /**
+     * The control for the widened declaration shape: whitespace after a member dot is hidden, and
+     * an operator is not a method name. "X = Object. Function + (1);" is an ordinary expression.
+     */
+    @Test
+    public void testASpacedMemberExpressionIsNotADeclaration()
+    {
+        List<String> module = lines(
+            "Procedure Target()\n\tX = Object. Function + (1);\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\n\tNew = 1;\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("a spaced member expression is not a declaration: " + result.error, //$NON-NLS-1$
+            result.error);
+    }
+
+    /**
+     * And the control that keeps ordinary pragmas working: a complete one on its own line, with or
+     * without arguments, is still owned by the declaration below it.
+     */
+    @Test
+    public void testACompletePragmaOnItsOwnLineIsStillOwned()
+    {
+        List<String> module = lines(
+            "&Instead(\"Original\")\n&AtClient\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("a one-line pragma must still be addressable: " + result.error, result.error); //$NON-NLS-1$
+        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
+        assertTrue("the new method must go above both pragmas: " + joined, //$NON-NLS-1$
+            joined.indexOf("Procedure Added()") < joined.indexOf("&Instead(")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 }
