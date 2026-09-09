@@ -114,9 +114,12 @@ def test_create_update_disable_and_reenable_workspace_error_breakpoint():
             "the workspace already has %d exception breakpoints; this test would not be able "
             "to restore them all afterwards" % len(original)
         )
-    _delete_exception_breakpoints()
     breakpoint_id = None
     try:
+        # INSIDE the guard, not before it: this removal is already destructive, and an error or a
+        # timeout raised out here would skip the finally entirely - leaving the operator's own
+        # breakpoint deleted with no restoration installed.
+        _delete_exception_breakpoints()
         created = call("set_error_breakpoint", {"enabled": True})
         assert_ok(created, "create catch-all workspace error breakpoint")
         created_state = created.structured or {}

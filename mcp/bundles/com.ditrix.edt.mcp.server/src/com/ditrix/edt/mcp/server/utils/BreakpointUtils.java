@@ -530,7 +530,12 @@ public final class BreakpointUtils
         }
         catch (Exception unreadable) // NOSONAR: see above
         {
+            // The AGREEMENT goes with it, and that is the half that matters: an empty state
+            // under a SAME verdict is reported as a real filter - "catches everything, no
+            // message" - by a read that never happened. Nothing was established here, so the
+            // answer says so and the caller gets the unverified warning instead of a fiction.
             state = Map.of();
+            agreement = FilterAgreement.UNVERIFIED;
         }
         Object message = state.get("exceptionMessage"); //$NON-NLS-1$
         String storedMessage = message == null || message.toString().isEmpty()

@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IMarker;
 import org.eclipse.debug.core.model.IBreakpoint;
 
 import com.ditrix.edt.mcp.server.Activator;
@@ -184,6 +185,9 @@ public class SetBreakpointTool implements IMcpTool
         // UPDATE that dies halfway leaves the members it already reached carrying the new
         // settings, and nothing withdraws them. Their ids are the only handle the caller has.
         List<Long> alreadyChanged = new ArrayList<>();
+        // Every reconciled marker id, read once while the loop holds them and used to render
+        // the answer - so the response never depends on a marker read after the mutation.
+        List<Long> reconciledIds = new ArrayList<>();
         try
         {
             // ALL of them, not the first: an upgraded workspace can hold duplicates at one line,
@@ -198,6 +202,11 @@ public class SetBreakpointTool implements IMcpTool
                     BreakpointUtils.createLineBreakpoint(target.file, lineNumber));
             }
             IBreakpoint bp = existing.get(0);
+            // Captured while the loop walks, and rendered from afterwards: reading the markers
+            // again to build the response happens AFTER every setter has succeeded, so a marker
+            // that goes stale in between would report the whole call as failed for a change
+            // that took effect - and invite a retry that mutates it a second time.
+            long representativeId = -1L;
             try
             {
                 // AGGREGATED across the duplicates, not "whichever came last": with a native
@@ -212,9 +221,19 @@ public class SetBreakpointTool implements IMcpTool
                     // through may already carry the new condition, and a list of "fully done"
                     // ids would hide exactly the one the caller must look at. Only on the
                     // update path - a breakpoint this call created is withdrawn on failure.
-                    if (!created && each.getMarker() != null)
+                    IMarker marker = each.getMarker();
+                    if (marker != null)
                     {
-                        alreadyChanged.add(Long.valueOf(each.getMarker().getId()));
+                        Long id = Long.valueOf(marker.getId());
+                        if (each == bp)
+                        {
+                            representativeId = id.longValue();
+                        }
+                        reconciledIds.add(id);
+                        if (!created)
+                        {
+                            alreadyChanged.add(id);
+                        }
                     }
                     BreakpointUtils.LineBreakpointConfiguration one =
                         BreakpointUtils.configureLineBreakpoint(each, effectiveCondition,
@@ -235,9 +254,9 @@ public class SetBreakpointTool implements IMcpTool
                 BreakpointUtils.LineBreakpointConfiguration configuration = appliedEverywhere
                     ? BreakpointUtils.LineBreakpointConfiguration.appliedWith(fallbacks)
                     : BreakpointUtils.LineBreakpointConfiguration.notApplied();
-                return buildSuccessResult(bp, target.file, module, lineNumber, action,
+                return buildSuccessResult(existing, target.file, module, lineNumber, action,
                     effectiveCondition, hitCount, effectiveHitCondition, conditionProvided,
-                    hitCountProvided, configuration, existing);
+                    hitCountProvided, configuration, representativeId, reconciledIds);
             }
             catch (Exception configurationFailure)
             {
@@ -458,12 +477,12 @@ public class SetBreakpointTool implements IMcpTool
      * @param lineNumber the breakpoint line
      * @return the success result JSON
      */
-    private static String buildSuccessResult(IBreakpoint bp, IFile file, String module, int lineNumber,
-        String action, String condition, int hitCount, String hitCondition,
+    private static String buildSuccessResult(List<IBreakpoint> reconciled, IFile file, String module,
+        int lineNumber, String action, String condition, int hitCount, String hitCondition,
         boolean conditionProvided, boolean hitCountProvided,
-        BreakpointUtils.LineBreakpointConfiguration configuration, List<IBreakpoint> reconciled)
+        BreakpointUtils.LineBreakpointConfiguration configuration, long markerId,
+        List<Long> reconciledIds)
     {
-        long markerId = bp.getMarker() != null ? bp.getMarker().getId() : -1L;
         // ANY of the reconciled breakpoints being marker-only degrades the answer: taking the
         // flag from the first one made the warning depend on registration order, so a native
         // breakpoint listed before a marker-only twin hid the degradation entirely.
@@ -490,15 +509,8 @@ public class SetBreakpointTool implements IMcpTool
             res.put("reconciledBreakpoints", reconciled.size()); //$NON-NLS-1$
             // Every reconciled marker, not just the first: an upgraded workspace can hold
             // legacy duplicates at one line, and removing the returned breakpointId alone
-            // would leave the others live - coordinate-based removal takes one too.
-            List<Long> reconciledIds = new ArrayList<>(reconciled.size());
-            for (IBreakpoint each : reconciled)
-            {
-                if (each.getMarker() != null)
-                {
-                    reconciledIds.add(Long.valueOf(each.getMarker().getId()));
-                }
-            }
+            // would leave the others live - coordinate-based removal takes one too. Taken from
+            // what the mutation loop captured, so nothing here reads a marker again.
             res.put("breakpointIds", reconciledIds); //$NON-NLS-1$
         }
         if (configuration.isApplied())
