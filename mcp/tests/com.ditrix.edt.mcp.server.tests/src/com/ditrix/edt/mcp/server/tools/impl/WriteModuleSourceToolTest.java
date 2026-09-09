@@ -1737,4 +1737,59 @@ public class WriteModuleSourceToolTest
         assertTrue("and the target must have been replaced: " + joined, //$NON-NLS-1$
             joined.contains("X = 2;")); //$NON-NLS-1$
     }
+
+    /**
+     * BSL hides line breaks, so a body may begin on the declaration line - and a reserved word is
+     * a legal member name after a dot. {@code Procedure Target() X = Object.Function();} is one
+     * ordinary method, and the crowded-line rule must not read the member as a second declaration.
+     */
+    @Test
+    public void testABodyStartingOnTheDeclarationLineIsNotASecondDeclaration()
+    {
+        List<String> module = lines(
+            "Procedure Target() X = Object.Function();\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\n\tNew = 1;\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("a member call on the declaration line is not a declaration: " + result.error, //$NON-NLS-1$
+            result.error);
+    }
+
+    /**
+     * The dangling member dot survives hidden trivia. {@code Value = Object.}, a comment line and
+     * {@code EndFunction;} are the single expression {@code Object.EndFunction}, so the span must
+     * walk past it to the real {@code EndProcedure} instead of calling the method malformed.
+     */
+    @Test
+    public void testAMemberDotSurvivesACommentBeforeTheKeyword()
+    {
+        List<String> module = lines(
+            "Procedure Target()\n\tValue = Object.\n\t// the member\n\tEndFunction;\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\n\tNew = 1;\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("a member named after a terminator is not a terminator: " + result.error, //$NON-NLS-1$
+            result.error);
+    }
+
+    /**
+     * A pragma whose ARGUMENTS are split across lines belongs to the declaration below it. Walking
+     * back from the declaration used to stop at the argument-closing line, so an insertBefore
+     * landed between the pragma and its method - silently rebinding &Instead to the new one.
+     */
+    @Test
+    public void testASplitPragmaStaysWithItsDeclaration()
+    {
+        List<String> module = lines(
+            "&Instead(\n\t\"Original\")\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("the insert must be accepted: " + result.error, result.error); //$NON-NLS-1$
+        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
+        assertTrue("the pragma must still stand directly above its own method: " + joined, //$NON-NLS-1$
+            joined.contains("&Instead(\n\t\"Original\")\nProcedure Target()")); //$NON-NLS-1$
+        assertTrue("and the new method must go above the pragma, not inside it: " + joined, //$NON-NLS-1$
+            joined.indexOf("Procedure Added()") < joined.indexOf("&Instead(")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 }

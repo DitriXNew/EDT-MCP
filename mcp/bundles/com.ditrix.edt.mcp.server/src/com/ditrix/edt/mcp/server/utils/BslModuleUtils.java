@@ -433,12 +433,18 @@ public final class BslModuleUtils
     private static final Pattern METHOD_END_TAIL_PATTERN = Pattern.compile("^\\s*;?\\s*(?://.*)?$"); //$NON-NLS-1$
 
     /**
-     * A declaration keyword anywhere, used only to look PAST the opener of a declaration line.
-     * Neither terminator matches it: there is no word boundary inside "EndProcedure", and the
-     * Russian closer is a different word from the opener.
+     * A method DECLARATION anywhere on a line, used only to look PAST the opener of a
+     * declaration line.
+     * <p>
+     * The shape matters, not the keyword: BSL hides line breaks, so a body may begin on the
+     * declaration line, and a reserved word is a legal member name after a dot (grammar rule
+     * {@code ExtName}) - {@code Procedure Target() X = Object.Function();} is one ordinary
+     * method. So the keyword must not be preceded by a dot or by word characters, and must be
+     * followed by a name and an opening parenthesis, the way a declaration is written.
+     * </p>
      */
     private static final Pattern ANY_DECLARATION_KEYWORD_PATTERN = Pattern.compile(
-        "\\b(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\b", //$NON-NLS-1$
+        "(?<![.\\p{L}\\p{N}_])(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\s+[^\\s(]+\\s*\\(", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /**
@@ -568,7 +574,7 @@ public final class BslModuleUtils
             // one expression rather than a method end. Skipping it here fails SAFE, unlike the
             // same exemption on the declaration side: a terminator missed by mistake ends the
             // span later or leaves it incomplete, and an incomplete span is a refusal.
-            if (i > 0 && endsWithMemberDot(lines.get(i - 1)))
+            if (previousMeaningfulLineEndsWithMemberDot(lines, i))
             {
                 continue;
             }
@@ -586,6 +592,33 @@ public final class BslModuleUtils
             }
         }
         return -1;
+    }
+
+    /**
+     * Whether the last line that carries anything before {@code index} ends in a member-access
+     * dot.
+     * <p>
+     * Blank and comment-only lines are crossed, because whitespace and comments are hidden
+     * terminals: {@code Value = Object.}, a comment line, then {@code EndFunction;} is the one
+     * expression {@code Object.EndFunction} and not a method end. Looking only at the line
+     * immediately above would read the blank and conclude the dot was gone.
+     * </p>
+     *
+     * @param lines the lines being scanned, with literals and comments already masked
+     * @param index the line under examination
+     * @return whether the preceding code line left a dangling member dot
+     */
+    private static boolean previousMeaningfulLineEndsWithMemberDot(List<String> lines, int index)
+    {
+        for (int i = index - 1; i >= 0; i--)
+        {
+            String line = lines.get(i);
+            if (line != null && !line.trim().isEmpty())
+            {
+                return endsWithMemberDot(line);
+            }
+        }
+        return false;
     }
 
     /**
@@ -1271,6 +1304,17 @@ public final class BslModuleUtils
             }
             if (!trimmed.isEmpty())
             {
+                // A pragma may carry ARGUMENTS split across lines - "&Instead(" on one and
+                // '"Original")' on the next - and the tail looks like ordinary code. Breaking
+                // here left the pragma above the owned range, so an insertBefore landed between
+                // the pragma and its declaration and silently rebound it to the new method.
+                int pragmaStart = splitPragmaOpeningAbove(sourceLines, idx);
+                if (pragmaStart >= 0)
+                {
+                    owned = pragmaStart + 1;
+                    idx = pragmaStart - 1;
+                    continue;
+                }
                 break;
             }
             // A blank run: cross it only to an ANNOTATION above it - "&AtClient", an explaining
@@ -1288,6 +1332,72 @@ public final class BslModuleUtils
             break;
         }
         return owned;
+    }
+
+    /**
+     * When the line at {@code idx} completes a pragma whose arguments were split across lines,
+     * the index of the line that OPENS that pragma; -1 when it is ordinary code.
+     * <p>
+     * The opener has to leave a parenthesis unclosed and the run down to {@code idx} has to
+     * close it exactly: an annotation without arguments, or a statement standing under one,
+     * balances at zero from the start and is not claimed.
+     * </p>
+     *
+     * @param lines all file lines
+     * @param idx the line under examination
+     * @return the opening line index, or -1
+     */
+    private static int splitPragmaOpeningAbove(List<String> lines, int idx)
+    {
+        for (int start = idx; start >= 0; start--)
+        {
+            String trimmed = lines.get(start).trim();
+            if (trimmed.isEmpty() || trimmed.startsWith("//")) //$NON-NLS-1$
+            {
+                return -1;
+            }
+            if (trimmed.startsWith("&")) //$NON-NLS-1$
+            {
+                return parenthesisBalance(lines, start, start) > 0
+                    && parenthesisBalance(lines, start, idx) == 0 ? start : -1;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * The parenthesis balance over a range of lines, ignoring anything inside a string literal.
+     *
+     * @param lines all file lines
+     * @param from the first line of the range
+     * @param to the last line of the range
+     * @return opening parentheses minus closing ones
+     */
+    private static int parenthesisBalance(List<String> lines, int from, int to)
+    {
+        int balance = 0;
+        boolean inLiteral = false;
+        for (int i = from; i <= to; i++)
+        {
+            String line = lines.get(i);
+            for (int c = 0; c < line.length(); c++)
+            {
+                char ch = line.charAt(c);
+                if (ch == '"')
+                {
+                    inLiteral = !inLiteral;
+                }
+                else if (!inLiteral && ch == '(')
+                {
+                    balance++;
+                }
+                else if (!inLiteral && ch == ')')
+                {
+                    balance--;
+                }
+            }
+        }
+        return balance;
     }
 
     /**
