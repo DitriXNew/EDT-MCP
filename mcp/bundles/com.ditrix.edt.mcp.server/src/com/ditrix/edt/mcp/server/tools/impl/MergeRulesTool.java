@@ -848,6 +848,12 @@ public class MergeRulesTool implements IMcpTool
         MergeRulesCodec.Target targetPolicy = MergeRulesCodec.Target.MUST_NOT_EXIST;
         BasicFileAttributes targetAsRead = null;
         String targetDigestAsRead = null;
+        // What ELSE the target's container held when it was read. The write produces a one-entry
+        // archive, and sidecarEntriesRefusal already refuses a container holding anything else -
+        // but it judges the list taken at the READ, so an entry that appears afterwards would be
+        // discarded by the rewrite without anyone noticing. The confirm point compares this list
+        // against the container as it is then.
+        List<String> targetEntriesAsRead = new ArrayList<>();
         if (Files.exists(file))
         {
             if (!isSameFile(file, base))
@@ -911,23 +917,26 @@ public class MergeRulesTool implements IMcpTool
         // the same length that preserves or restores both instants.
         if (targetAsRead != null)
         {
-            if (base != null && base.equals(file))
+            if (isSameTarget(base, file))
             {
                 // Off the DOCUMENT rather than a second read: this is the digest the codec took of
                 // the very bytes it parsed, so there is no window between the parse and the digest
                 // for a timestamp-preserving writer to slip through - and that writer is precisely
                 // what the attributes cannot see, so a window here would defeat the whole clause.
                 targetDigestAsRead = document.sourceDigest();
+                targetEntriesAsRead.addAll(document.unreadContainerEntries());
             }
             else
             {
-                // The target is replaced wholesale here and never parsed. Digest it the way the
-                // parser WOULD read it - bounded, and for an archive the settings entry instead of
-                // the whole file - so the confirm point compares like with like. Unreadable or
-                // unparseable leaves it null, and the attribute check stands alone.
+                // The target is replaced wholesale here and never parsed. Read it the way the
+                // parser WOULD - bounded, and for an archive the settings entry instead of the
+                // whole file - so the confirm point compares like with like. Unreadable or
+                // unparseable leaves the digest null, and the attribute check stands alone.
                 try
                 {
-                    targetDigestAsRead = MergeRulesCodec.documentDigest(file);
+                    MergeRulesDocument onDisk = MergeRulesCodec.read(file);
+                    targetDigestAsRead = onDisk.sourceDigest();
+                    targetEntriesAsRead.addAll(onDisk.unreadContainerEntries());
                 }
                 catch (IOException | MergeRulesFormatException notComparable) // NOSONAR: see above
                 {
@@ -1157,7 +1166,8 @@ public class MergeRulesTool implements IMcpTool
             // answers without a prompt still leaves the whole interval above - the read, the
             // parse, the comparison's BM read - for a foreign writer to land in, and a check that
             // ran only at the Ask level would guard the slow path and leave the fast one open.
-            String changed = targetChangedRefusal(file, targetAsRead, targetDigestAsRead);
+            String changed = targetChangedRefusal(file, targetAsRead, targetDigestAsRead,
+                targetEntriesAsRead);
             if (changed != null)
             {
                 return changed;
@@ -1325,11 +1335,14 @@ public class MergeRulesTool implements IMcpTool
      * @return the digest, or {@code null} when the file cannot be read or parsed - which the
      *         caller treats as changed, the direction the whole check reasons in
      */
-    private static String currentDocumentDigest(Path file)
+    private static String currentDocument(Path file, List<String> entriesOut)
     {
         try
         {
-            return MergeRulesCodec.documentDigest(file);
+            MergeRulesDocument present = MergeRulesCodec.read(file);
+            entriesOut.clear();
+            entriesOut.addAll(present.unreadContainerEntries());
+            return present.sourceDigest();
         }
         catch (IOException | MergeRulesFormatException unverifiable) // NOSONAR: see the javadoc
         {
@@ -1337,10 +1350,41 @@ public class MergeRulesTool implements IMcpTool
         }
     }
 
+    /**
+     * Whether two paths name the SAME target. Compared by identity on the filesystem rather than
+     * by spelling: a caller may pass the target as {@code basedOn} through a different but
+     * equivalent path, and the digest taken from the parsed document is only reusable when the
+     * two really are one file.
+     *
+     * @param base the basedOn path, or {@code null}
+     * @param file the target
+     * @return whether they are the same existing file
+     */
+    private static boolean isSameTarget(Path base, Path file)
+    {
+        if (base == null)
+        {
+            return false;
+        }
+        if (base.equals(file))
+        {
+            return true;
+        }
+        try
+        {
+            return Files.isSameFile(base, file);
+        }
+        catch (IOException cannotTell) // NOSONAR: unverifiable means "not the same", the safe answer
+        {
+            return false;
+        }
+    }
+
     private static String targetChangedRefusal(Path file, BasicFileAttributes asRead,
-        String digestAsRead)
+        String digestAsRead, List<String> entriesAsRead)
     {
         String observed;
+        List<String> entriesNow = new ArrayList<>();
         try
         {
             BasicFileAttributes present = Files.readAttributes(file, BasicFileAttributes.class);
@@ -1352,13 +1396,22 @@ public class MergeRulesTool implements IMcpTool
             {
                 observed = "its size or timestamps are not those of the file that was read"; //$NON-NLS-1$
             }
-            else if (digestAsRead != null && !digestAsRead.equals(currentDocumentDigest(file)))
+            else if (digestAsRead != null && !digestAsRead.equals(currentDocument(file, entriesNow)))
             {
                 // The residue the attributes cannot see: same length, both instants preserved or
                 // restored. Reached only when every attribute still matches, so it costs one read
                 // of a file this call has already read - and it turns "a writer would have stamped
                 // the mtime" from an assumption into something the code checked.
                 observed = "its content is not the content that was read"; //$NON-NLS-1$
+            }
+            else if (!entriesNow.equals(entriesAsRead))
+            {
+                // Same read, second question. The write produces a ONE-ENTRY archive, and the
+                // sidecar refusal above judged the container as it was at the read - so an entry
+                // that appeared since would be discarded by the rewrite with nobody the wiser.
+                // (When the digest was unavailable no re-read happened and this list is empty on
+                // both sides, which is the attributes-only path the clause above describes.)
+                observed = "the archive no longer holds the entries it held when it was read"; //$NON-NLS-1$
             }
             else
             {
