@@ -71,10 +71,8 @@ runs:
       shell: bash
       run: |
         set -x
-        # Same reason as the inlined copy in e2e-tests.yml: the runner image ships third-party
-        # apt lists we do not use, and a bad index in one of them makes `apt-get update` exit 100
-        # and kill the job before anything of ours has run. The STRICT xvfb install below is the
-        # real gate; the refresh is not.
+        # A bad index in a third-party list we do not use makes apt-get update exit 100 and
+        # kill the job; the strict xvfb install below is the real gate.
         sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
                    /etc/apt/sources.list.d/microsoft-prod.list || true
         sudo apt-get update || sudo apt-get update || true

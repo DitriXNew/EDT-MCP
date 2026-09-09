@@ -201,12 +201,8 @@ jobs:
         shell: bash
         run: |
           set -x
-          # The runner image ships third-party apt lists we do not use (Google Chrome, Microsoft
-          # prod). When one of them serves a bad index, `apt-get update` exits 100 and kills the
-          # job 25 seconds in - it took the whole master matrix down twice on 2026-09-09, with
-          # "Hash Sum mismatch" on dl.google.com and nothing wrong on our side. Drop those lists,
-          # and do not let the refresh itself be fatal: everything we need is in the Ubuntu
-          # archives, and the STRICT xvfb install at the end of this step is the real gate.
+          # A bad index in a third-party list we do not use makes apt-get update exit 100 and
+          # kill the job; the strict xvfb install at the end of this step is the real gate.
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
                      /etc/apt/sources.list.d/microsoft-prod.list || true
           sudo apt-get update || sudo apt-get update || true
