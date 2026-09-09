@@ -875,11 +875,6 @@ public class MergeRulesTool implements IMcpTool
             try
             {
                 targetAsRead = Files.readAttributes(file, BasicFileAttributes.class);
-                // Taken here as well, and for the residue the attributes cannot see: a replacement
-                // of the same length that preserves both instants. Same order, same direction - a
-                // change landing between these two lines is seen as a changed digest and costs a
-                // refusal, never a silent overwrite.
-                targetDigestAsRead = MergeRulesCodec.contentDigest(file);
             }
             catch (IOException e)
             {
@@ -911,6 +906,29 @@ public class MergeRulesTool implements IMcpTool
         else
         {
             document = MergeRulesDocument.empty();
+        }
+        // The target's content digest, for the residue the attributes cannot see: a replacement of
+        // the same length that preserves or restores both instants. Taken HERE, after the parse
+        // rather than beside the attributes, for two reasons. It then describes the bytes the
+        // document was actually built from, so a writer landing between the two reads costs a
+        // refusal on the ATTRIBUTES (where the design already puts it) instead of a confusing
+        // "content differs" about a document parsed from that very content. And the parse has
+        // already applied the codec's own size bound when the base IS the target, so an oversized
+        // input is refused before anything hashes it - the explicit bound below covers the other
+        // case, where the target is being replaced wholesale and never parsed at all.
+        if (targetAsRead != null && MergeRulesCodec.withinDocumentBound(targetAsRead.size()))
+        {
+            try
+            {
+                targetDigestAsRead = MergeRulesCodec.contentDigest(file);
+            }
+            catch (IOException e)
+            {
+                return ToolResult.error("Nothing was written: what is on " + file //$NON-NLS-1$
+                    + " could not be read (" + describe(e) //$NON-NLS-1$
+                    + "), so this call could not later show that the file it replaces is the " //$NON-NLS-1$
+                    + "file it read. Check the path and re-send the write.").toJson(); //$NON-NLS-1$
+            }
         }
         int existingDecisions = document.decisions().size();
         // Asked the moment the starting document is in hand, and BEFORE a single decision is
@@ -1290,8 +1308,8 @@ public class MergeRulesTool implements IMcpTool
      * @param file the absolute, normalised target, as read before the gate
      * @param asRead the target's description taken before the document was read, never
      *            {@code null} for a rewrite
-     * @param digestAsRead the target's content digest taken at the same point; {@code null} only
-     *            when there was no existing target to digest
+     * @param digestAsRead the target's content digest taken once the document was parsed; {@code null}
+     *            when there was no existing target, or it is too large to be one
      * @return the refusal, or {@code null} when the target is still the file that was read
      */
     private static String targetChangedRefusal(Path file, BasicFileAttributes asRead,

@@ -945,6 +945,19 @@ public final class MergeRulesCodec
     }
 
     /**
+     * Whether a file of this size is small enough to be a merge-rules document at all - the same
+     * {@link #MAX_DOCUMENT_BYTES} bound {@link #read} applies, exposed so a caller can decide not
+     * to hash an input the parse would refuse anyway.
+     *
+     * @param sizeInBytes the file's size
+     * @return {@code true} when it is within the document bound
+     */
+    public static boolean withinDocumentBound(long sizeInBytes)
+    {
+        return sizeInBytes <= MAX_DOCUMENT_BYTES;
+    }
+
+    /**
      * A digest of the file's whole content, for the residue {@link #isTheFileRead} cannot see.
      * <p>
      * That predicate compares size, both instants and the key, and its own note names what gets
@@ -955,8 +968,9 @@ public final class MergeRulesCodec
      * </p>
      * <p>
      * The whole file is hashed rather than "the bytes the parser consumed": for an archive target
-     * those are the whole file anyway, and streaming it keeps the cost O(size) in time and O(1)
-     * in memory - no buffering of a target that may be an archive.
+     * those are the whole file anyway, and streaming it keeps the cost O(size) in time and O(1) in
+     * memory. The SIZE is the caller's business - see {@link #withinDocumentBound}, which is the
+     * bound that keeps a multi-gigabyte input from being hashed before it is refused.
      * </p>
      *
      * @param file the file to digest
