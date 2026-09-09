@@ -1757,7 +1757,7 @@ public final class MergeRulesCodec
      * @param name a zip entry name
      * @return the name a comparison id is matched against
      */
-    private static String removeExtension(String name)
+    public static String removeExtension(String name)
     {
         String base = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1);
         int dot = base.lastIndexOf('.');

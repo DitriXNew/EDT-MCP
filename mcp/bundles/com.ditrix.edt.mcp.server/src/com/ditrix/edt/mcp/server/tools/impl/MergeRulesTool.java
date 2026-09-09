@@ -855,6 +855,10 @@ public class MergeRulesTool implements IMcpTool
         // discarded by the rewrite without anyone noticing. The confirm point compares this list
         // against the container as it is then.
         List<String> targetEntriesAsRead = new ArrayList<>();
+        // The archive COMMENT takes part in the pre-consent refusal (an archive carrying one is
+        // refused), so a comment that appears while the dialog is open must not be carried
+        // away by the rewrite unnoticed - it joins the snapshot the confirm point compares.
+        boolean[] targetCommentAsRead = new boolean[1];
         // The SELECTED entry's NAME, for the rename the other three cannot see: attributes, the
         // parsed digest and the other-entry list all stay equal when the settings entry is
         // renamed in place, and the write would then put the old name back over it. Taken from
@@ -933,6 +937,7 @@ public class MergeRulesTool implements IMcpTool
                 targetDigestAsRead = document.sourceDigest();
                 targetEntriesAsRead.addAll(document.unreadContainerEntries());
                 targetEntryAsRead[0] = document.sourceEntry();
+                targetCommentAsRead[0] = document.containerCarriedComment();
             }
             else
             {
@@ -946,6 +951,7 @@ public class MergeRulesTool implements IMcpTool
                     targetDigestAsRead = onDisk.sourceDigest();
                     targetEntriesAsRead.addAll(onDisk.unreadContainerEntries());
                     targetEntryAsRead[0] = onDisk.sourceEntry();
+                    targetCommentAsRead[0] = onDisk.containerCarriedComment();
                 }
                 catch (IOException | MergeRulesFormatException notComparable) // NOSONAR: see above
                 {
@@ -1176,7 +1182,7 @@ public class MergeRulesTool implements IMcpTool
             // parse, the comparison's BM read - for a foreign writer to land in, and a check that
             // ran only at the Ask level would guard the slow path and leave the fast one open.
             String changed = targetChangedRefusal(file, targetAsRead, targetDigestAsRead,
-                targetEntriesAsRead, targetEntryAsRead[0]);
+                targetEntriesAsRead, targetEntryAsRead[0], targetCommentAsRead[0]);
             if (changed != null)
             {
                 return changed;
@@ -1268,15 +1274,16 @@ public class MergeRulesTool implements IMcpTool
         // A rewrite may put the rules under a DIFFERENT entry name than the one they were read
         // from, and that changes which comparison can consume them - an address change the
         // operator must see BEFORE authorizing, not afterwards by diffing two report fields.
-        // Compared in the SAME form: sourceEntry() is the full entry name (always '.xml', since
-        // only such entries are read), while zipEntryId is the id WITHOUT the extension - which
-        // the write appends. Comparing them as they come would announce a rename on every single
-        // zip rewrite, including the ones that do not move anything.
-        String writtenEntry = entryToWrite == null ? null : entryToWrite + MergeRulesCodec.XML_EXTENSION;
-        String renameClause = entryAsRead != null && writtenEntry != null
-            && !entryAsRead.equals(writtenEntry)
+        // Compared through the READER's own normalization, which is what decides whether an
+        // entry answers to an id at all: removeExtension drops the directory AND the extension,
+        // so 'settings/A_B_C.xml' IS the entry 'A_B_C' - announcing that as a rename would be
+        // false, exactly as the codec's own lookup test says. Comparing the raw values would
+        // also fire on every ordinary rewrite, since one side carries the extension.
+        String readAddress = entryAsRead == null ? null : MergeRulesCodec.removeExtension(entryAsRead);
+        String renameClause = readAddress != null && entryToWrite != null
+            && !readAddress.equals(entryToWrite)
                 ? " The rules also change address inside the archive: they were read from entry '" //$NON-NLS-1$
-                    + entryAsRead + "' and will be written as '" + writtenEntry //$NON-NLS-1$
+                    + entryAsRead + "' and will be written as '" + entryToWrite //$NON-NLS-1$
                     + "', so a comparison looking for the old name will no longer find them." //$NON-NLS-1$
                 : ""; //$NON-NLS-1$
         return new ConsentPreview("Replace merge-rules file", //$NON-NLS-1$
@@ -1360,7 +1367,8 @@ public class MergeRulesTool implements IMcpTool
      *         caller treats as changed, the direction the whole check reasons in
      */
 
-    private static String currentDocument(Path file, List<String> entriesOut, String[] entryOut)
+    private static String currentDocument(Path file, List<String> entriesOut, String[] entryOut,
+        boolean[] commentOut)
     {
         try
         {
@@ -1368,6 +1376,7 @@ public class MergeRulesTool implements IMcpTool
             entriesOut.clear();
             entriesOut.addAll(present.unreadContainerEntries());
             entryOut[0] = present.sourceEntry();
+            commentOut[0] = present.containerCarriedComment();
             return present.sourceDigest();
         }
         catch (IOException | MergeRulesFormatException unverifiable) // NOSONAR: see the javadoc
@@ -1407,11 +1416,12 @@ public class MergeRulesTool implements IMcpTool
     }
 
     private static String targetChangedRefusal(Path file, BasicFileAttributes asRead,
-        String digestAsRead, List<String> entriesAsRead, String entryAsRead)
+        String digestAsRead, List<String> entriesAsRead, String entryAsRead, boolean commentAsRead)
     {
         String observed;
         List<String> entriesNow = new ArrayList<>();
         String[] entryNow = new String[1];
+        boolean[] commentNow = new boolean[1];
         try
         {
             BasicFileAttributes present = Files.readAttributes(file, BasicFileAttributes.class);
@@ -1424,7 +1434,7 @@ public class MergeRulesTool implements IMcpTool
                 observed = "its size or timestamps are not those of the file that was read"; //$NON-NLS-1$
             }
             else if (digestAsRead != null
-                && !digestAsRead.equals(currentDocument(file, entriesNow, entryNow)))
+                && !digestAsRead.equals(currentDocument(file, entriesNow, entryNow, commentNow)))
             {
                 // The residue the attributes cannot see: same length, both instants preserved or
                 // restored. Reached only when every attribute still matches, so it costs one read
@@ -1438,6 +1448,14 @@ public class MergeRulesTool implements IMcpTool
                 // that every other clause here is blind to. Null on both sides for a bare xml
                 // document, which is how that case stays unaffected.
                 observed = "the archive entry it was read from is no longer the one it holds"; //$NON-NLS-1$
+            }
+            else if (commentNow[0] != commentAsRead)
+            {
+                // Same read, third question. An archive comment is refused BEFORE consent, so one
+                // that appeared since would be destroyed by a rewrite the operator authorized
+                // without it - and the tool would never have offered the rewrite had it been
+                // there at the read.
+                observed = "the archive now carries a comment it did not carry when it was read"; //$NON-NLS-1$
             }
             else if (!entriesNow.equals(entriesAsRead))
             {
