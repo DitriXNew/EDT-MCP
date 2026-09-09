@@ -416,6 +416,50 @@ public class BslModuleUtilsTest
         assertTrue(span.complete);
         assertEquals("the method must end at its OWN terminator", 2, span.endLine); //$NON-NLS-1$
     }
+    /**
+     * A multi-line literal is lexed as a "-opened part and |-continued parts, with whitespace and
+     * comments hidden BETWEEN them - so a blank line inside one does not end it. Resetting the
+     * mask there exposed the continuation as code, and "Object." on it then suppressed the
+     * method's real terminator.
+     */
+    @Test
+    public void testABlankLineInsideAMultiLineLiteralDoesNotEndIt()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "\tText = \"first", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "|Object.\";", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue("the literal continues across the blank line, so the terminator is real", //$NON-NLS-1$
+            span.complete);
+        assertEquals(4, span.endLine);
+    }
+
+    /**
+     * A declaration sharing its line with its pragma is legal and invisible to a scan anchored on
+     * the keyword at line start - invisible to the span search AND to the duplicate-name check -
+     * so it is reported unaddressable instead of being silently skipped.
+     */
+    @Test
+    public void testAPragmaOnTheDeclarationLineIsReportedAsUnaddressable()
+    {
+        assertEquals(0, BslModuleUtils.unaddressableDeclarationLine(List.of(
+            "&AtClient Procedure Added()", //$NON-NLS-1$
+            "EndProcedure"))); //$NON-NLS-1$
+    }
+
+    /** The mirror: a pragma on its OWN line is ordinary and stays addressable. */
+    @Test
+    public void testAPragmaOnItsOwnLineStaysAddressable()
+    {
+        assertEquals(-1, BslModuleUtils.unaddressableDeclarationLine(List.of(
+            "&AtClient", //$NON-NLS-1$
+            "Procedure Added()", //$NON-NLS-1$
+            "EndProcedure"))); //$NON-NLS-1$
+    }
     @Test
     public void testATerminatorWordInsideADefaultValueIsNotCode()
     {

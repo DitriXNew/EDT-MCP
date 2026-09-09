@@ -117,6 +117,20 @@ public final class BslModuleUtils
     private static final Pattern INLINE_TERMINATOR_PATTERN = Pattern.compile(
         "(?<![\\p{L}\\p{N}_])(?:\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B|\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438|EndProcedure|EndFunction)(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    /**
+     * A declaration sharing its line with the pragma that annotates it
+     * ({@code &AtClient Procedure Added()}).
+     * <p>
+     * Legal, and equally unaddressable by a scan anchored on the keyword at line start: the
+     * method is invisible to the span search AND to the duplicate-name check, so an insert could
+     * add a second declaration of the same name. Refused by name instead of guessed at.
+     * </p>
+     */
+    private static final Pattern PRAGMA_ON_DECLARATION_LINE_PATTERN = Pattern.compile(
+        "^\\s*&[\\p{L}\\p{N}_]+(?:\\([^)]*\\))?\\s+"
+            + "(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)"
+            + "(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     /** Regex for region start (#Область / #Region) */
     public static final Pattern REGION_START_PATTERN = Pattern.compile(
         "^\\s*#(?:\u041e\u0431\u043b\u0430\u0441\u0442\u044c|Region)\\s+(\\S+)", //$NON-NLS-1$
@@ -542,6 +556,10 @@ public final class BslModuleUtils
             }
             if (METHOD_START_PATTERN.matcher(line).find()
                 && INLINE_TERMINATOR_PATTERN.matcher(line).find())
+            {
+                return i;
+            }
+            if (PRAGMA_ON_DECLARATION_LINE_PATTERN.matcher(line).find())
             {
                 return i;
             }

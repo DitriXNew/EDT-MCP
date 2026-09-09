@@ -208,7 +208,9 @@ public final class BslSyntaxChecker
             // continuation, the literal was not a valid multi-line string (a mis-tracked quote or a
             // genuinely unclosed string) - reset so it does not mask the real code that follows,
             // which would hide real block keywords (and their imbalance).
-            if (stringState.insideString && !lines.get(i).trim().startsWith("|")) //$NON-NLS-1$
+            String trimmedLine = lines.get(i).trim();
+            boolean ignorableTrivia = trimmedLine.isEmpty() || trimmedLine.startsWith("//"); //$NON-NLS-1$
+            if (stringState.insideString && !ignorableTrivia && !trimmedLine.startsWith("|")) //$NON-NLS-1$
             {
                 stringState.insideString = false;
             }
@@ -401,7 +403,12 @@ public final class BslSyntaxChecker
         StringLiteralState state = new StringLiteralState();
         for (String line : lines)
         {
-            if (state.insideString && !line.trim().startsWith("|")) //$NON-NLS-1$
+            String trimmed = line.trim();
+            // Ignorable trivia does NOT end a literal: the lexer splits a multi-line string into
+            // "-opened, |-continued parts, and whitespace (a blank line included) plus a comment
+            // are hidden between them. Resetting there would expose a continuation as code.
+            boolean ignorable = trimmed.isEmpty() || trimmed.startsWith("//"); //$NON-NLS-1$
+            if (state.insideString && !ignorable && !trimmed.startsWith("|")) //$NON-NLS-1$
             {
                 state.insideString = false;
             }
