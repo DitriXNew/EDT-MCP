@@ -1927,4 +1927,57 @@ public class WriteModuleSourceToolTest
         assertTrue("the new method must go above the whole pragma: " + joined, //$NON-NLS-1$
             joined.indexOf("Procedure Added()") < joined.indexOf("&Instead(")); //$NON-NLS-1$ //$NON-NLS-2$
     }
+
+    /**
+     * A numeric literal ends in a dot too, and the dot before a terminator does not make it a
+     * member name: "Value = 1. EndProcedure" really does end the method on its opening line, and
+     * missing that let the span borrow a later closer and delete the code in between.
+     */
+    @Test
+    public void testANumericLiteralBeforeAnInlineTerminatorIsNotAMemberAccess()
+    {
+        List<String> module = lines(
+            "Procedure Target() Value = 1. EndProcedure\nModuleValue = 1;\nEndProcedure\n"); //$NON-NLS-1$
+        assertMethodEditError("cannot address", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\nEndProcedure\n")); //$NON-NLS-1$
+    }
+
+    /**
+     * The pragma search must stop at real CODE. A target standing after a method that carries a
+     * split pragma used to be handed that whole method as its preamble, and replaceMethod then
+     * deleted it.
+     */
+    @Test
+    public void testAPreviousMethodIsNotSwallowedIntoTheTargetsPreamble()
+    {
+        List<String> module = lines(
+            "&Instead(\n\t\"Original\")\nProcedure Other()\nEndProcedure\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\n\tNew = 1;\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("the replace must be accepted: " + result.error, result.error); //$NON-NLS-1$
+        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
+        assertTrue("the previous method and its pragma must survive: " + joined, //$NON-NLS-1$
+            joined.contains("&Instead(") && joined.contains("Procedure Other()")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * A bare async modifier carrying a trailing comment is still part of the declaration below it.
+     * Judged on the raw line the comment hid that, and an insertBefore bound Async to the inserted
+     * method while quietly making the target synchronous.
+     */
+    @Test
+    public void testAnAsyncModifierWithATrailingCommentStaysWithItsDeclaration()
+    {
+        List<String> module = lines(
+            "Async // why\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("the insert must be accepted: " + result.error, result.error); //$NON-NLS-1$
+        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
+        assertTrue("the new method must go above the modifier: " + joined, //$NON-NLS-1$
+            joined.indexOf("Procedure Added()") < joined.indexOf("Async")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 }

@@ -415,7 +415,7 @@ public final class BslModuleUtils
             {
                 endLine = searchLimit;
             }
-            int startLine = findMethodPreambleStartLine(lines, declarationLine + 1) - 1;
+            int startLine = findMethodPreambleStartLine(lines, scan, declarationLine + 1) - 1;
             spans.add(new MethodSpan(startLine, declarationLine, endLine,
                 startMatcher.group(1), isFunction, complete));
         }
@@ -657,7 +657,52 @@ public final class BslModuleUtils
         {
             i--;
         }
-        return i >= 0 && line.charAt(i) == '.';
+        return i >= 0 && line.charAt(i) == '.' && isMemberAccessDot(line, i);
+    }
+
+    /**
+     * Whether the dot at {@code dot} takes a member from something, as opposed to ending a
+     * numeric literal.
+     * <p>
+     * One rule for both directions of this question - the dangling dot at the end of a line and
+     * the dot in front of a word on it - because they are the same question. "Value = 1." ends
+     * in a dot and takes a member from nothing, and reading it as an access suppressed a real
+     * terminator.
+     * </p>
+     *
+     * @param line the line
+     * @param dot the index of the dot
+     * @return whether it is a member access
+     */
+    private static boolean isMemberAccessDot(String line, int dot)
+    {
+        int base = dot - 1;
+        while (base >= 0 && Character.isWhitespace(line.charAt(base)))
+        {
+            base--;
+        }
+        if (base < 0)
+        {
+            return false;
+        }
+        char before = line.charAt(base);
+        if (before == ')' || before == ']')
+        {
+            return true;
+        }
+        // An identifier may END in a digit (Object1.), so walk the token back and judge it by
+        // its FIRST character: a run that starts with a digit is a numeric literal.
+        int i = base;
+        while (i >= 0 && (Character.isLetterOrDigit(line.charAt(i)) || line.charAt(i) == '_'))
+        {
+            i--;
+        }
+        if (i == base)
+        {
+            return false;
+        }
+        char first = line.charAt(i + 1);
+        return Character.isLetter(first) || first == '_';
     }
 
     /**
@@ -700,44 +745,8 @@ public final class BslModuleUtils
         int comment = line.indexOf("//"); //$NON-NLS-1$
         String code = comment >= 0 ? line.substring(0, comment) : line;
         String trimmed = code.stripTrailing();
-        if (!trimmed.endsWith(".")) //$NON-NLS-1$
-        {
-            return false;
-        }
-        // A member ACCESS, not any dot: what precedes it has to be something a member can be
-        // taken from. A numeric literal ends in a dot too ("Value = 1."), and reading that as a
-        // member access would suppress the real terminator on the next line.
-        if (trimmed.length() < 2)
-        {
-            return false;
-        }
-        // Whitespace between the base and the dot is hidden trivia - "Object ." is the same
-        // access as "Object." - so it is stepped over before anything is judged. Reading the
-        // space as the base made an ordinary split access look like a plain dot.
-        int base = trimmed.length() - 2;
-        while (base >= 0 && Character.isWhitespace(trimmed.charAt(base)))
-        {
-            base--;
-        }
-        if (base < 0)
-        {
-            return false;
-        }
-        char before = trimmed.charAt(base);
-        if (before == ')' || before == ']')
-        {
-            return true;
-        }
-        // An identifier may END in a digit (Object1.), so walk the token back and judge it by
-        // its FIRST character: a run that starts with a digit is a numeric literal, and its
-        // trailing dot is not a member access.
-        int i = base;
-        while (i >= 0 && (Character.isLetterOrDigit(trimmed.charAt(i)) || trimmed.charAt(i) == '_'))
-        {
-            i--;
-        }
-        char first = trimmed.charAt(i + 1);
-        return Character.isLetter(first) || first == '_';
+        return trimmed.endsWith(".") //$NON-NLS-1$
+            && isMemberAccessDot(trimmed, trimmed.length() - 1);
     }
 
     /**
@@ -1364,6 +1373,29 @@ public final class BslModuleUtils
     public static int findMethodPreambleStartLine(List<String> sourceLines,
         int declarationLine1Based)
     {
+        return findMethodPreambleStartLine(sourceLines,
+            sourceLines == null ? null : BslSyntaxChecker.maskLiteralsAndComments(sourceLines),
+            declarationLine1Based);
+    }
+
+    /**
+     * The same walk, told what the lines look like with their literals and comments blanked.
+     * <p>
+     * Two views on purpose: the COMMENT policy above needs the raw text - a comment above a
+     * declaration is documentation and must stay recognisable - while everything that is really
+     * a lexical question (a pragma's parentheses, a bare async modifier carrying a trailing
+     * comment) has to be asked of the masked text, or punctuation inside a comment or a literal
+     * decides it.
+     * </p>
+     *
+     * @param sourceLines all file lines (0-indexed list)
+     * @param masked those lines with literals and comments blanked
+     * @param declarationLine1Based 1-based declaration line
+     * @return 1-based first owned line, or the declaration line itself
+     */
+    private static int findMethodPreambleStartLine(List<String> sourceLines, List<String> masked,
+        int declarationLine1Based)
+    {
         if (sourceLines == null || declarationLine1Based <= 1)
         {
             return declarationLine1Based;
@@ -1374,7 +1406,7 @@ public final class BslModuleUtils
         while (idx >= 0)
         {
             String trimmed = sourceLines.get(idx).trim();
-            if (isTrivia(trimmed))
+            if (isTrivia(trimmed, masked.get(idx).trim()))
             {
                 owned = idx + 1;
                 idx--;
@@ -1386,7 +1418,7 @@ public final class BslModuleUtils
                 // '"Original")' on the next - and the tail looks like ordinary code. Breaking
                 // here left the pragma above the owned range, so an insertBefore landed between
                 // the pragma and its declaration and silently rebound it to the new method.
-                int pragmaStart = splitPragmaOpeningAbove(sourceLines, idx);
+                int pragmaStart = splitPragmaOpeningAbove(masked, idx);
                 if (pragmaStart >= 0)
                 {
                     owned = pragmaStart + 1;
@@ -1401,7 +1433,7 @@ public final class BslModuleUtils
             // as likely to be the previous method's footer, and claiming it would let
             // replaceMethod delete a note that belongs to somebody else. A group of comments
             // alone is not crossed at all, which is the documentation adjacency policy.
-            int annotation = topAnnotationAboveBlankRun(sourceLines, idx);
+            int annotation = topAnnotationAboveBlankRun(sourceLines, masked, idx);
             if (annotation < 0)
             {
                 break;
@@ -1430,18 +1462,26 @@ public final class BslModuleUtils
         for (int start = idx; start >= 0; start--)
         {
             String trimmed = lines.get(start).trim();
-            if (trimmed.isEmpty() || trimmed.startsWith("//")) //$NON-NLS-1$
+            if (trimmed.isEmpty())
             {
-                // CROSSED, not stopped at: whitespace and comments are hidden terminals, so a
-                // pragma may carry an explanation between its opener and its argument tail and
-                // still be one pragma. Stopping here left it out of the preamble, which is the
-                // rebinding this method exists to prevent.
+                // CROSSED, not stopped at: whitespace and comments are hidden terminals (and a
+                // comment is already blank in this masked view), so a pragma may carry an
+                // explanation between its opener and its argument tail and still be one pragma.
                 continue;
             }
             if (trimmed.startsWith("&")) //$NON-NLS-1$
             {
                 return parenthesisBalance(lines, start, start) > 0
                     && parenthesisBalance(lines, start, idx) == 0 ? start : -1;
+            }
+            // Real CODE below the candidate opener ends the search. Without this the walk ran on
+            // until it met any "&" line at all, so a target standing after a method that carries
+            // a split pragma was handed that whole method as its preamble - and replaceMethod
+            // deleted it. An argument list still open leaves the balance negative from here to
+            // the tail; anything else is code that belongs to nobody above.
+            if (parenthesisBalance(lines, start, idx) >= 0)
+            {
+                return -1;
             }
         }
         return -1;
@@ -1493,10 +1533,14 @@ public final class BslModuleUtils
      * A line that binds to the declaration below it: a comment, an ampersand annotation, or a
      * bare async modifier (which is part of the declaration itself, not decoration around it).
      */
-    private static boolean isTrivia(String trimmedLine)
+    private static boolean isTrivia(String trimmedLine, String trimmedMasked)
     {
+        // The async modifier is asked of the MASKED line: "Async // explanation" is still one
+        // async declaration, and an end-anchored pattern on the raw text fails on the comment -
+        // which would let an insertBefore land between the modifier and its method, binding the
+        // modifier to the inserted one and making the target synchronous.
         return trimmedLine.startsWith("//") || trimmedLine.startsWith("&") //$NON-NLS-1$ //$NON-NLS-2$
-            || ASYNC_MODIFIER_LINE_PATTERN.matcher(trimmedLine).matches();
+            || ASYNC_MODIFIER_LINE_PATTERN.matcher(trimmedMasked).matches();
     }
 
     /**
@@ -1511,7 +1555,8 @@ public final class BslModuleUtils
      * @return the 0-based index of that annotation, or {@code -1} when the group has none and the
      *         blank run must not be crossed
      */
-    private static int topAnnotationAboveBlankRun(List<String> sourceLines, int blankIndex)
+    private static int topAnnotationAboveBlankRun(List<String> sourceLines, List<String> masked,
+        int blankIndex)
     {
         int probe = blankIndex;
         while (probe >= 0 && sourceLines.get(probe).trim().isEmpty())
@@ -1522,12 +1567,13 @@ public final class BslModuleUtils
         while (probe >= 0)
         {
             String trimmed = sourceLines.get(probe).trim();
-            if (!isTrivia(trimmed))
+            String trimmedMasked = masked.get(probe).trim();
+            if (!isTrivia(trimmed, trimmedMasked))
             {
                 break;
             }
             if (trimmed.startsWith("&") //$NON-NLS-1$
-                || ASYNC_MODIFIER_LINE_PATTERN.matcher(trimmed).matches())
+                || ASYNC_MODIFIER_LINE_PATTERN.matcher(trimmedMasked).matches())
             {
                 topAnnotation = probe;
             }
