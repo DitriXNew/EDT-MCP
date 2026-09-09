@@ -124,7 +124,7 @@ runs:
 
     - name: Restore cached EDT base (Eclipse + 1C:EDT, no plugin)
       id: restore-edt
-      uses: actions/cache/restore@v5
+      uses: actions/cache/restore@v6
       with:
         path: ${{ runner.temp }}/edt/eclipse
         key: ${{ steps.edtcache.outputs.key }}
@@ -187,7 +187,7 @@ runs:
 
     - name: Save EDT base to cache (cache miss only)
       if: steps.restore-edt.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v5
+      uses: actions/cache/save@v6
       with:
         path: ${{ runner.temp }}/edt/eclipse
         key: ${{ steps.edtcache.outputs.key }}

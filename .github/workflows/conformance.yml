@@ -60,20 +60,20 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # The MCP plugin is BUILT on 25: Tycho 5 needs Maven on JDK 21+, and tycho-surefire runs
       # the EDT 2026.2 platform bundles, which are Java 25. The bundle itself still compiles to
       # release 17 (mcp/bom/pom.xml), so one artifact keeps loading on EDT 2026.1.
       - name: Set up JDK 25
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 25
           cache: maven
 
       - name: Cache Tycho P2 repositories
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.m2/repository/.cache/tycho
@@ -102,10 +102,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up the JDK EDT ${{ inputs.edt }} runs on
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: ${{ inputs.java }}
@@ -127,7 +127,7 @@ jobs:
           orbit-simrel-p2: ${{ inputs.orbit-simrel-p2 }}
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           # @modelcontextprotocol/conformance@latest uses fs.globSync, which is Node 22+
           # only (Node 20 errors: "module 'fs' does not provide an export named 'globSync'").
