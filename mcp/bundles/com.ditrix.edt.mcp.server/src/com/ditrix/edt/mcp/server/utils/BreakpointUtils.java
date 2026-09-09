@@ -383,12 +383,15 @@ public final class BreakpointUtils
         List<IBreakpoint> existing = findExceptionBreakpoints(manager);
         if (!enabled)
         {
-            List<Long> begun = new ArrayList<>();
+            TouchedBreakpoints begun = new TouchedBreakpoints();
             for (IBreakpoint breakpoint : existing)
             {
-                rememberTouched(begun, breakpoint);
                 try
                 {
+                    // Inside the guard, because getMarker() itself can throw on a stale marker
+                    // - isExceptionBreakpoint admits such a breakpoint through its interface
+                    // fallback - and outside it that throw would escape carrying nothing.
+                    begun.add(breakpoint);
                     breakpoint.setEnabled(false);
                 }
                 catch (Exception failure)
@@ -404,15 +407,17 @@ public final class BreakpointUtils
         String configuredMessage = catchAll ? null : exceptionMessage;
         if (!existing.isEmpty())
         {
-            List<Long> begun = new ArrayList<>();
+            TouchedBreakpoints begun = new TouchedBreakpoints();
             for (IBreakpoint breakpoint : existing)
             {
-                // Recorded BEFORE the mutation: a member that throws halfway may already carry
-                // the new filter, and a list of the fully done ones would hide the very entry
-                // the caller has to look at.
-                rememberTouched(begun, breakpoint);
                 try
                 {
+                    // Recorded BEFORE the mutation and INSIDE the guard: a member that throws
+                    // halfway may already carry the new filter, so the fully done ones alone
+                    // would hide the very entry the caller has to look at - and getMarker()
+                    // itself can throw on a stale marker, which outside the guard would escape
+                    // carrying nothing.
+                    begun.add(breakpoint);
                     if (updateFilter)
                     {
                         configureExceptionBreakpoint(breakpoint, catchAll, configuredMessage);
@@ -564,15 +569,18 @@ public final class BreakpointUtils
 
         private final List<Long> changed;
 
+        private final int begun;
+
         /**
-         * @param changed marker ids this call had begun changing, in the order it reached them
+         * @param touched what the loop had begun changing when it failed
          * @param cause the failure that stopped the loop
          */
-        PartialExceptionUpdateException(List<Long> changed, Throwable cause)
+        PartialExceptionUpdateException(TouchedBreakpoints touched, Throwable cause)
         {
             super(cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage(),
                 cause);
-            this.changed = List.copyOf(changed);
+            this.changed = List.copyOf(touched.ids);
+            this.begun = touched.begun;
         }
 
         /**
@@ -584,36 +592,66 @@ public final class BreakpointUtils
         }
 
         /**
-         * @return those ids as a comma-separated list, or "none it could name" when every
-         *         touched breakpoint was markerless
+         * @return how many breakpoints this call had begun changing, named or not
          */
-        public String describeChangedIds()
+        public int getBegunCount()
         {
+            return begun;
+        }
+
+        /**
+         * Describes what was touched, counting the members that have no marker to name them by.
+         * <p>
+         * A list of ids alone would understate the damage exactly where it matters: a markerless
+         * member was changed like the others and cannot be reached by any returned id, so the
+         * caller has to be told it exists rather than left to infer it from a shorter list.
+         * </p>
+         *
+         * @return the phrase, always naming a number the caller can act on
+         */
+        public String describeTouched()
+        {
+            int unnamed = begun - changed.size();
             if (changed.isEmpty())
             {
-                return "none it could name"; //$NON-NLS-1$
+                return begun + " breakpoint(s), none of which has a marker to name it by"; //$NON-NLS-1$
             }
-            StringBuilder ids = new StringBuilder();
+            StringBuilder ids = new StringBuilder("id(s) "); //$NON-NLS-1$
             for (int i = 0; i < changed.size(); i++)
             {
                 ids.append(i == 0 ? "" : ", ").append(changed.get(i)); //$NON-NLS-1$ //$NON-NLS-2$
             }
-            return ids.toString();
+            return unnamed > 0
+                ? ids.append(" and ").append(unnamed) //$NON-NLS-1$
+                    .append(" more with no marker to name it by").toString() //$NON-NLS-1$
+                : ids.toString();
         }
     }
 
     /**
-     * Records a breakpoint about to be mutated, when it has a marker to name it by.
-     *
-     * @param touched the ids collected so far
-     * @param breakpoint the breakpoint about to change
+     * What a mutation loop has begun changing: the ids it can name, and how many members it
+     * reached in total - which is larger whenever one of them has no marker.
      */
-    private static void rememberTouched(List<Long> touched, IBreakpoint breakpoint)
+    static final class TouchedBreakpoints
     {
-        IMarker marker = breakpoint.getMarker();
-        if (marker != null)
+        private final List<Long> ids = new ArrayList<>();
+
+        private int begun;
+
+        /**
+         * Records a breakpoint about to be mutated. Counted whether or not it can be named:
+         * a markerless member is changed like the rest and reachable by no returned id.
+         *
+         * @param breakpoint the breakpoint about to change
+         */
+        void add(IBreakpoint breakpoint)
         {
-            touched.add(Long.valueOf(marker.getId()));
+            begun++;
+            IMarker marker = breakpoint.getMarker();
+            if (marker != null)
+            {
+                ids.add(Long.valueOf(marker.getId()));
+            }
         }
     }
 

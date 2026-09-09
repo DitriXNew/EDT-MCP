@@ -276,7 +276,8 @@ public class SetBreakpointToolTest
     @Test
     public void testFailureMessageNamesTheBreakpointsAlreadyChanged()
     {
-        String partial = SetBreakpointTool.failureMessage("marker no longer exists",
+        String partial = SetBreakpointTool.failureMessage(
+            new IllegalStateException("marker no longer exists"), //$NON-NLS-1$
             Arrays.asList(Long.valueOf(12L), Long.valueOf(15L)));
         assertTrue("the failure must carry the cause: " + partial,
             partial.contains("marker no longer exists"));
@@ -289,10 +290,27 @@ public class SetBreakpointToolTest
         assertFalse("the message must not assert a state the call never established: " + partial,
             partial.contains("keep the new settings"));
 
-        String clean = SetBreakpointTool.failureMessage("boom", Collections.emptyList());
+        String clean = SetBreakpointTool.failureMessage(new IllegalStateException("boom"), //$NON-NLS-1$
+            Collections.emptyList());
         assertFalse("nothing survived a failed creation, so nothing may be claimed: " + clean,
             clean.contains("already begun changing"));
         assertTrue("every failure still points at the Breakpoints view: " + clean,
             clean.contains("Breakpoints view"));
+    }
+
+    /**
+     * A throw with no message - a raw NullPointerException is the realistic one - must not be
+     * serialized as the literal "null". ToolResult.error cannot substitute anything of its own
+     * here, because the composed string is not null, so the caller would be told nothing at all.
+     */
+    @Test
+    public void testFailureMessageKeepsTheExceptionTypeWhenThereIsNoDetail()
+    {
+        String message = SetBreakpointTool.failureMessage(new NullPointerException(),
+            Collections.emptyList());
+        assertTrue("the type has to stand in for the missing detail: " + message,
+            message.contains("NullPointerException"));
+        assertFalse("the literal null must not reach the caller: " + message,
+            message.contains("null"));
     }
 }

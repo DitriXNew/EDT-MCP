@@ -254,7 +254,7 @@ public class SetBreakpointTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Failed to set breakpoint", e); //$NON-NLS-1$
-            return ToolResult.error(failureMessage(e.getMessage(), alreadyChanged)).toJson();
+            return ToolResult.error(failureMessage(e, alreadyChanged)).toJson();
         }
     }
 
@@ -267,14 +267,18 @@ public class SetBreakpointTool implements IMcpTool
      * and coordinate-based inspection answers with one breakpoint of several.
      * </p>
      *
-     * @param cause the underlying failure message, possibly {@code null}
+     * @param cause the underlying failure
      * @param alreadyChanged marker ids this call had begun changing; empty when nothing survived
      * @return the error message
      */
-    static String failureMessage(String cause, List<Long> alreadyChanged)
+    static String failureMessage(Throwable cause, List<Long> alreadyChanged)
     {
+        // The class name when there is no message: a raw NullPointerException would otherwise be
+        // serialized as the literal "null", and ToolResult.error cannot substitute anything of
+        // its own because the composed string is not null - the caller would be told nothing.
         StringBuilder message = new StringBuilder("Failed to set breakpoint: ") //$NON-NLS-1$
-            .append(cause).append('.');
+            .append(cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage())
+            .append('.');
         if (!alreadyChanged.isEmpty())
         {
             // "Begun changing", not "changed": the failure can land before the first setter wrote

@@ -169,20 +169,70 @@ public class BreakpointUtilsTest
     @Test
     public void testAPartialExceptionUpdateCarriesTheIdsItTouched()
     {
+        BreakpointUtils.TouchedBreakpoints two = new BreakpointUtils.TouchedBreakpoints();
+        two.add(breakpointWithMarkerId(41L));
+        two.add(breakpointWithMarkerId(42L));
         BreakpointUtils.PartialExceptionUpdateException partial =
-            new BreakpointUtils.PartialExceptionUpdateException(
-                Arrays.asList(Long.valueOf(41L), Long.valueOf(42L)),
+            new BreakpointUtils.PartialExceptionUpdateException(two,
                 new IllegalStateException("marker no longer exists")); //$NON-NLS-1$
         assertEquals(Arrays.asList(Long.valueOf(41L), Long.valueOf(42L)), partial.getChangedIds());
-        assertEquals("41, 42", partial.describeChangedIds()); //$NON-NLS-1$
+        assertEquals("id(s) 41, 42", partial.describeTouched()); //$NON-NLS-1$
+        assertEquals(2, partial.getBegunCount());
         // The cause survives: the caller is owed WHY it failed as much as what it touched.
         assertEquals("marker no longer exists", partial.getMessage()); //$NON-NLS-1$
+    }
 
-        BreakpointUtils.PartialExceptionUpdateException nothingNamed =
-            new BreakpointUtils.PartialExceptionUpdateException(Collections.emptyList(),
-                new IllegalStateException()); //$NON-NLS-1$
-        assertEquals("none it could name", nothingNamed.describeChangedIds()); //$NON-NLS-1$
+    /**
+     * A member with no marker was changed like the rest and is reachable by no returned id, so
+     * it has to be COUNTED. A phrase built from the ids alone understates the damage exactly
+     * where the caller can do least about it.
+     */
+    @Test
+    public void testAPartialExceptionUpdateCountsWhatItCouldNotName()
+    {
+        BreakpointUtils.TouchedBreakpoints mixed = new BreakpointUtils.TouchedBreakpoints();
+        mixed.add(breakpointWithMarkerId(41L));
+        mixed.add(markerlessBreakpoint());
+        BreakpointUtils.PartialExceptionUpdateException partial =
+            new BreakpointUtils.PartialExceptionUpdateException(mixed, new IllegalStateException());
+        assertEquals("id(s) 41 and 1 more with no marker to name it by", //$NON-NLS-1$
+            partial.describeTouched());
+        assertEquals(2, partial.getBegunCount());
         // A cause with no message must not leave the sentence blank either.
-        assertEquals("IllegalStateException", nothingNamed.getMessage()); //$NON-NLS-1$
+        assertEquals("IllegalStateException", partial.getMessage()); //$NON-NLS-1$
+
+        BreakpointUtils.TouchedBreakpoints nameless = new BreakpointUtils.TouchedBreakpoints();
+        nameless.add(markerlessBreakpoint());
+        nameless.add(markerlessBreakpoint());
+        assertEquals("2 breakpoint(s), none of which has a marker to name it by", //$NON-NLS-1$
+            new BreakpointUtils.PartialExceptionUpdateException(nameless,
+                new IllegalStateException()).describeTouched());
+    }
+
+    /**
+     * A breakpoint whose marker answers with the given id.
+     *
+     * @param id the marker id
+     * @return the mocked breakpoint
+     */
+    private static IBreakpoint breakpointWithMarkerId(long id)
+    {
+        IMarker marker = mock(IMarker.class);
+        when(marker.getId()).thenReturn(Long.valueOf(id));
+        IBreakpoint breakpoint = mock(IBreakpoint.class);
+        when(breakpoint.getMarker()).thenReturn(marker);
+        return breakpoint;
+    }
+
+    /**
+     * A breakpoint the platform recognises by interface but that carries no marker.
+     *
+     * @return the mocked breakpoint
+     */
+    private static IBreakpoint markerlessBreakpoint()
+    {
+        IBreakpoint breakpoint = mock(IBreakpoint.class);
+        when(breakpoint.getMarker()).thenReturn(null);
+        return breakpoint;
     }
 }

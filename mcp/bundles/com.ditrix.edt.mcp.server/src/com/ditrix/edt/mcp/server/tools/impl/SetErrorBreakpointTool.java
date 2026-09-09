@@ -178,8 +178,8 @@ public class SetErrorBreakpointTool implements IMcpTool
             Activator.logError("Failed to set workspace-wide error breakpoint", partial); //$NON-NLS-1$
             return ToolResult.error("Failed to set workspace-wide error breakpoint: " //$NON-NLS-1$
                 + endSentence(partial.getMessage())
-                + " This call had already begun changing breakpoint id(s) " //$NON-NLS-1$
-                + partial.describeChangedIds()
+                + " This call had already begun changing " //$NON-NLS-1$
+                + partial.describeTouched()
                 + " - each may carry part of the new configuration and none of them was rolled " //$NON-NLS-1$
                 + "back, so inspect them in EDT's Breakpoints view before retrying.").toJson(); //$NON-NLS-1$
         }
