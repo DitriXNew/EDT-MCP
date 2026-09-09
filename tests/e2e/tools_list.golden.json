@@ -4174,14 +4174,14 @@
         "breakpointId": {
           "type": "integer"
         },
-        "catchAllExceptions": {
-          "type": "boolean"
-        },
         "breakpointIds": {
           "items": {
             "type": "integer"
           },
           "type": "array"
+        },
+        "catchAllExceptions": {
+          "type": "boolean"
         },
         "disabledCount": {
           "type": "integer"
