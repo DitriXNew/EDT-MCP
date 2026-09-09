@@ -966,6 +966,16 @@ public class MergeRulesTool implements IMcpTool
                     + "whether the archive changed under it. Retry once the file is readable.") //$NON-NLS-1$
                     .toJson();
             }
+            // The hash is one read and the bounded checks above it were another, so a writer
+            // could have slipped between them - adding the very sidecar the refusal exists for,
+            // and having it destroyed by a write that never saw it. Re-running those checks
+            // against the hashed file closes the window from the other side: a change inside it
+            // is either seen HERE, or it happened after the hash and the confirm point sees it.
+            String moved = archiveStillTheOneHashed(file, targetPolicy, targetDigestAsRead);
+            if (moved != null)
+            {
+                return moved;
+            }
         }
 
         List<RequestedDecision> requested = new ArrayList<>();
@@ -1361,6 +1371,60 @@ public class MergeRulesTool implements IMcpTool
      *            when there was no existing target, or it is too large to be one
      * @return the refusal, or {@code null} when the target is still the file that was read
      */
+    /**
+     * Re-runs the BOUNDED checks against the file that was just hashed: it still holds nothing
+     * but the merge-settings entry, and that entry is still the one this call parsed.
+     * <p>
+     * Cheap by construction - the same bounded read as the first parse, never the whole archive -
+     * so the giant-neighbour container the refusal above rejects is still rejected before any
+     * full-file work. What it buys is that the whole-file digest describes a snapshot whose
+     * sidecar-freedom and content were verified, rather than one nobody looked at again.
+     * </p>
+     *
+     * @param file the archive that was hashed
+     * @param targetPolicy whether this write may replace that file
+     * @param contentDigestAsRead the content digest snapshotted for it, or {@code null} when it
+     *            could not be parsed at all - in which case there is nothing to contradict
+     * @return a refusal, or {@code null} when the file is still the one that was hashed
+     */
+    private static String archiveStillTheOneHashed(Path file, MergeRulesCodec.Target targetPolicy,
+        String contentDigestAsRead)
+    {
+        MergeRulesDocument again;
+        try
+        {
+            again = MergeRulesCodec.read(file);
+        }
+        catch (IOException | MergeRulesFormatException noLongerReadable) // NOSONAR: see below
+        {
+            // Unparseable NOW. That is a change only if it parsed a moment ago; a target that
+            // never parsed was snapshotted with a null digest and is guarded by the attributes.
+            return contentDigestAsRead == null ? null : targetMovedRefusal(file);
+        }
+        String sidecars = sidecarEntriesRefusal(file, targetPolicy, again);
+        if (sidecars != null)
+        {
+            return sidecars;
+        }
+        return contentDigestAsRead != null && !contentDigestAsRead.equals(again.sourceDigest())
+            ? targetMovedRefusal(file)
+            : null;
+    }
+
+    /**
+     * The refusal for a target that changed between the parse and the fingerprint.
+     *
+     * @param file the target
+     * @return the refusal JSON
+     */
+    private static String targetMovedRefusal(Path file)
+    {
+        return ToolResult.error("Nothing was written: " + file //$NON-NLS-1$
+            + " changed while it was being read - what this call parsed is no longer what is on " //$NON-NLS-1$
+            + "the path, so the preview would describe one file and the write would replace " //$NON-NLS-1$
+            + "another. Read what is on the path now with mode '" + MODE_READ //$NON-NLS-1$
+            + "' and re-send this write against it.").toJson(); //$NON-NLS-1$
+    }
     /**
      * The whole file's digest, or {@code null} when it cannot be read - which the caller treats
      * as changed, the direction every clause here reasons in.
