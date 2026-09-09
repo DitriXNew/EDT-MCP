@@ -334,7 +334,7 @@ public final class BreakpointUtils
         setEnumOption(breakpoint, marker, "setHitCondition", HIT_CONDITION_ATTRIBUTE, //$NON-NLS-1$
             hitCondition == null ? DEFAULT_HIT_CONDITION : hitCondition,
             "hitCondition", markerFallbacks); //$NON-NLS-1$
-        return LineBreakpointConfiguration.applied(markerFallbacks);
+        return LineBreakpointConfiguration.appliedWith(markerFallbacks);
     }
 
     /**
@@ -472,7 +472,7 @@ public final class BreakpointUtils
         List<IBreakpoint> configured) throws Exception
     {
         List<Long> ids = markerIdsOf(configured);
-        boolean uniform = sameFilterEverywhere(configured);
+        FilterAgreement agreement = filterAgreement(configured);
         Map<String, Object> state =
             readExceptionBreakpointConfiguration(breakpoint.getMarker());
         Object message = state.get("exceptionMessage"); //$NON-NLS-1$
@@ -481,7 +481,7 @@ public final class BreakpointUtils
             : message.toString();
         return ExceptionBreakpointChange.enabled(action, breakpoint,
             Boolean.TRUE.equals(state.get("catchAllExceptions")), storedMessage, ids, //$NON-NLS-1$
-            configured.size(), uniform);
+            configured.size(), agreement);
     }
 
     /**
@@ -520,7 +520,18 @@ public final class BreakpointUtils
      * @return whether their filters agree
      * @throws Exception when a marker cannot be read
      */
-    private static boolean sameFilterEverywhere(List<IBreakpoint> breakpoints)
+    /** What a read-back could establish about the filters of the affected breakpoints. */
+    public enum FilterAgreement
+    {
+        /** Every affected breakpoint carries the same filter. */
+        SAME,
+        /** They carry different filters - the set has no single filter to report. */
+        DIFFERENT,
+        /** At least one could not be read back, so nothing about the set is established. */
+        UNVERIFIED
+    }
+
+    private static FilterAgreement filterAgreement(List<IBreakpoint> breakpoints)
     {
         Map<String, Object> first = null;
         for (IBreakpoint each : breakpoints)
@@ -528,7 +539,7 @@ public final class BreakpointUtils
             IMarker marker = each.getMarker();
             if (marker == null)
             {
-                return false;
+                return FilterAgreement.UNVERIFIED;
             }
             Map<String, Object> state;
             try
@@ -541,8 +552,9 @@ public final class BreakpointUtils
                 // already been configured and enabled, so letting a stale marker throw would
                 // report a failure for a mutation that happened - and would drop the ids the
                 // caller needs to undo it. An unreadable entry simply means the set cannot be
-                // described as uniform.
-                return false;
+                // described as uniform - and the caller is told it is UNVERIFIED rather than
+                // being left to read "the filters disagree" into a read that never happened.
+                return FilterAgreement.UNVERIFIED;
             }
             if (first == null)
             {
@@ -550,10 +562,10 @@ public final class BreakpointUtils
             }
             else if (!first.equals(state))
             {
-                return false;
+                return FilterAgreement.DIFFERENT;
             }
         }
-        return true;
+        return FilterAgreement.SAME;
     }
     /** Reads the configured exception filter for list_breakpoints without linking its interface. */
     public static Map<String, Object> readExceptionBreakpointConfiguration(IMarker marker)
@@ -1035,12 +1047,12 @@ public final class BreakpointUtils
             this.markerFallbacks = Collections.unmodifiableList(new ArrayList<>(markerFallbacks));
         }
 
-        static LineBreakpointConfiguration applied(List<String> markerFallbacks)
+        public static LineBreakpointConfiguration appliedWith(List<String> markerFallbacks)
         {
             return new LineBreakpointConfiguration(true, markerFallbacks);
         }
 
-        static LineBreakpointConfiguration notApplied()
+        public static LineBreakpointConfiguration notApplied()
         {
             return new LineBreakpointConfiguration(false, Collections.emptyList());
         }
@@ -1066,11 +1078,11 @@ public final class BreakpointUtils
         private final String exceptionMessage;
         private final List<Long> configuredIds;
         private final int configuredCount;
-        private final boolean uniformFilter;
+        private final FilterAgreement filterAgreement;
 
         private ExceptionBreakpointChange(String action, IBreakpoint breakpoint, int disabledCount,
             boolean catchAll, String exceptionMessage, List<Long> configuredIds,
-            int configuredCount, boolean uniformFilter)
+            int configuredCount, FilterAgreement filterAgreement)
         {
             this.action = action;
             this.breakpoint = breakpoint;
@@ -1079,21 +1091,21 @@ public final class BreakpointUtils
             this.exceptionMessage = exceptionMessage;
             this.configuredIds = configuredIds;
             this.configuredCount = configuredCount;
-            this.uniformFilter = uniformFilter;
+            this.filterAgreement = filterAgreement;
         }
 
         static ExceptionBreakpointChange enabled(String action, IBreakpoint breakpoint,
             boolean catchAll, String exceptionMessage, List<Long> configuredIds,
-            int configuredCount, boolean uniformFilter)
+            int configuredCount, FilterAgreement filterAgreement)
         {
             return new ExceptionBreakpointChange(action, breakpoint, 0, catchAll, exceptionMessage,
-                configuredIds, configuredCount, uniformFilter);
+                configuredIds, configuredCount, filterAgreement);
         }
 
         public static ExceptionBreakpointChange disabled(int disabledCount, List<Long> ids)
         {
             return new ExceptionBreakpointChange(disabledCount > 0 ? "disabled" : "notFound", //$NON-NLS-1$ //$NON-NLS-2$
-                null, disabledCount, true, null, ids, disabledCount, true);
+                null, disabledCount, true, null, ids, disabledCount, FilterAgreement.SAME);
         }
 
         /**
@@ -1125,14 +1137,14 @@ public final class BreakpointUtils
         }
 
         /**
-         * Whether every affected breakpoint carries the same filter, i.e. whether the filter
-         * fields describe the whole set rather than one member of it.
+         * What the read-back established about the filters: whether they agree, differ, or
+         * could not be read at all - three different answers a caller acts on differently.
          *
-         * @return {@code true} when the filters agree
+         * @return the agreement
          */
-        public boolean isUniformFilter()
+        public FilterAgreement getFilterAgreement()
         {
-            return uniformFilter;
+            return filterAgreement;
         }
 
         public String getAction()

@@ -191,16 +191,33 @@ public class SetBreakpointTool implements IMcpTool
             IBreakpoint bp = existing.get(0);
             try
             {
-                BreakpointUtils.LineBreakpointConfiguration configuration = null;
+                // AGGREGATED across the duplicates, not "whichever came last": with a native
+                // breakpoint beside a marker-only one, keeping the final result would report
+                // the condition as applied - or as degraded - depending on registration order.
+                // Applied only when EVERY duplicate applied it; the fallbacks are unioned.
+                boolean appliedEverywhere = true;
+                List<String> fallbacks = new ArrayList<>();
                 for (IBreakpoint each : existing)
                 {
-                    configuration = BreakpointUtils.configureLineBreakpoint(each, effectiveCondition,
-                        hitCount, effectiveHitCondition);
+                    BreakpointUtils.LineBreakpointConfiguration one =
+                        BreakpointUtils.configureLineBreakpoint(each, effectiveCondition,
+                            hitCount, effectiveHitCondition);
+                    appliedEverywhere = appliedEverywhere && one.isApplied();
+                    for (String fallback : one.getMarkerFallbacks())
+                    {
+                        if (!fallbacks.contains(fallback))
+                        {
+                            fallbacks.add(fallback);
+                        }
+                    }
                     // A breakpoint reused at this line may have been switched OFF in EDT. Asking for
                     // a breakpoint means "stop here", so leaving it disabled would report success for
                     // one that never fires - and this tool has no 'enabled' parameter to fix that.
                     each.setEnabled(true);
                 }
+                BreakpointUtils.LineBreakpointConfiguration configuration = appliedEverywhere
+                    ? BreakpointUtils.LineBreakpointConfiguration.appliedWith(fallbacks)
+                    : BreakpointUtils.LineBreakpointConfiguration.notApplied();
                 return buildSuccessResult(bp, target.file, module, lineNumber, action,
                     effectiveCondition, hitCount, effectiveHitCondition, conditionProvided,
                     hitCountProvided, configuration, existing);

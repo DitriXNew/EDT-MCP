@@ -94,6 +94,16 @@ public class SetErrorBreakpointTool implements IMcpTool
         boolean enabled = JsonUtils.extractBooleanArgument(params, KEY_ENABLED, false);
         String exceptionMessage = JsonUtils.extractStringArgument(params, KEY_EXCEPTION_MESSAGE);
 
+        if (!enabled && exceptionMessage != null)
+        {
+            // The disable path preserves each breakpoint's filter and applies none, so honouring
+            // this combination silently would leave the old filter in place while the answer
+            // said success. Refused with the order that works instead.
+            return ToolResult.error("exceptionMessage cannot be combined with enabled=false: " //$NON-NLS-1$
+                + "disabling preserves the existing filter and applies none. Set the filter " //$NON-NLS-1$
+                + "with enabled=true first, or disable now and pass exceptionMessage when you " //$NON-NLS-1$
+                + "re-enable.").toJson(); //$NON-NLS-1$
+        }
         try
         {
             BreakpointUtils.ExceptionBreakpointChange change =
@@ -108,6 +118,14 @@ public class SetErrorBreakpointTool implements IMcpTool
                 // breakpoint without a marker has no id to contribute.
                 .put("breakpointIds", change.getConfiguredIds()) //$NON-NLS-1$
                 .put("configuredCount", change.getConfiguredCount()); //$NON-NLS-1$
+            if (change.getFilterAgreement() == BreakpointUtils.FilterAgreement.UNVERIFIED)
+            {
+                // Distinct from "they disagree": nothing was established, so the caller must
+                // not read the absence of the filter fields as a statement about the set.
+                result.put("warning", "the filter of at least one affected breakpoint could " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "not be read back, so no filter is reported for this call; list_breakpoints " //$NON-NLS-1$
+                    + "shows each breakpoint's own state."); //$NON-NLS-1$
+            }
             int unaddressable = change.getConfiguredCount() - change.getConfiguredIds().size();
             if (unaddressable > 0)
             {
@@ -132,7 +150,7 @@ public class SetErrorBreakpointTool implements IMcpTool
                 // omits exceptionMessage preserves each - so reporting the first member's
                 // state as THE state would say "errors are filtered" while another catches
                 // everything. When they disagree, breakpointIds is the honest answer.
-                if (change.isUniformFilter())
+                if (change.getFilterAgreement() == BreakpointUtils.FilterAgreement.SAME)
                 {
                     result.put("catchAllExceptions", change.isCatchAll()); //$NON-NLS-1$
                     if (change.getExceptionMessage() != null)

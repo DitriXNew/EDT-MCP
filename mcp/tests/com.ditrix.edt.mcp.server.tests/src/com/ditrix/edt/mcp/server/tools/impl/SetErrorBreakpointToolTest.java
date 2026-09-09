@@ -173,4 +173,21 @@ public class SetErrorBreakpointToolTest
             }
         };
     }
+
+    /**
+     * The disable path preserves each breakpoint's filter and applies none, so accepting a filter
+     * alongside enabled=false would drop it while answering success. Refused with the order that
+     * works instead.
+     */
+    @Test
+    public void testFilterWithDisableIsRefused()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("enabled", "false"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("exceptionMessage", "Deadlock"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new SetErrorBreakpointTool().execute(params);
+        assertTrue(result, result.contains("cannot be combined with enabled=false")); //$NON-NLS-1$
+        assertTrue("the working order must be named: " + result, //$NON-NLS-1$
+            result.contains("re-enable")); //$NON-NLS-1$
+    }
 }
