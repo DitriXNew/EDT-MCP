@@ -76,20 +76,20 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # The MCP plugin is BUILT on 25: Tycho 5 needs Maven on JDK 21+, and tycho-surefire runs
       # the EDT 2026.2 platform bundles, which are Java 25. The bundle itself still compiles to
       # release 17 (mcp/bom/pom.xml), so one artifact keeps loading on EDT 2026.1.
       - name: Set up JDK 25
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 25
           cache: maven
 
       - name: Cache Tycho P2 repositories
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.m2/repository/.cache/tycho
@@ -163,16 +163,16 @@ jobs:
       MCP_PORT: "8765"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up the JDK EDT ${{ inputs.edt }} runs on
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: ${{ inputs.java }}
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -201,7 +201,15 @@ jobs:
         shell: bash
         run: |
           set -x
-          sudo apt-get update
+          # The runner image ships third-party apt lists we do not use (Google Chrome, Microsoft
+          # prod). When one of them serves a bad index, `apt-get update` exits 100 and kills the
+          # job 25 seconds in - it took the whole master matrix down twice on 2026-09-09, with
+          # "Hash Sum mismatch" on dl.google.com and nothing wrong on our side. Drop those lists,
+          # and do not let the refresh itself be fatal: everything we need is in the Ubuntu
+          # archives, and the STRICT xvfb install at the end of this step is the real gate.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/microsoft-prod.list || true
+          sudo apt-get update || sudo apt-get update || true
           # Tolerant install: package names differ across Ubuntu 22.04/24.04 (t64 ABI
           # transition), so try each and ignore the ones absent.
           PKGS="xvfb \
@@ -243,7 +251,7 @@ jobs:
 
       - name: "EDT setup 3/8 · RESTORE base cache (Eclipse+EDT, no plugin)"
         id: restore-edt
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/edt/eclipse
           key: ${{ steps.edtcache.outputs.key }}
@@ -300,7 +308,7 @@ jobs:
 
       - name: "EDT setup 6/8 · SAVE base cache [CACHE MISS ONLY]"
         if: steps.restore-edt.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/edt/eclipse
           key: ${{ steps.edtcache.outputs.key }}
