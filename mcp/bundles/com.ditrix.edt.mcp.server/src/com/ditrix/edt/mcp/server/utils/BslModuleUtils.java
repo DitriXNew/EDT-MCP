@@ -1094,11 +1094,12 @@ public final class BslModuleUtils
      * above the Procedure/Function declaration. Code ends the preamble, so a
      * branch/region directive is never absorbed into the method.
      *
-     * <p>Blank lines are crossed only to reach an annotation. Whitespace is a hidden
-     * terminal in the BSL grammar and {@code Procedure} carries its {@code pragmas}
-     * directly, so {@code &AtClient}, a blank line and the declaration are one unit -
-     * inserting between them would rebind the directive to the inserted method. A blank
-     * line still detaches a comment block, keeping the documentation adjacency policy.
+     * <p>Blank lines are crossed only to reach a comment/annotation group that CONTAINS an
+     * annotation, wherever in the group it sits. Whitespace and comments are hidden terminals
+     * in the BSL grammar and {@code Procedure} carries its {@code pragmas} directly, so
+     * {@code &AtClient}, an explaining comment, a blank line and the declaration are one unit -
+     * inserting between them would rebind the directive to the inserted method. A group of
+     * comments alone stays detached, keeping the documentation adjacency policy.
      *
      * @param sourceLines all file lines (0-indexed list)
      * @param declarationLine1Based 1-based declaration line
@@ -1117,7 +1118,7 @@ public final class BslModuleUtils
         while (idx >= 0)
         {
             String trimmed = sourceLines.get(idx).trim();
-            if (trimmed.startsWith("//") || trimmed.startsWith("&")) //$NON-NLS-1$ //$NON-NLS-2$
+            if (isTrivia(trimmed))
             {
                 owned = idx + 1;
                 idx--;
@@ -1127,18 +1128,56 @@ public final class BslModuleUtils
             {
                 break;
             }
-            int probe = idx;
-            while (probe >= 0 && sourceLines.get(probe).trim().isEmpty())
-            {
-                probe--;
-            }
-            if (probe < 0 || !sourceLines.get(probe).trim().startsWith("&")) //$NON-NLS-1$
+            // A blank run: cross it only when the trivia GROUP above it carries an annotation,
+            // wherever in that group it sits - "&AtClient", an explaining comment, a blank line
+            // and the declaration are one unit. A group of comments alone stays detached, which
+            // is the documentation adjacency policy.
+            int groupTop = groupTopAboveBlankRun(sourceLines, idx);
+            if (groupTop < 0)
             {
                 break;
             }
-            idx = probe;
+            owned = groupTop + 1;
+            idx = groupTop - 1;
         }
         return owned;
+    }
+
+    /** A line that binds to the declaration below it: a comment or an ampersand annotation. */
+    private static boolean isTrivia(String trimmedLine)
+    {
+        return trimmedLine.startsWith("//") || trimmedLine.startsWith("&"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Given the index of a blank line, finds the top of the contiguous comment/annotation group
+     * directly above the blank run - but only when that group contains an annotation, since a
+     * directive keeps binding across hidden trivia while a comment block does not.
+     *
+     * @return the 0-based index of the group's first line, or {@code -1} when the blank run must
+     *         not be crossed
+     */
+    private static int groupTopAboveBlankRun(List<String> sourceLines, int blankIndex)
+    {
+        int probe = blankIndex;
+        while (probe >= 0 && sourceLines.get(probe).trim().isEmpty())
+        {
+            probe--;
+        }
+        int top = -1;
+        boolean hasAnnotation = false;
+        while (probe >= 0)
+        {
+            String trimmed = sourceLines.get(probe).trim();
+            if (!isTrivia(trimmed))
+            {
+                break;
+            }
+            hasAnnotation = hasAnnotation || trimmed.startsWith("&"); //$NON-NLS-1$
+            top = probe;
+            probe--;
+        }
+        return hasAnnotation ? top : -1;
     }
 
     /**

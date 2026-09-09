@@ -1165,6 +1165,33 @@ public class WriteModuleSourceToolTest
     }
 
     @Test
+    public void testInsertBeforeKeepsAnAnnotationSeparatedByACommentAndABlankLine()
+    {
+        List<String> current = lines(
+            "&AtClient\n// explanation\n\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result = WriteModuleSourceTool.applyMethodTargetedEdit(
+            current, "insertBefore", "Target", "Procedure Added()\nEndProcedure\n", null); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertNull(result.error);
+        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
+        assertTrue(joined, joined.startsWith("Procedure Added()\nEndProcedure\n&AtClient")); //$NON-NLS-1$
+    }
+
+    /**
+     * A known limitation, pinned in its SAFE direction: BSL hides whitespace, so
+     * {@code Procedure Target} and {@code ()} on separate lines parses - the line-based scan does
+     * not recognize it, and the tool then REFUSES rather than splicing at a wrong anchor.
+     */
+    @Test
+    public void testDeclarationSplitAcrossLinesIsRefusedNotMisspliced()
+    {
+        List<String> current = lines("Procedure Target\n()\nEndProcedure\n"); //$NON-NLS-1$
+        assertMethodEditError("was not found", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(current, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\nEndProcedure\n", null)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testInsertBeforeDoesNotAbsorbABlankSeparatedCommentBlock()
     {
         // The mirror direction: a blank line carries a directive but still detaches

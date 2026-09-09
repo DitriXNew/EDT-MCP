@@ -314,6 +314,23 @@ public class BslModuleUtilsTest
         assertEquals(0, BslModuleUtils.findMethodSpansViaText(lines).get(0).startLine);
     }
 
+    /**
+     * Comments are hidden trivia too, so a comment between the directive and the blank line does
+     * not detach the directive either: the whole group belongs to the declaration below it.
+     */
+    @Test
+    public void testAnnotationAboveACommentAndABlankLineIsStillOwned()
+    {
+        List<String> lines = List.of(
+            "&AtClient", //$NON-NLS-1$
+            "// explanation", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(0, BslModuleUtils.findMethodSpansViaText(lines).get(0).startLine);
+    }
+
     @Test
     public void testBlankLineStillDetachesACommentBlock()
     {
