@@ -1635,12 +1635,18 @@ public class WriteModuleSourceToolTest
     }
 
     /**
-     * The other edge of the same rule: exactly ONE trailing element goes. A payload that ends in
-     * a deliberate blank line keeps that blank line, or the widened condition would start eating
+     * The other edge of the same rule: exactly ONE trailing element goes, so the three
+     * spellings arrive at the SAME list. Without this the widened condition could start eating
      * content instead of an artefact.
+     * <p>
+     * What this does NOT claim is that a blank line reaches the file: {@code writeFile} joins
+     * {@code ["a", ""]} to {@code "a<delim>"} and appends nothing, so a trailing blank line is
+     * normalized away - for every separator alike, which is the point. Before this change the
+     * bare CR alone kept it, by the very inconsistency the fix removes.
+     * </p>
      */
     @Test
-    public void testSplitSourceLinesKeepsADeliberateTrailingBlankLine()
+    public void testSplitSourceLinesTreatsTheThreeSpellingsAlikeAtTheTail()
     {
         assertEquals(Arrays.asList("a", ""), //$NON-NLS-1$ //$NON-NLS-2$
             WriteModuleSourceTool.splitSourceLines("a\r\r")); //$NON-NLS-1$
