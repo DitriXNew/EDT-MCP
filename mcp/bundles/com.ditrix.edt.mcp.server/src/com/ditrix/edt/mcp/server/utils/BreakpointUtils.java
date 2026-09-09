@@ -399,7 +399,17 @@ public final class BreakpointUtils
                     throw new PartialExceptionUpdateException(begun, failure);
                 }
             }
-            return ExceptionBreakpointChange.disabled(existing.size(), markerIdsOf(existing));
+            // The reporting re-reads every marker, and one that went stale AFTER its setter
+            // succeeded throws here - past the loop, where nothing would carry the ids of the
+            // breakpoints this call has already changed.
+            try
+            {
+                return ExceptionBreakpointChange.disabled(existing.size(), markerIdsOf(existing));
+            }
+            catch (Exception reportingFailure)
+            {
+                throw new PartialExceptionUpdateException(begun, reportingFailure);
+            }
         }
 
         boolean updateFilter = exceptionMessage != null;
@@ -432,7 +442,18 @@ public final class BreakpointUtils
             // Every one of them was configured, and the caller is told so: a workspace that
             // holds several (legacy state) is not served by an answer naming one id, since
             // removing that id would leave the others breaking on error.
-            return describe("updated", existing.get(0), existing); //$NON-NLS-1$
+            //
+            // Guarded for the same reason as the disable path: describe() reads the markers
+            // again, and a marker that went stale after its setter succeeded would throw past
+            // the loop, taking the ids of everything already changed with it.
+            try
+            {
+                return describe("updated", existing.get(0), existing); //$NON-NLS-1$
+            }
+            catch (Exception reportingFailure)
+            {
+                throw new PartialExceptionUpdateException(begun, reportingFailure);
+            }
         }
 
         IBreakpoint created = createExceptionBreakpointFromService(configuredMessage);

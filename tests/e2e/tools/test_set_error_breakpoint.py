@@ -227,7 +227,13 @@ def test_create_update_disable_and_reenable_workspace_error_breakpoint():
         if "exceptionMessage" in mine[0]:
             raise AssertionError("cleared exception-message filter is still listed: %r" % mine[0])
     finally:
-        restore_problem = _restore(original)
+        # The restoration runs while an assertion may already be propagating, so a raise here
+        # would REPLACE the failure the test exists to report. Its own trouble is worth saying,
+        # but never at the price of the original.
+        try:
+            restore_problem = _restore(original)
+        except Exception as restoration_failure:  # noqa: BLE001 - see above
+            restore_problem = "restoring the saved breakpoint raised %r" % (restoration_failure,)
     if restore_problem:
         raise AssertionError(restore_problem)
     assert_no_diff("workspace-wide error-breakpoint changes must not modify project source")
