@@ -849,26 +849,6 @@ public class MergeRulesTool implements IMcpTool
         MergeRulesCodec.Target targetPolicy = MergeRulesCodec.Target.MUST_NOT_EXIST;
         BasicFileAttributes targetAsRead = null;
         String targetDigestAsRead = null;
-        // What ELSE the target's container held when it was read. The write produces a one-entry
-        // archive, and sidecarEntriesRefusal already refuses a container holding anything else -
-        // but it judges the list taken at the READ, so an entry that appears afterwards would be
-        // discarded by the rewrite without anyone noticing. The confirm point compares this list
-        // against the container as it is then.
-        List<String> targetEntriesAsRead = new ArrayList<>();
-        // The archive COMMENT takes part in the pre-consent refusal (an archive carrying one is
-        // refused), so a comment that appears while the dialog is open must not be carried
-        // away by the rewrite unnoticed - it joins the snapshot the confirm point compares.
-        boolean[] targetCommentAsRead = new boolean[1];
-        // And the SELECTED entry's own comment/extra field, for the same reason: the preview
-        // promises that a changed file is not written, and an equal-length metadata edit is a
-        // change the digest cannot see because it is not part of the entry content.
-        boolean[] targetEntryMetadataAsRead = new boolean[1];
-        // The SELECTED entry's NAME, for the rename the other three cannot see: attributes, the
-        // parsed digest and the other-entry list all stay equal when the settings entry is
-        // renamed in place, and the write would then put the old name back over it. Taken from
-        // the document's own field rather than from its display label, which is text for a
-        // person and lives in a path that may legally contain the separator.
-        String[] targetEntryAsRead = new String[1];
         if (Files.exists(file))
         {
             if (!isSameFile(file, base))
@@ -934,15 +914,12 @@ public class MergeRulesTool implements IMcpTool
         {
             if (isSameTarget(base, file))
             {
-                // Off the DOCUMENT rather than a second read: this is the digest the codec took of
-                // the very bytes it parsed, so there is no window between the parse and the digest
-                // for a timestamp-preserving writer to slip through - and that writer is precisely
-                // what the attributes cannot see, so a window here would defeat the whole clause.
-                targetDigestAsRead = document.sourceDigest();
-                targetEntriesAsRead.addAll(document.unreadContainerEntries());
-                targetEntryAsRead[0] = document.sourceEntry();
-                targetCommentAsRead[0] = document.containerCarriedComment();
-                targetEntryMetadataAsRead[0] = document.readEntryCarriedMetadata();
+                // For a bare xml the write replaces exactly the document that was parsed, so the
+                // codec's own digest of those bytes is both exact and window-free. For an ARCHIVE
+                // the write replaces the whole file, so the whole file is what must not change:
+                // one digest then covers the entry, its name and metadata, the archive comment,
+                // the entries beside it and every structural detail this code does not model.
+                targetDigestAsRead = zipped ? wholeFileDigest(file) : document.sourceDigest();
             }
             else
             {
@@ -953,11 +930,7 @@ public class MergeRulesTool implements IMcpTool
                 try
                 {
                     MergeRulesDocument onDisk = MergeRulesCodec.read(file);
-                    targetDigestAsRead = onDisk.sourceDigest();
-                    targetEntriesAsRead.addAll(onDisk.unreadContainerEntries());
-                    targetEntryAsRead[0] = onDisk.sourceEntry();
-                    targetCommentAsRead[0] = onDisk.containerCarriedComment();
-                    targetEntryMetadataAsRead[0] = onDisk.readEntryCarriedMetadata();
+                    targetDigestAsRead = zipped ? wholeFileDigest(file) : onDisk.sourceDigest();
                 }
                 catch (IOException | MergeRulesFormatException notComparable) // NOSONAR: see above
                 {
@@ -1187,9 +1160,7 @@ public class MergeRulesTool implements IMcpTool
             // answers without a prompt still leaves the whole interval above - the read, the
             // parse, the comparison's BM read - for a foreign writer to land in, and a check that
             // ran only at the Ask level would guard the slow path and leave the fast one open.
-            String changed = targetChangedRefusal(file, targetAsRead, targetDigestAsRead,
-                targetEntriesAsRead, targetEntryAsRead[0], targetCommentAsRead[0],
-                targetEntryMetadataAsRead[0]);
+            String changed = targetChangedRefusal(file, targetAsRead, targetDigestAsRead, zipped);
             if (changed != null)
             {
                 return changed;
@@ -1369,6 +1340,24 @@ public class MergeRulesTool implements IMcpTool
      * @return the refusal, or {@code null} when the target is still the file that was read
      */
     /**
+     * The whole file's digest, or {@code null} when it cannot be read - which the caller treats
+     * as changed, the direction every clause here reasons in.
+     *
+     * @param file the target
+     * @return the digest, or {@code null}
+     */
+    private static String wholeFileDigest(Path file)
+    {
+        try
+        {
+            return MergeRulesCodec.fileDigest(file);
+        }
+        catch (IOException unreadable) // NOSONAR: unreadable means changed, see the javadoc
+        {
+            return null;
+        }
+    }
+    /**
      * The target's content digest as it is NOW, defined the way the parser reads it so it is
      * comparable with the one taken before the prompt.
      *
@@ -1377,20 +1366,13 @@ public class MergeRulesTool implements IMcpTool
      *         caller treats as changed, the direction the whole check reasons in
      */
 
-    private static String currentDocument(Path file, List<String> entriesOut, String[] entryOut,
-        boolean[] commentOut, boolean[] entryMetadataOut)
+    private static String currentDocumentDigest(Path file)
     {
         try
         {
-            MergeRulesDocument present = MergeRulesCodec.read(file);
-            entriesOut.clear();
-            entriesOut.addAll(present.unreadContainerEntries());
-            entryOut[0] = present.sourceEntry();
-            commentOut[0] = present.containerCarriedComment();
-            entryMetadataOut[0] = present.readEntryCarriedMetadata();
-            return present.sourceDigest();
+            return MergeRulesCodec.read(file).sourceDigest();
         }
-        catch (IOException | MergeRulesFormatException unverifiable) // NOSONAR: see the javadoc
+        catch (IOException | MergeRulesFormatException unverifiable) // NOSONAR: unverifiable is changed
         {
             return null;
         }
@@ -1427,14 +1409,9 @@ public class MergeRulesTool implements IMcpTool
     }
 
     private static String targetChangedRefusal(Path file, BasicFileAttributes asRead,
-        String digestAsRead, List<String> entriesAsRead, String entryAsRead, boolean commentAsRead,
-        boolean entryMetadataAsRead)
+        String digestAsRead, boolean zipped)
     {
         String observed;
-        List<String> entriesNow = new ArrayList<>();
-        String[] entryNow = new String[1];
-        boolean[] commentNow = new boolean[1];
-        boolean[] entryMetadataNow = new boolean[1];
         try
         {
             BasicFileAttributes present = Files.readAttributes(file, BasicFileAttributes.class);
@@ -1446,46 +1423,15 @@ public class MergeRulesTool implements IMcpTool
             {
                 observed = "its size or timestamps are not those of the file that was read"; //$NON-NLS-1$
             }
-            else if (digestAsRead != null
-                && !digestAsRead.equals(
-                    currentDocument(file, entriesNow, entryNow, commentNow, entryMetadataNow)))
+            else if (digestAsRead != null && !digestAsRead.equals(zipped
+                ? wholeFileDigest(file)
+                : currentDocumentDigest(file)))
             {
                 // The residue the attributes cannot see: same length, both instants preserved or
                 // restored. Reached only when every attribute still matches, so it costs one read
                 // of a file this call has already read - and it turns "a writer would have stamped
                 // the mtime" from an assumption into something the code checked.
                 observed = "its content is not the content that was read"; //$NON-NLS-1$
-            }
-            else if (!Objects.equals(entryAsRead, entryNow[0]))
-            {
-                // The entry the write puts back, and the one thing renaming it in place changes
-                // that every other clause here is blind to. Null on both sides for a bare xml
-                // document, which is how that case stays unaffected.
-                observed = "the archive entry it was read from is no longer the one it holds"; //$NON-NLS-1$
-            }
-            else if (entryMetadataNow[0] != entryMetadataAsRead)
-            {
-                // The entry's comment or extra field: named in the preview as something the
-                // rewrite loses, so one that appeared since would be destroyed by a write the
-                // operator authorized without knowing about it.
-                observed = "the archive entry now carries metadata it did not carry when it was read"; //$NON-NLS-1$
-            }
-            else if (commentNow[0] != commentAsRead)
-            {
-                // Same read, third question. An archive comment is refused BEFORE consent, so one
-                // that appeared since would be destroyed by a rewrite the operator authorized
-                // without it - and the tool would never have offered the rewrite had it been
-                // there at the read.
-                observed = "the archive now carries a comment it did not carry when it was read"; //$NON-NLS-1$
-            }
-            else if (!entriesNow.equals(entriesAsRead))
-            {
-                // Same read, second question. The write produces a ONE-ENTRY archive, and the
-                // sidecar refusal above judged the container as it was at the read - so an entry
-                // that appeared since would be discarded by the rewrite with nobody the wiser.
-                // (When the digest was unavailable no re-read happened and this list is empty on
-                // both sides, which is the attributes-only path the clause above describes.)
-                observed = "the archive no longer holds the entries it held when it was read"; //$NON-NLS-1$
             }
             else
             {

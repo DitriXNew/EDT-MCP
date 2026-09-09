@@ -969,6 +969,43 @@ public final class MergeRulesCodec
     }
 
     /**
+     * The digest of the file as a whole, byte for byte.
+     * <p>
+     * For an ARCHIVE this is the honest snapshot: the write replaces the entire file, so the
+     * entire file is what must not have changed under it - the entry content, its name, its
+     * comment and extra field, the archive comment, the entries beside it and every structural
+     * detail this code does not model. Comparing those one at a time meant a new gap for every
+     * attribute nobody had listed yet.
+     * </p>
+     *
+     * @param file the file to digest
+     * @return the hex SHA-256 of its bytes
+     * @throws IOException when it cannot be read - which a caller comparing digests must treat
+     *             as changed
+     */
+    public static String fileDigest(Path file) throws IOException
+    {
+        MessageDigest digest;
+        try
+        {
+            digest = MessageDigest.getInstance("SHA-256"); //$NON-NLS-1$
+        }
+        catch (NoSuchAlgorithmException impossible)
+        {
+            throw new IllegalStateException("SHA-256 is required to verify the target", impossible); //$NON-NLS-1$
+        }
+        byte[] buffer = new byte[8192];
+        try (InputStream in = Files.newInputStream(file))
+        {
+            int read;
+            while ((read = in.read(buffer)) > 0)
+            {
+                digest.update(buffer, 0, read);
+            }
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+    /**
      * Re-reads a file the way {@link #read} would - the zip entry's bytes for an archive, the
      * bounded file otherwise - and returns their digest, WITHOUT keeping the parsed document.
      * <p>
