@@ -517,19 +517,6 @@ public final class BreakpointUtils
         return ids;
     }
 
-    /**
-     * Whether every configured breakpoint carries the same filter.
-     * <p>
-     * Legacy duplicates may hold DIFFERENT filters, and an enable call that omits
-     * {@code exceptionMessage} preserves each of them - so describing the set by its first
-     * member would report "errors are filtered" while another one catches everything. When they
-     * disagree the caller is told that instead of being given one member's state as the answer.
-     * </p>
-     *
-     * @param breakpoints the configured breakpoints
-     * @return whether their filters agree
-     * @throws Exception when a marker cannot be read
-     */
     /** What a read-back could establish about the filters of the affected breakpoints. */
     public enum FilterAgreement
     {
@@ -541,9 +528,24 @@ public final class BreakpointUtils
         UNVERIFIED
     }
 
-    private static FilterAgreement filterAgreement(List<IBreakpoint> breakpoints)
+    /**
+     * Whether every configured breakpoint carries the same filter.
+     * <p>
+     * Legacy duplicates may hold DIFFERENT filters, and an enable call that omits
+     * {@code exceptionMessage} preserves each of them - so describing the set by its first
+     * member would report "errors are filtered" while another one catches everything. When they
+     * disagree the caller is told that instead of being given one member's state as the answer.
+     * </p>
+     *
+     * @param breakpoints the configured breakpoints
+     * @return SAME, DIFFERENT, or UNVERIFIED when any member could not be read; UNVERIFIED
+     *         outranks DIFFERENT, because "nothing was established" is the weaker claim the
+     *         caller is owed when part of the set was never read
+     */
+    static FilterAgreement filterAgreement(List<IBreakpoint> breakpoints)
     {
         Map<String, Object> first = null;
+        boolean differ = false;
         for (IBreakpoint each : breakpoints)
         {
             IMarker marker = each.getMarker();
@@ -572,10 +574,13 @@ public final class BreakpointUtils
             }
             else if (!first.equals(state))
             {
-                return FilterAgreement.DIFFERENT;
+                // Remembered, not returned: a later member may still be unreadable, and
+                // "nothing was established" outranks "they differ" - the caller is owed the
+                // weaker claim when part of the set was never read.
+                differ = true;
             }
         }
-        return FilterAgreement.SAME;
+        return differ ? FilterAgreement.DIFFERENT : FilterAgreement.SAME;
     }
     /** Reads the configured exception filter for list_breakpoints without linking its interface. */
     public static Map<String, Object> readExceptionBreakpointConfiguration(IMarker marker)

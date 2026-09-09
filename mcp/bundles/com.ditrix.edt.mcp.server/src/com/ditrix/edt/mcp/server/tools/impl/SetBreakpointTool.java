@@ -175,6 +175,10 @@ public class SetBreakpointTool implements IMcpTool
             return target.error;
         }
 
+        // Filled as the loop below walks the duplicates, and read by the failure handler: an
+        // UPDATE that dies halfway leaves the members it already reached carrying the new
+        // settings, and nothing withdraws them. Their ids are the only handle the caller has.
+        List<Long> alreadyChanged = new ArrayList<>();
         try
         {
             // ALL of them, not the first: an upgraded workspace can hold duplicates at one line,
@@ -199,6 +203,14 @@ public class SetBreakpointTool implements IMcpTool
                 List<String> fallbacks = new ArrayList<>();
                 for (IBreakpoint each : existing)
                 {
+                    // Recorded BEFORE the mutation, not after: a member that throws halfway
+                    // through may already carry the new condition, and a list of "fully done"
+                    // ids would hide exactly the one the caller must look at. Only on the
+                    // update path - a breakpoint this call created is withdrawn on failure.
+                    if (!created && each.getMarker() != null)
+                    {
+                        alreadyChanged.add(Long.valueOf(each.getMarker().getId()));
+                    }
                     BreakpointUtils.LineBreakpointConfiguration one =
                         BreakpointUtils.configureLineBreakpoint(each, effectiveCondition,
                             hitCount, effectiveHitCondition);
@@ -237,11 +249,93 @@ public class SetBreakpointTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Failed to set breakpoint", e); //$NON-NLS-1$
-            return ToolResult.error("Failed to set breakpoint: " + e.getMessage() //$NON-NLS-1$
-                + ". Verify the breakpoint in EDT's Breakpoints view, then retry.").toJson(); //$NON-NLS-1$
+            return ToolResult.error(failureMessage(e.getMessage(), alreadyChanged)).toJson();
         }
     }
 
+    /**
+     * Builds the failure message, naming the breakpoints this call had already begun changing.
+     * <p>
+     * A creation that fails is withdrawn, so there is nothing to name. An UPDATE cannot be
+     * undone that way: every duplicate the loop reached before the failure keeps the new
+     * condition, hit count and enabled state. Saying only "failed" would leave those invisible,
+     * and coordinate-based inspection answers with one breakpoint of several.
+     * </p>
+     *
+     * @param cause the underlying failure message, possibly {@code null}
+     * @param alreadyChanged marker ids this call had begun changing; empty when nothing survived
+     * @return the error message
+     */
+    static String failureMessage(String cause, List<Long> alreadyChanged)
+    {
+        StringBuilder message = new StringBuilder("Failed to set breakpoint: ") //$NON-NLS-1$
+            .append(cause).append('.');
+        if (!alreadyChanged.isEmpty())
+        {
+            message.append(" Breakpoints this call had already begun changing keep the new "); //$NON-NLS-1$
+            message.append("settings - id(s) "); //$NON-NLS-1$
+            for (int i = 0; i < alreadyChanged.size(); i++)
+            {
+                message.append(i == 0 ? "" : ", ").append(alreadyChanged.get(i)); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            message.append('.');
+        }
+        return message.append(" Verify the breakpoint in EDT's Breakpoints view, then retry.") //$NON-NLS-1$
+            .toString();
+    }
+
+    /**
+     * Builds the degraded warning from what actually happened.
+     * <p>
+     * Worded by case rather than from the fallback that usually causes it: on the {@code updated}
+     * path this call looked up no class and created nothing, and a line can carry a marker-only
+     * breakpoint beside a fully native one. Announcing a failed creation there would be a false
+     * diagnosis of a set that partly works.
+     * </p>
+     *
+     * @param created whether this call created the breakpoint
+     * @param markerOnly how many of the reconciled breakpoints are marker-only
+     * @param total how many breakpoints were reconciled at this line
+     * @param conditionProvided whether the caller asked for a condition
+     * @param hitCountProvided whether the caller asked for a hit count
+     * @return the warning text
+     */
+    static String degradedWarning(boolean created, int markerOnly, int total,
+        boolean conditionProvided, boolean hitCountProvided)
+    {
+        boolean everyOne = markerOnly >= total;
+        StringBuilder warning = new StringBuilder();
+        if (created)
+        {
+            warning.append("EDT BSL breakpoint class not available \u2014 created a marker-only ") //$NON-NLS-1$
+                .append("breakpoint that may NOT trigger debug suspend events. "); //$NON-NLS-1$
+        }
+        else if (everyOne)
+        {
+            warning.append("Every breakpoint already registered at this line is marker-only (no ") //$NON-NLS-1$
+                .append("EDT BSL breakpoint class behind it) and may NOT trigger debug suspend ") //$NON-NLS-1$
+                .append("events. "); //$NON-NLS-1$
+        }
+        else
+        {
+            warning.append(markerOnly).append(" of ").append(total) //$NON-NLS-1$
+                .append(" breakpoints already registered at this line are marker-only and may ") //$NON-NLS-1$
+                .append("NOT trigger debug suspend events; the rest are native. "); //$NON-NLS-1$
+        }
+        if (conditionProvided || hitCountProvided)
+        {
+            warning.append(conditionProvided && hitCountProvided
+                ? "The condition and hit count were NOT applied" //$NON-NLS-1$
+                : conditionProvided
+                    ? "The condition was NOT applied" //$NON-NLS-1$
+                    : "The hit count was NOT applied"); //$NON-NLS-1$
+            // The aggregate flag is false for the mixed set too, so the prose has to say WHERE:
+            // the native twin did take the condition, and "not applied" alone reads as nowhere.
+            warning.append(everyOne ? ". " : " to the marker-only breakpoints. "); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return warning.append("Verify in EDT that the breakpoint appears in the Breakpoints view.") //$NON-NLS-1$
+            .toString();
+    }
     /**
      * Removes a breakpoint this call created after its configuration failed, without letting the
      * cleanup replace the failure that caused it.
@@ -361,11 +455,12 @@ public class SetBreakpointTool implements IMcpTool
         // ANY of the reconciled breakpoints being marker-only degrades the answer: taking the
         // flag from the first one made the warning depend on registration order, so a native
         // breakpoint listed before a marker-only twin hid the degradation entirely.
-        boolean degraded = false;
+        int markerOnly = 0;
         for (IBreakpoint each : reconciled)
         {
-            degraded = degraded || each instanceof BreakpointUtils.MarkerOnlyBreakpoint;
+            markerOnly += each instanceof BreakpointUtils.MarkerOnlyBreakpoint ? 1 : 0;
         }
+        boolean degraded = markerOnly > 0;
         Activator.logInfo("Breakpoint set: " + file.getFullPath() + ":" + lineNumber //$NON-NLS-1$ //$NON-NLS-2$
             + (degraded ? " (degraded — marker-only)" : "")); //$NON-NLS-1$ //$NON-NLS-2$
         ToolResult res = ToolResult.success()
@@ -423,26 +518,16 @@ public class SetBreakpointTool implements IMcpTool
         if (degraded)
         {
             res.put("degraded", true); //$NON-NLS-1$
-            String warning = "EDT BSL breakpoint class not available — created a marker-only " //$NON-NLS-1$
-                + "breakpoint that may NOT trigger debug suspend events. "; //$NON-NLS-1$
-            if (conditionProvided || hitCountProvided)
+            if (conditionProvided)
             {
-                if (conditionProvided)
-                {
-                    res.put("conditionApplied", false); //$NON-NLS-1$
-                }
-                if (hitCountProvided)
-                {
-                    res.put("hitCountApplied", false); //$NON-NLS-1$
-                }
-                warning += (conditionProvided && hitCountProvided
-                    ? "The condition and hit count were NOT applied. " //$NON-NLS-1$
-                    : conditionProvided
-                        ? "The condition was NOT applied. " //$NON-NLS-1$
-                        : "The hit count was NOT applied. "); //$NON-NLS-1$
+                res.put("conditionApplied", false); //$NON-NLS-1$
             }
-            res.put("warning", warning //$NON-NLS-1$
-                + "Verify in EDT that the breakpoint appears in the Breakpoints view."); //$NON-NLS-1$
+            if (hitCountProvided)
+            {
+                res.put("hitCountApplied", false); //$NON-NLS-1$
+            }
+            res.put("warning", degradedWarning("created".equals(action), markerOnly, //$NON-NLS-1$ //$NON-NLS-2$
+                reconciled.size(), conditionProvided, hitCountProvided));
         }
         return res.toJson();
     }

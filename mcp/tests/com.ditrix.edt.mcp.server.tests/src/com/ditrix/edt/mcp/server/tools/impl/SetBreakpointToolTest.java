@@ -14,6 +14,8 @@ import static org.junit.Assert.assertTrue;
 import java.util.HashMap;
 import java.util.Map;
 
+import java.util.Arrays;
+import java.util.Collections;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
@@ -218,5 +220,75 @@ public class SetBreakpointToolTest
         assertTrue(result.contains("EQUAL_OR_LESS")); //$NON-NLS-1$
         assertTrue(result.contains("EQUAL_OR_HIGHER")); //$NON-NLS-1$
         assertTrue(result.contains("MULTIPLIER")); //$NON-NLS-1$
+    }
+
+    /**
+     * A creation that degraded says so; an UPDATE must not, because it looked up no class and
+     * created nothing. The wrong spelling is asserted ABSENT, since both texts contain
+     * "marker-only" and a substring check for it would pass either way.
+     */
+    @Test
+    public void testDegradedWarningDoesNotClaimACreationOnTheUpdatePath()
+    {
+        String created = SetBreakpointTool.degradedWarning(true, 1, 1, false, false);
+        assertTrue("a created fallback must say it was created: " + created,
+            created.contains("created a marker-only breakpoint"));
+
+        String updated = SetBreakpointTool.degradedWarning(false, 1, 1, false, false);
+        assertFalse("an update created nothing, so it must not claim a creation: " + updated,
+            updated.contains("created a marker-only"));
+        assertFalse("an update looked up no class, so it must not blame one: " + updated,
+            updated.contains("class not available"));
+        assertTrue("an all-degraded update must say every registered breakpoint is: " + updated,
+            updated.contains("Every breakpoint already registered at this line is marker-only"));
+    }
+
+    /**
+     * A native breakpoint beside a marker-only twin is a MIXED set: the count must be named and
+     * the surviving native member acknowledged, instead of condemning the whole line.
+     */
+    @Test
+    public void testDegradedWarningNamesTheMixedSetInsteadOfCondemningTheLine()
+    {
+        String mixed = SetBreakpointTool.degradedWarning(false, 1, 2, true, false);
+        assertTrue("a mixed set must count the degraded members: " + mixed,
+            mixed.contains("1 of 2 breakpoints"));
+        assertTrue("a mixed set must say the others still work: " + mixed,
+            mixed.contains("the rest are native"));
+        assertFalse("a mixed set is not an all-degraded one: " + mixed,
+            mixed.contains("Every breakpoint already registered"));
+        // The condition DID reach the native twin, so an unqualified "not applied" is wrong.
+        assertTrue("a mixed set must say where the condition failed to land: " + mixed,
+            mixed.contains("The condition was NOT applied to the marker-only breakpoints."));
+        assertFalse("a mixed set must not report a hit count nobody asked for: " + mixed,
+            mixed.contains("hit count"));
+
+        String all = SetBreakpointTool.degradedWarning(false, 2, 2, true, true);
+        assertTrue("an all-degraded set applied neither, with no qualifier: " + all,
+            all.contains("The condition and hit count were NOT applied. "));
+    }
+
+    /**
+     * A half-finished UPDATE leaves real mutations behind: the failure must hand back the ids of
+     * what it had begun changing, or the caller cannot find them. A failed CREATION is withdrawn,
+     * so its message must stay clean of that clause.
+     */
+    @Test
+    public void testFailureMessageNamesTheBreakpointsAlreadyChanged()
+    {
+        String partial = SetBreakpointTool.failureMessage("marker no longer exists",
+            Arrays.asList(Long.valueOf(12L), Long.valueOf(15L)));
+        assertTrue("the failure must carry the cause: " + partial,
+            partial.contains("marker no longer exists"));
+        assertTrue("both mutated ids must be named: " + partial,
+            partial.contains("id(s) 12, 15."));
+        assertTrue("the caller must be told they keep the new settings: " + partial,
+            partial.contains("keep the new settings"));
+
+        String clean = SetBreakpointTool.failureMessage("boom", Collections.emptyList());
+        assertFalse("nothing survived a failed creation, so nothing may be claimed: " + clean,
+            clean.contains("already begun changing"));
+        assertTrue("every failure still points at the Breakpoints view: " + clean,
+            clean.contains("Breakpoints view"));
     }
 }

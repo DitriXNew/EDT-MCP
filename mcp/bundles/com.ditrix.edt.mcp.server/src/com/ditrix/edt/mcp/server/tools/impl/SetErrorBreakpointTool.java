@@ -126,9 +126,11 @@ public class SetErrorBreakpointTool implements IMcpTool
             List<String> warnings = new ArrayList<>();
             if (change.getFilterAgreement() == BreakpointUtils.FilterAgreement.UNVERIFIED)
             {
+                // No promise about list_breakpoints here: when the cause is a markerless entry,
+                // that listing skips it too, so pointing at it would send the caller nowhere.
                 warnings.add("the filter of at least one affected breakpoint could not be read " //$NON-NLS-1$
-                    + "back, so no filter is reported for this call; list_breakpoints shows each " //$NON-NLS-1$
-                    + "breakpoint's own state"); //$NON-NLS-1$
+                    + "back, so no filter is reported for this call; inspect it in EDT's " //$NON-NLS-1$
+                    + "Breakpoints view"); //$NON-NLS-1$
             }
             int unaddressable = change.getConfiguredCount() - change.getConfiguredIds().size();
             if (unaddressable > 0)

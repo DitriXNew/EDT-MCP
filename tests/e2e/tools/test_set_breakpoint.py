@@ -128,12 +128,18 @@ def test_sets_breakpoint_on_calc_module_line_and_does_not_touch_project():
     # If the EDT BSL breakpoint class was unavailable, the tool degrades to a
     # marker-only breakpoint — that is still a success, but it MUST announce itself
     # with an actionable warning (so a silent degradation cannot pass unnoticed).
-    if sc.get("degraded"):
+    degraded = bool(sc.get("degraded"))
+    if degraded:
         warning = str(sc.get("warning") or "")
         assert_contains(warning, "marker-only",
                         "a degraded breakpoint must say it is marker-only")
         assert_contains(warning, "Breakpoints view",
                         "the degraded warning must tell the user how to verify (Breakpoints view)")
+        # The fallback deliberately does not carry a BSL condition, so the tool must SAY the
+        # condition did not land rather than let the caller assume a live one.
+        assert sc.get("conditionApplied") is False, \
+            "a degraded breakpoint must report conditionApplied=false; got %r" \
+            % sc.get("conditionApplied")
 
     # Read it back through the sibling list tool: the breakpoint we just set must be
     # enumerable by breakpointId, on the requested project + line. This proves the
@@ -148,9 +154,13 @@ def test_sets_breakpoint_on_calc_module_line_and_does_not_touch_project():
         % (bp_id, [b.get("breakpointId") for b in bps])
     assert mine[0].get("lineNumber") == 2, \
         "the listed breakpoint must report line 2; got %r" % mine[0].get("lineNumber")
-    assert mine[0].get("condition") == "A > 0", \
-        "the real BSL condition must round-trip through list_breakpoints; got %r" \
-        % mine[0].get("condition")
+    # Native only: configureLineBreakpoint deliberately writes no condition onto the marker-only
+    # fallback, so demanding the round-trip here would fail in exactly the degraded environment
+    # this test declares a valid success above.
+    if not degraded:
+        assert mine[0].get("condition") == "A > 0", \
+            "the real BSL condition must round-trip through list_breakpoints; got %r" \
+            % mine[0].get("condition")
 
     # The same coordinates must UPDATE the existing breakpoint, not create a
     # second independently firing marker. Also exercise all extended settings.
@@ -178,12 +188,18 @@ def test_sets_breakpoint_on_calc_module_line_and_does_not_touch_project():
                      and "Calc" in str(b.get("file") or "")]
     assert len(same_position) == 1, \
         "updating one source position must leave exactly one breakpoint; got %r" % same_position
-    assert same_position[0].get("condition") == "B > 0", \
-        "updated condition must be visible; got %r" % same_position[0]
-    assert same_position[0].get("hitCount") == 2, \
-        "configured hitCount must be visible; got %r" % same_position[0]
-    assert same_position[0].get("hitCondition") == "EQUAL_OR_HIGHER", \
-        "configured hitCondition must be visible; got %r" % same_position[0]
+    if not degraded:
+        assert same_position[0].get("condition") == "B > 0", \
+            "updated condition must be visible; got %r" % same_position[0]
+        assert same_position[0].get("hitCount") == 2, \
+            "configured hitCount must be visible; got %r" % same_position[0]
+        assert same_position[0].get("hitCondition") == "EQUAL_OR_HIGHER", \
+            "configured hitCondition must be visible; got %r" % same_position[0]
+    else:
+        # Degraded: the settings could not be applied, so the SECOND call must own up to that
+        # too - a silent second success would be the very hiding this test exists to prevent.
+        assert usc.get("conditionApplied") is False and usc.get("hitCountApplied") is False, \
+            "a degraded update must report neither setting as applied; got %r" % usc
 
     # The whole sequence must NOT have modified the git-tracked project source —
     # breakpoints are a workspace artifact, never a project-tree edit.
