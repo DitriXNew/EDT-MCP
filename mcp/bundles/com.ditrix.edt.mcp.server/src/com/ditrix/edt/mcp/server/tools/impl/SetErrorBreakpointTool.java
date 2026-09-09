@@ -60,7 +60,7 @@ public class SetErrorBreakpointTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("action", "created, updated, disabled, or notFound") //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("breakpointId", "Eclipse marker id when the breakpoint is enabled") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("breakpointId", "Eclipse marker id when the breakpoint is enabled; omitted when the affected breakpoint has no marker to name it by") //$NON-NLS-1$ //$NON-NLS-2$
             .integerArrayProperty("breakpointIds", "Marker ids of EVERY exception breakpoint this call touched, on both the enable and the disable path; more than one means breakpointId alone is not the whole setting, and each id has to be removed") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("configuredCount", "How many breakpoints were touched; larger than breakpointIds when one of them has no marker to name") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("warning", "Present when an affected breakpoint has no marker (so remove_breakpoint cannot reach it), when a filter could not be read back (the filter fields are then omitted), or both - the text says which") //$NON-NLS-1$ //$NON-NLS-2$
@@ -149,8 +149,14 @@ public class SetErrorBreakpointTool implements IMcpTool
                 // between would throw here - past the reporting guard - and the generic handler
                 // would answer with none of the ids this change is holding.
                 List<Long> configured = change.getConfiguredIds();
-                result.put("breakpointId", //$NON-NLS-1$
-                    configured.isEmpty() ? Long.valueOf(-1L) : configured.get(0));
+                // OMITTED when there is none, rather than -1: that is not a marker id, and a
+                // caller following the documented singular cleanup field would hand it to
+                // remove_breakpoint, which rejects it and removes nothing. The markerless case is
+                // already described by configuredCount and the warning.
+                if (!configured.isEmpty())
+                {
+                    result.put("breakpointId", configured.get(0)); //$NON-NLS-1$
+                }
                 // The filter is described only when every configured breakpoint carries the
                 // same one. Legacy duplicates may hold different filters, and an enable that
                 // omits exceptionMessage preserves each - so reporting the first member's
