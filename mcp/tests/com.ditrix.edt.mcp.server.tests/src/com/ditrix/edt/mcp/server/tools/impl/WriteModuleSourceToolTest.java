@@ -2130,4 +2130,34 @@ public class WriteModuleSourceToolTest
             WriteModuleSourceTool.applyMethodTargetedEdit(simpleModule(), "insertAfter", "Target", //$NON-NLS-1$ //$NON-NLS-2$
                 "Procedure If()\nEndProcedure\n")); //$NON-NLS-1$
     }
+
+    /**
+     * The walk that replaced the pragma regex must not be MORE permissive than it was: a nested
+     * opener is not a closed argument list, and taking the first ")" for the matching one accepted
+     * a malformed pragma the pattern rejected.
+     */
+    @Test
+    public void testAPragmaWithANestedOpenerIsStillRefused()
+    {
+        List<String> module = lines(
+            "&Instead((\"Original\")\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        assertMethodEditError("pragma this scanner cannot delimit", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n")); //$NON-NLS-1$
+    }
+
+    /**
+     * And not more permissive about SPACING either: Character.isWhitespace accepts the C0
+     * separators, which the replaced pattern did not, so pragmas glued together with a FILE
+     * SEPARATOR must still be refused.
+     */
+    @Test
+    public void testPragmasGluedWithAControlCharacterAreStillRefused()
+    {
+        List<String> module = lines(
+            "&AtClient\u001C&AtServer\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        assertMethodEditError("pragma this scanner cannot delimit", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n")); //$NON-NLS-1$
+    }
 }

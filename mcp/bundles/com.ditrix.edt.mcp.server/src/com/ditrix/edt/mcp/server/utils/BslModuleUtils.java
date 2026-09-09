@@ -532,8 +532,17 @@ public final class BslModuleUtils
             i = skipWhitespace(trimmed, i);
             if (i < trimmed.length() && trimmed.charAt(i) == '(')
             {
-                int close = trimmed.indexOf(')', i);
-                if (close < 0)
+                // Scanned rather than indexOf(")"): a nested opener has to be REJECTED, the way
+                // the [^()]* this walk replaced rejected it. Taking the first close for the
+                // matching one accepts "&Instead((...)", which is not a pragma this scanner can
+                // delimit either.
+                int close = i + 1;
+                while (close < trimmed.length() && trimmed.charAt(close) != ')'
+                    && trimmed.charAt(close) != '(')
+                {
+                    close++;
+                }
+                if (close >= trimmed.length() || trimmed.charAt(close) != ')')
                 {
                     return false;
                 }
@@ -549,10 +558,25 @@ public final class BslModuleUtils
      * @param from where to start
      * @return the first index at or after {@code from} that is not whitespace
      */
+    private static boolean isBslSpace(char ch)
+    {
+        // The same characters Java's \\s matches, and deliberately NOT
+        // Character.isWhitespace: that one accepts the C0 separators (U+001C..U+001F), so a
+        // pragma line glued together with a FILE SEPARATOR would pass a walk written to replace
+        // a \\s pattern that rejected it.
+        return ch == ' ' || ch == '\t' || ch == '\n'
+            || ch == 0x0B || ch == '\f' || ch == '\r';
+    }
+
+    /**
+     * @param text the text to walk
+     * @param from where to start
+     * @return the first index at or after {@code from} that is not BSL whitespace
+     */
     private static int skipWhitespace(String text, int from)
     {
         int i = from;
-        while (i < text.length() && Character.isWhitespace(text.charAt(i)))
+        while (i < text.length() && isBslSpace(text.charAt(i)))
         {
             i++;
         }
