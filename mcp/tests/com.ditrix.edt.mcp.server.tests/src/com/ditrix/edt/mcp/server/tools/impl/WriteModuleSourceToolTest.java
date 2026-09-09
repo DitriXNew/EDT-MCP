@@ -2177,4 +2177,61 @@ public class WriteModuleSourceToolTest
         assertNull("a pragma name is [\\p{L}\\p{N}_]+, not just letters and Nd: " + result.error, //$NON-NLS-1$
             result.error);
     }
+
+    /**
+     * A parameter list wrapped onto the next line is ordinary formatting, not a broken
+     * declaration: the newline inside it is hidden trivia. Refusing it would take every
+     * method-targeted edit away from a module that merely wraps a long signature.
+     */
+    @Test
+    public void testAParameterListThatWrapsOntoTheNextLineIsStillAddressable()
+    {
+        List<String> module = lines("Procedure ExportData(\n" //$NON-NLS-1$
+            + "    Value, Options)\n" //$NON-NLS-1$
+            + "EndProcedure\n" //$NON-NLS-1$
+            + "\n" //$NON-NLS-1$
+            + "Procedure Target()\n" //$NON-NLS-1$
+            + "EndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("a wrapped parameter list closes, just not on the first line: " + result.error, //$NON-NLS-1$
+            result.error);
+    }
+
+    /**
+     * The inverse of the dangling dot, and just as valid: the dot STARTS the continuation line.
+     * "Value = Object" then ".EndFunction();" is one member call - a reserved word is a legal
+     * member name - so the terminator spelling on that line does not close a method.
+     */
+    @Test
+    public void testALeadingDotContinuationDoesNotLookLikeATerminator()
+    {
+        List<String> module = lines("Procedure Target()\n" //$NON-NLS-1$
+            + "    Value = Object\n" //$NON-NLS-1$
+            + "        .EndFunction();\n" //$NON-NLS-1$
+            + "EndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("a leading dot continues the line above it: " + result.error, result.error); //$NON-NLS-1$
+    }
+
+    /**
+     * And the refusal the first of those two fixes relaxes must still fire on the shape it was
+     * written for: a parameter list that never closes at all.
+     */
+    @Test
+    public void testAParameterListThatNeverClosesIsStillRefused()
+    {
+        List<String> module = lines("Procedure Broken(\n" //$NON-NLS-1$
+            + "    Value, Options\n" //$NON-NLS-1$
+            + "EndProcedure\n" //$NON-NLS-1$
+            + "\n" //$NON-NLS-1$
+            + "Procedure Target()\n" //$NON-NLS-1$
+            + "EndProcedure\n"); //$NON-NLS-1$
+        assertMethodEditError("parameter list does not close", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n")); //$NON-NLS-1$
+    }
 }

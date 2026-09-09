@@ -469,28 +469,40 @@ public final class BslModuleUtils
     }
 
     /**
-     * Whether the parameter list opened at or after {@code from} closes on this line.
+     * Whether the parameter list opened at or after {@code from} ever closes.
      * <p>
-     * A declaration whose list stays open - {@code Procedure Added(} with the terminator on the
-     * next line - was emitted as a complete span, and the balance check only counts block
+     * A declaration whose list never closes - {@code Procedure Added(} with a terminator and
+     * nothing else - was emitted as a complete span, and the balance check only counts block
      * keywords, so invalid BSL went to disk under the exactly-one-method contract.
      * </p>
+     * <p>
+     * Followed ACROSS lines, because wrapping a long signature is ordinary formatting and not a
+     * broken declaration: the newline inside the list is hidden trivia. Judged on the first line
+     * alone, this refused every method-targeted edit in 2 140 of 1C:ERP 2.5.16.41's 22 786
+     * modules - 8 517 declarations wrap their parameters - which is not a shape a scanner may
+     * decline to address.
+     * </p>
      *
-     * @param maskedLine the line with its literals and comments blanked
+     * @param scan the module lines with their literals and comments blanked
+     * @param lineIndex the declaration line
      * @param from where the name ended
-     * @return whether the list closes here
+     * @return whether the list closes, here or on a continuation line
      */
-    private static boolean parameterListCloses(String maskedLine, int from)
+    private static boolean parameterListCloses(List<String> scan, int lineIndex, int from)
     {
         int depth = 0;
-        for (int i = from; i < maskedLine.length(); i++)
+        for (int line = lineIndex; line < scan.size(); line++)
         {
-            char ch = maskedLine.charAt(i);
-            depth += ch == '(' ? 1 : 0;
-            depth -= ch == ')' ? 1 : 0;
-            if (depth == 0 && ch == ')')
+            String text = scan.get(line);
+            for (int i = line == lineIndex ? from : 0; i < text.length(); i++)
             {
-                return true;
+                char ch = text.charAt(i);
+                depth += ch == '(' ? 1 : 0;
+                depth -= ch == ')' ? 1 : 0;
+                if (depth == 0 && ch == ')')
+                {
+                    return true;
+                }
             }
         }
         return false;
@@ -795,10 +807,16 @@ public final class BslModuleUtils
     /**
      * The first line this scanner cannot address, with the reason - or {@code null}.
      * <p>
-     * Six shapes, one rule: a whole-line scanner may only edit what it can DELIMIT. Each of
+     * Eight shapes, one rule: a whole-line scanner may only edit what it can DELIMIT. Each of
      * these hides a declaration or a terminator from every anchored rule in this class, and a
      * span that guesses past one either rebinds an annotation or deletes code that belongs to
-     * somebody else. The reason travels with the line because the six need six different fixes.
+     * somebody else. The reason travels with the line because the eight need eight different
+     * fixes.
+     * </p>
+     * <p>
+     * The bar for ADDING one: a shape must be absent from real code, measured, not assumed. A
+     * rule written from reasoning alone refused a wrapped parameter list - 2 140 of 1C:ERP
+     * 2.5.16.41's 22 786 modules.
      * </p>
      *
      * @param lines BSL module or fragment lines
@@ -840,10 +858,10 @@ public final class BslModuleUtils
                     return new Unaddressable(i, "a method named after a block keyword", //$NON-NLS-1$
                         "give the method a name that is not " + opener.group(1)); //$NON-NLS-1$
                 }
-                if (!parameterListCloses(line, opener.end(1)))
+                if (!parameterListCloses(scan, i, opener.end(1)))
                 {
                     return new Unaddressable(i, "a declaration whose parameter list does not close", //$NON-NLS-1$
-                        "close the parameter list on the declaration line"); //$NON-NLS-1$
+                        "close the parameter list of this declaration"); //$NON-NLS-1$
                 }
             }
             if (hasInlineTerminator(line) && !isMethodTerminatorLine(line, METHOD_END_PATTERN))
