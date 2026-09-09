@@ -6,7 +6,7 @@ Start a background question to the 1C:Workmate plugin and return its jobId. Poll
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
 | question | — | string | Non-empty question or instruction to send to 1C:Workmate. Required unless workmateTool selects direct tool mode. |
-| projectName | — | string | Optional open EDT project name used as Workmate's context. Omit to use Workmate's default project context. |
+| projectName | — | string | Optional open EDT project name used as Workmate's context. It may be omitted only on builds with a default project context; newer builds require it for conversations. |
 | maxToolRounds | — | integer | Optional positive limit for Workmate's internal tool-call rounds; it applies per assistant turn, so a conversation continued to reach a final answer spends it again on each turn. |
 | skillName | — | string | Optional Workmate skill name. Omit to use 'custom', the skill under which Workmate runs its own tool loop; Workmate's plain 'raw' skill answers from the model alone and inspects nothing. |
 | timeoutSeconds | — | integer | Total wall-clock budget for the background job across all get_job_status polls, in seconds; defaults to 300 and accepts 1 to 3600. After this budget the job is failed - unless the request has already reached Workmate, which cannot be taken back: the job then reports Workmate's own outcome rather than a retryable timeout, because a retry would run the same work twice. This is not the per-call waitSeconds budget. |
@@ -23,8 +23,9 @@ Start a background question to the 1C:Workmate plugin and return its jobId. Poll
   non-whitespace text. It is required unless `workmateTool` selects direct tool
   mode.
 - `projectName` applies only when starting. When present, it must name an open
-  EDT project; use `list_projects` to discover valid names. When omitted,
-  Workmate receives its `ProjectId.Default` context.
+  EDT project; use `list_projects` to discover valid names. When omitted, the
+  1.0.5 API uses `ProjectId.Default`; the 1.0.7 API requires a project for
+  conversation modes and refuses the request before dispatch.
 - `maxToolRounds` applies only when starting and optionally limits Workmate's
   internal tool-call rounds. It must be a positive integer. Omit it to use
   Workmate's own default. The limit is **per assistant turn**, which is how the

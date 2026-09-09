@@ -143,7 +143,8 @@ public class AskWorkmateTool implements IMcpTool
                     + "workmateTool selects direct tool mode.") //$NON-NLS-1$
             .stringProperty(KEY_PROJECT_NAME,
                 "Optional open EDT project name used as Workmate's context. " //$NON-NLS-1$
-                    + "Omit to use Workmate's default project context.") //$NON-NLS-1$
+                    + "It may be omitted only on builds with a default project context; " //$NON-NLS-1$
+                    + "newer builds require it for conversations.") //$NON-NLS-1$
             .integerProperty(KEY_MAX_TOOL_ROUNDS,
                 "Optional positive limit for Workmate's internal tool-call " //$NON-NLS-1$
                     + "rounds; it applies per assistant turn, so a conversation continued to " //$NON-NLS-1$
@@ -633,8 +634,12 @@ public class AskWorkmateTool implements IMcpTool
                     + "Preferences > 1C:Workmate > User Token, then retry ask_workmate."; //$NON-NLS-1$
             case INCOMPATIBLE:
                 return "Incompatible 1C:Workmate version or structure: " + error.getDetail() //$NON-NLS-1$
-                    + ". Install a 1C:Workmate build compatible with 1.0.5 or update EDT-MCP's " //$NON-NLS-1$
-                    + "Workmate adapter, then retry ask_workmate."; //$NON-NLS-1$
+                    + ". Install a supported 1C:Workmate build (1.0.5 or 1.0.7) or update " //$NON-NLS-1$
+                    + "EDT-MCP's Workmate adapter, then retry ask_workmate."; //$NON-NLS-1$
+            case PROJECT_REQUIRED:
+                return endSentence(error.getDetail())
+                    + " Set projectName to the name of an open EDT project; use " //$NON-NLS-1$
+                    + "list_projects to discover valid names, then retry ask_workmate."; //$NON-NLS-1$
             case NOT_READY:
                 return "1C:Workmate is installed but not initialized: " + error.getDetail() //$NON-NLS-1$
                     + ". Open Workmate in EDT (or restart EDT), wait for it to initialize, " //$NON-NLS-1$
