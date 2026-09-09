@@ -21,7 +21,6 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.resources.ProjectScope;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.ICoreRunnable;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.preferences.IScopeContext;
@@ -372,7 +371,9 @@ public class WriteModuleSourceTool implements IMcpTool
                     failure[0] = e;
                 }
             };
-            IWorkspace workspace = ResourcesPlugin.getWorkspace();
+            // The workspace comes from the resource itself - tools/impl must not add another
+            // ResourcesPlugin.getWorkspace() copy (rule #4, enforced by ProjectContextAdoptionRatchetTest).
+            IWorkspace workspace = file.getWorkspace();
             workspace.run(operation, workspace.getRuleFactory().modifyRule(file),
                 IWorkspace.AVOID_UPDATE, null);
             if (failure[0] != null)
