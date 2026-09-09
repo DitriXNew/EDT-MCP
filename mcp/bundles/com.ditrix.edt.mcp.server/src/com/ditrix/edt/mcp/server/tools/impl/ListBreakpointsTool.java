@@ -83,7 +83,19 @@ public class ListBreakpointsTool implements IMcpTool
 
         for (IBreakpoint bp : bpManager.getBreakpoints()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
-            IMarker m = bp.getMarker();
+            // GUARDED, because this lookup can throw: the platform recognises a breakpoint by
+            // interface, and its marker may be stale by the time the listing runs. Unguarded,
+            // one such entry threw out of the loop and the whole call failed - the caller lost
+            // every OTHER breakpoint over one it could not have named anyway.
+            IMarker m;
+            try
+            {
+                m = bp.getMarker();
+            }
+            catch (Exception unreadable) // NOSONAR: an entry this tool cannot name is skipped
+            {
+                continue;
+            }
             if (m == null || m.getResource() == null)
             {
                 continue;

@@ -542,12 +542,15 @@ public class SetBreakpointTool implements IMcpTool
                 }
                 res.put("hitCountApplied", true); //$NON-NLS-1$
             }
-            if (!configuration.getMarkerFallbacks().isEmpty())
-            {
-                res.put("configurationFallback", //$NON-NLS-1$
-                    "Native EDT breakpoint setter methods were absent; wrote marker attributes for: " //$NON-NLS-1$
-                        + String.join(", ", configuration.getMarkerFallbacks())); //$NON-NLS-1$
-            }
+        }
+        // OUTSIDE the applied branch: a mixed set aggregates to "not applied", and the native
+        // member may still have written marker attributes on the way. Reporting the fallback
+        // only when everything applied hid what was actually done to the workspace.
+        if (!configuration.getMarkerFallbacks().isEmpty())
+        {
+            res.put("configurationFallback", //$NON-NLS-1$
+                "Native EDT breakpoint setter methods were absent; wrote marker attributes for: " //$NON-NLS-1$
+                    + String.join(", ", configuration.getMarkerFallbacks())); //$NON-NLS-1$
         }
         if (degraded)
         {

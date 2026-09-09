@@ -45,7 +45,8 @@ public class SetErrorBreakpointTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .booleanProperty(KEY_ENABLED,
                 "True creates/enables the workspace-wide breakpoint; false disables it while " //$NON-NLS-1$
-                    + "preserving its filter. To delete it, call remove_breakpoint with its breakpointId", true) //$NON-NLS-1$
+                    + "preserving its filter. To delete it, pass every id in breakpointIds to " //$NON-NLS-1$
+                    + "remove_breakpoint - an entry with no marker has none and is removed in EDT", true) //$NON-NLS-1$
             .stringProperty(KEY_EXCEPTION_MESSAGE,
                 "Omit to keep an existing filter (or create catch-all when none exists); pass an " //$NON-NLS-1$
                     + "empty string to catch all exceptions; non-empty text is forwarded verbatim " //$NON-NLS-1$
