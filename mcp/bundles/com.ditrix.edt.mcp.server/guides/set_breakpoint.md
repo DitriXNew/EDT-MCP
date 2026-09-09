@@ -23,3 +23,5 @@ JSON: `action` (`created` or `updated`), `breakpointId` (the Eclipse marker id -
 - Requires a debug session to be useful: pair with `launch` (or an Attach config), then `wait_for_break`. Inspect with `get_variables` / `evaluate_expression`, move with `step`, continue with `resume`.
 - Setting on an EDT module path while the project is still building returns a clear "still building" error - wait for it to settle.
 - Remove it with `remove_breakpoint` (by `breakpointId`, or by the same coordinates); list active ones with `list_breakpoints`.
+
+When an upgraded workspace holds legacy DUPLICATE breakpoints at the requested line, all of them are configured identically and `reconciledBreakpoints` says how many. `breakpointIds` then lists every reconciled marker: removing the singular `breakpointId` - or removing by coordinate - takes only ONE of them and leaves the others live, so clean up by passing each id in `breakpointIds` to `remove_breakpoint`.

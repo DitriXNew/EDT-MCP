@@ -4204,6 +4204,9 @@
         "success": {
           "type": "boolean"
         },
+        "warning": {
+          "type": "string"
+        },
         "workspaceWide": {
           "type": "boolean"
         }

@@ -520,7 +520,7 @@ public final class BreakpointUtils
      * @return whether their filters agree
      * @throws Exception when a marker cannot be read
      */
-    private static boolean sameFilterEverywhere(List<IBreakpoint> breakpoints) throws Exception
+    private static boolean sameFilterEverywhere(List<IBreakpoint> breakpoints)
     {
         Map<String, Object> first = null;
         for (IBreakpoint each : breakpoints)
@@ -530,7 +530,20 @@ public final class BreakpointUtils
             {
                 return false;
             }
-            Map<String, Object> state = readExceptionBreakpointConfiguration(marker);
+            Map<String, Object> state;
+            try
+            {
+                state = readExceptionBreakpointConfiguration(marker);
+            }
+            catch (Exception unreadable) // NOSONAR: see below
+            {
+                // Deliberately swallowed, and ONLY here: this runs after every breakpoint has
+                // already been configured and enabled, so letting a stale marker throw would
+                // report a failure for a mutation that happened - and would drop the ids the
+                // caller needs to undo it. An unreadable entry simply means the set cannot be
+                // described as uniform.
+                return false;
+            }
             if (first == null)
             {
                 first = state;

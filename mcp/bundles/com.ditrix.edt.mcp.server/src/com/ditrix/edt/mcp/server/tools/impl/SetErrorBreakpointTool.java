@@ -62,6 +62,7 @@ public class SetErrorBreakpointTool implements IMcpTool
             .integerProperty("breakpointId", "Eclipse marker id when the breakpoint is enabled") //$NON-NLS-1$ //$NON-NLS-2$
             .integerArrayProperty("breakpointIds", "Marker ids of EVERY exception breakpoint this call touched, on both the enable and the disable path; more than one means breakpointId alone is not the whole setting, and each id has to be removed") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("configuredCount", "How many breakpoints were touched; larger than breakpointIds when one of them has no marker to name") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("warning", "Present when some affected breakpoint has no marker and therefore cannot be removed through remove_breakpoint") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty(KEY_ENABLED, "Whether break-on-error is enabled") //$NON-NLS-1$
             .booleanProperty("workspaceWide", "Always true; EDT does not scope this breakpoint by project") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("catchAllExceptions", "Whether all BSL exceptions are matched") //$NON-NLS-1$ //$NON-NLS-2$
@@ -107,6 +108,18 @@ public class SetErrorBreakpointTool implements IMcpTool
                 // breakpoint without a marker has no id to contribute.
                 .put("breakpointIds", change.getConfiguredIds()) //$NON-NLS-1$
                 .put("configuredCount", change.getConfiguredCount()); //$NON-NLS-1$
+            int unaddressable = change.getConfiguredCount() - change.getConfiguredIds().size();
+            if (unaddressable > 0)
+            {
+                // Said in words, not left to be inferred from two numbers: remove_breakpoint
+                // addresses an exception breakpoint only by a positive marker id, so an entry
+                // without a marker cannot be removed through this server at all - it has to go
+                // from the EDT breakpoints view.
+                result.put("warning", unaddressable //$NON-NLS-1$
+                    + " of the affected exception breakpoint(s) have no marker, so they are not " //$NON-NLS-1$
+                    + "in breakpointIds and remove_breakpoint cannot address them; clear those " //$NON-NLS-1$
+                    + "in the EDT Breakpoints view."); //$NON-NLS-1$
+            }
             if (enabled)
             {
                 IBreakpoint breakpoint = change.getBreakpoint();
