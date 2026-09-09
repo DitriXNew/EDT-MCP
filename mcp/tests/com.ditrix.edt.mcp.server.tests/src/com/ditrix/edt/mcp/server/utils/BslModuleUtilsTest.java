@@ -351,33 +351,13 @@ public class BslModuleUtilsTest
     }
 
     /**
-     * The terminator search stops at a declaration whose opening parenthesis sits on the NEXT
-     * line: BSL hides the newline, so such a method is real, and an unterminated method above it
-     * would otherwise borrow its terminator and report itself complete - the span that deletes a
-     * whole neighbouring method.
-     */
-    /**
-     * The mirror of the bound: BSL lists the reserved words legal as MEMBER names (grammar rule
-     * {@code ExtName}) and allows a line break after the dot, so a line opening with Function
-     * right after a line ending in a dot is one expression, not a declaration. Bounding there
-     * would end the method before its terminator and refuse a perfectly legal write.
+     * A declaration whose opening parenthesis sits on the NEXT line is real BSL (the newline is
+     * hidden) and this whole-line scanner can neither locate nor bound it. It is therefore
+     * DETECTED so the caller can refuse, rather than guessed at - guessing produced a span that
+     * ran through the hidden method and a duplicate-name check that could not see it.
      */
     @Test
-    public void testAKeywordMemberNameAfterADanglingDotIsNotABound()
-    {
-        List<String> lines = List.of(
-            "Procedure Target()", //$NON-NLS-1$
-            "\tValue = Object.", //$NON-NLS-1$
-            "\t\tFunction();", //$NON-NLS-1$
-            "EndProcedure"); //$NON-NLS-1$
-
-        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
-        assertTrue("a member access split after its dot must not bound the span", span.complete); //$NON-NLS-1$
-        assertEquals(3, span.endLine);
-    }
-
-    @Test
-    public void testSpanStopsAtADeclarationSplitAcrossLines()
+    public void testADeclarationSplitAcrossLinesIsReportedAsUnaddressable()
     {
         List<String> lines = List.of(
             "Procedure Target()", //$NON-NLS-1$
@@ -385,13 +365,27 @@ public class BslModuleUtilsTest
             "()", //$NON-NLS-1$
             "EndProcedure"); //$NON-NLS-1$
 
-        List<BslModuleUtils.MethodSpan> spans = BslModuleUtils.findMethodSpansViaText(lines);
-        assertEquals(1, spans.size());
-        assertFalse("an unterminated method must not borrow the split declaration's terminator", //$NON-NLS-1$
-            spans.get(0).complete);
-        assertEquals(0, spans.get(0).endLine);
+        assertEquals(1, BslModuleUtils.unaddressableDeclarationLine(lines));
     }
 
+    /**
+     * The mirror: ordinary code must not be mistaken for one. A member access split after its dot
+     * opens a line with a reserved word (the grammar rule ExtName allows it), and a whole method
+     * on one line is addressable - neither is a hidden declaration.
+     */
+    @Test
+    public void testOrdinaryLinesAreNotReportedAsUnaddressableDeclarations()
+    {
+        assertEquals(-1, BslModuleUtils.unaddressableDeclarationLine(List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "	Value = Object.", //$NON-NLS-1$
+            "		Function();", //$NON-NLS-1$
+            "EndProcedure"))); //$NON-NLS-1$
+        assertEquals(-1, BslModuleUtils.unaddressableDeclarationLine(List.of(
+            "Function Value() Export", //$NON-NLS-1$
+            "	Return 1;", //$NON-NLS-1$
+            "EndFunction"))); //$NON-NLS-1$
+    }
     @Test
     public void testBlankLineStillDetachesACommentBlock()
     {

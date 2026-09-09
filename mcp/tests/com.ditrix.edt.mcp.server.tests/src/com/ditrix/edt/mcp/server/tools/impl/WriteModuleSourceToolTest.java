@@ -1178,17 +1178,31 @@ public class WriteModuleSourceToolTest
     }
 
     /**
-     * A known limitation, pinned in its SAFE direction: BSL hides whitespace, so
-     * {@code Procedure Target} and {@code ()} on separate lines parses - the line-based scan does
-     * not recognize it, and the tool then REFUSES rather than splicing at a wrong anchor.
+     * A declaration split across lines is real BSL that a whole-line scanner can neither locate
+     * nor bound, so the module is REFUSED by name and line rather than edited around: the hidden
+     * method is invisible both to the span search and to the duplicate-name check.
      */
     @Test
-    public void testDeclarationSplitAcrossLinesIsRefusedNotMisspliced()
+    public void testAModuleWithASplitDeclarationIsRefusedByName()
     {
-        List<String> current = lines("Procedure Target\n()\nEndProcedure\n"); //$NON-NLS-1$
-        assertMethodEditError("was not found", //$NON-NLS-1$
+        List<String> current = lines("Procedure Target()\nEndProcedure\nProcedure Other\n()\nEndProcedure\n"); //$NON-NLS-1$
+        assertMethodEditError("split across lines at line 3", //$NON-NLS-1$
             WriteModuleSourceTool.applyMethodTargetedEdit(current, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
                 "Procedure Target()\nEndProcedure\n", null)); //$NON-NLS-1$
+    }
+
+    /**
+     * The collision this closes: the hidden declaration names a method the duplicate check could
+     * not see, so an insert used to add a SECOND unconditional declaration of the same name.
+     */
+    @Test
+    public void testInsertBesideASplitDeclarationCannotDuplicateItsName()
+    {
+        List<String> current =
+            lines("Procedure Added\n()\nEndProcedure\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        assertMethodEditError("split across lines", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(current, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n", null)); //$NON-NLS-1$
     }
 
     @Test

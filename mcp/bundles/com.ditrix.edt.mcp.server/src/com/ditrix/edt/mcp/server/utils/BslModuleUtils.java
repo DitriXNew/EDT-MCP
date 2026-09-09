@@ -83,18 +83,18 @@ public final class BslModuleUtils
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /**
-     * A line that STARTS a method declaration, matched on the keyword alone.
+     * A method declaration this line-based scanner cannot ADDRESS: the keyword alone on its
+     * line, or the keyword and a name with no opening parenthesis.
      * <p>
-     * Deliberately weaker than {@link #METHOD_START_PATTERN}, which also requires the name and
-     * the opening parenthesis on the same line: BSL hides whitespace, so a declaration may put
-     * the parenthesis on a later line, and such a line must still BOUND a terminator search -
-     * otherwise an unterminated method borrows the terminator of the method it hides. A bound
-     * that is too eager only ever ends a span earlier, which turns an over-reaching splice into
-     * a refusal; a bound that is too narrow loses a whole method.
+     * BSL hides the newline, so such a declaration is real - and everything here is measured in
+     * whole lines, so it can be neither located nor bounded. A module holding one is therefore
+     * REFUSED for method-targeted edits rather than guessed at: guessing produced a span that
+     * ran through the hidden method and a duplicate-name check that did not see it.
      * </p>
      */
-    private static final Pattern METHOD_DECLARATION_KEYWORD_PATTERN = Pattern.compile(
-        "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)(?!\\p{L}|\\p{N}|_)", //$NON-NLS-1$
+    public static final Pattern UNADDRESSABLE_DECLARATION_PATTERN = Pattern.compile(
+        "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)"
+            + "(?!\\p{L}|\\p{N}|_)(?:\\s+[\\p{L}_][\\p{L}\\p{N}_]*)?\\s*$", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /** Regex for region start (#Область / #Region) */
@@ -485,39 +485,37 @@ public final class BslModuleUtils
      */
     private static int nextDeclarationLine(List<String> lines, int from)
     {
-        int start = Math.max(0, from);
-        boolean danglingDot = start > 0 && endsWithMemberDot(lines.get(start - 1));
-        for (int i = start; i < lines.size(); i++)
+        for (int i = Math.max(0, from); i < lines.size(); i++)
         {
-            String line = lines.get(i);
-            if (!danglingDot && METHOD_DECLARATION_KEYWORD_PATTERN.matcher(line).find())
+            if (METHOD_START_PATTERN.matcher(lines.get(i)).find())
             {
                 return i;
             }
-            danglingDot = endsWithMemberDot(line);
         }
         return lines.size();
     }
 
     /**
-     * Whether the line's last meaningful character is a member-access dot, so a keyword opening
-     * the NEXT line is a member name rather than a declaration. An end-of-line comment is dropped
-     * first; anything else is judged as written, which keeps the answer conservative - when in
-     * doubt this reports "not a dot", and the caller then bounds the span, which costs a refusal
-     * rather than an over-reaching splice.
+     * The first line holding a declaration this scanner cannot address, or {@code -1}.
+     *
+     * @param lines module or fragment lines
+     * @return the 0-based line index, or {@code -1} when there is none
      */
-    private static boolean endsWithMemberDot(String line)
+    public static int unaddressableDeclarationLine(List<String> lines)
     {
-        if (line == null)
+        if (lines == null)
         {
-            return false;
+            return -1;
         }
-        int comment = line.indexOf("//"); //$NON-NLS-1$
-        String code = comment >= 0 ? line.substring(0, comment) : line;
-        String trimmed = code.stripTrailing();
-        return trimmed.endsWith("."); //$NON-NLS-1$
+        for (int i = 0; i < lines.size(); i++)
+        {
+            if (UNADDRESSABLE_DECLARATION_PATTERN.matcher(lines.get(i)).find())
+            {
+                return i;
+            }
+        }
+        return -1;
     }
-
     private static int findTerminatorLine(List<String> lines, int from, int to, Pattern terminator)
     {
         for (int i = from; i <= to; i++)

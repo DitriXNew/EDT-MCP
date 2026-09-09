@@ -698,6 +698,20 @@ public class WriteModuleSourceTool implements IMcpTool
     static MethodEditResult applyMethodTargetedEdit(List<String> originalLines, String mode,
         String methodName, String source, Module module)
     {
+        // A declaration this line scanner cannot ADDRESS - the keyword alone on its line, or the
+        // keyword and a name with the parenthesis on the next - makes every answer below unsafe
+        // rather than merely incomplete: the method is invisible, so a span can run straight
+        // through it and the duplicate-name check cannot see the name it declares. Naming the
+        // line and refusing is the only honest outcome for a whole-line scanner.
+        int hidden = BslModuleUtils.unaddressableDeclarationLine(originalLines);
+        if (hidden >= 0)
+        {
+            return methodEditError("the module has a method declaration split across lines at line " //$NON-NLS-1$
+                + (hidden + 1) + " ('" + originalLines.get(hidden).trim() //$NON-NLS-1$ //$NON-NLS-2$
+                + "'), which method-targeted modes cannot address: the opening parenthesis has to " //$NON-NLS-1$
+                + "be on the declaration line. Put that declaration on one line, or edit with " //$NON-NLS-1$
+                + "mode 'searchReplace'."); //$NON-NLS-1$
+        }
         List<BslModuleUtils.MethodSpan> moduleSpans =
             BslModuleUtils.findMethodSpansViaText(originalLines);
         List<BslModuleUtils.MethodSpan> targets = new ArrayList<>();
