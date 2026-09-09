@@ -22,7 +22,7 @@ Lists the line breakpoints and workspace-wide BSL exception breakpoints currentl
 JSON: `breakpoints` and a `count`. A line entry has `kind: "line"`, coordinates, enabled state, and its debug model; non-empty `condition` and positive `hitCount` / `hitCondition` fields appear only when configured. An exception entry has `kind: "exception"`, `workspaceWide: true`, `enabled`, `catchAllExceptions`, and `exceptionMessage` only when a filter is set - a catch-all entry OMITS that field rather than sending it empty.
 
 ## Notes & gotchas
-- The `modelId` tells you the breakpoint's debug model - a 1C BSL model id indicates a real, suspend-capable breakpoint (as opposed to a degraded marker-only one from `set_breakpoint`).
+- The `modelId` tells you the breakpoint's debug model. It does NOT tell you whether the breakpoint can suspend: the marker-only fallback `set_breakpoint` creates when the EDT BSL breakpoint class is missing reports the same BSL model id as a native one. The call that CREATED the breakpoint is what says so - `set_breakpoint` answers `degraded: true` with a warning in that case.
 - Remove entries with `remove_breakpoint` (pass the `breakpointId`).
 - Use `set_error_breakpoint(enabled=false)` to disable the workspace-wide exception breakpoint while preserving its filter. To delete any breakpoint permanently, including a workspace-wide exception breakpoint, pass its `breakpointId` to `remove_breakpoint`.
 

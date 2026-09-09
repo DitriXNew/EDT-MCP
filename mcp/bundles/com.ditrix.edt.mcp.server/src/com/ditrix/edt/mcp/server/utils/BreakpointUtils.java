@@ -448,7 +448,7 @@ public final class BreakpointUtils
             // the loop, taking the ids of everything already changed with it.
             try
             {
-                return describe("updated", existing.get(0), existing); //$NON-NLS-1$
+                return describe("updated", existing.get(0), existing, begun.ids); //$NON-NLS-1$
             }
             catch (Exception reportingFailure)
             {
@@ -462,7 +462,11 @@ public final class BreakpointUtils
             configureExceptionBreakpoint(created, catchAll, configuredMessage);
             created.setEnabled(true);
             manager.addBreakpoint(created);
-            return describe("created", created, List.of(created)); //$NON-NLS-1$
+            // The id read once, here, while nothing else has happened to the marker yet - the
+            // same discipline as the update path, whose loop captured them as it walked.
+            IMarker createdMarker = created.getMarker();
+            return describe("created", created, List.of(created), //$NON-NLS-1$
+                createdMarker == null ? List.of() : List.of(Long.valueOf(createdMarker.getId())));
         }
         catch (Exception e)
         {
@@ -516,9 +520,12 @@ public final class BreakpointUtils
      * @throws Exception when the marker cannot be read
      */
     private static ExceptionBreakpointChange describe(String action, IBreakpoint breakpoint,
-        List<IBreakpoint> configured) throws Exception
+        List<IBreakpoint> configured, List<Long> ids) throws Exception
     {
-        List<Long> ids = markerIdsOf(configured);
+        // NOT re-read here: the ids come from the caller, which captured them while it was
+        // mutating. Re-reading a marker that went stale since would throw before the agreement
+        // could be downgraded, and the reporting guard would answer with a partial-update error
+        // for a mutation that completed in full.
         FilterAgreement agreement = filterAgreement(configured);
         // The same read the agreement check just made, and it may fail the same way. Every
         // breakpoint has already been configured and enabled by now, so letting it throw would
