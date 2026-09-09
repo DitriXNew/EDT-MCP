@@ -67,6 +67,23 @@ public final class BslSyntaxChecker
     /** One alternation over all spellings in {@link #KEYWORDS}, in registration order. */
     private static final Pattern BLOCK_KEYWORD;
 
+    /**
+     * Whether the word is one of the BLOCK keywords this checker knows, in either spelling.
+     * <p>
+     * Lent to the module scanner so a method named after one - {@code Procedure If()} - is not
+     * taken for a declaration it can address. This set is block keywords ONLY: the operator
+     * words are not in it, because this class has no authoritative list of them and inventing
+     * one would refuse valid names while still missing others.
+     * </p>
+     *
+     * @param word the word to test
+     * @return whether it is a block keyword
+     */
+    public static boolean isBlockKeyword(String word)
+    {
+        return word != null && KEYWORDS.containsKey(word.toLowerCase(Locale.ROOT));
+    }
+
     static
     {
         List<String> spellings = new ArrayList<>();

@@ -469,6 +469,34 @@ public final class BslModuleUtils
     }
 
     /**
+     * Whether the parameter list opened at or after {@code from} closes on this line.
+     * <p>
+     * A declaration whose list stays open - {@code Procedure Added(} with the terminator on the
+     * next line - was emitted as a complete span, and the balance check only counts block
+     * keywords, so invalid BSL went to disk under the exactly-one-method contract.
+     * </p>
+     *
+     * @param maskedLine the line with its literals and comments blanked
+     * @param from where the name ended
+     * @return whether the list closes here
+     */
+    private static boolean parameterListCloses(String maskedLine, int from)
+    {
+        int depth = 0;
+        for (int i = from; i < maskedLine.length(); i++)
+        {
+            char ch = maskedLine.charAt(i);
+            depth += ch == '(' ? 1 : 0;
+            depth -= ch == ')' ? 1 : 0;
+            if (depth == 0 && ch == ')')
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Whether the line is nothing but complete pragmas: an ampersand name, optionally followed by
      * a closed argument list, repeated.
      * <p>
@@ -737,6 +765,14 @@ public final class BslModuleUtils
         for (int i = 0; i < scan.size(); i++)
         {
             String line = scan.get(i);
+            // NONE of the rules below apply when the line above left a dangling member dot: the
+            // newline is hidden, so this line continues an expression - "Value = Object." then
+            // "EndFunction(Arg);" is one member call, and "Function And" is one member name. Each
+            // rule judged that line on its own and refused a valid module.
+            if (previousMeaningfulLineEndsWithMemberDot(scan, i))
+            {
+                continue;
+            }
             if (UNADDRESSABLE_DECLARATION_PATTERN.matcher(line).find())
             {
                 return new Unaddressable(i, "a method declaration split across lines", //$NON-NLS-1$
@@ -747,6 +783,20 @@ public final class BslModuleUtils
             // its line, so an inline one is invisible to it - the span reads past it, borrows a
             // later closer, and a replaceMethod deletes everything in between while the balance
             // check sees a healed result.
+            Matcher opener = METHOD_START_PATTERN.matcher(line);
+            if (opener.find())
+            {
+                if (BslSyntaxChecker.isBlockKeyword(opener.group(1)))
+                {
+                    return new Unaddressable(i, "a method named after a block keyword", //$NON-NLS-1$
+                        "give the method a name that is not " + opener.group(1)); //$NON-NLS-1$
+                }
+                if (!parameterListCloses(line, opener.end(1)))
+                {
+                    return new Unaddressable(i, "a declaration whose parameter list does not close", //$NON-NLS-1$
+                        "close the parameter list on the declaration line"); //$NON-NLS-1$
+                }
+            }
             if (hasInlineTerminator(line) && !isMethodTerminatorLine(line, METHOD_END_PATTERN))
             {
                 return new Unaddressable(i, "a method terminator sharing its line with other code", //$NON-NLS-1$

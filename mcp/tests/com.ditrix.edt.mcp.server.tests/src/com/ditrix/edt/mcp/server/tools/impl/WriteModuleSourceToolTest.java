@@ -2076,4 +2076,58 @@ public class WriteModuleSourceToolTest
             WriteModuleSourceTool.applyMethodTargetedEdit(simpleModule(), "insertAfter", "Target", //$NON-NLS-1$ //$NON-NLS-2$
                 "Procedure +()\nEndProcedure\n")); //$NON-NLS-1$
     }
+
+    /**
+     * The dangling-dot exemption belongs to EVERY per-line rule, not just the span scan: a member
+     * call split after its dot ("Value = Object." then "EndFunction(Arg);") is one expression, and
+     * the inline-terminator rule used to read it as a method ending on that line.
+     */
+    @Test
+    public void testAMemberCallSplitAfterItsDotIsNotAnInlineTerminator()
+    {
+        List<String> module = lines(
+            "Procedure Target()\n\tValue = Object.\n\tEndFunction(Arg);\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("a member call across a line break is not a terminator", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\n\tNew = 1;\nEndProcedure\n").error); //$NON-NLS-1$
+    }
+
+    /**
+     * The same expression split once more: "Value = Object.", "Function And", "(Condition);" is
+     * still Object.Function And (Condition), and the split-declaration rule read the middle line as
+     * a declaration whose parenthesis had been moved.
+     */
+    @Test
+    public void testAMemberNameSplitFromItsArgumentsIsNotASplitDeclaration()
+    {
+        List<String> module = lines(
+            "Procedure Target()\n\tValue = Object.\n\tFunction And\n\t(Condition);\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("a member name across a line break is not a declaration", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\n\tNew = 1;\nEndProcedure\n").error); //$NON-NLS-1$
+    }
+
+    /**
+     * A parameter list that never closes: the span was emitted as complete, and the balance check
+     * counts only block keywords, so invalid BSL passed the exactly-one-method contract.
+     */
+    @Test
+    public void testADeclarationWhoseParameterListDoesNotCloseIsRefused()
+    {
+        assertMethodEditError("parameter list does not close", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(simpleModule(), "insertAfter", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added(\nEndProcedure\n")); //$NON-NLS-1$
+    }
+
+    /**
+     * A method named after a BLOCK keyword is refused through the checker's own set - the one this
+     * tool already treats as authoritative - rather than through a keyword list invented here.
+     */
+    @Test
+    public void testAMethodNamedAfterABlockKeywordIsRefused()
+    {
+        assertMethodEditError("named after a block keyword", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(simpleModule(), "insertAfter", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure If()\nEndProcedure\n")); //$NON-NLS-1$
+    }
 }
