@@ -404,7 +404,7 @@ public final class BreakpointUtils
             // breakpoints this call has already changed.
             try
             {
-                return ExceptionBreakpointChange.disabled(existing.size(), markerIdsOf(existing));
+                return ExceptionBreakpointChange.disabled(existing.size(), begun.ids);
             }
             catch (Exception reportingFailure)
             {
@@ -553,28 +553,6 @@ public final class BreakpointUtils
             configured.size(), agreement);
     }
 
-    /**
-     * Marker ids of the given breakpoints, in order. A breakpoint with no marker contributes
-     * nothing - it has no id to give - which is why the COUNT of configured breakpoints travels
-     * beside the list: a caller comparing the two can see when the list is short instead of
-     * believing it complete.
-     *
-     * @param breakpoints the configured breakpoints
-     * @return their marker ids
-     */
-    private static List<Long> markerIdsOf(List<IBreakpoint> breakpoints)
-    {
-        List<Long> ids = new ArrayList<>(breakpoints.size());
-        for (IBreakpoint each : breakpoints)
-        {
-            IMarker marker = each.getMarker();
-            if (marker != null)
-            {
-                ids.add(Long.valueOf(marker.getId()));
-            }
-        }
-        return ids;
-    }
 
     /** What a read-back could establish about the filters of the affected breakpoints. */
     public enum FilterAgreement
@@ -715,14 +693,17 @@ public final class BreakpointUtils
         boolean differ = false;
         for (IBreakpoint each : breakpoints)
         {
-            IMarker marker = each.getMarker();
-            if (marker == null)
-            {
-                return FilterAgreement.UNVERIFIED;
-            }
             Map<String, Object> state;
             try
             {
+                // The LOOKUP is inside the guard too: getMarker() throws on a stale marker that
+                // the interface fallback still recognises, and outside it that throw would leave
+                // this call reporting a failure for breakpoints that were all configured.
+                IMarker marker = each.getMarker();
+                if (marker == null)
+                {
+                    return FilterAgreement.UNVERIFIED;
+                }
                 state = readExceptionBreakpointConfiguration(marker);
             }
             catch (Exception unreadable) // NOSONAR: see below
