@@ -2665,18 +2665,189 @@ public final class LaunchLifecycleUtils
             return null;
         }
         final Shell[] holder = new Shell[1];
-        display.syncExec(() -> {
-            holder[0] = display.getActiveShell();
-            if (holder[0] == null)
-            {
-                Shell[] shells = display.getShells();
-                if (shells.length > 0)
-                {
-                    holder[0] = shells[0];
-                }
-            }
-        });
+        display.syncExec(() -> holder[0] = activeOrFirstShell(display));
         return holder[0];
+    }
+
+    /**
+     * The shell this class hands out: the active one, or the first one there is. Extracted so the
+     * unbounded and bounded probes cannot drift apart on WHICH shell they mean.
+     * <p>
+     * Must run on the UI thread.
+     * </p>
+     *
+     * @param display the live display
+     * @return a shell, or {@code null} when the workbench has none
+     */
+    private static Shell activeOrFirstShell(Display display)
+    {
+        Shell active = display.getActiveShell();
+        if (active != null)
+        {
+            return active;
+        }
+        Shell[] shells = display.getShells();
+        return shells.length > 0 ? shells[0] : null;
+    }
+
+    /**
+     * How a bounded shell probe ended, so a caller can tell "there is no window" from "the UI
+     * never answered". The two need different words to a human and, before a destructive
+     * operation, they are the difference between "nobody is there" and "somebody is stuck".
+     */
+    public enum ShellProbeOutcome
+    {
+        /** A shell was obtained. */
+        SHELL,
+        /** The UI answered, and there is no shell - or there is no display at all. */
+        NO_SHELL,
+        /** The UI thread did not answer within the budget. */
+        TIMED_OUT
+    }
+
+    /** The result of {@link #grabActiveShellWithin(long)}: how it ended, and the shell if any. */
+    public static final class ShellProbe
+    {
+        private final ShellProbeOutcome outcome;
+        private final Shell shell;
+
+        ShellProbe(ShellProbeOutcome outcome, Shell shell)
+        {
+            this.outcome = outcome;
+            this.shell = shell;
+        }
+
+        /**
+         * @return how the probe ended
+         */
+        public ShellProbeOutcome outcome()
+        {
+            return outcome;
+        }
+
+        /**
+         * @return the shell, or {@code null} unless {@link #outcome()} is
+         *         {@link ShellProbeOutcome#SHELL}
+         */
+        public Shell shell()
+        {
+            return shell;
+        }
+    }
+
+    /**
+     * {@link #grabActiveShell()} with a deadline, for callers that must not wait forever.
+     * <p>
+     * The unbounded form asks the UI thread with {@code syncExec} and waits as long as that thread
+     * takes. On a workbench whose UI thread is wedged that is forever - and a caller holding a
+     * lock goes on holding it, so every later call for the same resource queues behind a wait that
+     * will not end. The destructive-consent gate is exactly such a caller.
+     * </p>
+     * <p>
+     * This form posts the same question with {@code asyncExec} and waits on a latch for at most
+     * {@code timeoutMillis}. A late answer is harmless: the runnable only reads a shell into a
+     * holder nobody is waiting on any more.
+     * </p>
+     * <p>
+     * A timeout is its OWN outcome and is never reported as "no shell". Collapsing the two would
+     * tell a stuck operator they are running headless and send them to the launch bypass, when
+     * what they actually need is to free the UI thread - and inside a gate, "there is no UI" has
+     * to keep meaning precisely that.
+     * </p>
+     *
+     * @param timeoutMillis how long to wait for the UI thread, in milliseconds
+     * @return how the probe ended, and the shell when one was obtained
+     */
+    public static ShellProbe grabActiveShellWithin(long timeoutMillis)
+    {
+        Display display = workbenchDisplayOrNull();
+        if (display == null || display.isDisposed())
+        {
+            return new ShellProbe(ShellProbeOutcome.NO_SHELL, null);
+        }
+        if (display.getThread() == Thread.currentThread())
+        {
+            // Already ON the UI thread (rename_metadata_object asks the consent gate from inside
+            // its syncExec scope). Posting the question here and then waiting for it would block
+            // the very thread that has to run it: the latch could not be counted down before the
+            // deadline, so the probe would ALWAYS time out. There is nothing to wait for on this
+            // thread - read the shell inline, which is what the syncExec form did here.
+            return inlineShellAnswer(activeOrFirstShell(display));
+        }
+        final Shell[] holder = new Shell[1];
+        CountDownLatch answered = new CountDownLatch(1);
+        try
+        {
+            display.asyncExec(() -> {
+                try
+                {
+                    holder[0] = activeOrFirstShell(display);
+                }
+                finally
+                {
+                    answered.countDown();
+                }
+            });
+        }
+        catch (RuntimeException disposedMidCall)
+        {
+            // The display went away between the probe and the post: the same answer as no display.
+            return new ShellProbe(ShellProbeOutcome.NO_SHELL, null);
+        }
+        return awaitShellAnswer(answered, holder, timeoutMillis);
+    }
+
+    /**
+     * Turns a shell read that needed no waiting into an outcome.
+     * <p>
+     * Package-visible for the test that pins the property this branch must keep: an answer given
+     * INLINE is never a timeout. "No shell" and "nobody answered" are different verdicts with
+     * different remedies, and the caller on the UI thread has, by definition, an answer.
+     * </p>
+     *
+     * @param shell the shell read on the calling (UI) thread, or {@code null} when there is none
+     * @return {@link ShellProbeOutcome#SHELL} with that shell, else {@link ShellProbeOutcome#NO_SHELL}
+     */
+    static ShellProbe inlineShellAnswer(Shell shell)
+    {
+        return shell != null ? new ShellProbe(ShellProbeOutcome.SHELL, shell)
+            : new ShellProbe(ShellProbeOutcome.NO_SHELL, null);
+    }
+
+    /**
+     * Waits for a posted shell question to be answered, and turns the wait into an outcome.
+     * <p>
+     * Package-visible and free of SWT ON PURPOSE: the deadline is the whole point of the bounded
+     * probe, and a UI thread that never answers is precisely what cannot be arranged in a
+     * headless test runtime. Given the latch, it can - a latch that is never counted down IS a
+     * wedged UI thread, as far as this code is concerned.
+     * </p>
+     *
+     * @param answered counted down by the UI thread once it has filled {@code holder}
+     * @param holder receives the shell, or keeps {@code null} when there is none
+     * @param timeoutMillis how long to wait
+     * @return {@link ShellProbeOutcome#TIMED_OUT} when the answer did not arrive in time,
+     *         otherwise what the answer was
+     */
+    static ShellProbe awaitShellAnswer(CountDownLatch answered, Shell[] holder, long timeoutMillis)
+    {
+        try
+        {
+            if (!answered.await(timeoutMillis, TimeUnit.MILLISECONDS))
+            {
+                return new ShellProbe(ShellProbeOutcome.TIMED_OUT, null);
+            }
+        }
+        catch (InterruptedException e)
+        {
+            // An interrupt is not an answer. Restore the flag and report the same "did not
+            // answer" outcome rather than inventing a shell or a headless verdict.
+            Thread.currentThread().interrupt();
+            return new ShellProbe(ShellProbeOutcome.TIMED_OUT, null);
+        }
+        Shell shell = holder[0];
+        return shell != null ? new ShellProbe(ShellProbeOutcome.SHELL, shell)
+            : new ShellProbe(ShellProbeOutcome.NO_SHELL, null);
     }
 
     // ==================================================================================

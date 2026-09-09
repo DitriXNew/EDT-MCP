@@ -14,10 +14,12 @@ import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNull;
 
 import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
 import java.util.Collections;
 import java.util.Set;
 
 import org.eclipse.jface.dialogs.IDialogConstants;
+import org.eclipse.swt.widgets.Shell;
 import org.junit.After;
 import org.junit.Test;
 
@@ -360,6 +362,130 @@ public class DestructiveConsentGateTest
     // =====================================================================
     // Issue #277 — consentDeniedMessage: REJECT text unchanged, TIMEOUT text actionable
     // =====================================================================
+
+    // =====================================================================
+    // The shell probe is BOUNDED: a wedged UI thread is refused, not waited on
+    // =====================================================================
+
+    /**
+     * The defect this closes: the gate asked the UI thread for a shell with an unbounded
+     * syncExec, from a worker thread that is holding the caller's lock. On a workbench whose UI
+     * thread is wedged the call never returned, so merge_rules kept its path mutex and every
+     * later call for that path queued behind a wait that could not end.
+     * <p>
+     * A latch that is never counted down IS that wedged UI thread as far as the wait is
+     * concerned, which is what makes the deadline testable with no display in the room.
+     * </p>
+     */
+    @Test
+    public void aUiThreadThatNeverAnswersIsGivenUpOnRatherThanWaitedFor()
+    {
+        CountDownLatch neverAnswered = new CountDownLatch(1);
+
+        long startedAt = System.nanoTime();
+        LaunchLifecycleUtils.ShellProbe probe =
+            LaunchLifecycleUtils.awaitShellAnswer(neverAnswered, new Shell[1], 150L);
+        long tookMs = (System.nanoTime() - startedAt) / 1_000_000L;
+
+        assertEquals("a silent UI thread must end as TIMED_OUT", //$NON-NLS-1$
+            LaunchLifecycleUtils.ShellProbeOutcome.TIMED_OUT, probe.outcome());
+        assertNull("and hand back no shell", probe.shell()); //$NON-NLS-1$
+        assertTrue("it must give up near the budget, not hang: took " + tookMs + "ms", //$NON-NLS-1$ //$NON-NLS-2$
+            tookMs < 10_000L);
+    }
+
+    /**
+     * The other edge, and the one that keeps #566 intact: a UI thread that ANSWERS "there is no
+     * shell" must not be reported as a timeout. The two mean different things to the operator -
+     * one says nobody is there, the other says somebody is stuck - and the gate turns them into
+     * different verdicts with different remedies.
+     */
+    @Test
+    public void aUiThreadThatAnswersNoShellIsNotATimeout()
+    {
+        CountDownLatch answered = new CountDownLatch(1);
+        answered.countDown();
+
+        LaunchLifecycleUtils.ShellProbe probe =
+            LaunchLifecycleUtils.awaitShellAnswer(answered, new Shell[1], 150L);
+
+        assertEquals("an answered probe with no shell is NO_SHELL, not TIMED_OUT", //$NON-NLS-1$
+            LaunchLifecycleUtils.ShellProbeOutcome.NO_SHELL, probe.outcome());
+    }
+
+    /**
+     * The probe must not spend its budget when there is simply no display: a headless runtime is
+     * answered from the workbench check, without ever posting to a UI thread.
+     */
+    @Test
+    public void aHeadlessRuntimeIsAnsweredWithoutSpendingTheBudget()
+    {
+        long startedAt = System.nanoTime();
+        LaunchLifecycleUtils.ShellProbe probe =
+            LaunchLifecycleUtils.grabActiveShellWithin(30_000L);
+        long tookMs = (System.nanoTime() - startedAt) / 1_000_000L;
+
+        assertEquals("no workbench means NO_SHELL", //$NON-NLS-1$
+            LaunchLifecycleUtils.ShellProbeOutcome.NO_SHELL, probe.outcome());
+        assertTrue("and it must answer at once, not wait 30s: took " + tookMs + "ms", //$NON-NLS-1$ //$NON-NLS-2$
+            tookMs < 5_000L);
+    }
+
+    /**
+     * The branch that keeps the bounded probe usable from the UI thread itself:
+     * rename_metadata_object asks the gate from INSIDE its {@code syncExec} scope, where posting
+     * the question and then waiting on it would block the only thread that could answer - the
+     * probe would spend its whole budget and refuse on a perfectly healthy workbench. An answer
+     * taken inline is therefore never a timeout; with no shell it is NO_SHELL, a different
+     * verdict with a different remedy.
+     */
+    @Test
+    public void anInlineAnswerIsNeverATimeout()
+    {
+        LaunchLifecycleUtils.ShellProbe probe = LaunchLifecycleUtils.inlineShellAnswer(null);
+
+        assertEquals("an inline read with no shell means NO_SHELL, not TIMED_OUT", //$NON-NLS-1$
+            LaunchLifecycleUtils.ShellProbeOutcome.NO_SHELL, probe.outcome());
+        assertNull("and it hands back no shell", probe.shell()); //$NON-NLS-1$
+    }
+
+    /**
+     * The probe timeout and the dialog timeout are DIFFERENT failures and must not share a text:
+     * nothing was ever shown here, the wait was the probe's 5 s and not the prompt's 120 s, and a
+     * Preferences allowance cannot rescue it because the probe runs BEFORE the policy is read.
+     * Telling the operator to answer a dialog promptly sends them after a window that never opened.
+     */
+    @Test
+    public void anUnresponsiveUiIsNotReportedAsAnUnansweredDialog()
+    {
+        String message =
+            DestructiveConsentGate.consentDeniedMessage(ConsentDecision.UI_UNRESPONSIVE, TOOL);
+
+        assertTrue(message, message.contains(TOOL));
+        assertTrue("it must name the probe budget: " + message, //$NON-NLS-1$
+            message.contains(String.valueOf(DestructiveConsentGate.SHELL_PROBE_TIMEOUT_MS)));
+        assertTrue("and say the workbench did not answer: " + message, //$NON-NLS-1$
+            message.contains("wedged") || message.contains("did not answer")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("it must NOT quote the dialog budget: " + message, //$NON-NLS-1$
+            message.contains(DestructiveConsentGate.CONSENT_PROMPT_TIMEOUT_SECONDS + " s")); //$NON-NLS-1$
+        assertFalse("nor send them to a dialog that was never shown: " + message, //$NON-NLS-1$
+            message.contains("answer the confirmation dialog")); //$NON-NLS-1$
+    }
+
+    /**
+     * The mirror direction: the DIALOG timeout keeps its own text, so splitting the two verdicts
+     * did not quietly rewrite the case that really is an unanswered prompt.
+     */
+    @Test
+    public void theDialogTimeoutKeepsItsOwnPromptText()
+    {
+        String message = DestructiveConsentGate.consentDeniedMessage(ConsentDecision.TIMEOUT, TOOL);
+
+        assertTrue("the dialog verdict still names its 120 s budget: " + message, //$NON-NLS-1$
+            message.contains(String.valueOf(DestructiveConsentGate.CONSENT_PROMPT_TIMEOUT_SECONDS)));
+        assertTrue("and still points at the dialog: " + message, //$NON-NLS-1$
+            message.contains("confirmation dialog")); //$NON-NLS-1$
+    }
 
     @Test
     public void consentDeniedMessageKeepsTheOriginalRejectText()

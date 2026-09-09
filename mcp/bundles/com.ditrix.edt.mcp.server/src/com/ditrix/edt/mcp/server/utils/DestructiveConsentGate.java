@@ -156,6 +156,19 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         "evaluate_expression" //$NON-NLS-1$
     );
 
+    /**
+     * How long the headless probe waits for the UI thread before giving up on it.
+     * <p>
+     * Short on purpose. This is not the human's thinking time - that is
+     * {@link #CONSENT_PROMPT_TIMEOUT_SECONDS}, and it starts later. This is only "is there a
+     * workbench able to answer at all", a question a healthy UI thread answers in microseconds.
+     * A wedged one never answers, and the wait for it used to be unbounded: the gate is called
+     * from a worker thread that holds the caller's lock, so every later call for the same
+     * resource queued behind a wait with no end.
+     * </p>
+     */
+    static final long SHELL_PROBE_TIMEOUT_MS = 5_000L;
+
     private static final DestructiveConsentGate INSTANCE = new DestructiveConsentGate();
 
     /**
@@ -205,7 +218,19 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
          * ({@link DestructiveConsentGate#ENV_DESTRUCTIVE_CONSENT}{@code =allow}, step 1) rather
          * than something the absence of a display grants on their behalf.</p>
          */
-        UNATTENDED
+        UNATTENDED,
+        /**
+         * The workbench exists but its UI thread did not answer the bounded shell probe within
+         * {@link DestructiveConsentGate#SHELL_PROBE_TIMEOUT_MS} — so no dialog was ever shown.
+         *
+         * <p>Separate from {@link #TIMEOUT} because the remedies differ: that verdict means a
+         * dialog WAS shown and nobody answered it within
+         * {@link DestructiveConsentGate#CONSENT_PROMPT_TIMEOUT_SECONDS}, so "answer it promptly"
+         * and "allow the tool in Preferences" are the right advice. Here they are not: the probe
+         * runs BEFORE the policy is read, so a preference allowance cannot get through a wedged
+         * UI either — only freeing the UI thread, or the launch-time bypass, does.</p>
+         */
+        UI_UNRESPONSIVE
     }
 
     /**
@@ -247,11 +272,33 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
             return ConsentDecision.ALLOW;
         }
 
-        // Step 2 — headless probe: never syncExec / block without a live display+shell. With no
-        // human to ask, the answer is NO. Consent for an unattended run comes from the operator
-        // at launch (step 1), not from the absence of a display.
+        // Step 2 — headless probe: never block forever, and never grant consent because no UI
+        // answered. With no human to ask, the answer is NO; consent for an unattended run comes
+        // from the operator at launch (step 1), not from the absence of a display.
+        //
+        // The probe is BOUNDED. It used to ask the UI thread with an unbounded syncExec, so on a
+        // workbench whose UI thread is wedged this call never returned - and it is reached from a
+        // worker thread that is holding the caller's lock (merge_rules holds its path mutex),
+        // so every later call for the same resource queued behind a wait that could not end.
+        //
+        // The ORDER is deliberately unchanged. Reading the policy first would answer ALLOW on a
+        // display-less EDT for ALLOW_ALL, for a per-tool allowance and for a session allowance -
+        // exactly where #566 decided the gate must refuse - so the reorder that was tried once
+        // (b1180580) had to be reverted (b1d14680). The fix here is the WAIT, not the sequence.
         Display display = LaunchLifecycleUtils.workbenchDisplayOrNull();
-        Shell shell = display != null ? LaunchLifecycleUtils.grabActiveShell() : null;
+        LaunchLifecycleUtils.ShellProbe probe =
+            LaunchLifecycleUtils.grabActiveShellWithin(SHELL_PROBE_TIMEOUT_MS);
+        if (probe.outcome() == LaunchLifecycleUtils.ShellProbeOutcome.TIMED_OUT)
+        {
+            // NOT reported as headless: this workbench exists and simply did not answer, so the
+            // remedy is to free the UI thread. TIMEOUT already says that in words, and says it
+            // without claiming the operator is running without a display.
+            Activator.logInfo("Destructive-consent gate: the UI thread did not answer within " //$NON-NLS-1$
+                + SHELL_PROBE_TIMEOUT_MS + "ms — refusing '" + toolName //$NON-NLS-1$
+                + "' rather than waiting on it."); //$NON-NLS-1$
+            return ConsentDecision.UI_UNRESPONSIVE;
+        }
+        Shell shell = probe.shell();
         if (display == null || display.isDisposed() || shell == null)
         {
             Activator.logInfo("Destructive-consent gate: no active UI session — refusing '" //$NON-NLS-1$
@@ -301,6 +348,19 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
                 + "nothing was changed. To run it unattended, set " + ENV_DESTRUCTIVE_CONSENT //$NON-NLS-1$
                 + "=allow on the EDT process at launch; otherwise re-run it on an EDT workbench " //$NON-NLS-1$
                 + "with a window open and answer the confirmation dialog."; //$NON-NLS-1$
+        }
+        if (decision == ConsentDecision.UI_UNRESPONSIVE)
+        {
+            // No dialog was ever shown, and the wait was the probe's, not the prompt's: naming the
+            // prompt budget or the Preferences allowance here would send the operator after a
+            // dialog that does not exist and a setting the wedged probe never reaches.
+            return "Destructive operation '" + toolName + "' was refused because the EDT workbench " //$NON-NLS-1$ //$NON-NLS-2$
+                + "did not answer within " + SHELL_PROBE_TIMEOUT_MS + " ms: its UI thread is busy " //$NON-NLS-1$ //$NON-NLS-2$
+                + "or wedged, so no confirmation dialog could be shown and nothing was changed. " //$NON-NLS-1$
+                + "Free the UI thread (finish or cancel what the workbench is doing, or restart " //$NON-NLS-1$
+                + "it) and re-run; for an unattended run set " + ENV_DESTRUCTIVE_CONSENT //$NON-NLS-1$
+                + "=allow on the EDT process at launch. A Preferences allowance does NOT help " //$NON-NLS-1$
+                + "here - the gate asks for the workbench before it reads the policy."; //$NON-NLS-1$
         }
         if (decision == ConsentDecision.TIMEOUT)
         {
