@@ -473,8 +473,18 @@ public final class BreakpointUtils
     {
         List<Long> ids = markerIdsOf(configured);
         FilterAgreement agreement = filterAgreement(configured);
-        Map<String, Object> state =
-            readExceptionBreakpointConfiguration(breakpoint.getMarker());
+        // The same read the agreement check just made, and it may fail the same way. Every
+        // breakpoint has already been configured and enabled by now, so letting it throw would
+        // report a failure for a mutation that happened - and would drop the ids that undo it.
+        Map<String, Object> state;
+        try
+        {
+            state = readExceptionBreakpointConfiguration(breakpoint.getMarker());
+        }
+        catch (Exception unreadable) // NOSONAR: see above
+        {
+            state = Map.of();
+        }
         Object message = state.get("exceptionMessage"); //$NON-NLS-1$
         String storedMessage = message == null || message.toString().isEmpty()
             ? null

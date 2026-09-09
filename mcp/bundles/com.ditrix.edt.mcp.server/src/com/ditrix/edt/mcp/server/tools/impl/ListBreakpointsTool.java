@@ -135,7 +135,11 @@ public class ListBreakpointsTool implements IMcpTool
         }
         catch (Exception ex)
         {
-            dto.put("error", ex.getMessage()); //$NON-NLS-1$
+            // An exception with a NO message would store null, which the shared Gson drops - the entry
+                                // would then look ordinary while its state was never read. Fall back to the type.
+                dto.put("error", ex.getMessage() != null && !ex.getMessage().isEmpty() //$NON-NLS-1$
+                                    ? ex.getMessage()
+                                    : ex.getClass().getSimpleName());
         }
         return dto;
     }
@@ -152,7 +156,11 @@ public class ListBreakpointsTool implements IMcpTool
         }
         catch (Exception ex)
         {
-            dto.put("error", ex.getMessage()); //$NON-NLS-1$
+            // An exception with a NO message would store null, which the shared Gson drops - the entry
+                                // would then look ordinary while its state was never read. Fall back to the type.
+                dto.put("error", ex.getMessage() != null && !ex.getMessage().isEmpty() //$NON-NLS-1$
+                                    ? ex.getMessage()
+                                    : ex.getClass().getSimpleName());
         }
         return dto;
     }

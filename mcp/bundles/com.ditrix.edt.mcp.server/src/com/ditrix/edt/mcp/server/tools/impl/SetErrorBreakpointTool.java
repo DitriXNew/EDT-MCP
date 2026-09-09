@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 import org.eclipse.debug.core.model.IBreakpoint;
@@ -118,25 +120,26 @@ public class SetErrorBreakpointTool implements IMcpTool
                 // breakpoint without a marker has no id to contribute.
                 .put("breakpointIds", change.getConfiguredIds()) //$NON-NLS-1$
                 .put("configuredCount", change.getConfiguredCount()); //$NON-NLS-1$
+            // ONE warning, assembled from every reason there is: the same markerless entry can
+            // make the filter unverified AND leave ids missing, and two put() calls on the same
+            // key would have left only the second reason visible.
+            List<String> warnings = new ArrayList<>();
             if (change.getFilterAgreement() == BreakpointUtils.FilterAgreement.UNVERIFIED)
             {
-                // Distinct from "they disagree": nothing was established, so the caller must
-                // not read the absence of the filter fields as a statement about the set.
-                result.put("warning", "the filter of at least one affected breakpoint could " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "not be read back, so no filter is reported for this call; list_breakpoints " //$NON-NLS-1$
-                    + "shows each breakpoint's own state."); //$NON-NLS-1$
+                warnings.add("the filter of at least one affected breakpoint could not be read " //$NON-NLS-1$
+                    + "back, so no filter is reported for this call; list_breakpoints shows each " //$NON-NLS-1$
+                    + "breakpoint's own state"); //$NON-NLS-1$
             }
             int unaddressable = change.getConfiguredCount() - change.getConfiguredIds().size();
             if (unaddressable > 0)
             {
-                // Said in words, not left to be inferred from two numbers: remove_breakpoint
-                // addresses an exception breakpoint only by a positive marker id, so an entry
-                // without a marker cannot be removed through this server at all - it has to go
-                // from the EDT breakpoints view.
-                result.put("warning", unaddressable //$NON-NLS-1$
-                    + " of the affected exception breakpoint(s) have no marker, so they are not " //$NON-NLS-1$
-                    + "in breakpointIds and remove_breakpoint cannot address them; clear those " //$NON-NLS-1$
-                    + "in the EDT Breakpoints view."); //$NON-NLS-1$
+                warnings.add(unaddressable + " of the affected exception breakpoint(s) have no " //$NON-NLS-1$
+                    + "marker, so they are not in breakpointIds and remove_breakpoint cannot " //$NON-NLS-1$
+                    + "address them; clear those in the EDT Breakpoints view"); //$NON-NLS-1$
+            }
+            if (!warnings.isEmpty())
+            {
+                result.put("warning", String.join("; ", warnings) + "."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             }
             if (enabled)
             {

@@ -358,7 +358,14 @@ public class SetBreakpointTool implements IMcpTool
         BreakpointUtils.LineBreakpointConfiguration configuration, List<IBreakpoint> reconciled)
     {
         long markerId = bp.getMarker() != null ? bp.getMarker().getId() : -1L;
-        boolean degraded = bp instanceof BreakpointUtils.MarkerOnlyBreakpoint;
+        // ANY of the reconciled breakpoints being marker-only degrades the answer: taking the
+        // flag from the first one made the warning depend on registration order, so a native
+        // breakpoint listed before a marker-only twin hid the degradation entirely.
+        boolean degraded = false;
+        for (IBreakpoint each : reconciled)
+        {
+            degraded = degraded || each instanceof BreakpointUtils.MarkerOnlyBreakpoint;
+        }
         Activator.logInfo("Breakpoint set: " + file.getFullPath() + ":" + lineNumber //$NON-NLS-1$ //$NON-NLS-2$
             + (degraded ? " (degraded — marker-only)" : "")); //$NON-NLS-1$ //$NON-NLS-2$
         ToolResult res = ToolResult.success()
