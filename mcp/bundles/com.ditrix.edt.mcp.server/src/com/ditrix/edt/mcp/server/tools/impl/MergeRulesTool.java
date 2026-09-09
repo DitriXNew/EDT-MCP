@@ -908,26 +908,31 @@ public class MergeRulesTool implements IMcpTool
             document = MergeRulesDocument.empty();
         }
         // The target's content digest, for the residue the attributes cannot see: a replacement of
-        // the same length that preserves or restores both instants. Taken HERE, after the parse
-        // rather than beside the attributes, for two reasons. It then describes the bytes the
-        // document was actually built from, so a writer landing between the two reads costs a
-        // refusal on the ATTRIBUTES (where the design already puts it) instead of a confusing
-        // "content differs" about a document parsed from that very content. And the parse has
-        // already applied the codec's own size bound when the base IS the target, so an oversized
-        // input is refused before anything hashes it - the explicit bound below covers the other
-        // case, where the target is being replaced wholesale and never parsed at all.
-        if (targetAsRead != null && MergeRulesCodec.withinDocumentBound(targetAsRead.size()))
+        // the same length that preserves or restores both instants.
+        if (targetAsRead != null)
         {
-            try
+            if (base != null && base.equals(file))
             {
-                targetDigestAsRead = MergeRulesCodec.contentDigest(file);
+                // Off the DOCUMENT rather than a second read: this is the digest the codec took of
+                // the very bytes it parsed, so there is no window between the parse and the digest
+                // for a timestamp-preserving writer to slip through - and that writer is precisely
+                // what the attributes cannot see, so a window here would defeat the whole clause.
+                targetDigestAsRead = document.sourceDigest();
             }
-            catch (IOException e)
+            else
             {
-                return ToolResult.error("Nothing was written: what is on " + file //$NON-NLS-1$
-                    + " could not be read (" + describe(e) //$NON-NLS-1$
-                    + "), so this call could not later show that the file it replaces is the " //$NON-NLS-1$
-                    + "file it read. Check the path and re-send the write.").toJson(); //$NON-NLS-1$
+                // The target is replaced wholesale here and never parsed. Digest it the way the
+                // parser WOULD read it - bounded, and for an archive the settings entry instead of
+                // the whole file - so the confirm point compares like with like. Unreadable or
+                // unparseable leaves it null, and the attribute check stands alone.
+                try
+                {
+                    targetDigestAsRead = MergeRulesCodec.documentDigest(file);
+                }
+                catch (IOException | MergeRulesFormatException notComparable) // NOSONAR: see above
+                {
+                    targetDigestAsRead = null;
+                }
             }
         }
         int existingDecisions = document.decisions().size();
@@ -1312,6 +1317,26 @@ public class MergeRulesTool implements IMcpTool
      *            when there was no existing target, or it is too large to be one
      * @return the refusal, or {@code null} when the target is still the file that was read
      */
+    /**
+     * The target's content digest as it is NOW, defined the way the parser reads it so it is
+     * comparable with the one taken before the prompt.
+     *
+     * @param file the target
+     * @return the digest, or {@code null} when the file cannot be read or parsed - which the
+     *         caller treats as changed, the direction the whole check reasons in
+     */
+    private static String currentDocumentDigest(Path file)
+    {
+        try
+        {
+            return MergeRulesCodec.documentDigest(file);
+        }
+        catch (IOException | MergeRulesFormatException unverifiable) // NOSONAR: see the javadoc
+        {
+            return null;
+        }
+    }
+
     private static String targetChangedRefusal(Path file, BasicFileAttributes asRead,
         String digestAsRead)
     {
@@ -1327,8 +1352,7 @@ public class MergeRulesTool implements IMcpTool
             {
                 observed = "its size or timestamps are not those of the file that was read"; //$NON-NLS-1$
             }
-            else if (digestAsRead != null
-                && !digestAsRead.equals(MergeRulesCodec.contentDigest(file)))
+            else if (digestAsRead != null && !digestAsRead.equals(currentDocumentDigest(file)))
             {
                 // The residue the attributes cannot see: same length, both instants preserved or
                 // restored. Reached only when every attribute still matches, so it costs one read

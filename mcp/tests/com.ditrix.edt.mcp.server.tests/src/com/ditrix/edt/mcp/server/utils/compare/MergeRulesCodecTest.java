@@ -3066,19 +3066,22 @@ public class MergeRulesCodecTest
     public void testTheContentDigestSeesAReplacementTheAttributesCannotTellApart() throws Exception
     {
         Path file = workDir.resolve("rules-digest.xml"); //$NON-NLS-1$
-        Files.writeString(file, "AAAA", StandardCharsets.UTF_8); //$NON-NLS-1$
+        Files.writeString(file, RULE_BESIDE_THE_ROOT, StandardCharsets.UTF_8);
         BasicFileAttributes asRead = Files.readAttributes(file, BasicFileAttributes.class);
-        String digestAsRead = MergeRulesCodec.contentDigest(file);
+        String digestAsRead = MergeRulesCodec.documentDigest(file);
 
-        Files.writeString(file, "BBBB", StandardCharsets.UTF_8); //$NON-NLS-1$
+        // Same LENGTH, different content, and the timestamps put back - inode reuse, NTFS
+        // tunnelling and any timestamp-copying sync tool all produce exactly this.
+        Files.writeString(file, RULE_BESIDE_THE_ROOT.replace("commonModules", "commonModuleX"), //$NON-NLS-1$ //$NON-NLS-2$
+            StandardCharsets.UTF_8);
         Files.setLastModifiedTime(file, asRead.lastModifiedTime());
         BasicFileAttributes present = Files.readAttributes(file, BasicFileAttributes.class);
 
         assertTrue("the attribute check cannot tell this replacement apart - that is the residue " //$NON-NLS-1$
             + "the digest exists for; if this ever fails, the test has stopped modelling it", //$NON-NLS-1$
             MergeRulesCodec.isTheFileRead(asRead, present));
-        assertNotEquals("but the content digest must see it", //$NON-NLS-1$
-            digestAsRead, MergeRulesCodec.contentDigest(file));
+        assertNotEquals("but the document digest must see it", //$NON-NLS-1$
+            digestAsRead, MergeRulesCodec.documentDigest(file));
     }
 
     /**
@@ -3089,10 +3092,10 @@ public class MergeRulesCodecTest
     public void testTheContentDigestOfAnUntouchedFileIsUnchanged() throws Exception
     {
         Path file = workDir.resolve("rules-digest-stable.xml"); //$NON-NLS-1$
-        Files.writeString(file, "AAAA", StandardCharsets.UTF_8); //$NON-NLS-1$
+        Files.writeString(file, RULE_BESIDE_THE_ROOT, StandardCharsets.UTF_8);
 
         assertEquals("re-reading the same bytes must give the same digest", //$NON-NLS-1$
-            MergeRulesCodec.contentDigest(file), MergeRulesCodec.contentDigest(file));
+            MergeRulesCodec.documentDigest(file), MergeRulesCodec.documentDigest(file));
     }
 
     /**

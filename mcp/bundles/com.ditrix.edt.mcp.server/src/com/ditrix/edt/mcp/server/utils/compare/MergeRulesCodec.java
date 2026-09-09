@@ -373,6 +373,7 @@ public final class MergeRulesCodec
         }
         MergeRulesDocument document = parse(new ByteArrayInputStream(content));
         document.setSourceLabel(file.toString());
+        document.setSourceDigest(digestOf(content));
         return document;
     }
 
@@ -945,40 +946,14 @@ public final class MergeRulesCodec
     }
 
     /**
-     * Whether a file of this size is small enough to be a merge-rules document at all - the same
-     * {@link #MAX_DOCUMENT_BYTES} bound {@link #read} applies, exposed so a caller can decide not
-     * to hash an input the parse would refuse anyway.
+     * The digest of the bytes a read consumed, recorded on the document by {@link #read} and
+     * re-taken by {@link #documentDigest} - the pair a caller compares to prove that the file it
+     * is about to replace still holds what it parsed.
      *
-     * @param sizeInBytes the file's size
-     * @return {@code true} when it is within the document bound
+     * @param content the bytes that were parsed
+     * @return their hex SHA-256
      */
-    public static boolean withinDocumentBound(long sizeInBytes)
-    {
-        return sizeInBytes <= MAX_DOCUMENT_BYTES;
-    }
-
-    /**
-     * A digest of the file's whole content, for the residue {@link #isTheFileRead} cannot see.
-     * <p>
-     * That predicate compares size, both instants and the key, and its own note names what gets
-     * through: a replacement of the same length that preserves or restores the instants, which a
-     * POSIX store's inode reuse, NTFS tunnelling, and any sync tool that copies timestamps all
-     * make reachable. Attributes are an argument about what a writer usually does; this is a
-     * mechanism, so the caller does not have to be right about the writer.
-     * </p>
-     * <p>
-     * The whole file is hashed rather than "the bytes the parser consumed": for an archive target
-     * those are the whole file anyway, and streaming it keeps the cost O(size) in time and O(1) in
-     * memory. The SIZE is the caller's business - see {@link #withinDocumentBound}, which is the
-     * bound that keeps a multi-gigabyte input from being hashed before it is refused.
-     * </p>
-     *
-     * @param file the file to digest
-     * @return the hex SHA-256 of its content
-     * @throws IOException when the file cannot be read - which the caller must treat as changed,
-     *             the same direction the attribute check reasons in
-     */
-    public static String contentDigest(Path file) throws IOException
+    static String digestOf(byte[] content)
     {
         MessageDigest digest;
         try
@@ -990,16 +965,41 @@ public final class MergeRulesCodec
             // Every conforming JRE ships SHA-256; there is no fallback that would be honest here.
             throw new IllegalStateException("SHA-256 is required to verify the target", impossible); //$NON-NLS-1$
         }
-        byte[] buffer = new byte[8192];
-        try (InputStream in = Files.newInputStream(file))
-        {
-            int read;
-            while ((read = in.read(buffer)) > 0)
-            {
-                digest.update(buffer, 0, read);
-            }
-        }
-        return HexFormat.of().formatHex(digest.digest());
+        return HexFormat.of().formatHex(digest.digest(content));
+    }
+
+    /**
+     * Re-reads a file the way {@link #read} would - the zip entry's bytes for an archive, the
+     * bounded file otherwise - and returns their digest, WITHOUT keeping the parsed document.
+     * <p>
+     * The definition of "the bytes" is deliberately the parser's, not the filesystem's: it is
+     * bounded by {@link #MAX_DOCUMENT_BYTES} the same way, and for a large archive holding a small
+     * settings entry it hashes the entry rather than the archive. That is what makes the answer
+     * comparable with {@link MergeRulesDocument#sourceDigest()}.
+     * </p>
+     *
+     * @param file the file to digest
+     * @return the digest of the bytes a read would parse
+     * @throws IOException when the file cannot be read
+     * @throws MergeRulesFormatException when it is not a readable merge-settings document - which
+     *             a caller comparing digests must treat as changed
+     */
+    public static String documentDigest(Path file) throws IOException, MergeRulesFormatException
+    {
+        return read(file).sourceDigest();
+    }
+
+    /**
+     * Whether a file of this size is small enough to be a merge-rules document at all - the same
+     * {@link #MAX_DOCUMENT_BYTES} bound {@link #read} applies, exposed so a caller can decide not
+     * to hash an input the parse would refuse anyway.
+     *
+     * @param sizeInBytes the file's size
+     * @return {@code true} when it is within the document bound
+     */
+    public static boolean withinDocumentBound(long sizeInBytes)
+    {
+        return sizeInBytes <= MAX_DOCUMENT_BYTES;
     }
 
     /**
@@ -1938,6 +1938,7 @@ public final class MergeRulesCodec
             }
             MergeRulesDocument document = parse(new ByteArrayInputStream(content));
             document.setSourceLabel(file + "!" + entry.getName()); //$NON-NLS-1$
+            document.setSourceDigest(digestOf(content));
             // What the archive held BESIDES the entry that was read, carried on the document
             // because this is the only moment it is knowable. An archive of one merge-settings
             // entry beside a notes file reads perfectly well - the candidate is unambiguous - and

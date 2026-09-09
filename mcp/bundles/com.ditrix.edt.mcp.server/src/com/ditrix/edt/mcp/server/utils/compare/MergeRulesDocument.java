@@ -129,6 +129,8 @@ public final class MergeRulesDocument
 
     private String sourceLabel;
 
+    private String sourceDigest;
+
     private List<String> unreadContainerEntries = Collections.emptyList();
 
     private boolean containerCarriedComment;
@@ -250,6 +252,33 @@ public final class MergeRulesDocument
     public void setSourceLabel(String label)
     {
         this.sourceLabel = label;
+    }
+
+    /**
+     * The digest of the BYTES this document was parsed from - the zip entry's bytes when it came
+     * out of an archive, the file's bytes otherwise.
+     * <p>
+     * Carried on the document rather than taken by a second read, so there is no window between
+     * the parse and the digest for a writer to slip through: a caller that must later prove the
+     * file is still the one it built this document from compares against exactly what it parsed.
+     * </p>
+     *
+     * @return the hex SHA-256 of those bytes, or {@code null} when the document was not read
+     *         from a file
+     */
+    public String sourceDigest()
+    {
+        return sourceDigest;
+    }
+
+    /**
+     * Records the digest of the bytes this document was parsed from.
+     *
+     * @param digest the hex SHA-256 of those bytes
+     */
+    public void setSourceDigest(String digest)
+    {
+        this.sourceDigest = digest;
     }
 
     /**
