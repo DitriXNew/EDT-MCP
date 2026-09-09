@@ -6,10 +6,12 @@ Lists the line breakpoints and workspace-wide BSL exception breakpoints currentl
 - To confirm a `set_breakpoint` actually registered.
 
 ## Parameter details
-- `projectName` - optional filter for line breakpoints; omit to list them across all projects. Exception breakpoints are workspace-wide and are always returned, even when this filter names a project.
+- `projectName` - optional filter for line breakpoints; omit to list them across all projects. Exception breakpoints are workspace-wide and are returned whatever this filter names.
+
+A breakpoint with no marker is NOT listed - the listing is built from markers - and the platform can recognise one by interface alone, which `set_error_breakpoint` reports as an entry it configured but cannot name by id. Read that call's own `configuredCount` and warning for it; EDT's Breakpoints view shows it too.
 
 ## What you get
-JSON: `breakpoints` and a `count`. A line entry has `kind: "line"`, coordinates, enabled state, and its debug model; non-empty `condition` and positive `hitCount` / `hitCondition` fields appear only when configured. An exception entry has `kind: "exception"`, `workspaceWide: true`, `enabled`, `catchAllExceptions`, and `exceptionMessage` only when a filter is set - a catch-all entry OMITS that field rather than sending it empty.
+JSON: `breakpoints` and a `count`. A line entry has `kind: "line"`, coordinates, enabled state, and its debug model; non-empty `condition` and positive `hitCount` / `hitCondition` fields appear only when configured. An exception entry has `kind: "exception"`, `workspaceWide: true`, `enabled`, `catchAllExceptions`, and `exceptionMessage` only when a filter is set - a catch-all entry OMITS that field rather than sending it empty. An entry whose marker could not be read carries an `error` field instead of the fields that read would have produced: check for it before relying on the rest of that entry, since a missing `enabled` there means "not readable", not "false".
 
 ## Notes & gotchas
 - The `modelId` tells you the breakpoint's debug model. It does NOT tell you whether the breakpoint can suspend: the marker-only fallback `set_breakpoint` creates when the EDT BSL breakpoint class is missing reports the same BSL model id as a native one. The call that CREATED the breakpoint is what says so - `set_breakpoint` answers `degraded: true` with a warning in that case.

@@ -19,7 +19,7 @@ Controls EDT's workspace-wide BSL break-on-error breakpoint. It is deliberately 
 - Limit suspension to exceptions whose message matches a known filter.
 
 ## Parameter details
-- `enabled` (required) - True creates/enables the workspace-wide breakpoint; false disables it while preserving its filter. To delete it, call `remove_breakpoint` with its `breakpointId`.
+- `enabled` (required) - True creates/enables the workspace-wide breakpoint; false disables it while preserving its filter. To delete it, pass every id in `breakpointIds` to `remove_breakpoint` - and note that a breakpoint the platform recognises by interface alone has no marker and therefore no id at all: `configuredCount` counts it, nothing can address it through this tool, and it is removed in EDT's Breakpoints view.
 - `exceptionMessage` - Omit to keep an existing filter (or create catch-all when none exists); pass an empty string to catch all exceptions; non-empty text is forwarded verbatim to the platform's break-on-error filter as a message template, so pass a distinctive message fragment.
 
 ## What you get
