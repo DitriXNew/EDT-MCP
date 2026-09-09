@@ -210,7 +210,13 @@ public final class BslSyntaxChecker
             // which would hide real block keywords (and their imbalance).
             String trimmedLine = lines.get(i).trim();
             boolean ignorableTrivia = trimmedLine.isEmpty() || trimmedLine.startsWith("//"); //$NON-NLS-1$
-            if (stringState.insideString && !ignorableTrivia && !trimmedLine.startsWith("|")) //$NON-NLS-1$
+            if (stringState.insideString && ignorableTrivia)
+            {
+                // Hidden between two parts of a literal: it carries no code, and lexing it would
+                // let a quote inside the comment close the literal early.
+                continue;
+            }
+            if (stringState.insideString && !trimmedLine.startsWith("|")) //$NON-NLS-1$
             {
                 stringState.insideString = false;
             }
@@ -408,7 +414,16 @@ public final class BslSyntaxChecker
             // "-opened, |-continued parts, and whitespace (a blank line included) plus a comment
             // are hidden between them. Resetting there would expose a continuation as code.
             boolean ignorable = trimmed.isEmpty() || trimmed.startsWith("//"); //$NON-NLS-1$
-            if (state.insideString && !ignorable && !trimmed.startsWith("|")) //$NON-NLS-1$
+            if (state.insideString && ignorable)
+            {
+                // And it is not MASKED either: a quote inside such a comment would toggle the
+                // literal state, after which the real closing quote reads as an opener and the
+                // code following it disappears from the mask. The line carries no code, so a
+                // blank one preserves both the line count and the truth.
+                masked.add(""); //$NON-NLS-1$
+                continue;
+            }
+            if (state.insideString && !trimmed.startsWith("|")) //$NON-NLS-1$
             {
                 state.insideString = false;
             }

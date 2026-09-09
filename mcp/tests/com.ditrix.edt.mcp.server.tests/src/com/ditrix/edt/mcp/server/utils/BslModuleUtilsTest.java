@@ -443,6 +443,35 @@ public class BslModuleUtilsTest
      * the keyword at line start - invisible to the span search AND to the duplicate-name check -
      * so it is reported unaddressable instead of being silently skipped.
      */
+    /**
+     * A comment hidden between two parts of a literal may itself contain a quote. Lexing it would
+     * close the literal early, after which the REAL closing quote reads as an opener and the code
+     * following it vanishes from the mask - taking a method terminator with it.
+     */
+    @Test
+    public void testAQuoteInsideTriviaDoesNotCloseTheLiteral()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "\tText = \"first", //$NON-NLS-1$
+            "\t// comment with a \" quote", //$NON-NLS-1$
+            "|last\";", //$NON-NLS-1$
+            "\tValue = 1;", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue("the code after the literal must stay visible", span.complete); //$NON-NLS-1$
+        assertEquals(5, span.endLine);
+    }
+
+    /** The grammar allows a RUN of pragmas, and a run hides a declaration just as well as one. */
+    @Test
+    public void testSeveralPragmasOnTheDeclarationLineAreAlsoUnaddressable()
+    {
+        assertEquals(0, BslModuleUtils.unaddressableDeclarationLine(List.of(
+            "&AtClient &Deprecated Procedure Added()", //$NON-NLS-1$
+            "EndProcedure"))); //$NON-NLS-1$
+    }
     @Test
     public void testAPragmaOnTheDeclarationLineIsReportedAsUnaddressable()
     {

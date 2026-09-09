@@ -118,7 +118,7 @@ public final class BslModuleUtils
         "(?<![\\p{L}\\p{N}_])(?:\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B|\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438|EndProcedure|EndFunction)(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     /**
-     * A declaration sharing its line with the pragma that annotates it
+     * A declaration sharing its line with the pragma(s) that annotate it
      * ({@code &AtClient Procedure Added()}).
      * <p>
      * Legal, and equally unaddressable by a scan anchored on the keyword at line start: the
@@ -127,7 +127,7 @@ public final class BslModuleUtils
      * </p>
      */
     private static final Pattern PRAGMA_ON_DECLARATION_LINE_PATTERN = Pattern.compile(
-        "^\\s*&[\\p{L}\\p{N}_]+(?:\\([^)]*\\))?\\s+"
+        "^\\s*(?:&[\\p{L}\\p{N}_]+(?:\\([^)]*\\))?\\s+)+"
             + "(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)"
             + "(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
