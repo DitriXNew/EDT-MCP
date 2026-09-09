@@ -134,8 +134,13 @@ public class SetBreakpointTool implements IMcpTool
         // breakpoint and be reported as success. MCP dispatch does not validate arguments against
         // the advertised schema, so the refusal has to happen here. The sentinel is outside the
         // range this parameter accepts, so it cannot collide with a real value.
+        // A BLANK value is refused too, unlike the sibling 'condition': that one is a STRING whose
+        // empty value legitimately means "no condition", while hitCount is an INTEGER, for which a
+        // blank is not a value at all - and letting it through would clear a configured hit count
+        // and answer success, the very behaviour this guard exists to stop. A JSON null stays
+        // exempt: that is a field the caller left unset, not a value it got wrong.
         String rawHitCount = JsonUtils.extractStringArgument(params, KEY_HIT_COUNT);
-        if (hitCountProvided && rawHitCount != null && !rawHitCount.trim().isEmpty()
+        if (hitCountProvided && rawHitCount != null
             && JsonUtils.extractIntArgument(params, KEY_HIT_COUNT, Integer.MIN_VALUE)
                 == Integer.MIN_VALUE)
         {

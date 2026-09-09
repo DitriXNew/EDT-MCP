@@ -151,6 +151,39 @@ public class SetBreakpointToolTest
         }
     }
 
+    /**
+     * A blank value for an INTEGER parameter is not a value, it is a value the caller got wrong,
+     * and letting it through would clear a configured hit count and answer success - the same
+     * silent reconfiguration the malformed cases above refuse. The sibling {@code condition} is a
+     * STRING, where blank legitimately means "no condition"; that asymmetry is deliberate and the
+     * next test pins its other half.
+     */
+    @Test
+    public void testBlankHitCountIsRejectedRatherThanClearingTheSetting()
+    {
+        for (String blank : new String[] {"", "   "}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            Map<String, String> params = new HashMap<>();
+            params.put("hitCount", blank); //$NON-NLS-1$
+            String result = new SetBreakpointTool().execute(params);
+            assertTrue("a blank hitCount must be refused, not treated as clear: " + result,
+                result.contains("Invalid hitCount")); //$NON-NLS-1$
+            assertTrue("and the fix must be stated: " + result,
+                result.contains("whole number")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testBlankConditionStillMeansClearNotAnError()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("condition", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new SetBreakpointTool().execute(params);
+        assertFalse("an empty condition clears it; only the module is missing here: " + result,
+            result.contains("Invalid")); //$NON-NLS-1$
+        assertTrue(result, result.contains("modulePath is required")); //$NON-NLS-1$
+    }
+
     @Test
     public void testExplicitZeroHitCountIsNotMistakenForAParseFailure()
     {
