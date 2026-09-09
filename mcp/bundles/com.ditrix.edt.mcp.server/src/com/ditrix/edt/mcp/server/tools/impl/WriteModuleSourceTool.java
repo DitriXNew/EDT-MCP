@@ -1223,7 +1223,10 @@ public class WriteModuleSourceTool implements IMcpTool
             return new ArrayList<>();
         }
 
-        String[] parts = source.split("\n", -1); //$NON-NLS-1$
+        // All three separators, not just the newline: a payload written with bare carriage
+        // returns would otherwise arrive as ONE element holding several physical lines, and
+        // every rule here reasons about whole lines.
+        String[] parts = source.split("\\r\\n|\\r|\\n", -1); //$NON-NLS-1$
         List<String> lines = new ArrayList<>(Arrays.asList(parts));
 
         // If source ends with \n, split produces a trailing empty element.

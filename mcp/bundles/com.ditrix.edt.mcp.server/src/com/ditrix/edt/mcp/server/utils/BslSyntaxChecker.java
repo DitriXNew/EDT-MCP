@@ -209,7 +209,8 @@ public final class BslSyntaxChecker
             // genuinely unclosed string) - reset so it does not mask the real code that follows,
             // which would hide real block keywords (and their imbalance).
             String trimmedLine = lines.get(i).trim();
-            boolean ignorableTrivia = trimmedLine.isEmpty() || trimmedLine.startsWith("//"); //$NON-NLS-1$
+            boolean ignorableTrivia = (trimmedLine.isEmpty() || trimmedLine.startsWith("//")) //$NON-NLS-1$
+                && lines.get(i).indexOf('\r') < 0;
             if (stringState.insideString && ignorableTrivia)
             {
                 // Hidden between two parts of a literal: it carries no code, and lexing it would
@@ -413,7 +414,11 @@ public final class BslSyntaxChecker
             // Ignorable trivia does NOT end a literal: the lexer splits a multi-line string into
             // "-opened, |-continued parts, and whitespace (a blank line included) plus a comment
             // are hidden between them. Resetting there would expose a continuation as code.
-            boolean ignorable = trimmed.isEmpty() || trimmed.startsWith("//"); //$NON-NLS-1$
+            // A bare carriage return can pack SEVERAL physical lines into one element (the
+            // splitter cuts on the newline only), so a line that merely STARTS with a
+            // comment may carry real code after it. Such an element is not ignorable trivia.
+            boolean ignorable = (trimmed.isEmpty() || trimmed.startsWith("//")) //$NON-NLS-1$
+                && line.indexOf('\r') < 0;
             if (state.insideString && ignorable)
             {
                 // And it is not MASKED either: a quote inside such a comment would toggle the
@@ -523,7 +528,22 @@ public final class BslSyntaxChecker
             }
             if (c == '/' && i + 1 < len && line.charAt(i + 1) == '/')
             {
-                break; // inline comment - the rest of the line is not code
+                // An inline comment runs to the end of the LINE - and a bare carriage return is
+                // a line end too. Source that mixes separators can pack several physical lines
+                // into one element, and dropping everything after the slashes would hide the
+                // code that follows the CR from this gate.
+                int carriageReturn = line.indexOf('\r', i);
+                if (carriageReturn < 0)
+                {
+                    break;
+                }
+                while (i < carriageReturn)
+                {
+                    masked.append(' ');
+                    i++;
+                }
+                masked.append('\r');
+                continue;
             }
             masked.append(c);
         }
