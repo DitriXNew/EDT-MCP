@@ -955,6 +955,16 @@ public class MergeRulesTool implements IMcpTool
         // multi-gigabyte neighbour first. Everything above it is bounded.
         if (targetAsRead != null && zipped)
         {
+            // BEFORE the stream, and cheap: an archive replaced since the attributes were read
+            // is refused here rather than hashed. Without it the bounded refusal above could be
+            // undone by an atomic replacement - the clean archive swapped for one carrying a
+            // multi-gigabyte neighbour - and this thread would stream all of it, holding the
+            // path mutex, only for the re-check below to reject the result.
+            String grew = sizeChangedRefusal(file, targetAsRead);
+            if (grew != null)
+            {
+                return grew;
+            }
             targetArchiveDigestAsRead = wholeFileDigest(file);
             if (targetArchiveDigestAsRead == null)
             {
@@ -971,7 +981,8 @@ public class MergeRulesTool implements IMcpTool
             // and having it destroyed by a write that never saw it. Re-running those checks
             // against the hashed file closes the window from the other side: a change inside it
             // is either seen HERE, or it happened after the hash and the confirm point sees it.
-            String moved = archiveStillTheOneHashed(file, targetPolicy, targetDigestAsRead);
+            String moved = archiveStillTheOneHashed(file, targetPolicy, targetDigestAsRead,
+                document.sourceEntry());
             if (moved != null)
             {
                 return moved;
@@ -1372,6 +1383,28 @@ public class MergeRulesTool implements IMcpTool
      * @return the refusal, or {@code null} when the target is still the file that was read
      */
     /**
+     * Refuses when the target is no longer the size it was read at - checked before any
+     * whole-file work, so a container substituted since then is rejected rather than streamed.
+     *
+     * @param file the target
+     * @param asRead its attributes when this call read it
+     * @return a refusal, or {@code null} when the size still matches
+     */
+    private static String sizeChangedRefusal(Path file, BasicFileAttributes asRead)
+    {
+        try
+        {
+            BasicFileAttributes present = Files.readAttributes(file, BasicFileAttributes.class);
+            return present.isRegularFile() && present.size() == asRead.size()
+                ? null
+                : targetMovedRefusal(file);
+        }
+        catch (IOException gone) // NOSONAR: unreadable means changed, the direction every clause here takes
+        {
+            return targetMovedRefusal(file);
+        }
+    }
+    /**
      * Re-runs the BOUNDED checks against the file that was just hashed: it still holds nothing
      * but the merge-settings entry, and that entry is still the one this call parsed.
      * <p>
@@ -1388,7 +1421,7 @@ public class MergeRulesTool implements IMcpTool
      * @return a refusal, or {@code null} when the file is still the one that was hashed
      */
     private static String archiveStillTheOneHashed(Path file, MergeRulesCodec.Target targetPolicy,
-        String contentDigestAsRead)
+        String contentDigestAsRead, String entryAsRead)
     {
         MergeRulesDocument again;
         try
@@ -1405,6 +1438,14 @@ public class MergeRulesTool implements IMcpTool
         if (sidecars != null)
         {
             return sidecars;
+        }
+        // The ADDRESS as well as the bytes: an entry renamed to an equal-length name, with the
+        // same expanded XML behind it, moves nothing this far except sourceEntry() - and the
+        // preview and the in-memory document would still describe the old name while the write
+        // put it back, silently undoing the rename.
+        if (entryAsRead != null && !entryAsRead.equals(again.sourceEntry()))
+        {
+            return targetMovedRefusal(file);
         }
         return contentDigestAsRead != null && !contentDigestAsRead.equals(again.sourceDigest())
             ? targetMovedRefusal(file)
@@ -1523,6 +1564,16 @@ public class MergeRulesTool implements IMcpTool
                 // entry name or its metadata, the archive comment, an entry beside it. The write
                 // replaces the whole file, so it would take that with it.
                 observed = "the archive around it is not the archive that was read"; //$NON-NLS-1$
+            }
+            else if (!MergeRulesCodec.isTheFileRead(asRead,
+                Files.readAttributes(file, BasicFileAttributes.class)))
+            {
+                // Sampled AGAIN, after the digests were read. An open stream keeps reading the
+                // inode it was given, so a replacement dropped onto the path while those reads
+                // were in flight would hash the detached old file and agree with everything.
+                // Re-reading the path afterwards catches that: the identity it names now is not
+                // the one this call verified.
+                observed = "it was replaced on that path while it was being verified"; //$NON-NLS-1$
             }
             else
             {
