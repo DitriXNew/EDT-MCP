@@ -19,6 +19,7 @@ import java.util.Collections;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.BreakpointUtils;
 
 /**
  * Tests for {@link SetBreakpointTool}.
@@ -312,5 +313,52 @@ public class SetBreakpointToolTest
             message.contains("NullPointerException"));
         assertFalse("the literal null must not reach the caller: " + message,
             message.contains("null"));
+    }
+
+    /**
+     * A mixed set of legacy duplicates aggregates to "not applied" - and must still carry what
+     * the NATIVE member wrote to marker attributes. Rebuilding that answer with an empty list
+     * told the caller the condition had not applied, and did not tell them where it went.
+     */
+    @Test
+    public void testAMixedSetKeepsTheFallbacksItAggregatesOver()
+    {
+        BreakpointUtils.LineBreakpointConfiguration mixed =
+            SetBreakpointTool.aggregate(false, Arrays.asList("setCondition", "setHitCount"));
+        assertFalse("a marker-only member makes the aggregate not-applied", mixed.isApplied());
+        assertEquals("the fallbacks the native member used must survive the aggregate",
+            Arrays.asList("setCondition", "setHitCount"), mixed.getMarkerFallbacks());
+    }
+
+    /**
+     * A creation whose WITHDRAWAL also failed leaves a registered, half-configured breakpoint.
+     * That arrives as a suppressed throwable, and the message has to spell it out: the next
+     * call would find the leftover and answer 'updated' on a call that reported failure.
+     */
+    @Test
+    public void testAFailedWithdrawalIsNamedInsteadOfOnlyLogged()
+    {
+        Exception failure = new IllegalStateException("setter refused"); //$NON-NLS-1$
+        failure.addSuppressed(new IllegalStateException("manager refused the removal")); //$NON-NLS-1$
+        String message = SetBreakpointTool.failureMessage(failure, Collections.emptyList());
+        assertTrue("the original failure still leads: " + message, //$NON-NLS-1$
+            message.contains("setter refused")); //$NON-NLS-1$
+        assertTrue("the leftover has to be named: " + message, //$NON-NLS-1$
+            message.contains("may still be registered")); //$NON-NLS-1$
+        assertTrue("and why the withdrawal failed: " + message, //$NON-NLS-1$
+            message.contains("manager refused the removal")); //$NON-NLS-1$
+    }
+
+    /**
+     * And the applied aggregate carries them too: the union travels with BOTH answers.
+     */
+    @Test
+    public void testAnAppliedAggregateAlsoCarriesItsFallbacks()
+    {
+        BreakpointUtils.LineBreakpointConfiguration applied =
+            SetBreakpointTool.aggregate(true, Arrays.asList("setHitCondition"));
+        assertTrue("every member applied it natively", applied.isApplied());
+        assertEquals("the union is what the caller is shown",
+            Arrays.asList("setHitCondition"), applied.getMarkerFallbacks());
     }
 }

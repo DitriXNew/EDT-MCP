@@ -1,5 +1,7 @@
 """Real e2e coverage for the workspace-wide set_error_breakpoint tool."""
 
+import sys
+
 from harness import (
     E2ESkip,
     call,
@@ -115,6 +117,9 @@ def test_create_update_disable_and_reenable_workspace_error_breakpoint():
             "to restore them all afterwards" % len(original)
         )
     breakpoint_id = None
+    # Held so the cleanup below can ATTACH its own problem to it instead of losing it: the check
+    # after the try/finally does not run while an exception from the body is propagating.
+    body_failure = None
     try:
         # INSIDE the guard, not before it: this removal is already destructive, and an error or a
         # timeout raised out here would skip the finally entirely - leaving the operator's own
@@ -229,6 +234,9 @@ def test_create_update_disable_and_reenable_workspace_error_breakpoint():
             raise AssertionError("cleared filter did not round-trip as catch-all: %r" % mine)
         if "exceptionMessage" in mine[0]:
             raise AssertionError("cleared exception-message filter is still listed: %r" % mine[0])
+    except BaseException as failing:  # noqa: BLE001 - recorded and re-raised at once
+        body_failure = failing
+        raise
     finally:
         # The restoration runs while an assertion may already be propagating, so a raise here
         # would REPLACE the failure the test exists to report. Its own trouble is worth saying,
@@ -237,6 +245,19 @@ def test_create_update_disable_and_reenable_workspace_error_breakpoint():
             restore_problem = _restore(original)
         except Exception as restoration_failure:  # noqa: BLE001 - see above
             restore_problem = "restoring the saved breakpoint raised %r" % (restoration_failure,)
+        if restore_problem and body_failure is not None:
+            # ATTACHED to the failure already propagating, not reported after this block: Python
+            # resumes that exception the moment the finally ends and never reaches the code
+            # below, so a restoration problem raised there was discarded exactly when it matters
+            # most - the operator's own breakpoint may still be deleted.
+            note = getattr(body_failure, "add_note", None)
+            if note is not None:
+                note("CLEANUP: " + restore_problem)
+            else:
+                # Python < 3.11 has no exception notes; stderr is then the only channel that
+                # keeps BOTH the original failure and this one.
+                print("CLEANUP: " + restore_problem, file=sys.stderr)
+            restore_problem = None
     if restore_problem:
         raise AssertionError(restore_problem)
     assert_no_diff("workspace-wide error-breakpoint changes must not modify project source")

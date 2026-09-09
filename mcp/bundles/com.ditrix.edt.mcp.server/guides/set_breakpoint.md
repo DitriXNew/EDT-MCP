@@ -13,7 +13,7 @@ Creates or updates a line breakpoint on a BSL module so the 1C application suspe
 - `hitCondition` - Hit-count comparison; requires a positive hitCount and defaults to EQUALS. Exact values: `EQUALS`, `EQUAL_OR_LESS`, `EQUAL_OR_HIGHER`, `MULTIPLIER`.
 
 ## What you get
-JSON: `action` (`created` or `updated`), `breakpointId` (the Eclipse marker id - keep it to remove the breakpoint later), the echoed `modulePath` / `resolvedFile`, and `lineNumber`. Configured condition/hit-count fields are included when set. If native setter methods are absent, `configurationFallback` says which verified EDT marker attributes were written.
+JSON: `action` (`created` or `updated`), `breakpointId` (the Eclipse marker id - keep it to remove the breakpoint later), the echoed `modulePath` / `resolvedFile`, and `lineNumber`. Configured condition/hit-count fields are included when set. If native setter methods are absent, `configurationFallback` says which verified EDT marker attributes were written - including when the set as a whole reports NOT applied, because one member may have written attributes while another took nothing at all.
 
 ## Notes & gotchas
 - **`degraded: true` means the breakpoint may NOT actually suspend execution** (the EDT BSL breakpoint class wasn't available, so it fell back to a plain marker). Verify it appears in EDT's Breakpoints view.

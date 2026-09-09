@@ -256,9 +256,8 @@ public class SetBreakpointTool implements IMcpTool
                     // one that never fires - and this tool has no 'enabled' parameter to fix that.
                     each.setEnabled(true);
                 }
-                BreakpointUtils.LineBreakpointConfiguration configuration = appliedEverywhere
-                    ? BreakpointUtils.LineBreakpointConfiguration.appliedWith(fallbacks)
-                    : BreakpointUtils.LineBreakpointConfiguration.notApplied();
+                BreakpointUtils.LineBreakpointConfiguration configuration =
+                    aggregate(appliedEverywhere, fallbacks);
                 return buildSuccessResult(existing, target.file, module, lineNumber, action,
                     effectiveCondition, hitCount, effectiveHitCondition, conditionProvided,
                     hitCountProvided, configuration,
@@ -271,7 +270,7 @@ public class SetBreakpointTool implements IMcpTool
                 // 'updated' on the half-configured leftover of a call that said it failed.
                 if (created)
                 {
-                    removeQuietly(createdId, configurationFailure);
+                    removeQuietly(bp, configurationFailure);
                 }
                 throw configurationFailure;
             }
@@ -286,10 +285,12 @@ public class SetBreakpointTool implements IMcpTool
     /**
      * Builds the failure message, naming the breakpoints this call had already begun changing.
      * <p>
-     * A creation that fails is withdrawn, so there is nothing to name. An UPDATE cannot be
-     * undone that way: every duplicate the loop reached before the failure keeps the new
-     * condition, hit count and enabled state. Saying only "failed" would leave those invisible,
-     * and coordinate-based inspection answers with one breakpoint of several.
+     * A creation that fails is withdrawn, so there is nothing to name - unless the withdrawal
+     * failed too, which arrives here as a SUPPRESSED throwable and is spelled out, because the
+     * leftover is registered and invisible otherwise. An UPDATE cannot be undone that way at
+     * all: every duplicate the loop reached before the failure keeps the new condition, hit
+     * count and enabled state. Saying only "failed" would leave those invisible, and
+     * coordinate-based inspection answers with one breakpoint of several.
      * </p>
      *
      * @param cause the underlying failure
@@ -316,6 +317,17 @@ public class SetBreakpointTool implements IMcpTool
             }
             message.append(" - each may carry part of the new settings and none of them was " //$NON-NLS-1$
                 + "rolled back, so inspect them."); //$NON-NLS-1$
+        }
+        for (Throwable cleanupFailure : cause.getSuppressed())
+        {
+            // The withdrawal is what makes "a creation that fails leaves nothing" true. When it
+            // fails too, a half-configured breakpoint stays registered and the next call would
+            // find it and answer 'updated' - so the caller has to be told, not just the log.
+            message.append(" Withdrawing the breakpoint this call created ALSO failed (") //$NON-NLS-1$
+                .append(cleanupFailure.getMessage() == null
+                    ? cleanupFailure.getClass().getSimpleName()
+                    : cleanupFailure.getMessage())
+                .append("), so a half-configured breakpoint may still be registered at that line.");  //$NON-NLS-1$
         }
         return message.append(" Verify the breakpoint in EDT's Breakpoints view, then retry.") //$NON-NLS-1$
             .toString();
@@ -373,22 +385,50 @@ public class SetBreakpointTool implements IMcpTool
         return warning.append("Verify in EDT that the breakpoint appears in the Breakpoints view.") //$NON-NLS-1$
             .toString();
     }
+
+    /**
+     * The aggregate configuration of a set of duplicates.
+     * <p>
+     * The union of marker fallbacks travels with BOTH answers. A mixed set - a marker-only
+     * breakpoint beside a native one - aggregates to "not applied", and rebuilding that answer
+     * with an empty list threw away what the native member had already written to marker
+     * attributes: the caller was told the condition did not apply, and not told where it went.
+     * </p>
+     *
+     * @param appliedEverywhere whether every duplicate took the settings natively
+     * @param markerFallbacks the union of setters that fell back to marker attributes
+     * @return the aggregate
+     */
+    static BreakpointUtils.LineBreakpointConfiguration aggregate(boolean appliedEverywhere,
+        List<String> markerFallbacks)
+    {
+        return appliedEverywhere
+            ? BreakpointUtils.LineBreakpointConfiguration.appliedWith(markerFallbacks)
+            : BreakpointUtils.LineBreakpointConfiguration.notAppliedWith(markerFallbacks);
+    }
+
     /**
      * Removes a breakpoint this call created after its configuration failed, without letting the
      * cleanup replace the failure that caused it.
+     * <p>
+     * The OBJECT, not its id: removing by id walks the whole breakpoint manager asking every
+     * entry for its marker, and one unreadable entry - the very kind this branch exists for -
+     * ended that walk before reaching the breakpoint to withdraw. The one to remove is already
+     * in hand.
+     * </p>
      *
-     * @param markerId the id read when the breakpoint was created, or -1 when it had none
+     * @param created the breakpoint this call registered, or {@code null} when it registered none
      * @param failure the configuration failure being reported; cleanup trouble is attached to it
      */
-    private static void removeQuietly(long markerId, Exception failure)
+    private static void removeQuietly(IBreakpoint created, Exception failure)
     {
-        if (markerId < 0)
+        if (created == null)
         {
             return;
         }
         try
         {
-            BreakpointUtils.removeBreakpointById(markerId);
+            BreakpointUtils.removeBreakpoint(created);
         }
         catch (Exception cleanupFailure)
         {

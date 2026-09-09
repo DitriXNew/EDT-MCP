@@ -1169,15 +1169,31 @@ public final class BreakpointUtils
 
     /**
      * Removes a breakpoint by id (marker id) on the breakpoint manager.
+     * <p>
+     * The scan is GUARDED per entry: {@code IBreakpoint} is not {@code @noimplement}, so
+     * {@code getMarker()} is code a third-party debug model writes and may throw. Unguarded, one
+     * such entry ended the loop before the wanted breakpoint was reached, and the removal failed
+     * over a breakpoint that was not even the target.
+     * </p>
      *
+     * @param markerId the marker id to remove
      * @return {@code true} if a breakpoint was removed
+     * @throws Exception if the removal itself fails
      */
     public static boolean removeBreakpointById(long markerId) throws Exception
     {
         IBreakpointManager bpManager = DebugPlugin.getDefault().getBreakpointManager();
         for (IBreakpoint bp : bpManager.getBreakpoints())
         {
-            IMarker m = bp.getMarker();
+            IMarker m;
+            try
+            {
+                m = bp.getMarker();
+            }
+            catch (Exception unreadable) // NOSONAR: an entry we cannot identify is not the target
+            {
+                continue;
+            }
             if (m != null && m.getId() == markerId)
             {
                 bpManager.removeBreakpoint(bp, true);
@@ -1185,6 +1201,17 @@ public final class BreakpointUtils
             }
         }
         return false;
+    }
+
+    /**
+     * Removes one breakpoint the caller already holds - no scan, nothing else consulted.
+     *
+     * @param breakpoint the breakpoint to remove
+     * @throws Exception if the manager refuses the removal
+     */
+    public static void removeBreakpoint(IBreakpoint breakpoint) throws Exception
+    {
+        DebugPlugin.getDefault().getBreakpointManager().removeBreakpoint(breakpoint, true);
     }
 
     /**
@@ -1229,6 +1256,24 @@ public final class BreakpointUtils
         public static LineBreakpointConfiguration notApplied()
         {
             return new LineBreakpointConfiguration(false, Collections.emptyList());
+        }
+
+        /**
+         * Not applied - but marker attributes WERE written on the way there.
+         * <p>
+         * The mixed set needs this: a marker-only breakpoint beside a native one makes the
+         * aggregate "not applied", while the native member may still have fallen back to marker
+         * attributes. Reporting that aggregate with an empty list hid a change actually made to
+         * the workspace - the caller was told the condition did not apply, and not told where it
+         * had been written instead.
+         * </p>
+         *
+         * @param markerFallbacks the setters that fell back to marker attributes
+         * @return the configuration
+         */
+        public static LineBreakpointConfiguration notAppliedWith(List<String> markerFallbacks)
+        {
+            return new LineBreakpointConfiguration(false, markerFallbacks);
         }
 
         public boolean isApplied()
