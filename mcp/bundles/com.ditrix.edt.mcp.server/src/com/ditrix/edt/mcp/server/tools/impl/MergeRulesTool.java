@@ -849,6 +849,11 @@ public class MergeRulesTool implements IMcpTool
         MergeRulesCodec.Target targetPolicy = MergeRulesCodec.Target.MUST_NOT_EXIST;
         BasicFileAttributes targetAsRead = null;
         String targetDigestAsRead = null;
+        // Separate from the content digest, and only for an archive: the content digest binds
+        // the RULES, this one binds everything around them - the entry name and metadata, the
+        // archive comment, the entries beside it, every structural detail this code does not
+        // model. One value could not do both, because only one of them can be window-free.
+        String targetArchiveDigestAsRead = null;
         if (Files.exists(file))
         {
             if (!isSameFile(file, base))
@@ -914,12 +919,12 @@ public class MergeRulesTool implements IMcpTool
         {
             if (isSameTarget(base, file))
             {
-                // For a bare xml the write replaces exactly the document that was parsed, so the
-                // codec's own digest of those bytes is both exact and window-free. For an ARCHIVE
-                // the write replaces the whole file, so the whole file is what must not change:
-                // one digest then covers the entry, its name and metadata, the archive comment,
-                // the entries beside it and every structural detail this code does not model.
-                targetDigestAsRead = zipped ? wholeFileDigest(file) : document.sourceDigest();
+                // The codec's own digest of the very bytes it parsed. Reopening the path here
+                // instead would leave a window: a writer that replaced the archive between the
+                // parse and the digest would be snapshotted as the NEW file while this call
+                // still held the OLD rules, and the confirm point would then wave through a
+                // write that discards it. Off the parsed bytes there is no such instant.
+                targetDigestAsRead = document.sourceDigest();
             }
             else
             {
@@ -929,8 +934,7 @@ public class MergeRulesTool implements IMcpTool
                 // unparseable leaves the digest null, and the attribute check stands alone.
                 try
                 {
-                    MergeRulesDocument onDisk = MergeRulesCodec.read(file);
-                    targetDigestAsRead = zipped ? wholeFileDigest(file) : onDisk.sourceDigest();
+                    targetDigestAsRead = MergeRulesCodec.read(file).sourceDigest();
                 }
                 catch (IOException | MergeRulesFormatException notComparable) // NOSONAR: see above
                 {
@@ -945,6 +949,23 @@ public class MergeRulesTool implements IMcpTool
         if (sidecars != null)
         {
             return sidecars;
+        }
+        // AFTER the sidecar refusal, and that order is the point: this streams the whole
+        // archive, and a container that can never reach consent must not pay for a read of a
+        // multi-gigabyte neighbour first. Everything above it is bounded.
+        if (targetAsRead != null && zipped)
+        {
+            targetArchiveDigestAsRead = wholeFileDigest(file);
+            if (targetArchiveDigestAsRead == null)
+            {
+                // Fail CLOSED. The alternative is a rewrite guarded by size and timestamps
+                // alone - exactly the residue the digest exists for - and the caller cannot
+                // see that its protection quietly dropped to that.
+                return ToolResult.error("Nothing was written: " + file //$NON-NLS-1$
+                    + " could not be read to fingerprint it, so this call cannot tell later " //$NON-NLS-1$
+                    + "whether the archive changed under it. Retry once the file is readable.") //$NON-NLS-1$
+                    .toJson();
+            }
         }
 
         List<RequestedDecision> requested = new ArrayList<>();
@@ -1160,7 +1181,8 @@ public class MergeRulesTool implements IMcpTool
             // answers without a prompt still leaves the whole interval above - the read, the
             // parse, the comparison's BM read - for a foreign writer to land in, and a check that
             // ran only at the Ask level would guard the slow path and leave the fast one open.
-            String changed = targetChangedRefusal(file, targetAsRead, targetDigestAsRead, zipped);
+            String changed = targetChangedRefusal(file, targetAsRead, targetDigestAsRead,
+                targetArchiveDigestAsRead);
             if (changed != null)
             {
                 return changed;
@@ -1409,7 +1431,7 @@ public class MergeRulesTool implements IMcpTool
     }
 
     private static String targetChangedRefusal(Path file, BasicFileAttributes asRead,
-        String digestAsRead, boolean zipped)
+        String digestAsRead, String archiveDigestAsRead)
     {
         String observed;
         try
@@ -1423,15 +1445,20 @@ public class MergeRulesTool implements IMcpTool
             {
                 observed = "its size or timestamps are not those of the file that was read"; //$NON-NLS-1$
             }
-            else if (digestAsRead != null && !digestAsRead.equals(zipped
-                ? wholeFileDigest(file)
-                : currentDocumentDigest(file)))
+            else if (digestAsRead != null && !digestAsRead.equals(currentDocumentDigest(file)))
             {
                 // The residue the attributes cannot see: same length, both instants preserved or
                 // restored. Reached only when every attribute still matches, so it costs one read
                 // of a file this call has already read - and it turns "a writer would have stamped
                 // the mtime" from an assumption into something the code checked.
                 observed = "its content is not the content that was read"; //$NON-NLS-1$
+            }
+            else if (archiveDigestAsRead != null && !archiveDigestAsRead.equals(wholeFileDigest(file)))
+            {
+                // Reached with the RULES unchanged: what moved is the archive around them - the
+                // entry name or its metadata, the archive comment, an entry beside it. The write
+                // replaces the whole file, so it would take that with it.
+                observed = "the archive around it is not the archive that was read"; //$NON-NLS-1$
             }
             else
             {

@@ -5627,4 +5627,124 @@ public class MergeRulesToolTest
             + System.getProperty("user.dir")); //$NON-NLS-1$
         return null; // unreachable
     }
+
+    /**
+     * The archive repacked around rules that did NOT change. Every attribute still matches - same
+     * size, the modification instant put back - and the merge-settings entry is byte-identical, so
+     * the content digest sees nothing. What moved is the archive AROUND the rules, and the write
+     * replaces the whole file, so it would take that with it.
+     *
+     * @throws IOException when the fixture cannot be written or read back
+     */
+    @Test
+    public void testAnArchiveRepackedAroundUnchangedRulesIsStillRefused() throws IOException
+    {
+        Path archive = file("repacked-around-the-rules.zip"); //$NON-NLS-1$
+        writeArchiveWithEntryComment(archive, "kept by hand"); //$NON-NLS-1$
+        long sizeAsSeeded = Files.size(archive);
+        FileTime asSeeded = Files.getLastModifiedTime(archive);
+        AtomicReference<Long> sizeTheWriterLeft = new AtomicReference<>();
+        MergeRulesTool tool = new MergeRulesTool(
+            id -> Optional.of(authority("cmp-7", EVERY_RULE)), (title, preview) -> { //$NON-NLS-1$
+                try
+                {
+                    // The same entry bytes under the same name, and a comment of the same LENGTH:
+                    // the file differs, its size does not.
+                    writeArchiveWithEntryComment(archive, "kept by hend"); //$NON-NLS-1$
+                    Files.setLastModifiedTime(archive, asSeeded);
+                    sizeTheWriterLeft.set(Long.valueOf(Files.size(archive)));
+                }
+                catch (IOException e)
+                {
+                    // The seam cannot declare IOException, and a failure to model the writer must
+                    // fail the test rather than leave the refusal under test unreachable.
+                    throw new UncheckedIOException(e);
+                }
+                return DestructiveConsentGate.ConsentDecision.ALLOW;
+            });
+
+        String result = tool.execute(params("mode", "write", "filePath", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", archive.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("the setup has to leave the SIZE identical, or the size clause decides this " //$NON-NLS-1$
+            + "and the archive digest pins nothing", Long.valueOf(sizeAsSeeded), //$NON-NLS-1$
+            sizeTheWriterLeft.get());
+        assertErrorNaming(result, "changed while consent", "the archive around it"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The half that matters: the refusal is worth nothing if the write had already happened.
+        assertEquals("the writer's archive must survive the refusal", "kept by hend", //$NON-NLS-1$ //$NON-NLS-2$
+            entryCommentOf(archive));
+    }
+
+    /**
+     * The control that keeps the clause narrow: the same archive, with NOTHING touching it while
+     * consent is asked, must still write - entry comment and all, which this tool discloses as
+     * lost rather than refusing. A comparison that refused every archive rewrite would pass the
+     * test above and take away the update path the guide documents.
+     *
+     * @throws IOException when the fixture cannot be written or read back
+     */
+    @Test
+    public void testAnUntouchedArchiveWithAnArchiveCommentStillWrites() throws IOException
+    {
+        Path archive = file("untouched-with-a-comment.zip"); //$NON-NLS-1$
+        writeArchiveWithEntryComment(archive, "kept by hand"); //$NON-NLS-1$
+        MergeRulesTool tool = tool(
+            id -> Optional.of(authority("cmp-7", EVERY_RULE))); //$NON-NLS-1$
+
+        String result = tool.execute(params("mode", "write", "filePath", archive.toString(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "basedOn", archive.toString(), //$NON-NLS-1$
+            "decisions", "[{\"path\":[],\"rule\":\"DoNotMerge\"}]")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("expected a report, got a refusal:" + System.lineSeparator() + result, //$NON-NLS-1$
+            result.trim().startsWith("{")); //$NON-NLS-1$
+        assertEquals("the rewrite still produces the single addressed entry", //$NON-NLS-1$
+            List.of(ENTRY_ID + ".xml"), zipEntryNames(archive)); //$NON-NLS-1$
+    }
+
+    /**
+     * An archive whose merge-settings ENTRY carries a comment, with a fixed entry instant so
+     * that two calls differ in that comment alone.
+     * <p>
+     * The entry comment and not the ARCHIVE comment: a container comment makes this tool refuse
+     * a same-path rewrite outright, so the write under test would never be reached. An entry
+     * comment is disclosed as lost instead, which leaves the rewrite allowed - and it lives in
+     * the central directory, so a same-length change moves the file's bytes and not its size.
+     * </p>
+     *
+     * @param archive the file to write
+     * @param entryComment the comment to put on the merge-settings entry
+     * @throws IOException when it cannot be written
+     */
+    private static void writeArchiveWithEntryComment(Path archive, String entryComment)
+        throws IOException
+    {
+        try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(archive)))
+        {
+            ZipEntry entry = new ZipEntry(ENTRY_ID + ".xml"); //$NON-NLS-1$
+            entry.setComment(entryComment);
+            // Fixed, not "now": a fresh instant per call would make every repack differ and the
+            // control test below would be pinning the clock rather than the comment.
+            entry.setTime(1_600_000_000_000L);
+            out.putNextEntry(entry);
+            out.write(FIXTURE.getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+    }
+
+    /**
+     * The comment on the merge-settings entry as it is on disk now.
+     *
+     * @param archive the file to read
+     * @return the entry comment, or {@code null} when it carries none
+     * @throws IOException when it cannot be read
+     */
+    private static String entryCommentOf(Path archive) throws IOException
+    {
+        try (ZipFile zip = new ZipFile(archive.toFile()))
+        {
+            ZipEntry entry = zip.getEntry(ENTRY_ID + ".xml"); //$NON-NLS-1$
+            return entry == null ? null : entry.getComment();
+        }
+    }
 }
