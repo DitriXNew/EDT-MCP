@@ -20,15 +20,43 @@ def _exception_breakpoints(project_filter=None):
 
 
 def _restore(original):
+    """Puts the workspace back and PROVES it, returning a problem description or None.
+
+    A restoring call can fail like any other (the factory or a reflective setter going away is
+    exactly the kind of breakage this suite exists to catch), and an unchecked cleanup would then
+    delete the workspace's own exception breakpoint and still report a green test. The caller
+    raises on the returned message once the body has finished, so a real failure in the body is
+    still the one that surfaces.
+    """
     _delete_exception_breakpoints()
     if not original:
-        return
+        return None
     params = {"enabled": True}
+    wanted_message = None
     if not original[0].get("catchAllExceptions") and "exceptionMessage" in original[0]:
-        params["exceptionMessage"] = original[0]["exceptionMessage"]
-    call("set_error_breakpoint", params)
-    if original[0].get("enabled") is False:
-        call("set_error_breakpoint", {"enabled": False})
+        wanted_message = original[0]["exceptionMessage"]
+        params["exceptionMessage"] = wanted_message
+    recreated = call("set_error_breakpoint", params)
+    if recreated.is_error or recreated.rpc_error:
+        return "restoring the pre-existing exception breakpoint failed: %r" % (recreated.error_text(),)
+    wanted_enabled = original[0].get("enabled") is not False
+    if not wanted_enabled:
+        disabled = call("set_error_breakpoint", {"enabled": False})
+        if disabled.is_error or disabled.rpc_error:
+            return "restoring the disabled state failed: %r" % (disabled.error_text(),)
+
+    # Read it back: the calls answering OK is not the same observation as the workspace holding
+    # what it held before.
+    restored = _exception_breakpoints()
+    if len(restored) != 1:
+        return "restore left %d exception breakpoints, expected exactly 1" % len(restored)
+    if restored[0].get("enabled") is not wanted_enabled:
+        return "restored breakpoint has enabled=%r, expected %r" % (
+            restored[0].get("enabled"), wanted_enabled)
+    if restored[0].get("exceptionMessage") != wanted_message:
+        return "restored breakpoint has exceptionMessage=%r, expected %r" % (
+            restored[0].get("exceptionMessage"), wanted_message)
+    return None
 
 
 def _delete_exception_breakpoints():
@@ -161,7 +189,9 @@ def test_create_update_disable_and_reenable_workspace_error_breakpoint():
         if "exceptionMessage" in mine[0]:
             raise AssertionError("cleared exception-message filter is still listed: %r" % mine[0])
     finally:
-        _restore(original)
+        restore_problem = _restore(original)
+    if restore_problem:
+        raise AssertionError(restore_problem)
     assert_no_diff("workspace-wide error-breakpoint changes must not modify project source")
 
 
