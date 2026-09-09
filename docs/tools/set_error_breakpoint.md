@@ -1,0 +1,37 @@
+# set_error_breakpoint
+
+Create, update, enable, or disable the workspace-wide BSL break-on-error breakpoint. Full parameters and examples: call get_tool_guide('set_error_breakpoint').
+
+## Parameters
+| Parameter | Required | Type | Description |
+| --- | --- | --- | --- |
+| enabled | yes | boolean | True creates/enables the workspace-wide breakpoint; false disables it while preserving its filter. To delete it, call remove_breakpoint with its breakpointId |
+| exceptionMessage | — | string | Omit to keep an existing filter (or create catch-all when none exists); pass an empty string to catch all exceptions; non-empty text is forwarded verbatim to the platform's break-on-error filter as a message template, so pass a distinctive message fragment |
+
+`breakpointIds` lists the marker id of EVERY exception breakpoint this call configured - normally one. A workspace can already hold several (legacy state); all of them are configured together, and `breakpointId` names only the first, so deleting the whole setting means removing every id in `breakpointIds`. The list is returned by this tool itself, so the cleanup does not depend on `list_breakpoints` being enabled in your toolset. The list is reported on the DISABLE path too, and `configuredCount` says how many breakpoints were touched - larger than the list only when one of them has no marker to name. The filter fields (`catchAllExceptions` / `exceptionMessage`) are reported only when every touched breakpoint carries the SAME filter; when legacy duplicates disagree they are omitted rather than described by one member.
+
+## Guide
+Controls EDT's workspace-wide BSL break-on-error breakpoint. It is deliberately scriptable so an unattended regression run can switch break-on-error off before the run, avoid stopping on every exception, and switch it back on afterward.
+
+## When to use
+- Disable a Break on Error setting that would otherwise suspend an unattended test or regression run on every exception.
+- Restore break-on-error after the unattended run completes.
+- Limit suspension to exceptions whose message matches a known filter.
+
+## Parameter details
+- `enabled` (required) - True creates/enables the workspace-wide breakpoint; false disables it while preserving its filter. To delete it, pass every id in `breakpointIds` to `remove_breakpoint` - and note that a breakpoint the platform recognises by interface alone has no marker and therefore no id at all: `configuredCount` counts it, nothing can address it through this tool, and it is removed in EDT's Breakpoints view.
+- `exceptionMessage` - Omit to keep an existing filter (or create catch-all when none exists); pass an empty string to catch all exceptions; non-empty text is forwarded verbatim to the platform's break-on-error filter as a message template, so pass a distinctive message fragment.
+
+## What you get
+JSON with `action` (`created`, `updated`, `disabled`, or `notFound`), `enabled`, and `workspaceWide: true`. An enabled result also includes `catchAllExceptions` and `exceptionMessage` when configured, and `breakpointId` when the affected breakpoint HAS a marker to name it by - a workspace can hold one the platform recognises by interface with no marker, and the field is omitted there rather than filled with a number `remove_breakpoint` would reject. `configuredCount` and the warning describe that case, so read `breakpointIds` rather than assuming the singular field is present. A disabled result includes `disabledCount`.
+
+## Notes & gotchas
+- This setting is **workspace-wide**, not per project. EDT attaches the exception breakpoint to the workspace root and exposes no project scope, so this tool intentionally has no `projectName` parameter.
+- `enabled=false` disables every registered BSL exception breakpoint without deleting its marker or message filter, and succeeds with `action: "notFound"` when none exists.
+- Omitting `exceptionMessage` always keeps an existing filter, regardless of whether the breakpoint is currently enabled or disabled. Pass `exceptionMessage: ""` to clear that filter and catch all exceptions.
+- To delete the saved configuration outright, pass EVERY id in `breakpointIds` to `remove_breakpoint` - normally one, but where a workspace holds legacy duplicates `breakpointId` alone leaves the others configured and breaking on error.
+- Creating a breakpoint requires EDT's OSGi `IBslBreakpointFactory` service. If that service is unavailable, the tool reports the exact service name and does not fake success.
+- The unattended-run pattern is `set_error_breakpoint(enabled=false)` -> run the regression -> `set_error_breakpoint(enabled=true)`, and the final call keeps the breakpoint's previous catch-all or message-filter configuration without requiring it again. It does NOT restore the workspace as it was, so branch on what the disable call answered: `action: "notFound"` means there was nothing enabled to begin with, and re-enabling would CREATE a catch-all breakpoint that was never there. Enable again only when the disable call reported `action: "disabled"`; `list_breakpoints` before the run records the per-entry state if you need to restore more precisely than that.
+
+---
+*Generated from the live MCP server (`get_tool_guide`) by `docs/generate_tool_docs.py`. Do not edit this file. Edit the tool's description/schema in its Java source and its guide body in `mcp/bundles/com.ditrix.edt.mcp.server/guides/<tool>.md`.*

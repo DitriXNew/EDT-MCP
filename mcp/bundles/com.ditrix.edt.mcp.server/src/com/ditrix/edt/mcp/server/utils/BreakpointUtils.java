@@ -7,7 +7,13 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.eclipse.core.resources.IFile;
@@ -21,6 +27,9 @@ import org.eclipse.debug.core.IBreakpointManager;
 import org.eclipse.debug.core.model.IBreakpoint;
 import org.eclipse.debug.core.model.ILineBreakpoint;
 import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.FrameworkUtil;
+import org.osgi.framework.ServiceReference;
 
 import com.ditrix.edt.mcp.server.Activator;
 
@@ -55,6 +64,38 @@ public final class BreakpointUtils
      * restrictions on the {@code internal.*} package.
      */
     private static final String BSL_DEBUG_CORE_BUNDLE = "com._1c.g5.v8.dt.debug.core"; //$NON-NLS-1$
+
+    /** Exported EDT service interface used to create workspace-wide exception breakpoints. */
+    public static final String BSL_BREAKPOINT_FACTORY_SERVICE =
+        "com._1c.g5.v8.dt.debug.core.model.breakpoints.IBslBreakpointFactory"; //$NON-NLS-1$
+
+    /** EDT marker type for a workspace-wide BSL exception breakpoint. */
+    public static final String BSL_EXCEPTION_BREAKPOINT_MARKER =
+        "com._1c.g5.v8.dt.debug.core.bslExceptionBreakpointMarker"; //$NON-NLS-1$
+
+    /** EDT marker attributes used when an older breakpoint implementation lacks public setters. */
+    public static final String CONDITION_ATTRIBUTE =
+        "com._1c.g5.v8.dt.debug.core.condition"; //$NON-NLS-1$
+    public static final String HIT_COUNT_ATTRIBUTE =
+        "com._1c.g5.v8.dt.debug.core.hitCount"; //$NON-NLS-1$
+    public static final String HIT_CONDITION_ATTRIBUTE =
+        "com._1c.g5.v8.dt.debug.core.hitCondition"; //$NON-NLS-1$
+
+    /**
+     * Exception-breakpoint marker attributes, spelled exactly as the platform declares them in
+     * {@code IBslExceptionBreakpoint} ({@code ALL_EXCEPTIONS} / {@code EXCEPTION_MESSAGE}). The
+     * flag's id deliberately does NOT mirror its setter {@code setCatchAllExceptions}.
+     */
+    public static final String ALL_EXCEPTIONS_ATTRIBUTE =
+        "com._1c.g5.v8.dt.debug.core.allExceptions"; //$NON-NLS-1$
+    public static final String EXCEPTION_MESSAGE_ATTRIBUTE =
+        "com._1c.g5.v8.dt.debug.core.exceptionMessage"; //$NON-NLS-1$
+
+    private static final String DEFAULT_HIT_CONDITION = "EQUALS"; //$NON-NLS-1$
+
+    private static final List<String> VALID_HIT_CONDITIONS = Collections.unmodifiableList(
+        java.util.Arrays.asList(DEFAULT_HIT_CONDITION, "EQUAL_OR_LESS", //$NON-NLS-1$
+            "EQUAL_OR_HIGHER", "MULTIPLIER")); //$NON-NLS-1$ //$NON-NLS-2$
 
     /** Candidate fully-qualified class names for the BSL line breakpoint. */
     private static final String[] BSL_BREAKPOINT_CLASSES = {
@@ -173,6 +214,575 @@ public final class BreakpointUtils
         bpManager.addBreakpoint(fallback);
         fallback.registered = true;
         return fallback;
+    }
+
+    /**
+     * Finds the first registered line breakpoint at the exact resource and 1-based line.
+     * Reusing it is important when a caller changes a condition: EDT expects one breakpoint
+     * per source position, and creating another would leave two independently firing markers.
+     *
+     * @return the existing breakpoint, or {@code null} when the position is unused
+     */
+    public static IBreakpoint findLineBreakpoint(IFile file, int lineNumber) throws Exception
+    {
+        List<IBreakpoint> found = findLineBreakpoints(file, lineNumber);
+        return found.isEmpty() ? null : found.get(0);
+    }
+
+    /**
+     * Every BSL line breakpoint registered at the exact resource and 1-based line.
+     * <p>
+     * More than one can exist on an upgraded workspace: an earlier build of {@code set_breakpoint}
+     * created a new marker on every call instead of reusing the one already there. Configuring
+     * only the first would leave a legacy duplicate firing unconditionally and quietly defeat the
+     * condition the caller just asked for, so the caller configures them ALL.
+     *
+     * @param file the module file
+     * @param lineNumber the 1-based line
+     * @return the matching BSL breakpoints, in registration order; never {@code null}
+     * @throws Exception when a breakpoint cannot be inspected
+     */
+    public static List<IBreakpoint> findLineBreakpoints(IFile file, int lineNumber) throws Exception
+    {
+        List<IBreakpoint> found = new ArrayList<>();
+        IBreakpointManager bpManager = DebugPlugin.getDefault().getBreakpointManager();
+        for (IBreakpoint bp : bpManager.getBreakpoints())
+        {
+            if (!(bp instanceof ILineBreakpoint))
+            {
+                continue;
+            }
+            // Only a BSL breakpoint may be reused. Another Eclipse debug model can hold a line
+            // breakpoint on the very same file and line; writing BSL condition attributes into it
+            // would hijack a foreign breakpoint and leave the BSL session with none at that line,
+            // while the answer said "updated".
+            if (!isBslLineBreakpoint(bp))
+            {
+                continue;
+            }
+            IMarker marker = bp.getMarker();
+            if (marker != null && file.equals(marker.getResource())
+                && ((ILineBreakpoint)bp).getLineNumber() == lineNumber)
+            {
+                found.add(bp);
+            }
+        }
+        return found;
+    }
+
+    /**
+     * Reports whether a line breakpoint belongs to EDT's BSL debug model (or to this plugin's own
+     * degraded stand-in, which reports the same model id).
+     *
+     * @param breakpoint the candidate breakpoint
+     * @return {@code true} when the breakpoint is a BSL one
+     */
+    public static boolean isBslLineBreakpoint(IBreakpoint breakpoint)
+    {
+        if (!(breakpoint instanceof ILineBreakpoint))
+        {
+            return false;
+        }
+        try
+        {
+            return BSL_MODEL_ID.equals(breakpoint.getModelIdentifier());
+        }
+        catch (RuntimeException e) // NOSONAR a breakpoint we cannot identify is not ours
+        {
+            return false;
+        }
+    }
+
+    /** Returns the four literals accepted by EDT's hit-condition enum. */
+    public static String[] getValidHitConditions()
+    {
+        return VALID_HIT_CONDITIONS.toArray(new String[0]);
+    }
+
+    /** Headless-testable validation for EDT's exact, case-sensitive hit-condition literals. */
+    public static boolean isValidHitCondition(String value)
+    {
+        return VALID_HIT_CONDITIONS.contains(value);
+    }
+
+    /**
+     * Applies line-breakpoint options through the native breakpoint object's public interface
+     * methods, resolved on the instance so this bundle does not import EDT's breakpoint package.
+     * A missing individual method falls back to the corresponding verified marker attribute.
+     * Marker-only degraded breakpoints deliberately accept none of these options.
+     *
+     * @param breakpoint the native or degraded breakpoint
+     * @param condition condition text; {@code null} and blank both clear it
+     * @param hitCount positive count, or a non-positive value to clear it
+     * @param hitCondition one of {@link #getValidHitConditions()}; normally {@code EQUALS}
+     * @return details needed to report whether marker-attribute fallback was used
+     */
+    public static LineBreakpointConfiguration configureLineBreakpoint(IBreakpoint breakpoint,
+        String condition, int hitCount, String hitCondition) throws Exception
+    {
+        if (breakpoint instanceof MarkerOnlyBreakpoint)
+        {
+            return LineBreakpointConfiguration.notApplied();
+        }
+        return configureLineBreakpoint(breakpoint, breakpoint.getMarker(), condition, hitCount,
+            hitCondition);
+    }
+
+    /**
+     * The same, with the marker the caller ALREADY read.
+     * <p>
+     * A caller that has recorded this breakpoint as one it is about to change must not have the
+     * marker looked up a second time here: that second read can throw before any setter runs, and
+     * the failure then reports a breakpoint as begun-changing whose state was never touched.
+     * </p>
+     *
+     * @param breakpoint the native or degraded breakpoint
+     * @param marker the marker already read for this breakpoint
+     * @param condition condition text; {@code null} and blank both clear it
+     * @param hitCount positive count, or a non-positive value to clear it
+     * @param hitCondition one of {@link #getValidHitConditions()}; normally {@code EQUALS}
+     * @return details needed to report whether marker-attribute fallback was used
+     * @throws Exception if a setter or its marker-attribute fallback fails
+     */
+    public static LineBreakpointConfiguration configureLineBreakpoint(IBreakpoint breakpoint,
+        IMarker marker, String condition, int hitCount, String hitCondition) throws Exception
+    {
+        if (breakpoint instanceof MarkerOnlyBreakpoint)
+        {
+            return LineBreakpointConfiguration.notApplied();
+        }
+        List<String> markerFallbacks = new ArrayList<>();
+        setStringOption(breakpoint, marker, "setCondition", CONDITION_ATTRIBUTE, //$NON-NLS-1$
+            condition == null ? "" : condition, "condition", markerFallbacks); //$NON-NLS-1$ //$NON-NLS-2$
+        setIntegerOption(breakpoint, marker, "setHitCount", HIT_COUNT_ATTRIBUTE, //$NON-NLS-1$
+            hitCount > 0 ? hitCount : -1, "hitCount", markerFallbacks); //$NON-NLS-1$
+        setEnumOption(breakpoint, marker, "setHitCondition", HIT_CONDITION_ATTRIBUTE, //$NON-NLS-1$
+            hitCondition == null ? DEFAULT_HIT_CONDITION : hitCondition,
+            "hitCondition", markerFallbacks); //$NON-NLS-1$
+        return LineBreakpointConfiguration.appliedWith(markerFallbacks);
+    }
+
+    /**
+     * Reads the line options actually held by the breakpoint, using the native getters first and
+     * their verified marker attributes only when a getter is absent. Unset values are omitted.
+     */
+    public static Map<String, Object> readLineBreakpointConfiguration(IBreakpoint breakpoint,
+        IMarker marker) throws Exception
+    {
+        Map<String, Object> configured = new LinkedHashMap<>();
+        Object condition = getOption(breakpoint, marker, "getCondition", CONDITION_ATTRIBUTE); //$NON-NLS-1$
+        if (condition != null && !condition.toString().isEmpty())
+        {
+            configured.put("condition", condition.toString()); //$NON-NLS-1$
+        }
+
+        Object rawHitCount = getOption(breakpoint, marker, "getHitCount", HIT_COUNT_ATTRIBUTE); //$NON-NLS-1$
+        int hitCount = rawHitCount instanceof Number ? ((Number)rawHitCount).intValue() : -1;
+        if (hitCount > 0)
+        {
+            configured.put("hitCount", hitCount); //$NON-NLS-1$
+            Object rawHitCondition = getOption(breakpoint, marker, "getHitCondition", //$NON-NLS-1$
+                HIT_CONDITION_ATTRIBUTE);
+            String hitCondition = enumName(rawHitCondition);
+            configured.put("hitCondition", hitCondition == null ? DEFAULT_HIT_CONDITION : hitCondition); //$NON-NLS-1$
+        }
+        return configured;
+    }
+
+    /**
+     * Creates, updates, enables, or disables the single workspace-wide BSL exception breakpoint.
+     * A {@code null} message preserves an existing filter, an empty message explicitly selects
+     * catch-all, and non-empty text replaces the filter; creating with no message is catch-all.
+     * The factory is looked up by its interface NAME in the OSGi service registry and is
+     * released after creation; no EDT debug-breakpoint type is linked at compile time.
+     */
+    public static ExceptionBreakpointChange setExceptionBreakpoint(boolean enabled,
+        String exceptionMessage) throws Exception
+    {
+        DebugPlugin debugPlugin = DebugPlugin.getDefault();
+        if (debugPlugin == null)
+        {
+            throw new IllegalStateException("DebugPlugin is unavailable; start this tool inside a running EDT workbench"); //$NON-NLS-1$
+        }
+        IBreakpointManager manager = debugPlugin.getBreakpointManager();
+        List<IBreakpoint> existing = findExceptionBreakpoints(manager);
+        if (!enabled)
+        {
+            TouchedBreakpoints begun = new TouchedBreakpoints();
+            for (IBreakpoint breakpoint : existing)
+            {
+                try
+                {
+                    // Inside the guard, because getMarker() itself can throw on a stale marker
+                    // - isExceptionBreakpoint admits such a breakpoint through its interface
+                    // fallback - and outside it that throw would escape carrying nothing.
+                    begun.add(breakpoint);
+                    breakpoint.setEnabled(false);
+                }
+                catch (Exception failure)
+                {
+                    throw new PartialExceptionUpdateException(begun, failure);
+                }
+            }
+            // The reporting re-reads every marker, and one that went stale AFTER its setter
+            // succeeded throws here - past the loop, where nothing would carry the ids of the
+            // breakpoints this call has already changed.
+            try
+            {
+                return ExceptionBreakpointChange.disabled(existing.size(), begun.ids);
+            }
+            catch (Exception reportingFailure)
+            {
+                throw new PartialExceptionUpdateException(begun, reportingFailure);
+            }
+        }
+
+        boolean updateFilter = exceptionMessage != null;
+        boolean catchAll = exceptionMessage == null || exceptionMessage.isEmpty();
+        String configuredMessage = catchAll ? null : exceptionMessage;
+        if (!existing.isEmpty())
+        {
+            TouchedBreakpoints begun = new TouchedBreakpoints();
+            for (IBreakpoint breakpoint : existing)
+            {
+                try
+                {
+                    // Recorded BEFORE the mutation and INSIDE the guard: a member that throws
+                    // halfway may already carry the new filter, so the fully done ones alone
+                    // would hide the very entry the caller has to look at - and getMarker()
+                    // itself can throw on a stale marker, which outside the guard would escape
+                    // carrying nothing.
+                    begun.add(breakpoint);
+                    if (updateFilter)
+                    {
+                        configureExceptionBreakpoint(breakpoint, catchAll, configuredMessage);
+                    }
+                    breakpoint.setEnabled(true);
+                }
+                catch (Exception failure)
+                {
+                    throw new PartialExceptionUpdateException(begun, failure);
+                }
+            }
+            // Every one of them was configured, and the caller is told so: a workspace that
+            // holds several (legacy state) is not served by an answer naming one id, since
+            // removing that id would leave the others breaking on error.
+            //
+            // Guarded for the same reason as the disable path: describe() reads the markers
+            // again, and a marker that went stale after its setter succeeded would throw past
+            // the loop, taking the ids of everything already changed with it.
+            try
+            {
+                return describe("updated", existing.get(0), existing, begun.ids); //$NON-NLS-1$
+            }
+            catch (Exception reportingFailure)
+            {
+                throw new PartialExceptionUpdateException(begun, reportingFailure);
+            }
+        }
+
+        IBreakpoint created = createExceptionBreakpointFromService(configuredMessage);
+        // BEFORE the configuration, the enable and the registration - not after them. Read
+        // afterwards, a marker that went stale in between would take the id of a breakpoint
+        // this call really did create, and the failure would name nothing.
+        IMarker createdMarker = created.getMarker();
+        List<Long> createdIds =
+            createdMarker == null ? List.of() : List.of(Long.valueOf(createdMarker.getId()));
+        try
+        {
+            configureExceptionBreakpoint(created, catchAll, configuredMessage);
+            created.setEnabled(true);
+            manager.addBreakpoint(created);
+            return describe("created", created, List.of(created), createdIds); //$NON-NLS-1$
+        }
+        catch (Exception e)
+        {
+            try
+            {
+                created.delete();
+            }
+            catch (Exception cleanupFailure)
+            {
+                e.addSuppressed(cleanupFailure);
+            }
+            throw e;
+        }
+    }
+
+    /** True for EDT's workspace-root BSL exception breakpoint marker/interface. */
+    public static boolean isExceptionBreakpoint(IBreakpoint breakpoint)
+    {
+        if (breakpoint == null)
+        {
+            return false;
+        }
+        try
+        {
+            IMarker marker = breakpoint.getMarker();
+            if (marker != null && BSL_EXCEPTION_BREAKPOINT_MARKER.equals(marker.getType()))
+            {
+                return true;
+            }
+        }
+        catch (Exception e)
+        {
+            // Fall through to the interface-name check; a stale marker may be inaccessible.
+        }
+        return implementsInterfaceNamed(breakpoint.getClass(),
+            "com._1c.g5.v8.dt.debug.core.model.breakpoints.IBslExceptionBreakpoint"); //$NON-NLS-1$
+    }
+
+    /**
+     * Describes an exception breakpoint from its MARKER, after the write, never from what the
+     * caller asked for.
+     * <p>
+     * The reason is a defect this code had: the answer echoed the request, so a setter whose
+     * effect never reached the marker was still reported as applied - "the filter is cleared"
+     * while the filter was still there. An answer computed from the request cannot fail; an
+     * answer read back can, and that is the point.
+     *
+     * @param action what happened, {@code created} or {@code updated}
+     * @param breakpoint the registered exception breakpoint
+     * @return the change carrying the state the marker actually holds
+     * @throws Exception when the marker cannot be read
+     */
+    private static ExceptionBreakpointChange describe(String action, IBreakpoint breakpoint,
+        List<IBreakpoint> configured, List<Long> ids) throws Exception
+    {
+        // NOT re-read here: the ids come from the caller, which captured them while it was
+        // mutating. Re-reading a marker that went stale since would throw before the agreement
+        // could be downgraded, and the reporting guard would answer with a partial-update error
+        // for a mutation that completed in full.
+        FilterAgreement agreement = filterAgreement(configured);
+        // The same read the agreement check just made, and it may fail the same way. Every
+        // breakpoint has already been configured and enabled by now, so letting it throw would
+        // report a failure for a mutation that happened - and would drop the ids that undo it.
+        Map<String, Object> state;
+        try
+        {
+            state = readExceptionBreakpointConfiguration(breakpoint.getMarker());
+        }
+        catch (Exception unreadable) // NOSONAR: see above
+        {
+            // The AGREEMENT goes with it, and that is the half that matters: an empty state
+            // under a SAME verdict is reported as a real filter - "catches everything, no
+            // message" - by a read that never happened. Nothing was established here, so the
+            // answer says so and the caller gets the unverified warning instead of a fiction.
+            state = Map.of();
+            agreement = FilterAgreement.UNVERIFIED;
+        }
+        Object message = state.get("exceptionMessage"); //$NON-NLS-1$
+        String storedMessage = message == null || message.toString().isEmpty()
+            ? null
+            : message.toString();
+        return ExceptionBreakpointChange.enabled(action, breakpoint,
+            Boolean.TRUE.equals(state.get("catchAllExceptions")), storedMessage, ids, //$NON-NLS-1$
+            configured.size(), agreement);
+    }
+
+
+    /** What a read-back could establish about the filters of the affected breakpoints. */
+    public enum FilterAgreement
+    {
+        /** Every affected breakpoint carries the same filter. */
+        SAME,
+        /** They carry different filters - the set has no single filter to report. */
+        DIFFERENT,
+        /** At least one could not be read back, so nothing about the set is established. */
+        UNVERIFIED
+    }
+
+    /**
+     * A mutation of several exception breakpoints that failed after touching some of them.
+     * <p>
+     * Carries their marker ids, because nothing withdraws them: the members the loop reached
+     * keep whatever the setters managed to write, and an error that named none of them would
+     * leave a caller without {@code list_breakpoints} unable to find what moved.
+     * </p>
+     */
+    public static class PartialExceptionUpdateException
+        extends Exception
+    {
+        private static final long serialVersionUID = 1L;
+
+        private final List<Long> changed;
+
+        private final int begun;
+
+        /**
+         * @param touched what the loop had begun changing when it failed
+         * @param cause the failure that stopped the loop
+         */
+        PartialExceptionUpdateException(TouchedBreakpoints touched, Throwable cause)
+        {
+            super(cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage(),
+                cause);
+            this.changed = List.copyOf(touched.ids);
+            this.begun = touched.begun;
+        }
+
+        /**
+         * @return the marker ids this call had begun changing
+         */
+        public List<Long> getChangedIds()
+        {
+            return changed;
+        }
+
+        /**
+         * @return how many breakpoints this call had begun changing, named or not
+         */
+        public int getBegunCount()
+        {
+            return begun;
+        }
+
+        /**
+         * Describes what was touched, counting the members that have no marker to name them by.
+         * <p>
+         * A list of ids alone would understate the damage exactly where it matters: a markerless
+         * member was changed like the others and cannot be reached by any returned id, so the
+         * caller has to be told it exists rather than left to infer it from a shorter list.
+         * </p>
+         *
+         * @return the phrase, always naming a number the caller can act on
+         */
+        public String describeTouched()
+        {
+            int unnamed = begun - changed.size();
+            if (changed.isEmpty())
+            {
+                return begun + " breakpoint(s), none of which has a marker to name it by"; //$NON-NLS-1$
+            }
+            StringBuilder ids = new StringBuilder("id(s) "); //$NON-NLS-1$
+            for (int i = 0; i < changed.size(); i++)
+            {
+                ids.append(i == 0 ? "" : ", ").append(changed.get(i)); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            return unnamed > 0
+                ? ids.append(" and ").append(unnamed) //$NON-NLS-1$
+                    .append(" more with no marker to name it by").toString() //$NON-NLS-1$
+                : ids.toString();
+        }
+    }
+
+    /**
+     * What a mutation loop has begun changing: the ids it can name, and how many members it
+     * reached in total - which is larger whenever one of them has no marker.
+     */
+    static final class TouchedBreakpoints
+    {
+        private final List<Long> ids = new ArrayList<>();
+
+        private int begun;
+
+        /**
+         * Records a breakpoint about to be mutated. Counted whether or not it can be named:
+         * a markerless member is changed like the rest and reachable by no returned id.
+         * <p>
+         * The count comes LAST, after the marker has been read. Both reads can throw on a
+         * stale marker that the interface fallback still recognises, and at that point nothing
+         * has been mutated - counting first would report a member as begun that the setters
+         * never reached, and describe it as markerless besides.
+         * </p>
+         *
+         * @param breakpoint the breakpoint about to change
+         */
+        void add(IBreakpoint breakpoint)
+        {
+            IMarker marker = breakpoint.getMarker();
+            Long id = marker == null ? null : Long.valueOf(marker.getId());
+            begun++;
+            if (id != null)
+            {
+                ids.add(id);
+            }
+        }
+    }
+
+    /**
+     * Whether every configured breakpoint carries the same filter.
+     * <p>
+     * Legacy duplicates may hold DIFFERENT filters, and an enable call that omits
+     * {@code exceptionMessage} preserves each of them - so describing the set by its first
+     * member would report "errors are filtered" while another one catches everything. When they
+     * disagree the caller is told that instead of being given one member's state as the answer.
+     * </p>
+     *
+     * @param breakpoints the configured breakpoints
+     * @return SAME, DIFFERENT, or UNVERIFIED when any member could not be read; UNVERIFIED
+     *         outranks DIFFERENT, because "nothing was established" is the weaker claim the
+     *         caller is owed when part of the set was never read
+     */
+    static FilterAgreement filterAgreement(List<IBreakpoint> breakpoints)
+    {
+        Map<String, Object> first = null;
+        boolean differ = false;
+        for (IBreakpoint each : breakpoints)
+        {
+            Map<String, Object> state;
+            try
+            {
+                // The LOOKUP is inside the guard too: getMarker() throws on a stale marker that
+                // the interface fallback still recognises, and outside it that throw would leave
+                // this call reporting a failure for breakpoints that were all configured.
+                IMarker marker = each.getMarker();
+                if (marker == null)
+                {
+                    return FilterAgreement.UNVERIFIED;
+                }
+                state = readExceptionBreakpointConfiguration(marker);
+            }
+            catch (Exception unreadable) // NOSONAR: see below
+            {
+                // Deliberately swallowed, and ONLY here: this runs after every breakpoint has
+                // already been configured and enabled, so letting a stale marker throw would
+                // report a failure for a mutation that happened - and would drop the ids the
+                // caller needs to undo it. An unreadable entry simply means the set cannot be
+                // described as uniform - and the caller is told it is UNVERIFIED rather than
+                // being left to read "the filters disagree" into a read that never happened.
+                return FilterAgreement.UNVERIFIED;
+            }
+            if (first == null)
+            {
+                first = state;
+            }
+            else if (!first.equals(state))
+            {
+                // Remembered, not returned: a later member may still be unreadable, and
+                // "nothing was established" outranks "they differ" - the caller is owed the
+                // weaker claim when part of the set was never read.
+                differ = true;
+            }
+        }
+        return differ ? FilterAgreement.DIFFERENT : FilterAgreement.SAME;
+    }
+    /** Reads the configured exception filter for list_breakpoints without linking its interface. */
+    public static Map<String, Object> readExceptionBreakpointConfiguration(IMarker marker)
+        throws Exception
+    {
+        Map<String, Object> configured = new LinkedHashMap<>();
+        // The verified public exception interface exposes setters, not a getter contract we can
+        // safely link or guess. Read the backing marker EDT actually persists instead, by the
+        // EXACT attribute ids the platform declares as IBslExceptionBreakpoint.ALL_EXCEPTIONS and
+        // .EXCEPTION_MESSAGE. Two traps this spelling avoids: the flag's id is NOT the setter's
+        // name (setCatchAllExceptions writes '...allExceptions'), and a suffix match would also
+        // answer with a foreign attribute such as 'vendor.saved.exceptionMessage', picking one or
+        // the other by map iteration order.
+        Object catchAll = markerAttribute(marker, ALL_EXCEPTIONS_ATTRIBUTE);
+        Object message = markerAttribute(marker, EXCEPTION_MESSAGE_ATTRIBUTE);
+        boolean catchesAll = catchAll instanceof Boolean
+            ? ((Boolean)catchAll).booleanValue()
+            : message == null || message.toString().isEmpty();
+        configured.put("catchAllExceptions", catchesAll); //$NON-NLS-1$
+        // An absent filter is left OUT rather than rendered as an empty string: the same rule the
+        // line-breakpoint reader follows, and the difference a caller acts on - "" would read as
+        // "there is a filter, and it matches everything".
+        if (message != null && !message.toString().isEmpty())
+        {
+            configured.put("exceptionMessage", message.toString()); //$NON-NLS-1$
+        }
+        return configured;
     }
 
     /**
@@ -320,17 +930,295 @@ public final class BreakpointUtils
         return null;
     }
 
+    private static void setStringOption(Object target, IMarker marker, String methodName,
+        String attributeName, String value, String fieldName, List<String> markerFallbacks)
+        throws Exception
+    {
+        Method method = findMethod(target.getClass(), methodName, 1);
+        if (method != null)
+        {
+            invoke(method, target, value);
+            return;
+        }
+        setMarkerAttribute(marker, attributeName, value, fieldName, markerFallbacks);
+    }
+
+    private static void setIntegerOption(Object target, IMarker marker, String methodName,
+        String attributeName, int value, String fieldName, List<String> markerFallbacks)
+        throws Exception
+    {
+        Method method = findMethod(target.getClass(), methodName, 1);
+        if (method != null)
+        {
+            invoke(method, target, Integer.valueOf(value));
+            return;
+        }
+        setMarkerAttribute(marker, attributeName, Integer.valueOf(value), fieldName, markerFallbacks);
+    }
+
+    private static void setEnumOption(Object target, IMarker marker, String methodName,
+        String attributeName, String value, String fieldName, List<String> markerFallbacks)
+        throws Exception
+    {
+        Method method = findMethod(target.getClass(), methodName, 1);
+        if (method != null)
+        {
+            Class<?> parameterType = method.getParameterTypes()[0];
+            Object enumValue = enumConstant(parameterType, value);
+            invoke(method, target, enumValue);
+            return;
+        }
+        setMarkerAttribute(marker, attributeName, value, fieldName, markerFallbacks);
+    }
+
+    private static void setMarkerAttribute(IMarker marker, String attributeName, Object value,
+        String fieldName, List<String> markerFallbacks) throws Exception
+    {
+        if (marker == null)
+        {
+            throw new IllegalStateException("Cannot apply " + fieldName //$NON-NLS-1$
+                + ": the EDT setter is absent and the breakpoint has no marker"); //$NON-NLS-1$
+        }
+        marker.setAttribute(attributeName, value);
+        markerFallbacks.add(fieldName);
+    }
+
+    private static Object getOption(Object target, IMarker marker, String methodName,
+        String attributeName) throws Exception
+    {
+        Method method = findMethod(target.getClass(), methodName, 0);
+        if (method != null)
+        {
+            return invoke(method, target);
+        }
+        return marker == null ? null : marker.getAttribute(attributeName);
+    }
+
+    private static Method findMethod(Class<?> type, String name, int parameterCount)
+    {
+        for (Method method : type.getMethods())
+        {
+            if (name.equals(method.getName()) && method.getParameterCount() == parameterCount)
+            {
+                return method;
+            }
+        }
+        return null;
+    }
+
+    private static Object invoke(Method method, Object target, Object... arguments) throws Exception
+    {
+        try
+        {
+            return method.invoke(target, arguments);
+        }
+        catch (InvocationTargetException e)
+        {
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception)
+            {
+                throw (Exception)cause;
+            }
+            throw e;
+        }
+    }
+
+    private static Object enumConstant(Class<?> enumType, String value)
+    {
+        if (!enumType.isEnum())
+        {
+            throw new IllegalStateException("EDT setHitCondition parameter is not an enum: " //$NON-NLS-1$
+                + enumType.getName());
+        }
+        for (Object constant : enumType.getEnumConstants())
+        {
+            if (value.equals(((Enum<?>)constant).name()))
+            {
+                return constant;
+            }
+        }
+        throw new IllegalArgumentException("EDT hit condition enum has no value '" + value + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static String enumName(Object value)
+    {
+        if (value instanceof Enum<?>)
+        {
+            return ((Enum<?>)value).name();
+        }
+        return value == null ? null : value.toString();
+    }
+
+    private static List<IBreakpoint> findExceptionBreakpoints(IBreakpointManager manager)
+    {
+        List<IBreakpoint> result = new ArrayList<>();
+        for (IBreakpoint breakpoint : manager.getBreakpoints())
+        {
+            if (isExceptionBreakpoint(breakpoint))
+            {
+                result.add(breakpoint);
+            }
+        }
+        return result;
+    }
+
+    private static IBreakpoint createExceptionBreakpointFromService(String exceptionMessage)
+        throws Exception
+    {
+        Bundle owner = FrameworkUtil.getBundle(BreakpointUtils.class);
+        BundleContext context = owner == null ? null : owner.getBundleContext();
+        ServiceReference<?> reference = context == null
+            ? null
+            : context.getServiceReference(BSL_BREAKPOINT_FACTORY_SERVICE);
+        if (reference == null)
+        {
+            throw new IllegalStateException(breakpointFactoryUnavailableMessage());
+        }
+        Object factory = context.getService(reference);
+        if (factory == null)
+        {
+            context.ungetService(reference);
+            throw new IllegalStateException(breakpointFactoryUnavailableMessage());
+        }
+        try
+        {
+            int parameterCount = exceptionMessage == null ? 0 : 1;
+            Method create = findMethod(factory.getClass(), "createExceptionBreakpoint", parameterCount); //$NON-NLS-1$
+            if (create == null)
+            {
+                throw new IllegalStateException("OSGi service '" + BSL_BREAKPOINT_FACTORY_SERVICE //$NON-NLS-1$
+                    + "' does not expose createExceptionBreakpoint(" //$NON-NLS-1$
+                    + (parameterCount == 0 ? "" : "String") + "); update EDT and retry"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            }
+            Object value = parameterCount == 0
+                ? invoke(create, factory)
+                : invoke(create, factory, exceptionMessage);
+            if (!(value instanceof IBreakpoint))
+            {
+                throw new IllegalStateException("OSGi service '" + BSL_BREAKPOINT_FACTORY_SERVICE //$NON-NLS-1$
+                    + "' returned a non-breakpoint from createExceptionBreakpoint; update EDT and retry"); //$NON-NLS-1$
+            }
+            return (IBreakpoint)value;
+        }
+        finally
+        {
+            context.ungetService(reference);
+        }
+    }
+
+    /** Actionable text used when EDT has not registered its breakpoint factory service. */
+    public static String breakpointFactoryUnavailableMessage()
+    {
+        return "OSGi service '" + BSL_BREAKPOINT_FACTORY_SERVICE //$NON-NLS-1$
+            + "' is unavailable. Ensure bundle '" + BSL_DEBUG_CORE_BUNDLE //$NON-NLS-1$
+            + "' is installed and active, then retry."; //$NON-NLS-1$
+    }
+
+    private static void configureExceptionBreakpoint(IBreakpoint breakpoint, boolean catchAll,
+        String exceptionMessage) throws Exception
+    {
+        Method setMessage = findMethod(breakpoint.getClass(), "setExceptionMessage", 1); //$NON-NLS-1$
+        Method setCatchAll = findMethod(breakpoint.getClass(), "setCatchAllExceptions", 1); //$NON-NLS-1$
+        if (setMessage == null || setCatchAll == null)
+        {
+            throw new IllegalStateException("EDT exception breakpoint does not expose " //$NON-NLS-1$
+                + "setExceptionMessage(String) and setCatchAllExceptions(boolean); update EDT and retry"); //$NON-NLS-1$
+        }
+        invoke(setMessage, breakpoint, exceptionMessage == null ? "" : exceptionMessage); //$NON-NLS-1$
+        invoke(setCatchAll, breakpoint, Boolean.valueOf(catchAll));
+        if (exceptionMessage == null || exceptionMessage.isEmpty())
+        {
+            clearMarkerAttribute(breakpoint.getMarker(), EXCEPTION_MESSAGE_ATTRIBUTE);
+        }
+    }
+
+    /**
+     * Removes one marker attribute that the platform setter did NOT remove.
+     * <p>
+     * Measured on EDT 2026.2: {@code setCatchAllExceptions(true)} reaches the marker, while
+     * {@code setExceptionMessage("")} - which the platform turns into a null passed to the ARRAY
+     * form of {@code setAttributes} - leaves the old filter in place. Read back after the setter,
+     * the filter was still there, so the clear is finished here through the single-attribute form.
+     * <p>
+     * The name is the platform's exact id, never a suffix: a suffix would also delete a foreign
+     * attribute such as {@code vendor.saved.exceptionMessage} that this code has no business
+     * touching.
+     *
+     * @param marker the breakpoint's marker, may be {@code null}
+     * @param attributeName the exact attribute id to remove
+     * @throws Exception when the marker cannot be read or written
+     */
+    private static void clearMarkerAttribute(IMarker marker, String attributeName)
+        throws Exception
+    {
+        if (marker == null || !marker.exists() || marker.getAttribute(attributeName) == null)
+        {
+            return;
+        }
+        marker.setAttribute(attributeName, null);
+    }
+
+    private static Object markerAttribute(IMarker marker, String attributeName) throws Exception
+    {
+        if (marker == null)
+        {
+            return null;
+        }
+        if (!marker.exists())
+        {
+            // A marker that has been DELETED answers no attributes, and answering "absent" for
+            // each of them fabricates a filter: the reader would report catch-all with no
+            // message, and the agreement would call that SAME across the set. A marker that is
+            // gone is unreadable, which is the verdict the caller can act on.
+            throw new IllegalStateException(
+                "Marker " + marker.getId() + " no longer exists"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return marker.getAttribute(attributeName);
+    }
+
+    private static boolean implementsInterfaceNamed(Class<?> type, String interfaceName)
+    {
+        if (type == null)
+        {
+            return false;
+        }
+        for (Class<?> iface : type.getInterfaces())
+        {
+            if (interfaceName.equals(iface.getName()) || implementsInterfaceNamed(iface, interfaceName))
+            {
+                return true;
+            }
+        }
+        return implementsInterfaceNamed(type.getSuperclass(), interfaceName);
+    }
+
     /**
      * Removes a breakpoint by id (marker id) on the breakpoint manager.
+     * <p>
+     * The scan is GUARDED per entry: {@code IBreakpoint} is not {@code @noimplement}, so
+     * {@code getMarker()} is code a third-party debug model writes and may throw. Unguarded, one
+     * such entry ended the loop before the wanted breakpoint was reached, and the removal failed
+     * over a breakpoint that was not even the target.
+     * </p>
      *
+     * @param markerId the marker id to remove
      * @return {@code true} if a breakpoint was removed
+     * @throws Exception if the removal itself fails
      */
     public static boolean removeBreakpointById(long markerId) throws Exception
     {
         IBreakpointManager bpManager = DebugPlugin.getDefault().getBreakpointManager();
         for (IBreakpoint bp : bpManager.getBreakpoints())
         {
-            IMarker m = bp.getMarker();
+            IMarker m;
+            try
+            {
+                m = bp.getMarker();
+            }
+            catch (Exception unreadable) // NOSONAR: an entry we cannot identify is not the target
+            {
+                continue;
+            }
             if (m != null && m.getId() == markerId)
             {
                 bpManager.removeBreakpoint(bp, true);
@@ -338,6 +1226,17 @@ public final class BreakpointUtils
             }
         }
         return false;
+    }
+
+    /**
+     * Removes one breakpoint the caller already holds - no scan, nothing else consulted.
+     *
+     * @param breakpoint the breakpoint to remove
+     * @throws Exception if the manager refuses the removal
+     */
+    public static void removeBreakpoint(IBreakpoint breakpoint) throws Exception
+    {
+        DebugPlugin.getDefault().getBreakpointManager().removeBreakpoint(breakpoint, true);
     }
 
     /**
@@ -360,6 +1259,162 @@ public final class BreakpointUtils
             }
         }
         return false;
+    }
+
+    /** Outcome of applying native line-breakpoint options. */
+    public static final class LineBreakpointConfiguration
+    {
+        private final boolean applied;
+        private final List<String> markerFallbacks;
+
+        private LineBreakpointConfiguration(boolean applied, List<String> markerFallbacks)
+        {
+            this.applied = applied;
+            this.markerFallbacks = Collections.unmodifiableList(new ArrayList<>(markerFallbacks));
+        }
+
+        public static LineBreakpointConfiguration appliedWith(List<String> markerFallbacks)
+        {
+            return new LineBreakpointConfiguration(true, markerFallbacks);
+        }
+
+        public static LineBreakpointConfiguration notApplied()
+        {
+            return new LineBreakpointConfiguration(false, Collections.emptyList());
+        }
+
+        /**
+         * Not applied - but marker attributes WERE written on the way there.
+         * <p>
+         * The mixed set needs this: a marker-only breakpoint beside a native one makes the
+         * aggregate "not applied", while the native member may still have fallen back to marker
+         * attributes. Reporting that aggregate with an empty list hid a change actually made to
+         * the workspace - the caller was told the condition did not apply, and not told where it
+         * had been written instead.
+         * </p>
+         *
+         * @param markerFallbacks the setters that fell back to marker attributes
+         * @return the configuration
+         */
+        public static LineBreakpointConfiguration notAppliedWith(List<String> markerFallbacks)
+        {
+            return new LineBreakpointConfiguration(false, markerFallbacks);
+        }
+
+        public boolean isApplied()
+        {
+            return applied;
+        }
+
+        public List<String> getMarkerFallbacks()
+        {
+            return markerFallbacks;
+        }
+    }
+
+    /** Outcome of changing the workspace-wide exception breakpoint. */
+    public static final class ExceptionBreakpointChange
+    {
+        private final String action;
+        private final IBreakpoint breakpoint;
+        private final int disabledCount;
+        private final boolean catchAll;
+        private final String exceptionMessage;
+        private final List<Long> configuredIds;
+        private final int configuredCount;
+        private final FilterAgreement filterAgreement;
+
+        private ExceptionBreakpointChange(String action, IBreakpoint breakpoint, int disabledCount,
+            boolean catchAll, String exceptionMessage, List<Long> configuredIds,
+            int configuredCount, FilterAgreement filterAgreement)
+        {
+            this.action = action;
+            this.breakpoint = breakpoint;
+            this.disabledCount = disabledCount;
+            this.catchAll = catchAll;
+            this.exceptionMessage = exceptionMessage;
+            this.configuredIds = configuredIds;
+            this.configuredCount = configuredCount;
+            this.filterAgreement = filterAgreement;
+        }
+
+        static ExceptionBreakpointChange enabled(String action, IBreakpoint breakpoint,
+            boolean catchAll, String exceptionMessage, List<Long> configuredIds,
+            int configuredCount, FilterAgreement filterAgreement)
+        {
+            return new ExceptionBreakpointChange(action, breakpoint, 0, catchAll, exceptionMessage,
+                configuredIds, configuredCount, filterAgreement);
+        }
+
+        public static ExceptionBreakpointChange disabled(int disabledCount, List<Long> ids)
+        {
+            return new ExceptionBreakpointChange(disabledCount > 0 ? "disabled" : "notFound", //$NON-NLS-1$ //$NON-NLS-2$
+                null, disabledCount, true, null, ids, disabledCount, FilterAgreement.SAME);
+        }
+
+        /**
+         * The marker ids of every workspace-wide exception breakpoint this call configured.
+         * <p>
+         * Normally one. A workspace can hold several (legacy state), and then ALL of them are
+         * configured while {@link #getBreakpoint()} names only the first - so a caller that
+         * removed that one id would leave the others breaking on error. Handing back every id
+         * keeps the cleanup self-contained: it does not depend on list_breakpoints being
+         * enabled in the caller's toolset.
+         * </p>
+         *
+         * @return the marker ids configured, empty when the call disabled them instead
+         */
+        public List<Long> getConfiguredIds()
+        {
+            return configuredIds;
+        }
+
+        /**
+         * How many breakpoints the call configured (or disabled). Equal to the id list size
+         * unless one of them has no marker to name.
+         *
+         * @return the number affected
+         */
+        public int getConfiguredCount()
+        {
+            return configuredCount;
+        }
+
+        /**
+         * What the read-back established about the filters: whether they agree, differ, or
+         * could not be read at all - three different answers a caller acts on differently.
+         *
+         * @return the agreement
+         */
+        public FilterAgreement getFilterAgreement()
+        {
+            return filterAgreement;
+        }
+
+        public String getAction()
+        {
+            return action;
+        }
+
+        public IBreakpoint getBreakpoint()
+        {
+            return breakpoint;
+        }
+
+        public int getDisabledCount()
+        {
+            return disabledCount;
+        }
+
+        public boolean isCatchAll()
+        {
+            return catchAll;
+        }
+
+        public String getExceptionMessage()
+        {
+            return exceptionMessage;
+        }
     }
 
     /**

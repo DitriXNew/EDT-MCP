@@ -185,7 +185,10 @@ public class ToolGroupTest
         assertTrue(tools.contains("get_variables"));
         assertTrue(tools.contains("set_variable"));
         assertTrue(tools.contains("stop_profiling")); //$NON-NLS-1$
-        assertEquals(14, tools.size());
+        // The workspace-wide break-on-error switch sits in the same group as the line
+        // breakpoints it complements: whoever may set one may set the other.
+        assertTrue(tools.contains("set_error_breakpoint")); //$NON-NLS-1$
+        assertEquals(15, tools.size());
     }
 
     @Test

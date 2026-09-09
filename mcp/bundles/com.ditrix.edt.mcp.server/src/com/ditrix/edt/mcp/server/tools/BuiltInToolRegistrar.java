@@ -90,6 +90,7 @@ import com.ditrix.edt.mcp.server.tools.impl.RunYaxunitTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.SearchInCodeTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetBranchInfobaseTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetBreakpointTool;
+import com.ditrix.edt.mcp.server.tools.impl.SetErrorBreakpointTool;
 import com.ditrix.edt.mcp.server.tools.impl.SetVariableTool;
 import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.StartProfilingTool;
@@ -196,6 +197,7 @@ public final class BuiltInToolRegistrar
 
         // Debug inspection tools (breakpoints + suspended state)
         catalogue.add(new SetBreakpointTool());
+        catalogue.add(new SetErrorBreakpointTool());
         catalogue.add(new RemoveBreakpointTool());
         catalogue.add(new ListBreakpointsTool());
         catalogue.add(new WaitForBreakTool());

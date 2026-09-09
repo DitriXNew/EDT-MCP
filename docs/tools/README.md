@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**93 tools.**
+**94 tools.**
 
 ## Core
 
@@ -71,10 +71,11 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`get_applications`](get_applications.md) | Get list of applications (infobases) for a project. Returns application ID, name, type, and update state. Application ID is required for update_database and… |
 | [`get_variables`](get_variables.md) | Read variables from a stack frame of a suspended debug thread. Pass frameRef from wait_for_break (preferred) or threadId+frameIndex. Use expandPath to drill… |
 | [`launch`](launch.md) | Start a 1C application in EDT debug (default) or run mode. An already-running session is not relaunched unless restartIfRunning=true. |
-| [`list_breakpoints`](list_breakpoints.md) | List active line breakpoints. Optionally filter by projectName. |
+| [`list_breakpoints`](list_breakpoints.md) | Review configured BSL line breakpoints and workspace-wide break-on-error state. Full parameters and examples: call get_tool_guide('list_breakpoints'). |
 | [`remove_breakpoint`](remove_breakpoint.md) | Remove a 1C BSL line breakpoint. Either pass breakpointId (returned from set_breakpoint) or projectName+module+lineNumber to look it up by coordinates. |
 | [`resume`](resume.md) | Resume a suspended debug thread or all threads of a debug target. Pass threadId (from wait_for_break) or applicationId. applicationId accepts ANY id form for… |
-| [`set_breakpoint`](set_breakpoint.md) | Set a line breakpoint on a 1C BSL module. Accepts either an EDT module-relative path (e.g. 'CommonModules/Foo/Module.bsl') or an absolute filesystem path. Us… |
+| [`set_breakpoint`](set_breakpoint.md) | Pause BSL execution at a selected source line during debugging, optionally only while a condition holds or after a number of hits. Parameters and examples: get_tool_guide('set_breakpoint'). |
+| [`set_error_breakpoint`](set_error_breakpoint.md) | Create, update, enable, or disable the workspace-wide BSL break-on-error breakpoint. Full parameters and examples: call get_tool_guide('set_error_breakpoint'). |
 | [`set_variable`](set_variable.md) | Set a BSL variable's value in a suspended debug frame. WRITE/side-effect: EXECUTES the entered value as a BSL literal/expression live in the running 1C appli… |
 | [`step`](step.md) | Step a suspended debug thread. kind ∈ {over, into, out}. Blocks until the next SUSPEND event (or timeout) and returns the new frame snapshot. |
 | [`terminate_launch`](terminate_launch.md) | Terminate one or more 1C launches started from THIS EDT instance; externally launched 1C clients are never touched. Select ONE target mode: launchConfigurati… |

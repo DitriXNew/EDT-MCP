@@ -227,6 +227,27 @@ public class JsonSchemaBuilder
     }
     
     /**
+     * Adds an array property with integer items - the counterpart of
+     * {@link #stringArrayProperty} for ids.
+     *
+     * @param name property name
+     * @param description property description
+     * @return this builder
+     */
+    public JsonSchemaBuilder integerArrayProperty(String name, String description)
+    {
+        Map<String, Object> items = new LinkedHashMap<>();
+        items.put("type", "integer"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        Map<String, Object> prop = new LinkedHashMap<>();
+        prop.put("type", "array"); //$NON-NLS-1$ //$NON-NLS-2$
+        prop.put("items", items); //$NON-NLS-1$
+        prop.put(KEY_DESCRIPTION, description);
+        properties.put(name, prop);
+        return this;
+    }
+
+    /**
      * Adds a number (floating-point) property to the schema. Use for values whose
      * Java type is {@code double}/{@code float} (e.g. a duration in seconds, a
      * percentage); use {@link #integerProperty} for {@code int}/{@code long}.
