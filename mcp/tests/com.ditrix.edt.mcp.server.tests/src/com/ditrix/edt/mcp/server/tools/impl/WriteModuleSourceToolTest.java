@@ -1889,4 +1889,42 @@ public class WriteModuleSourceToolTest
         assertTrue("the new method must go above the whole pragma: " + joined, //$NON-NLS-1$
             joined.indexOf("Procedure Added()") < joined.indexOf("&Instead(")); //$NON-NLS-1$ //$NON-NLS-2$
     }
+
+    /**
+     * Whitespace around the member dot is hidden trivia on BOTH sides, so neither a fixed-width
+     * lookbehind nor a base-token walk that stops at the first space may decide what a word is.
+     */
+    @Test
+    public void testWhitespaceAroundTheMemberDotDoesNotMakeAKeywordSyntax()
+    {
+        List<String> spacedAfter = lines(
+            "Procedure Target() X = Object. EndProcedure;\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("a member name after a spaced dot is not an inline terminator", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(spacedAfter, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\n\tNew = 1;\nEndProcedure\n").error); //$NON-NLS-1$
+
+        List<String> spacedBefore = lines(
+            "Procedure Target()\n\tValue = Object .\n\tEndFunction;\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("a base separated from its dot is still a member access", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(spacedBefore, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\n\tNew = 1;\nEndProcedure\n").error); //$NON-NLS-1$
+    }
+
+    /**
+     * Punctuation inside a comment is not syntax: a pragma whose explanation carries an unbalanced
+     * parenthesis is still one pragma, and must stay with the declaration it binds to.
+     */
+    @Test
+    public void testAParenthesisInsideAPragmaCommentDoesNotUnbalanceIt()
+    {
+        List<String> module = lines(
+            "&Instead(\n\t// why )\n\t\"Original\")\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("the insert must be accepted: " + result.error, result.error); //$NON-NLS-1$
+        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
+        assertTrue("the new method must go above the whole pragma: " + joined, //$NON-NLS-1$
+            joined.indexOf("Procedure Added()") < joined.indexOf("&Instead(")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 }

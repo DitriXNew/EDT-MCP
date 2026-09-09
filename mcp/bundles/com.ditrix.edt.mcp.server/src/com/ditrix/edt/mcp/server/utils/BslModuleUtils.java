@@ -560,8 +560,7 @@ public final class BslModuleUtils
             {
                 return i;
             }
-            if (METHOD_START_PATTERN.matcher(line).find()
-                && INLINE_TERMINATOR_PATTERN.matcher(line).find())
+            if (METHOD_START_PATTERN.matcher(line).find() && hasInlineTerminator(line))
             {
                 return i;
             }
@@ -620,6 +619,48 @@ public final class BslModuleUtils
     }
 
     /**
+     * Whether the line ends a method ON that line, as opposed to merely naming a terminator.
+     * <p>
+     * A reserved word is a legal MEMBER name and whitespace around the dot is hidden trivia, so
+     * {@code Procedure Target() X = Object. EndProcedure;} names one and ends nothing. Judged
+     * lexically - the nearest non-space character before the word - rather than by a
+     * fixed-width lookbehind, which sees the space and not the dot.
+     * </p>
+     *
+     * @param line the line, with literals and comments already masked
+     * @return whether a real inline terminator stands on it
+     */
+    private static boolean hasInlineTerminator(String line)
+    {
+        Matcher terminator = INLINE_TERMINATOR_PATTERN.matcher(line);
+        while (terminator.find())
+        {
+            if (!precededByMemberDot(line, terminator.start()))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether the nearest non-space character before {@code index} is a member-access dot.
+     *
+     * @param line the line
+     * @param index where the word begins
+     * @return whether the word is a member name
+     */
+    private static boolean precededByMemberDot(String line, int index)
+    {
+        int i = index - 1;
+        while (i >= 0 && Character.isWhitespace(line.charAt(i)))
+        {
+            i--;
+        }
+        return i >= 0 && line.charAt(i) == '.';
+    }
+
+    /**
      * Whether the last line that carries anything before {@code index} ends in a member-access
      * dot.
      * <p>
@@ -670,7 +711,19 @@ public final class BslModuleUtils
         {
             return false;
         }
-        char before = trimmed.charAt(trimmed.length() - 2);
+        // Whitespace between the base and the dot is hidden trivia - "Object ." is the same
+        // access as "Object." - so it is stepped over before anything is judged. Reading the
+        // space as the base made an ordinary split access look like a plain dot.
+        int base = trimmed.length() - 2;
+        while (base >= 0 && Character.isWhitespace(trimmed.charAt(base)))
+        {
+            base--;
+        }
+        if (base < 0)
+        {
+            return false;
+        }
+        char before = trimmed.charAt(base);
         if (before == ')' || before == ']')
         {
             return true;
@@ -678,7 +731,7 @@ public final class BslModuleUtils
         // An identifier may END in a digit (Object1.), so walk the token back and judge it by
         // its FIRST character: a run that starts with a digit is a numeric literal, and its
         // trailing dot is not a member access.
-        int i = trimmed.length() - 2;
+        int i = base;
         while (i >= 0 && (Character.isLetterOrDigit(trimmed.charAt(i)) || trimmed.charAt(i) == '_'))
         {
             i--;
@@ -1412,6 +1465,13 @@ public final class BslModuleUtils
             for (int c = 0; c < line.length(); c++)
             {
                 char ch = line.charAt(c);
+                // A comment is trivia, and its punctuation is not syntax: "// why )" inside a
+                // pragma would otherwise close a parenthesis nobody opened, leave the run
+                // unbalanced, and drop the pragma out of the preamble it belongs to.
+                if (!inLiteral && ch == '/' && c + 1 < line.length() && line.charAt(c + 1) == '/')
+                {
+                    break;
+                }
                 if (ch == '"')
                 {
                     inLiteral = !inLiteral;
