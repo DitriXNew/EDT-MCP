@@ -2253,6 +2253,36 @@ public class WriteModuleSourceToolTest
     }
 
     /**
+     * The name is not the whole contract. Replacing a Function with a Procedure of the same name
+     * takes the return value away from every expression that consumes Target(), and no check
+     * downstream can see it: Function/EndFunction and Procedure/EndProcedure are each balanced.
+     */
+    @Test
+    public void testReplaceMethodRefusesToTurnAFunctionIntoAProcedure()
+    {
+        List<String> module = lines("Function Target()\n" //$NON-NLS-1$
+            + "    Return 1;\n" //$NON-NLS-1$
+            + "EndFunction\n"); //$NON-NLS-1$
+        assertMethodEditError("does not change the kind of a method", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\nEndProcedure\n")); //$NON-NLS-1$
+    }
+
+    /**
+     * And the other direction, which is no safer: a caller that ignores a return value compiles,
+     * but the module now promises one it never promised before.
+     */
+    @Test
+    public void testReplaceMethodRefusesToTurnAProcedureIntoAFunction()
+    {
+        List<String> module = lines("Procedure Target()\n" //$NON-NLS-1$
+            + "EndProcedure\n"); //$NON-NLS-1$
+        assertMethodEditError("does not change the kind of a method", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Function Target()\n    Return 1;\nEndFunction\n")); //$NON-NLS-1$
+    }
+
+    /**
      * Annotations separated by BLANK runs all bind to the declaration below them - the
      * whitespace between them is hidden trivia. A span that starts at the nearer one leaves
      * the further annotation behind: replaceMethod keeps a stale directive, and insertBefore

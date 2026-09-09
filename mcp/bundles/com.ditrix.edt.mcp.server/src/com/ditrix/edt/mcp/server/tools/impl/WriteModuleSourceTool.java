@@ -815,6 +815,20 @@ public class WriteModuleSourceTool implements IMcpTool
         }
 
         BslModuleUtils.MethodSpan target = targets.get(0);
+        if (MODE_REPLACE_METHOD.equals(mode) && incoming.isFunction != target.isFunction)
+        {
+            // Refused for the same reason a rename is: matching the NAME is not the whole
+            // contract. Turning a Function into a Procedure takes the return value away from
+            // every expression that consumes Target(), and no check below can see it -
+            // Function/EndFunction and Procedure/EndProcedure are each balanced on their own.
+            return methodEditError("source declares " //$NON-NLS-1$
+                + (incoming.isFunction ? "a Function" : "a Procedure") //$NON-NLS-1$ //$NON-NLS-2$
+                + ", but '" + methodName + "' is " //$NON-NLS-1$ //$NON-NLS-2$
+                + (target.isFunction ? "a Function" : "a Procedure") //$NON-NLS-1$ //$NON-NLS-2$
+                + " in the module. replaceMethod does not change the kind of a method, because " //$NON-NLS-1$
+                + "callers of a Function consume its return value; declare the same kind in " //$NON-NLS-1$
+                + "source, or change the kind deliberately with delete plus insert."); //$NON-NLS-1$
+        }
         List<String> result = new ArrayList<>(originalLines);
         if (MODE_REPLACE_METHOD.equals(mode))
         {
