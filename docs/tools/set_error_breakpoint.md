@@ -23,7 +23,7 @@ Controls EDT's workspace-wide BSL break-on-error breakpoint. It is deliberately 
 - `exceptionMessage` - Omit to keep an existing filter (or create catch-all when none exists); pass an empty string to catch all exceptions; non-empty text is forwarded verbatim to the platform's break-on-error filter as a message template, so pass a distinctive message fragment.
 
 ## What you get
-JSON with `action` (`created`, `updated`, `disabled`, or `notFound`), `enabled`, and `workspaceWide: true`. An enabled result also includes `breakpointId`, `catchAllExceptions`, and `exceptionMessage` when configured. A disabled result includes `disabledCount`.
+JSON with `action` (`created`, `updated`, `disabled`, or `notFound`), `enabled`, and `workspaceWide: true`. An enabled result also includes `catchAllExceptions` and `exceptionMessage` when configured, and `breakpointId` when the affected breakpoint HAS a marker to name it by - a workspace can hold one the platform recognises by interface with no marker, and the field is omitted there rather than filled with a number `remove_breakpoint` would reject. `configuredCount` and the warning describe that case, so read `breakpointIds` rather than assuming the singular field is present. A disabled result includes `disabledCount`.
 
 ## Notes & gotchas
 - This setting is **workspace-wide**, not per project. EDT attaches the exception breakpoint to the workspace root and exposes no project scope, so this tool intentionally has no `projectName` parameter.
