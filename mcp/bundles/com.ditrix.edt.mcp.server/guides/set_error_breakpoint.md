@@ -9,7 +9,7 @@ Controls EDT's workspace-wide BSL break-on-error breakpoint. It is deliberately 
 - `enabled` (required) - True creates/enables the workspace-wide breakpoint; false disables it while preserving its filter. To delete it, call `remove_breakpoint` with its `breakpointId`.
 - `exceptionMessage` - Omit to keep an existing filter (or create catch-all when none exists); pass an empty string to catch all exceptions; non-empty text is forwarded verbatim to the platform's break-on-error filter as a message template, so pass a distinctive message fragment.
 
-`configuredCount` says how many exception breakpoints the call configured. It is normally 1. A workspace can already hold SEVERAL (legacy state); all of them are configured together, and `breakpointId` names only the first - so deleting the whole setting means removing every id `list_breakpoints` reports with `kind: exception`, not just the returned one.
+`breakpointIds` lists the marker id of EVERY exception breakpoint this call configured - normally one. A workspace can already hold several (legacy state); all of them are configured together, and `breakpointId` names only the first, so deleting the whole setting means removing every id in `breakpointIds`. The list is returned by this tool itself, so the cleanup does not depend on `list_breakpoints` being enabled in your toolset.
 
 ## What you get
 JSON with `action` (`created`, `updated`, `disabled`, or `notFound`), `enabled`, and `workspaceWide: true`. An enabled result also includes `breakpointId`, `catchAllExceptions`, and `exceptionMessage` when configured. A disabled result includes `disabledCount`.

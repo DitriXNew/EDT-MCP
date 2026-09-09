@@ -60,7 +60,7 @@ public class SetErrorBreakpointTool implements IMcpTool
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("action", "created, updated, disabled, or notFound") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("breakpointId", "Eclipse marker id when the breakpoint is enabled") //$NON-NLS-1$ //$NON-NLS-2$
-            .integerProperty("configuredCount", "How many exception breakpoints were configured; more than one means breakpointId is not the whole setting") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerArrayProperty("breakpointIds", "Marker ids of EVERY exception breakpoint this call configured; more than one means breakpointId alone is not the whole setting, and each id has to be removed") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty(KEY_ENABLED, "Whether break-on-error is enabled") //$NON-NLS-1$
             .booleanProperty("workspaceWide", "Always true; EDT does not scope this breakpoint by project") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("catchAllExceptions", "Whether all BSL exceptions are matched") //$NON-NLS-1$ //$NON-NLS-2$
@@ -107,7 +107,7 @@ public class SetErrorBreakpointTool implements IMcpTool
                     ? breakpoint.getMarker().getId()
                     : -1L;
                 result.put("breakpointId", markerId) //$NON-NLS-1$
-                    .put("configuredCount", change.getConfiguredCount()) //$NON-NLS-1$
+                    .put("breakpointIds", change.getConfiguredIds()) //$NON-NLS-1$
                     .put("catchAllExceptions", change.isCatchAll()); //$NON-NLS-1$
                 if (change.getExceptionMessage() != null)
                 {

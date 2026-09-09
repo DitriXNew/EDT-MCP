@@ -4177,8 +4177,11 @@
         "catchAllExceptions": {
           "type": "boolean"
         },
-        "configuredCount": {
-          "type": "integer"
+        "breakpointIds": {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
         },
         "disabledCount": {
           "type": "integer"

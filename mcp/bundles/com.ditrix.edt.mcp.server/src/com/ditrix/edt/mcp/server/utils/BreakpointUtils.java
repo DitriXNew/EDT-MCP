@@ -406,7 +406,7 @@ public final class BreakpointUtils
             // Every one of them was configured, and the caller is told so: a workspace that
             // holds several (legacy state) is not served by an answer naming one id, since
             // removing that id would leave the others breaking on error.
-            return describe("updated", existing.get(0), existing.size()); //$NON-NLS-1$
+            return describe("updated", existing.get(0), existing); //$NON-NLS-1$
         }
 
         IBreakpoint created = createExceptionBreakpointFromService(configuredMessage);
@@ -415,7 +415,7 @@ public final class BreakpointUtils
             configureExceptionBreakpoint(created, catchAll, configuredMessage);
             created.setEnabled(true);
             manager.addBreakpoint(created);
-            return describe("created", created, 1); //$NON-NLS-1$
+            return describe("created", created, List.of(created)); //$NON-NLS-1$
         }
         catch (Exception e)
         {
@@ -469,17 +469,25 @@ public final class BreakpointUtils
      * @throws Exception when the marker cannot be read
      */
     private static ExceptionBreakpointChange describe(String action, IBreakpoint breakpoint,
-        int configuredCount) throws Exception
+        List<IBreakpoint> configured) throws Exception
     {
-        Map<String, Object> configured =
+        List<Long> ids = new ArrayList<>(configured.size());
+        for (IBreakpoint each : configured)
+        {
+            IMarker marker = each.getMarker();
+            if (marker != null)
+            {
+                ids.add(Long.valueOf(marker.getId()));
+            }
+        }
+        Map<String, Object> state =
             readExceptionBreakpointConfiguration(breakpoint.getMarker());
-        Object message = configured.get("exceptionMessage"); //$NON-NLS-1$
+        Object message = state.get("exceptionMessage"); //$NON-NLS-1$
         String storedMessage = message == null || message.toString().isEmpty()
             ? null
             : message.toString();
         return ExceptionBreakpointChange.enabled(action, breakpoint,
-            Boolean.TRUE.equals(configured.get("catchAllExceptions")), storedMessage, //$NON-NLS-1$
-            configuredCount);
+            Boolean.TRUE.equals(state.get("catchAllExceptions")), storedMessage, ids); //$NON-NLS-1$
     }
 
     /** Reads the configured exception filter for list_breakpoints without linking its interface. */
@@ -991,46 +999,47 @@ public final class BreakpointUtils
         private final int disabledCount;
         private final boolean catchAll;
         private final String exceptionMessage;
-        private final int configuredCount;
+        private final List<Long> configuredIds;
 
         private ExceptionBreakpointChange(String action, IBreakpoint breakpoint, int disabledCount,
-            boolean catchAll, String exceptionMessage, int configuredCount)
+            boolean catchAll, String exceptionMessage, List<Long> configuredIds)
         {
             this.action = action;
             this.breakpoint = breakpoint;
             this.disabledCount = disabledCount;
             this.catchAll = catchAll;
             this.exceptionMessage = exceptionMessage;
-            this.configuredCount = configuredCount;
+            this.configuredIds = configuredIds;
         }
 
         static ExceptionBreakpointChange enabled(String action, IBreakpoint breakpoint,
-            boolean catchAll, String exceptionMessage, int configuredCount)
+            boolean catchAll, String exceptionMessage, List<Long> configuredIds)
         {
             return new ExceptionBreakpointChange(action, breakpoint, 0, catchAll, exceptionMessage,
-                configuredCount);
+                configuredIds);
         }
 
         public static ExceptionBreakpointChange disabled(int disabledCount)
         {
             return new ExceptionBreakpointChange(disabledCount > 0 ? "disabled" : "notFound", //$NON-NLS-1$ //$NON-NLS-2$
-                null, disabledCount, true, null, 0);
+                null, disabledCount, true, null, List.of());
         }
 
         /**
-         * How many workspace-wide exception breakpoints this call configured.
+         * The marker ids of every workspace-wide exception breakpoint this call configured.
          * <p>
          * Normally one. A workspace can hold several (legacy state), and then ALL of them are
          * configured while {@link #getBreakpoint()} names only the first - so a caller that
-         * removed that one id would leave the others breaking on error. The count is what makes
-         * that visible instead of leaving it to be discovered.
+         * removed that one id would leave the others breaking on error. Handing back every id
+         * keeps the cleanup self-contained: it does not depend on list_breakpoints being
+         * enabled in the caller's toolset.
          * </p>
          *
-         * @return the number configured, or 0 when the call disabled them instead
+         * @return the marker ids configured, empty when the call disabled them instead
          */
-        public int getConfiguredCount()
+        public List<Long> getConfiguredIds()
         {
-            return configuredCount;
+            return configuredIds;
         }
 
         public String getAction()

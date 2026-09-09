@@ -26,7 +26,7 @@ def _can_reconstruct(entry):
     entry that came back with an error is not a description of anything.
     """
     if entry.get("error"):
-        return False
+        return False  # handled by the caller as a FAILURE, not a skip
     if not isinstance(entry.get("enabled"), bool):
         return False
     if entry.get("catchAllExceptions") is True:
@@ -86,6 +86,15 @@ def test_create_update_disable_and_reenable_workspace_error_breakpoint():
     """Exercise the real OSGi factory, manager registration, reflective setters,
     workspace-root listing, in-place update, and configuration-preserving disable."""
     original = _exception_breakpoints()
+    broken = [entry for entry in original if entry.get("error")]
+    if broken:
+        # NOT a skip: the listing puts `error` there when a production marker/configuration read
+        # threw, so skipping would turn a broken listing contract into a green run. Raised before
+        # anything is deleted, so the operator state survives the failure.
+        raise AssertionError(
+            "list_breakpoints reported an unreadable exception breakpoint (%r); the listing "
+            "contract is broken, so this test refuses to run against it" % (broken[0],)
+        )
     unreconstructable = [entry for entry in original if not _can_reconstruct(entry)]
     if unreconstructable:
         # The saved state has to be READABLE before anything is deleted: an entry carrying an
@@ -119,6 +128,11 @@ def test_create_update_disable_and_reenable_workspace_error_breakpoint():
             raise AssertionError("omitted exceptionMessage must enable catch-all: %r" % created_state)
         if created_state.get("workspaceWide") is not True:
             raise AssertionError("result must label the setting workspace-wide: %r" % created_state)
+        if created_state.get("breakpointIds") != [breakpoint_id]:
+            raise AssertionError(
+                "breakpointIds must list every configured marker, and here that is exactly the "
+                "one just created: %r" % created_state
+            )
 
         # A project filter cannot exclude a workspace-root exception breakpoint.
         listed = _exception_breakpoints("NoSuchProject_ZZZ_e2e")

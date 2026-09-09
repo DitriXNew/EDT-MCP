@@ -78,8 +78,10 @@ def _set_probe():
     existing = call("list_breakpoints", {"projectName": PROJECT})
     assert_ok(existing, "precondition: list_breakpoints must answer before the probe is set")
     for entry in (existing.structured or {}).get("breakpoints", []):
+        # The line DTO carries its path as "file" (a workspace path), not "modulePath": comparing
+        # the wrong key made this guard match nothing at all, which is worse than not having it.
         if entry.get("kind") == "line" and entry.get("lineNumber") == PROBE_LINE \
-                and str(entry.get("modulePath") or "").endswith(PROBE_MODULE):
+                and str(entry.get("file") or "").replace(chr(92), "/").endswith(PROBE_MODULE):
             raise E2ESkip(
                 "%s:%d already holds a breakpoint (%r); this test would reconfigure and then "
                 "delete it" % (PROBE_MODULE, PROBE_LINE, entry)
