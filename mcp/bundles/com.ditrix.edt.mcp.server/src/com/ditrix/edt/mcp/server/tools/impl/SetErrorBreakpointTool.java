@@ -10,7 +10,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-import org.eclipse.debug.core.model.IBreakpoint;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -145,11 +144,13 @@ public class SetErrorBreakpointTool implements IMcpTool
             }
             if (enabled)
             {
-                IBreakpoint breakpoint = change.getBreakpoint();
-                long markerId = breakpoint != null && breakpoint.getMarker() != null
-                    ? breakpoint.getMarker().getId()
-                    : -1L;
-                result.put("breakpointId", markerId); //$NON-NLS-1$
+                // Taken from what describe() already READ, not by reading the marker again: this
+                // runs after every breakpoint has been mutated, and a marker that went stale in
+                // between would throw here - past the reporting guard - and the generic handler
+                // would answer with none of the ids this change is holding.
+                List<Long> configured = change.getConfiguredIds();
+                result.put("breakpointId", //$NON-NLS-1$
+                    configured.isEmpty() ? Long.valueOf(-1L) : configured.get(0));
                 // The filter is described only when every configured breakpoint carries the
                 // same one. Legacy duplicates may hold different filters, and an enable that
                 // omits exceptionMessage preserves each - so reporting the first member's
