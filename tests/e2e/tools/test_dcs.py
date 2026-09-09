@@ -14,9 +14,11 @@ import xml.etree.ElementTree as ET
 from harness import (
     PROJECT,
     PROJECT_DIR,
+    assert_contains,
     assert_error,
     assert_error_quality,
     assert_no_diff,
+    assert_not_contains,
     assert_ok,
     call,
     diff,
@@ -2789,6 +2791,56 @@ def test_field_collection_replace_refuses_omitting_selected_field_and_preserves_
                          ctx="field collection replacement names the retained reference")
     assert read_disk(dcs_rel) == before_disk, \
         "a refused field collection replacement must leave Template.dcs byte-for-byte unchanged"
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_dynamic_list_without_authored_settings_is_not_reported_as_a_failed_write():
+    """A write that authors NO listSettings must still answer success (issue #581).
+
+    The post-commit verification compares what was written against a re-read, and the platform
+    materializes a default DataCompositionSettings carrier on the committed object by itself.
+    A write that never mentioned listSettings therefore came back as
+    'success=false, mutationCommitted=true' with 'root/listSettings: expected <null>, actual
+    DataCompositionSettings' - the mutation had landed and the caller was told it had not, which
+    is the shape that makes an unattended agent retry or start repairing correct content.
+
+    The body here is deliberately the MINIMAL one from the report - main table plus flags, no
+    query, no fields, no parameters - because every richer body authors settings and so never
+    reproduced this. The read-back proves the write really did land, so a future regression
+    cannot be waved away as a merely cosmetic verdict.
+    """
+    catalog_name = "E2EDcsListNoSettings"
+    catalog = "Catalog." + catalog_name
+    form = catalog + ".Form.ListForm"
+    root = form + ".Attribute.List"
+    for fqn, why in ((catalog, "catalog"), (form, "form"), (root, "attribute")):
+        assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+                  "seed the %s" % why)
+        wait_for_project_ready()
+
+    written = _write(root, "upsert", "dynamicList", {
+        "mainTable": catalog,
+        "customQuery": False,
+        "dynamicDataRead": True,
+        "autoFillAvailableFields": True,
+    })
+    assert_ok(written, "a dynamic list without authored settings must be reported as written")
+    # The exact refusal wording, not the bare word 'listSettings': a successful answer may
+    # legitimately name the feature, and an assertion forbidding the word would then fail for a
+    # reason that has nothing to do with this defect.
+    assert_not_contains(written.text, "post-commit read",
+                        "the materialized settings carrier must not read as a verification miss")
+    assert_not_contains(written.text, "mutationCommitted",
+                        "a committed write must not be dressed as a failure")
+
+    # The verdict is only trustworthy if the write actually landed: read the model back. The
+    # read must be asserted OK first - a dcs failure names the full target FQN, which contains
+    # the catalog name, so the marker check alone would pass on "DCS root target ... was not
+    # found" and prove nothing.
+    back = _get(root, "dynamicList")
+    assert_ok(back, "the written dynamic list must read back")
+    assert_contains(back.text, catalog_name,
+                    "the read-back must show the main table the write asked for")
 
 
 @e2e_test(tool="dcs", kind="write-metadata")

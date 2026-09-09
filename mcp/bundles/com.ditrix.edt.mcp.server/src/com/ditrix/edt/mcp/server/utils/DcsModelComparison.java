@@ -108,6 +108,14 @@ public final class DcsModelComparison
             }
             Object expectedValue = expected.eGet(expectedFeature);
             Object actualValue = actual.eGet(actualFeature);
+            if (expectedFeature
+                == FormPackage.Literals.DYNAMIC_LIST_EXT_INFO__LIST_SETTINGS
+                && expectedValue == null && actualValue != null)
+            {
+                // The platform materializes a default settings carrier after commit, so its
+                // presence cannot contradict a request that did not author listSettings (issue #581).
+                continue;
+            }
             String difference;
             if (expectedFeature instanceof EAttribute)
             {

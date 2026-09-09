@@ -117,6 +117,8 @@ public class DcsToolTest
         assertNotNull(error);
         assertTrue(error, error.contains("Applied is withheld")); //$NON-NLS-1$
         assertTrue(error, error.contains("post-commit read")); //$NON-NLS-1$
+        assertTrue(error, error.contains("requested content is attached")); //$NON-NLS-1$
+        assertTrue(error, error.contains("Re-run dcs action='get' before any retry")); //$NON-NLS-1$
         assertTrue(error, error.contains(address));
         assertTrue(error, error.contains("root/listSettings/selection")); //$NON-NLS-1$
     }
