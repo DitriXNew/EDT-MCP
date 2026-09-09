@@ -5073,4 +5073,67 @@ public class MergeRulesCodecTest
         }
         return names;
     }
+
+    /**
+     * A REPLACEMENT refuses when the path stopped being the file the caller verified, and it
+     * refuses at the last possible moment rather than at the caller's own last look.
+     * <p>
+     * Between that look and the move there is a serialization, a temporary file, a write and a
+     * permission copy - all of it window. The interference here lands inside exactly that window,
+     * through the same seam the reservation tests use.
+     * </p>
+     * <p>
+     * The assertion is on the CONTENT that ends up on disk, not on the outcome: a refusal that
+     * had already replaced the bytes would be no refusal at all.
+     * </p>
+     *
+     * @throws Exception when the fixture cannot be written or read back
+     */
+    @Test
+    public void testAReplacementRefusesWhenTheTargetChangedAfterItWasVerified() throws Exception
+    {
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+        Files.write(target, FIXTURE.getBytes(StandardCharsets.UTF_8));
+        BasicFileAttributes verified = Files.readAttributes(target, BasicFileAttributes.class);
+
+        try
+        {
+            MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+                MergeRulesCodec.Target.MAY_BE_REPLACED, null, replaceReservationAndCarryOn(target),
+                verified);
+            fail("a replacement whose target changed since it was verified must refuse"); //$NON-NLS-1$
+        }
+        catch (IOException expected)
+        {
+            assertTrue("the refusal has to say WHAT it observed: " + expected.getMessage(), //$NON-NLS-1$
+                expected.getMessage().contains("changed between the last verification")); //$NON-NLS-1$
+        }
+
+        assertEquals("the file that replaced the target is not this call's to overwrite", //$NON-NLS-1$
+            FOREIGN_DECISIONS,
+            new String(Files.readAllBytes(target), StandardCharsets.UTF_8));
+    }
+
+    /**
+     * The control that keeps the guard from becoming a blanket refusal: with nothing touching the
+     * path, the very same call installs the document. Without this, refusing every replacement
+     * would pass the test above.
+     *
+     * @throws Exception when the fixture cannot be written or read back
+     */
+    @Test
+    public void testAReplacementStillInstallsWhenTheTargetIsTheFileVerified() throws Exception
+    {
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+        Files.write(target, FOREIGN_DECISIONS.getBytes(StandardCharsets.UTF_8));
+        BasicFileAttributes verified = Files.readAttributes(target, BasicFileAttributes.class);
+
+        MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+            MergeRulesCodec.Target.MAY_BE_REPLACED, null, () -> { /* nothing interferes */ },
+            verified);
+
+        assertTrue("the document must actually have been installed", //$NON-NLS-1$
+            new String(Files.readAllBytes(target), StandardCharsets.UTF_8)
+                .contains("MergeSettings")); //$NON-NLS-1$
+    }
 }

@@ -512,7 +512,31 @@ public final class MergeRulesCodec
     public static void write(Path file, MergeRulesDocument document, Target target)
         throws IOException
     {
-        write(file, document, target, null);
+        write(file, document, target, (BasicFileAttributes)null);
+    }
+
+    /**
+     * The same write, told what the caller verified the target to be.
+     * <p>
+     * The caller's own last look is taken before this method serializes the document, creates
+     * a temporary, writes it and inherits permissions - all of which stand between that look
+     * and the move that replaces the file. Handing the identity in lets the LAST step before
+     * the move be the question, exactly as {@link Target#MUST_NOT_EXIST} already asks it of its
+     * reservation. It does not make the replacement atomic; it removes the wide window in
+     * front of it.
+     * </p>
+     *
+     * @param file the target file
+     * @param document the document
+     * @param target what the caller has established about a file already on the path
+     * @param expected the attributes the caller verified the target by, or {@code null} to
+     *            replace whatever is on the path
+     * @throws IOException when the file cannot be written, or no longer holds {@code expected}
+     */
+    public static void write(Path file, MergeRulesDocument document, Target target,
+        BasicFileAttributes expected) throws IOException
+    {
+        write(file, document, target, null, NOTHING_INTERFERES, expected);
     }
 
     /**
@@ -556,6 +580,29 @@ public final class MergeRulesCodec
     }
 
     /**
+     * The zip write, told what the caller verified the target to be.
+     *
+     * @param file the target file, normally named {@code .zip}
+     * @param document the document
+     * @param target what the caller has established about a file already on the path
+     * @param entryId the comparison id the entry is named after, without an extension
+     * @param expected the attributes the caller verified the target by, or {@code null}
+     * @throws IOException when the file cannot be written, or no longer holds {@code expected}
+     */
+    public static void writeZip(Path file, MergeRulesDocument document, Target target,
+        String entryId, BasicFileAttributes expected) throws IOException
+    {
+        if (entryId == null || entryId.isBlank())
+        {
+            throw new IllegalArgumentException(
+                "A zipped merge-rules file is addressed by the entry name the comparison looks " //$NON-NLS-1$
+                    + "for, and none was supplied. EDT ignores an archive whose entry is named " //$NON-NLS-1$
+                    + "anything else, so no name can be invented here."); //$NON-NLS-1$
+        }
+        write(file, document, target, entryId, NOTHING_INTERFERES, expected);
+    }
+
+    /**
      * The shared write. {@code zipEntryId} picks the container: {@code null} writes the bare xml
      * document, a name writes a one-entry zip carrying it.
      *
@@ -568,7 +615,7 @@ public final class MergeRulesCodec
     private static void write(Path file, MergeRulesDocument document, Target target, String zipEntryId)
         throws IOException
     {
-        write(file, document, target, zipEntryId, NOTHING_INTERFERES);
+        write(file, document, target, zipEntryId, NOTHING_INTERFERES, null);
     }
 
     /**
@@ -590,6 +637,24 @@ public final class MergeRulesCodec
      */
     static void write(Path file, MergeRulesDocument document, Target target, String zipEntryId,
         Runnable afterReservation) throws IOException
+    {
+        write(file, document, target, zipEntryId, afterReservation, null);
+    }
+
+    /**
+     * The shared write, with the caller's verified identity re-asked immediately before each
+     * replacement move.
+     *
+     * @param file the target file
+     * @param document the document
+     * @param target what the caller has established about a file already on the path
+     * @param zipEntryId the zip entry's name without its extension, or {@code null} for bare xml
+     * @param afterReservation the test seam described above; production does nothing here
+     * @param expected the attributes the caller verified the target by, or {@code null}
+     * @throws IOException when the file cannot be written, or no longer holds {@code expected}
+     */
+    static void write(Path file, MergeRulesDocument document, Target target, String zipEntryId,
+        Runnable afterReservation, BasicFileAttributes expected) throws IOException
     {
         // FIRST, and before a single filesystem step - not even the parent directories. This is
         // the one refusal that has to leave the path exactly as it found it, and a check made
@@ -648,6 +713,11 @@ public final class MergeRulesCodec
                 // written.
                 refuseUnlessThePathStillHoldsTheReservation(resolved, reservation);
             }
+            // The same question for a REPLACEMENT, and in the same place: everything between the
+            // caller's own last look and here - serializing, creating the temporary, writing it,
+            // inheriting permissions - is window, and this closes all of it but the step to the
+            // move itself.
+            refuseUnlessTheTargetIsStillTheFileVerified(resolved, expected);
             try
             {
                 Files.move(temporary, resolved, StandardCopyOption.REPLACE_EXISTING,
@@ -662,6 +732,7 @@ public final class MergeRulesCodec
                     // is another one somebody can write into.
                     refuseUnlessThePathStillHoldsTheReservation(resolved, reservation);
                 }
+                refuseUnlessTheTargetIsStillTheFileVerified(resolved, expected);
                 Files.move(temporary, resolved, StandardCopyOption.REPLACE_EXISTING);
             }
         }
@@ -685,6 +756,41 @@ public final class MergeRulesCodec
                 }
             }
             throw e;
+        }
+    }
+
+    /**
+     * Refuses to install the document when the path no longer holds the file the CALLER
+     * verified. Does nothing when the caller named no expectation.
+     *
+     * @param resolved the target path
+     * @param expected the attributes the caller verified it by, or {@code null}
+     * @throws IOException when the path now holds something else
+     */
+    private static void refuseUnlessTheTargetIsStillTheFileVerified(Path resolved,
+        BasicFileAttributes expected) throws IOException
+    {
+        if (expected == null)
+        {
+            return;
+        }
+        BasicFileAttributes present;
+        try
+        {
+            present = Files.readAttributes(resolved, BasicFileAttributes.class);
+        }
+        catch (IOException gone)
+        {
+            throw new IOException("Nothing was written: " + resolved //$NON-NLS-1$
+                + " could no longer be read when the replacement was about to be installed, so " //$NON-NLS-1$
+                + "this write cannot tell that it would replace the file it verified.", gone); //$NON-NLS-1$
+        }
+        if (!isTheFileRead(expected, present))
+        {
+            throw new IOException("Nothing was written: " + resolved //$NON-NLS-1$
+                + " changed between the last verification and the replacement - what is on that " //$NON-NLS-1$
+                + "path now is not the file this write was authorized against, and replacing it " //$NON-NLS-1$
+                + "would discard whatever was saved to it since."); //$NON-NLS-1$
         }
     }
 
@@ -985,6 +1091,24 @@ public final class MergeRulesCodec
      */
     public static String fileDigest(Path file) throws IOException
     {
+        return fileDigest(file, Long.MAX_VALUE);
+    }
+
+    /**
+     * The same digest, refusing to read more than {@code limit} bytes.
+     * <p>
+     * The bound belongs to the READ, not to a {@code stat} in front of it: an archive replaced
+     * between the two would be streamed whole no matter what the earlier size said. Stopping
+     * the stream itself is what makes the work bounded by construction.
+     * </p>
+     *
+     * @param file the file to digest
+     * @param limit the largest number of bytes this read may consume
+     * @return the hex SHA-256 of its bytes
+     * @throws IOException when it cannot be read, or holds more than {@code limit} bytes
+     */
+    public static String fileDigest(Path file, long limit) throws IOException
+    {
         MessageDigest digest;
         try
         {
@@ -997,9 +1121,17 @@ public final class MergeRulesCodec
         byte[] buffer = new byte[8192];
         try (InputStream in = Files.newInputStream(file))
         {
+            long consumed = 0;
             int read;
             while ((read = in.read(buffer)) > 0)
             {
+                consumed += read;
+                if (consumed > limit)
+                {
+                    throw new IOException("Nothing was written: " + file //$NON-NLS-1$
+                        + " grew past the " + limit + " bytes it held when it was read, so it is " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "no longer the file this call verified and is not read any further."); //$NON-NLS-1$
+                }
                 digest.update(buffer, 0, read);
             }
         }

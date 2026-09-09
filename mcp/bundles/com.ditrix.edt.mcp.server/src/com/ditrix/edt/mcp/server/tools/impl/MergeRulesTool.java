@@ -965,7 +965,7 @@ public class MergeRulesTool implements IMcpTool
             {
                 return grew;
             }
-            targetArchiveDigestAsRead = wholeFileDigest(file);
+            targetArchiveDigestAsRead = wholeFileDigest(file, targetAsRead.size());
             if (targetArchiveDigestAsRead == null)
             {
                 // Fail CLOSED. The alternative is a rewrite guarded by size and timestamps
@@ -982,7 +982,7 @@ public class MergeRulesTool implements IMcpTool
             // against the hashed file closes the window from the other side: a change inside it
             // is either seen HERE, or it happened after the hash and the confirm point sees it.
             String moved = archiveStillTheOneHashed(file, targetPolicy, targetDigestAsRead,
-                document.sourceEntry());
+                document.sourceEntry(), document.readEntryCarriedMetadata());
             if (moved != null)
             {
                 return moved;
@@ -1214,11 +1214,11 @@ public class MergeRulesTool implements IMcpTool
         {
             if (zipEntryId == null)
             {
-                MergeRulesCodec.write(file, document, targetPolicy);
+                MergeRulesCodec.write(file, document, targetPolicy, targetAsRead);
             }
             else
             {
-                MergeRulesCodec.writeZip(file, document, targetPolicy, zipEntryId);
+                MergeRulesCodec.writeZip(file, document, targetPolicy, zipEntryId, targetAsRead);
             }
         }
         catch (FileAlreadyExistsException e)
@@ -1421,7 +1421,7 @@ public class MergeRulesTool implements IMcpTool
      * @return a refusal, or {@code null} when the file is still the one that was hashed
      */
     private static String archiveStillTheOneHashed(Path file, MergeRulesCodec.Target targetPolicy,
-        String contentDigestAsRead, String entryAsRead)
+        String contentDigestAsRead, String entryAsRead, boolean entryMetadataAsRead)
     {
         MergeRulesDocument again;
         try
@@ -1444,6 +1444,13 @@ public class MergeRulesTool implements IMcpTool
         // preview and the in-memory document would still describe the old name while the write
         // put it back, silently undoing the rename.
         if (entryAsRead != null && !entryAsRead.equals(again.sourceEntry()))
+        {
+            return targetMovedRefusal(file);
+        }
+        // And the entry METADATA, for the same reason: the preview promises what a rewrite
+        // destroys, and it promises it from the FIRST read. A comment or extra field that
+        // appeared in the window would be lost without ever being named.
+        if (entryMetadataAsRead != again.readEntryCarriedMetadata())
         {
             return targetMovedRefusal(file);
         }
@@ -1473,11 +1480,11 @@ public class MergeRulesTool implements IMcpTool
      * @param file the target
      * @return the digest, or {@code null}
      */
-    private static String wholeFileDigest(Path file)
+    private static String wholeFileDigest(Path file, long limit)
     {
         try
         {
-            return MergeRulesCodec.fileDigest(file);
+            return MergeRulesCodec.fileDigest(file, limit);
         }
         catch (IOException unreadable) // NOSONAR: unreadable means changed, see the javadoc
         {
@@ -1558,7 +1565,8 @@ public class MergeRulesTool implements IMcpTool
                 // the mtime" from an assumption into something the code checked.
                 observed = "its content is not the content that was read"; //$NON-NLS-1$
             }
-            else if (archiveDigestAsRead != null && !archiveDigestAsRead.equals(wholeFileDigest(file)))
+            else if (archiveDigestAsRead != null
+                && !archiveDigestAsRead.equals(wholeFileDigest(file, asRead.size())))
             {
                 // Reached with the RULES unchanged: what moved is the archive around them - the
                 // entry name or its metadata, the archive comment, an entry beside it. The write
