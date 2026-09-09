@@ -10,6 +10,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -207,6 +208,35 @@ public class BreakpointUtilsTest
         assertEquals("2 breakpoint(s), none of which has a marker to name it by", //$NON-NLS-1$
             new BreakpointUtils.PartialExceptionUpdateException(nameless,
                 new IllegalStateException()).describeTouched());
+    }
+
+    /**
+     * A member whose marker cannot even be read was never mutated: the loop throws at the
+     * lookup, before any setter runs. Counting it would report one more breakpoint as changed
+     * than this call touched - and describe it as markerless, which it may not be.
+     */
+    @Test
+    public void testAMemberThatThrowsAtTheMarkerLookupIsNotCounted()
+    {
+        BreakpointUtils.TouchedBreakpoints touched = new BreakpointUtils.TouchedBreakpoints();
+        touched.add(breakpointWithMarkerId(41L));
+        IBreakpoint stale = mock(IBreakpoint.class);
+        when(stale.getMarker()).thenThrow(new IllegalStateException("stale marker")); //$NON-NLS-1$
+        try
+        {
+            touched.add(stale);
+            fail("the lookup was supposed to throw"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            // The loops turn exactly this into a PartialExceptionUpdateException.
+        }
+
+        BreakpointUtils.PartialExceptionUpdateException partial =
+            new BreakpointUtils.PartialExceptionUpdateException(touched,
+                new IllegalStateException("stale marker")); //$NON-NLS-1$
+        assertEquals("id(s) 41", partial.describeTouched()); //$NON-NLS-1$
+        assertEquals(1, partial.getBegunCount());
     }
 
     /**

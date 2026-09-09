@@ -641,16 +641,23 @@ public final class BreakpointUtils
         /**
          * Records a breakpoint about to be mutated. Counted whether or not it can be named:
          * a markerless member is changed like the rest and reachable by no returned id.
+         * <p>
+         * The count comes LAST, after the marker has been read. Both reads can throw on a
+         * stale marker that the interface fallback still recognises, and at that point nothing
+         * has been mutated - counting first would report a member as begun that the setters
+         * never reached, and describe it as markerless besides.
+         * </p>
          *
          * @param breakpoint the breakpoint about to change
          */
         void add(IBreakpoint breakpoint)
         {
-            begun++;
             IMarker marker = breakpoint.getMarker();
-            if (marker != null)
+            Long id = marker == null ? null : Long.valueOf(marker.getId());
+            begun++;
+            if (id != null)
             {
-                ids.add(Long.valueOf(marker.getId()));
+                ids.add(id);
             }
         }
     }
