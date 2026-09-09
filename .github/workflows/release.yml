@@ -45,7 +45,12 @@ jobs:
       - name: Set version from tag
         working-directory: mcp
         run: |
-          mvn org.eclipse.tycho:tycho-versions-plugin:4.0.5:set-version \
+          set -euo pipefail
+          # From the pom, not pinned here: a hardcoded 4.0.5 stopped loading on the move to Tycho 5.
+          TYCHO=$(sed -n 's|.*<tycho\.version>\(.*\)</tycho\.version>.*|\1|p' bom/pom.xml)
+          test -n "$TYCHO"
+          echo "tycho-versions-plugin: $TYCHO"
+          mvn "org.eclipse.tycho:tycho-versions-plugin:$TYCHO:set-version" \
             -DnewVersion=${{ steps.version.outputs.version }} \
             --batch-mode --no-transfer-progress
 
