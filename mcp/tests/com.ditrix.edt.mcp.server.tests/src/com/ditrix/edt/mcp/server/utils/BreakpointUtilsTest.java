@@ -16,6 +16,7 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
 import java.util.Arrays;
+import java.util.Collections;
 
 import org.eclipse.core.resources.IMarker;
 import org.eclipse.core.runtime.CoreException;
@@ -158,5 +159,30 @@ public class BreakpointUtilsTest
         }
         when(breakpoint.getMarker()).thenReturn(marker);
         return breakpoint;
+    }
+
+    /**
+     * The ids a half-done exception update touched travel WITH the failure, because nothing
+     * withdraws them. The empty case is pinned too: a set whose members were all markerless has
+     * nothing to name, and an empty list rendered as "" would read as a truncated sentence.
+     */
+    @Test
+    public void testAPartialExceptionUpdateCarriesTheIdsItTouched()
+    {
+        BreakpointUtils.PartialExceptionUpdateException partial =
+            new BreakpointUtils.PartialExceptionUpdateException(
+                Arrays.asList(Long.valueOf(41L), Long.valueOf(42L)),
+                new IllegalStateException("marker no longer exists")); //$NON-NLS-1$
+        assertEquals(Arrays.asList(Long.valueOf(41L), Long.valueOf(42L)), partial.getChangedIds());
+        assertEquals("41, 42", partial.describeChangedIds()); //$NON-NLS-1$
+        // The cause survives: the caller is owed WHY it failed as much as what it touched.
+        assertEquals("marker no longer exists", partial.getMessage()); //$NON-NLS-1$
+
+        BreakpointUtils.PartialExceptionUpdateException nothingNamed =
+            new BreakpointUtils.PartialExceptionUpdateException(Collections.emptyList(),
+                new IllegalStateException()); //$NON-NLS-1$
+        assertEquals("none it could name", nothingNamed.describeChangedIds()); //$NON-NLS-1$
+        // A cause with no message must not leave the sentence blank either.
+        assertEquals("IllegalStateException", nothingNamed.getMessage()); //$NON-NLS-1$
     }
 }

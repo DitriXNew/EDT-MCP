@@ -101,10 +101,15 @@ public class SetBreakpointTool implements IMcpTool
             .integerArrayProperty("breakpointIds", //$NON-NLS-1$
                 "Marker ids of every breakpoint reconciled at this line; more than one means breakpointId alone is not all of them") //$NON-NLS-1$
             .integerProperty("reconciledBreakpoints", //$NON-NLS-1$
-                "Present only when this line carried more than one registered BSL breakpoint; all " //$NON-NLS-1$
-                    + "of them were configured identically") //$NON-NLS-1$
-            .booleanProperty("degraded", "True when only a marker-only breakpoint could be created") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("warning", "Warning text when the breakpoint is degraded/marker-only") //$NON-NLS-1$ //$NON-NLS-2$
+                "Present only when this line carried more than one registered BSL breakpoint; the " //$NON-NLS-1$
+                    + "same settings were requested for every one of them, and a marker-only member " //$NON-NLS-1$
+                    + "takes none of them") //$NON-NLS-1$
+            .booleanProperty("degraded", //$NON-NLS-1$
+                "True when ANY breakpoint at this line is marker-only - one created as the fallback, " //$NON-NLS-1$
+                    + "or one already registered there, which an update does not turn native") //$NON-NLS-1$
+            .stringProperty("warning", //$NON-NLS-1$
+                "Present when degraded; it says whether the marker-only breakpoint was created here " //$NON-NLS-1$
+                    + "or already registered, and how many of the reconciled ones are native") //$NON-NLS-1$
             .build();
     }
 
@@ -272,13 +277,16 @@ public class SetBreakpointTool implements IMcpTool
             .append(cause).append('.');
         if (!alreadyChanged.isEmpty())
         {
-            message.append(" Breakpoints this call had already begun changing keep the new "); //$NON-NLS-1$
-            message.append("settings - id(s) "); //$NON-NLS-1$
+            // "Begun changing", not "changed": the failure can land before the first setter wrote
+            // anything, or between the condition and the hit count. Naming a state this call did
+            // not establish would be the same dishonesty as saying nothing.
+            message.append(" This call had already begun changing breakpoint id(s) "); //$NON-NLS-1$
             for (int i = 0; i < alreadyChanged.size(); i++)
             {
                 message.append(i == 0 ? "" : ", ").append(alreadyChanged.get(i)); //$NON-NLS-1$ //$NON-NLS-2$
             }
-            message.append('.');
+            message.append(" - each may carry part of the new settings and none of them was " //$NON-NLS-1$
+                + "rolled back, so inspect them."); //$NON-NLS-1$
         }
         return message.append(" Verify the breakpoint in EDT's Breakpoints view, then retry.") //$NON-NLS-1$
             .toString();

@@ -64,7 +64,7 @@ public class SetErrorBreakpointTool implements IMcpTool
             .integerProperty("breakpointId", "Eclipse marker id when the breakpoint is enabled") //$NON-NLS-1$ //$NON-NLS-2$
             .integerArrayProperty("breakpointIds", "Marker ids of EVERY exception breakpoint this call touched, on both the enable and the disable path; more than one means breakpointId alone is not the whole setting, and each id has to be removed") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("configuredCount", "How many breakpoints were touched; larger than breakpointIds when one of them has no marker to name") //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty("warning", "Present when some affected breakpoint has no marker and therefore cannot be removed through remove_breakpoint") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("warning", "Present when an affected breakpoint has no marker (so remove_breakpoint cannot reach it), when a filter could not be read back (the filter fields are then omitted), or both - the text says which") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty(KEY_ENABLED, "Whether break-on-error is enabled") //$NON-NLS-1$
             .booleanProperty("workspaceWide", "Always true; EDT does not scope this breakpoint by project") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("catchAllExceptions", "Whether all BSL exceptions are matched") //$NON-NLS-1$ //$NON-NLS-2$
@@ -169,6 +169,19 @@ public class SetErrorBreakpointTool implements IMcpTool
                 result.put("disabledCount", change.getDisabledCount()); //$NON-NLS-1$
             }
             return result.toJson();
+        }
+        catch (BreakpointUtils.PartialExceptionUpdateException partial)
+        {
+            // The ids are the whole point of the separate catch: this mutation cannot be undone
+            // by withdrawing anything - the members the loop reached keep whatever the setters
+            // managed to write - and a plain error would leave them unnameable.
+            Activator.logError("Failed to set workspace-wide error breakpoint", partial); //$NON-NLS-1$
+            return ToolResult.error("Failed to set workspace-wide error breakpoint: " //$NON-NLS-1$
+                + endSentence(partial.getMessage())
+                + " This call had already begun changing breakpoint id(s) " //$NON-NLS-1$
+                + partial.describeChangedIds()
+                + " - each may carry part of the new configuration and none of them was rolled " //$NON-NLS-1$
+                + "back, so inspect them in EDT's Breakpoints view before retrying.").toJson(); //$NON-NLS-1$
         }
         catch (Exception e)
         {

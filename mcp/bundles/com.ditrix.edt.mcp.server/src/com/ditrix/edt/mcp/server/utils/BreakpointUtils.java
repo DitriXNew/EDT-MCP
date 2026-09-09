@@ -383,9 +383,18 @@ public final class BreakpointUtils
         List<IBreakpoint> existing = findExceptionBreakpoints(manager);
         if (!enabled)
         {
+            List<Long> begun = new ArrayList<>();
             for (IBreakpoint breakpoint : existing)
             {
-                breakpoint.setEnabled(false);
+                rememberTouched(begun, breakpoint);
+                try
+                {
+                    breakpoint.setEnabled(false);
+                }
+                catch (Exception failure)
+                {
+                    throw new PartialExceptionUpdateException(begun, failure);
+                }
             }
             return ExceptionBreakpointChange.disabled(existing.size(), markerIdsOf(existing));
         }
@@ -395,13 +404,25 @@ public final class BreakpointUtils
         String configuredMessage = catchAll ? null : exceptionMessage;
         if (!existing.isEmpty())
         {
+            List<Long> begun = new ArrayList<>();
             for (IBreakpoint breakpoint : existing)
             {
-                if (updateFilter)
+                // Recorded BEFORE the mutation: a member that throws halfway may already carry
+                // the new filter, and a list of the fully done ones would hide the very entry
+                // the caller has to look at.
+                rememberTouched(begun, breakpoint);
+                try
                 {
-                    configureExceptionBreakpoint(breakpoint, catchAll, configuredMessage);
+                    if (updateFilter)
+                    {
+                        configureExceptionBreakpoint(breakpoint, catchAll, configuredMessage);
+                    }
+                    breakpoint.setEnabled(true);
                 }
-                breakpoint.setEnabled(true);
+                catch (Exception failure)
+                {
+                    throw new PartialExceptionUpdateException(begun, failure);
+                }
             }
             // Every one of them was configured, and the caller is told so: a workspace that
             // holds several (legacy state) is not served by an answer naming one id, since
@@ -526,6 +547,74 @@ public final class BreakpointUtils
         DIFFERENT,
         /** At least one could not be read back, so nothing about the set is established. */
         UNVERIFIED
+    }
+
+    /**
+     * A mutation of several exception breakpoints that failed after touching some of them.
+     * <p>
+     * Carries their marker ids, because nothing withdraws them: the members the loop reached
+     * keep whatever the setters managed to write, and an error that named none of them would
+     * leave a caller without {@code list_breakpoints} unable to find what moved.
+     * </p>
+     */
+    public static class PartialExceptionUpdateException
+        extends Exception
+    {
+        private static final long serialVersionUID = 1L;
+
+        private final List<Long> changed;
+
+        /**
+         * @param changed marker ids this call had begun changing, in the order it reached them
+         * @param cause the failure that stopped the loop
+         */
+        PartialExceptionUpdateException(List<Long> changed, Throwable cause)
+        {
+            super(cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage(),
+                cause);
+            this.changed = List.copyOf(changed);
+        }
+
+        /**
+         * @return the marker ids this call had begun changing
+         */
+        public List<Long> getChangedIds()
+        {
+            return changed;
+        }
+
+        /**
+         * @return those ids as a comma-separated list, or "none it could name" when every
+         *         touched breakpoint was markerless
+         */
+        public String describeChangedIds()
+        {
+            if (changed.isEmpty())
+            {
+                return "none it could name"; //$NON-NLS-1$
+            }
+            StringBuilder ids = new StringBuilder();
+            for (int i = 0; i < changed.size(); i++)
+            {
+                ids.append(i == 0 ? "" : ", ").append(changed.get(i)); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            return ids.toString();
+        }
+    }
+
+    /**
+     * Records a breakpoint about to be mutated, when it has a marker to name it by.
+     *
+     * @param touched the ids collected so far
+     * @param breakpoint the breakpoint about to change
+     */
+    private static void rememberTouched(List<Long> touched, IBreakpoint breakpoint)
+    {
+        IMarker marker = breakpoint.getMarker();
+        if (marker != null)
+        {
+            touched.add(Long.valueOf(marker.getId()));
+        }
     }
 
     /**

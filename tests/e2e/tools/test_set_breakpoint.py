@@ -63,6 +63,7 @@ deterministic. assert_no_diff() still proves the project source was untouched.
 from harness import (
     call,
     assert_ok,
+    E2ESkip,
     assert_error,
     assert_error_quality,
     assert_contains,
@@ -72,6 +73,27 @@ from harness import (
 )
 
 CALC_MODULE = "CommonModules/Calc/Module.bsl"
+CALC_LINE = 2
+
+
+def _require_free_probe():
+    """Raises E2ESkip when the coordinate this test writes to already holds a breakpoint.
+
+    set_breakpoint RECONFIGURES what is already there rather than creating a second breakpoint,
+    and this test cleans up by the returned id - so in a reused workspace it would rewrite a
+    breakpoint it does not own, then delete it. The same precondition guards the probe in
+    test_list_breakpoints.py.
+    """
+    existing = call("list_breakpoints", {"projectName": PROJECT})
+    assert_ok(existing, "precondition: list_breakpoints must answer before the breakpoint is set")
+    for entry in (existing.structured or {}).get("breakpoints", []):
+        # The line DTO carries its path as "file" (a workspace path), not "modulePath".
+        if entry.get("kind") == "line" and entry.get("lineNumber") == CALC_LINE \
+                and str(entry.get("file") or "").replace(chr(92), "/").endswith(CALC_MODULE):
+            raise E2ESkip(
+                "%s:%d already holds a breakpoint (%r); this test would reconfigure and then "
+                "delete it" % (CALC_MODULE, CALC_LINE, entry)
+            )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -90,6 +112,7 @@ def test_sets_breakpoint_on_calc_module_line_and_does_not_touch_project():
     drops the line number, or returns no id would FAIL one of these asserts. A
     tool that secretly wrote into the project tree would FAIL assert_no_diff().
     """
+    _require_free_probe()
     r = call("set_breakpoint", {
         "projectName": PROJECT,
         "modulePath": CALC_MODULE,

@@ -281,8 +281,12 @@ public class SetBreakpointToolTest
         assertTrue("the failure must carry the cause: " + partial,
             partial.contains("marker no longer exists"));
         assertTrue("both mutated ids must be named: " + partial,
-            partial.contains("id(s) 12, 15."));
-        assertTrue("the caller must be told they keep the new settings: " + partial,
+            partial.contains("id(s) 12, 15"));
+        // "may carry PART of", not "keep": the failure can land before the first setter wrote
+        // anything, so a message asserting the settled state would claim what nobody knows.
+        assertTrue("the caller must be told what is uncertain about them: " + partial,
+            partial.contains("each may carry part of the new settings"));
+        assertFalse("the message must not assert a state the call never established: " + partial,
             partial.contains("keep the new settings"));
 
         String clean = SetBreakpointTool.failureMessage("boom", Collections.emptyList());

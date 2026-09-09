@@ -18,6 +18,6 @@ JSON with `action` (`created`, `updated`, `disabled`, or `notFound`), `enabled`,
 - This setting is **workspace-wide**, not per project. EDT attaches the exception breakpoint to the workspace root and exposes no project scope, so this tool intentionally has no `projectName` parameter.
 - `enabled=false` disables every registered BSL exception breakpoint without deleting its marker or message filter, and succeeds with `action: "notFound"` when none exists.
 - Omitting `exceptionMessage` always keeps an existing filter, regardless of whether the breakpoint is currently enabled or disabled. Pass `exceptionMessage: ""` to clear that filter and catch all exceptions.
-- To delete the saved configuration outright, pass its workspace-wide `breakpointId` to `remove_breakpoint`.
+- To delete the saved configuration outright, pass EVERY id in `breakpointIds` to `remove_breakpoint` - normally one, but where a workspace holds legacy duplicates `breakpointId` alone leaves the others configured and breaking on error.
 - Creating a breakpoint requires EDT's OSGi `IBslBreakpointFactory` service. If that service is unavailable, the tool reports the exact service name and does not fake success.
 - A safe unattended-run pattern is: `set_error_breakpoint(enabled=false)` -> run the regression -> `set_error_breakpoint(enabled=true)`. The final call keeps the breakpoint's previous catch-all or message-filter configuration without requiring it again.
