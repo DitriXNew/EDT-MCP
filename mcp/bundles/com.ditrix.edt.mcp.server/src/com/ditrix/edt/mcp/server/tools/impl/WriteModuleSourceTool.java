@@ -1214,9 +1214,20 @@ public class WriteModuleSourceTool implements IMcpTool
     }
 
     /**
+     * Whether the text ends with a line separator in any of the three spellings.
+     *
+     * @param source the payload
+     * @return whether it ends with a separator
+     */
+    private static boolean endsWithSeparator(String source)
+    {
+        return source.endsWith("\n") || source.endsWith("\r"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
      * Splits source code into lines, handling trailing newline artifact.
      */
-    private static List<String> splitSourceLines(String source)
+    static List<String> splitSourceLines(String source)
     {
         if (source.isEmpty())
         {
@@ -1229,9 +1240,11 @@ public class WriteModuleSourceTool implements IMcpTool
         String[] parts = source.split("\\r\\n|\\r|\\n", -1); //$NON-NLS-1$
         List<String> lines = new ArrayList<>(Arrays.asList(parts));
 
-        // If source ends with \n, split produces a trailing empty element.
-        // Remove it to avoid adding an extra blank line.
-        if (source.endsWith("\n") && lines.size() > 1 //$NON-NLS-1$
+        // A trailing separator produces a trailing empty element; remove it to avoid adding an
+        // extra blank line. ANY separator, not just the newline: the split above cuts on all
+        // three, so a payload ending in a bare carriage return produces that element too - and
+        // testing only for the newline left it in, splicing a blank line into the module.
+        if (endsWithSeparator(source) && lines.size() > 1
             && lines.get(lines.size() - 1).isEmpty())
         {
             lines.remove(lines.size() - 1);

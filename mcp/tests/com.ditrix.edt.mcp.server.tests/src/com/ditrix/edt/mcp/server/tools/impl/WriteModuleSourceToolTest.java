@@ -1614,4 +1614,40 @@ public class WriteModuleSourceToolTest
         assertNull(WriteModuleSourceTool.detectDominantDelimiter("")); //$NON-NLS-1$
         assertNull(WriteModuleSourceTool.detectDominantDelimiter(null));
     }
+
+    /**
+     * The trailing separator is dropped for ALL THREE spellings, not only the newline. A payload
+     * ending in a bare carriage return splits into a trailing empty element exactly like one
+     * ending in a newline, and keeping it spliced a blank line into the module.
+     */
+    @Test
+    public void testSplitSourceLinesDropsTheTrailingElementForEverySeparator()
+    {
+        assertEquals(Arrays.asList("a", "b"), //$NON-NLS-1$ //$NON-NLS-2$
+            WriteModuleSourceTool.splitSourceLines("a\rb\r")); //$NON-NLS-1$
+        assertEquals(Arrays.asList("a", "b"), //$NON-NLS-1$ //$NON-NLS-2$
+            WriteModuleSourceTool.splitSourceLines("a\nb\n")); //$NON-NLS-1$
+        assertEquals(Arrays.asList("a", "b"), //$NON-NLS-1$ //$NON-NLS-2$
+            WriteModuleSourceTool.splitSourceLines("a\r\nb\r\n")); //$NON-NLS-1$
+        // No trailing separator at all: nothing to drop.
+        assertEquals(Arrays.asList("a", "b"), //$NON-NLS-1$ //$NON-NLS-2$
+            WriteModuleSourceTool.splitSourceLines("a\rb")); //$NON-NLS-1$
+    }
+
+    /**
+     * The other edge of the same rule: exactly ONE trailing element goes. A payload that ends in
+     * a deliberate blank line keeps that blank line, or the widened condition would start eating
+     * content instead of an artefact.
+     */
+    @Test
+    public void testSplitSourceLinesKeepsADeliberateTrailingBlankLine()
+    {
+        assertEquals(Arrays.asList("a", ""), //$NON-NLS-1$ //$NON-NLS-2$
+            WriteModuleSourceTool.splitSourceLines("a\r\r")); //$NON-NLS-1$
+        assertEquals(Arrays.asList("a", ""), //$NON-NLS-1$ //$NON-NLS-2$
+            WriteModuleSourceTool.splitSourceLines("a\n\n")); //$NON-NLS-1$
+        // A lone separator is a single empty line, not an empty list: size > 1 guards that.
+        assertEquals(Arrays.asList(""), //$NON-NLS-1$
+            WriteModuleSourceTool.splitSourceLines("\r")); //$NON-NLS-1$
+    }
 }
