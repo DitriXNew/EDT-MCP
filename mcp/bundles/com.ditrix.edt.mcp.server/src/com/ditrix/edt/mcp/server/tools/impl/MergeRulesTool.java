@@ -1341,6 +1341,24 @@ public class MergeRulesTool implements IMcpTool
      * @return the digest, or {@code null} when the file cannot be read or parsed - which the
      *         caller treats as changed, the direction the whole check reasons in
      */
+    /**
+     * The ENTRY half of a codec source label ({@code <file>!<entry>}), or {@code null} for a bare
+     * xml document - the half that identifies what a zip write puts back, independent of how the
+     * caller spelled the path.
+     *
+     * @param label the label recorded by the codec, may be {@code null}
+     * @return the entry name, or {@code null}
+     */
+    private static String entryNameOf(String label)
+    {
+        if (label == null)
+        {
+            return null;
+        }
+        int bang = label.lastIndexOf('!');
+        return bang < 0 ? null : label.substring(bang + 1);
+    }
+
     private static String currentDocument(Path file, List<String> entriesOut, String[] labelOut)
     {
         try
@@ -1413,11 +1431,13 @@ public class MergeRulesTool implements IMcpTool
                 // the mtime" from an assumption into something the code checked.
                 observed = "its content is not the content that was read"; //$NON-NLS-1$
             }
-            else if (labelAsRead != null && !labelAsRead.equals(labelNow[0]))
+            else if (!java.util.Objects.equals(entryNameOf(labelAsRead), entryNameOf(labelNow[0])))
             {
-                // The label carries the entry a zip was read from ("<file>!<entry>"), so this
-                // catches a settings entry renamed in place - which nothing else here can see,
-                // and which the write would silently undo.
+                // Only the ENTRY part of the label: the path half is whatever spelling the caller
+                // used, and basedOn may name this same file differently - comparing the whole
+                // label would refuse a legitimate rewrite over a difference in spelling. The entry
+                // is what the write puts back, and renaming it in place is invisible to every
+                // other clause here.
                 observed = "the archive entry it was read from is no longer the one it holds"; //$NON-NLS-1$
             }
             else if (!entriesNow.equals(entriesAsRead))
