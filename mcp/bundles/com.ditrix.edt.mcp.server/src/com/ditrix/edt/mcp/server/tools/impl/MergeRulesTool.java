@@ -1279,11 +1279,14 @@ public class MergeRulesTool implements IMcpTool
         // so 'settings/A_B_C.xml' IS the entry 'A_B_C' - announcing that as a rename would be
         // false, exactly as the codec's own lookup test says. Comparing the raw values would
         // also fire on every ordinary rewrite, since one side carries the extension.
+        // Compared as ADDRESSES (the reader's normalization), shown as NAMES: the operator reads
+        // the entry that will exist in the archive, not the identifier the tool addresses it by.
         String readAddress = entryAsRead == null ? null : MergeRulesCodec.removeExtension(entryAsRead);
         String renameClause = readAddress != null && entryToWrite != null
             && !readAddress.equals(entryToWrite)
                 ? " The rules also change address inside the archive: they were read from entry '" //$NON-NLS-1$
-                    + entryAsRead + "' and will be written as '" + entryToWrite //$NON-NLS-1$
+                    + entryAsRead + "' and will be written as '" //$NON-NLS-1$
+                    + entryToWrite + MergeRulesCodec.XML_EXTENSION
                     + "', so a comparison looking for the old name will no longer find them." //$NON-NLS-1$
                 : ""; //$NON-NLS-1$
         return new ConsentPreview("Replace merge-rules file", //$NON-NLS-1$
