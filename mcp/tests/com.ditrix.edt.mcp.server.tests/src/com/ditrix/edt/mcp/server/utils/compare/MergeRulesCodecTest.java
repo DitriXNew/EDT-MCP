@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils.compare;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -3054,6 +3055,45 @@ public class MergeRulesCodecTest
      * two predicates would agree by accident and a size clause that had gone missing would hide.
      */
     private static final long AS_READ_SIZE = 4096L;
+
+    /**
+     * The residue the attribute comparison cannot see, on a REAL file rather than a built
+     * description: a replacement of the same length whose timestamps are put back, which inode
+     * reuse, NTFS tunnelling and any timestamp-copying sync tool all produce. The attributes say
+     * "same file" - that is the point of this test - and only the content digest disagrees.
+     */
+    @Test
+    public void testTheContentDigestSeesAReplacementTheAttributesCannotTellApart() throws Exception
+    {
+        Path file = workDir.resolve("rules-digest.xml"); //$NON-NLS-1$
+        Files.writeString(file, "AAAA", StandardCharsets.UTF_8); //$NON-NLS-1$
+        BasicFileAttributes asRead = Files.readAttributes(file, BasicFileAttributes.class);
+        String digestAsRead = MergeRulesCodec.contentDigest(file);
+
+        Files.writeString(file, "BBBB", StandardCharsets.UTF_8); //$NON-NLS-1$
+        Files.setLastModifiedTime(file, asRead.lastModifiedTime());
+        BasicFileAttributes present = Files.readAttributes(file, BasicFileAttributes.class);
+
+        assertTrue("the attribute check cannot tell this replacement apart - that is the residue " //$NON-NLS-1$
+            + "the digest exists for; if this ever fails, the test has stopped modelling it", //$NON-NLS-1$
+            MergeRulesCodec.isTheFileRead(asRead, present));
+        assertNotEquals("but the content digest must see it", //$NON-NLS-1$
+            digestAsRead, MergeRulesCodec.contentDigest(file));
+    }
+
+    /**
+     * The mirror direction: a file nobody touched keeps its digest, so the new clause cannot
+     * refuse the rewrites this tool exists to perform.
+     */
+    @Test
+    public void testTheContentDigestOfAnUntouchedFileIsUnchanged() throws Exception
+    {
+        Path file = workDir.resolve("rules-digest-stable.xml"); //$NON-NLS-1$
+        Files.writeString(file, "AAAA", StandardCharsets.UTF_8); //$NON-NLS-1$
+
+        assertEquals("re-reading the same bytes must give the same digest", //$NON-NLS-1$
+            MergeRulesCodec.contentDigest(file), MergeRulesCodec.contentDigest(file));
+    }
 
     /**
      * The control, and it does more than keep the rest from being satisfied by "never the same

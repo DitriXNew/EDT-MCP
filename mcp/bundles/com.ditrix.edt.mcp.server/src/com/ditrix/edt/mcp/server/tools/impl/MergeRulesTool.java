@@ -847,6 +847,7 @@ public class MergeRulesTool implements IMcpTool
         boolean zipped = MergeRulesCodec.isZip(file);
         MergeRulesCodec.Target targetPolicy = MergeRulesCodec.Target.MUST_NOT_EXIST;
         BasicFileAttributes targetAsRead = null;
+        String targetDigestAsRead = null;
         if (Files.exists(file))
         {
             if (!isSameFile(file, base))
@@ -874,6 +875,11 @@ public class MergeRulesTool implements IMcpTool
             try
             {
                 targetAsRead = Files.readAttributes(file, BasicFileAttributes.class);
+                // Taken here as well, and for the residue the attributes cannot see: a replacement
+                // of the same length that preserves both instants. Same order, same direction - a
+                // change landing between these two lines is seen as a changed digest and costs a
+                // refusal, never a silent overwrite.
+                targetDigestAsRead = MergeRulesCodec.contentDigest(file);
             }
             catch (IOException e)
             {
@@ -1128,7 +1134,7 @@ public class MergeRulesTool implements IMcpTool
             // answers without a prompt still leaves the whole interval above - the read, the
             // parse, the comparison's BM read - for a foreign writer to land in, and a check that
             // ran only at the Ask level would guard the slow path and leave the fast one open.
-            String changed = targetChangedRefusal(file, targetAsRead);
+            String changed = targetChangedRefusal(file, targetAsRead, targetDigestAsRead);
             if (changed != null)
             {
                 return changed;
@@ -1256,14 +1262,16 @@ public class MergeRulesTool implements IMcpTool
      * path stops holding it. {@code MAY_BE_REPLACED} moves unconditionally, which is what makes
      * this the tool's question to ask.
      *
-     * <h2>Attributes rather than content, and a refusal rather than a second prompt</h2>
-     * The comparison is {@link MergeRulesCodec#isTheFileRead} - the same identity the reservation
-     * is recognised by. Against the writer this exists to catch it is practically exact: a save
-     * stamps the file with the current instant, and the instant this call read it precedes the
-     * dialog by seconds at least, so even a store with two-second timestamp granularity cannot
-     * hide it. A content hash would be stricter and would have to cover the same bytes the parser
-     * consumed - for an archive, the whole file - which is a change to the codec for a case this
-     * threat model does not hold.
+     * <h2>Attributes AND content, and a refusal rather than a second prompt</h2>
+     * The first comparison is {@link MergeRulesCodec#isTheFileRead} - the same identity the
+     * reservation is recognised by - and it settles the ordinary writer outright: a save stamps
+     * the file with the current instant, and the instant this call read it precedes the dialog by
+     * seconds at least, so even a store with two-second timestamp granularity cannot hide it.
+     * What it cannot see is named in its own note: a replacement of the same length that preserves
+     * or restores both instants, which inode reuse, NTFS tunnelling and any timestamp-copying sync
+     * tool make reachable. So when every attribute still matches, the content is compared too
+     * ({@link MergeRulesCodec#contentDigest}) - one read of a file this call has already read,
+     * which turns "a writer would have stamped the mtime" from an assumption into a check.
      * <p>
      * Re-prompting was the alternative and is worse: an honest second prompt means re-running the
      * pipeline from the read - the sidecar check, the duplicate paths, the comparison's snapshot,
@@ -1282,9 +1290,12 @@ public class MergeRulesTool implements IMcpTool
      * @param file the absolute, normalised target, as read before the gate
      * @param asRead the target's description taken before the document was read, never
      *            {@code null} for a rewrite
+     * @param digestAsRead the target's content digest taken at the same point; {@code null} only
+     *            when there was no existing target to digest
      * @return the refusal, or {@code null} when the target is still the file that was read
      */
-    private static String targetChangedRefusal(Path file, BasicFileAttributes asRead)
+    private static String targetChangedRefusal(Path file, BasicFileAttributes asRead,
+        String digestAsRead)
     {
         String observed;
         try
@@ -1297,6 +1308,15 @@ public class MergeRulesTool implements IMcpTool
             else if (!MergeRulesCodec.isTheFileRead(asRead, present))
             {
                 observed = "its size or timestamps are not those of the file that was read"; //$NON-NLS-1$
+            }
+            else if (digestAsRead != null
+                && !digestAsRead.equals(MergeRulesCodec.contentDigest(file)))
+            {
+                // The residue the attributes cannot see: same length, both instants preserved or
+                // restored. Reached only when every attribute still matches, so it costs one read
+                // of a file this call has already read - and it turns "a writer would have stamped
+                // the mtime" from an assumption into something the code checked.
+                observed = "its content is not the content that was read"; //$NON-NLS-1$
             }
             else
             {

@@ -23,9 +23,12 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFileAttributes;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HexFormat;
 import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -939,6 +942,50 @@ public final class MergeRulesCodec
     {
         return present.isRegularFile() && present.size() == read.size()
             && sameStampsAndKey(read, present);
+    }
+
+    /**
+     * A digest of the file's whole content, for the residue {@link #isTheFileRead} cannot see.
+     * <p>
+     * That predicate compares size, both instants and the key, and its own note names what gets
+     * through: a replacement of the same length that preserves or restores the instants, which a
+     * POSIX store's inode reuse, NTFS tunnelling, and any sync tool that copies timestamps all
+     * make reachable. Attributes are an argument about what a writer usually does; this is a
+     * mechanism, so the caller does not have to be right about the writer.
+     * </p>
+     * <p>
+     * The whole file is hashed rather than "the bytes the parser consumed": for an archive target
+     * those are the whole file anyway, and streaming it keeps the cost O(size) in time and O(1)
+     * in memory - no buffering of a target that may be an archive.
+     * </p>
+     *
+     * @param file the file to digest
+     * @return the hex SHA-256 of its content
+     * @throws IOException when the file cannot be read - which the caller must treat as changed,
+     *             the same direction the attribute check reasons in
+     */
+    public static String contentDigest(Path file) throws IOException
+    {
+        MessageDigest digest;
+        try
+        {
+            digest = MessageDigest.getInstance("SHA-256"); //$NON-NLS-1$
+        }
+        catch (NoSuchAlgorithmException impossible)
+        {
+            // Every conforming JRE ships SHA-256; there is no fallback that would be honest here.
+            throw new IllegalStateException("SHA-256 is required to verify the target", impossible); //$NON-NLS-1$
+        }
+        byte[] buffer = new byte[8192];
+        try (InputStream in = Files.newInputStream(file))
+        {
+            int read;
+            while ((read = in.read(buffer)) > 0)
+            {
+                digest.update(buffer, 0, read);
+            }
+        }
+        return HexFormat.of().formatHex(digest.digest());
     }
 
     /**
