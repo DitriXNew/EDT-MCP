@@ -1268,10 +1268,15 @@ public class MergeRulesTool implements IMcpTool
         // A rewrite may put the rules under a DIFFERENT entry name than the one they were read
         // from, and that changes which comparison can consume them - an address change the
         // operator must see BEFORE authorizing, not afterwards by diffing two report fields.
-        String renameClause = entryAsRead != null && entryToWrite != null
-            && !entryAsRead.equals(entryToWrite)
+        // Compared in the SAME form: sourceEntry() is the full entry name (always '.xml', since
+        // only such entries are read), while zipEntryId is the id WITHOUT the extension - which
+        // the write appends. Comparing them as they come would announce a rename on every single
+        // zip rewrite, including the ones that do not move anything.
+        String writtenEntry = entryToWrite == null ? null : entryToWrite + MergeRulesCodec.XML_EXTENSION;
+        String renameClause = entryAsRead != null && writtenEntry != null
+            && !entryAsRead.equals(writtenEntry)
                 ? " The rules also change address inside the archive: they were read from entry '" //$NON-NLS-1$
-                    + entryAsRead + "' and will be written as '" + entryToWrite //$NON-NLS-1$
+                    + entryAsRead + "' and will be written as '" + writtenEntry //$NON-NLS-1$
                     + "', so a comparison looking for the old name will no longer find them." //$NON-NLS-1$
                 : ""; //$NON-NLS-1$
         return new ConsentPreview("Replace merge-rules file", //$NON-NLS-1$
