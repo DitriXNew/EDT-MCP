@@ -115,7 +115,7 @@ public final class BslModuleUtils
      * </p>
      */
     private static final Pattern INLINE_TERMINATOR_PATTERN = Pattern.compile(
-        "(?<![\\p{L}\\p{N}_])(?:\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B|\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438|EndProcedure|EndFunction)(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
+        "(?<![.\\p{L}\\p{N}_])(?:\u041A\u043E\u043D\u0435\u0446\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u044B|\u041A\u043E\u043D\u0435\u0446\u0424\u0443\u043D\u043A\u0446\u0438\u0438|EndProcedure|EndFunction)(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     /**
      * A declaration sharing its line with the pragma(s) that annotate it
@@ -433,6 +433,14 @@ public final class BslModuleUtils
     private static final Pattern METHOD_END_TAIL_PATTERN = Pattern.compile("^\\s*;?\\s*(?://.*)?$"); //$NON-NLS-1$
 
     /**
+     * A line holding nothing but a declaration keyword, its name having been put on the next
+     * line. Hidden whitespace makes that a real method, and no anchored rule here can see it.
+     */
+    private static final Pattern BARE_DECLARATION_KEYWORD_PATTERN = Pattern.compile(
+        "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\s*$", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /**
      * A method DECLARATION anywhere on a line, used only to look PAST the opener of a
      * declaration line.
      * <p>
@@ -444,7 +452,7 @@ public final class BslModuleUtils
      * </p>
      */
     private static final Pattern ANY_DECLARATION_KEYWORD_PATTERN = Pattern.compile(
-        "(?<![.\\p{L}\\p{N}_])(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\s+[^\\s(]+\\s*\\(", //$NON-NLS-1$
+        "(?<![.\\p{L}\\p{N}_])(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\s+[^\\s(]+\\s*(?:\\(|$)", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /**
@@ -558,6 +566,23 @@ public final class BslModuleUtils
                 return i;
             }
             if (PRAGMA_ON_DECLARATION_LINE_PATTERN.matcher(line).find())
+            {
+                return i;
+            }
+            // A declaration the ANCHORED scan cannot see: written after something else on the
+            // line - the tail of a split pragma, say - it is invisible to every rule here, so
+            // the module holds a method this tool cannot count, address or check for duplicate
+            // names. Refusing is the only honest answer a whole-line scanner has.
+            if (ANY_DECLARATION_KEYWORD_PATTERN.matcher(line).find()
+                && !METHOD_START_PATTERN.matcher(line).find())
+            {
+                return i;
+            }
+            // The keyword ALONE, with its name on the next line. Not refused when the line
+            // above left a dangling member dot: a reserved word is a legal member name, so
+            // "Value = Object." and "Procedure" is one expression and not a declaration.
+            if (BARE_DECLARATION_KEYWORD_PATTERN.matcher(line).matches()
+                && !previousMeaningfulLineEndsWithMemberDot(scan, i))
             {
                 return i;
             }
@@ -1354,7 +1379,11 @@ public final class BslModuleUtils
             String trimmed = lines.get(start).trim();
             if (trimmed.isEmpty() || trimmed.startsWith("//")) //$NON-NLS-1$
             {
-                return -1;
+                // CROSSED, not stopped at: whitespace and comments are hidden terminals, so a
+                // pragma may carry an explanation between its opener and its argument tail and
+                // still be one pragma. Stopping here left it out of the preamble, which is the
+                // rebinding this method exists to prevent.
+                continue;
             }
             if (trimmed.startsWith("&")) //$NON-NLS-1$
             {

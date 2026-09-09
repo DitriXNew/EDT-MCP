@@ -1792,4 +1792,101 @@ public class WriteModuleSourceToolTest
         assertTrue("and the new method must go above the pragma, not inside it: " + joined, //$NON-NLS-1$
             joined.indexOf("Procedure Added()") < joined.indexOf("&Instead(")); //$NON-NLS-1$ //$NON-NLS-2$
     }
+
+    /**
+     * The mirror of the declaration case, on the TERMINATOR: {@code EndProcedure} after a dot is a
+     * member name, so a body that starts on the declaration line with
+     * {@code X = Object.EndProcedure;} is one ordinary method and must not be read as a method
+     * that ends on its own opening line.
+     */
+    @Test
+    public void testATerminatorNamedAsAMemberOnTheDeclarationLineIsNotATerminator()
+    {
+        List<String> module = lines(
+            "Procedure Target() X = Object.EndProcedure;\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\n\tNew = 1;\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("a member named after a terminator is not a terminator: " + result.error, //$NON-NLS-1$
+            result.error);
+    }
+
+    /**
+     * A second declaration whose parenthesis was moved to the next line is still a second
+     * declaration: the scan would count one method and the balance check would see matching pairs.
+     */
+    @Test
+    public void testASecondDeclarationWithItsParenthesisOnTheNextLineIsRejected()
+    {
+        List<String> crowded = lines(
+            "Procedure Target() Procedure Hidden\n()\nEndProcedure\nEndProcedure\n"); //$NON-NLS-1$
+        assertMethodEditError("declares two methods", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(crowded, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\nEndProcedure\n")); //$NON-NLS-1$
+    }
+
+    /**
+     * A declaration written after something else on the line - here the tail of a split pragma -
+     * is invisible to every anchored rule, so the module holds a method this tool cannot count or
+     * check for a duplicate name. It is refused rather than silently skipped.
+     */
+    @Test
+    public void testADeclarationAfterAPragmaTailIsRefusedAsUnaddressable()
+    {
+        List<String> module = lines(
+            "&Instead(\n\t\"Original\") Procedure Added()\nEndProcedure\n\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        assertMethodEditError("cannot address", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertAfter", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n")); //$NON-NLS-1$
+    }
+
+    /**
+     * The keyword alone, with its name on the next line: hidden whitespace makes it a real method
+     * that the anchored scan cannot see, so a duplicate name could be inserted beside it.
+     */
+    @Test
+    public void testADeclarationSplitBeforeItsNameIsRefusedAsUnaddressable()
+    {
+        List<String> module = lines(
+            "Procedure\nAdded()\nEndProcedure\n\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        assertMethodEditError("cannot address", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertAfter", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n")); //$NON-NLS-1$
+    }
+
+    /**
+     * The edge that keeps that rule honest: a reserved word is a legal member name, so
+     * {@code Value = Object.} followed by {@code Procedure} on its own line is ONE expression and
+     * not a declaration at all.
+     */
+    @Test
+    public void testAKeywordAloneAfterAMemberDotIsNotADeclaration()
+    {
+        List<String> module = lines(
+            "Procedure Target()\n\tValue = Object.\n\tProcedure;\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\n\tNew = 1;\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("a member reached across a line break is not a declaration: " + result.error, //$NON-NLS-1$
+            result.error);
+    }
+
+    /**
+     * A pragma may carry an explanation between its opener and its argument tail, because comments
+     * are hidden trivia. The backward walk must cross that comment, or the pragma falls out of the
+     * preamble and an insertBefore rebinds it to the inserted method.
+     */
+    @Test
+    public void testASplitPragmaWithACommentInsideStaysWithItsDeclaration()
+    {
+        List<String> module = lines(
+            "&Instead(\n\t// why\n\t\"Original\")\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("the insert must be accepted: " + result.error, result.error); //$NON-NLS-1$
+        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
+        assertTrue("the new method must go above the whole pragma: " + joined, //$NON-NLS-1$
+            joined.indexOf("Procedure Added()") < joined.indexOf("&Instead(")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 }
