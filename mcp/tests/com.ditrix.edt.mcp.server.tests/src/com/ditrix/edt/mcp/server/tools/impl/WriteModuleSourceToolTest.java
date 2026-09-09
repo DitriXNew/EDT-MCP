@@ -2160,4 +2160,21 @@ public class WriteModuleSourceToolTest
             WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
                 "Procedure Added()\nEndProcedure\n")); //$NON-NLS-1$
     }
+
+    /**
+     * The last direction the walk could differ from the pattern it replaced: a pragma name holding
+     * a Unicode number outside Nd. The pattern accepted it, so the walk must too - otherwise a
+     * module carrying such a pragma is refused for no reason.
+     */
+    @Test
+    public void testAPragmaNameWithANonDecimalNumberIsStillOwned()
+    {
+        List<String> module = lines(
+            "&X\u00B2(\"Original\")\nProcedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("a pragma name is [\\p{L}\\p{N}_]+, not just letters and Nd: " + result.error, //$NON-NLS-1$
+            result.error);
+    }
 }

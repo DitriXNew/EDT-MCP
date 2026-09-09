@@ -520,10 +520,14 @@ public final class BslModuleUtils
             }
             i++;
             int nameStart = i;
-            while (i < trimmed.length()
-                && (Character.isLetterOrDigit(trimmed.charAt(i)) || trimmed.charAt(i) == '_'))
+            while (i < trimmed.length())
             {
-                i++;
+                int codePoint = trimmed.codePointAt(i);
+                if (!isPragmaNameCharacter(codePoint))
+                {
+                    break;
+                }
+                i += Character.charCount(codePoint);
             }
             if (i == nameStart)
             {
@@ -554,16 +558,37 @@ public final class BslModuleUtils
     }
 
     /**
-     * @param text the text to walk
-     * @param from where to start
-     * @return the first index at or after {@code from} that is not whitespace
+     * Whether the code point may stand in a pragma name - the same class as the
+     * {@code [\p{L}\p{N}_]} this walk replaced.
+     * <p>
+     * Two ways the obvious test is narrower than that class, and both were wrong here:
+     * {@code Character.isLetterOrDigit} covers only Nd while {@code \p{N}} is Nd, Nl and No, so a
+     * name ending in a superscript two (U+00B2) was rejected; and reading CHARS rather than code
+     * points cuts a supplementary letter into two halves that are neither.
+     * </p>
+     *
+     * @param codePoint the code point to test
+     * @return whether it belongs in a pragma name
      */
+    private static boolean isPragmaNameCharacter(int codePoint)
+    {
+        if (codePoint == '_')
+        {
+            return true;
+        }
+        int type = Character.getType(codePoint);
+        return Character.isLetter(codePoint)
+            || type == Character.DECIMAL_DIGIT_NUMBER
+            || type == Character.LETTER_NUMBER
+            || type == Character.OTHER_NUMBER;
+    }
+
     private static boolean isBslSpace(char ch)
     {
-        // The same characters Java's \\s matches, and deliberately NOT
+        // The same characters Java's \s matches, and deliberately NOT
         // Character.isWhitespace: that one accepts the C0 separators (U+001C..U+001F), so a
         // pragma line glued together with a FILE SEPARATOR would pass a walk written to replace
-        // a \\s pattern that rejected it.
+        // a \s pattern that rejected it.
         return ch == ' ' || ch == '\t' || ch == '\n'
             || ch == 0x0B || ch == '\f' || ch == '\r';
     }
@@ -849,11 +874,11 @@ public final class BslModuleUtils
                 return new Unaddressable(i, "a declaration written after something else on the line", //$NON-NLS-1$
                     "start the declaration on a line of its own"); //$NON-NLS-1$
             }
-            // The keyword ALONE, with its name on the next line. Not refused when the line
-            // above left a dangling member dot: a reserved word is a legal member name, so
-            // "Value = Object." and "Procedure" is one expression and not a declaration.
-            if (BARE_DECLARATION_KEYWORD_PATTERN.matcher(line).matches()
-                && !previousMeaningfulLineEndsWithMemberDot(scan, i))
+            // The keyword ALONE, with its name on the next line. The dangling-dot case - where
+            // "Value = Object." and "Procedure" are one expression rather than a declaration,
+            // because a reserved word is a legal member name - is already excluded by the shared
+            // guard at the top of this loop.
+            if (BARE_DECLARATION_KEYWORD_PATTERN.matcher(line).matches())
             {
                 return new Unaddressable(i, "a declaration whose name is on the next line", //$NON-NLS-1$
                     "put the declaration and its name on one line"); //$NON-NLS-1$
