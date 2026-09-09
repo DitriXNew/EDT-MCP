@@ -494,6 +494,15 @@ public final class BslModuleUtils
         for (int line = lineIndex; line < scan.size(); line++)
         {
             String text = scan.get(line);
+            // BOUNDED by the method it belongs to. A list that only closes after the terminator
+            // has not closed inside this method: the span still ends at that terminator, so
+            // replaceMethod left the stray ")" behind - and the balance check counts block
+            // keywords, not parentheses, so it called the result healthy.
+            if (line > lineIndex && (isMethodTerminatorLine(text, METHOD_END_PATTERN)
+                || METHOD_START_PATTERN.matcher(text).find()))
+            {
+                return false;
+            }
             for (int i = line == lineIndex ? from : 0; i < text.length(); i++)
             {
                 char ch = text.charAt(i);
@@ -535,7 +544,7 @@ public final class BslModuleUtils
             while (i < trimmed.length())
             {
                 int codePoint = trimmed.codePointAt(i);
-                if (!isPragmaNameCharacter(codePoint))
+                if (!isIdentifierCharacter(codePoint))
                 {
                     break;
                 }
@@ -570,7 +579,7 @@ public final class BslModuleUtils
     }
 
     /**
-     * Whether the code point may stand in a pragma name - the same class as the
+     * Whether the code point may stand in an identifier or a pragma name - the same class as the
      * {@code [\p{L}\p{N}_]} this walk replaced.
      * <p>
      * Two ways the obvious test is narrower than that class, and both were wrong here:
@@ -582,7 +591,7 @@ public final class BslModuleUtils
      * @param codePoint the code point to test
      * @return whether it belongs in a pragma name
      */
-    private static boolean isPragmaNameCharacter(int codePoint)
+    private static boolean isIdentifierCharacter(int codePoint)
     {
         if (codePoint == '_')
         {
@@ -1007,17 +1016,25 @@ public final class BslModuleUtils
             return true;
         }
         // An identifier may END in a digit (Object1.), so walk the token back and judge it by
-        // its FIRST character: a run that starts with a digit is a numeric literal.
-        int i = base;
-        while (i >= 0 && (Character.isLetterOrDigit(line.charAt(i)) || line.charAt(i) == '_'))
+        // its FIRST character: a run that starts with a digit is a numeric literal. Walked by
+        // CODE POINT and through the same class as the identifier patterns - judged char-wise
+        // with isLetterOrDigit, a base ending in a non-Nd number stopped the walk, the dot was
+        // read as ending a literal, and the member below it was accepted as a real terminator.
+        int end = base + 1;
+        while (end > 0)
         {
-            i--;
+            int codePoint = line.codePointBefore(end);
+            if (!isIdentifierCharacter(codePoint))
+            {
+                break;
+            }
+            end -= Character.charCount(codePoint);
         }
-        if (i == base)
+        if (end == base + 1)
         {
             return false;
         }
-        char first = line.charAt(i + 1);
+        int first = line.codePointAt(end);
         return Character.isLetter(first) || first == '_';
     }
 
@@ -1060,7 +1077,17 @@ public final class BslModuleUtils
         }
         int comment = line.indexOf("//"); //$NON-NLS-1$
         String code = comment >= 0 ? line.substring(0, comment) : line;
-        String trimmed = code.stripTrailing();
+        // Trimmed with the BSL class, not String.stripTrailing(): that one strips by
+        // Character.isWhitespace, which accepts the C0 separators (U+001C..U+001F) the lexer does
+        // not. A line ending "Object." plus a FILE SEPARATOR was read as a dangling dot, the real
+        // terminator below it was taken for a member name, and the span borrowed a later closer -
+        // deleting whatever stood between them.
+        int end = code.length();
+        while (end > 0 && isBslSpace(code.charAt(end - 1)))
+        {
+            end--;
+        }
+        String trimmed = code.substring(0, end);
         return trimmed.endsWith(".") //$NON-NLS-1$
             && isMemberAccessDot(trimmed, trimmed.length() - 1);
     }
@@ -1783,25 +1810,44 @@ public final class BslModuleUtils
         int blankIndex)
     {
         int probe = blankIndex;
-        while (probe >= 0 && sourceLines.get(probe).trim().isEmpty())
-        {
-            probe--;
-        }
         int topAnnotation = -1;
+        // Group by group, not once: "&AtServer", blank, "&Around(...)", blank, declaration is ONE
+        // unit - every one of those directives binds to the declaration, because the whitespace
+        // between them is hidden. Stopping at the first blank run above the nearer annotation
+        // started the span below the further one, so replaceMethod kept a stale directive and
+        // insertBefore rebound it to the method being inserted. A group that holds no annotation
+        // is still not crossed: that is the documentation adjacency policy, unchanged.
         while (probe >= 0)
         {
-            String trimmed = sourceLines.get(probe).trim();
-            String trimmedMasked = masked.get(probe).trim();
-            if (!isTrivia(trimmed, trimmedMasked))
+            while (probe >= 0 && sourceLines.get(probe).trim().isEmpty())
             {
-                break;
+                probe--;
             }
-            if (trimmed.startsWith("&") //$NON-NLS-1$
-                || ASYNC_MODIFIER_LINE_PATTERN.matcher(trimmedMasked).matches())
+            boolean annotationInThisGroup = false;
+            while (probe >= 0)
             {
-                topAnnotation = probe;
+                String trimmed = sourceLines.get(probe).trim();
+                String trimmedMasked = masked.get(probe).trim();
+                if (trimmed.isEmpty())
+                {
+                    break;
+                }
+                if (!isTrivia(trimmed, trimmedMasked))
+                {
+                    return topAnnotation;
+                }
+                if (trimmed.startsWith("&") //$NON-NLS-1$
+                    || ASYNC_MODIFIER_LINE_PATTERN.matcher(trimmedMasked).matches())
+                {
+                    topAnnotation = probe;
+                    annotationInThisGroup = true;
+                }
+                probe--;
             }
-            probe--;
+            if (!annotationInThisGroup)
+            {
+                return topAnnotation;
+            }
         }
         return topAnnotation;
     }

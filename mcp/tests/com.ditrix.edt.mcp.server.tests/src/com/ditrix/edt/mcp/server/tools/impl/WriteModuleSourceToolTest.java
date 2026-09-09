@@ -2234,4 +2234,84 @@ public class WriteModuleSourceToolTest
             WriteModuleSourceTool.applyMethodTargetedEdit(module, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
                 "Procedure Added()\nEndProcedure\n")); //$NON-NLS-1$
     }
+
+    /**
+     * The relaxed parameter walk must stop where the METHOD does. A list that only closes
+     * after the terminator has not closed inside the candidate method: the span ends at that
+     * terminator, so replaceMethod would leave the stray ")" behind and the block-balance
+     * check - which counts keywords, not parentheses - would call the result healthy.
+     */
+    @Test
+    public void testAParameterListClosingAfterTheTerminatorIsNotClosed()
+    {
+        List<String> module = lines("Procedure Target(\n" //$NON-NLS-1$
+            + "EndProcedure\n" //$NON-NLS-1$
+            + ")\n"); //$NON-NLS-1$
+        assertMethodEditError("parameter list does not close", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\nEndProcedure\n")); //$NON-NLS-1$
+    }
+
+    /**
+     * Annotations separated by BLANK runs all bind to the declaration below them - the
+     * whitespace between them is hidden trivia. A span that starts at the nearer one leaves
+     * the further annotation behind: replaceMethod keeps a stale directive, and insertBefore
+     * silently rebinds it to the method being inserted.
+     */
+    @Test
+    public void testInsertBeforeCrossesRepeatedBlankRunsBetweenAnnotations()
+    {
+        List<String> current = lines("&AtServer\n" //$NON-NLS-1$
+            + "\n" //$NON-NLS-1$
+            + "&Around(\"Original\")\n" //$NON-NLS-1$
+            + "\n" //$NON-NLS-1$
+            + "Procedure Target()\n" //$NON-NLS-1$
+            + "EndProcedure\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(current, "insertBefore", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Added()\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull(result.error);
+        String joined = String.join("\n", result.newLines); //$NON-NLS-1$
+        assertTrue("the insert must land above BOTH annotations: " + joined, //$NON-NLS-1$
+            joined.startsWith("Procedure Added()\nEndProcedure\n&AtServer")); //$NON-NLS-1$
+    }
+
+    /**
+     * A C0 separator is not BSL whitespace, so a line ending in "Object." followed by one does
+     * NOT leave a dangling member dot. Trimming it away made the next terminator look like a
+     * member name, and the span then ran past the real end of the method.
+     */
+    @Test
+    public void testAControlCharacterAfterADotDoesNotSuppressTheTerminator()
+    {
+        List<String> module = lines("Procedure Target()\n" //$NON-NLS-1$
+            + "    Value = Object.\u001C\n" //$NON-NLS-1$
+            + "EndProcedure\n" //$NON-NLS-1$
+            + "ModuleValue = 1;\n"); //$NON-NLS-1$
+        WriteModuleSourceTool.MethodEditResult result =
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\nEndProcedure\n"); //$NON-NLS-1$
+        assertNull("the terminator owns its line and closes the method: " + result.error, //$NON-NLS-1$
+            result.error);
+        assertTrue("module-level code below the method must survive", //$NON-NLS-1$
+            String.join("\n", result.newLines).contains("ModuleValue = 1;")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * And the member BASE is read with the same identifier class as everything else here:
+     * "Object\u00B2." does leave a dangling dot, so the "EndProcedure;" below it is a member
+     * call and not this method's closer. Judged char-wise, that closer was accepted and
+     * the body statement after it was left behind as module-level code.
+     */
+    @Test
+    public void testAMemberBaseEndingInANonDecimalNumberStillDanglesItsDot()
+    {
+        List<String> module = lines("Procedure Target()\n" //$NON-NLS-1$
+            + "    Value = Object\u00B2.\n" //$NON-NLS-1$
+            + "EndProcedure;\n" //$NON-NLS-1$
+            + "    Other = 2;\n"); //$NON-NLS-1$
+        assertMethodEditError("target span is incomplete", //$NON-NLS-1$
+            WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
+                "Procedure Target()\nEndProcedure\n")); //$NON-NLS-1$
+    }
 }
