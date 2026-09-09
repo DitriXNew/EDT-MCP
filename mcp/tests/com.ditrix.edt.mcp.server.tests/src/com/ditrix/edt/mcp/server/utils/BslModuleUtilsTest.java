@@ -331,6 +331,47 @@ public class BslModuleUtilsTest
         assertEquals(0, BslModuleUtils.findMethodSpansViaText(lines).get(0).startLine);
     }
 
+    /**
+     * Crossing a blank line reaches the ANNOTATION, not everything above it: a comment on the far
+     * side of the blank reads as the previous method's trailing note just as easily, and claiming
+     * it would let replaceMethod delete somebody else's line.
+     */
+    @Test
+    public void testACommentAboveACrossedAnnotationIsNotClaimed()
+    {
+        List<String> lines = List.of(
+            "// footer for the previous method", //$NON-NLS-1$
+            "&AtClient", //$NON-NLS-1$
+            "// explanation", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(1, BslModuleUtils.findMethodSpansViaText(lines).get(0).startLine);
+    }
+
+    /**
+     * The terminator search stops at a declaration whose opening parenthesis sits on the NEXT
+     * line: BSL hides the newline, so such a method is real, and an unterminated method above it
+     * would otherwise borrow its terminator and report itself complete - the span that deletes a
+     * whole neighbouring method.
+     */
+    @Test
+    public void testSpanStopsAtADeclarationSplitAcrossLines()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "Procedure Other", //$NON-NLS-1$
+            "()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        List<BslModuleUtils.MethodSpan> spans = BslModuleUtils.findMethodSpansViaText(lines);
+        assertEquals(1, spans.size());
+        assertFalse("an unterminated method must not borrow the split declaration's terminator", //$NON-NLS-1$
+            spans.get(0).complete);
+        assertEquals(0, spans.get(0).endLine);
+    }
+
     @Test
     public void testBlankLineStillDetachesACommentBlock()
     {

@@ -82,6 +82,21 @@ public final class BslModuleUtils
         "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Function)\\s", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
+    /**
+     * A line that STARTS a method declaration, matched on the keyword alone.
+     * <p>
+     * Deliberately weaker than {@link #METHOD_START_PATTERN}, which also requires the name and
+     * the opening parenthesis on the same line: BSL hides whitespace, so a declaration may put
+     * the parenthesis on a later line, and such a line must still BOUND a terminator search -
+     * otherwise an unterminated method borrows the terminator of the method it hides. A bound
+     * that is too eager only ever ends a span earlier, which turns an over-reaching splice into
+     * a refusal; a bound that is too narrow loses a whole method.
+     * </p>
+     */
+    private static final Pattern METHOD_DECLARATION_KEYWORD_PATTERN = Pattern.compile(
+        "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)(?!\\p{L}|\\p{N}|_)", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
     /** Regex for region start (#Область / #Region) */
     public static final Pattern REGION_START_PATTERN = Pattern.compile(
         "^\\s*#(?:\u041e\u0431\u043b\u0430\u0441\u0442\u044c|Region)\\s+(\\S+)", //$NON-NLS-1$
@@ -464,7 +479,7 @@ public final class BslModuleUtils
     {
         for (int i = Math.max(0, from); i < lines.size(); i++)
         {
-            if (METHOD_START_PATTERN.matcher(lines.get(i)).find())
+            if (METHOD_DECLARATION_KEYWORD_PATTERN.matcher(lines.get(i)).find())
             {
                 return i;
             }
@@ -1128,17 +1143,19 @@ public final class BslModuleUtils
             {
                 break;
             }
-            // A blank run: cross it only when the trivia GROUP above it carries an annotation,
-            // wherever in that group it sits - "&AtClient", an explaining comment, a blank line
-            // and the declaration are one unit. A group of comments alone stays detached, which
-            // is the documentation adjacency policy.
-            int groupTop = groupTopAboveBlankRun(sourceLines, idx);
-            if (groupTop < 0)
+            // A blank run: cross it only to an ANNOTATION above it - "&AtClient", an explaining
+            // comment, a blank line and the declaration are one unit. Ownership then starts at
+            // that annotation and stops: a comment ABOVE it, on the far side of a blank line, is
+            // as likely to be the previous method's footer, and claiming it would let
+            // replaceMethod delete a note that belongs to somebody else. A group of comments
+            // alone is not crossed at all, which is the documentation adjacency policy.
+            int annotation = topAnnotationAboveBlankRun(sourceLines, idx);
+            if (annotation < 0)
             {
                 break;
             }
-            owned = groupTop + 1;
-            idx = groupTop - 1;
+            owned = annotation + 1;
+            break;
         }
         return owned;
     }
@@ -1150,22 +1167,25 @@ public final class BslModuleUtils
     }
 
     /**
-     * Given the index of a blank line, finds the top of the contiguous comment/annotation group
-     * directly above the blank run - but only when that group contains an annotation, since a
-     * directive keeps binding across hidden trivia while a comment block does not.
+     * Given the index of a blank line, finds the TOPMOST annotation in the contiguous
+     * comment/annotation group directly above the blank run.
+     * <p>
+     * The annotation is what may be crossed to, because a directive keeps binding to its
+     * declaration across hidden trivia; the comments above it are not, because on the far side of
+     * a blank line they read as the previous method's trailing note just as easily.
+     * </p>
      *
-     * @return the 0-based index of the group's first line, or {@code -1} when the blank run must
-     *         not be crossed
+     * @return the 0-based index of that annotation, or {@code -1} when the group has none and the
+     *         blank run must not be crossed
      */
-    private static int groupTopAboveBlankRun(List<String> sourceLines, int blankIndex)
+    private static int topAnnotationAboveBlankRun(List<String> sourceLines, int blankIndex)
     {
         int probe = blankIndex;
         while (probe >= 0 && sourceLines.get(probe).trim().isEmpty())
         {
             probe--;
         }
-        int top = -1;
-        boolean hasAnnotation = false;
+        int topAnnotation = -1;
         while (probe >= 0)
         {
             String trimmed = sourceLines.get(probe).trim();
@@ -1173,11 +1193,13 @@ public final class BslModuleUtils
             {
                 break;
             }
-            hasAnnotation = hasAnnotation || trimmed.startsWith("&"); //$NON-NLS-1$
-            top = probe;
+            if (trimmed.startsWith("&")) //$NON-NLS-1$
+            {
+                topAnnotation = probe;
+            }
             probe--;
         }
-        return hasAnnotation ? top : -1;
+        return topAnnotation;
     }
 
     /**
