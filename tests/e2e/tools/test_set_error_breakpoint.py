@@ -19,6 +19,20 @@ def _exception_breakpoints(project_filter=None):
             if entry.get("kind") == "exception" and entry.get("workspaceWide") is True]
 
 
+def _can_reconstruct(entry):
+    """Whether _restore could put this entry back exactly as it is now.
+
+    Catch-all needs nothing but the enabled flag; a FILTERED breakpoint needs its message, and an
+    entry that came back with an error is not a description of anything.
+    """
+    if entry.get("error"):
+        return False
+    if not isinstance(entry.get("enabled"), bool):
+        return False
+    if entry.get("catchAllExceptions") is True:
+        return True
+    return isinstance(entry.get("exceptionMessage"), str) and entry["exceptionMessage"] != ""
+
 def _restore(original):
     """Puts the workspace back and PROVES it, returning a problem description or None.
 
@@ -72,6 +86,16 @@ def test_create_update_disable_and_reenable_workspace_error_breakpoint():
     """Exercise the real OSGi factory, manager registration, reflective setters,
     workspace-root listing, in-place update, and configuration-preserving disable."""
     original = _exception_breakpoints()
+    unreconstructable = [entry for entry in original if not _can_reconstruct(entry)]
+    if unreconstructable:
+        # The saved state has to be READABLE before anything is deleted: an entry carrying an
+        # error, or a filtered one whose message did not come back, cannot be put back the way it
+        # was - and _restore would rebuild a plausible default that its own read-back then
+        # accepts, losing the operator's filter for good.
+        raise E2ESkip(
+            "a pre-existing exception breakpoint cannot be reconstructed from what "
+            "list_breakpoints reports (%r); refusing to delete it" % (unreconstructable[0],)
+        )
     if len(original) > 1:
         # This test deletes the workspace's exception breakpoints and puts ONE back, because
         # set_error_breakpoint configures every registered one rather than creating a second.

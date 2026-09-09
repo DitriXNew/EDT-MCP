@@ -403,7 +403,10 @@ public final class BreakpointUtils
                 }
                 breakpoint.setEnabled(true);
             }
-            return describe("updated", existing.get(0)); //$NON-NLS-1$
+            // Every one of them was configured, and the caller is told so: a workspace that
+            // holds several (legacy state) is not served by an answer naming one id, since
+            // removing that id would leave the others breaking on error.
+            return describe("updated", existing.get(0), existing.size()); //$NON-NLS-1$
         }
 
         IBreakpoint created = createExceptionBreakpointFromService(configuredMessage);
@@ -412,7 +415,7 @@ public final class BreakpointUtils
             configureExceptionBreakpoint(created, catchAll, configuredMessage);
             created.setEnabled(true);
             manager.addBreakpoint(created);
-            return describe("created", created); //$NON-NLS-1$
+            return describe("created", created, 1); //$NON-NLS-1$
         }
         catch (Exception e)
         {
@@ -465,8 +468,8 @@ public final class BreakpointUtils
      * @return the change carrying the state the marker actually holds
      * @throws Exception when the marker cannot be read
      */
-    private static ExceptionBreakpointChange describe(String action, IBreakpoint breakpoint)
-        throws Exception
+    private static ExceptionBreakpointChange describe(String action, IBreakpoint breakpoint,
+        int configuredCount) throws Exception
     {
         Map<String, Object> configured =
             readExceptionBreakpointConfiguration(breakpoint.getMarker());
@@ -475,7 +478,8 @@ public final class BreakpointUtils
             ? null
             : message.toString();
         return ExceptionBreakpointChange.enabled(action, breakpoint,
-            Boolean.TRUE.equals(configured.get("catchAllExceptions")), storedMessage); //$NON-NLS-1$
+            Boolean.TRUE.equals(configured.get("catchAllExceptions")), storedMessage, //$NON-NLS-1$
+            configuredCount);
     }
 
     /** Reads the configured exception filter for list_breakpoints without linking its interface. */
@@ -987,27 +991,46 @@ public final class BreakpointUtils
         private final int disabledCount;
         private final boolean catchAll;
         private final String exceptionMessage;
+        private final int configuredCount;
 
         private ExceptionBreakpointChange(String action, IBreakpoint breakpoint, int disabledCount,
-            boolean catchAll, String exceptionMessage)
+            boolean catchAll, String exceptionMessage, int configuredCount)
         {
             this.action = action;
             this.breakpoint = breakpoint;
             this.disabledCount = disabledCount;
             this.catchAll = catchAll;
             this.exceptionMessage = exceptionMessage;
+            this.configuredCount = configuredCount;
         }
 
         static ExceptionBreakpointChange enabled(String action, IBreakpoint breakpoint,
-            boolean catchAll, String exceptionMessage)
+            boolean catchAll, String exceptionMessage, int configuredCount)
         {
-            return new ExceptionBreakpointChange(action, breakpoint, 0, catchAll, exceptionMessage);
+            return new ExceptionBreakpointChange(action, breakpoint, 0, catchAll, exceptionMessage,
+                configuredCount);
         }
 
         public static ExceptionBreakpointChange disabled(int disabledCount)
         {
             return new ExceptionBreakpointChange(disabledCount > 0 ? "disabled" : "notFound", //$NON-NLS-1$ //$NON-NLS-2$
-                null, disabledCount, true, null);
+                null, disabledCount, true, null, 0);
+        }
+
+        /**
+         * How many workspace-wide exception breakpoints this call configured.
+         * <p>
+         * Normally one. A workspace can hold several (legacy state), and then ALL of them are
+         * configured while {@link #getBreakpoint()} names only the first - so a caller that
+         * removed that one id would leave the others breaking on error. The count is what makes
+         * that visible instead of leaving it to be discovered.
+         * </p>
+         *
+         * @return the number configured, or 0 when the call disabled them instead
+         */
+        public int getConfiguredCount()
+        {
+            return configuredCount;
         }
 
         public String getAction()

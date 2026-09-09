@@ -49,6 +49,7 @@ Fixture inventory used (TestConfiguration, English Names):
 """
 
 from harness import (
+    E2ESkip,
     E2ECallTimeout,
     call,
     assert_ok,
@@ -68,7 +69,21 @@ def _set_probe():
 
     Asserts the set itself succeeded so a list assertion never silently runs
     against a breakpoint that was never created (which would make a broken
-    list_breakpoints look correct by listing nothing)."""
+    list_breakpoints look correct by listing nothing).
+
+    Skips when the probe line is ALREADY occupied: set_breakpoint reconfigures the breakpoint
+    that is there rather than creating a second one, so the cleanup below would delete a
+    breakpoint this test never owned - after having changed its condition and hit count.
+    """
+    existing = call("list_breakpoints", {"projectName": PROJECT})
+    assert_ok(existing, "precondition: list_breakpoints must answer before the probe is set")
+    for entry in (existing.structured or {}).get("breakpoints", []):
+        if entry.get("kind") == "line" and entry.get("lineNumber") == PROBE_LINE \
+                and str(entry.get("modulePath") or "").endswith(PROBE_MODULE):
+            raise E2ESkip(
+                "%s:%d already holds a breakpoint (%r); this test would reconfigure and then "
+                "delete it" % (PROBE_MODULE, PROBE_LINE, entry)
+            )
     s = call("set_breakpoint", {
         "projectName": PROJECT,
         "modulePath": PROBE_MODULE,
