@@ -468,10 +468,68 @@ public final class BslModuleUtils
         return -1;
     }
 
-    /** A complete pragma: an ampersand name, optionally with a closed argument list. */
-    private static final Pattern PRAGMA_ONLY_LINE_PATTERN = Pattern.compile(
-        "^(?:&[\\p{L}\\p{N}_]+\\s*(?:\\([^()]*\\))?\\s*)+$", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    /**
+     * Whether the line is nothing but complete pragmas: an ampersand name, optionally followed by
+     * a closed argument list, repeated.
+     * <p>
+     * Walked rather than matched. The regex that did this repeated a group containing two runs of
+     * optional whitespace, which CodeQL flagged as exponential backtracking on a line of many
+     * "&x" - and it was right: nothing decides which run a space belongs to. A walk has one
+     * answer per character and no backtracking at all.
+     * </p>
+     *
+     * @param trimmed the trimmed, masked line
+     * @return whether it holds only complete pragmas
+     */
+    private static boolean pragmasOnly(String trimmed)
+    {
+        int i = 0;
+        while (i < trimmed.length())
+        {
+            if (trimmed.charAt(i) != '&')
+            {
+                return false;
+            }
+            i++;
+            int nameStart = i;
+            while (i < trimmed.length()
+                && (Character.isLetterOrDigit(trimmed.charAt(i)) || trimmed.charAt(i) == '_'))
+            {
+                i++;
+            }
+            if (i == nameStart)
+            {
+                return false;
+            }
+            i = skipWhitespace(trimmed, i);
+            if (i < trimmed.length() && trimmed.charAt(i) == '(')
+            {
+                int close = trimmed.indexOf(')', i);
+                if (close < 0)
+                {
+                    return false;
+                }
+                i = close + 1;
+            }
+            i = skipWhitespace(trimmed, i);
+        }
+        return true;
+    }
+
+    /**
+     * @param text the text to walk
+     * @param from where to start
+     * @return the first index at or after {@code from} that is not whitespace
+     */
+    private static int skipWhitespace(String text, int from)
+    {
+        int i = from;
+        while (i < text.length() && Character.isWhitespace(text.charAt(i)))
+        {
+            i++;
+        }
+        return i;
+    }
 
     /**
      * Whether the ampersand line cannot be owned as a whole line of pragmas.
@@ -494,7 +552,7 @@ public final class BslModuleUtils
         {
             return false;
         }
-        if (!PRAGMA_ONLY_LINE_PATTERN.matcher(trimmed).matches())
+        if (!pragmasOnly(trimmed))
         {
             // Either an open argument list or something else riding along. A declaration after
             // the pragma has its own refusal and message, so it is left to that one.
