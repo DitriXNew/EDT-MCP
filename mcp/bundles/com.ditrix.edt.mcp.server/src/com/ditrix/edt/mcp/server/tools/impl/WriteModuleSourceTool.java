@@ -26,8 +26,6 @@ import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.preferences.IScopeContext;
 import org.eclipse.core.runtime.preferences.InstanceScope;
 
-import com._1c.g5.v8.dt.bsl.model.Method;
-import com._1c.g5.v8.dt.bsl.model.Module;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -663,10 +661,13 @@ public class WriteModuleSourceTool implements IMcpTool
             case MODE_INSERT_BEFORE:
             case MODE_INSERT_AFTER:
             {
-                Module module = BslModuleUtils.looksLikeAbsolutePath(req.modulePath)
-                    ? null : BslModuleUtils.loadModule(file.getProject(), req.modulePath);
+                // No BSL model here on purpose. Loading it touches EMF/Xtext, which the sibling
+                // read tools reach only through the UI thread, and this runs on the MCP dispatch
+                // thread; marshalling it would add another unbounded wait on a thread a modal
+                // dialog can hold. Nothing is lost: the span the model produced was accepted only
+                // when it matched the text span line for line, so it could not change an outcome.
                 MethodEditResult edit = applyMethodTargetedEdit(originalLines, req.mode,
-                    req.methodName, source, module);
+                    req.methodName, source);
                 return new NewLinesResult(edit.error, edit.newLines);
             }
 
@@ -691,12 +692,11 @@ public class WriteModuleSourceTool implements IMcpTool
     /**
      * Validates one complete incoming method, resolves one unambiguous anchor in
      * the current module, and performs the requested line splice without I/O.
-     * The raw current lines are authoritative for ambiguity/collision checks;
-     * when the EDT model has a node range that agrees with that declaration it is
-     * preferred for the actual span.
+     * The raw current lines are authoritative: the text span is what the splice uses, and no
+     * BSL model is consulted (see the call site for why).
      */
     static MethodEditResult applyMethodTargetedEdit(List<String> originalLines, String mode,
-        String methodName, String source, Module module)
+        String methodName, String source)
     {
         // A declaration this line scanner cannot ADDRESS - the keyword alone on its line, or the
         // keyword and a name with the parenthesis on the next - makes every answer below unsafe
@@ -711,6 +711,17 @@ public class WriteModuleSourceTool implements IMcpTool
                 + "'), which method-targeted modes cannot address: the opening parenthesis has to " //$NON-NLS-1$
                 + "be on the declaration line. Put that declaration on one line, or edit with " //$NON-NLS-1$
                 + "mode 'searchReplace'."); //$NON-NLS-1$
+        }
+        // The mirror of the same blindness: a SECOND declaration written after the opener on
+        // one line is invisible to every anchored rule here, so the scan counts one method
+        // where two are declared and a span runs straight through the hidden one.
+        int crowded = BslModuleUtils.secondDeclarationOnLine(originalLines);
+        if (crowded >= 0)
+        {
+            return methodEditError("the module declares two methods on line " + (crowded + 1) //$NON-NLS-1$
+                + " ('" + originalLines.get(crowded).trim() //$NON-NLS-1$
+                + "'), which method-targeted modes cannot address: one declaration per line. " //$NON-NLS-1$
+                + "Split them, or edit with mode 'searchReplace'."); //$NON-NLS-1$
         }
         List<BslModuleUtils.MethodSpan> moduleSpans =
             BslModuleUtils.findMethodSpansViaText(originalLines);
@@ -753,6 +764,17 @@ public class WriteModuleSourceTool implements IMcpTool
                 + "'): put the declaration and its opening parenthesis on one line, and keep the " //$NON-NLS-1$
                 + "terminator on a line of its own."); //$NON-NLS-1$
         }
+        // And on the payload: "Procedure A() Function B()" reads as ONE method to the scan and
+        // as balanced pairs to the syntax check, so without this it would be written as a
+        // method nested inside a method - invalid BSL reported as a success.
+        int crowdedInSource = BslModuleUtils.secondDeclarationOnLine(sourceLines);
+        if (crowdedInSource >= 0)
+        {
+            return methodEditError("source declares two methods on line " //$NON-NLS-1$
+                + (crowdedInSource + 1) + " ('" + sourceLines.get(crowdedInSource).trim() //$NON-NLS-1$ //$NON-NLS-2$
+                + "'): this mode takes exactly one method, and a declaration after the opener " //$NON-NLS-1$
+                + "on the same line is not one. Put one declaration per line."); //$NON-NLS-1$
+        }
         List<BslModuleUtils.MethodSpan> sourceSpans =
             BslModuleUtils.findMethodSpansViaText(sourceLines);
         if (sourceSpans.size() != 1)
@@ -793,8 +815,7 @@ public class WriteModuleSourceTool implements IMcpTool
             }
         }
 
-        BslModuleUtils.MethodSpan target = preferModelSpan(module, originalLines,
-            methodName, targets.get(0));
+        BslModuleUtils.MethodSpan target = targets.get(0);
         List<String> result = new ArrayList<>(originalLines);
         if (MODE_REPLACE_METHOD.equals(mode))
         {
@@ -810,36 +831,6 @@ public class WriteModuleSourceTool implements IMcpTool
             result.addAll(target.endLine + 1, sourceLines);
         }
         return new MethodEditResult(null, result);
-    }
-
-    private static BslModuleUtils.MethodSpan preferModelSpan(Module module,
-        List<String> originalLines, String methodName, BslModuleUtils.MethodSpan textSpan)
-    {
-        if (module == null)
-        {
-            return textSpan;
-        }
-        Method matched = null;
-        for (Method method : module.allMethods())
-        {
-            if (methodName.equalsIgnoreCase(method.getName()))
-            {
-                if (matched != null)
-                {
-                    return textSpan;
-                }
-                matched = method;
-            }
-        }
-        BslModuleUtils.MethodSpan modelSpan =
-            BslModuleUtils.findMethodSpanFromModel(matched, originalLines);
-        if (modelSpan != null && modelSpan.startLine == textSpan.startLine
-            && modelSpan.declarationLine == textSpan.declarationLine
-            && modelSpan.endLine == textSpan.endLine)
-        {
-            return modelSpan;
-        }
-        return textSpan;
     }
 
     private static MethodEditResult methodEditError(String message)

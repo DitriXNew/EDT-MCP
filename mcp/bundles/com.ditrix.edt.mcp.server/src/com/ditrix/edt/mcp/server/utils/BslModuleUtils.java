@@ -403,11 +403,13 @@ public final class BslModuleUtils
 
             boolean isFunction = FUNC_KEYWORD_PATTERN.matcher(scan.get(declarationLine)).find();
             Pattern terminator = isFunction ? FUNCTION_END_PATTERN : PROCEDURE_END_PATTERN;
+            Pattern wrongKind = isFunction ? PROCEDURE_END_PATTERN : FUNCTION_END_PATTERN;
             // The search stops at the NEXT declaration: unbounded, an unterminated method
             // borrows its neighbour's terminator, reports itself complete, and a
             // replaceMethod on it would delete that neighbour and its documentation.
             int searchLimit = nextDeclarationLine(scan, declarationLine + 1) - 1;
-            int endLine = findTerminatorLine(scan, declarationLine, searchLimit, terminator);
+            int endLine =
+                findTerminatorLine(scan, declarationLine, searchLimit, terminator, wrongKind);
             boolean complete = endLine >= 0;
             if (!complete)
             {
@@ -421,62 +423,6 @@ public final class BslModuleUtils
     }
 
     /**
-     * Resolves a method span from the EDT node model. The node supplies the safe
-     * search bounds; the declaration and matching terminator are then verified
-     * against the current file lines so a stale model is never used for a splice.
-     *
-     * @param method EDT BSL method model
-     * @param lines current module source lines
-     * @return verified span, or {@code null} when the node is missing/stale
-     */
-    public static MethodSpan findMethodSpanFromModel(Method method, List<String> lines)
-    {
-        if (method == null || lines == null || lines.isEmpty())
-        {
-            return null;
-        }
-        INode node = NodeModelUtils.findActualNodeFor(method);
-        if (node == null)
-        {
-            return null;
-        }
-
-        int nodeStart = Math.max(0, node.getStartLine() - 1);
-        int nodeEnd = Math.min(lines.size() - 1, node.getEndLine() - 1);
-        if (nodeStart > nodeEnd)
-        {
-            return null;
-        }
-
-        int declarationLine = -1;
-        boolean isFunction = method instanceof Function;
-        for (int i = nodeStart; i <= nodeEnd; i++)
-        {
-            Matcher matcher = METHOD_START_PATTERN.matcher(lines.get(i));
-            if (matcher.find() && method.getName().equalsIgnoreCase(matcher.group(1)))
-            {
-                declarationLine = i;
-                isFunction = FUNC_KEYWORD_PATTERN.matcher(lines.get(i)).find();
-                break;
-            }
-        }
-        if (declarationLine < 0)
-        {
-            return null;
-        }
-
-        Pattern terminator = isFunction ? FUNCTION_END_PATTERN : PROCEDURE_END_PATTERN;
-        int endLine = findTerminatorLine(lines, declarationLine, nodeEnd, terminator);
-        if (endLine < 0)
-        {
-            return null;
-        }
-        int startLine = findMethodPreambleStartLine(lines, declarationLine + 1) - 1;
-        return new MethodSpan(startLine, declarationLine, endLine, method.getName(),
-            isFunction, true);
-    }
-
-    /**
      * The tail a terminator line may carry and still be owned entirely by the method:
      * whitespace, at most one statement separator, and an end-of-line comment. BSL puts
      * module-level statements AFTER the methods (Bsl.xtext {@code Module} rule), so
@@ -485,6 +431,52 @@ public final class BslModuleUtils
      * statement would ride along inside the method span.
      */
     private static final Pattern METHOD_END_TAIL_PATTERN = Pattern.compile("^\\s*;?\\s*(?://.*)?$"); //$NON-NLS-1$
+
+    /**
+     * A declaration keyword anywhere, used only to look PAST the opener of a declaration line.
+     * Neither terminator matches it: there is no word boundary inside "EndProcedure", and the
+     * Russian closer is a different word from the opener.
+     */
+    private static final Pattern ANY_DECLARATION_KEYWORD_PATTERN = Pattern.compile(
+        "\\b(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)\\b", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /**
+     * The first line that declares a SECOND method after the one it opens with, or -1.
+     * <p>
+     * Every rule here is anchored at the start of a line, so a declaration written after the
+     * opener - {@code Procedure A() Function B()} - is invisible to all of them: the scan reports
+     * one method, the balance check sees matching pairs, and a method nested inside another
+     * method gets written as if it were valid. Such a line is refused instead.
+     * </p>
+     *
+     * @param lines BSL module or fragment lines
+     * @return the 0-based line index, or -1 when every declaration line opens exactly one
+     */
+    public static int secondDeclarationOnLine(List<String> lines)
+    {
+        if (lines == null)
+        {
+            return -1;
+        }
+        List<String> scan = BslSyntaxChecker.maskLiteralsAndComments(lines);
+        for (int i = 0; i < scan.size(); i++)
+        {
+            Matcher opener = METHOD_START_PATTERN.matcher(scan.get(i));
+            // Only a DECLARATION line is examined, and only past its own opener: a statement
+            // line may legitimately carry the keyword twice, since a reserved word is a legal
+            // member name after a dot (grammar rule ExtName).
+            if (!opener.find())
+            {
+                continue;
+            }
+            if (ANY_DECLARATION_KEYWORD_PATTERN.matcher(scan.get(i)).find(opener.end(1)))
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
 
     /**
      * Reports whether the line is a method terminator that owns its whole line.
@@ -566,7 +558,8 @@ public final class BslModuleUtils
         }
         return -1;
     }
-    private static int findTerminatorLine(List<String> lines, int from, int to, Pattern terminator)
+    private static int findTerminatorLine(List<String> lines, int from, int to, Pattern terminator,
+        Pattern wrongKind)
     {
         for (int i = from; i <= to; i++)
         {
@@ -582,6 +575,14 @@ public final class BslModuleUtils
             if (isMethodTerminatorLine(lines.get(i), terminator))
             {
                 return i;
+            }
+            if (i > from && isMethodTerminatorLine(lines.get(i), wrongKind))
+            {
+                // The WRONG closer, reached before the right one: the declaration is malformed,
+                // and reading past it would hand this span a terminator belonging to nothing -
+                // with whatever stands between them, module-level statements included, deleted
+                // by a replaceMethod. An incomplete span is a refusal, which is the safe end.
+                return -1;
             }
         }
         return -1;
