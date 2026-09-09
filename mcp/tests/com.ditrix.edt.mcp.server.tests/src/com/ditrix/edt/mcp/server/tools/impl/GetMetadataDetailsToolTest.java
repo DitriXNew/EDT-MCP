@@ -31,7 +31,9 @@ import org.junit.Test;
 
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogCodeType;
+import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
 import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypes;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.Constant;
@@ -42,7 +44,9 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.ReturnValuesReuse;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.google.gson.JsonPrimitive;
 
@@ -124,6 +128,9 @@ public class GetMetadataDetailsToolTest
         assertTrue(schema.contains("\"full\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"assignable\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"language\"")); //$NON-NLS-1$
+        assertTrue("assignable mode should advertise managed-form root addresses", //$NON-NLS-1$
+            schema.contains("Catalog.Products.Form.ItemForm") //$NON-NLS-1$
+                && schema.contains("CommonForm.Main")); //$NON-NLS-1$
     }
 
     /**
@@ -192,6 +199,7 @@ public class GetMetadataDetailsToolTest
     {
         String desc = new GetMetadataDetailsTool().getDescription();
         assertTrue(desc.contains("get_tool_guide('get_metadata_details')")); //$NON-NLS-1$
+        assertTrue(desc.contains("managed-form root")); //$NON-NLS-1$
     }
 
     /**
@@ -397,6 +405,124 @@ public class GetMetadataDetailsToolTest
         assertTrue(section.contains("Catalog.A\\|B")); //$NON-NLS-1$
         assertTrue(section.contains("bad \\| reason")); //$NON-NLS-1$
         assertFalse(section.contains("**Error:**")); //$NON-NLS-1$
+    }
+
+    // ==================== Form-root assignable view (#549) ====================
+
+    @Test
+    public void testFormRootAssignableResolutionCoversOwnedAndAdditiveCommonContent()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName("X"); //$NON-NLS-1$
+        CatalogForm owned = MdClassFactory.eINSTANCE.createCatalogForm();
+        owned.setName("Y"); //$NON-NLS-1$
+        catalog.getForms().add(owned);
+        config.getCatalogs().add(catalog);
+        CommonForm common = MdClassFactory.eINSTANCE.createCommonForm();
+        common.setName("Y"); //$NON-NLS-1$
+        config.getCommonForms().add(common);
+        MetadataScope scope = MetadataScope.ofConfiguration(config);
+
+        assertEquals(owned, GetMetadataDetailsTool.resolveFormRootForAssignable(scope,
+            MetadataTypeUtils.normalizeFqn("Catalog.X.Form.Y"))); //$NON-NLS-1$
+        assertEquals(owned, GetMetadataDetailsTool.resolveFormRootForAssignable(scope,
+            MetadataTypeUtils.normalizeFqn("Справочник.X.Форма.Y"))); //$NON-NLS-1$
+        assertEquals(common, GetMetadataDetailsTool.resolveFormRootForAssignable(scope,
+            MetadataTypeUtils.normalizeFqn("CommonForm.Y"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormRootAssignableListsRootProperties()
+    {
+        EObject formRoot = syntheticFormRoot();
+        String md = GetMetadataDetailsTool.formatAssignable(
+            "Catalog.X.Form.Y", formRoot); //$NON-NLS-1$
+
+        assertTrue(md.contains("## Assignable properties: Catalog.X.Form.Y")); //$NON-NLS-1$
+        assertTrue(md.contains("| title |")); //$NON-NLS-1$
+        assertTrue(md.contains("| autoTitle | BOOLEAN | false |")); //$NON-NLS-1$
+        assertTrue(md.contains("| windowOpeningMode | ENUM | LockOwner |")); //$NON-NLS-1$
+        assertTrue(md.contains("| saveDataInSettings | BOOLEAN | true |")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCommonFormAssignableKeepsMdclassTableThenAddsContentRootSection()
+    {
+        CommonForm common = MdClassFactory.eINSTANCE.createCommonForm();
+        common.setName("Y"); //$NON-NLS-1$
+        String mdclass = GetMetadataDetailsTool.formatAssignable("CommonForm.Y", common); //$NON-NLS-1$
+        String contentRoot = GetMetadataDetailsTool.formatFormContentRootAssignable(
+            "CommonForm.Y", syntheticFormRoot()); //$NON-NLS-1$
+        String combined = mdclass + "\n" + contentRoot; //$NON-NLS-1$
+
+        assertTrue(combined.contains("## Assignable properties: CommonForm.Y")); //$NON-NLS-1$
+        assertTrue(combined.contains("| usePurposes | MANY_ENUM |")); //$NON-NLS-1$
+        assertTrue(combined.contains("PersonalComputer, MobileDevice")); //$NON-NLS-1$
+        assertTrue(combined.contains(
+            "## Form content root assignable properties: CommonForm.Y")); //$NON-NLS-1$
+        assertTrue(combined.contains("| autoTitle | BOOLEAN | false |")); //$NON-NLS-1$
+        assertTrue("the mdclass surface must render before the additive content-root surface", //$NON-NLS-1$
+            combined.indexOf("## Assignable properties: CommonForm.Y") //$NON-NLS-1$
+                < combined.indexOf("## Form content root assignable properties: CommonForm.Y")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMissingFormRootReasonNamesFormAndOwner()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName("X"); //$NON-NLS-1$
+        config.getCatalogs().add(catalog);
+        String normFqn = MetadataTypeUtils.normalizeFqn("Catalog.X.Form.Nope"); //$NON-NLS-1$
+        assertNull(GetMetadataDetailsTool.resolveFormRootForAssignable(
+            MetadataScope.ofConfiguration(config), normFqn));
+        String reason = GetMetadataDetailsTool.formRootNotFoundReason(
+            FormElementWriter.parseFormPath(normFqn));
+        assertTrue(reason, reason.contains("Form 'Nope' not found")); //$NON-NLS-1$
+        assertTrue(reason, reason.contains("Catalog.X")); //$NON-NLS-1$
+        assertTrue(reason, reason.contains("get_metadata_details")); //$NON-NLS-1$
+        assertFalse(reason, reason.contains("Node not found")); //$NON-NLS-1$
+    }
+
+    private static EObject syntheticFormRoot()
+    {
+        EcoreFactory f = EcoreFactory.eINSTANCE;
+        EPackage pkg = f.createEPackage();
+        pkg.setName("formroot"); //$NON-NLS-1$
+        pkg.setNsPrefix("formroot"); //$NON-NLS-1$
+        pkg.setNsURI("http://example.com/edt-mcp/formroot/549"); //$NON-NLS-1$
+
+        EEnum openingMode = f.createEEnum();
+        openingMode.setName("FormWindowOpeningMode"); //$NON-NLS-1$
+        addLiteral(f, openingMode, "LockOwner", 0); //$NON-NLS-1$
+        addLiteral(f, openingMode, "Independent", 1); //$NON-NLS-1$
+        pkg.getEClassifiers().add(openingMode);
+
+        EClass form = f.createEClass();
+        form.setName("Form"); //$NON-NLS-1$
+        addAttribute(f, form, "title", EcorePackage.Literals.ESTRING); //$NON-NLS-1$
+        EAttribute autoTitle = addAttribute(f, form, "autoTitle", EcorePackage.Literals.EBOOLEAN); //$NON-NLS-1$
+        EAttribute windowOpeningMode = addAttribute(f, form, "windowOpeningMode", openingMode); //$NON-NLS-1$
+        EAttribute saveData = addAttribute(f, form, "saveDataInSettings", //$NON-NLS-1$
+            EcorePackage.Literals.EBOOLEAN);
+        pkg.getEClassifiers().add(form);
+
+        EObject root = pkg.getEFactoryInstance().create(form);
+        root.eSet(autoTitle, Boolean.FALSE);
+        root.eSet(windowOpeningMode, openingMode.getEEnumLiteralByLiteral("LockOwner")); //$NON-NLS-1$
+        root.eSet(saveData, Boolean.TRUE);
+        return root;
+    }
+
+    private static EAttribute addAttribute(EcoreFactory factory, EClass owner, String name,
+        org.eclipse.emf.ecore.EClassifier type)
+    {
+        EAttribute attribute = factory.createEAttribute();
+        attribute.setName(name);
+        attribute.setEType(type);
+        owner.getEStructuralFeatures().add(attribute);
+        return attribute;
     }
 
     // ==================== Form-member assignable view: the general reflective extInfo path (#235) ====================
@@ -807,7 +933,7 @@ public class GetMetadataDetailsToolTest
         PredefinedWriter.create(catalog, "Blue", props, false); //$NON-NLS-1$
 
         GetMetadataDetailsTool.RenderContext ctx =
-            new GetMetadataDetailsTool.RenderContext(MetadataScope.ofConfiguration(config), null,
+            new GetMetadataDetailsTool.RenderContext(null, MetadataScope.ofConfiguration(config), null,
                 "en", false, false, false, 0); //$NON-NLS-1$
         GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
         List<String[]> failures = new ArrayList<>();
@@ -829,7 +955,7 @@ public class GetMetadataDetailsToolTest
     {
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
         GetMetadataDetailsTool.RenderContext ctx =
-            new GetMetadataDetailsTool.RenderContext(MetadataScope.ofConfiguration(config), null,
+            new GetMetadataDetailsTool.RenderContext(null, MetadataScope.ofConfiguration(config), null,
                 "en", false, false, false, 0); //$NON-NLS-1$
         GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
         List<String[]> failures = new ArrayList<>();
@@ -849,7 +975,7 @@ public class GetMetadataDetailsToolTest
     {
         Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
         GetMetadataDetailsTool.RenderContext ctx =
-            new GetMetadataDetailsTool.RenderContext(MetadataScope.ofConfiguration(config), null,
+            new GetMetadataDetailsTool.RenderContext(null, MetadataScope.ofConfiguration(config), null,
                 "en", false, false, false, 0); //$NON-NLS-1$
         GetMetadataDetailsTool tool = new GetMetadataDetailsTool();
         List<String[]> failures = new ArrayList<>();

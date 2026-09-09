@@ -42,6 +42,7 @@ import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.Document;
@@ -116,6 +117,10 @@ import com.google.gson.JsonPrimitive;
 public class ModifyMetadataTool extends AbstractMetadataWriteTool
 {
     public static final String NAME = "modify_metadata"; //$NON-NLS-1$
+
+    private static final String COMMON_FORM_MDCLASS_DISCOVERY_HINT =
+        "The common form's own metadata properties are listed by get_metadata_details with " //$NON-NLS-1$
+            + "assignable:true on the same FQN."; //$NON-NLS-1$
 
     /**
      * Asks the destructive-consent gate. A package-private SEAM: the production default delegates to
@@ -274,8 +279,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     @Override
     public String getDescription()
     {
-        return "Set properties of any metadata node (object or member, including form items, attributes, " //$NON-NLS-1$
-            + "commands, and handlers). Parameters and examples: get_tool_guide('modify_metadata')."; //$NON-NLS-1$
+        return "Set properties of any metadata node, including managed-form roots, items, " //$NON-NLS-1$
+            + "attributes, commands, and handlers. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('modify_metadata')."; //$NON-NLS-1$
     }
 
     @Override
@@ -286,8 +292,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 "EDT project name (required).", true) //$NON-NLS-1$
             .stringProperty("fqn", //$NON-NLS-1$
                 "Full-name FQN of the node to modify (required), e.g. 'Catalog.Products' or " //$NON-NLS-1$
-                + "'Catalog.Products.Attribute.Weight' (type / kind tokens may be English or Russian; " //$NON-NLS-1$
-                + "the Name parts are the programmatic Name).", true) //$NON-NLS-1$
+                + "'Catalog.Products.Attribute.Weight'; a managed-form root is " //$NON-NLS-1$
+                + "'Catalog.Products.Form.ItemForm' or 'CommonForm.Main'. On CommonForm.Main, any " //$NON-NLS-1$
+                + "mdclass-assignable property keeps the whole call on the mdclass surface; only " //$NON-NLS-1$
+                + "an all-root-only batch falls back to the content root. Type / kind tokens may " //$NON-NLS-1$
+                + "be English or Russian; the Name parts are the programmatic Name.", true) //$NON-NLS-1$
             .objectArrayProperty("properties", //$NON-NLS-1$
                 "Properties to set, as [{name, value, language?}]. 'name' is " //$NON-NLS-1$
                 + "the property name (e.g. 'comment', 'synonym', 'indexing'); 'value' is the new " //$NON-NLS-1$
@@ -440,6 +449,20 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return dispatchFormMemberFqn(ctx, normFqn, formRef, args);
         }
 
+        // A four-part OWNED-form FQN addresses only the FORM MODEL ROOT (the form:Form object
+        // serialized in Form.form): no mdclass node exists at that address, so it always takes the
+        // early root branch. A two-part CommonForm.Name is also a real mdclass top object and is
+        // deliberately deferred until after mdclass resolution below.
+        String formRootPath = FormElementWriter.parseFormPath(normFqn);
+        if (shouldDispatchFormRoot(formRootPath, null, args.properties))
+        {
+            if (resolveFormRootForDispatch(ctx.scope, normFqn) == null)
+            {
+                return formRootNotFoundError(formRootPath);
+            }
+            return dispatchFormRootFqn(ctx, normFqn, formRootPath, args, false);
+        }
+
         // A FQN addressing a PREDEFINED item (Catalog/ChartOfCharacteristicTypes.Name.Predefined.Item)
         // is dispatched EARLY too: the predefined content is a plain EMF containment on the owner, not
         // an mdclass member collection the generic resolver below knows about (issue #293).
@@ -479,6 +502,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         normFqn = resolvedTarget.normFqn;
         MdObject target = resolvedTarget.node.object;
+
+        // CommonForm.Name keeps the mdclass path whenever ANY requested property belongs to that
+        // mdclass object. Only an all-non-mdclass property batch falls back to the content-form root;
+        // the already-resolved CommonForm proves the FQN names a real common form.
+        formRootPath = FormElementWriter.parseFormPath(normFqn);
+        if (shouldDispatchFormRoot(formRootPath, target, args.properties))
+        {
+            return dispatchFormRootFqn(ctx, normFqn, formRootPath, args, true);
+        }
 
         // The payload surfaces (template / role / membership content) are dispatched by the
         // resolved target's kind; null means none applies and the generic path runs.
@@ -611,6 +643,102 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         return dispatchFormMember(ctx, normFqn, formRef, args.properties, args.normReport,
             args.hasRolePayload, args.hasContentPayload);
+    }
+
+    /**
+     * Dispatches an EXISTING managed-form MODEL ROOT. Unlike a form member, the root has no
+     * structural side channels (handler/button rebind, move/reorder, dynamic-list query), so the
+     * only accepted payload is the ordinary {@code properties} list and it routes directly to the
+     * shared form-property apply loop.
+     */
+    private String dispatchFormRootFqn(ProjectContext ctx, String normFqn, String formRootPath,
+        ModifyArgs args, boolean commonFormFallback)
+    {
+        if (args.hasRolePayload || args.hasContentPayload || args.hasTemplatePayload)
+        {
+            return ToolResult.error("'" + normFqn //$NON-NLS-1$
+                + "' addresses a managed FORM root, which only " //$NON-NLS-1$
+                + "accepts the 'properties' payload. Role payloads, membership 'content', and " //$NON-NLS-1$
+                + "spreadsheet 'template' content apply to their respective metadata objects, not " //$NON-NLS-1$
+                + "to the form model root.").toJson(); //$NON-NLS-1$
+        }
+        return modifyFormRoot(ctx, normFqn, formRootPath, args.properties, args.normReport,
+            commonFormFallback);
+    }
+
+    /**
+     * Builds the actionable not-found error for a syntactically valid form-root address. An owned
+     * form names both the missing form and its owner, so it cannot fall back to the generic mdclass
+     * "Node not found" message that describes a different address space. Package-visible for the
+     * headless dispatch test.
+     */
+    static String formRootNotFoundError(String formPath)
+    {
+        return ToolResult.error(formRootNotFoundMessage(formPath)).toJson();
+    }
+
+    /**
+     * Resolves only the existing managed-form root address accepted by the dedicated dispatch. The
+     * shared parser owns bilingual token recognition and the shared reader owns project-root-aware
+     * MD-form resolution. Package-visible so headless tests can exercise the exact dispatch decision
+     * without a workbench/BM model.
+     */
+    static MdObject resolveFormRootForDispatch(MetadataScope scope, String normFqn)
+    {
+        String formPath = FormElementWriter.parseFormPath(normFqn);
+        return formPath == null ? null : FormStructureReader.resolveMdForm(scope, formPath);
+    }
+
+    /**
+     * Decides whether a parsed form address belongs to the content-root write path. Four-part owned
+     * forms always do. A two-part common form does only after it resolved as a {@link CommonForm} and
+     * none of the requested property names is assignable on that mdclass object. The latter check is
+     * deliberately the same lightweight introspector lookup used by generic write preparation.
+     * Package-visible for the headless dispatch test.
+     */
+    static boolean shouldDispatchFormRoot(String formRootPath, MdObject resolvedTarget,
+        List<JsonObject> properties)
+    {
+        if (formRootPath == null)
+        {
+            return false;
+        }
+        if (FormElementWriter.parseFormObjectCreate(formRootPath) != null)
+        {
+            return true;
+        }
+        if (!(resolvedTarget instanceof CommonForm))
+        {
+            return false;
+        }
+        for (JsonObject property : properties)
+        {
+            String name = asString(property.get("name")); //$NON-NLS-1$
+            if (MetadataPropertyIntrospector.findFeature(resolvedTarget, name) != null)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static String formRootNotFoundMessage(String formPath)
+    {
+        String[] parts = formPath == null ? new String[0] : formPath.split("\\."); //$NON-NLS-1$
+        if (parts.length == 4)
+        {
+            String ownerFqn = parts[0] + "." + parts[1]; //$NON-NLS-1$
+            return "Form '" + parts[3] + "' not found on owner '" + ownerFqn //$NON-NLS-1$ //$NON-NLS-2$
+                + "'. Use get_metadata_details on '" + ownerFqn + "' to list its forms, or " //$NON-NLS-1$ //$NON-NLS-2$
+                + "get_metadata_objects to verify the owner FQN."; //$NON-NLS-1$
+        }
+        if (parts.length == 2)
+        {
+            return "Common form '" + parts[1] + "' not found. Use " //$NON-NLS-1$ //$NON-NLS-2$
+                + "get_metadata_objects to list available CommonForm FQNs."; //$NON-NLS-1$
+        }
+        return "Form not found for '" + formPath //$NON-NLS-1$
+            + "'. Use get_metadata_objects to verify the owner and form FQN."; //$NON-NLS-1$
     }
 
     /**
@@ -2844,6 +2972,36 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * Modifies the editable {@code form:Form} ROOT addressed by a form FQN. The MD-form has already
+     * been proven to exist by the dispatch; {@link FormElementWriter#resolveForEdit} establishes the
+     * canonical form-write context, and the root then uses the same validation, localized reporting,
+     * one-transaction apply, normalization and content-form export as an ordinary form member.
+     */
+    private String modifyFormRoot(ProjectContext ctx, String normFqn, String formRootPath,
+        List<JsonObject> properties, MdNameNormalizer.Report normReport, boolean commonFormFallback)
+    {
+        try
+        {
+            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(ctx.project,
+                ctx.scope, formRootPath, formRootNotFoundMessage(formRootPath));
+            Version version = platformVersionOf(ctx);
+            return applyFormProperties(ctx, normFqn, properties, normReport, fctx, version,
+                "ModifyFormRoot", formModel -> formModel, commonFormFallback //$NON-NLS-1$
+                    ? COMMON_FORM_MDCLASS_DISCOVERY_HINT : null);
+        }
+        catch (Exception e)
+        {
+            String validationJson = FormValidationException.jsonOf(e);
+            if (validationJson != null)
+            {
+                return validationJson;
+            }
+            Activator.logError("Error modifying form root", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to modify form root: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+    }
+
+    /**
      * Modifies a FORM member (item / attribute / command) addressed by a form FQN. The member lives on
      * the editable Form content model (reached via the cross-model hop), so this branch resolves the
      * member there, reuses the shared {@link #prepare} validation + {@link PreparedChange} pipeline
@@ -2979,19 +3137,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormMemberRef ref, List<JsonObject> properties,
         MdNameNormalizer.Report normReport, FormElementWriter.FormEditContext fctx, Version version)
     {
-        final List<String> applied = new ArrayList<>();
-        // A form member's title is a localized property too, so it gets the same report the mdclass
-        // path gives (issue #298). The declared codes are read OUTSIDE the write transaction.
-        final List<String> declaredCodes = ctx.scope.declaredLanguageCodes();
-        final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
-
-        // Validate + apply inside ONE BM write transaction: resolve the member, validate every
-        // property (a failure throws FormValidationException carrying the JSON error BEFORE any eSet,
-        // so the tx rolls back with no partial mutation), then apply. The member is re-navigated by
-        // name inside the tx (only the form top object is re-fetchable by bmId). Building the change
-        // values and setting them in the SAME tx avoids any cross-transaction detached-object concern.
-        final boolean persisted = FormElementWriter.writeEditableForm(fctx, "ModifyFormMember", //$NON-NLS-1$
-            (formModel, tx) ->
+        return applyFormProperties(ctx, normFqn, properties, normReport, fctx, version,
+            "ModifyFormMember", formModel -> //$NON-NLS-1$
             {
                 EObject member = FormElementWriter.resolveFormMember(formModel, ref);
                 if (member == null)
@@ -3005,8 +3152,46 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                             ref.name, normFqn),
                             ". Use get_metadata_details to list the members.")).toJson()); //$NON-NLS-1$
                 }
+                return member;
+            }, null);
+    }
+
+    /** Resolves the form-model EObject whose ordinary properties the shared apply loop will set. */
+    @FunctionalInterface
+    private interface FormPropertyTargetResolver
+    {
+        EObject resolve(EObject formModel);
+    }
+
+    /**
+     * Applies ordinary properties to either the form MODEL ROOT or a resolved form member. This is
+     * the single form property loop: it prepares every {@link HolderChange} before applying any,
+     * performs the extInfo holder hop, tracks localized pre/post state, records applied features and
+     * returns the common modified/persisted/normalization result shape.
+     */
+    private String applyFormProperties(ProjectContext ctx, String normFqn, // NOSONAR shared root/member contract
+        List<JsonObject> properties, MdNameNormalizer.Report normReport,
+        FormElementWriter.FormEditContext fctx, Version version, String taskName,
+        FormPropertyTargetResolver targetResolver, String nonAssignableHint)
+    {
+        final List<String> applied = new ArrayList<>();
+        // A form root's/member's title is localized too, so it gets the same report the mdclass path
+        // gives (issue #298). The declared codes are read OUTSIDE the write transaction.
+        final List<String> declaredCodes = ctx.scope.declaredLanguageCodes();
+        final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
+
+        // Validate + apply inside ONE BM write transaction: resolve the target, validate every
+        // property (a failure throws FormValidationException carrying the JSON error BEFORE any eSet,
+        // so the tx rolls back with no partial mutation), then apply. A member is re-navigated by name
+        // inside the tx; the root is the re-fetched content form itself. Building the change values
+        // and setting them in the SAME tx avoids any cross-transaction detached-object concern.
+        final boolean persisted = FormElementWriter.writeEditableForm(fctx, taskName,
+            (formModel, tx) ->
+            {
+                EObject target = targetResolver.resolve(formModel);
                 List<HolderChange> changes =
-                    prepareFormMemberChanges(ctx.scope, version, member, properties, normReport);
+                    prepareFormMemberChanges(ctx.scope, version, target, properties, normReport,
+                        nonAssignableHint);
                 // (receiver, change) of every localized write, reported only AFTER the whole
                 // batch is applied: reading a map mid-batch would report a locale as missing that
                 // a LATER change in the same call fills in.
@@ -3014,17 +3199,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 List<PreparedChange> localizedChanges = new ArrayList<>();
                 for (HolderChange hc : changes)
                 {
-                    // A direct feature lands on the member; a property on the nested <extInfo> lands
+                    // A direct feature lands on the target; a property on the nested <extInfo> lands
                     // on the extInfo holder, created (or reused) here now that every property has
                     // validated. Mixing both in one call routes each change to its correct receiver.
                     EObject holder = hc.onExtInfo
-                        ? FormElementWriter.ensureExtInfo(formModel, member) : member;
+                        ? FormElementWriter.ensureExtInfo(formModel, target) : target;
                     // BEFORE the write: whether this locale already held text decides if the
                     // OTHER locales go stale (see LocalizedWriteReport.rememberPreState).
                     localizedReport.rememberPreState(holder, List.of(hc.change));
                     hc.change.applyTo(holder, tx);
                     applied.add(hc.change.featureName());
-                    if (syncExtInfoAfter(hc, formModel, member))
+                    if (syncExtInfoAfter(hc, formModel, target))
                     {
                         applied.add("extInfo"); //$NON-NLS-1$
                     }
@@ -3394,19 +3579,31 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Validates every property of a form-member modify against the introspected schema and builds the
-     * ordered list of {@link HolderChange}s to apply - each pairing a {@link PreparedChange} with the
-     * receiver it targets: the member itself for a direct feature, or the member's nested
+     * Validates every property of a form-model EObject (root or member) against the introspected
+     * schema and builds the ordered list of {@link HolderChange}s to apply - each pairing a
+     * {@link PreparedChange} with the
+     * receiver it targets: the EObject itself for a direct feature, or a member's nested
      * {@code <extInfo>} holder for a layout / kind-specific property (a UsualGroup's grouping / united /
      * ... live under {@code <extInfo>}, not on the group element). Runs inside the BM write transaction
      * (called from the {@code writeEditableForm} callback) but performs NO model mutation itself - it
-     * only reads {@code member}'s (and its extInfo's) schema and constructs the changes; a
+     * only reads the target's (and, when present, its extInfo's) schema and constructs the changes; a
      * structural-property guard or an invalid value throws {@link FormValidationException} BEFORE any
      * {@code eSet}, so the transaction rolls back with no partial mutation. The extInfo holder is
      * created (when absent) only at APPLY time by the caller, once every property has validated.
      */
     private List<HolderChange> prepareFormMemberChanges(MetadataScope scope, Version version, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         EObject member, List<JsonObject> properties, MdNameNormalizer.Report normReport)
+    {
+        return prepareFormMemberChanges(scope, version, member, properties, normReport, null);
+    }
+
+    /**
+     * The form-root variant may add discovery guidance for the common form's mdclass surface. The
+     * five-argument overload remains the ordinary member path and preserves its validation contract.
+     */
+    private List<HolderChange> prepareFormMemberChanges(MetadataScope scope, Version version, // NOSONAR shared validation contract
+        EObject member, List<JsonObject> properties, MdNameNormalizer.Report normReport,
+        String nonAssignableHint)
     {
         // Reject a classifier `type` change batched with a nested-extInfo layout prop BEFORE building any
         // change: the extInfo props are validated against the pre-change type's extInfo EClass, so
@@ -3415,6 +3612,29 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (comboErr != null)
         {
             throw new FormValidationException(comboErr);
+        }
+        // A CommonForm.Name fallback was chosen only because no requested name belongs to the
+        // common form's mdclass object. If a name is absent from the content root as well, report
+        // BOTH surfaces before a structural guard can replace the ordinary assignability error.
+        if (nonAssignableHint != null)
+        {
+            for (JsonObject prop : properties)
+            {
+                JsonObject normProp = normalizeFormProperty(member, prop);
+                String name = asString(normProp.get("name")); //$NON-NLS-1$
+                if (name == null || name.isEmpty())
+                {
+                    continue;
+                }
+                FormHolder holder = resolveFormHolder(member, name);
+                if (MetadataPropertyIntrospector.findFeature(member, holder.classifyExtInfo, name) == null)
+                {
+                    EClass extInfoEClass = holder.classifyExtInfo != null
+                        ? holder.classifyExtInfo.eClass() : FormElementWriter.resolveExtInfoEClass(member);
+                    throw new FormValidationException(nonAssignablePropertyError(member, name,
+                        extInfoEClass, nonAssignableHint));
+                }
+            }
         }
         List<HolderChange> changes = new ArrayList<>();
         for (JsonObject prop : properties)
@@ -4641,10 +4861,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // empty - is derived reflectively; null on the mdclass path (member-only, unchanged).
             EClass extInfoEClass = extInfo != null ? extInfo.eClass()
                 : FormElementWriter.resolveExtInfoEClass(target);
-            return ToolResult.error("Property '" + name + "' is not assignable on " //$NON-NLS-1$ //$NON-NLS-2$
-                + target.eClass().getName() + ". Assignable properties: " //$NON-NLS-1$
-                + String.join(", ", MetadataPropertyIntrospector.assignableNames(target, extInfoEClass)) //$NON-NLS-1$
-                + ". Use get_metadata_details with assignable:true for kinds + allowed values.").toJson(); //$NON-NLS-1$
+            return nonAssignablePropertyError(target, name, extInfoEClass, null);
         }
 
         switch (info.valueKind)
@@ -4681,6 +4898,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             default:
                 return prepareString(name, value, info, out, normReport);
         }
+    }
+
+    /** Builds the shared actionable error for a property outside an EObject's assignable surface. */
+    private static String nonAssignablePropertyError(EObject target, String name, EClass extInfoEClass,
+        String additionalHint)
+    {
+        String discovery = additionalHint == null
+            ? "Use get_metadata_details with assignable:true for kinds + allowed values." //$NON-NLS-1$
+            : additionalHint;
+        String targetLabel = additionalHint == null ? target.eClass().getName()
+            : "the form content root (" + target.eClass().getName() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+        String propertiesLabel = additionalHint == null ? "Assignable properties: " //$NON-NLS-1$
+            : "Form content root assignable properties: "; //$NON-NLS-1$
+        return ToolResult.error("Property '" + name + "' is not assignable on " //$NON-NLS-1$ //$NON-NLS-2$
+            + targetLabel + ". " + propertiesLabel //$NON-NLS-1$
+            + String.join(", ", MetadataPropertyIntrospector.assignableNames(target, extInfoEClass)) //$NON-NLS-1$
+            + ". " + discovery).toJson(); //$NON-NLS-1$
     }
 
     /**

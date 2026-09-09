@@ -491,7 +491,7 @@ with `python docs/generate_tool_docs.py`.
 |------|-------------|
 | [`enable_toolset`](docs/tools/enable_toolset.md) | Reveal (or hide) tool groups for progressive disclosure. Pass toolsets=[ids] from list_toolsets to reveal them, then RE-REQUEST tools/list to see the newly r… |
 | [`get_edt_version`](docs/tools/get_edt_version.md) | Returns the running 1C:EDT version as a plain version string. Returns "Unknown" when the version cannot be determined. |
-| [`get_metadata_details`](docs/tools/get_metadata_details.md) | Get detailed properties of one or more 1C metadata objects (basic info by default, or every reflected section with 'full: true'). Use it after get_metadata_o… |
+| [`get_metadata_details`](docs/tools/get_metadata_details.md) | Inspect metadata objects and members, including managed-form root properties and structure. Parameters and examples: get_tool_guide('get_metadata_details'). |
 | [`get_metadata_objects`](docs/tools/get_metadata_objects.md) | Get a flat list of 1C configuration metadata objects (Name, Synonym, Comment, Type, ObjectModule, ManagerModule) as a Markdown table. Use it to discover what… |
 | [`get_module_structure`](docs/tools/get_module_structure.md) | Get structure of a BSL module: all procedures/functions with signatures, line numbers, regions, execution context (&AtServer, &AtClient), export flag, and pa… |
 | [`get_server_status`](docs/tools/get_server_status.md) | Self-diagnosis snapshot of the running MCP server: listening port, MCP protocol version, plugin version, EDT version, enabled/total tool counts, the plainTex… |
@@ -520,7 +520,7 @@ with `python docs/generate_tool_docs.py`.
 | [`list_common_pictures`](docs/tools/list_common_pictures.md) | List a 1C configuration's CommonPicture objects and the variants each carries in its Picture.zip (DPI, theme, interface variant, template flag, glyph size, p… |
 | [`list_configurations`](docs/tools/list_configurations.md) | List EDT launch configurations (runtime client + Attach + other 1C types) with their running state. This is the discovery step before launch / run_yaxunit… |
 | [`list_subsystems`](docs/tools/list_subsystems.md) | List 1C subsystems of a configuration as a flat table (FQN, Synonym, Comment, InCommandInterface, content count, children count). Walks the whole tree by def… |
-| [`modify_metadata`](docs/tools/modify_metadata.md) | Set properties of any metadata node (object or member, including form items, attributes, commands, and handlers). Parameters and examples: get_tool_guide('modify_metadata'). |
+| [`modify_metadata`](docs/tools/modify_metadata.md) | Set properties of any metadata node, including managed-form roots, items, attributes, commands, and handlers. Parameters and examples: get_tool_guide('modify_metadata'). |
 | [`rename_metadata_object`](docs/tools/rename_metadata_object.md) | Rename a metadata object, one of its members, or a managed-form element (attribute / command / field / button / group / decoration / table / attribute column… |
 
 ### Code

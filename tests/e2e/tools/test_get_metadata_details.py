@@ -275,6 +275,56 @@ def test_common_form_fqn_renders_structure():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# FORM-ROOT assignable schema — the editable form:Form object's own properties
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="get_metadata_details", kind="read")
+def test_assignable_on_form_root_lists_root_properties():
+    fqn = "Catalog.Catalog.Form.ItemForm"
+    r = call("get_metadata_details", {
+        "projectName": PROJECT,
+        "objectFqns": [fqn],
+        "assignable": True,
+    })
+    assert_ok(r, "assignable schema for the managed-form model root")
+    assert_not_contains(r.text, "## Errors",
+                        "a valid form root must not fall through to mdclass resolution")
+    assert_contains(r.text, "## Assignable properties: " + fqn,
+                    "assignable mode must render the form-root schema heading")
+    for property_name in ("title", "autoTitle", "windowOpeningMode",
+                          "saveDataInSettings", "autoSaveDataInSettings"):
+        assert_contains(r.text, "| %s |" % property_name,
+                        "the form root must expose %s" % property_name)
+    assert_no_diff("reading a form root's assignable schema must not touch Form.form")
+
+
+@e2e_test(tool="get_metadata_details", kind="read")
+def test_assignable_on_common_form_keeps_mdclass_and_adds_content_root():
+    fqn = "CommonForm.Form"
+    r = call("get_metadata_details", {
+        "projectName": PROJECT,
+        "objectFqns": [fqn],
+        "assignable": True,
+    })
+    assert_ok(r, "additive assignable schema for a common form")
+    mdclass_heading = "## Assignable properties: " + fqn
+    content_heading = "## Form content root assignable properties: " + fqn
+    assert_contains(r.text, mdclass_heading,
+                    "the common form must retain its mdclass assignable table")
+    assert_contains(r.text, "| usePurposes | MANY_ENUM |",
+                    "the mdclass table must retain the issue #510 many-enum property")
+    assert_contains(r.text, "PersonalComputer, MobileDevice",
+                    "the mdclass table must retain every usePurposes literal")
+    assert_contains(r.text, content_heading,
+                    "the form content root must be added under a distinct heading")
+    assert_contains(r.text, "| autoTitle |",
+                    "the additive content-root table must expose root properties")
+    assert r.text.index(mdclass_heading) < r.text.index(content_heading), \
+        "the mdclass table must precede the additive content-root table"
+    assert_no_diff("reading a common form's two assignable surfaces must be side-effect free")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # FORM-MEMBER assignable schema — a form GROUP FQN (assignable:true) lists the
 # layout props nested in <extInfo> (issue #235). A form member is NOT an mdclass
 # node, so the assignable view used to fail with "Object not found"; it now routes

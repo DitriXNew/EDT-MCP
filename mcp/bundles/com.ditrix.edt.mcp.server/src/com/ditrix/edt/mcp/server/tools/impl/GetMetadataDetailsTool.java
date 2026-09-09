@@ -28,6 +28,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.ChartOfAccounts;
 import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCalculationTypes;
 import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCharacteristicTypes;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.InformationRegister;
@@ -51,6 +52,7 @@ import com.ditrix.edt.mcp.server.utils.DcsStructureReader;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
+import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
@@ -85,8 +87,8 @@ public class GetMetadataDetailsTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Inspect the properties and structure of a metadata object or member. Parameters and " //$NON-NLS-1$
-            + "examples: get_tool_guide('get_metadata_details')."; //$NON-NLS-1$
+        return "Inspect metadata objects and members, including managed-form root properties and " //$NON-NLS-1$
+            + "structure. Parameters and examples: get_tool_guide('get_metadata_details')."; //$NON-NLS-1$
     }
 
     @Override
@@ -109,8 +111,11 @@ public class GetMetadataDetailsTool implements IMcpTool
             .booleanProperty("assignable", //$NON-NLS-1$
                 "Instead of the details view, return the ASSIGNABLE-property schema (default false): " + //$NON-NLS-1$
                 "per property its value kind, current value and ALLOWED values (enum literals). This " + //$NON-NLS-1$
-                "is what modify_metadata can set; FQNs may address members (e.g. " + //$NON-NLS-1$
-                "'Catalog.Products.Attribute.Weight'), but NOT a predefined item " + //$NON-NLS-1$
+                "is what modify_metadata can set; FQNs may address managed-form roots " + //$NON-NLS-1$
+                "('Catalog.Products.Form.ItemForm' / 'CommonForm.Main') and members (e.g. " + //$NON-NLS-1$
+                "'Catalog.Products.Attribute.Weight'). For CommonForm.Main the mdclass properties " + //$NON-NLS-1$
+                "remain first and content-root properties are added in a labeled second section. " + //$NON-NLS-1$
+                "This mode does NOT cover a predefined item " + //$NON-NLS-1$
                 "('...Predefined.<Item>' is not resolvable in this mode - its settable surface is " + //$NON-NLS-1$
                 "FIXED and depends on the OWNER: description / code everywhere; isFolder on a Catalog " + //$NON-NLS-1$
                 "/ ChartOfCharacteristicTypes; valueType (alias 'type') on a " + //$NON-NLS-1$
@@ -239,7 +244,7 @@ public class GetMetadataDetailsTool implements IMcpTool
         List<String[]> failures = new ArrayList<>();
 
         // Per-request render context, constant across every FQN in the loop.
-        RenderContext ctx = new RenderContext(resolved.scope(), bmModel, effectiveLanguage,
+        RenderContext ctx = new RenderContext(project, resolved.scope(), bmModel, effectiveLanguage,
             full, assignable, isExtensionProject, roleObjectOffset);
 
         // Process each FQN
@@ -391,15 +396,41 @@ public class GetMetadataDetailsTool implements IMcpTool
     }
 
     /**
-     * Renders the ASSIGNABLE-property view for one FQN of the request: a form-member FQN is routed
-     * through the form resolver (issue #235), any other FQN through the shared mdclass resolver.
+     * Renders the ASSIGNABLE-property view for one FQN of the request: an owned-form root or form
+     * member is routed through the form resolver (issues #549 / #235), while a common form first
+     * takes the shared mdclass resolver and then adds its content-root table.
      * Appends the table to {@code sb}, or records a {@code {fqn, reason}} row in {@code failures}
-     * when the node cannot be resolved. Extracted verbatim from the {@code ctx.assignable} branch
-     * of {@link #processFqn}; no behaviour change.
+     * when the node cannot be resolved.
      */
     private void appendAssignableView(String fqn, StringBuilder sb, List<String[]> failures, RenderContext ctx)
     {
         String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
+        // A four-part owned-form ROOT has no mdclass node at that address. Resolve it through the
+        // form seams before the mdclass resolver and render the editable form:Form object's own
+        // assignable features inside readEditableForm's BM READ transaction. A two-part
+        // CommonForm.Name is deliberately deferred: it needs the mdclass table plus an additive
+        // content-root section below.
+        String formRootPath = FormElementWriter.parseFormPath(normFqn);
+        if (FormElementWriter.parseFormObjectCreate(normFqn) != null)
+        {
+            if (resolveFormRootForAssignable(ctx.scope, normFqn) == null)
+            {
+                failures.add(new String[] { fqn, formRootNotFoundReason(formRootPath) });
+                return;
+            }
+            String rootAssignable = ctx.bmModel == null ? null
+                : renderFormRootAssignable(ctx.project, ctx.scope, formRootPath, normFqn, false);
+            if (rootAssignable == null)
+            {
+                failures.add(new String[] { fqn, "the managed form root has no editable content " //$NON-NLS-1$
+                    + "model (the project may still be building, or the form may be empty/legacy)" }); //$NON-NLS-1$
+                return;
+            }
+            sb.append(rootAssignable);
+            sb.append(SECTION_SEPARATOR);
+            return;
+        }
+
         // A form-member FQN (a group / field / table / decoration inside a form's editable content
         // model) is NOT part of the mdclass tree, so MetadataNodeResolver cannot see it and the
         // assignable view used to fail with "Object not found". Route it - BEFORE the mdclass
@@ -435,7 +466,25 @@ public class GetMetadataDetailsTool implements IMcpTool
             failures.add(new String[] { fqn, describeResolutionFailure(fqn, ctx.scope) });
             return;
         }
+        // CommonForm.Name is BOTH a first-class mdclass top object and a form root. Keep the mdclass
+        // assignable table byte-for-byte first, then add the content root under an unmistakable
+        // heading. Every other mdclass FQN remains the single-table path.
         sb.append(formatAssignable(normFqn, node.object));
+        if (node.object instanceof CommonForm)
+        {
+            formRootPath = FormElementWriter.parseFormPath(normFqn);
+            String rootAssignable = formRootPath == null || ctx.bmModel == null ? null
+                : renderFormRootAssignable(ctx.project, ctx.scope, formRootPath, normFqn, true);
+            if (rootAssignable == null)
+            {
+                failures.add(new String[] { fqn, "the common form's content root has no editable " //$NON-NLS-1$
+                    + "model (the project may still be building, or the form may be empty/legacy)" }); //$NON-NLS-1$
+            }
+            else
+            {
+                sb.append('\n').append(rootAssignable);
+            }
+        }
         sb.append(SECTION_SEPARATOR);
     }
 
@@ -646,6 +695,8 @@ public class GetMetadataDetailsTool implements IMcpTool
      */
     static final class RenderContext
     {
+        /** Workspace project used to obtain the form edit/read scaffold. */
+        final IProject project;
         /** The ROOT an FQN resolves against: the configuration, or an external-objects project's roots. */
         final MetadataScope scope;
         final IBmModel bmModel;
@@ -656,10 +707,11 @@ public class GetMetadataDetailsTool implements IMcpTool
         /** 0-based object offset for a Role FQN's paginated rights matrix (ignored in {@code full} mode). */
         final int roleObjectOffset;
 
-        RenderContext(MetadataScope scope, IBmModel bmModel, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        RenderContext(IProject project, MetadataScope scope, IBmModel bmModel, // NOSONAR established render contract
             String effectiveLanguage, boolean full, boolean assignable, boolean isExtensionProject,
             int roleObjectOffset)
         {
+            this.project = project;
             this.scope = scope;
             this.bmModel = bmModel;
             this.effectiveLanguage = effectiveLanguage;
@@ -689,8 +741,20 @@ public class GetMetadataDetailsTool implements IMcpTool
      */
     static String formatAssignable(String fqn, EObject obj)
     {
+        return formatAssignableSection("## Assignable properties: ", fqn, obj); //$NON-NLS-1$
+    }
+
+    /** Renders the separately-labeled content-root section appended for a common form. */
+    static String formatFormContentRootAssignable(String fqn, EObject obj)
+    {
+        return formatAssignableSection("## Form content root assignable properties: ", fqn, obj); //$NON-NLS-1$
+    }
+
+    /** Shared table body; callers supply the heading that identifies the represented surface. */
+    private static String formatAssignableSection(String heading, String fqn, EObject obj)
+    {
         StringBuilder sb = new StringBuilder();
-        sb.append("## Assignable properties: ").append(fqn).append("\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sb.append(heading).append(fqn).append("\n\n"); //$NON-NLS-1$
         sb.append("Set these with `modify_metadata`. For an ENUM property the value must be one of " //$NON-NLS-1$
             + "the listed Allowed values.\n\n"); //$NON-NLS-1$
         sb.append(MarkdownUtils.tableHeader("Property", "Kind", "Current", "Allowed values")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
@@ -1109,6 +1173,73 @@ public class GetMetadataDetailsTool implements IMcpTool
             Package content = txPackage instanceof XDTOPackage ? ((XDTOPackage)txPackage).getPackage() : null;
             return XdtoStructureReader.render(normalized, content);
         });
+    }
+
+    /**
+     * Describes a missing syntactically-valid form-root address. Owned forms name their owner so the
+     * failure cannot be mistaken for the mdclass resolver's generic object miss. Package-visible for
+     * the headless routing tests.
+     */
+    static String formRootNotFoundReason(String formPath)
+    {
+        String[] parts = formPath == null ? new String[0] : formPath.split("\\."); //$NON-NLS-1$
+        if (parts.length == 4)
+        {
+            String ownerFqn = parts[0] + "." + parts[1]; //$NON-NLS-1$
+            return "Form '" + parts[3] + "' not found on owner '" + ownerFqn //$NON-NLS-1$ //$NON-NLS-2$
+                + "'. Use get_metadata_details on '" + ownerFqn + "' to list its forms, or " //$NON-NLS-1$ //$NON-NLS-2$
+                + "get_metadata_objects to verify the owner FQN."; //$NON-NLS-1$
+        }
+        if (parts.length == 2)
+        {
+            return "Common form '" + parts[1] //$NON-NLS-1$
+                + "' not found. Use get_metadata_objects to list " //$NON-NLS-1$
+                + "available CommonForm FQNs."; //$NON-NLS-1$
+        }
+        return "Form not found for '" + formPath //$NON-NLS-1$
+            + "'. Use get_metadata_objects to verify the owner and form FQN."; //$NON-NLS-1$
+    }
+
+    /**
+     * Resolves only the existing managed-form root accepted by the assignable branch. Token parsing
+     * and scope-aware MD-form lookup stay delegated to the shared form seams. Package-visible so the
+     * exact pre-BM dispatch decision is testable headlessly.
+     */
+    static MdObject resolveFormRootForAssignable(MetadataScope scope, String normFqn)
+    {
+        String formPath = FormElementWriter.parseFormPath(normFqn);
+        return formPath == null ? null : FormStructureReader.resolveMdForm(scope, formPath);
+    }
+
+    /**
+     * Renders the editable {@code form:Form} ROOT's assignable properties. Resolution uses the same
+     * form-write context as modify_metadata; the root EObject is consumed wholly inside
+     * {@link FormElementWriter#readEditableForm}, so no transaction-bound model object escapes.
+     */
+    private static String renderFormRootAssignable(IProject project, MetadataScope scope,
+        String formRootPath, String normFqn, boolean commonFormSection)
+    {
+        if (project == null)
+        {
+            return null;
+        }
+        try
+        {
+            FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(project, scope,
+                formRootPath, formRootNotFoundReason(formRootPath));
+            return FormElementWriter.readEditableForm(fctx, "GetMetadataDetailsFormRoot", //$NON-NLS-1$
+                (formModel, tx) -> commonFormSection
+                    ? formatFormContentRootAssignable(normFqn, formModel)
+                    : formatAssignable(normFqn, formModel));
+        }
+        catch (RuntimeException e)
+        {
+            if (FormValidationException.jsonOf(e) != null)
+            {
+                return null;
+            }
+            throw e;
+        }
     }
 
     /**
