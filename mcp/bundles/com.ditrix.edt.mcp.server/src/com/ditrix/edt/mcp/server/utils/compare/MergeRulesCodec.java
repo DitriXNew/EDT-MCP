@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -536,7 +537,30 @@ public final class MergeRulesCodec
     public static void write(Path file, MergeRulesDocument document, Target target,
         BasicFileAttributes expected) throws IOException
     {
-        write(file, document, target, null, NOTHING_INTERFERES, expected);
+        write(file, document, target, null, NOTHING_INTERFERES, expected, null);
+    }
+
+    /**
+     * The same write, with the caller's OWN verification re-asked immediately before the move.
+     * <p>
+     * The attribute identity this class can check is cheap and blind to an in-place edit that
+     * kept the length and restored the stamps - which is exactly what the caller's content
+     * digests are for. Rather than teach this class about them, the caller hands in the
+     * question: {@code stillVerified} answers whether the target is still the one it authorized,
+     * and it is asked at the last possible instant instead of before the staging work.
+     * </p>
+     *
+     * @param file the target file
+     * @param document the document
+     * @param target what the caller has established about a file already on the path
+     * @param expected the attributes the caller verified the target by, or {@code null}
+     * @param stillVerified the caller's own re-check, or {@code null} for none
+     * @throws IOException when the file cannot be written, or is no longer the verified one
+     */
+    public static void write(Path file, MergeRulesDocument document, Target target,
+        BasicFileAttributes expected, BooleanSupplier stillVerified) throws IOException
+    {
+        write(file, document, target, null, NOTHING_INTERFERES, expected, stillVerified);
     }
 
     /**
@@ -592,6 +616,24 @@ public final class MergeRulesCodec
     public static void writeZip(Path file, MergeRulesDocument document, Target target,
         String entryId, BasicFileAttributes expected) throws IOException
     {
+        writeZip(file, document, target, entryId, expected, null);
+    }
+
+    /**
+     * The zip write, with the caller's own verification re-asked immediately before the move.
+     *
+     * @param file the target file, normally named {@code .zip}
+     * @param document the document
+     * @param target what the caller has established about a file already on the path
+     * @param entryId the comparison id the entry is named after, without an extension
+     * @param expected the attributes the caller verified the target by, or {@code null}
+     * @param stillVerified the caller's own re-check, or {@code null} for none
+     * @throws IOException when the file cannot be written, or is no longer the verified one
+     */
+    public static void writeZip(Path file, MergeRulesDocument document, Target target,
+        String entryId, BasicFileAttributes expected, BooleanSupplier stillVerified)
+        throws IOException
+    {
         if (entryId == null || entryId.isBlank())
         {
             throw new IllegalArgumentException(
@@ -599,7 +641,7 @@ public final class MergeRulesCodec
                     + "for, and none was supplied. EDT ignores an archive whose entry is named " //$NON-NLS-1$
                     + "anything else, so no name can be invented here."); //$NON-NLS-1$
         }
-        write(file, document, target, entryId, NOTHING_INTERFERES, expected);
+        write(file, document, target, entryId, NOTHING_INTERFERES, expected, stillVerified);
     }
 
     /**
@@ -615,7 +657,7 @@ public final class MergeRulesCodec
     private static void write(Path file, MergeRulesDocument document, Target target, String zipEntryId)
         throws IOException
     {
-        write(file, document, target, zipEntryId, NOTHING_INTERFERES, null);
+        write(file, document, target, zipEntryId, NOTHING_INTERFERES, null, null);
     }
 
     /**
@@ -638,7 +680,7 @@ public final class MergeRulesCodec
     static void write(Path file, MergeRulesDocument document, Target target, String zipEntryId,
         Runnable afterReservation) throws IOException
     {
-        write(file, document, target, zipEntryId, afterReservation, null);
+        write(file, document, target, zipEntryId, afterReservation, null, null);
     }
 
     /**
@@ -654,7 +696,8 @@ public final class MergeRulesCodec
      * @throws IOException when the file cannot be written, or no longer holds {@code expected}
      */
     static void write(Path file, MergeRulesDocument document, Target target, String zipEntryId,
-        Runnable afterReservation, BasicFileAttributes expected) throws IOException
+        Runnable afterReservation, BasicFileAttributes expected, BooleanSupplier stillVerified)
+        throws IOException
     {
         // FIRST, and before a single filesystem step - not even the parent directories. This is
         // the one refusal that has to leave the path exactly as it found it, and a check made
@@ -718,6 +761,7 @@ public final class MergeRulesCodec
             // inheriting permissions - is window, and this closes all of it but the step to the
             // move itself.
             refuseUnlessTheTargetIsStillTheFileVerified(resolved, expected);
+            refuseUnlessTheCallerStillRecognisesTheTarget(resolved, stillVerified);
             try
             {
                 Files.move(temporary, resolved, StandardCopyOption.REPLACE_EXISTING,
@@ -733,6 +777,7 @@ public final class MergeRulesCodec
                     refuseUnlessThePathStillHoldsTheReservation(resolved, reservation);
                 }
                 refuseUnlessTheTargetIsStillTheFileVerified(resolved, expected);
+                refuseUnlessTheCallerStillRecognisesTheTarget(resolved, stillVerified);
                 Files.move(temporary, resolved, StandardCopyOption.REPLACE_EXISTING);
             }
         }
@@ -756,6 +801,30 @@ public final class MergeRulesCodec
                 }
             }
             throw e;
+        }
+    }
+
+    /**
+     * Refuses to install the document when the CALLER no longer recognises what is on the path.
+     * <p>
+     * The attribute check beside this one cannot see an in-place edit that kept the length and
+     * restored the stamps; the caller's own comparison can, and this is where it is worth
+     * asking - after the staging work rather than before it.
+     * </p>
+     *
+     * @param resolved the target path
+     * @param stillVerified the caller's re-check, or {@code null} when there is none
+     * @throws IOException when the caller says the target is no longer the one it authorized
+     */
+    private static void refuseUnlessTheCallerStillRecognisesTheTarget(Path resolved,
+        BooleanSupplier stillVerified) throws IOException
+    {
+        if (stillVerified != null && !stillVerified.getAsBoolean())
+        {
+            throw new IOException("Nothing was written: " + resolved //$NON-NLS-1$
+                + " stopped being the file this write was authorized against while the " //$NON-NLS-1$
+                + "replacement was being prepared, so installing it would discard whatever was " //$NON-NLS-1$
+                + "saved to it since."); //$NON-NLS-1$
         }
     }
 

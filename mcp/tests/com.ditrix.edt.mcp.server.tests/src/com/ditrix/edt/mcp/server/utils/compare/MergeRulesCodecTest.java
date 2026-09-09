@@ -5100,7 +5100,7 @@ public class MergeRulesCodecTest
         {
             MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
                 MergeRulesCodec.Target.MAY_BE_REPLACED, null, replaceReservationAndCarryOn(target),
-                verified);
+                verified, null);
             fail("a replacement whose target changed since it was verified must refuse"); //$NON-NLS-1$
         }
         catch (IOException expected)
@@ -5130,10 +5130,41 @@ public class MergeRulesCodecTest
 
         MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
             MergeRulesCodec.Target.MAY_BE_REPLACED, null, () -> { /* nothing interferes */ },
-            verified);
+            verified, null);
 
         assertTrue("the document must actually have been installed", //$NON-NLS-1$
             new String(Files.readAllBytes(target), StandardCharsets.UTF_8)
                 .contains("MergeSettings")); //$NON-NLS-1$
+    }
+
+    /**
+     * The attributes this class compares cannot see an in-place edit that kept the length and put
+     * the timestamps back - the caller has digests for that. So the caller hands in the question,
+     * and it is asked at the last instant rather than before the staging work.
+     *
+     * @throws Exception when the fixture cannot be written or read back
+     */
+    @Test
+    public void testAReplacementRefusesWhenTheCallerNoLongerRecognisesTheTarget() throws Exception
+    {
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+        Files.write(target, FOREIGN_DECISIONS.getBytes(StandardCharsets.UTF_8));
+        BasicFileAttributes verified = Files.readAttributes(target, BasicFileAttributes.class);
+
+        try
+        {
+            MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+                MergeRulesCodec.Target.MAY_BE_REPLACED, null, () -> { /* nothing interferes */ },
+                verified, () -> false);
+            fail("the caller said the target is no longer the one it authorized"); //$NON-NLS-1$
+        }
+        catch (IOException expected)
+        {
+            assertTrue("the refusal has to say what it observed: " + expected.getMessage(), //$NON-NLS-1$
+                expected.getMessage().contains("stopped being the file this write was authorized")); //$NON-NLS-1$
+        }
+
+        assertEquals("nothing may be installed over a target the caller disowned", //$NON-NLS-1$
+            FOREIGN_DECISIONS, new String(Files.readAllBytes(target), StandardCharsets.UTF_8));
     }
 }

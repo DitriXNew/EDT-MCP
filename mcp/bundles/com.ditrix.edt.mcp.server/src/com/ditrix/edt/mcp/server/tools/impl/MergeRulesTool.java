@@ -22,6 +22,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -926,12 +927,29 @@ public class MergeRulesTool implements IMcpTool
                 // write that discards it. Off the parsed bytes there is no such instant.
                 targetDigestAsRead = document.sourceDigest();
             }
+            else if (targetPolicy == MergeRulesCodec.Target.MAY_BE_REPLACED)
+            {
+                // The replacement was authorized a few lines above by "basedOn and filePath are the SAME file", and that
+                // answer has just changed - a symlink retargeted under this call is the way it
+                // happens. Taking the new answer would fingerprint the file now addressed while
+                // the document still came from the old one, and write one file's decisions over
+                // another. The authorization is what stops holding, so the call stops.
+                return ToolResult.error("Nothing was written: " + file + " and " + KEY_BASED_ON //$NON-NLS-1$ //$NON-NLS-2$
+                    + " '" + base //$NON-NLS-1$
+                    + "' named the same file when this call authorized the replacement and no " //$NON-NLS-1$
+                    + "longer do, so what is on that path now is not what this write was " //$NON-NLS-1$
+                    + "authorized to replace. Read the path again with mode '" + MODE_READ //$NON-NLS-1$
+                    + "' and re-send the write against it.").toJson(); //$NON-NLS-1$
+            }
             else
             {
-                // The target is replaced wholesale here and never parsed. Read it the way the
-                // parser WOULD - bounded, and for an archive the settings entry instead of the
-                // whole file - so the confirm point compares like with like. Unreadable or
-                // unparseable leaves the digest null, and the attribute check stands alone.
+                // Reached only when there is nothing on the path to replace - a fresh file, or
+                // one written beside its base. An EXISTING target that is not the base was
+                // already refused above, and one that STOPPED being the base is refused in the
+                // branch before this. Read it the way the parser WOULD - bounded, and for an
+                // archive the settings entry instead of the whole file - so the confirm point
+                // compares like with like. Unreadable or unparseable leaves the digest null,
+                // and the attribute check stands alone.
                 try
                 {
                     targetDigestAsRead = MergeRulesCodec.read(file).sourceDigest();
@@ -1214,11 +1232,15 @@ public class MergeRulesTool implements IMcpTool
         {
             if (zipEntryId == null)
             {
-                MergeRulesCodec.write(file, document, targetPolicy, targetAsRead);
+                MergeRulesCodec.write(file, document, targetPolicy, targetAsRead,
+                    stillTheTargetThisCallVerified(file, targetAsRead, targetDigestAsRead,
+                        targetArchiveDigestAsRead));
             }
             else
             {
-                MergeRulesCodec.writeZip(file, document, targetPolicy, zipEntryId, targetAsRead);
+                MergeRulesCodec.writeZip(file, document, targetPolicy, zipEntryId, targetAsRead,
+                    stillTheTargetThisCallVerified(file, targetAsRead, targetDigestAsRead,
+                        targetArchiveDigestAsRead));
             }
         }
         catch (FileAlreadyExistsException e)
@@ -1383,6 +1405,28 @@ public class MergeRulesTool implements IMcpTool
      * @return the refusal, or {@code null} when the target is still the file that was read
      */
     /**
+     * The question the codec asks at the last instant before it replaces the file: is this still
+     * the target this call verified?
+     * <p>
+     * It is {@code targetChangedRefusal} and nothing new - the same attributes, the same content
+     * digest, the same archive digest - asked once more after the document has been serialized
+     * and staged, which is work the caller's own check stands in front of.
+     * </p>
+     *
+     * @param file the target
+     * @param asRead its attributes when this call read it, or {@code null} when it did not exist
+     * @param digestAsRead the content digest snapshotted for it
+     * @param archiveDigestAsRead the whole-file digest snapshotted for an archive
+     * @return the re-check, or {@code null} when there was no file to verify
+     */
+    private static BooleanSupplier stillTheTargetThisCallVerified(Path file,
+        BasicFileAttributes asRead, String digestAsRead, String archiveDigestAsRead)
+    {
+        return asRead == null ? null
+            : () -> targetChangedRefusal(file, asRead, digestAsRead, archiveDigestAsRead) == null;
+    }
+
+    /**
      * Refuses when the target is no longer the size it was read at - checked before any
      * whole-file work, so a container substituted since then is rejected rather than streamed.
      *
@@ -1517,6 +1561,14 @@ public class MergeRulesTool implements IMcpTool
      * by spelling: a caller may pass the target as {@code basedOn} through a different but
      * equivalent path, and the digest taken from the parsed document is only reusable when the
      * two really are one file.
+     * <p>
+     * A {@code false} here is not a safe default at the call site, whatever it is for the
+     * predicate: on an EXISTING target the replacement was authorized by this very relation, so
+     * a {@code false} - a retargeted link, or an answer that could not be obtained - means the
+     * authorization stopped holding, and the caller REFUSES rather than continuing another way.
+     * A predicate whose failure mode reads like an ordinary answer cannot decide that on its
+     * own, so it does not: it reports, and the consumer decides.
+     * </p>
      *
      * @param base the basedOn path, or {@code null}
      * @param file the target
@@ -1536,7 +1588,7 @@ public class MergeRulesTool implements IMcpTool
         {
             return Files.isSameFile(base, file);
         }
-        catch (IOException cannotTell) // NOSONAR: unverifiable means "not the same", the safe answer
+        catch (IOException cannotTell) // NOSONAR: unverifiable is reported as "not the same"; see the javadoc
         {
             return false;
         }
