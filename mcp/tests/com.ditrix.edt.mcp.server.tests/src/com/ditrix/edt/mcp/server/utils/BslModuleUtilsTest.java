@@ -356,6 +356,26 @@ public class BslModuleUtilsTest
      * would otherwise borrow its terminator and report itself complete - the span that deletes a
      * whole neighbouring method.
      */
+    /**
+     * The mirror of the bound: BSL lists the reserved words legal as MEMBER names (grammar rule
+     * {@code ExtName}) and allows a line break after the dot, so a line opening with Function
+     * right after a line ending in a dot is one expression, not a declaration. Bounding there
+     * would end the method before its terminator and refuse a perfectly legal write.
+     */
+    @Test
+    public void testAKeywordMemberNameAfterADanglingDotIsNotABound()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "\tValue = Object.", //$NON-NLS-1$
+            "\t\tFunction();", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue("a member access split after its dot must not bound the span", span.complete); //$NON-NLS-1$
+        assertEquals(3, span.endLine);
+    }
+
     @Test
     public void testSpanStopsAtADeclarationSplitAcrossLines()
     {

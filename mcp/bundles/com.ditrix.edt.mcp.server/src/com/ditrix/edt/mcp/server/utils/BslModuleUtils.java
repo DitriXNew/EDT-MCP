@@ -474,17 +474,48 @@ public final class BslModuleUtils
      * Index of the first method declaration at or after {@code from}, or the line count
      * when there is none. A method cannot contain another declaration, so this is the
      * hard upper bound of a method's terminator search.
+     * <p>
+     * A keyword that opens a line right after one ending in a member-access dot is NOT a
+     * declaration: the grammar's {@code ExtName} rule lists the reserved words legal as member
+     * names - {@code Процедура} and {@code Функция} among them - and whitespace after the dot
+     * includes a line break, so {@code Объект.} followed by {@code Функция()} is one expression.
+     * Bounding there would end the enclosing method before its terminator and refuse a legal
+     * write. Same reasoning, and the same helper shape, as {@code BslSyntaxChecker.isMemberName}.
+     * </p>
      */
     private static int nextDeclarationLine(List<String> lines, int from)
     {
-        for (int i = Math.max(0, from); i < lines.size(); i++)
+        int start = Math.max(0, from);
+        boolean danglingDot = start > 0 && endsWithMemberDot(lines.get(start - 1));
+        for (int i = start; i < lines.size(); i++)
         {
-            if (METHOD_DECLARATION_KEYWORD_PATTERN.matcher(lines.get(i)).find())
+            String line = lines.get(i);
+            if (!danglingDot && METHOD_DECLARATION_KEYWORD_PATTERN.matcher(line).find())
             {
                 return i;
             }
+            danglingDot = endsWithMemberDot(line);
         }
         return lines.size();
+    }
+
+    /**
+     * Whether the line's last meaningful character is a member-access dot, so a keyword opening
+     * the NEXT line is a member name rather than a declaration. An end-of-line comment is dropped
+     * first; anything else is judged as written, which keeps the answer conservative - when in
+     * doubt this reports "not a dot", and the caller then bounds the span, which costs a refusal
+     * rather than an over-reaching splice.
+     */
+    private static boolean endsWithMemberDot(String line)
+    {
+        if (line == null)
+        {
+            return false;
+        }
+        int comment = line.indexOf("//"); //$NON-NLS-1$
+        String code = comment >= 0 ? line.substring(0, comment) : line;
+        String trimmed = code.stripTrailing();
+        return trimmed.endsWith("."); //$NON-NLS-1$
     }
 
     private static int findTerminatorLine(List<String> lines, int from, int to, Pattern terminator)
