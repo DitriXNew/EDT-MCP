@@ -324,8 +324,33 @@ public final class BreakpointUtils
         {
             return LineBreakpointConfiguration.notApplied();
         }
+        return configureLineBreakpoint(breakpoint, breakpoint.getMarker(), condition, hitCount,
+            hitCondition);
+    }
 
-        IMarker marker = breakpoint.getMarker();
+    /**
+     * The same, with the marker the caller ALREADY read.
+     * <p>
+     * A caller that has recorded this breakpoint as one it is about to change must not have the
+     * marker looked up a second time here: that second read can throw before any setter runs, and
+     * the failure then reports a breakpoint as begun-changing whose state was never touched.
+     * </p>
+     *
+     * @param breakpoint the native or degraded breakpoint
+     * @param marker the marker already read for this breakpoint
+     * @param condition condition text; {@code null} and blank both clear it
+     * @param hitCount positive count, or a non-positive value to clear it
+     * @param hitCondition one of {@link #getValidHitConditions()}; normally {@code EQUALS}
+     * @return details needed to report whether marker-attribute fallback was used
+     * @throws Exception if a setter or its marker-attribute fallback fails
+     */
+    public static LineBreakpointConfiguration configureLineBreakpoint(IBreakpoint breakpoint,
+        IMarker marker, String condition, int hitCount, String hitCondition) throws Exception
+    {
+        if (breakpoint instanceof MarkerOnlyBreakpoint)
+        {
+            return LineBreakpointConfiguration.notApplied();
+        }
         List<String> markerFallbacks = new ArrayList<>();
         setStringOption(breakpoint, marker, "setCondition", CONDITION_ATTRIBUTE, //$NON-NLS-1$
             condition == null ? "" : condition, "condition", markerFallbacks); //$NON-NLS-1$ //$NON-NLS-2$

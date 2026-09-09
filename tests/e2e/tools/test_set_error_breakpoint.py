@@ -128,6 +128,21 @@ def test_create_update_disable_and_reenable_workspace_error_breakpoint():
         created = call("set_error_breakpoint", {"enabled": True})
         assert_ok(created, "create catch-all workspace error breakpoint")
         created_state = created.structured or {}
+        # The snapshot above CANNOT see an exception breakpoint the platform recognises by
+        # interface alone: it has no marker, so list_breakpoints does not report it - and no
+        # read-only surface in this server does. The earliest evidence that one exists is right
+        # here, in a configuredCount larger than the ids the tool can name, and by then this call
+        # has already set that entry to catch-all. Stop before changing anything else and say
+        # what has to be put back by hand, instead of running a destructive test blind.
+        named = created_state.get("breakpointIds") or []
+        configured = created_state.get("configuredCount")
+        if isinstance(configured, int) and configured > len(named):
+            raise AssertionError(
+                "the workspace holds %d exception breakpoint(s) with no marker, which this suite "
+                "can neither see beforehand nor restore; this call has already set them to "
+                "catch-all - restore them in EDT's Breakpoints view (response: %r)"
+                % (configured - len(named), created_state)
+            )
         breakpoint_id = created_state.get("breakpointId")
         if not isinstance(breakpoint_id, int) or breakpoint_id <= 0:
             raise AssertionError("factory-created exception breakpoint needs a real marker id: %r"

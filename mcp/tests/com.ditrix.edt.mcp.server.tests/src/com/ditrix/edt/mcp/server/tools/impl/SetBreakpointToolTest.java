@@ -339,7 +339,8 @@ public class SetBreakpointToolTest
     public void testAFailedWithdrawalIsNamedInsteadOfOnlyLogged()
     {
         Exception failure = new IllegalStateException("setter refused"); //$NON-NLS-1$
-        failure.addSuppressed(new IllegalStateException("manager refused the removal")); //$NON-NLS-1$
+        failure.addSuppressed(new SetBreakpointTool.WithdrawalFailed(
+            new IllegalStateException("manager refused the removal"))); //$NON-NLS-1$
         String message = SetBreakpointTool.failureMessage(failure, Collections.emptyList());
         assertTrue("the original failure still leads: " + message, //$NON-NLS-1$
             message.contains("setter refused")); //$NON-NLS-1$
@@ -347,6 +348,21 @@ public class SetBreakpointToolTest
             message.contains("may still be registered")); //$NON-NLS-1$
         assertTrue("and why the withdrawal failed: " + message, //$NON-NLS-1$
             message.contains("manager refused the removal")); //$NON-NLS-1$
+    }
+
+    /**
+     * And the mirror of it: a suppressed throwable that is NOT ours proves nothing. An EDT
+     * setter may attach its own, and reading one as a failed withdrawal announced a leftover
+     * breakpoint that an update - which creates nothing - could never have left.
+     */
+    @Test
+    public void testAnUnrelatedSuppressedThrowableIsNotAWithdrawalFailure()
+    {
+        Exception failure = new IllegalStateException("setter refused"); //$NON-NLS-1$
+        failure.addSuppressed(new IllegalStateException("closing the setter's own handle")); //$NON-NLS-1$
+        String message = SetBreakpointTool.failureMessage(failure, Collections.emptyList());
+        assertFalse("only OUR withdrawal failure may claim a leftover: " + message, //$NON-NLS-1$
+            message.contains("may still be registered")); //$NON-NLS-1$
     }
 
     /**

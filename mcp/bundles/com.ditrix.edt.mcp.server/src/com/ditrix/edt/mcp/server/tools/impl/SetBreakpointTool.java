@@ -240,8 +240,12 @@ public class SetBreakpointTool implements IMcpTool
                             alreadyChanged.add(id);
                         }
                     }
+                    // The marker READ ABOVE is handed over, not looked up again: a second lookup
+                    // can throw before any setter runs, and this id is already recorded as one
+                    // this call began changing - so the failure would name a breakpoint whose
+                    // state was never touched.
                     BreakpointUtils.LineBreakpointConfiguration one =
-                        BreakpointUtils.configureLineBreakpoint(each, effectiveCondition,
+                        BreakpointUtils.configureLineBreakpoint(each, marker, effectiveCondition,
                             hitCount, effectiveHitCondition);
                     appliedEverywhere = appliedEverywhere && one.isApplied();
                     for (String fallback : one.getMarkerFallbacks())
@@ -320,6 +324,14 @@ public class SetBreakpointTool implements IMcpTool
         }
         for (Throwable cleanupFailure : cause.getSuppressed())
         {
+            // ONLY our own withdrawal failure, by type. A setter's exception can arrive carrying
+            // suppressed throwables of its own - from its resource cleanup, say - and reading any
+            // of them as a failed withdrawal would tell the caller a half-configured NEW
+            // breakpoint may be registered after an update that created nothing at all.
+            if (!(cleanupFailure instanceof WithdrawalFailed))
+            {
+                continue;
+            }
             // The withdrawal is what makes "a creation that fails leaves nothing" true. When it
             // fails too, a half-configured breakpoint stays registered and the next call would
             // find it and answer 'updated' - so the caller has to be told, not just the log.
@@ -432,7 +444,25 @@ public class SetBreakpointTool implements IMcpTool
         }
         catch (Exception cleanupFailure)
         {
-            failure.addSuppressed(cleanupFailure);
+            failure.addSuppressed(new WithdrawalFailed(cleanupFailure));
+        }
+    }
+
+    /**
+     * A withdrawal that failed, carried by TYPE rather than inferred from being suppressed.
+     * <p>
+     * The suppressed list is not ours: an EDT setter can attach throwables of its own, and
+     * reading one of those as a failed withdrawal announced a leftover breakpoint that a
+     * creation-free update never made.
+     * </p>
+     */
+    static final class WithdrawalFailed extends Exception
+    {
+        private static final long serialVersionUID = 1L;
+
+        WithdrawalFailed(Throwable cause)
+        {
+            super(cause.getMessage(), cause);
         }
     }
 
