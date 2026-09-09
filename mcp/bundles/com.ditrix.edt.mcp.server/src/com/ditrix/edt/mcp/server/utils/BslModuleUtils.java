@@ -83,8 +83,8 @@ public final class BslModuleUtils
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     /**
-     * A method declaration this line-based scanner cannot ADDRESS: the keyword alone on its
-     * line, or the keyword and a name with no opening parenthesis.
+     * A method declaration this line-based scanner cannot ADDRESS: the keyword and a name with
+     * the opening parenthesis on a later line.
      * <p>
      * BSL hides the newline, so such a declaration is real - and everything here is measured in
      * whole lines, so it can be neither located nor bounded. A module holding one is therefore
@@ -94,9 +94,17 @@ public final class BslModuleUtils
      */
     public static final Pattern UNADDRESSABLE_DECLARATION_PATTERN = Pattern.compile(
         "^\\s*(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)"
-            + "(?!\\p{L}|\\p{N}|_)(?:\\s+[\\p{L}_][\\p{L}\\p{N}_]*)?\\s*$", //$NON-NLS-1$
+            + "(?!\\p{L}|\\p{N}|_)\\s+[\\p{L}_][\\p{L}\\p{N}_]*\\s*$", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
+    /**
+     * A bare {@code Async}/{@code Асинх} modifier on its own line, directly above the
+     * declaration it applies to. It is part of the method - replacing the method without it
+     * would leave the modifier behind, binding to whatever is written in its place.
+     */
+    private static final Pattern ASYNC_MODIFIER_LINE_PATTERN = Pattern.compile(
+        "^\\s*(?:\u0410\u0441\u0438\u043D\u0445|Async)\\s*$", //$NON-NLS-1$
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     /** Regex for region start (#Область / #Region) */
     public static final Pattern REGION_START_PATTERN = Pattern.compile(
         "^\\s*#(?:\u041e\u0431\u043b\u0430\u0441\u0442\u044c|Region)\\s+(\\S+)", //$NON-NLS-1$
@@ -520,12 +528,36 @@ public final class BslModuleUtils
     {
         for (int i = from; i <= to; i++)
         {
+            // A reserved word is a legal MEMBER name (grammar rule ExtName), and the newline
+            // after the dot is hidden, so "Object." on one line and "EndProcedure" on the next is
+            // one expression rather than a method end. Skipping it here fails SAFE, unlike the
+            // same exemption on the declaration side: a terminator missed by mistake ends the
+            // span later or leaves it incomplete, and an incomplete span is a refusal.
+            if (i > 0 && endsWithMemberDot(lines.get(i - 1)))
+            {
+                continue;
+            }
             if (isMethodTerminatorLine(lines.get(i), terminator))
             {
                 return i;
             }
         }
         return -1;
+    }
+
+    /**
+     * Whether the line's last meaningful character is a member-access dot. An end-of-line
+     * comment is dropped first; everything else is judged as written.
+     */
+    private static boolean endsWithMemberDot(String line)
+    {
+        if (line == null)
+        {
+            return false;
+        }
+        int comment = line.indexOf("//"); //$NON-NLS-1$
+        String code = comment >= 0 ? line.substring(0, comment) : line;
+        return code.stripTrailing().endsWith("."); //$NON-NLS-1$
     }
 
     /**
@@ -1189,10 +1221,14 @@ public final class BslModuleUtils
         return owned;
     }
 
-    /** A line that binds to the declaration below it: a comment or an ampersand annotation. */
+    /**
+     * A line that binds to the declaration below it: a comment, an ampersand annotation, or a
+     * bare async modifier (which is part of the declaration itself, not decoration around it).
+     */
     private static boolean isTrivia(String trimmedLine)
     {
-        return trimmedLine.startsWith("//") || trimmedLine.startsWith("&"); //$NON-NLS-1$ //$NON-NLS-2$
+        return trimmedLine.startsWith("//") || trimmedLine.startsWith("&") //$NON-NLS-1$ //$NON-NLS-2$
+            || ASYNC_MODIFIER_LINE_PATTERN.matcher(trimmedLine).matches();
     }
 
     /**

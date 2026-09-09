@@ -356,6 +356,56 @@ public class BslModuleUtilsTest
      * DETECTED so the caller can refuse, rather than guessed at - guessing produced a span that
      * ran through the hidden method and a duplicate-name check that could not see it.
      */
+    /**
+     * The false refusal this closes: a member call split after its dot puts a reserved word
+     * alone on a line, and the rule used to read that as a nameless declaration and refuse the
+     * whole module. A declaration only counts as unaddressable when it names something.
+     */
+    @Test
+    public void testASplitMemberCallIsNotAnUnaddressableDeclaration()
+    {
+        assertEquals(-1, BslModuleUtils.unaddressableDeclarationLine(List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "\tValue = Object.", //$NON-NLS-1$
+            "\t\tFunction;", //$NON-NLS-1$
+            "EndProcedure"))); //$NON-NLS-1$
+    }
+
+    /**
+     * A terminator keyword is a legal MEMBER name too, so "Object." on one line and
+     * "EndProcedure" on the next is one expression - the method continues to its real end. The
+     * exemption is safe HERE, unlike on the declaration side: a terminator missed by mistake
+     * leaves the span incomplete, which is a refusal, never a shorter splice.
+     */
+    @Test
+    public void testATerminatorKeywordUsedAsAMemberNameDoesNotEndTheMethod()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "\tValue = Object.", //$NON-NLS-1$
+            "\t\tEndProcedure;", //$NON-NLS-1$
+            "\tOther = 2;", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue("the member name must not be taken for the method end", span.complete); //$NON-NLS-1$
+        assertEquals(4, span.endLine);
+    }
+
+    /**
+     * A bare async modifier belongs to the declaration below it: replacing the method without it
+     * would leave the modifier behind, bound to whatever is written in its place.
+     */
+    @Test
+    public void testABareAsyncModifierLineIsPartOfTheMethod()
+    {
+        List<String> lines = List.of(
+            "Async", //$NON-NLS-1$
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(0, BslModuleUtils.findMethodSpansViaText(lines).get(0).startLine);
+    }
     @Test
     public void testADeclarationSplitAcrossLinesIsReportedAsUnaddressable()
     {
