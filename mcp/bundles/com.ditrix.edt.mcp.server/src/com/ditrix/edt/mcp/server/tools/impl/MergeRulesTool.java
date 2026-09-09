@@ -1165,7 +1165,7 @@ public class MergeRulesTool implements IMcpTool
         {
             DestructiveConsentGate.ConsentDecision decision = consentRequester.request(NAME,
                 replacementPreview(file, existingDecisions, replaced, requested.size(),
-                    document.readEntryCarriedMetadata()));
+                    document.readEntryCarriedMetadata(), document.sourceEntry(), zipEntryId));
             if (decision != DestructiveConsentGate.ConsentDecision.ALLOW)
             {
                 return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME))
@@ -1263,8 +1263,17 @@ public class MergeRulesTool implements IMcpTool
      * @return the preview
      */
     private static ConsentPreview replacementPreview(Path file, int existingDecisions, int replaced,
-        int requested, boolean entryCarriedMetadata)
+        int requested, boolean entryCarriedMetadata, String entryAsRead, String entryToWrite)
     {
+        // A rewrite may put the rules under a DIFFERENT entry name than the one they were read
+        // from, and that changes which comparison can consume them - an address change the
+        // operator must see BEFORE authorizing, not afterwards by diffing two report fields.
+        String renameClause = entryAsRead != null && entryToWrite != null
+            && !entryAsRead.equals(entryToWrite)
+                ? " The rules also change address inside the archive: they were read from entry '" //$NON-NLS-1$
+                    + entryAsRead + "' and will be written as '" + entryToWrite //$NON-NLS-1$
+                    + "', so a comparison looking for the old name will no longer find them." //$NON-NLS-1$
+                : ""; //$NON-NLS-1$
         return new ConsentPreview("Replace merge-rules file", //$NON-NLS-1$
             "This replaces " + file + " with a new file. It carries " //$NON-NLS-1$ //$NON-NLS-2$
                 + (existingDecisions - replaced) + " of the " + existingDecisions //$NON-NLS-1$
@@ -1278,6 +1287,7 @@ public class MergeRulesTool implements IMcpTool
                     ? " Also lost: the merge-settings entry this write started from carried a zip " //$NON-NLS-1$
                         + "entry comment or an extra field, and that did not come across." //$NON-NLS-1$
                     : "") //$NON-NLS-1$
+                + renameClause
                 // A PROMISE, not a disclaimer: every number above was computed from the file as it
                 // stood before this dialog opened, and the sentence says what happens if that
                 // stops being true rather than warning that it might. See targetChangedRefusal.
