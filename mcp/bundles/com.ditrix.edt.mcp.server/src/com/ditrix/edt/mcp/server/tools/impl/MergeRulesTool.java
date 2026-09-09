@@ -24,6 +24,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
@@ -854,10 +855,12 @@ public class MergeRulesTool implements IMcpTool
         // discarded by the rewrite without anyone noticing. The confirm point compares this list
         // against the container as it is then.
         List<String> targetEntriesAsRead = new ArrayList<>();
-        // The SELECTED entry's label, for the rename the other three cannot see: attributes,
-        // the parsed digest and the other-entry list all stay equal when the settings entry is
-        // renamed in place, and the write would then put the old name back over it.
-        String[] targetLabelAsRead = new String[1];
+        // The SELECTED entry's NAME, for the rename the other three cannot see: attributes, the
+        // parsed digest and the other-entry list all stay equal when the settings entry is
+        // renamed in place, and the write would then put the old name back over it. Taken from
+        // the document's own field rather than from its display label, which is text for a
+        // person and lives in a path that may legally contain the separator.
+        String[] targetEntryAsRead = new String[1];
         if (Files.exists(file))
         {
             if (!isSameFile(file, base))
@@ -929,7 +932,7 @@ public class MergeRulesTool implements IMcpTool
                 // what the attributes cannot see, so a window here would defeat the whole clause.
                 targetDigestAsRead = document.sourceDigest();
                 targetEntriesAsRead.addAll(document.unreadContainerEntries());
-                targetLabelAsRead[0] = document.sourceLabel();
+                targetEntryAsRead[0] = document.sourceEntry();
             }
             else
             {
@@ -942,7 +945,7 @@ public class MergeRulesTool implements IMcpTool
                     MergeRulesDocument onDisk = MergeRulesCodec.read(file);
                     targetDigestAsRead = onDisk.sourceDigest();
                     targetEntriesAsRead.addAll(onDisk.unreadContainerEntries());
-                    targetLabelAsRead[0] = onDisk.sourceLabel();
+                    targetEntryAsRead[0] = onDisk.sourceEntry();
                 }
                 catch (IOException | MergeRulesFormatException notComparable) // NOSONAR: see above
                 {
@@ -1173,7 +1176,7 @@ public class MergeRulesTool implements IMcpTool
             // parse, the comparison's BM read - for a foreign writer to land in, and a check that
             // ran only at the Ask level would guard the slow path and leave the fast one open.
             String changed = targetChangedRefusal(file, targetAsRead, targetDigestAsRead,
-                targetEntriesAsRead, targetLabelAsRead[0]);
+                targetEntriesAsRead, targetEntryAsRead[0]);
             if (changed != null)
             {
                 return changed;
@@ -1341,32 +1344,15 @@ public class MergeRulesTool implements IMcpTool
      * @return the digest, or {@code null} when the file cannot be read or parsed - which the
      *         caller treats as changed, the direction the whole check reasons in
      */
-    /**
-     * The ENTRY half of a codec source label ({@code <file>!<entry>}), or {@code null} for a bare
-     * xml document - the half that identifies what a zip write puts back, independent of how the
-     * caller spelled the path.
-     *
-     * @param label the label recorded by the codec, may be {@code null}
-     * @return the entry name, or {@code null}
-     */
-    private static String entryNameOf(String label)
-    {
-        if (label == null)
-        {
-            return null;
-        }
-        int bang = label.lastIndexOf('!');
-        return bang < 0 ? null : label.substring(bang + 1);
-    }
 
-    private static String currentDocument(Path file, List<String> entriesOut, String[] labelOut)
+    private static String currentDocument(Path file, List<String> entriesOut, String[] entryOut)
     {
         try
         {
             MergeRulesDocument present = MergeRulesCodec.read(file);
             entriesOut.clear();
             entriesOut.addAll(present.unreadContainerEntries());
-            labelOut[0] = present.sourceLabel();
+            entryOut[0] = present.sourceEntry();
             return present.sourceDigest();
         }
         catch (IOException | MergeRulesFormatException unverifiable) // NOSONAR: see the javadoc
@@ -1406,11 +1392,11 @@ public class MergeRulesTool implements IMcpTool
     }
 
     private static String targetChangedRefusal(Path file, BasicFileAttributes asRead,
-        String digestAsRead, List<String> entriesAsRead, String labelAsRead)
+        String digestAsRead, List<String> entriesAsRead, String entryAsRead)
     {
         String observed;
         List<String> entriesNow = new ArrayList<>();
-        String[] labelNow = new String[1];
+        String[] entryNow = new String[1];
         try
         {
             BasicFileAttributes present = Files.readAttributes(file, BasicFileAttributes.class);
@@ -1423,7 +1409,7 @@ public class MergeRulesTool implements IMcpTool
                 observed = "its size or timestamps are not those of the file that was read"; //$NON-NLS-1$
             }
             else if (digestAsRead != null
-                && !digestAsRead.equals(currentDocument(file, entriesNow, labelNow)))
+                && !digestAsRead.equals(currentDocument(file, entriesNow, entryNow)))
             {
                 // The residue the attributes cannot see: same length, both instants preserved or
                 // restored. Reached only when every attribute still matches, so it costs one read
@@ -1431,13 +1417,11 @@ public class MergeRulesTool implements IMcpTool
                 // the mtime" from an assumption into something the code checked.
                 observed = "its content is not the content that was read"; //$NON-NLS-1$
             }
-            else if (!java.util.Objects.equals(entryNameOf(labelAsRead), entryNameOf(labelNow[0])))
+            else if (!Objects.equals(entryAsRead, entryNow[0]))
             {
-                // Only the ENTRY part of the label: the path half is whatever spelling the caller
-                // used, and basedOn may name this same file differently - comparing the whole
-                // label would refuse a legitimate rewrite over a difference in spelling. The entry
-                // is what the write puts back, and renaming it in place is invisible to every
-                // other clause here.
+                // The entry the write puts back, and the one thing renaming it in place changes
+                // that every other clause here is blind to. Null on both sides for a bare xml
+                // document, which is how that case stays unaffected.
                 observed = "the archive entry it was read from is no longer the one it holds"; //$NON-NLS-1$
             }
             else if (!entriesNow.equals(entriesAsRead))

@@ -131,6 +131,8 @@ public final class MergeRulesDocument
 
     private String sourceDigest;
 
+    private String sourceEntry;
+
     private List<String> unreadContainerEntries = Collections.emptyList();
 
     private boolean containerCarriedComment;
@@ -271,6 +273,31 @@ public final class MergeRulesDocument
         return sourceDigest;
     }
 
+    /**
+     * The name of the archive ENTRY this document was read from, or {@code null} when it came
+     * from a bare xml file.
+     * <p>
+     * A field rather than something parsed back out of {@link #sourceLabel()}: that label is text
+     * for a person (it appears in the report), a path may legally contain the separator, and a
+     * caller comparing "the entry I read" must not depend on either.
+     * </p>
+     *
+     * @return the entry name, or {@code null} for a bare xml document
+     */
+    public String sourceEntry()
+    {
+        return sourceEntry;
+    }
+
+    /**
+     * Records the archive entry this document was read from.
+     *
+     * @param entry the entry name
+     */
+    public void setSourceEntry(String entry)
+    {
+        this.sourceEntry = entry;
+    }
     /**
      * Records the digest of the bytes this document was parsed from.
      *

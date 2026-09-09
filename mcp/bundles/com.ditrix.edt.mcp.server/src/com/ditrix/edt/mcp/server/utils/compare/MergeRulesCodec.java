@@ -1938,6 +1938,7 @@ public final class MergeRulesCodec
             }
             MergeRulesDocument document = parse(new ByteArrayInputStream(content));
             document.setSourceLabel(file + "!" + entry.getName()); //$NON-NLS-1$
+            document.setSourceEntry(entry.getName());
             document.setSourceDigest(digestOf(content));
             // What the archive held BESIDES the entry that was read, carried on the document
             // because this is the only moment it is knowable. An archive of one merge-settings
