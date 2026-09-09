@@ -393,10 +393,18 @@ public final class BslSyntaxChecker
      */
     public static List<String> maskLiteralsAndComments(List<String> lines)
     {
+        // NOTE for the loop below: it applies the same continuation reset check() does. A literal
+        // only continues onto the next physical line through a leading '|', so a quote left open
+        // by broken source must not go on masking the real code underneath it - that is exactly
+        // how an unterminated string could hide a method's own terminator from a span scan.
         List<String> masked = new ArrayList<>(lines.size());
         StringLiteralState state = new StringLiteralState();
         for (String line : lines)
         {
+            if (state.insideString && !line.trim().startsWith("|")) //$NON-NLS-1$
+            {
+                state.insideString = false;
+            }
             masked.add(maskStringLiterals(line, state));
         }
         return masked;

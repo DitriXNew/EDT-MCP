@@ -397,6 +397,25 @@ public class BslModuleUtilsTest
      * Every line rule reads text with literals and comments masked, so a keyword inside a DEFAULT
      * VALUE is not code: this declaration is ordinary and must not make the module unaddressable.
      */
+    /**
+     * A literal continues onto the next physical line only through a leading "|", so a quote left
+     * open by BROKEN source must not keep masking the code underneath it - otherwise the mask
+     * hides the method's own terminator and the span runs on to an unrelated one.
+     */
+    @Test
+    public void testAnUnterminatedStringDoesNotMaskTheTerminatorBelowIt()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "\tValue = \"broken", //$NON-NLS-1$
+            "EndProcedure", //$NON-NLS-1$
+            "ModuleValue = \"also broken", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue(span.complete);
+        assertEquals("the method must end at its OWN terminator", 2, span.endLine); //$NON-NLS-1$
+    }
     @Test
     public void testATerminatorWordInsideADefaultValueIsNotCode()
     {
