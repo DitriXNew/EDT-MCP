@@ -202,6 +202,11 @@ public class SetBreakpointTool implements IMcpTool
                     BreakpointUtils.createLineBreakpoint(target.file, lineNumber));
             }
             IBreakpoint bp = existing.get(0);
+            // Read once, before anything is configured: the withdrawal below needs this id
+            // exactly when the marker has gone bad, so asking the marker for it at that moment
+            // would leave the created breakpoint registered and half-configured.
+            IMarker createdMarker = created ? bp.getMarker() : null;
+            long createdId = createdMarker == null ? -1L : createdMarker.getId();
             // Captured while the loop walks, and rendered from afterwards: reading the markers
             // again to build the response happens AFTER every setter has succeeded, so a marker
             // that goes stale in between would report the whole call as failed for a change
@@ -221,10 +226,10 @@ public class SetBreakpointTool implements IMcpTool
                     // through may already carry the new condition, and a list of "fully done"
                     // ids would hide exactly the one the caller must look at. Only on the
                     // update path - a breakpoint this call created is withdrawn on failure.
-                    IMarker marker = each.getMarker();
+                    IMarker marker = created ? createdMarker : each.getMarker();
                     if (marker != null)
                     {
-                        Long id = Long.valueOf(marker.getId());
+                        Long id = Long.valueOf(created ? createdId : marker.getId());
                         if (each == bp)
                         {
                             representativeId = id.longValue();
@@ -256,7 +261,8 @@ public class SetBreakpointTool implements IMcpTool
                     : BreakpointUtils.LineBreakpointConfiguration.notApplied();
                 return buildSuccessResult(existing, target.file, module, lineNumber, action,
                     effectiveCondition, hitCount, effectiveHitCondition, conditionProvided,
-                    hitCountProvided, configuration, representativeId, reconciledIds);
+                    hitCountProvided, configuration,
+                    created ? createdId : representativeId, reconciledIds);
             }
             catch (Exception configurationFailure)
             {
@@ -265,7 +271,7 @@ public class SetBreakpointTool implements IMcpTool
                 // 'updated' on the half-configured leftover of a call that said it failed.
                 if (created)
                 {
-                    removeQuietly(bp, configurationFailure);
+                    removeQuietly(createdId, configurationFailure);
                 }
                 throw configurationFailure;
             }
@@ -371,14 +377,18 @@ public class SetBreakpointTool implements IMcpTool
      * Removes a breakpoint this call created after its configuration failed, without letting the
      * cleanup replace the failure that caused it.
      *
-     * @param breakpoint the breakpoint to withdraw
+     * @param markerId the id read when the breakpoint was created, or -1 when it had none
      * @param failure the configuration failure being reported; cleanup trouble is attached to it
      */
-    private static void removeQuietly(IBreakpoint breakpoint, Exception failure)
+    private static void removeQuietly(long markerId, Exception failure)
     {
+        if (markerId < 0)
+        {
+            return;
+        }
         try
         {
-            BreakpointUtils.removeBreakpointById(breakpoint.getMarker().getId());
+            BreakpointUtils.removeBreakpointById(markerId);
         }
         catch (Exception cleanupFailure)
         {

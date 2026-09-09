@@ -457,16 +457,18 @@ public final class BreakpointUtils
         }
 
         IBreakpoint created = createExceptionBreakpointFromService(configuredMessage);
+        // BEFORE the configuration, the enable and the registration - not after them. Read
+        // afterwards, a marker that went stale in between would take the id of a breakpoint
+        // this call really did create, and the failure would name nothing.
+        IMarker createdMarker = created.getMarker();
+        List<Long> createdIds =
+            createdMarker == null ? List.of() : List.of(Long.valueOf(createdMarker.getId()));
         try
         {
             configureExceptionBreakpoint(created, catchAll, configuredMessage);
             created.setEnabled(true);
             manager.addBreakpoint(created);
-            // The id read once, here, while nothing else has happened to the marker yet - the
-            // same discipline as the update path, whose loop captured them as it walked.
-            IMarker createdMarker = created.getMarker();
-            return describe("created", created, List.of(created), //$NON-NLS-1$
-                createdMarker == null ? List.of() : List.of(Long.valueOf(createdMarker.getId())));
+            return describe("created", created, List.of(created), createdIds); //$NON-NLS-1$
         }
         catch (Exception e)
         {
@@ -1133,9 +1135,18 @@ public final class BreakpointUtils
 
     private static Object markerAttribute(IMarker marker, String attributeName) throws Exception
     {
-        if (marker == null || !marker.exists())
+        if (marker == null)
         {
             return null;
+        }
+        if (!marker.exists())
+        {
+            // A marker that has been DELETED answers no attributes, and answering "absent" for
+            // each of them fabricates a filter: the reader would report catch-all with no
+            // message, and the agreement would call that SAME across the set. A marker that is
+            // gone is unreadable, which is the verdict the caller can act on.
+            throw new IllegalStateException(
+                "Marker " + marker.getId() + " no longer exists"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return marker.getAttribute(attributeName);
     }

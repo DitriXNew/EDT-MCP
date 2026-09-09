@@ -265,4 +265,21 @@ public class BreakpointUtilsTest
         when(breakpoint.getMarker()).thenReturn(null);
         return breakpoint;
     }
+
+    /**
+     * A marker that has been DELETED answers no attributes, and treating each absence as a value
+     * fabricates a filter: catch-all with no message, reported as agreed across the set. It counts
+     * as unreadable, which is a verdict the caller can act on.
+     */
+    @Test
+    public void testADeletedMarkerIsUnreadableRatherThanEmpty()
+    {
+        IMarker deleted = mock(IMarker.class);
+        when(deleted.exists()).thenReturn(false);
+        IBreakpoint gone = mock(IBreakpoint.class);
+        when(gone.getMarker()).thenReturn(deleted);
+
+        assertEquals(BreakpointUtils.FilterAgreement.UNVERIFIED,
+            BreakpointUtils.filterAgreement(Arrays.asList(breakpointWithFilter(Boolean.TRUE, null), gone)));
+    }
 }
