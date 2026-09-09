@@ -431,6 +431,62 @@ public class DestructiveConsentGateTest
             tookMs < 5_000L);
     }
 
+    /**
+     * The branch that keeps the bounded probe usable from the UI thread itself:
+     * rename_metadata_object asks the gate from INSIDE its {@code syncExec} scope, where posting
+     * the question and then waiting on it would block the only thread that could answer - the
+     * probe would spend its whole budget and refuse on a perfectly healthy workbench. An answer
+     * taken inline is therefore never a timeout; with no shell it is NO_SHELL, a different
+     * verdict with a different remedy.
+     */
+    @Test
+    public void anInlineAnswerIsNeverATimeout()
+    {
+        LaunchLifecycleUtils.ShellProbe probe = LaunchLifecycleUtils.inlineShellAnswer(null);
+
+        assertEquals("an inline read with no shell means NO_SHELL, not TIMED_OUT", //$NON-NLS-1$
+            LaunchLifecycleUtils.ShellProbeOutcome.NO_SHELL, probe.outcome());
+        assertNull("and it hands back no shell", probe.shell()); //$NON-NLS-1$
+    }
+
+    /**
+     * The probe timeout and the dialog timeout are DIFFERENT failures and must not share a text:
+     * nothing was ever shown here, the wait was the probe's 5 s and not the prompt's 120 s, and a
+     * Preferences allowance cannot rescue it because the probe runs BEFORE the policy is read.
+     * Telling the operator to answer a dialog promptly sends them after a window that never opened.
+     */
+    @Test
+    public void anUnresponsiveUiIsNotReportedAsAnUnansweredDialog()
+    {
+        String message =
+            DestructiveConsentGate.consentDeniedMessage(ConsentDecision.UI_UNRESPONSIVE, TOOL);
+
+        assertTrue(message, message.contains(TOOL));
+        assertTrue("it must name the probe budget: " + message, //$NON-NLS-1$
+            message.contains(String.valueOf(DestructiveConsentGate.SHELL_PROBE_TIMEOUT_MS)));
+        assertTrue("and say the workbench did not answer: " + message, //$NON-NLS-1$
+            message.contains("wedged") || message.contains("did not answer")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("it must NOT quote the dialog budget: " + message, //$NON-NLS-1$
+            message.contains(DestructiveConsentGate.CONSENT_PROMPT_TIMEOUT_SECONDS + " s")); //$NON-NLS-1$
+        assertFalse("nor send them to a dialog that was never shown: " + message, //$NON-NLS-1$
+            message.contains("answer the confirmation dialog")); //$NON-NLS-1$
+    }
+
+    /**
+     * The mirror direction: the DIALOG timeout keeps its own text, so splitting the two verdicts
+     * did not quietly rewrite the case that really is an unanswered prompt.
+     */
+    @Test
+    public void theDialogTimeoutKeepsItsOwnPromptText()
+    {
+        String message = DestructiveConsentGate.consentDeniedMessage(ConsentDecision.TIMEOUT, TOOL);
+
+        assertTrue("the dialog verdict still names its 120 s budget: " + message, //$NON-NLS-1$
+            message.contains(String.valueOf(DestructiveConsentGate.CONSENT_PROMPT_TIMEOUT_SECONDS)));
+        assertTrue("and still points at the dialog: " + message, //$NON-NLS-1$
+            message.contains("confirmation dialog")); //$NON-NLS-1$
+    }
+
     @Test
     public void consentDeniedMessageKeepsTheOriginalRejectText()
     {

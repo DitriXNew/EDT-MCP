@@ -2765,6 +2765,15 @@ public final class LaunchLifecycleUtils
         {
             return new ShellProbe(ShellProbeOutcome.NO_SHELL, null);
         }
+        if (display.getThread() == Thread.currentThread())
+        {
+            // Already ON the UI thread (rename_metadata_object asks the consent gate from inside
+            // its syncExec scope). Posting the question here and then waiting for it would block
+            // the very thread that has to run it: the latch could not be counted down before the
+            // deadline, so the probe would ALWAYS time out. There is nothing to wait for on this
+            // thread - read the shell inline, which is what the syncExec form did here.
+            return inlineShellAnswer(activeOrFirstShell(display));
+        }
         final Shell[] holder = new Shell[1];
         CountDownLatch answered = new CountDownLatch(1);
         try
@@ -2786,6 +2795,23 @@ public final class LaunchLifecycleUtils
             return new ShellProbe(ShellProbeOutcome.NO_SHELL, null);
         }
         return awaitShellAnswer(answered, holder, timeoutMillis);
+    }
+
+    /**
+     * Turns a shell read that needed no waiting into an outcome.
+     * <p>
+     * Package-visible for the test that pins the property this branch must keep: an answer given
+     * INLINE is never a timeout. "No shell" and "nobody answered" are different verdicts with
+     * different remedies, and the caller on the UI thread has, by definition, an answer.
+     * </p>
+     *
+     * @param shell the shell read on the calling (UI) thread, or {@code null} when there is none
+     * @return {@link ShellProbeOutcome#SHELL} with that shell, else {@link ShellProbeOutcome#NO_SHELL}
+     */
+    static ShellProbe inlineShellAnswer(Shell shell)
+    {
+        return shell != null ? new ShellProbe(ShellProbeOutcome.SHELL, shell)
+            : new ShellProbe(ShellProbeOutcome.NO_SHELL, null);
     }
 
     /**
