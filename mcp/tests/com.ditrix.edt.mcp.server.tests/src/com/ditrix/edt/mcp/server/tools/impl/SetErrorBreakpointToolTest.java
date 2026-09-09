@@ -11,6 +11,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.Test;
@@ -79,7 +80,7 @@ public class SetErrorBreakpointToolTest
     @Test
     public void testDisableReportsCountAndPreservesBreakpoint()
     {
-        SetErrorBreakpointTool tool = toolReturning(BreakpointUtils.ExceptionBreakpointChange.disabled(2));
+        SetErrorBreakpointTool tool = toolReturning(BreakpointUtils.ExceptionBreakpointChange.disabled(2, List.of(7L, 8L)));
         JsonObject result = JsonParser.parseString(tool.execute(Map.of("enabled", "false"))) //$NON-NLS-1$ //$NON-NLS-2$
             .getAsJsonObject();
 
@@ -91,7 +92,7 @@ public class SetErrorBreakpointToolTest
     @Test
     public void testDisableWithNoBreakpointReportsNotFound()
     {
-        SetErrorBreakpointTool tool = toolReturning(BreakpointUtils.ExceptionBreakpointChange.disabled(0));
+        SetErrorBreakpointTool tool = toolReturning(BreakpointUtils.ExceptionBreakpointChange.disabled(0, List.of()));
         JsonObject result = JsonParser.parseString(tool.execute(Map.of("enabled", "false"))) //$NON-NLS-1$ //$NON-NLS-2$
             .getAsJsonObject();
 
@@ -110,7 +111,7 @@ public class SetErrorBreakpointToolTest
                 String exceptionMessage)
             {
                 observed[0] = exceptionMessage;
-                return BreakpointUtils.ExceptionBreakpointChange.disabled(0);
+                return BreakpointUtils.ExceptionBreakpointChange.disabled(0, List.of());
             }
         };
 

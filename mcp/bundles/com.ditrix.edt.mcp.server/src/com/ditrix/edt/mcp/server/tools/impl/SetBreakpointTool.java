@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -97,6 +98,8 @@ public class SetBreakpointTool implements IMcpTool
             .booleanProperty("hitCountApplied", "Whether a requested hit count was applied") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("configurationFallback", //$NON-NLS-1$
                 "Marker attributes written because native EDT setter methods were absent") //$NON-NLS-1$
+            .integerArrayProperty("breakpointIds", //$NON-NLS-1$
+                "Marker ids of every breakpoint reconciled at this line; more than one means breakpointId alone is not all of them") //$NON-NLS-1$
             .integerProperty("reconciledBreakpoints", //$NON-NLS-1$
                 "Present only when this line carried more than one registered BSL breakpoint; all " //$NON-NLS-1$
                     + "of them were configured identically") //$NON-NLS-1$
@@ -200,7 +203,7 @@ public class SetBreakpointTool implements IMcpTool
                 }
                 return buildSuccessResult(bp, target.file, module, lineNumber, action,
                     effectiveCondition, hitCount, effectiveHitCondition, conditionProvided,
-                    hitCountProvided, configuration, existing.size());
+                    hitCountProvided, configuration, existing);
             }
             catch (Exception configurationFailure)
             {
@@ -335,7 +338,7 @@ public class SetBreakpointTool implements IMcpTool
     private static String buildSuccessResult(IBreakpoint bp, IFile file, String module, int lineNumber,
         String action, String condition, int hitCount, String hitCondition,
         boolean conditionProvided, boolean hitCountProvided,
-        BreakpointUtils.LineBreakpointConfiguration configuration, int reconciledCount)
+        BreakpointUtils.LineBreakpointConfiguration configuration, List<IBreakpoint> reconciled)
     {
         long markerId = bp.getMarker() != null ? bp.getMarker().getId() : -1L;
         boolean degraded = bp instanceof BreakpointUtils.MarkerOnlyBreakpoint;
@@ -348,12 +351,24 @@ public class SetBreakpointTool implements IMcpTool
             .put("resolvedFile", file.getFullPath().toString()) //$NON-NLS-1$
             .put(KEY_LINE_NUMBER, lineNumber)
             .put("action", action); //$NON-NLS-1$
-        if (reconciledCount > 1)
+        if (reconciled.size() > 1)
         {
             // Said out loud, because the caller could not have known: this line carried more than
             // one registered BSL breakpoint (an upgraded workspace from a build that created a new
             // one per call), and all of them were configured the same way.
-            res.put("reconciledBreakpoints", reconciledCount); //$NON-NLS-1$
+            res.put("reconciledBreakpoints", reconciled.size()); //$NON-NLS-1$
+            // Every reconciled marker, not just the first: an upgraded workspace can hold
+            // legacy duplicates at one line, and removing the returned breakpointId alone
+            // would leave the others live - coordinate-based removal takes one too.
+            List<Long> reconciledIds = new ArrayList<>(reconciled.size());
+            for (IBreakpoint each : reconciled)
+            {
+                if (each.getMarker() != null)
+                {
+                    reconciledIds.add(Long.valueOf(each.getMarker().getId()));
+                }
+            }
+            res.put("breakpointIds", reconciledIds); //$NON-NLS-1$
         }
         if (configuration.isApplied())
         {

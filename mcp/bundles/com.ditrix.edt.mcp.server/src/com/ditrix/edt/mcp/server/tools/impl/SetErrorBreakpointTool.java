@@ -60,7 +60,8 @@ public class SetErrorBreakpointTool implements IMcpTool
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("action", "created, updated, disabled, or notFound") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("breakpointId", "Eclipse marker id when the breakpoint is enabled") //$NON-NLS-1$ //$NON-NLS-2$
-            .integerArrayProperty("breakpointIds", "Marker ids of EVERY exception breakpoint this call configured; more than one means breakpointId alone is not the whole setting, and each id has to be removed") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerArrayProperty("breakpointIds", "Marker ids of EVERY exception breakpoint this call touched, on both the enable and the disable path; more than one means breakpointId alone is not the whole setting, and each id has to be removed") //$NON-NLS-1$ //$NON-NLS-2$
+            .integerProperty("configuredCount", "How many breakpoints were touched; larger than breakpointIds when one of them has no marker to name") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty(KEY_ENABLED, "Whether break-on-error is enabled") //$NON-NLS-1$
             .booleanProperty("workspaceWide", "Always true; EDT does not scope this breakpoint by project") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty("catchAllExceptions", "Whether all BSL exceptions are matched") //$NON-NLS-1$ //$NON-NLS-2$
@@ -99,19 +100,32 @@ public class SetErrorBreakpointTool implements IMcpTool
             ToolResult result = ToolResult.success()
                 .put("action", change.getAction()) //$NON-NLS-1$
                 .put(KEY_ENABLED, enabled)
-                .put("workspaceWide", true); //$NON-NLS-1$
+                .put("workspaceWide", true) //$NON-NLS-1$
+                // On BOTH paths: disabling also touches every exception breakpoint, and a
+                // caller whose toolset excludes list_breakpoints has no other way to learn
+                // which markers to remove. The count travels beside the list because a
+                // breakpoint without a marker has no id to contribute.
+                .put("breakpointIds", change.getConfiguredIds()) //$NON-NLS-1$
+                .put("configuredCount", change.getConfiguredCount()); //$NON-NLS-1$
             if (enabled)
             {
                 IBreakpoint breakpoint = change.getBreakpoint();
                 long markerId = breakpoint != null && breakpoint.getMarker() != null
                     ? breakpoint.getMarker().getId()
                     : -1L;
-                result.put("breakpointId", markerId) //$NON-NLS-1$
-                    .put("breakpointIds", change.getConfiguredIds()) //$NON-NLS-1$
-                    .put("catchAllExceptions", change.isCatchAll()); //$NON-NLS-1$
-                if (change.getExceptionMessage() != null)
+                result.put("breakpointId", markerId); //$NON-NLS-1$
+                // The filter is described only when every configured breakpoint carries the
+                // same one. Legacy duplicates may hold different filters, and an enable that
+                // omits exceptionMessage preserves each - so reporting the first member's
+                // state as THE state would say "errors are filtered" while another catches
+                // everything. When they disagree, breakpointIds is the honest answer.
+                if (change.isUniformFilter())
                 {
-                    result.put(KEY_EXCEPTION_MESSAGE, change.getExceptionMessage());
+                    result.put("catchAllExceptions", change.isCatchAll()); //$NON-NLS-1$
+                    if (change.getExceptionMessage() != null)
+                    {
+                        result.put(KEY_EXCEPTION_MESSAGE, change.getExceptionMessage());
+                    }
                 }
             }
             else

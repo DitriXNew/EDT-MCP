@@ -4095,6 +4095,12 @@
         "breakpointId": {
           "type": "integer"
         },
+        "breakpointIds": {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
         "condition": {
           "type": "string"
         },
@@ -4182,6 +4188,9 @@
         },
         "catchAllExceptions": {
           "type": "boolean"
+        },
+        "configuredCount": {
+          "type": "integer"
         },
         "disabledCount": {
           "type": "integer"

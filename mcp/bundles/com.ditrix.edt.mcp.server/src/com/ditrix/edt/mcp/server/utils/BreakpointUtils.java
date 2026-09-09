@@ -387,7 +387,7 @@ public final class BreakpointUtils
             {
                 breakpoint.setEnabled(false);
             }
-            return ExceptionBreakpointChange.disabled(existing.size());
+            return ExceptionBreakpointChange.disabled(existing.size(), markerIdsOf(existing));
         }
 
         boolean updateFilter = exceptionMessage != null;
@@ -471,15 +471,8 @@ public final class BreakpointUtils
     private static ExceptionBreakpointChange describe(String action, IBreakpoint breakpoint,
         List<IBreakpoint> configured) throws Exception
     {
-        List<Long> ids = new ArrayList<>(configured.size());
-        for (IBreakpoint each : configured)
-        {
-            IMarker marker = each.getMarker();
-            if (marker != null)
-            {
-                ids.add(Long.valueOf(marker.getId()));
-            }
-        }
+        List<Long> ids = markerIdsOf(configured);
+        boolean uniform = sameFilterEverywhere(configured);
         Map<String, Object> state =
             readExceptionBreakpointConfiguration(breakpoint.getMarker());
         Object message = state.get("exceptionMessage"); //$NON-NLS-1$
@@ -487,9 +480,68 @@ public final class BreakpointUtils
             ? null
             : message.toString();
         return ExceptionBreakpointChange.enabled(action, breakpoint,
-            Boolean.TRUE.equals(state.get("catchAllExceptions")), storedMessage, ids); //$NON-NLS-1$
+            Boolean.TRUE.equals(state.get("catchAllExceptions")), storedMessage, ids, //$NON-NLS-1$
+            configured.size(), uniform);
     }
 
+    /**
+     * Marker ids of the given breakpoints, in order. A breakpoint with no marker contributes
+     * nothing - it has no id to give - which is why the COUNT of configured breakpoints travels
+     * beside the list: a caller comparing the two can see when the list is short instead of
+     * believing it complete.
+     *
+     * @param breakpoints the configured breakpoints
+     * @return their marker ids
+     */
+    private static List<Long> markerIdsOf(List<IBreakpoint> breakpoints)
+    {
+        List<Long> ids = new ArrayList<>(breakpoints.size());
+        for (IBreakpoint each : breakpoints)
+        {
+            IMarker marker = each.getMarker();
+            if (marker != null)
+            {
+                ids.add(Long.valueOf(marker.getId()));
+            }
+        }
+        return ids;
+    }
+
+    /**
+     * Whether every configured breakpoint carries the same filter.
+     * <p>
+     * Legacy duplicates may hold DIFFERENT filters, and an enable call that omits
+     * {@code exceptionMessage} preserves each of them - so describing the set by its first
+     * member would report "errors are filtered" while another one catches everything. When they
+     * disagree the caller is told that instead of being given one member's state as the answer.
+     * </p>
+     *
+     * @param breakpoints the configured breakpoints
+     * @return whether their filters agree
+     * @throws Exception when a marker cannot be read
+     */
+    private static boolean sameFilterEverywhere(List<IBreakpoint> breakpoints) throws Exception
+    {
+        Map<String, Object> first = null;
+        for (IBreakpoint each : breakpoints)
+        {
+            IMarker marker = each.getMarker();
+            if (marker == null)
+            {
+                return false;
+            }
+            Map<String, Object> state = readExceptionBreakpointConfiguration(marker);
+            if (first == null)
+            {
+                first = state;
+            }
+            else if (!first.equals(state))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
     /** Reads the configured exception filter for list_breakpoints without linking its interface. */
     public static Map<String, Object> readExceptionBreakpointConfiguration(IMarker marker)
         throws Exception
@@ -1000,9 +1052,12 @@ public final class BreakpointUtils
         private final boolean catchAll;
         private final String exceptionMessage;
         private final List<Long> configuredIds;
+        private final int configuredCount;
+        private final boolean uniformFilter;
 
         private ExceptionBreakpointChange(String action, IBreakpoint breakpoint, int disabledCount,
-            boolean catchAll, String exceptionMessage, List<Long> configuredIds)
+            boolean catchAll, String exceptionMessage, List<Long> configuredIds,
+            int configuredCount, boolean uniformFilter)
         {
             this.action = action;
             this.breakpoint = breakpoint;
@@ -1010,19 +1065,22 @@ public final class BreakpointUtils
             this.catchAll = catchAll;
             this.exceptionMessage = exceptionMessage;
             this.configuredIds = configuredIds;
+            this.configuredCount = configuredCount;
+            this.uniformFilter = uniformFilter;
         }
 
         static ExceptionBreakpointChange enabled(String action, IBreakpoint breakpoint,
-            boolean catchAll, String exceptionMessage, List<Long> configuredIds)
+            boolean catchAll, String exceptionMessage, List<Long> configuredIds,
+            int configuredCount, boolean uniformFilter)
         {
             return new ExceptionBreakpointChange(action, breakpoint, 0, catchAll, exceptionMessage,
-                configuredIds);
+                configuredIds, configuredCount, uniformFilter);
         }
 
-        public static ExceptionBreakpointChange disabled(int disabledCount)
+        public static ExceptionBreakpointChange disabled(int disabledCount, List<Long> ids)
         {
             return new ExceptionBreakpointChange(disabledCount > 0 ? "disabled" : "notFound", //$NON-NLS-1$ //$NON-NLS-2$
-                null, disabledCount, true, null, List.of());
+                null, disabledCount, true, null, ids, disabledCount, true);
         }
 
         /**
@@ -1040,6 +1098,28 @@ public final class BreakpointUtils
         public List<Long> getConfiguredIds()
         {
             return configuredIds;
+        }
+
+        /**
+         * How many breakpoints the call configured (or disabled). Equal to the id list size
+         * unless one of them has no marker to name.
+         *
+         * @return the number affected
+         */
+        public int getConfiguredCount()
+        {
+            return configuredCount;
+        }
+
+        /**
+         * Whether every affected breakpoint carries the same filter, i.e. whether the filter
+         * fields describe the whole set rather than one member of it.
+         *
+         * @return {@code true} when the filters agree
+         */
+        public boolean isUniformFilter()
+        {
+            return uniformFilter;
         }
 
         public String getAction()

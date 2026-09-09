@@ -64,6 +64,24 @@ PROBE_MODULE = "CommonModules/Calc/Module.bsl"
 PROBE_LINE = 2
 
 
+def _require_free_probe():
+    """Raises E2ESkip when the probe coordinate already holds a breakpoint.
+
+    Shared by every test that sets that coordinate: set_breakpoint reconfigures what is already
+    there rather than creating a second breakpoint, so a test that cleans up by id would delete
+    one it never owned - after having changed its condition and hit count.
+    """
+    existing = call("list_breakpoints", {"projectName": PROJECT})
+    assert_ok(existing, "precondition: list_breakpoints must answer before the probe is set")
+    for entry in (existing.structured or {}).get("breakpoints", []):
+        # The line DTO carries its path as "file" (a workspace path), not "modulePath".
+        if entry.get("kind") == "line" and entry.get("lineNumber") == PROBE_LINE \
+                and str(entry.get("file") or "").replace(chr(92), "/").endswith(PROBE_MODULE):
+            raise E2ESkip(
+                "%s:%d already holds a breakpoint (%r); this test would reconfigure and then "
+                "delete it" % (PROBE_MODULE, PROBE_LINE, entry)
+            )
+
 def _set_probe():
     """Set the probe breakpoint via the sibling tool; return its breakpointId.
 
@@ -75,17 +93,7 @@ def _set_probe():
     that is there rather than creating a second one, so the cleanup below would delete a
     breakpoint this test never owned - after having changed its condition and hit count.
     """
-    existing = call("list_breakpoints", {"projectName": PROJECT})
-    assert_ok(existing, "precondition: list_breakpoints must answer before the probe is set")
-    for entry in (existing.structured or {}).get("breakpoints", []):
-        # The line DTO carries its path as "file" (a workspace path), not "modulePath": comparing
-        # the wrong key made this guard match nothing at all, which is worse than not having it.
-        if entry.get("kind") == "line" and entry.get("lineNumber") == PROBE_LINE \
-                and str(entry.get("file") or "").replace(chr(92), "/").endswith(PROBE_MODULE):
-            raise E2ESkip(
-                "%s:%d already holds a breakpoint (%r); this test would reconfigure and then "
-                "delete it" % (PROBE_MODULE, PROBE_LINE, entry)
-            )
+    _require_free_probe()
     s = call("set_breakpoint", {
         "projectName": PROJECT,
         "modulePath": PROBE_MODULE,
@@ -178,6 +186,9 @@ def test_reports_extended_fields_and_omits_them_after_clear():
     """Configured line options must reflect real EDT breakpoint state, and a
     same-coordinate plain set must clear them so unset sentinel values never
     leak as empty strings or -1."""
+    # Through the occupancy check like every other probe: setting the coordinate directly would
+    # reconfigure a breakpoint that is already there, and the cleanup below would then delete it.
+    _require_free_probe()
     configured = call("set_breakpoint", {
         "projectName": PROJECT,
         "modulePath": PROBE_MODULE,
