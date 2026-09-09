@@ -201,7 +201,15 @@ jobs:
         shell: bash
         run: |
           set -x
-          sudo apt-get update
+          # The runner image ships third-party apt lists we do not use (Google Chrome, Microsoft
+          # prod). When one of them serves a bad index, `apt-get update` exits 100 and kills the
+          # job 25 seconds in - it took the whole master matrix down twice on 2026-09-09, with
+          # "Hash Sum mismatch" on dl.google.com and nothing wrong on our side. Drop those lists,
+          # and do not let the refresh itself be fatal: everything we need is in the Ubuntu
+          # archives, and the STRICT xvfb install at the end of this step is the real gate.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/microsoft-prod.list || true
+          sudo apt-get update || sudo apt-get update || true
           # Tolerant install: package names differ across Ubuntu 22.04/24.04 (t64 ABI
           # transition), so try each and ignore the ones absent.
           PKGS="xvfb \
