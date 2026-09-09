@@ -379,6 +379,29 @@ public final class BslSyntaxChecker
     }
 
     /**
+     * Masks string literals and comments across a whole module, carrying the multi-line string
+     * state from one line to the next.
+     * <p>
+     * Shared so that every line-based rule reads the same text this checker does: a keyword
+     * inside a default value ({@code Procedure Target(Mode = "EndProcedure")}) or behind a
+     * trailing comment is not code, and a rule that reads the raw line either refuses valid
+     * source or misses a declaration hiding behind one.
+     * </p>
+     *
+     * @param lines raw module or fragment lines
+     * @return a same-sized list with literal and comment content blanked out
+     */
+    public static List<String> maskLiteralsAndComments(List<String> lines)
+    {
+        List<String> masked = new ArrayList<>(lines.size());
+        StringLiteralState state = new StringLiteralState();
+        for (String line : lines)
+        {
+            masked.add(maskStringLiterals(line, state));
+        }
+        return masked;
+    }
+    /**
      * Normalize a source line for keyword matching by masking any string-literal
      * (and comment) content via {@link #maskStringLiterals}.
      *

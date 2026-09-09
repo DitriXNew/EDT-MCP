@@ -375,21 +375,25 @@ public final class BslModuleUtils
             return spans;
         }
 
-        for (int declarationLine = 0; declarationLine < lines.size(); declarationLine++)
+        // Every rule below reads text whose string literals and comments are blanked out: a
+        // keyword inside a default value or behind a trailing comment is not code, and the
+        // splice still uses the ORIGINAL lines.
+        List<String> scan = BslSyntaxChecker.maskLiteralsAndComments(lines);
+        for (int declarationLine = 0; declarationLine < scan.size(); declarationLine++)
         {
-            Matcher startMatcher = METHOD_START_PATTERN.matcher(lines.get(declarationLine));
+            Matcher startMatcher = METHOD_START_PATTERN.matcher(scan.get(declarationLine));
             if (!startMatcher.find())
             {
                 continue;
             }
 
-            boolean isFunction = FUNC_KEYWORD_PATTERN.matcher(lines.get(declarationLine)).find();
+            boolean isFunction = FUNC_KEYWORD_PATTERN.matcher(scan.get(declarationLine)).find();
             Pattern terminator = isFunction ? FUNCTION_END_PATTERN : PROCEDURE_END_PATTERN;
             // The search stops at the NEXT declaration: unbounded, an unterminated method
             // borrows its neighbour's terminator, reports itself complete, and a
             // replaceMethod on it would delete that neighbour and its documentation.
-            int searchLimit = nextDeclarationLine(lines, declarationLine + 1) - 1;
-            int endLine = findTerminatorLine(lines, declarationLine, searchLimit, terminator);
+            int searchLimit = nextDeclarationLine(scan, declarationLine + 1) - 1;
+            int endLine = findTerminatorLine(scan, declarationLine, searchLimit, terminator);
             boolean complete = endLine >= 0;
             if (!complete)
             {
@@ -528,9 +532,10 @@ public final class BslModuleUtils
         {
             return -1;
         }
-        for (int i = 0; i < lines.size(); i++)
+        List<String> scan = BslSyntaxChecker.maskLiteralsAndComments(lines);
+        for (int i = 0; i < scan.size(); i++)
         {
-            String line = lines.get(i);
+            String line = scan.get(i);
             if (UNADDRESSABLE_DECLARATION_PATTERN.matcher(line).find())
             {
                 return i;
@@ -589,7 +594,20 @@ public final class BslModuleUtils
             return false;
         }
         char before = trimmed.charAt(trimmed.length() - 2);
-        return Character.isLetter(before) || before == '_' || before == ')' || before == ']';
+        if (before == ')' || before == ']')
+        {
+            return true;
+        }
+        // An identifier may END in a digit (Object1.), so walk the token back and judge it by
+        // its FIRST character: a run that starts with a digit is a numeric literal, and its
+        // trailing dot is not a member access.
+        int i = trimmed.length() - 2;
+        while (i >= 0 && (Character.isLetterOrDigit(trimmed.charAt(i)) || trimmed.charAt(i) == '_'))
+        {
+            i--;
+        }
+        char first = trimmed.charAt(i + 1);
+        return Character.isLetter(first) || first == '_';
     }
 
     /**
@@ -1290,7 +1308,8 @@ public final class BslModuleUtils
             {
                 break;
             }
-            if (trimmed.startsWith("&")) //$NON-NLS-1$
+            if (trimmed.startsWith("&") //$NON-NLS-1$
+                || ASYNC_MODIFIER_LINE_PATTERN.matcher(trimmed).matches())
             {
                 topAnnotation = probe;
             }

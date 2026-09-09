@@ -393,6 +393,74 @@ public class BslModuleUtilsTest
             "Procedure Target() EndProcedure Procedure Other()", //$NON-NLS-1$
             "EndProcedure"))); //$NON-NLS-1$
     }
+    /**
+     * Every line rule reads text with literals and comments masked, so a keyword inside a DEFAULT
+     * VALUE is not code: this declaration is ordinary and must not make the module unaddressable.
+     */
+    @Test
+    public void testATerminatorWordInsideADefaultValueIsNotCode()
+    {
+        List<String> lines = List.of(
+            "Procedure Target(Mode = \"EndProcedure\")", //$NON-NLS-1$
+            "\tValue = 1;", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(-1, BslModuleUtils.unaddressableDeclarationLine(lines));
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue("a literal must not end the method early", span.complete); //$NON-NLS-1$
+        assertEquals(2, span.endLine);
+    }
+
+    /**
+     * The mirror: masking must not HIDE a split declaration either. A trailing comment after the
+     * name used to defeat the end-of-line requirement, leaving the method invisible to the
+     * duplicate-name check.
+     */
+    @Test
+    public void testACommentAfterASplitDeclarationNameStillCounts()
+    {
+        assertEquals(0, BslModuleUtils.unaddressableDeclarationLine(List.of(
+            "Procedure Added // explanation", //$NON-NLS-1$
+            "()", //$NON-NLS-1$
+            "EndProcedure"))); //$NON-NLS-1$
+    }
+
+    /**
+     * An identifier may end in a DIGIT, and the member-access test judges the token by its first
+     * character rather than its last - otherwise "Object1." looked like a numeric literal and the
+     * reserved word on the next line was taken for the method end.
+     */
+    @Test
+    public void testAMemberAccessBaseEndingInADigitIsStillAMemberAccess()
+    {
+        List<String> lines = List.of(
+            "Procedure Target()", //$NON-NLS-1$
+            "\tValue = Object1.", //$NON-NLS-1$
+            "\t\tEndProcedure;", //$NON-NLS-1$
+            "\tOther = 2;", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        BslModuleUtils.MethodSpan span = BslModuleUtils.findMethodSpansViaText(lines).get(0);
+        assertTrue(span.complete);
+        assertEquals(4, span.endLine);
+    }
+
+    /**
+     * Hidden whitespace includes a blank line, so an async modifier separated from its
+     * declaration still belongs to it - inserting between them would make the target
+     * synchronous and hand the modifier to the inserted method.
+     */
+    @Test
+    public void testABareAsyncModifierBindsAcrossABlankLine()
+    {
+        List<String> lines = List.of(
+            "Async", //$NON-NLS-1$
+            "", //$NON-NLS-1$
+            "Procedure Target()", //$NON-NLS-1$
+            "EndProcedure"); //$NON-NLS-1$
+
+        assertEquals(0, BslModuleUtils.findMethodSpansViaText(lines).get(0).startLine);
+    }
     @Test
     public void testASplitMemberCallIsNotAnUnaddressableDeclaration()
     {
