@@ -1465,28 +1465,16 @@ public final class FormStructureReader
                 continue;
             }
             budget[0]--;
-            for (EObject handler : handlersOf(current.element))
+            // Both lists this element binds through, walked in place and in order. The extInfo's
+            // list is consulted only while the cap is still taking rows.
+            EObject extInfo = getSingleReference(current.element, FEATURE_EXT_INFO);
+            boolean declined = collectBoundHandlers(
+                getReferenceList(current.element, FEATURE_HANDLERS), current.ownerLabel, language,
+                rows);
+            if (!declined && extInfo != null)
             {
-                if (handler == null)
-                {
-                    // Never a row, and never counted as one: the cap decides between handlers
-                    // this element HAS, and the model's list may legally hold a null.
-                    continue;
-                }
-                // Asked BEFORE the row is built: past the cap the strings would be read off the
-                // model only to be dropped, and the whole point of the cap is that nothing past it
-                // is retained. Leaving the loop still RECORDS the decline - there is a handler in
-                // hand, so "there were more rows than are shown" is established - and it leaves
-                // only this element's remaining handlers; the WALK carries on, because the element
-                // budget is a separate statement (see this method's own doc).
-                if (rows.full())
-                {
-                    rows.decline();
-                    break;
-                }
-                String procName = stringValue(getValue(handler, FEATURE_NAME));
-                String eventName = eventNameOf(getSingleReference(handler, FEATURE_EVENT), language);
-                rows.add(current.ownerLabel, eventName, procName);
+                collectBoundHandlers(getReferenceList(extInfo, FEATURE_HANDLERS),
+                    current.ownerLabel, language, rows);
             }
             pushHandlerChildren(current.element, pending, budget, cutShort);
         }
@@ -1624,28 +1612,42 @@ public final class FormStructureReader
      *         them
      */
     /**
-     * The element's own bound handlers plus the ones its {@code extInfo} holds, under the SAME
-     * owner label.
+     * Adds one bound-handler list to {@code rows} under {@code ownerLabel}.
      *
-     * <p>A form root's ext-info is an event-handler container in its own right, and EDT binds a
-     * record form's write and read events inside it. Reading only the element's own list reported
-     * "no event handlers" for a form that has one (issue #592). Item ext-infos carry no handler
-     * list, so nothing else changes.</p>
+     * <p>An element binds through TWO lists: its own, and the one its {@code extInfo} holds when
+     * that ext-info is an event-handler container - a form root's is, which is where EDT keeps a
+     * record form's write and read events (issue #592). They are walked separately rather than
+     * merged so the row cap is consulted before anything is built, exactly as it was with one.</p>
+     *
+     * @return {@code true} when the cap DECLINED a row, so the caller stops offering more
      */
-    private static List<EObject> handlersOf(EObject element)
+    private static boolean collectBoundHandlers(List<EObject> handlers, String ownerLabel,
+        String language, HandlerRows rows)
     {
-        List<EObject> own = getReferenceList(element, FEATURE_HANDLERS);
-        EObject extInfo = getSingleReference(element, FEATURE_EXT_INFO);
-        List<EObject> inExtInfo =
-            extInfo == null ? List.of() : getReferenceList(extInfo, FEATURE_HANDLERS);
-        if (inExtInfo.isEmpty())
+        for (EObject handler : handlers)
         {
-            return own;
+            if (handler == null)
+            {
+                // Never a row, and never counted as one: the cap decides between handlers
+                // this element HAS, and the model's list may legally hold a null.
+                continue;
+            }
+            // Asked BEFORE the row is built: past the cap the strings would be read off the
+            // model only to be dropped, and the whole point of the cap is that nothing past it
+            // is retained. Leaving the loop still RECORDS the decline - there is a handler in
+            // hand, so "there were more rows than are shown" is established - and it leaves
+            // only this element's remaining handlers; the WALK carries on, because the element
+            // budget is a separate statement (see collectHandlers' own doc).
+            if (rows.full())
+            {
+                rows.decline();
+                return true;
+            }
+            String procName = stringValue(getValue(handler, FEATURE_NAME));
+            String eventName = eventNameOf(getSingleReference(handler, FEATURE_EVENT), language);
+            rows.add(ownerLabel, eventName, procName);
         }
-        List<EObject> all = new ArrayList<>(own.size() + inExtInfo.size());
-        all.addAll(own);
-        all.addAll(inExtInfo);
-        return all;
+        return false;
     }
 
     private static List<EObject> handlerSingularChildren(EObject element)

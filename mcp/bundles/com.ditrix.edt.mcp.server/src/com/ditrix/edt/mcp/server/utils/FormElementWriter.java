@@ -3043,7 +3043,12 @@ public final class FormElementWriter
         EObject current = singleReference(formModel, FEATURE_EXT_INFO);
         if (classifier == null)
         {
-            if (current != null)
+            // Clear only a kind THIS mapping could have produced. The platform generator writes
+            // kinds createFormExtInfo never makes - a cube record-set form gets its
+            // CubeRecordSetFormExtInfo from RecordSetFormContainGenerator - and dropping one of
+            // those would delete the handlers bound inside it.
+            if (current != null
+                && FORM_EXT_INFO_BY_TYPE_CATEGORY.containsValue(current.eClass().getName()))
             {
                 formModel.eSet(extInfoFeature, null);
             }

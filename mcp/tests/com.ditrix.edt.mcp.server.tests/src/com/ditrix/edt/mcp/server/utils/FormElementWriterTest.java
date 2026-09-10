@@ -6381,6 +6381,14 @@ public class FormElementWriterTest
             return extInfo().eClass().getEStructuralFeature("handlers"); //$NON-NLS-1$
         }
 
+        void giveExtInfo(String kind)
+        {
+            EPackage pkg = form.eClass().getEPackage();
+            EClass kindClass = (EClass)pkg.getEClassifier(kind);
+            form.eSet(form.eClass().getEStructuralFeature("extInfo"), //$NON-NLS-1$
+                pkg.getEFactoryInstance().create(kindClass));
+        }
+
         void retypeMainAttribute(String typeName)
         {
             TypeDescription description = McoreFactory.eINSTANCE.createTypeDescription();
@@ -6437,8 +6445,10 @@ public class FormElementWriterTest
         extInfoBase.setAbstract(true);
         pkg.getEClassifiers().add(extInfoBase);
 
-        // Two concrete kinds, so a test can watch the sync REPLACE one with the other.
-        for (String kind : new String[]{"InformationRegisterManagerFormExtInfo", "CatalogFormExtInfo"}) //$NON-NLS-1$ //$NON-NLS-2$
+        // Two kinds the mapping produces, so a test can watch the sync REPLACE one with the
+        // other, and one it never produces (the platform form GENERATOR writes that one).
+        for (String kind : new String[]{"InformationRegisterManagerFormExtInfo", //$NON-NLS-1$
+            "CatalogFormExtInfo", "CubeRecordSetFormExtInfo"}) //$NON-NLS-1$ //$NON-NLS-2$
         {
             EClass formExtInfo = f.createEClass();
             formExtInfo.setName(kind);
@@ -6505,6 +6515,23 @@ public class FormElementWriterTest
         m.retypeMainAttribute("String"); //$NON-NLS-1$
         assertNull(FormElementWriter.syncFormExtInfo(m.form));
         assertNull("a form whose main type maps to no ext-info must carry none", m.extInfo()); //$NON-NLS-1$
+    }
+
+    /**
+     * The other side of the CLEAR: {@code createFormExtInfo} has no case for a cube record set,
+     * but {@code RecordSetFormContainGenerator} writes {@code CubeRecordSetFormExtInfo} for one.
+     * Clearing a kind this mapping never produces would delete the handlers bound inside it.
+     */
+    @Test
+    public void testSyncFormExtInfoKeepsAKindItCouldNotHaveProduced()
+    {
+        FormRootModel m = newFormRootModel("ExternalDataSourceCubeRecordSet.Sales", true); //$NON-NLS-1$
+        m.giveExtInfo("CubeRecordSetFormExtInfo"); //$NON-NLS-1$
+
+        assertNull("this mapping produces no ext-info for that category", //$NON-NLS-1$
+            FormElementWriter.syncFormExtInfo(m.form));
+        assertNotNull("a generator-authored ext-info must survive the sync", m.extInfo()); //$NON-NLS-1$
+        assertEquals("CubeRecordSetFormExtInfo", m.extInfo().eClass().getName()); //$NON-NLS-1$
     }
 
     @Test
