@@ -74,14 +74,15 @@ import com.ditrix.edt.mcp.server.ui.DestructiveConsentDialog;
  *       shell is closed (best-effort) so it does not linger.</li>
  * </ol>
  *
- * <p><b>Invariant:</b> every path is bounded. Two return without
- * waiting for anything: the env bypass (step 1) and a display-less EDT (the probe answers
- * NO_SHELL immediately when there is no display). On a live workbench EVERY remaining path
- * first waits on the shell probe for at most {@link #SHELL_PROBE_TIMEOUT_MS} ms — the non-ASK
- * ones (level-2 / session / per-tool-allowed) included, because the probe deliberately precedes
- * the policy (see step 2). Beyond it the dialog paths wait at most
- * {@link #CONSENT_PROMPT_TIMEOUT_SECONDS} (issue #277). It does not deadlock when already on
- * the UI thread (the probe reads the shell inline there); and a non-
+ * <p><b>Invariant:</b> every path is bounded, and the shell probe is what any of them can wait
+ * on. Two never wait, whichever thread asks: the env bypass (step 1) and a display-less EDT (the
+ * probe answers NO_SHELL at once when there is no display). On a live workbench the probe comes
+ * first, and its cost depends on the CALLER's thread. Asked ON the UI thread it reads the shell
+ * inline and waits for nothing — so a non-ASK path (level-2 / session / per-tool-allowed)
+ * returns immediately, and nothing can deadlock. Asked from a worker it posts the question and
+ * waits at most {@link #SHELL_PROBE_TIMEOUT_MS} ms — the non-ASK paths included, because the
+ * probe deliberately precedes the policy (see step 2). Beyond the probe the dialog paths wait at
+ * most {@link #CONSENT_PROMPT_TIMEOUT_SECONDS} (issue #277); and a non-
  * {@link ConsentDecision#ALLOW} verdict ({@link ConsentDecision#REJECT},
  * {@link ConsentDecision#TIMEOUT}, {@link ConsentDecision#UNATTENDED} or
  * {@link ConsentDecision#UI_UNRESPONSIVE}) mutates nothing
