@@ -6518,20 +6518,42 @@ public class FormElementWriterTest
     }
 
     /**
-     * The other side of the CLEAR: {@code createFormExtInfo} has no case for a cube record set,
-     * but {@code RecordSetFormContainGenerator} writes {@code CubeRecordSetFormExtInfo} for one.
-     * Clearing a kind this mapping never produces would delete the handlers bound inside it.
+     * A MAIN attribute whose category pairs with nothing takes the node with it, whatever kind it
+     * was - {@code CubeRecordSetFormExtInfo} comes from the form GENERATOR and
+     * {@code createFormExtInfo} cannot produce it, but the platform still answers {@code null} for
+     * that category and {@code isNeedUpdateExtInfo(null, old)} clears the node.
      */
     @Test
-    public void testSyncFormExtInfoKeepsAKindItCouldNotHaveProduced()
+    public void testSyncFormExtInfoClearsEvenAKindItCouldNotHaveProduced()
     {
         FormRootModel m = newFormRootModel("ExternalDataSourceCubeRecordSet.Sales", true); //$NON-NLS-1$
         m.giveExtInfo("CubeRecordSetFormExtInfo"); //$NON-NLS-1$
 
         assertNull("this mapping produces no ext-info for that category", //$NON-NLS-1$
             FormElementWriter.syncFormExtInfo(m.form));
-        assertNotNull("a generator-authored ext-info must survive the sync", m.extInfo()); //$NON-NLS-1$
-        assertEquals("CubeRecordSetFormExtInfo", m.extInfo().eClass().getName()); //$NON-NLS-1$
+        assertNull("a main attribute that pairs with nothing leaves no node behind", //$NON-NLS-1$
+            m.extInfo());
+    }
+
+    /**
+     * Promoting a different main attribute CHANGES the ext-info kind, and the platform carries the
+     * old node's data across ({@code copyDataOfSameFeatures}) rather than dropping it. For a form
+     * root the data that matters is the event handlers bound inside.
+     */
+    @Test
+    public void testAKindChangeCarriesTheBoundHandlersOver()
+    {
+        FormRootModel m = newFormRootModel("CatalogObject.Goods", true); //$NON-NLS-1$
+        assertEquals("CatalogFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
+        assertNull(FormElementWriter.bindEventHandler(m.extInfo(), m.extInfoHandlers(), m.event,
+            "BeforeWriteAtServer", "BeforeWriteAtServer", null, new String[1])); //$NON-NLS-1$ //$NON-NLS-2$
+
+        m.retypeMainAttribute("InformationRegisterRecordManager.MyRegister"); //$NON-NLS-1$
+        assertEquals("InformationRegisterManagerFormExtInfo", //$NON-NLS-1$
+            FormElementWriter.syncFormExtInfo(m.form));
+
+        assertEquals("the handlers bound in the old ext-info must survive the kind change", //$NON-NLS-1$
+            1, ((List<?>)m.extInfo().eGet(m.extInfoHandlers())).size());
     }
 
     /**

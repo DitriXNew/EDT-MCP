@@ -3058,12 +3058,10 @@ public final class FormElementWriter
         String classifier = FORM_EXT_INFO_BY_TYPE_CATEGORY.get(singleValueTypeCategory(main));
         if (classifier == null)
         {
-            // Clear only a kind THIS mapping could have produced. The platform generator writes
-            // kinds createFormExtInfo never makes - a cube record-set form gets its
-            // CubeRecordSetFormExtInfo from RecordSetFormContainGenerator - and dropping one of
-            // those would delete the handlers bound inside it.
-            if (current != null
-                && FORM_EXT_INFO_BY_TYPE_CATEGORY.containsValue(current.eClass().getName()))
+            // A main attribute whose category pairs with nothing takes the node with it, whatever
+            // kind it was: createFormExtInfo answers null here, and isNeedUpdateExtInfo(null, old)
+            // makes the platform set it to null.
+            if (current != null)
             {
                 formModel.eSet(extInfoFeature, null);
             }
@@ -3075,7 +3073,49 @@ public final class FormElementWriter
         }
         EObject created =
             replaceExtInfoClassifier(formModel, formModel, extInfoFeature, classifier);
-        return created == null ? null : created.eClass().getName();
+        if (created == null)
+        {
+            return null;
+        }
+        // A CHANGE of kind is not a reason to lose what the old node held - above all the event
+        // handlers bound inside it.
+        copySameFeatures(current, created);
+        return created.eClass().getName();
+    }
+
+    /** The features {@code ExtInfoManagementService} refuses to carry over. */
+    private static final Set<String> EXT_INFO_FEATURES_NOT_CARRIED_OVER =
+        Set.of("orientation"); //$NON-NLS-1$
+
+    /**
+     * Carries the old ext-info's data over to the new one, mirroring
+     * {@code ExtInfoManagementService.copyDataOfSameFeatures}: every feature the two kinds share by
+     * NAME and TYPE, that the old one actually set, minus the ones the platform skips.
+     *
+     * <p>For a form ROOT that is what keeps the event handlers bound inside the node when its KIND
+     * changes - promoting a different main attribute must not silently discard them.</p>
+     */
+    private static void copySameFeatures(EObject source, EObject destination)
+    {
+        if (source == null || destination == null)
+        {
+            return;
+        }
+        EClass destinationClass = destination.eClass();
+        for (EStructuralFeature feature : source.eClass().getEAllStructuralFeatures())
+        {
+            EStructuralFeature target = destinationClass.getEStructuralFeature(feature.getName());
+            if (target == null || !feature.getEType().equals(target.getEType())
+                || !source.eIsSet(feature)
+                || EXT_INFO_FEATURES_NOT_CARRIED_OVER.contains(feature.getName()))
+            {
+                continue;
+            }
+            Object value = source.eGet(feature);
+            // A containment list is COPIED before it is handed over: setting it moves the elements
+            // out of the source, and the source list is what is being read.
+            destination.eSet(target, value instanceof List<?> ? new ArrayList<>((List<?>)value) : value);
+        }
     }
 
     /**
