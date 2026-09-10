@@ -838,8 +838,10 @@ public final class RoleRightsWriter
      *     (nothing was mutated on that branch, so the write stands and only the rights-resource export
      *     is lost); a FRESH description that cannot be given an FQN is refused instead, because there
      *     the reference has already been repointed and leaving it is the unpersistable #452 state
+     * @throws RoleWriteException when a fresh description cannot be safely registered
      */
-    static String attachRoleDescription(IBmTransaction tx, Role inTx, ITopObjectFqnGenerator fqnGenerator)
+    public static String attachRoleDescription(IBmTransaction tx, Role inTx,
+        ITopObjectFqnGenerator fqnGenerator)
     {
         AbstractRoleDescription current = inTx.getRights();
         if (current instanceof RoleDescription && current instanceof IBmObject
@@ -1531,7 +1533,7 @@ public final class RoleRightsWriter
      * top-level {@link #apply} returns it verbatim. Unchecked so it crosses the BM task boundary; the
      * message is a validated {@link ToolResult#error} JSON string.
      */
-    static final class RoleWriteException extends RuntimeException
+    public static final class RoleWriteException extends RuntimeException
     {
         private static final long serialVersionUID = 1L;
         private final transient String errorJson;
@@ -1542,7 +1544,7 @@ public final class RoleRightsWriter
             this.errorJson = errorJson;
         }
 
-        String getErrorJson()
+        public String getErrorJson()
         {
             return errorJson;
         }

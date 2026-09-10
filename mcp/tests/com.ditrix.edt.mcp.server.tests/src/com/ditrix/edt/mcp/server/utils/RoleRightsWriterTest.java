@@ -417,8 +417,8 @@ public class RoleRightsWriterTest
     @Test
     public void testAttachRoleDescriptionRegistersTheFreshDescriptionUnderTheGeneratedFqn()
     {
-        // The whole of issue #452: a role created through create_metadata has no rights model, and a
-        // description that is merely REFERENCED is not persistable - the next commit dies with
+        // The missing-model branch behind issue #452: a merely REFERENCED description is not
+        // persistable - the next commit dies with
         // "Failed to persist reference value ...RoleDescriptionImpl@<hash>". The bootstrap must
         // register it as a BM top object in the SAME transaction that sets the reference.
         Role role = mockRole("Reader"); //$NON-NLS-1$
@@ -789,9 +789,8 @@ public class RoleRightsWriterTest
     @Test
     public void testAnUnresolvableRightsEntryIsRefusedBeforeTheBootstrapWrites()
     {
-        // The whole rights payload must resolve before the bootstrap commits. An unresolvable entry
-        // on a fresh role must therefore leave NO Rights.rights model behind - and, above all, must
-        // not leave a right granted while the caller sees only a refusal.
+        // The whole payload resolves before bootstrap. For a legacy role with no description, an
+        // unresolvable entry must leave no Rights.rights model or silently granted right behind.
         Role role = mockRole("Reader"); //$NON-NLS-1$
         JsonObject missing = rightsEntry("DefinitelyNotAnObjectFqn", "Read", "set"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         RoleRightsWriter.Result result = applyThroughMockedModel(role, null,
