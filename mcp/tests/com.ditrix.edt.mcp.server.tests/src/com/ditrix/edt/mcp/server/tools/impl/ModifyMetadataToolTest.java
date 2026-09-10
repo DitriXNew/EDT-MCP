@@ -1824,7 +1824,7 @@ public class ModifyMetadataToolTest
         RecordingConsent consent = new RecordingConsent(ConsentDecision.REJECT);
         RecordingWrite write = new RecordingWrite();
 
-        String result = new ModifyMetadataTool(consent).gateFormRetype(retypePreview(),
+        String result = new ModifyMetadataTool(consent).gateFormRetype(() -> retypePreview(),
             () -> REFUSAL, write);
 
         assertEquals("a refused retype must never raise the destructive prompt", 0, consent.asked); //$NON-NLS-1$
@@ -1842,7 +1842,7 @@ public class ModifyMetadataToolTest
         RecordingConsent consent = new RecordingConsent(ConsentDecision.REJECT);
         RecordingWrite write = new RecordingWrite();
 
-        String result = new ModifyMetadataTool(consent).gateFormRetype(retypePreview(), () -> "", write); //$NON-NLS-1$
+        String result = new ModifyMetadataTool(consent).gateFormRetype(() -> retypePreview(), () -> "", write); //$NON-NLS-1$
 
         assertEquals("a benign change must not prompt", 0, consent.asked); //$NON-NLS-1$
         assertEquals("a benign change is written exactly once", 1, write.calls); //$NON-NLS-1$
@@ -1858,7 +1858,7 @@ public class ModifyMetadataToolTest
             RecordingConsent consent = new RecordingConsent(refused);
             RecordingWrite write = new RecordingWrite();
             String result =
-                new ModifyMetadataTool(consent).gateFormRetype(retypePreview(), () -> null, write);
+                new ModifyMetadataTool(consent).gateFormRetype(() -> retypePreview(), () -> null, write);
             assertEquals("a real retype must be authorized (" + refused + ")", 1, consent.asked); //$NON-NLS-1$ //$NON-NLS-2$
             assertEquals("a refused retype must not write (" + refused + ")", 0, write.calls); //$NON-NLS-1$ //$NON-NLS-2$
             assertTrue(result.contains("error")); //$NON-NLS-1$
@@ -1866,7 +1866,7 @@ public class ModifyMetadataToolTest
 
         RecordingConsent allowed = new RecordingConsent(ConsentDecision.ALLOW);
         RecordingWrite write = new RecordingWrite();
-        String ok = new ModifyMetadataTool(allowed).gateFormRetype(retypePreview(), () -> null, write);
+        String ok = new ModifyMetadataTool(allowed).gateFormRetype(() -> retypePreview(), () -> null, write);
         assertEquals("an allowed retype is written exactly once", 1, write.calls); //$NON-NLS-1$
         assertEquals(WRITTEN, ok);
     }
@@ -2721,22 +2721,43 @@ public class ModifyMetadataToolTest
         String fqn = "InformationRegister.Reg.Form.RecordForm.Attribute.Record"; //$NON-NLS-1$
 
         ConsentPreview retypeOnly =
-            ModifyMetadataTool.formRetypePreview(fqn, ref, props("valueType", "String")); //$NON-NLS-1$ //$NON-NLS-2$
+            ModifyMetadataTool.formRetypePreview(fqn, ref, props("valueType", "String"), false); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(List.of("valueType"), retypeOnly.getTopNames()); //$NON-NLS-1$
 
         ConsentPreview mainOnly =
-            ModifyMetadataTool.formRetypePreview(fqn, ref, props("main", "false")); //$NON-NLS-1$ //$NON-NLS-2$
+            ModifyMetadataTool.formRetypePreview(fqn, ref, props("main", "false"), true); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(List.of("main"), mainOnly.getTopNames()); //$NON-NLS-1$
         assertTrue("a main-only prompt is about the ext-info, not about stored values: " //$NON-NLS-1$
             + mainOnly.getSubtitle(),
             mainOnly.getSubtitle().contains("ext-info")); //$NON-NLS-1$
 
         ConsentPreview both = ModifyMetadataTool.formRetypePreview(fqn, ref,
-            List.of(props("valueType", "String").get(0), props("main", "false").get(0))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            List.of(props("valueType", "String").get(0), props("main", "false").get(0)), true); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         assertEquals("both losses are named", List.of("valueType", "main"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             both.getTopNames());
         assertTrue("and the subtitle spells out the second one: " + both.getSubtitle(), //$NON-NLS-1$
             both.getSubtitle().contains("ext-info")); //$NON-NLS-1$
+    }
+
+    /**
+     * The other edge of the same rule. A batch may carry BOTH a retype and a main write and still
+     * lose no handler - the node merely changes kind, and its data is carried over. The dialog is
+     * therefore built from what the pre-check FOUND, not from what the request could have carried:
+     * a prompt that promises a deletion which will not happen teaches the reader to ignore it.
+     */
+    @Test
+    public void testThePreviewDoesNotClaimALossThePreCheckDidNotFind()
+    {
+        FormElementWriter.FormMemberRef ref = FormElementWriter.parse(
+            "InformationRegister.Reg.Form.RecordForm.Attribute.Record"); //$NON-NLS-1$
+        String fqn = "InformationRegister.Reg.Form.RecordForm.Attribute.Record"; //$NON-NLS-1$
+
+        ConsentPreview harmlessMain = ModifyMetadataTool.formRetypePreview(fqn, ref,
+            List.of(props("valueType", "String").get(0), props("main", "true").get(0)), false); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertEquals("only the retype is at stake", List.of("valueType"), //$NON-NLS-1$ //$NON-NLS-2$
+            harmlessMain.getTopNames());
+        assertFalse("so the dialog must not promise a deletion that will not happen: " //$NON-NLS-1$
+            + harmlessMain.getSubtitle(), harmlessMain.getSubtitle().contains("ext-info")); //$NON-NLS-1$
     }
 
     /** One property list carrying a single string-valued property. */

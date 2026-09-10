@@ -1199,6 +1199,12 @@ public class FormElementWriterTest
 
         EClass eventType = EcoreFactory.eINSTANCE.createEClass();
         eventType.setName("Event"); //$NON-NLS-1$
+        // The platform's Event carries its own name, and the duplicate guard keys on it: two
+        // resolutions of one event are two EObjects, and only the name says they are the same.
+        EAttribute eventName = EcoreFactory.eINSTANCE.createEAttribute();
+        eventName.setName("name"); //$NON-NLS-1$
+        eventName.setEType(EcorePackage.Literals.ESTRING);
+        eventType.getEStructuralFeatures().add(eventName);
         pkg.getEClassifiers().add(eventType);
 
         EClass eventHandler = EcoreFactory.eINSTANCE.createEClass();
@@ -1246,6 +1252,7 @@ public class FormElementWriterTest
         m.container = pkg.getEFactoryInstance().create(field);
         m.handlersFeat = field.getEStructuralFeature("handlers"); //$NON-NLS-1$
         m.event = pkg.getEFactoryInstance().create(eventType);
+        m.event.eSet(eventType.getEStructuralFeature("name"), "OnChange"); //$NON-NLS-1$ //$NON-NLS-2$
         return m;
     }
 
@@ -1300,6 +1307,40 @@ public class FormElementWriterTest
             "OnChange", "another", null, new String[1]); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull(dup);
         assertTrue(dup.contains("already exists")); //$NON-NLS-1$
+    }
+
+    /**
+     * The duplicate guard compares events by NAME, not by object identity. A change of ext-info
+     * kind carries the handlers over to the new node, and they keep pointing at the PREVIOUS
+     * platform type's event object while a fresh resolution answers with the new type's - two
+     * objects, one event. Compared by identity, the existing handler is invisible and a second
+     * base handler for the same event lands next to it.
+     */
+    @Test
+    public void testADuplicateIsCaughtEvenWhenTheEventObjectIsADifferentInstance()
+    {
+        HandlerModel m = newHandlerModel(true);
+        assertNull(FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+            "OnChange", "OnChange", null, new String[1])); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The same event, resolved from another type: a different EObject carrying the same name.
+        EObject sameEventOtherInstance = m.event.eClass().getEPackage().getEFactoryInstance()
+            .create(m.event.eClass());
+        sameEventOtherInstance.eSet(m.event.eClass().getEStructuralFeature("name"), "OnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String dup = FormElementWriter.bindEventHandler(m.container, m.handlersFeat,
+            sameEventOtherInstance, "OnChange", "second", null, new String[1]); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("a second base handler for the same event must be refused", dup); //$NON-NLS-1$
+        assertTrue(dup.contains("already exists")); //$NON-NLS-1$
+        assertEquals("and nothing must have been added", 1, //$NON-NLS-1$
+            ((List<?>)m.container.eGet(m.handlersFeat)).size());
+
+        // A DIFFERENT event still binds - the name is the key, not a blanket refusal.
+        EObject otherEvent = m.event.eClass().getEPackage().getEFactoryInstance()
+            .create(m.event.eClass());
+        otherEvent.eSet(m.event.eClass().getEStructuralFeature("name"), "OnOpen"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.bindEventHandler(m.container, m.handlersFeat, otherEvent,
+            "OnOpen", "OnOpen", null, new String[1])); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

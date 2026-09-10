@@ -5271,10 +5271,10 @@ public final class FormElementWriter
         // Duplicate guard. Base path keeps the original "one BASE handler per event" rule. Extension
         // path lets the extension handler COEXIST with the base handler and with other-call-type // NOSONAR explanatory comment, not commented-out code
         // extension handlers; only a same-(event, callType) EventHandlerExtension is a real duplicate.
-        EStructuralFeature evFeat = handlerEventFeature(handlersFeat);
+        List<String> matchedSpellings = eventSpellings(matched);
         for (EObject existing : handlersAroundContainer(container))
         {
-            if (evFeat == null || existing.eGet(evFeat) != matched)
+            if (!boundToSameEvent(existing, matched, matchedSpellings))
             {
                 continue;
             }
@@ -5298,9 +5298,10 @@ public final class FormElementWriter
         }
         EObject handler = ehType.getEPackage().getEFactoryInstance().create(ehType);
         setStringFeature(handler, FEATURE_NAME, (procName == null || procName.isEmpty()) ? eventName : procName);
-        if (evFeat != null)
+        EStructuralFeature eventFeat = ehType.getEStructuralFeature(FEATURE_EVENT);
+        if (eventFeat != null)
         {
-            handler.eSet(evFeat, matched);
+            handler.eSet(eventFeat, matched);
         }
         if (extension)
         {
@@ -5448,12 +5449,6 @@ public final class FormElementWriter
         return matchesKindToken(item, ref.itemKindToken) ? item : null;
     }
 
-    /** The {@code event} EReference on the EventHandler EClass held by the {@code handlers} feature. */
-    private static EStructuralFeature handlerEventFeature(EStructuralFeature handlersFeat)
-    {
-        EClass ehType = ((EReference)handlersFeat).getEReferenceType();
-        return ehType != null ? ehType.getEStructuralFeature(FEATURE_EVENT) : null;
-    }
 
     private static String eventNameOf(EObject event, boolean russian)
     {
@@ -7110,20 +7105,55 @@ public final class FormElementWriter
      */
     public static List<String> eventNameSpellings(EObject handler)
     {
-        List<String> names = new ArrayList<>(2);
         if (handler == null)
         {
-            return names;
+            return new ArrayList<>(2);
         }
         EStructuralFeature eventFeat = handler.eClass().getEStructuralFeature(FEATURE_EVENT);
         Object event = eventFeat instanceof EReference ? handler.eGet(eventFeat) : null;
-        if (!(event instanceof EObject))
+        return event instanceof EObject ? eventSpellings((EObject)event) : new ArrayList<>(2);
+    }
+
+    /**
+     * Whether an existing handler is bound to the SAME event as the one being written. Object
+     * identity is not enough: a change of ext-info kind carries the handlers over to the new node
+     * ({@code copyDataOfSameFeatures}), and they keep pointing at the PREVIOUS platform type's event
+     * object while a fresh resolution answers with the new type's - two objects, one event, and a
+     * duplicate the identity test would wave through.
+     */
+    private static boolean boundToSameEvent(EObject handler, EObject event, List<String> spellings)
+    {
+        EStructuralFeature eventFeat = handler.eClass().getEStructuralFeature(FEATURE_EVENT);
+        Object bound = eventFeat instanceof EReference ? handler.eGet(eventFeat) : null;
+        if (bound == event)
+        {
+            return true;
+        }
+        if (!(bound instanceof EObject) || spellings.isEmpty())
+        {
+            return false;
+        }
+        for (String spelling : eventSpellings((EObject)bound))
+        {
+            if (spellings.contains(spelling))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Both spellings an event answers to, English first; empty when it names itself neither way. */
+    private static List<String> eventSpellings(EObject event)
+    {
+        List<String> names = new ArrayList<>(2);
+        if (event == null)
         {
             return names;
         }
         for (String feature : new String[] {FEATURE_NAME, FEATURE_NAME_RU})
         {
-            String name = stringFeature((EObject)event, feature);
+            String name = stringFeature(event, feature);
             if (name != null && !name.isEmpty() && !names.contains(name))
             {
                 names.add(name);

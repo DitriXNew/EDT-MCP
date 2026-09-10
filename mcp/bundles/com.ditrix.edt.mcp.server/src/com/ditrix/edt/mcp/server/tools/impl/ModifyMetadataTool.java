@@ -166,15 +166,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * raise a destructive dialog, because a denial or a timeout would come back INSTEAD of the
      * actionable validation error (issue #295 review).
      *
-     * @param preview what the user is being asked to authorize
+     * @param preview what the user is being asked to authorize, built AFTER the pre-check ran: the
+     *            request alone cannot say which of the two losses is actually at stake, and a
+     *            dialog that names a loss that will not happen teaches the reader to ignore it
      * @param preflight the deterministic pre-check, run BEFORE any prompt: a ready JSON error refuses
      *            the write with no prompt at all, {@code ""} means nothing destructive happens (write
      *            without asking), {@code null} means a real retype - ask
      * @param write the mutation, invoked only when the pre-check passed and consent was granted
      * @return the mutation's result, the pre-check's refusal, or the consent refusal
      */
-    String gateFormRetype(ConsentPreview preview, java.util.function.Supplier<String> preflight,
-        java.util.function.Supplier<String> write)
+    String gateFormRetype(java.util.function.Supplier<ConsentPreview> preview,
+        java.util.function.Supplier<String> preflight, java.util.function.Supplier<String> write)
     {
         String verdict = preflight.get();
         if (verdict != null && !verdict.isEmpty())
@@ -184,7 +186,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         if (verdict == null)
         {
-            ConsentDecision decision = consentRequester.request(NAME, preview);
+            ConsentDecision decision = consentRequester.request(NAME, preview.get());
             if (decision != ConsentDecision.ALLOW)
             {
                 return ToolResult.error(
@@ -2361,22 +2363,21 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /** What the user authorizes when a form attribute (or column) changes its data type. */
     static ConsentPreview formRetypePreview(String normFqn,
-        FormElementWriter.FormMemberRef ref, List<JsonObject> properties)
+        FormElementWriter.FormMemberRef ref, List<JsonObject> properties, boolean extInfoLoss)
     {
         boolean retype = isFormRetypeRequest(ref, properties);
-        boolean mainWrite = requestedMainFlag(ref, properties) != null;
-        if (retype && mainWrite)
+        if (retype && extInfoLoss)
         {
             // One batch, two different losses - the dialog has to name both, or the answer
             // authorizes something the question never mentioned.
             return new ConsentPreview(
                 "Change the data type of " + normFqn + " and rewrite its main flag", //$NON-NLS-1$ //$NON-NLS-2$
                 "Retyping a form attribute can drop stored values on the next database update, " //$NON-NLS-1$
-                    + "and the main flag can leave the form without its root ext-info, deleting " //$NON-NLS-1$
-                    + "the event handlers bound inside it.", //$NON-NLS-1$
+                    + "and the main flag leaves the form without its root ext-info, deleting the " //$NON-NLS-1$
+                    + "event handlers bound inside it.", //$NON-NLS-1$
                 2, List.of(PROP_VALUE_TYPE, PROP_MAIN));
         }
-        if (mainWrite)
+        if (extInfoLoss)
         {
             // The only other thing this gate authorizes: a main-flag write that leaves the form
             // root without its ext-info, and the event handlers bound inside it with it.
@@ -2386,6 +2387,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     + "event handlers bound inside it.", //$NON-NLS-1$
                 1, java.util.Collections.singletonList(PROP_MAIN));
         }
+        // Only the retype is at stake: the main flag either was not written, or writing it takes
+        // nothing with it (an empty node, or a kind change that carries its handlers over).
         return new ConsentPreview(
             "Change the data type of " + normFqn, //$NON-NLS-1$
             "Retyping a form attribute can drop stored values on the next database update.", //$NON-NLS-1$
@@ -2457,7 +2460,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      */
     private String formRetypePreflight(ProjectContext ctx, Version version, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         FormElementWriter.FormEditContext fctx, FormElementWriter.FormMemberRef ref,
-        List<JsonObject> properties, MdNameNormalizer.Report normReport)
+        List<JsonObject> properties, MdNameNormalizer.Report normReport, boolean[] extInfoLossOut)
     {
         boolean retype = isFormRetypeRequest(ref, properties);
         Boolean mainFlag = requestedMainFlag(ref, properties);
@@ -2480,9 +2483,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     return refusal;
                 }
                 // Prepared cleanly: ask when the request retypes stored data, or when the main
-                // flag it LEAVES would take the root ext-info and the handlers bound in it.
-                return retype || (mainFlag != null && FormElementWriter.clearsBoundFormExtInfo(
-                    formModel, member, mainFlag.booleanValue())) ? null : ""; //$NON-NLS-1$
+                // flag it LEAVES would take the root ext-info and the handlers bound in it. WHICH
+                // of the two it is decides what the dialog says, so it is reported back.
+                extInfoLossOut[0] = mainFlag != null && FormElementWriter.clearsBoundFormExtInfo(
+                    formModel, member, mainFlag.booleanValue());
+                return retype || extInfoLossOut[0] ? null : ""; //$NON-NLS-1$
             });
     }
 
@@ -3187,8 +3192,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // The version the type payload is built for: resolved BEFORE the gate, because the
             // pre-check validates that payload (it is the same one the write then uses).
             final Version version = platformVersionOf(ctx);
-            return gateFormRetype(formRetypePreview(normFqn, ref, properties),
-                () -> formRetypePreflight(ctx, version, fctx, ref, properties, normReport),
+            // Written by the pre-check, read by the preview - in that order, which is the order
+            // gateFormRetype runs them in.
+            final boolean[] extInfoLoss = new boolean[1];
+            return gateFormRetype(() -> formRetypePreview(normFqn, ref, properties, extInfoLoss[0]),
+                () -> formRetypePreflight(ctx, version, fctx, ref, properties, normReport,
+                    extInfoLoss),
                 () -> applyFormMemberProperties(ctx, normFqn, ref, properties, normReport, fctx,
                     version));
         }
@@ -3447,7 +3456,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // Resolved BEFORE the gate: the conversion needs the DynamicList value type for this
             // version, and failing to build it refuses the write whatever the user answers.
             final Version version = platformVersionOf(ctx);
-            return gateFormRetype(dynamicListRetypePreview(normFqn),
+            return gateFormRetype(() -> dynamicListRetypePreview(normFqn),
                 () -> dynamicListRetypePreflight(fctx, ctx.config, version, ref, qt, mt),
                 () -> applyDynamicListQuery(ctx, normFqn, ref, qt, cq, mt, normReport, fctx, version));
         }
