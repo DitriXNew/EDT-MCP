@@ -403,9 +403,9 @@ public final class FormModelValidator
         String expected = FormElementWriter.expectedExtInfoClassifier(element);
         if (expected == null)
         {
-            // Only the kinds whose TYPE decides the node have an opinion here; for the rest a null
+            // Only the kinds that decide their own node have an opinion here; for the rest a null
             // answer means "no opinion", not "carries none".
-            if (actual != null && FormElementWriter.typeDecidesExtInfo(element))
+            if (actual != null && FormElementWriter.kindDecidesExtInfo(element))
             {
                 findings.add(new Finding(SEVERITY_ERROR, "stale-ext-info", path, //$NON-NLS-1$
                     "This element carries a '" + actual.eClass().getName() + "' but its current type " //$NON-NLS-1$ //$NON-NLS-2$
@@ -541,18 +541,7 @@ public final class FormModelValidator
 
     private static boolean isFormItem(EClass eClass)
     {
-        if (ECLASS_FORM_ITEM.equals(eClass.getName()))
-        {
-            return true;
-        }
-        for (EClass superType : eClass.getEAllSuperTypes())
-        {
-            if (ECLASS_FORM_ITEM.equals(superType.getName()))
-            {
-                return true;
-            }
-        }
-        return false;
+        return FormElementWriter.isOrInherits(eClass, ECLASS_FORM_ITEM);
     }
 
     private static boolean isAddition(EObject element)

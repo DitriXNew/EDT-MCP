@@ -4658,42 +4658,58 @@ public final class FormElementWriter
      * The ext-info classifier the element's CURRENT type calls for, or {@code null} when its type
      * pairs with none. Read-only counterpart of the dispatch the writer uses, for a validator that
      * has to tell "this type wants none" from "this kind has no opinion" - see
-     * {@link #typeDecidesExtInfo(EObject)}.
+     * {@link #kindDecidesExtInfo(EObject)}.
      */
     static String expectedExtInfoClassifier(EObject element)
     {
         return element == null ? null : extInfoClassifierNameFor(element);
     }
 
-    /** Whether this element's KIND is one whose {@code type} decides which ext-info it carries. */
-    static boolean typeDecidesExtInfo(EObject element)
+    /**
+     * Whether this element's KIND has an opinion at all about which ext-info it carries - by its
+     * {@code type} for most, by the class alone for an {@code ExtendedTooltip}. A {@code null}
+     * answer from {@link #expectedExtInfoClassifier} means "this type pairs with none" only for
+     * these; for every other kind it means "no opinion".
+     */
+    static boolean kindDecidesExtInfo(EObject element)
     {
         if (element == null)
         {
             return false;
         }
-        String eClassName = element.eClass().getName();
-        return ECLASS_FORM_GROUP.equals(eClassName) || ECLASS_FORM_FIELD.equals(eClassName)
-            || ECLASS_DECORATION.equals(eClassName) || ECLASS_ADDITION.equals(eClassName);
+        EClass eClass = element.eClass();
+        return isOrInherits(eClass, ECLASS_FORM_GROUP) || isOrInherits(eClass, ECLASS_FORM_FIELD)
+            || isOrInherits(eClass, ECLASS_DECORATION) || isOrInherits(eClass, ECLASS_ADDITION);
     }
+
     private static String extInfoClassifierNameFor(EObject element)
     {
-        String eClassName = element.eClass().getName();
+        EClass eClass = element.eClass();
         String typeLiteral = enumLiteralOf(element, FEATURE_TYPE);
-        if (ECLASS_FORM_GROUP.equals(eClassName))
+        if (isOrInherits(eClass, ECLASS_EXTENDED_TOOLTIP))
         {
-            // An unset type still means UsualGroup - the platform's own default group shape.
+            // A tooltip is pinned to the label node whatever its type says: the platform's own
+            // check overrides the type switch with a plain "is it an ExtendedTooltip", and pins the
+            // type to Label separately. Reading the type here would demand a picture node for a
+            // tooltip the platform rejects for its TYPE, and call a correct node stale.
+            return ECLASS_LABEL_DECORATION_EXT_INFO;
+        }
+        if (isOrInherits(eClass, ECLASS_FORM_GROUP))
+        {
+            // EMF answers ButtonGroup for an unset type (the first literal of
+            // ManagedFormGroupType), so this fallback is reached only by a model whose group has no
+            // type feature at all - there the plain-group shape is the honest guess.
             return groupExtInfoClassifierFor(typeLiteral != null ? typeLiteral : TYPE_LITERAL_USUAL_GROUP);
         }
-        if (ECLASS_FORM_FIELD.equals(eClassName))
+        if (isOrInherits(eClass, ECLASS_FORM_FIELD))
         {
             return FIELD_EXT_INFO_BY_TYPE.get(typeLiteral);
         }
-        if (ECLASS_DECORATION.equals(eClassName))
+        if (isOrInherits(eClass, ECLASS_DECORATION))
         {
             return DECORATION_EXT_INFO_BY_TYPE.get(typeLiteral);
         }
-        if (ECLASS_ADDITION.equals(eClassName))
+        if (isOrInherits(eClass, ECLASS_ADDITION))
         {
             return ADDITION_EXT_INFO_BY_TYPE.get(typeLiteral);
         }
@@ -6360,7 +6376,7 @@ public final class FormElementWriter
      * Whether {@code eClass} IS the named form EClass or inherits from it. Matched by NAME so this
      * stays reflective (no compile dependency on {@code com._1c.g5.v8.dt.form.model}).
      */
-    private static boolean isOrInherits(EClass eClass, String eClassName)
+    static boolean isOrInherits(EClass eClass, String eClassName)
     {
         if (eClassName.equals(eClass.getName()))
         {

@@ -15,6 +15,8 @@ import java.util.List;
 
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EEnum;
+import org.eclipse.emf.ecore.EEnumLiteral;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EPackage;
 import org.eclipse.emf.ecore.EReference;
@@ -354,6 +356,28 @@ public class FormModelValidatorTest
             codes(form).contains("stale-ext-info")); //$NON-NLS-1$
     }
 
+    /**
+     * An {@code ExtendedTooltip} is a {@code Decoration}, and the platform pins its node to a
+     * {@code LabelDecorationExtInfo}. One hangs off nearly every visual item, so a tooltip that lost
+     * its node - or kept the wrong one - is a defect the walk has to see.
+     */
+    @Test
+    public void testAnExtendedTooltipIsJudgedThroughTheDecorationItInherits()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        EObject field = form.field("Price", "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject tooltip = form.tooltipOn(field, "Label"); //$NON-NLS-1$
+
+        assertTrue("a Label tooltip with no node at all is a defect: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("missing-ext-info")); //$NON-NLS-1$
+
+        // Given a node of the wrong class it is stale, exactly as for a plain decoration.
+        form.giveItemExtInfo(tooltip);
+        assertTrue("a tooltip carrying the wrong node is stale: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("stale-ext-info")); //$NON-NLS-1$
+    }
+
     // --- the synthetic form --------------------------------------------------------------------
 
     private static List<String> codes(Form form)
@@ -384,6 +408,8 @@ public class FormModelValidatorTest
         final EClass additionType;
         final EClass extensionHandlerType;
         final EClass commandActionType;
+        final EClass decorationType;
+        final EClass tooltipType;
         final EClass dataPathType;
         final EClass eventType;
         final EClass handlerType;
@@ -458,6 +484,18 @@ public class FormModelValidatorTest
             barType = eClass("AutoCommandBar"); //$NON-NLS-1$
             barType.getESuperTypes().add(itemBase);
 
+            // Picture is the FIRST literal of ManagedFormDecorationType, so an unset type means
+            // Picture - the order matters, and the shipped metamodel is the one reproduced here.
+            EEnum decorationKind = eEnum("ManagedFormDecorationType", "Picture", "Label"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            decorationType = eClass("Decoration"); //$NON-NLS-1$
+            decorationType.getESuperTypes().add(itemBase);
+            decorationType.getEStructuralFeatures().add(attribute("type", decorationKind, false)); //$NON-NLS-1$
+            // An ExtendedTooltip adds nothing of its own - it IS a Decoration.
+            tooltipType = eClass("ExtendedTooltip"); //$NON-NLS-1$
+            tooltipType.getESuperTypes().add(decorationType);
+            itemBase.getEStructuralFeatures()
+                .add(reference("extendedTooltip", tooltipType, false, true)); //$NON-NLS-1$
+
             formType = eClass("Form"); //$NON-NLS-1$
             formType.getEStructuralFeatures().add(reference("items", itemBase, true, true)); //$NON-NLS-1$
             formType.getEStructuralFeatures().add(reference("attributes", attributeType, true, true)); //$NON-NLS-1$
@@ -481,6 +519,18 @@ public class FormModelValidatorTest
             set(attribute, "main", Boolean.valueOf(main)); //$NON-NLS-1$
             add(root, "attributes", attribute); //$NON-NLS-1$
             return attribute;
+        }
+
+        /** The extended tooltip nearly every visual item carries, in its own inherited slot. */
+        EObject tooltipOn(EObject item, String type)
+        {
+            EObject tooltip = create(tooltipType);
+            set(tooltip, "name", "Tip"); //$NON-NLS-1$ //$NON-NLS-2$
+            set(tooltip, "id", Integer.valueOf(++itemId)); //$NON-NLS-1$
+            EAttribute kind = (EAttribute)tooltipType.getEStructuralFeature("type"); //$NON-NLS-1$
+            set(tooltip, "type", ((EEnum)kind.getEAttributeType()).getEEnumLiteralByLiteral(type)); //$NON-NLS-1$
+            set(item, "extendedTooltip", tooltip); //$NON-NLS-1$
+            return tooltip;
         }
 
         EObject command(String name, int id)
@@ -627,6 +677,23 @@ public class FormModelValidatorTest
         }
 
         // --- EMF plumbing ---
+
+        private EEnum eEnum(String name, String... literals)
+        {
+            EEnum eEnum = EcoreFactory.eINSTANCE.createEEnum();
+            eEnum.setName(name);
+            int value = 0;
+            for (String literal : literals)
+            {
+                EEnumLiteral eLiteral = EcoreFactory.eINSTANCE.createEEnumLiteral();
+                eLiteral.setName(literal);
+                eLiteral.setLiteral(literal);
+                eLiteral.setValue(value++);
+                eEnum.getELiterals().add(eLiteral);
+            }
+            pkg.getEClassifiers().add(eEnum);
+            return eEnum;
+        }
 
         private EClass eClass(String name)
         {

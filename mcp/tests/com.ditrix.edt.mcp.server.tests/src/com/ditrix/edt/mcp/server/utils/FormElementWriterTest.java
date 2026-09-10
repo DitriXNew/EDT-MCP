@@ -3877,7 +3877,7 @@ public class FormElementWriterTest
             EEnum throughAlign = newEnum(f, "FormElementsThroughAlign", "Auto", "Use", "DontUse"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             EEnum groupRepresentation = newEnum(f, "UsualGroupRepresentation", //$NON-NLS-1$
                 "None", "WeakSeparation", "NormalSeparation", "StrongSeparation"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            EEnum decorationType = newEnum(f, "ManagedFormDecorationType", "Label", "Picture"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            EEnum decorationType = newEnum(f, "ManagedFormDecorationType", "Picture", "Label"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             EEnum fieldType = newEnum(f, "ManagedFormFieldType", "InputField", "LabelField"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             EEnum horizontalAlign = newEnum(f, "ItemHorizontalAlignment", "Auto", "Left"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             EEnum editMode =
@@ -6015,6 +6015,45 @@ public class FormElementWriterTest
         {"SearchStringAddition", "SearchStringAdditionExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
         {"ViewStatusAddition", "ViewStatusAdditionExtInfo"}, //$NON-NLS-1$ //$NON-NLS-2$
         {"SearchControlAddition", "SearchControlAdditionExtInfo"}}; //$NON-NLS-1$ //$NON-NLS-2$
+
+    /**
+     * An {@code ExtendedTooltip} extends {@code Decoration} with no features of its own, so a
+     * dispatch on the EClass NAME alone answers "not my kind" for the tooltip that hangs off nearly
+     * every visual item. Its node is pinned to {@code LabelDecorationExtInfo} by CLASS, not by type:
+     * the platform's decoration check overrides the type switch with an instanceof, and refuses to
+     * retype a tooltip at all.
+     */
+    @Test
+    public void testAnExtendedTooltipIsDispatchedAsTheDecorationItIs()
+    {
+        EObject form = newForm();
+        EObject field = addNamedItem(form, "FormField", "PriceField"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject tooltip = newObject(modelClass("ExtendedTooltip")); //$NON-NLS-1$
+        field.eSet(feature(field, "extendedTooltip"), tooltip); //$NON-NLS-1$
+        setLiteral(tooltip, "type", "Label"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("ExtendedTooltip", tooltip.eClass().getName()); //$NON-NLS-1$
+        assertTrue("an ExtendedTooltip IS a Decoration, so its type decides its node", //$NON-NLS-1$
+            FormElementWriter.kindDecidesExtInfo(tooltip));
+        assertEquals("LabelDecorationExtInfo", //$NON-NLS-1$
+            FormElementWriter.expectedExtInfoClassifier(tooltip));
+
+        // Even typed Picture - which the platform rejects outright - the tooltip still calls for the
+        // LABEL node, so a correct node is never reported stale over a type the form should not have.
+        setLiteral(tooltip, "type", "Picture"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("LabelDecorationExtInfo", //$NON-NLS-1$
+            FormElementWriter.expectedExtInfoClassifier(tooltip));
+
+        // A plain decoration, by contrast, does follow its type.
+        EObject decoration = addNamedItem(form, "Decoration", "Logo"); //$NON-NLS-1$ //$NON-NLS-2$
+        setLiteral(decoration, "type", "Picture"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("PictureDecorationExtInfo", //$NON-NLS-1$
+            FormElementWriter.expectedExtInfoClassifier(decoration));
+
+        // A Button pairs with no ext-info at all, and the widened dispatch still says so.
+        assertFalse("a Button is no kind whose type decides a node", //$NON-NLS-1$
+            FormElementWriter.kindDecidesExtInfo(addNamedItem(form, "Button", "Go"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 
     @Test
     public void testEveryFieldTypeGetsItsExtInfo()
