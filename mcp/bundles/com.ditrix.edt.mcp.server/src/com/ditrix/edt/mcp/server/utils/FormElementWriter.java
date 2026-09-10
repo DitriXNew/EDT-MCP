@@ -3032,6 +3032,22 @@ public final class FormElementWriter
      */
     public static String syncFormExtInfo(EObject formModel)
     {
+        return syncFormExtInfo(formModel, false);
+    }
+
+    /**
+     * {@link #syncFormExtInfo(EObject)} with the CLEAR allowed.
+     *
+     * <p>Only a change of the main attribute's TYPE may clear the node, because only that request
+     * passes the destructive-consent gate ({@code isFormRetypeRequest} looks for {@code type} /
+     * {@code valueType}). A bare {@code main} write must not turn destructive: re-writing an
+     * already-true flag on a form whose kind this mapping cannot produce would otherwise delete the
+     * node and every handler inside it, un-gated and for no change at all.</p>
+     *
+     * @param retypeMayClear whether this call may leave the form without an ext-info
+     */
+    public static String syncFormExtInfo(EObject formModel, boolean retypeMayClear)
+    {
         EStructuralFeature extInfoFeature = formModel.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
         if (!(extInfoFeature instanceof EReference) || extInfoFeature.isMany())
         {
@@ -3060,7 +3076,11 @@ public final class FormElementWriter
         {
             // A main attribute whose category pairs with nothing takes the node with it, whatever
             // kind it was: createFormExtInfo answers null here, and isNeedUpdateExtInfo(null, old)
-            // makes the platform set it to null.
+            // makes the platform set it to null. Only a RETYPE gets to do that (see the overload).
+            if (!retypeMayClear)
+            {
+                return current == null ? null : current.eClass().getName();
+            }
             if (current != null)
             {
                 formModel.eSet(extInfoFeature, null);

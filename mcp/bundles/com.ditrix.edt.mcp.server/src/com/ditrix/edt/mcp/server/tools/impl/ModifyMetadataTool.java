@@ -3200,6 +3200,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 List<EObject> localizedHolders = new ArrayList<>();
                 List<PreparedChange> localizedChanges = new ArrayList<>();
                 boolean mainAttributeTouched = false;
+                boolean mainAttributeRetyped = false;
                 for (HolderChange hc : changes)
                 {
                     // A direct feature lands on the target; a property on the nested <extInfo> lands
@@ -3217,6 +3218,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         applied.add("extInfo"); //$NON-NLS-1$
                     }
                     mainAttributeTouched = mainAttributeTouched || decidesFormExtInfo(hc);
+                    mainAttributeRetyped =
+                        mainAttributeRetyped || (!hc.onExtInfo && hc.change.isTypeChange());
                     if (hc.change.isLocalized())
                     {
                         // Remember the receiver the change actually landed on: a title on the
@@ -3229,7 +3232,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // decided once the whole batch is applied. Per change it would depend on the
                 // order the properties arrived in: [main=false, valueType=X] and the reverse pair
                 // describe the same end state and must not leave two different ext-infos.
-                if (mainAttributeTouched && FormElementWriter.syncFormExtInfo(formModel) != null
+                if (mainAttributeTouched
+                    && FormElementWriter.syncFormExtInfo(formModel, mainAttributeRetyped) != null
                     && !applied.contains("extInfo")) //$NON-NLS-1$
                 {
                     applied.add("extInfo"); //$NON-NLS-1$

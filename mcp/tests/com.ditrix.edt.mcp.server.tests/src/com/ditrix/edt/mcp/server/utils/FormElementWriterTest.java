@@ -6513,7 +6513,7 @@ public class FormElementWriterTest
 
         // Retyped to a category the platform pairs with nothing: the stale node is CLEARED, not kept.
         m.retypeMainAttribute("String"); //$NON-NLS-1$
-        assertNull(FormElementWriter.syncFormExtInfo(m.form));
+        assertNull(FormElementWriter.syncFormExtInfo(m.form, true));
         assertNull("a form whose main type maps to no ext-info must carry none", m.extInfo()); //$NON-NLS-1$
     }
 
@@ -6530,9 +6530,25 @@ public class FormElementWriterTest
         m.giveExtInfo("CubeRecordSetFormExtInfo"); //$NON-NLS-1$
 
         assertNull("this mapping produces no ext-info for that category", //$NON-NLS-1$
-            FormElementWriter.syncFormExtInfo(m.form));
+            FormElementWriter.syncFormExtInfo(m.form, true));
         assertNull("a main attribute that pairs with nothing leaves no node behind", //$NON-NLS-1$
             m.extInfo());
+    }
+
+    /**
+     * The same form, the same unmapped category - but reached by a bare {@code main} write instead
+     * of a retype. Only a retype passes the destructive-consent gate, so only a retype may clear;
+     * otherwise re-writing an already-true flag would destroy the node for no change at all.
+     */
+    @Test
+    public void testAMainOnlyWriteNeverClearsTheExtInfo()
+    {
+        FormRootModel m = newFormRootModel("ExternalDataSourceCubeRecordSet.Sales", true); //$NON-NLS-1$
+        m.giveExtInfo("CubeRecordSetFormExtInfo"); //$NON-NLS-1$
+
+        assertEquals("the node stays, and the sync reports the kind it found", //$NON-NLS-1$
+            "CubeRecordSetFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
+        assertNotNull("a main-only write must not destroy the node", m.extInfo()); //$NON-NLS-1$
     }
 
     /**
