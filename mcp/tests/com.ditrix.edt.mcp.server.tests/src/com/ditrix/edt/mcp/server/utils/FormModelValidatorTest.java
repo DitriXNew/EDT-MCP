@@ -379,22 +379,21 @@ public class FormModelValidatorTest
     }
 
     /**
-     * A standard command is not a {@code FormCommand}, so the "is it inside this form" fallback let
-     * ANY resolved one pass. {@code resolveButtonCommand} only ever returns a standard command this
-     * form root or an item inside it publishes, so one belonging to a different form is exactly as
-     * unresolvable as a deleted custom command - and looks perfectly well-formed.
+     * The BOUNDARY of the command check, pinned deliberately: a standard command is never reported,
+     * wherever it is rooted. Containment cannot tell this form's inferred set from a peer's - an
+     * adopted form keeps one rooted in its linked base form, an inferred one may be rooted nowhere -
+     * so a rule built on it produced false findings on healthy forms twice. Silence here is the
+     * claim, not an oversight; a future rule needs the form's own command SOURCES, not the tree.
      */
     @Test
-    public void testAStandardCommandPublishedByAnotherFormIsReported()
+    public void testAStandardCommandIsNeverReportedWhereverItIsRooted()
     {
         Form form = new Form();
         form.attribute("Object", 1, true); //$NON-NLS-1$
         form.button("RunOwn", form.ownStandardCommand("Post")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertFalse("this form's OWN standard command resolves: " + codes(form), //$NON-NLS-1$
-            codes(form).contains("unresolved-command-reference")); //$NON-NLS-1$
-
         form.button("RunForeign", form.standardCommandOfAnotherForm("Post")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("a standard command of ANOTHER form is not resolvable here: " + codes(form), //$NON-NLS-1$
+
+        assertFalse("no standard command may be called unresolvable: " + codes(form), //$NON-NLS-1$
             codes(form).contains("unresolved-command-reference")); //$NON-NLS-1$
     }
 
