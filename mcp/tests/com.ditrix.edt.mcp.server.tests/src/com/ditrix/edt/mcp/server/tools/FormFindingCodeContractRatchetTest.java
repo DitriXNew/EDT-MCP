@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -67,15 +68,11 @@ public class FormFindingCodeContractRatchetTest
         Map<String, String> emitted = emittedCodes();
         assertTrue("the source scan found no emissions at all - it is not reading the validator", //$NON-NLS-1$
             emitted.size() >= 20);
-        List<String> problems = new ArrayList<>();
-        for (Map.Entry<String, String> entry : emitted.entrySet())
-        {
-            if (!FormModelValidator.CODES.contains(entry.getKey()))
-            {
-                problems.add(entry.getKey() + " is emitted but missing from FormModelValidator.CODES"); //$NON-NLS-1$
-            }
-        }
-        assertTrue(String.valueOf(problems), problems.isEmpty());
+        // Set equality in BOTH directions: a code emitted but unregistered is an undocumented
+        // outcome, and one registered but no longer emitted advertises a finding that can never
+        // arrive. Either way CODES stops describing the engine.
+        assertEquals("FormModelValidator.CODES must be exactly what the engine emits", //$NON-NLS-1$
+            new TreeSet<>(emitted.keySet()), new TreeSet<>(FormModelValidator.CODES));
     }
 
     /**
@@ -114,10 +111,13 @@ public class FormFindingCodeContractRatchetTest
     @Test
     public void testTheGuideAdvertisesNoCodeTheEngineCannotEmit()
     {
+        // Compared with the EMISSIONS, not with the registry: a check deleted while its constant
+        // stayed in CODES would keep the guide row "valid" against a list that is itself stale.
+        Map<String, String> emitted = emittedCodes();
         List<String> phantom = new ArrayList<>();
         for (String code : documentedCodes(guide()).keySet())
         {
-            if (!FormModelValidator.CODES.contains(code))
+            if (!emitted.containsKey(code))
             {
                 phantom.add(code);
             }

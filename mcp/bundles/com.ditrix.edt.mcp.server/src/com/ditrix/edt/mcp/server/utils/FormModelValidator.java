@@ -380,14 +380,20 @@ public final class FormModelValidator
         for (EObject attribute : list(formModel, FEATURE_ATTRIBUTES))
         {
             String expected = FormElementWriter.attributeExtInfoClassifierNameFor(attribute);
-            if (expected == null)
-            {
-                // Null means either no ext-info is due or MULTI-typed and unreadable; a finding
-                // would guess.
-                continue;
-            }
             EObject actual = FormElementWriter.extInfoInstance(attribute);
             String path = pathOf(attribute);
+            if (expected == null)
+            {
+                // A SINGLE type with no pairing forbids an ext-info outright - the writer clears
+                // one there. A type that is not single cannot be read, and a finding would guess.
+                if (actual != null && FormElementWriter.singleValueTypeCategory(attribute) != null)
+                {
+                    findings.add(new Finding(SEVERITY_ERROR, CODE_STALE_EXT_INFO, path,
+                        "This attribute carries a '" + actual.eClass().getName() //$NON-NLS-1$
+                            + "' although its value type calls for none.")); //$NON-NLS-1$
+                }
+                continue;
+            }
             if (actual == null)
             {
                 findings.add(new Finding(SEVERITY_ERROR, CODE_MISSING_EXT_INFO, path,

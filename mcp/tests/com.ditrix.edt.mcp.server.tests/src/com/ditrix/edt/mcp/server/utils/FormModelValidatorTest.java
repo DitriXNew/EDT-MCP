@@ -583,6 +583,27 @@ public class FormModelValidatorTest
             + unknownCodes, List.of(), unknownCodes);
     }
 
+    /**
+     * Retyping an attribute away from a paired type leaves its old node behind, and the writer
+     * CLEARS one there - so a node the value type forbids is a defect, not an absence of opinion.
+     * The unreadable case stays silent: a type that is not single says nothing either way.
+     */
+    @Test
+    public void testAnExtInfoTheValueTypeForbidsIsReported()
+    {
+        Form form = new Form();
+        EObject retyped = form.attribute("Rows", 1, false); //$NON-NLS-1$
+        form.giveAttributeTypes(retyped, "String"); //$NON-NLS-1$
+        form.giveDynamicListExtInfo(retyped);
+        assertTrue("a String attribute may carry no ext-info at all: " + codes(form), //$NON-NLS-1$
+            codes(form).contains(FormModelValidator.CODE_STALE_EXT_INFO));
+
+        // A type that is not SINGLE cannot be read, and there the same node proves nothing.
+        form.giveAttributeTypes(retyped, "DynamicList", "String"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a MULTI-typed attribute is unknowable and must stay silent: " + codes(form), //$NON-NLS-1$
+            codes(form).contains(FormModelValidator.CODE_STALE_EXT_INFO));
+    }
+
     // --- the synthetic form --------------------------------------------------------------------
 
     /** The message of the FIRST finding carrying {@code code}, or empty when there is none. */

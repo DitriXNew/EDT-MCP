@@ -3283,7 +3283,15 @@ public final class FormElementWriter
         return member == null ? null : singleValueTypeCategory(member);
     }
 
-    private static String singleValueTypeCategory(EObject member)
+    /**
+     * The category of a member's SINGLE value type ({@code DynamicList}, {@code String}, the head of
+     * a qualified name), or {@code null} when the member does not carry exactly one type - which is
+     * the difference between "this type takes no ext-info" and "the type cannot be read at all".
+     *
+     * @param member the form attribute or column to read
+     * @return the type category, or {@code null} when the value type is absent or not single
+     */
+    public static String singleValueTypeCategory(EObject member)
     {
         EStructuralFeature feature = member.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
         return feature == null ? null : typeCategoryOf(member.eGet(feature));
@@ -5560,15 +5568,34 @@ public final class FormElementWriter
     /**
      * The English names of the events the platform publishes for {@code container}.
      *
-     * <p>An empty list means "cannot tell" (no version or no {@link IEObjectProvider}); callers must
-     * stay silent then.</p>
+     * <p>An empty list means "cannot tell", and there are THREE ways to get there: no version, no
+     * {@link IEObjectProvider}, and - the one that bites - an element whose own base type is not in
+     * {@link #PLATFORM_TYPE_BY_ECLASS}. That map is keyed by EXACT EClass name, so a subclass (an
+     * {@code ExtendedTooltip} under {@code Decoration}) would answer with its ext type's events
+     * alone; a caller told "these are the events" would then call an ordinary base-type binding
+     * foreign. An incomplete union is reported as no union at all.</p>
      */
+    /**
+     * Whether {@code element}'s OWN base platform type is known, i.e. whether an event union built
+     * for it can be complete. {@link #PLATFORM_TYPE_BY_ECLASS} is keyed by EXACT EClass name, so a
+     * SUBCLASS answers {@code false}: its union would carry the ext type's events without the base
+     * type's, and a caller reading that as "these are the events" would be wrong.
+     */
+    static boolean hasKnownPlatformBaseType(EObject element)
+    {
+        return element != null && PLATFORM_TYPE_BY_ECLASS.get(element.eClass().getName()) != null;
+    }
+
     public static List<String> availableEventNames(EObject container, Version version)
     {
-        List<String> names = new ArrayList<>();
-        for (EObject event : availableEvents(container, version))
+        if (!hasKnownPlatformBaseType(container))
         {
-            String name = eventNameOf(event, false);
+            return Collections.emptyList();
+        }
+        List<String> names = new ArrayList<>();
+        for (AvailableEvent available : availableEvents(container, version))
+        {
+            String name = eventNameOf(available.event, false);
             if (name != null && !name.isEmpty())
             {
                 names.add(name);

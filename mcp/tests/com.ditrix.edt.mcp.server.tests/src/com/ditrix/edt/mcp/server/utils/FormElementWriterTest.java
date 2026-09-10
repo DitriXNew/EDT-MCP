@@ -1433,6 +1433,33 @@ public class FormElementWriterTest
     private static final String RU_COMMAND = fromCp(0x043a, 0x043e, 0x043c, 0x0430, 0x043d, 0x0434, 0x0430);
 
     /** A named item of {@code eClassName} appended to {@code owner}'s {@code items}. */
+    /**
+     * An element's event union may only be called complete when its OWN base type is known. The
+     * platform-type map is keyed by exact EClass name, so an {@code ExtendedTooltip} - a
+     * {@code Decoration} SUBCLASS - would answer with its ext type's events alone, and a consumer
+     * treating that as the full set would call an ordinary base-type binding foreign.
+     */
+    @Test
+    public void testOnlyAnElementWithItsOwnBaseTypeHasAKnownEventSet()
+    {
+        assertTrue("a Decoration is keyed in the platform-type map by its own name", //$NON-NLS-1$
+            FormElementWriter.hasKnownPlatformBaseType(bareElement("Decoration"))); //$NON-NLS-1$
+        assertFalse("an ExtendedTooltip inherits its base events, and the map is keyed by EXACT " //$NON-NLS-1$
+            + "name, so its union would silently omit them", //$NON-NLS-1$
+            FormElementWriter.hasKnownPlatformBaseType(bareElement("ExtendedTooltip"))); //$NON-NLS-1$
+    }
+
+    /** A dynamic object whose EClass carries only the name the platform-type map is keyed by. */
+    private static EObject bareElement(String eClassName)
+    {
+        EPackage pack = EcoreFactory.eINSTANCE.createEPackage();
+        pack.setName("probe"); //$NON-NLS-1$
+        EClass eClass = EcoreFactory.eINSTANCE.createEClass();
+        eClass.setName(eClassName);
+        pack.getEClassifiers().add(eClass);
+        return pack.getEFactoryInstance().create(eClass);
+    }
+
     private static EObject addNamedItem(EObject owner, String eClassName, String name)
     {
         EObject item = newObject(modelClass(eClassName));
