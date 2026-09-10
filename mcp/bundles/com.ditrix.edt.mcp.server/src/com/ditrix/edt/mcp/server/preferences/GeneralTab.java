@@ -355,6 +355,24 @@ public class GeneralTab
         }
     }
 
+    /**
+     * A row of controls packed to the LEFT, spanning the section's full width. Buttons live here
+     * rather than in the section grid itself: a grid column shared with a label that stretches
+     * carries every button in it to the far right, away from the controls it belongs with.
+     */
+    private static Composite leftPackedBar(Composite parent, int columns)
+    {
+        Composite bar = new Composite(parent, SWT.NONE);
+        GridLayout barLayout = new GridLayout(columns, false);
+        barLayout.marginWidth = 0;
+        barLayout.marginHeight = 0;
+        bar.setLayout(barLayout);
+        GridData barGd = new GridData(SWT.LEFT, SWT.CENTER, true, false);
+        barGd.horizontalSpan = 2;
+        bar.setLayoutData(barGd);
+        return bar;
+    }
+
     private void createServerControlSection()
     {
         // Separator
@@ -371,9 +389,14 @@ public class GeneralTab
         titleGd.horizontalSpan = 3;
         sectionTitle.setLayoutData(titleGd);
 
-        // Container for controls
+        // Container for controls. The action rows below are their own left-packed bars: a button
+        // sharing a grid column with a stretching label gets carried to the far right with it,
+        // which is how Restart and the two Copy buttons ended up detached from their siblings.
         Composite controlComposite = new Composite(composite, SWT.NONE);
-        controlComposite.setLayout(new GridLayout(4, false));
+        GridLayout controlLayout = new GridLayout(2, false);
+        controlLayout.marginWidth = 0;
+        controlLayout.marginHeight = 0;
+        controlComposite.setLayout(controlLayout);
         GridData compositeGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         compositeGd.horizontalSpan = 3;
         controlComposite.setLayoutData(compositeGd);
@@ -383,10 +406,10 @@ public class GeneralTab
         statusTitleLabel.setText(Messages.GeneralTab_Status);
 
         statusLabel = new Label(controlComposite, SWT.NONE);
-        GridData statusGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        statusGd.horizontalSpan = 3;
-        statusLabel.setLayoutData(statusGd);
+        statusLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         updateStatusLabel();
+
+        Composite buttonBar = leftPackedBar(controlComposite, 3);
 
         // Control buttons
         ImageDescriptor startIcon = AbstractUIPlugin.imageDescriptorFromPlugin(
@@ -396,7 +419,7 @@ public class GeneralTab
         ImageDescriptor restartIcon = AbstractUIPlugin.imageDescriptorFromPlugin(
             Activator.PLUGIN_ID, "icons/restart.png"); //$NON-NLS-1$
 
-        startButton = new Button(controlComposite, SWT.PUSH);
+        startButton = new Button(buttonBar, SWT.PUSH);
         startButton.setText(Messages.GeneralTab_Start);
         setManagedImage(startButton, startIcon);
         startButton.addSelectionListener(new SelectionAdapter()
@@ -408,7 +431,7 @@ public class GeneralTab
             }
         });
 
-        stopButton = new Button(controlComposite, SWT.PUSH);
+        stopButton = new Button(buttonBar, SWT.PUSH);
         stopButton.setText(Messages.GeneralTab_Stop);
         setManagedImage(stopButton, stopIcon);
         stopButton.addSelectionListener(new SelectionAdapter()
@@ -420,7 +443,7 @@ public class GeneralTab
             }
         });
 
-        restartButton = new Button(controlComposite, SWT.PUSH);
+        restartButton = new Button(buttonBar, SWT.PUSH);
         restartButton.setText(Messages.GeneralTab_Restart);
         setManagedImage(restartButton, restartIcon);
         restartButton.addSelectionListener(new SelectionAdapter()
@@ -432,20 +455,16 @@ public class GeneralTab
             }
         });
 
-        // Empty placeholder for alignment
-        new Label(controlComposite, SWT.NONE);
-
         // Connection info. The label used to read "http://localhost:<port>/mcp" literally, so the
         // one thing a user comes here for - the address to paste into their agent - had to be
         // assembled by hand from the spinner above it (#464). It now shows the real URL and
         // follows the spinner, and the two buttons put it on the clipboard.
-        endpointLabel = new Label(controlComposite, SWT.NONE);
-        GridData infoGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        infoGd.horizontalSpan = 2;
-        endpointLabel.setLayoutData(infoGd);
+        Composite infoBar = leftPackedBar(controlComposite, 3);
+        endpointLabel = new Label(infoBar, SWT.NONE);
+        endpointLabel.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         updateEndpointLabel();
 
-        Button copyUrlButton = new Button(controlComposite, SWT.PUSH);
+        Button copyUrlButton = new Button(infoBar, SWT.PUSH);
         copyUrlButton.setText(Messages.GeneralTab_CopyUrl);
         copyUrlButton.setToolTipText(Messages.GeneralTab_CopyUrl_Tooltip);
         copyUrlButton.addSelectionListener(new SelectionAdapter()
@@ -457,7 +476,7 @@ public class GeneralTab
             }
         });
 
-        Button copyConfigButton = new Button(controlComposite, SWT.PUSH);
+        Button copyConfigButton = new Button(infoBar, SWT.PUSH);
         copyConfigButton.setText(Messages.GeneralTab_CopyConfig);
         copyConfigButton.setToolTipText(Messages.GeneralTab_CopyConfig_Tooltip);
         copyConfigButton.addSelectionListener(new SelectionAdapter()

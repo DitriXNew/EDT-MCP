@@ -397,6 +397,46 @@ public class FormModelValidatorTest
             codes(form).contains("unresolved-command-reference")); //$NON-NLS-1$
     }
 
+    /**
+     * The binding is stored as a NAME path and re-resolved on load, so a surviving command of the
+     * same name keeps it valid even when the reference went stale. Judged by object identity this
+     * form would be called broken although it loads and resolves perfectly.
+     */
+    @Test
+    public void testASurvivingCommandOfTheSameNameKeepsTheBindingValid()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        EObject first = form.command("Print", 1); //$NON-NLS-1$
+        form.command("Print", 2); //$NON-NLS-1$
+        form.button("RunPrint", first); //$NON-NLS-1$
+
+        form.removeCommand(first);
+
+        assertFalse("a command of that NAME is still in the form: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("unresolved-command-reference")); //$NON-NLS-1$
+    }
+
+    /**
+     * The platform rejects an extended tooltip whose TYPE is not Label, and it rejects it for the
+     * type alone - so carrying the correct label node does not make such a form valid.
+     */
+    @Test
+    public void testAnExtendedTooltipTypedOtherThanLabelIsReported()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        EObject field = form.field("Price", "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        form.tooltipOn(field, "Label"); //$NON-NLS-1$
+        assertFalse("a Label tooltip is what every real one is: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("invalid-extended-tooltip-type")); //$NON-NLS-1$
+
+        EObject other = form.field("Cost", "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        form.tooltipOn(other, "Picture"); //$NON-NLS-1$
+        assertTrue("the platform rejects a tooltip typed anything but Label: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("invalid-extended-tooltip-type")); //$NON-NLS-1$
+    }
+
     // --- the synthetic form --------------------------------------------------------------------
 
     private static List<String> codes(Form form)

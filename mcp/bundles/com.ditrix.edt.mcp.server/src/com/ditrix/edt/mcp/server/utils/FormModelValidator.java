@@ -12,6 +12,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
+import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
@@ -60,6 +61,9 @@ public final class FormModelValidator
 
     private static final String ECLASS_FORM_ITEM = "FormItem"; //$NON-NLS-1$
     private static final String ECLASS_ADDITION = "Addition"; //$NON-NLS-1$
+    private static final String ECLASS_EXTENDED_TOOLTIP = "ExtendedTooltip"; //$NON-NLS-1$
+    private static final String FEATURE_TYPE = "type"; //$NON-NLS-1$
+    private static final String TYPE_LITERAL_LABEL = "Label"; //$NON-NLS-1$
     private static final String ECLASS_BUTTON = "Button"; //$NON-NLS-1$
     private static final String ECLASS_FORM_COMMAND = "FormCommand"; //$NON-NLS-1$
     private static final String ECLASS_FORM_FIELD = "FormField"; //$NON-NLS-1$
@@ -393,8 +397,30 @@ public final class FormModelValidator
      * the element. A missing one means the element was built by something that did not know the
      * rule; a MISMATCHED one means the element's type changed and the node did not follow.
      */
+    /**
+     * An {@code ExtendedTooltip} is pinned to type {@code Label}, and the platform rejects any other
+     * type for the TYPE itself - independently of the node the tooltip carries. Carrying the right
+     * ext-info is therefore no evidence here: every one of the 347938 tooltips in a real
+     * configuration is a Label, so one typed otherwise is malformed however correct its node.
+     */
+    private static void checkExtendedTooltipType(EObject element, String path, List<Finding> findings)
+    {
+        if (!ECLASS_EXTENDED_TOOLTIP.equals(element.eClass().getName()))
+        {
+            return;
+        }
+        String type = literalOf(element, FEATURE_TYPE);
+        if (type != null && !TYPE_LITERAL_LABEL.equals(type))
+        {
+            findings.add(new Finding(SEVERITY_ERROR, "invalid-extended-tooltip-type", path, //$NON-NLS-1$
+                "This extended tooltip is typed '" + type //$NON-NLS-1$
+                    + "'; the platform accepts only 'Label' and rejects the form otherwise.")); //$NON-NLS-1$
+        }
+    }
+
     private static void checkItemExtInfo(EObject element, String path, List<Finding> findings)
     {
+        checkExtendedTooltipType(element, path, findings);
         if (element.eClass().getEStructuralFeature(FEATURE_EXT_INFO) == null)
         {
             return;
@@ -598,10 +624,11 @@ public final class FormModelValidator
     }
 
     /**
-     * Whether a COMMAND reference is gone: a proxy the model cannot resolve, or an object no longer
-     * inside the form. Removing a command from its containment does NOT turn the buttons' reference
-     * into a proxy, so the proxy test alone misses exactly the in-transaction removal this engine is
-     * meant to catch before a commit.
+     * Whether a BUTTON's command binding cannot resolve in this form. The binding PERSISTS as a name
+     * path ({@code Form.Command.X}) that is re-resolved on load, so the question is the one the
+     * resolver asks - is a form command of that NAME here - not which object a live session happens
+     * to point at. Removing a command does NOT turn the buttons' reference into a proxy, so the
+     * proxy test alone misses the in-transaction removal this engine is meant to catch.
      *
      * <p>Deliberately NOT used for an event: events are published by the platform TYPE, not by the
      * form, so "not inside the form" is their ordinary state and would flag every binding.</p>
@@ -621,11 +648,17 @@ public final class FormModelValidator
         {
             return false;
         }
-        // A FORM command has to be in THIS form's list - that is the only place the button
-        // resolver looks for one, so outside it the binding cannot resolve.
-        for (EObject owner = target; owner != null; owner = owner.eContainer())
+        // A form command resolves by NAME against THIS form's list - that is what the resolver looks
+        // up first and what the file re-resolves on load, so a surviving command of the same name
+        // keeps the binding valid even when the reference itself went stale.
+        String wanted = nameOf(target);
+        if (wanted.isEmpty())
         {
-            if (owner == formModel)
+            return true;
+        }
+        for (EObject candidate : list(formModel, FEATURE_FORM_COMMANDS))
+        {
+            if (wanted.equalsIgnoreCase(nameOf(candidate)))
             {
                 return false;
             }
@@ -654,6 +687,13 @@ public final class FormModelValidator
     {
         Object name = value(object, FEATURE_NAME);
         return name instanceof String ? (String)name : ""; //$NON-NLS-1$
+    }
+
+    /** The literal of an EEnum-valued feature, or {@code null} when it is absent or not an enum. */
+    private static String literalOf(EObject object, String featureName)
+    {
+        Object raw = value(object, featureName);
+        return raw instanceof Enumerator ? ((Enumerator)raw).getLiteral() : null;
     }
 
     private static Object value(EObject object, String featureName)
