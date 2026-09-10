@@ -100,19 +100,23 @@ public class FormModelValidatorTest
             codes(form).contains("duplicate-id")); //$NON-NLS-1$
     }
 
+    /**
+     * A data path is rooted at an ATTRIBUTE and nothing else. Nothing binds to a parameter that way
+     * (issue #396), and across a real configuration not one of the 3918 forms carrying parameters has
+     * a path rooted at one.
+     */
     @Test
-    public void testADataPathMustStartAtAnAttributeOrAParameter()
+    public void testADataPathMustStartAtAnAttribute()
     {
         Form form = new Form();
         form.attribute("Object", 1, true); //$NON-NLS-1$
         form.parameter("Key"); //$NON-NLS-1$
         form.field("ByAttribute", "Object", "Description"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        form.field("ByParameter", "Key"); //$NON-NLS-1$ //$NON-NLS-2$
-        assertFalse("both roots exist on this form: " + codes(form), //$NON-NLS-1$
+        assertFalse("an attribute root resolves: " + codes(form), //$NON-NLS-1$
             codes(form).contains("unresolved-data-path")); //$NON-NLS-1$
 
-        form.field("Dangling", "Renamed", "Description"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        assertTrue("a path that starts at nothing is unresolved: " + codes(form), //$NON-NLS-1$
+        form.field("ByParameter", "Key"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a parameter is not a data source: " + codes(form), //$NON-NLS-1$
             codes(form).contains("unresolved-data-path")); //$NON-NLS-1$
     }
 
@@ -294,6 +298,40 @@ public class FormModelValidatorTest
         form.giveCommandAction(command, null);
         assertTrue("an action with no handler runs nothing: " + codes(form), //$NON-NLS-1$
             codes(form).contains("empty-command-action")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAButtonPointingAtAnotherFormsCommandIsReported()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        form.button("Foreign", form.foreignCommand("Print")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("a form command of another form is not resolvable here: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("unresolved-command-reference")); //$NON-NLS-1$
+    }
+
+    /**
+     * A finding's path is a promise: it is pasted back into another call. The item NAMESPACE is
+     * called "item", but there is no such kind token - the address has to name the element's own
+     * kind.
+     */
+    @Test
+    public void testAnItemFindingIsAddressedByItsKind()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        form.group("Twice"); //$NON-NLS-1$
+        form.group("Twice"); //$NON-NLS-1$
+
+        List<FormModelValidator.Finding> findings = FormModelValidator.validate(form.root);
+        List<String> paths = new ArrayList<>();
+        for (FormModelValidator.Finding finding : findings)
+        {
+            paths.add(finding.path);
+        }
+        assertTrue("the path must name a kind a tool accepts: " + paths, //$NON-NLS-1$
+            paths.contains("Group.Twice")); //$NON-NLS-1$
     }
 
     // --- the synthetic form --------------------------------------------------------------------
@@ -518,6 +556,17 @@ public class FormModelValidatorTest
         {
             ((List<EObject>)root.eGet(root.eClass().getEStructuralFeature("formCommands"))) //$NON-NLS-1$
                 .remove(command);
+        }
+
+        /** A command contained in a DIFFERENT form - the button resolver never accepts one. */
+        EObject foreignCommand(String name)
+        {
+            EObject otherForm = create(formType);
+            EObject command = create(commandType);
+            set(command, "name", name); //$NON-NLS-1$
+            set(command, "id", Integer.valueOf(1)); //$NON-NLS-1$
+            add(otherForm, "formCommands", command); //$NON-NLS-1$
+            return command;
         }
 
         EObject event(String name)

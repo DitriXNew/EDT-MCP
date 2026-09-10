@@ -61,6 +61,7 @@ public final class FormModelValidator
     private static final String ECLASS_FORM_ITEM = "FormItem"; //$NON-NLS-1$
     private static final String ECLASS_ADDITION = "Addition"; //$NON-NLS-1$
     private static final String ECLASS_BUTTON = "Button"; //$NON-NLS-1$
+    private static final String ECLASS_FORM_COMMAND = "FormCommand"; //$NON-NLS-1$
     private static final String ECLASS_FORM_FIELD = "FormField"; //$NON-NLS-1$
     private static final String ECLASS_TABLE = "Table"; //$NON-NLS-1$
     private static final String ECLASS_EVENT_HANDLER_EXTENSION = "EventHandlerExtension"; //$NON-NLS-1$
@@ -194,7 +195,7 @@ public final class FormModelValidator
         judgeNamespace(list(formModel, FEATURE_ATTRIBUTES), "Attribute", findings); //$NON-NLS-1$
         judgeNamespace(list(formModel, FEATURE_FORM_COMMANDS), "Command", findings); //$NON-NLS-1$
         judgeNamespace(list(formModel, FEATURE_PARAMETERS), "Parameter", findings); //$NON-NLS-1$
-        judgeNamespace(items, "item", findings); //$NON-NLS-1$
+        judgeNamespace(items, "item", true, findings); //$NON-NLS-1$
         for (EObject attribute : list(formModel, FEATURE_ATTRIBUTES))
         {
             // Each columns list is its OWN id scope - the platform's normalization repairs
@@ -220,13 +221,23 @@ public final class FormModelValidator
     /** Names and ids of ONE list, plus the members that carry neither. */
     private static void judgeNamespace(List<EObject> members, String kindLabel, List<Finding> findings)
     {
+        judgeNamespace(members, kindLabel, false, findings);
+    }
+
+    /** @param itemPaths whether each finding is addressed by the member's own kind token */
+    private static void judgeNamespace(List<EObject> members, String kindLabel, boolean itemPaths,
+        List<Finding> findings)
+    {
         Map<String, Integer> names = new HashMap<>();
         Set<String> reported = new LinkedHashSet<>();
         Map<Integer, String> ids = new HashMap<>();
         for (EObject member : members)
         {
             String name = nameOf(member);
-            String path = kindLabel + "." + (name.isEmpty() ? "(unnamed)" : name); //$NON-NLS-1$ //$NON-NLS-2$
+            // The label names the NAMESPACE; the path has to be an address a caller can paste
+            // back, and only the element itself knows its kind token.
+            String path = itemPaths ? pathOf(member)
+                : kindLabel + "." + (name.isEmpty() ? "(unnamed)" : name); //$NON-NLS-1$ //$NON-NLS-2$
             if (name.isEmpty())
             {
                 if (!isAddition(member))
@@ -445,7 +456,7 @@ public final class FormModelValidator
             {
                 findings.add(new Finding(SEVERITY_ERROR, "unresolved-event-reference", path, //$NON-NLS-1$
                     "The handler '" + (procedure.isEmpty() ? "(unnamed)" : procedure) //$NON-NLS-1$ //$NON-NLS-2$
-                        + "' is bound to no event this element publishes.")); //$NON-NLS-1$
+                        + "' points at no event: the reference is empty or no longer resolves.")); //$NON-NLS-1$
                 continue;
             }
             if (isExtension && callType.isEmpty())
@@ -544,17 +555,18 @@ public final class FormModelValidator
         return groups;
     }
 
-    /** The names a data path may START with: the form's own attributes and parameters. */
+    /**
+     * The names a data path may START with: the form's own ATTRIBUTES, and only those. Nothing binds
+     * to a parameter by data path (see {@code FormElementWriter.isFormParameter}, issue #396) - and
+     * across a real configuration's 3918 forms that carry parameters, not one data path is rooted at
+     * one.
+     */
     private static Set<String> dataPathRoots(EObject formModel)
     {
         Set<String> roots = new LinkedHashSet<>();
         for (EObject attribute : list(formModel, FEATURE_ATTRIBUTES))
         {
             roots.add(nameOf(attribute).toLowerCase(Locale.ROOT));
-        }
-        for (EObject parameter : list(formModel, FEATURE_PARAMETERS))
-        {
-            roots.add(nameOf(parameter).toLowerCase(Locale.ROOT));
         }
         return roots;
     }
@@ -599,9 +611,11 @@ public final class FormModelValidator
                 return false;
             }
         }
-        // Outside the form is not by itself wrong - a standard command the platform infers lives in
-        // its own source - so only an object that belongs to nothing at all is judged gone.
-        return target.eResource() == null && target.eContainer() == null;
+        // A FORM command has to be in THIS form's list - that is the only place the button resolver
+        // looks. Outside it, only the standard commands the platform infers are legitimate, and they
+        // are not FormCommands.
+        return ECLASS_FORM_COMMAND.equals(target.eClass().getName())
+            || (target.eResource() == null && target.eContainer() == null);
     }
 
     /** An event names itself in either language; the first spelling it answers to labels it. */
