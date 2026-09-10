@@ -4654,6 +4654,28 @@ public final class FormElementWriter
      * slot ({@link #resolveExtInfoEClass}), and which class a live instance must be REPLACED by when
      * the type changed under it ({@link #syncItemExtInfo}).</p>
      */
+    /**
+     * The ext-info classifier the element's CURRENT type calls for, or {@code null} when its type
+     * pairs with none. Read-only counterpart of the dispatch the writer uses, for a validator that
+     * has to tell "this type wants none" from "this kind has no opinion" - see
+     * {@link #typeDecidesExtInfo(EObject)}.
+     */
+    static String expectedExtInfoClassifier(EObject element)
+    {
+        return element == null ? null : extInfoClassifierNameFor(element);
+    }
+
+    /** Whether this element's KIND is one whose {@code type} decides which ext-info it carries. */
+    static boolean typeDecidesExtInfo(EObject element)
+    {
+        if (element == null)
+        {
+            return false;
+        }
+        String eClassName = element.eClass().getName();
+        return ECLASS_FORM_GROUP.equals(eClassName) || ECLASS_FORM_FIELD.equals(eClassName)
+            || ECLASS_DECORATION.equals(eClassName) || ECLASS_ADDITION.equals(eClassName);
+    }
     private static String extInfoClassifierNameFor(EObject element)
     {
         String eClassName = element.eClass().getName();

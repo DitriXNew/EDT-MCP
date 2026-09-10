@@ -90,7 +90,16 @@ public final class FormModelValidator
         public final String severity;
         /** A stable kebab-case code, safe to branch on. */
         public final String code;
-        /** {@code Kind.Name}, {@code Attribute.A.Column.C}, or {@code (form)} for the root. */
+        /**
+         * WHERE the defect is, in the address vocabulary the other form tools use -
+         * {@code Field.Description}, {@code Attribute.A.Column.C}, {@code (form)} for the root.
+         *
+         * <p>Most of these paste straight into {@code get_metadata_details} or
+         * {@code modify_metadata}. Three cannot, by construction: an {@code Addition} and an
+         * additional column have no address in that vocabulary at all, and a DUPLICATE name is
+         * ambiguous - which is the defect being reported. There the path is a location, not an
+         * address.</p>
+         */
         public final String path;
         /** What is wrong, in one sentence, naming what to do about it where that is knowable. */
         public final String message;
@@ -200,11 +209,13 @@ public final class FormModelValidator
         {
             // Each columns list is its OWN id scope - the platform's normalization repairs
             // duplicates per list - and an attribute's additional-columns groups carry lists too.
-            String label = "Attribute." + nameOf(attribute) + ".Column"; //$NON-NLS-1$ //$NON-NLS-2$
-            judgeColumns(attribute, label, findings);
+            judgeColumns(attribute, "Attribute." + nameOf(attribute) + ".Column", findings); //$NON-NLS-1$ //$NON-NLS-2$
             for (EObject group : additionalColumnGroups(attribute))
             {
-                judgeColumns(group, label, findings);
+                // NOT the Column address: resolveFormMember reaches only the attribute's own
+                // columns, so reusing it would point at an unrelated same-named direct column.
+                judgeColumns(group, "Attribute." + nameOf(attribute) + ".AdditionalColumn", //$NON-NLS-1$ //$NON-NLS-2$
+                    findings);
             }
         }
     }
@@ -388,24 +399,32 @@ public final class FormModelValidator
         {
             return;
         }
-        EClass expected = FormElementWriter.resolveExtInfoEClass(element);
+        EObject actual = FormElementWriter.extInfoInstance(element);
+        String expected = FormElementWriter.expectedExtInfoClassifier(element);
         if (expected == null)
         {
+            // Only the kinds whose TYPE decides the node have an opinion here; for the rest a null
+            // answer means "no opinion", not "carries none".
+            if (actual != null && FormElementWriter.typeDecidesExtInfo(element))
+            {
+                findings.add(new Finding(SEVERITY_ERROR, "stale-ext-info", path, //$NON-NLS-1$
+                    "This element carries a '" + actual.eClass().getName() + "' but its current type " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "pairs with no ext-info at all; the type changed and the node stayed.")); //$NON-NLS-1$
+            }
             return;
         }
-        EObject actual = FormElementWriter.extInfoInstance(element);
         if (actual == null)
         {
             findings.add(new Finding(SEVERITY_ERROR, "missing-ext-info", path, //$NON-NLS-1$
-                "This element has no '" + expected.getName() + "', so its type-specific properties " //$NON-NLS-1$ //$NON-NLS-2$
+                "This element has no '" + expected + "', so its type-specific properties " //$NON-NLS-1$ //$NON-NLS-2$
                     + "and events are unavailable.")); //$NON-NLS-1$
             return;
         }
-        if (!expected.getName().equals(actual.eClass().getName()))
+        if (!expected.equals(actual.eClass().getName()))
         {
             findings.add(new Finding(SEVERITY_ERROR, "stale-ext-info", path, //$NON-NLS-1$
                 "This element carries a '" + actual.eClass().getName() + "' but its kind calls for a '" //$NON-NLS-1$ //$NON-NLS-2$
-                    + expected.getName() + "'; the type changed and the node did not follow.")); //$NON-NLS-1$
+                    + expected + "'; the type changed and the node did not follow.")); //$NON-NLS-1$
         }
     }
 

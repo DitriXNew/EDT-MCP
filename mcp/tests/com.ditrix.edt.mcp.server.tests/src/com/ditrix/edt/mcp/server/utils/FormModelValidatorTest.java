@@ -334,6 +334,26 @@ public class FormModelValidatorTest
             paths.contains("Group.Twice")); //$NON-NLS-1$
     }
 
+    /**
+     * A retype can leave an element whose new type pairs with NO ext-info while the old node stays.
+     * Asking the resolver alone misses it: with no type-derived classifier it answers the existing
+     * holder's own class, so expected equals actual and nothing is reported.
+     */
+    @Test
+    public void testANodeLeftOnATypeThatPairsWithNoneIsReported()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        EObject field = form.field("Stale", "Object", "Description"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse(codes(form).contains("stale-ext-info")); //$NON-NLS-1$
+
+        // This field names no type, which is the same answer the dispatch gives for a type that
+        // pairs with nothing - and it carries a node all the same.
+        form.giveItemExtInfo(field);
+        assertTrue("a node on a type that pairs with none is stale: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("stale-ext-info")); //$NON-NLS-1$
+    }
+
     // --- the synthetic form --------------------------------------------------------------------
 
     private static List<String> codes(Form form)
@@ -407,6 +427,7 @@ public class FormModelValidatorTest
             itemBase.setAbstract(true);
             named(itemBase);
             itemBase.getEStructuralFeatures().add(reference("handlers", handlerType, true, true)); //$NON-NLS-1$
+            itemBase.getEStructuralFeatures().add(reference("extInfo", extInfoType, false, true)); //$NON-NLS-1$
 
             groupType = eClass("FormGroup"); //$NON-NLS-1$
             groupType.getESuperTypes().add(itemBase);
@@ -585,6 +606,11 @@ public class FormModelValidatorTest
                 set(handler, "event", event); //$NON-NLS-1$
             }
             add(container, "handlers", handler); //$NON-NLS-1$
+        }
+
+        void giveItemExtInfo(EObject item)
+        {
+            set(item, "extInfo", create(extInfoType)); //$NON-NLS-1$
         }
 
         void giveRootExtInfo()

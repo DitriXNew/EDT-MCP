@@ -77,8 +77,9 @@ public class ValidateFormModelTool implements IMcpTool
             .integerProperty("warnings", "Number of findings with severity 'warning'.") //$NON-NLS-1$ //$NON-NLS-2$
             .objectArrayProperty("findings", //$NON-NLS-1$
                 "One entry per defect: 'severity' (error/warning), 'code' (a stable kebab-case " //$NON-NLS-1$
-                    + "identifier), 'path' (the member address, e.g. 'Field.Description', or " //$NON-NLS-1$
-                    + "'(form)' for the form root) and 'message'.") //$NON-NLS-1$
+                    + "identifier), 'path' (where it is, e.g. 'Field.Description' or '(form)' - usually " //$NON-NLS-1$
+                    + "an address other form tools accept, but a duplicate name and the kinds with no " //$NON-NLS-1$
+                    + "address of their own are locations only) and 'message'.") //$NON-NLS-1$
             .build();
     }
 

@@ -52,10 +52,13 @@ modify_metadata … → validate_form_model → read findings → fix → valida
 
 ### Reading the result
 
-`valid` is true when no finding has severity `error`; warnings do not make a form invalid. Each
-finding carries a `path` in the same address vocabulary the other form tools use
-(`Field.Description`, `Attribute.Object`, `(form)` for the root), so it can be pasted straight into
-`get_metadata_details` or `modify_metadata`.
+`valid` is true when no finding has severity `error`; warnings do not make a form invalid. Each finding carries a `path` in the same address vocabulary the other form tools use
+(`Field.Description`, `Attribute.Object`, `(form)` for the root), and most of them paste straight
+into `get_metadata_details` or `modify_metadata`.
+
+Three kinds of finding carry a LOCATION rather than an address, and that is inherent: a table
+addition and an additional column have no address in that vocabulary at all, and a duplicate name is
+ambiguous by definition — which is exactly what the finding reports.
 
 ### Not the same tool as `get_project_errors`
 
