@@ -910,8 +910,8 @@ public final class RoleRightsWriter
                 + "this project's model, so this role's rights model cannot be attached under it. " //$NON-NLS-1$
                 + "This call did not determine why that FQN is taken: if the " //$NON-NLS-1$
                 + "registration is stale (a rights model whose role no longer exists on disk), run " //$NON-NLS-1$
-                + "clean_project on the project and retry the same call; otherwise re-read the role " //$NON-NLS-1$
-                + "with get_metadata_details first.").toJson()); //$NON-NLS-1$
+                + "clean_project on the project and retry the same call; otherwise resolve the " //$NON-NLS-1$
+                + "conflicting registration before retrying.").toJson()); //$NON-NLS-1$
         }
 
         // (3) ...and only now register it. A role whose reference was set but whose attach did not
@@ -932,8 +932,36 @@ public final class RoleRightsWriter
             : PlatformFailures.withoutObjectIdentity(PlatformFailures.describe(cause));
         return ToolResult.error("Could not generate the rights model FQN for role '" + inTx.getName() //$NON-NLS-1$
             + "' (" + detail + "), so its rights model was not created and nothing was written. The " //$NON-NLS-1$ //$NON-NLS-2$
-            + "role is most likely not resolvable in the configuration tree: re-read it with " //$NON-NLS-1$
-            + "get_metadata_details, then retry.").toJson(); //$NON-NLS-1$
+            + "role is most likely not resolvable in the configuration tree. Run clean_project on " //$NON-NLS-1$
+            + "the project, then retry the same call.").toJson(); //$NON-NLS-1$
+    }
+
+    /** Extracts the error text; unexpected payloads pass through so error handling cannot fail again. */
+    public static String extractErrorMessage(RoleWriteException failure)
+    {
+        if (failure == null)
+        {
+            return null;
+        }
+        String errorJson = failure.getErrorJson();
+        try
+        {
+            JsonElement parsed = JsonParser.parseString(errorJson);
+            if (parsed.isJsonObject())
+            {
+                JsonElement error = parsed.getAsJsonObject().get(McpKeys.ERROR);
+                if (error != null && error.isJsonPrimitive()
+                    && error.getAsJsonPrimitive().isString())
+                {
+                    return error.getAsString();
+                }
+            }
+        }
+        catch (RuntimeException e)
+        {
+            // Error handling must preserve the original payload instead of failing again.
+        }
+        return errorJson;
     }
 
     /**

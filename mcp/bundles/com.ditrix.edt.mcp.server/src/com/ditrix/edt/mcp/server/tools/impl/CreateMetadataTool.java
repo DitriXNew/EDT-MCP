@@ -142,6 +142,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         "ITopObjectFqnGenerator not available (needed to attach the content form under its " //$NON-NLS-1$
             + "canonical FQN)"; //$NON-NLS-1$
 
+    /** Error: the service that registers a role's rights model is unavailable. */
+    private static final String ERR_NO_ROLE_FQN_GENERATOR =
+        "The role was not created because ITopObjectFqnGenerator is not available. The generator " //$NON-NLS-1$
+            + "is needed to register the role's rights model under its canonical FQN; without that " //$NON-NLS-1$
+            + "model, the role would be invalid for the configurator and an incremental " //$NON-NLS-1$
+            + "configuration load would fail for the whole configuration."; //$NON-NLS-1$
+
     /** Error prefix: could not resolve the V8 project. */
     private static final String ERR_NO_V8_PROJECT = "Could not resolve V8 project for: "; //$NON-NLS-1$
 
@@ -1102,9 +1109,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // content could not be attached under its canonical FQN is precisely the half-created object
         // issue #297 is about, so refuse rather than report success for a form nothing can be added
         // to. A ROLE is the same case for a harder reason (below). The XDTOPackage content stays
-        // best-effort by design, so the check covers these two types only.
-        if (fqnGenerator == null && (MdClassPackage.Literals.BASIC_FORM.isSuperTypeOf(eClass)
-            || MdClassPackage.Literals.ROLE.isSuperTypeOf(eClass)))
+        // best-effort by design, so the checks cover these two types only.
+        if (fqnGenerator == null && MdClassPackage.Literals.ROLE.isSuperTypeOf(eClass))
+        {
+            return ToolResult.error(ERR_NO_ROLE_FQN_GENERATOR).toJson();
+        }
+        if (fqnGenerator == null && MdClassPackage.Literals.BASIC_FORM.isSuperTypeOf(eClass))
         {
             return ToolResult.error(ERR_NO_FQN_GENERATOR).toJson();
         }
@@ -1185,7 +1195,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         catch (RoleRightsWriter.RoleWriteException e)
         {
-            return e.getErrorJson();
+            return roleCreationFailure(name, RoleRightsWriter.extractErrorMessage(e));
         }
         catch (Exception e)
         {
@@ -1213,6 +1223,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         return success(new SuccessInfo(req.normFqn, createdKind, name, persisted, req.props,
             req.synonymLanguage, req.localesMissing, req.localeUnused, req.typeSpecific,
             req.normReport));
+    }
+
+    /** Adds the rolled-back create context without nesting the writer's error JSON. */
+    static String roleCreationFailure(String roleName, String writerMessage)
+    {
+        return ToolResult.error("Role '" + roleName + "' was not created. " + writerMessage).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

@@ -667,6 +667,9 @@ public class RoleRightsWriterTest
         {
             assertErrorMentions(e.getErrorJson(), "Role.Reader.Rights"); //$NON-NLS-1$
             assertErrorMentions(e.getErrorJson(), "clean_project"); //$NON-NLS-1$
+            assertErrorMentions(e.getErrorJson(), "retry the same call"); //$NON-NLS-1$
+            assertFalse("the refusal must not tell a create caller to re-read a rolled-back role", //$NON-NLS-1$
+                e.getErrorJson().contains("re-read the role")); //$NON-NLS-1$
             // ...but the refusal may claim only what it OBSERVED: that the name is taken. Declaring
             // the registration stale sends the caller to run clean_project - a rebuild - on a premise
             // this call never checked, and a LIVE registration the role's reference has not resolved
@@ -997,6 +1000,38 @@ public class RoleRightsWriterTest
     }
 
     @Test
+    public void testExtractErrorMessageReturnsTheHumanReadableError()
+    {
+        String message = "The rights model could not be registered."; //$NON-NLS-1$
+        RoleRightsWriter.RoleWriteException failure = new RoleRightsWriter.RoleWriteException(
+            ToolResult.error(message).toJson());
+
+        assertEquals(message, RoleRightsWriter.extractErrorMessage(failure));
+    }
+
+    @Test
+    public void testExtractErrorMessageFallsBackToMalformedPayload()
+    {
+        String malformed = "{definitely not json"; //$NON-NLS-1$
+        RoleRightsWriter.RoleWriteException failure =
+            new RoleRightsWriter.RoleWriteException(malformed);
+
+        assertSame("a malformed refusal must pass through byte-for-byte", malformed, //$NON-NLS-1$
+            RoleRightsWriter.extractErrorMessage(failure));
+    }
+
+    @Test
+    public void testExtractErrorMessageFallsBackToUnexpectedPayloadShape()
+    {
+        String unexpected = "{\"success\":false,\"error\":42}"; //$NON-NLS-1$
+        RoleRightsWriter.RoleWriteException failure =
+            new RoleRightsWriter.RoleWriteException(unexpected);
+
+        assertSame("a non-string error must pass through byte-for-byte", unexpected, //$NON-NLS-1$
+            RoleRightsWriter.extractErrorMessage(failure));
+    }
+
+    @Test
     public void testApplyFailureCarriesNoEmfObjectIdentity()
     {
         // The catch-all of apply() is the one place the #452 commit failure reaches a caller, and the
@@ -1055,6 +1090,8 @@ public class RoleRightsWriterTest
         catch (RoleRightsWriter.RoleWriteException e)
         {
             assertErrorMentions(e.getErrorJson(), roleName);
+            assertErrorMentions(e.getErrorJson(), "clean_project"); //$NON-NLS-1$
+            assertErrorMentions(e.getErrorJson(), "retry the same call"); //$NON-NLS-1$
         }
 
         assertNull("the role must not keep a reference to a description that was never attached", //$NON-NLS-1$
@@ -1080,6 +1117,8 @@ public class RoleRightsWriterTest
         catch (RoleRightsWriter.RoleWriteException e)
         {
             assertErrorMentions(e.getErrorJson(), "Reader"); //$NON-NLS-1$
+            assertErrorMentions(e.getErrorJson(), "clean_project"); //$NON-NLS-1$
+            assertErrorMentions(e.getErrorJson(), "retry the same call"); //$NON-NLS-1$
         }
 
         assertSame("the previous reference must be restored, not cleared", previous, //$NON-NLS-1$

@@ -13,6 +13,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -24,6 +25,8 @@ import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool.CommonModuleFlags
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool.CommonModuleKind;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Lightweight contract tests for {@link CreateMetadataTool}: tool metadata and JSON schema,
@@ -53,6 +56,46 @@ public class CreateMetadataToolTest
         assertFalse(desc.isEmpty());
         assertTrue("description should point to get_tool_guide", //$NON-NLS-1$
             desc.contains("get_tool_guide('create_metadata')")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMissingFqnGeneratorHasADistinctRoleCreationRefusal() throws Exception
+    {
+        String formMessage = privateStringConstant("ERR_NO_FQN_GENERATOR"); //$NON-NLS-1$
+        String roleMessage = privateStringConstant("ERR_NO_ROLE_FQN_GENERATOR"); //$NON-NLS-1$
+
+        assertEquals("ITopObjectFqnGenerator not available (needed to attach the content form under " //$NON-NLS-1$
+            + "its canonical FQN)", formMessage); //$NON-NLS-1$
+        assertFalse("the role guard must not reuse the form-specific refusal", //$NON-NLS-1$
+            roleMessage.equals(formMessage));
+        assertTrue("the role refusal must say that the role was not created", //$NON-NLS-1$
+            roleMessage.contains("The role was not created")); //$NON-NLS-1$
+        assertTrue("the role refusal must name the missing rights-model registration", //$NON-NLS-1$
+            roleMessage.contains("register the role's rights model under its canonical FQN")); //$NON-NLS-1$
+        assertTrue("the role refusal must explain the configurator-wide consequence", //$NON-NLS-1$
+            roleMessage.contains("incremental configuration load would fail for the " //$NON-NLS-1$
+                + "whole configuration")); //$NON-NLS-1$
+        assertFalse("the role refusal must not name a content form", //$NON-NLS-1$
+            roleMessage.contains("content form")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRoleCreationFailureAddsCreateContextWithoutNestingJson()
+    {
+        String writerMessage = "The registration is stale; run clean_project and retry the same call."; //$NON-NLS-1$
+
+        JsonObject result = JsonParser.parseString(
+            CreateMetadataTool.roleCreationFailure("Reader", writerMessage)).getAsJsonObject(); //$NON-NLS-1$
+
+        assertEquals("Role 'Reader' was not created. " + writerMessage, //$NON-NLS-1$
+            result.get("error").getAsString()); //$NON-NLS-1$
+    }
+
+    private static String privateStringConstant(String name) throws Exception
+    {
+        Field field = CreateMetadataTool.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return (String)field.get(null);
     }
 
     @Test
