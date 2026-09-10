@@ -251,6 +251,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /** The form attribute's value-type feature / property alias. */
     private static final String PROP_VALUE_TYPE = "valueType"; //$NON-NLS-1$
+    /** The form-attribute flag that names the form's main data source. */
+    private static final String PROP_MAIN = "main"; //$NON-NLS-1$
 
     /** A ScheduledJob's method-reference property (guarded by {@link MethodReferenceValidator}). */
     private static final String PROP_METHOD_NAME = "methodName"; //$NON-NLS-1$
@@ -3678,7 +3680,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         if (hc.change.isTypeChange())
         {
-            return FormElementWriter.syncAttributeExtInfo(formModel, member) != null;
+            boolean onMember = FormElementWriter.syncAttributeExtInfo(formModel, member) != null;
+            // The MAIN attribute's type also decides the FORM root's ext-info - the node that
+            // publishes a record/object form's write and read events (#591).
+            boolean onForm = FormElementWriter.syncFormExtInfo(formModel) != null;
+            return onMember || onForm;
+        }
+        if (PROP_MAIN.equalsIgnoreCase(hc.change.featureName()))
+        {
+            return FormElementWriter.syncFormExtInfo(formModel) != null;
         }
         if ("type".equalsIgnoreCase(hc.change.featureName())) //$NON-NLS-1$
         {

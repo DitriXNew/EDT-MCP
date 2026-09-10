@@ -1465,7 +1465,7 @@ public final class FormStructureReader
                 continue;
             }
             budget[0]--;
-            for (EObject handler : getReferenceList(current.element, FEATURE_HANDLERS))
+            for (EObject handler : handlersOf(current.element))
             {
                 if (handler == null)
                 {
@@ -1623,6 +1623,31 @@ public final class FormStructureReader
      * @return the children present, at most {@link #SINGULAR_ITEM_CONTAINMENTS}{@code .length} of
      *         them
      */
+    /**
+     * The element's own bound handlers plus the ones its {@code extInfo} holds, under the SAME
+     * owner label.
+     *
+     * <p>A form root's ext-info is an event-handler container in its own right, and EDT binds a
+     * record form's write and read events inside it. Reading only the element's own list reported
+     * "no event handlers" for a form that has one (issue #592). Item ext-infos carry no handler
+     * list, so nothing else changes.</p>
+     */
+    private static List<EObject> handlersOf(EObject element)
+    {
+        List<EObject> own = getReferenceList(element, FEATURE_HANDLERS);
+        EObject extInfo = getSingleReference(element, FEATURE_EXT_INFO);
+        List<EObject> inExtInfo =
+            extInfo == null ? List.of() : getReferenceList(extInfo, FEATURE_HANDLERS);
+        if (inExtInfo.isEmpty())
+        {
+            return own;
+        }
+        List<EObject> all = new ArrayList<>(own.size() + inExtInfo.size());
+        all.addAll(own);
+        all.addAll(inExtInfo);
+        return all;
+    }
+
     private static List<EObject> handlerSingularChildren(EObject element)
     {
         List<EObject> present = new ArrayList<>(SINGULAR_ITEM_CONTAINMENTS.length);

@@ -1973,6 +1973,8 @@ public final class FormElementWriter
         // one shared helper rather than a copy that can drift out of step (issue #382).
         applyFormAttributeDefaults(attr);
         addToList(content, FEATURE_ATTRIBUTES, attr);
+        // The designer pairs a root ext-info with the main attribute it just seeded (#591).
+        syncFormExtInfo(content);
     }
 
     /**
@@ -2969,6 +2971,91 @@ public final class FormElementWriter
             ensureEmptyTypeDescription(created);
         }
         return created.eClass().getName();
+    }
+
+    /**
+     * The MAIN attribute's value-type CATEGORY &rarr; the concrete {@code FormExtInfo} classifier the
+     * platform pairs with the form ROOT, copied from {@code ExtInfoManagementService.createFormExtInfo}.
+     * A category not listed here leaves the form without a root ext-info, exactly as the platform does.
+     */
+    private static final Map<String, String> FORM_EXT_INFO_BY_TYPE_CATEGORY = buildFormExtInfoMap();
+
+    private static Map<String, String> buildFormExtInfoMap()
+    {
+        Map<String, String> m = new HashMap<>();
+        m.put("BusinessProcessObject", "BusinessProcesFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("CatalogObject", "CatalogFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ChartOfCharacteristicTypesObject", //$NON-NLS-1$
+            "ChartOfCharacteristicTypesFormExtInfo"); //$NON-NLS-1$
+        m.put("ConstantsSet", "ConstantsFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("DocumentObject", "DocumentFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ExternalDataSourceCubeDimensionTableObject", ECLASS_OBJECT_FORM_EXT_INFO); //$NON-NLS-1$
+        m.put("ExchangePlanObject", ECLASS_OBJECT_FORM_EXT_INFO); //$NON-NLS-1$
+        m.put("DataProcessorObject", ECLASS_OBJECT_FORM_EXT_INFO); //$NON-NLS-1$
+        m.put("DynamicList", "DynamicListFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("InformationRegisterRecordManager", //$NON-NLS-1$
+            "InformationRegisterManagerFormExtInfo"); //$NON-NLS-1$
+        m.put("RecalculationRecordSet", ECLASS_RECORD_SET_FORM_EXT_INFO); //$NON-NLS-1$
+        m.put("CalculationRegisterRecordSet", ECLASS_RECORD_SET_FORM_EXT_INFO); //$NON-NLS-1$
+        m.put("InformationRegisterRecordSet", ECLASS_RECORD_SET_FORM_EXT_INFO); //$NON-NLS-1$
+        m.put("AccountingRegisterRecordSet", ECLASS_RECORD_SET_FORM_EXT_INFO); //$NON-NLS-1$
+        m.put("SequenceRecordSet", ECLASS_RECORD_SET_FORM_EXT_INFO); //$NON-NLS-1$
+        m.put("AccumulationRegisterRecordSet", ECLASS_RECORD_SET_FORM_EXT_INFO); //$NON-NLS-1$
+        m.put("ReportObject", "ReportFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("DataCompositionSettingsComposer", "SettingsComposerFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("TaskObject", "TaskFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ExternalDataSourceTableObject", "TableObjectFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ExternalDataSourceTableRecordManager", "TableRecordFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ExternalDataSourceCubeRecordManager", "CubeRecordFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        return Collections.unmodifiableMap(m);
+    }
+
+    private static final String ECLASS_OBJECT_FORM_EXT_INFO = "ObjectFormExtInfo"; //$NON-NLS-1$
+    private static final String ECLASS_RECORD_SET_FORM_EXT_INFO = "RecordSetFormExtInfo"; //$NON-NLS-1$
+
+    /**
+     * Gives the form ROOT the ext-info its MAIN attribute's type calls for, mirroring
+     * {@code ExtInfoManagementService.setExtInfo(Form, FormAttribute, Version)}.
+     *
+     * <p>That node is what publishes a form's write and read events: without it a record form
+     * refuses {@code BeforeWriteAtServer} outright, and no MCP property can supply it (issue #591).
+     * A main attribute whose category maps to nothing CLEARS a stale ext-info, as the platform does.</p>
+     *
+     * @param formModel the editable content form, re-fetched inside the tx
+     * @return the EClass name of the ext-info now on the form root, or {@code null} when it carries none
+     */
+    public static String syncFormExtInfo(EObject formModel)
+    {
+        EStructuralFeature extInfoFeature = formModel.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
+        if (!(extInfoFeature instanceof EReference) || extInfoFeature.isMany())
+        {
+            return null;
+        }
+        String classifier = null;
+        for (EObject attr : referenceList(formModel, FEATURE_ATTRIBUTES))
+        {
+            if (isMainAttribute(attr))
+            {
+                classifier = FORM_EXT_INFO_BY_TYPE_CATEGORY.get(singleValueTypeCategory(attr));
+                break;
+            }
+        }
+        EObject current = singleReference(formModel, FEATURE_EXT_INFO);
+        if (classifier == null)
+        {
+            if (current != null)
+            {
+                formModel.eSet(extInfoFeature, null);
+            }
+            return null;
+        }
+        if (current != null && classifier.equals(current.eClass().getName()))
+        {
+            return classifier;
+        }
+        EObject created =
+            replaceExtInfoClassifier(formModel, formModel, extInfoFeature, classifier);
+        return created == null ? null : created.eClass().getName();
     }
 
     /**
@@ -4918,18 +5005,18 @@ public final class FormElementWriter
             return "The form element '" + container.eClass().getName() //$NON-NLS-1$
                 + "' cannot hold event handlers."; //$NON-NLS-1$
         }
-        List<EObject> events = availableEvents(container, version);
+        List<AvailableEvent> events = availableEvents(container, version);
         if (events.isEmpty())
         {
             return "Could not resolve the available events for this form element."; //$NON-NLS-1$
         }
-        EObject matched = null;
-        for (EObject ev : events)
+        AvailableEvent matched = null;
+        for (AvailableEvent candidate : events)
         {
-            if (eventName.equalsIgnoreCase(eventNameOf(ev, false))
-                || eventName.equalsIgnoreCase(eventNameOf(ev, true)))
+            if (eventName.equalsIgnoreCase(eventNameOf(candidate.event, false))
+                || eventName.equalsIgnoreCase(eventNameOf(candidate.event, true)))
             {
-                matched = ev;
+                matched = candidate;
                 break;
             }
         }
@@ -4937,8 +5024,9 @@ public final class FormElementWriter
         {
             boolean ru = "ru".equals(langCode); //$NON-NLS-1$
             StringBuilder sb = new StringBuilder();
-            for (EObject ev : events)
+            for (AvailableEvent candidate : events)
             {
+                EObject ev = candidate.event;
                 String n = eventNameOf(ev, ru);
                 if (n == null || n.isEmpty())
                 {
@@ -4956,8 +5044,12 @@ public final class FormElementWriter
             return ERR_EVENT_PREFIX + eventName + "' is not valid for " + container.eClass().getName() //$NON-NLS-1$
                 + ". Available events: " + sb; //$NON-NLS-1$
         }
-        return bindEventHandler(container, handlersFeat, matched, eventName, procName, callType,
-            createdKind);
+        // The binding goes where the event is published from: the element, or its extInfo when that
+        // is the handler container (a record form's write/read events, #592).
+        EStructuralFeature ownerHandlersFeat =
+            matched.owner.eClass().getEStructuralFeature(KEY_HANDLERS);
+        return bindEventHandler(matched.owner, ownerHandlersFeat, matched.event, eventName, procName,
+            callType, createdKind);
     }
 
     /**
@@ -5007,7 +5099,7 @@ public final class FormElementWriter
         // the extension handler COEXIST with the base handler and with other-call-type extension handlers; // NOSONAR explanatory comment, not commented-out code
         // only a same-(event, callType) EventHandlerExtension is a real duplicate.
         EStructuralFeature evFeat = handlerEventFeature(handlersFeat);
-        for (EObject existing : referenceList(container, KEY_HANDLERS))
+        for (EObject existing : handlersAroundContainer(container))
         {
             if (evFeat == null || existing.eGet(evFeat) != matched)
             {
@@ -5198,8 +5290,14 @@ public final class FormElementWriter
      * <p>Unioning the ext-info type matters for items: e.g. an input field's {@code OnChange} lives on
      * {@code FormFieldExtensionForATextBox} (its {@code InputFieldExtInfo}), not on the bare
      * {@code FormField} base type.</p>
+     *
+     * <p>Each event is paired with the object that OWNS its handler list. For an item that is the
+     * item itself, but a form root's {@code extInfo} is an {@code EventHandlerContainer} of its own
+     * and the events it publishes bind INSIDE it - that is where EDT puts a record form's
+     * {@code BeforeWriteAtServer} (issue #592, and {@code EventHandlerCollectionModel} does the same
+     * split). Item ext-infos hold no handler list, so they keep answering with the item.</p>
      */
-    private static List<EObject> availableEvents(EObject element, Version version)
+    private static List<AvailableEvent> availableEvents(EObject element, Version version)
     {
         if (version == null)
         {
@@ -5211,19 +5309,82 @@ public final class FormElementWriter
         {
             return Collections.emptyList();
         }
-        List<EObject> events = new ArrayList<>();
-        addTypeEvents(provider, element, PLATFORM_TYPE_BY_ECLASS.get(element.eClass().getName()), events);
-        EStructuralFeature extInfoFeat = element.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
-        if (extInfoFeat instanceof EReference)
+        List<EObject> base = new ArrayList<>();
+        addTypeEvents(provider, element, PLATFORM_TYPE_BY_ECLASS.get(element.eClass().getName()), base);
+        List<AvailableEvent> events = new ArrayList<>();
+        for (EObject event : base)
         {
-            Object ext = element.eGet(extInfoFeat);
-            if (ext instanceof EObject)
-            {
-                addTypeEvents(provider, element,
-                    PLATFORM_TYPE_BY_ECLASS.get(((EObject)ext).eClass().getName()), events);
-            }
+            events.add(new AvailableEvent(event, element));
+        }
+        EObject ext = singleReference(element, FEATURE_EXT_INFO);
+        if (ext == null)
+        {
+            return events;
+        }
+        List<EObject> extEvents = new ArrayList<>();
+        addTypeEvents(provider, element, PLATFORM_TYPE_BY_ECLASS.get(ext.eClass().getName()), extEvents);
+        EObject extOwner = holdsHandlerList(ext) ? ext : element;
+        for (EObject event : extEvents)
+        {
+            events.add(new AvailableEvent(event, extOwner));
         }
         return events;
+    }
+
+    /** An available form event and the object whose {@code handlers} list its binding belongs in. */
+    private static final class AvailableEvent
+    {
+        final EObject event;
+        final EObject owner;
+
+        AvailableEvent(EObject event, EObject owner)
+        {
+            this.event = event;
+            this.owner = owner;
+        }
+    }
+
+    /** Whether the object carries a {@code handlers} COLLECTION of its own. */
+    private static boolean holdsHandlerList(EObject object)
+    {
+        EStructuralFeature feature = object.eClass().getEStructuralFeature(KEY_HANDLERS);
+        return feature instanceof EReference && feature.isMany();
+    }
+
+    /**
+     * Every handler bound around {@code container}: its own list plus the other half of the
+     * root/{@code extInfo} pair, whichever side was handed in.
+     *
+     * <p>One event has ONE binding, but the two lists are separate objects, so a lookup or a
+     * duplicate check that reads only one of them answers about half the form. That is how a second
+     * handler was appended to the root for an event already bound inside the extInfo (issue #592),
+     * and why a binding EDT wrote there could not be addressed at all.</p>
+     */
+    private static List<EObject> handlersAroundContainer(EObject container)
+    {
+        List<EObject> own = referenceList(container, KEY_HANDLERS);
+        EObject sibling = null;
+        EObject ext = singleReference(container, FEATURE_EXT_INFO);
+        if (ext != null && holdsHandlerList(ext))
+        {
+            sibling = ext;
+        }
+        else
+        {
+            EObject parent = container.eContainer();
+            if (parent != null && singleReference(parent, FEATURE_EXT_INFO) == container
+                && holdsHandlerList(parent))
+            {
+                sibling = parent;
+            }
+        }
+        if (sibling == null)
+        {
+            return own;
+        }
+        List<EObject> all = new ArrayList<>(own);
+        all.addAll(referenceList(sibling, KEY_HANDLERS));
+        return all;
     }
 
     /** Resolves {@code typeName} to a platform {@code Type} and appends its {@code events} to the list. */
@@ -6564,8 +6725,9 @@ public final class FormElementWriter
         {
             return owner.eClass().getEStructuralFeature(FEATURE_ACTION) != null && isActionToken(leaf);
         }
-        for (EObject event : availableEvents(owner, version))
+        for (AvailableEvent candidate : availableEvents(owner, version))
         {
+            EObject event = candidate.event;
             if (leaf.equalsIgnoreCase(eventNameOf(event, false))
                 || leaf.equalsIgnoreCase(eventNameOf(event, true)))
             {
@@ -6737,7 +6899,7 @@ public final class FormElementWriter
         }
         EClass ehType = ((EReference)handlersFeat).getEReferenceType();
         EStructuralFeature evFeat = ehType != null ? ehType.getEStructuralFeature(FEATURE_EVENT) : null;
-        for (EObject handler : referenceList(container, KEY_HANDLERS))
+        for (EObject handler : handlersAroundContainer(container))
         {
             Object ev = evFeat != null ? handler.eGet(evFeat) : null;
             if (ev instanceof EObject

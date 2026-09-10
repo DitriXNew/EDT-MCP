@@ -628,6 +628,108 @@ public class FormStructureReaderTest
         return names;
     }
 
+    /**
+     * A form root's {@code extInfo} is an event-handler container of its own, and EDT binds a record
+     * form's write and read events inside it. The walk has to read that list too: reading only the
+     * root's own reported "no event handlers" for a form that has one (issue #592).
+     */
+    @Test
+    public void testTheHandlerWalkReportsBindingsThatLiveInTheExtInfo()
+    {
+        EObject root = rootWithExtInfoBinding();
+        FormStructureReader.HandlerRows rows = new FormStructureReader.HandlerRows(10);
+
+        FormStructureReader.collectHandlers(root, "Form", "en", rows, //$NON-NLS-1$ //$NON-NLS-2$
+            new int[] {MAX_NODES}, new boolean[] {false}, new ArrayDeque<>());
+
+        assertEquals("the binding inside the extInfo is a handler of this form", //$NON-NLS-1$
+            List.of("OnCreateAtServer", "BeforeWriteAtServer"), keptHandlerNames(rows)); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String[] row : rows.kept())
+        {
+            assertEquals("both belong to the FORM, not to a node called extInfo", //$NON-NLS-1$
+                "Form", row[0]); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * A form root carrying {@code OnCreateAtServer} on itself and {@code BeforeWriteAtServer} inside
+     * its {@code extInfo} - the shape EDT's wizard writes for an information-register record form.
+     */
+    private static EObject rootWithExtInfoBinding()
+    {
+        EcoreFactory f = EcoreFactory.eINSTANCE;
+        EPackage pkg = f.createEPackage();
+        pkg.setName("form"); //$NON-NLS-1$
+        pkg.setNsURI("http://g5.1c.ru/v8/dt/form/extinfohandlerstest"); //$NON-NLS-1$
+        pkg.setNsPrefix("form"); //$NON-NLS-1$
+
+        EClass eventType = f.createEClass();
+        eventType.setName("Event"); //$NON-NLS-1$
+        EAttribute eventName = f.createEAttribute();
+        eventName.setName("name"); //$NON-NLS-1$
+        eventName.setEType(EcorePackage.Literals.ESTRING);
+        eventType.getEStructuralFeatures().add(eventName);
+        pkg.getEClassifiers().add(eventType);
+
+        EClass handlerType = f.createEClass();
+        handlerType.setName("EventHandler"); //$NON-NLS-1$
+        EAttribute handlerName = f.createEAttribute();
+        handlerName.setName("name"); //$NON-NLS-1$
+        handlerName.setEType(EcorePackage.Literals.ESTRING);
+        handlerType.getEStructuralFeatures().add(handlerName);
+        EReference handlerEvent = f.createEReference();
+        handlerEvent.setName("event"); //$NON-NLS-1$
+        handlerEvent.setEType(eventType);
+        handlerEvent.setContainment(true);
+        handlerType.getEStructuralFeatures().add(handlerEvent);
+        pkg.getEClassifiers().add(handlerType);
+
+        EClass extInfoType = f.createEClass();
+        extInfoType.setName("InformationRegisterManagerFormExtInfo"); //$NON-NLS-1$
+        extInfoType.getEStructuralFeatures().add(handlerList(f, handlerType));
+        pkg.getEClassifiers().add(extInfoType);
+
+        EClass formType = f.createEClass();
+        formType.setName("Form"); //$NON-NLS-1$
+        formType.getEStructuralFeatures().add(handlerList(f, handlerType));
+        EReference extInfo = f.createEReference();
+        extInfo.setName("extInfo"); //$NON-NLS-1$
+        extInfo.setEType(extInfoType);
+        extInfo.setContainment(true);
+        formType.getEStructuralFeatures().add(extInfo);
+        pkg.getEClassifiers().add(formType);
+
+        EObject form = pkg.getEFactoryInstance().create(formType);
+        EObject extInfoObject = pkg.getEFactoryInstance().create(extInfoType);
+        form.eSet(extInfo, extInfoObject);
+        bindTestHandler(pkg, handlerType, eventType, form, "OnCreateAtServer"); //$NON-NLS-1$
+        bindTestHandler(pkg, handlerType, eventType, extInfoObject, "BeforeWriteAtServer"); //$NON-NLS-1$
+        return form;
+    }
+
+    private static EReference handlerList(EcoreFactory f, EClass handlerType)
+    {
+        EReference handlers = f.createEReference();
+        handlers.setName("handlers"); //$NON-NLS-1$
+        handlers.setEType(handlerType);
+        handlers.setContainment(true);
+        handlers.setUpperBound(-1);
+        return handlers;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void bindTestHandler(EPackage pkg, EClass handlerType, EClass eventType,
+        EObject container, String eventName)
+    {
+        EObject event = pkg.getEFactoryInstance().create(eventType);
+        event.eSet(eventType.getEStructuralFeature("name"), eventName); //$NON-NLS-1$
+        EObject handler = pkg.getEFactoryInstance().create(handlerType);
+        handler.eSet(handlerType.getEStructuralFeature("name"), eventName); //$NON-NLS-1$
+        handler.eSet(handlerType.getEStructuralFeature("event"), event); //$NON-NLS-1$
+        ((List<EObject>)container.eGet(container.eClass().getEStructuralFeature("handlers"))) //$NON-NLS-1$
+            .add(handler);
+    }
+
     @Test
     public void testTheHandlerWalkKeepsNoMoreRowsThanTheCapAllows()
     {
