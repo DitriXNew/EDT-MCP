@@ -3232,8 +3232,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // decided once the whole batch is applied. Per change it would depend on the
                 // order the properties arrived in: [main=false, valueType=X] and the reverse pair
                 // describe the same end state and must not leave two different ext-infos.
+                // ... and only when the retype was of the MAIN attribute itself. Every change in
+                // this batch lands on ONE member, so a retype of some other attribute or column
+                // says nothing about the node the main attribute decides.
+                boolean mainRetyped =
+                    mainAttributeRetyped && FormElementWriter.isMainAttribute(target);
                 if (mainAttributeTouched
-                    && FormElementWriter.syncFormExtInfo(formModel, mainAttributeRetyped) != null
+                    && FormElementWriter.syncFormExtInfo(formModel, mainRetyped) != null
                     && !applied.contains("extInfo")) //$NON-NLS-1$
                 {
                     applied.add("extInfo"); //$NON-NLS-1$

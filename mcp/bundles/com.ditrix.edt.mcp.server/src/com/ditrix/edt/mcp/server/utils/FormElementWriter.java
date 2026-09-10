@@ -3299,8 +3299,14 @@ public final class FormElementWriter
         return extInfo != null && ECLASS_DYNAMIC_LIST_EXT_INFO.equals(extInfo.eClass().getName());
     }
 
-    /** Whether a form attribute is flagged as the form's main data source ({@code main = true}). */
-    private static boolean isMainAttribute(EObject attribute)
+    /**
+     * Whether a form member is flagged as the form's main data source ({@code main = true}).
+     * Answers {@code false} for anything without that flag, an item or a column included.
+     *
+     * @param attribute the form member to inspect, on the tx-bound model
+     * @return {@code true} only for the attribute the form reads its data through
+     */
+    public static boolean isMainAttribute(EObject attribute)
     {
         EStructuralFeature mainFeature = attribute.eClass().getEStructuralFeature(FEATURE_MAIN);
         return mainFeature != null && Boolean.TRUE.equals(attribute.eGet(mainFeature));
