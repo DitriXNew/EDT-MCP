@@ -5268,9 +5268,9 @@ public final class FormElementWriter
                     + "Instead (ChangeAndValidate is for method interception, not events)."; //$NON-NLS-1$
             }
         }
-        // Duplicate guard. Base path keeps the original "one handler per event" rule. Extension path lets
-        // the extension handler COEXIST with the base handler and with other-call-type extension handlers; // NOSONAR explanatory comment, not commented-out code
-        // only a same-(event, callType) EventHandlerExtension is a real duplicate.
+        // Duplicate guard. Base path keeps the original "one BASE handler per event" rule. Extension
+        // path lets the extension handler COEXIST with the base handler and with other-call-type // NOSONAR explanatory comment, not commented-out code
+        // extension handlers; only a same-(event, callType) EventHandlerExtension is a real duplicate.
         EStructuralFeature evFeat = handlerEventFeature(handlersFeat);
         for (EObject existing : handlersAroundContainer(container))
         {
@@ -5278,12 +5278,19 @@ public final class FormElementWriter
             {
                 continue;
             }
+            boolean existingIsExtension =
+                ECLASS_EVENT_HANDLER_EXTENSION.equals(existing.eClass().getName());
             if (!extension)
             {
+                // Coexistence works in BOTH orders: an extension handler intercepts the base one,
+                // so finding it says nothing about whether the base handler is already there.
+                if (existingIsExtension)
+                {
+                    continue;
+                }
                 return "An event handler for '" + eventName + "' already exists on this element."; //$NON-NLS-1$ //$NON-NLS-2$
             }
-            if (ECLASS_EVENT_HANDLER_EXTENSION.equals(existing.eClass().getName())
-                && callTypeLiteral.getName().equals(callTypeNameOf(existing)))
+            if (existingIsExtension && callTypeLiteral.getName().equals(callTypeNameOf(existing)))
             {
                 return "An extension event handler for '" + eventName + "' with call type '" //$NON-NLS-1$ //$NON-NLS-2$
                     + callType + "' already exists on this element."; //$NON-NLS-1$

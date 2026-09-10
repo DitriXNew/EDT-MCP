@@ -1275,6 +1275,33 @@ public class FormElementWriterTest
         assertEquals("After", handlerCallTypeName((EObject)handlers.get(1))); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    /**
+     * Coexistence has to work in BOTH orders. The extension handler intercepts the base one, so an
+     * extension found on the event says nothing about whether the BASE handler is already there -
+     * and the platform stores the two next to each other whichever was written first.
+     */
+    @Test
+    public void testBindEventHandlerBaseIsAllowedAfterAnExtension()
+    {
+        HandlerModel m = newHandlerModel(true);
+        assertNull(FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+            "OnChange", "ext_OnChangeAfter", "After", new String[1])); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        String[] baseKind = new String[1];
+        assertNull("the base handler must not be refused because an extension came first", //$NON-NLS-1$
+            FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event, "OnChange", //$NON-NLS-1$
+                "OnChange", null, baseKind)); //$NON-NLS-1$
+        assertEquals("EventHandler", baseKind[0]); //$NON-NLS-1$
+        assertEquals("extension + base handler must coexist", 2, //$NON-NLS-1$
+            ((List<?>)m.container.eGet(m.handlersFeat)).size());
+
+        // ... and the base rule itself still holds: a SECOND base handler is a duplicate.
+        String dup = FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+            "OnChange", "another", null, new String[1]); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull(dup);
+        assertTrue(dup.contains("already exists")); //$NON-NLS-1$
+    }
+
     @Test
     public void testBindEventHandlerDuplicateCallTypeRejectedOtherwiseCoexists()
     {
