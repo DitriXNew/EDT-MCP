@@ -2807,9 +2807,12 @@ public final class FormElementWriter
                 + "Catalog.Products'}. 'customQuery' alone only toggles an attribute that is already a " //$NON-NLS-1$
                 + "dynamic list.").toJson()); //$NON-NLS-1$
         }
+        boolean promotedToMain = false;
         if (!alreadyDynamicList)
         {
+            boolean hadMainAttribute = hasMainAttribute(formModel);
             extInfo = convertPlainAttributeToDynamicList(formModel, attribute, version, applied);
+            promotedToMain = !hadMainAttribute && isMainAttribute(attribute);
         }
 
         boolean effectiveCustomQuery = customQuery != null ? customQuery.booleanValue() : queryText != null;
@@ -2833,10 +2836,13 @@ public final class FormElementWriter
         {
             applyMainTable(extInfo, config, mainTableFqn, applied);
         }
-        // This branch sets valueType (and main) itself, outside the property loop that syncs the
-        // form root - so it has to ask for the root ext-info here, or a main dynamic list leaves
-        // the form without its DynamicListFormExtInfo.
-        syncFormExtInfo(formModel);
+        // This branch sets main itself, outside the property loop that syncs the form root - so it
+        // asks here, but ONLY when it actually promoted the attribute. A query edit on a list that
+        // was already dynamic writes no main flag, and the root node is not its business.
+        if (promotedToMain)
+        {
+            syncFormExtInfo(formModel);
+        }
         return applied;
     }
 
@@ -3107,6 +3113,46 @@ public final class FormElementWriter
             if (isMainAttribute(attr))
             {
                 return singleValueTypeCategory(attr);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Whether writing {@code main} on this attribute would DELETE event handlers: the form root
+     * carries an ext-info with bindings inside, and the kind it would be left with is none.
+     *
+     * <p>Following the platform ({@code resetExtInfo} clears the node unconditionally) costs
+     * nothing when the node is empty or merely changes kind - a kind change carries the handlers
+     * over. This is the one shape where it destroys something the caller did not name, so it is
+     * the one the consent gate is asked about.</p>
+     *
+     * @param formModel the editable content form, on the tx-bound model
+     * @param attribute the attribute whose main flag the request writes
+     * @param mainAfter the value the request writes into that flag
+     * @return {@code true} when the write would take bound handlers with the node
+     */
+    public static boolean clearsBoundFormExtInfo(EObject formModel, EObject attribute,
+        boolean mainAfter)
+    {
+        EObject current = singleReference(formModel, FEATURE_EXT_INFO);
+        if (current == null || referenceList(current, KEY_HANDLERS).isEmpty())
+        {
+            return false;
+        }
+        EObject deciding = mainAfter ? attribute : otherMainAttribute(formModel, attribute);
+        return deciding == null
+            || FORM_EXT_INFO_BY_TYPE_CATEGORY.get(singleValueTypeCategory(deciding)) == null;
+    }
+
+    /** The form's main attribute other than the given one, or {@code null} when there is none. */
+    private static EObject otherMainAttribute(EObject formModel, EObject excluded)
+    {
+        for (EObject attr : referenceList(formModel, FEATURE_ATTRIBUTES))
+        {
+            if (attr != excluded && isMainAttribute(attr))
+            {
+                return attr;
             }
         }
         return null;

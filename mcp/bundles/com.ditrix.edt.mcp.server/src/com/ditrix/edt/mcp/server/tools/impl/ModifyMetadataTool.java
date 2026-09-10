@@ -2360,12 +2360,45 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /** What the user authorizes when a form attribute (or column) changes its data type. */
-    private static ConsentPreview formRetypePreview(String normFqn)
+    private static ConsentPreview formRetypePreview(String normFqn,
+        FormElementWriter.FormMemberRef ref, List<JsonObject> properties)
     {
+        if (!isFormRetypeRequest(ref, properties))
+        {
+            // The only other thing this gate authorizes: a main-flag write that leaves the form
+            // root without its ext-info, and the event handlers bound inside it with it.
+            return new ConsentPreview(
+                "Remove the root ext-info of " + ref.formPath, //$NON-NLS-1$
+                "Writing the main flag leaves this form without a root ext-info, deleting the " //$NON-NLS-1$
+                    + "event handlers bound inside it.", //$NON-NLS-1$
+                1, java.util.Collections.singletonList(PROP_MAIN));
+        }
         return new ConsentPreview(
             "Change the data type of " + normFqn, //$NON-NLS-1$
             "Retyping a form attribute can drop stored values on the next database update.", //$NON-NLS-1$
             1, java.util.Collections.singletonList(PROP_VALUE_TYPE));
+    }
+
+    /**
+     * The {@code main} value this request writes on an ATTRIBUTE, or {@code null} when it writes
+     * none. Reads only the request; whether that write actually destroys anything is a question
+     * for the model, answered in {@link #formRetypePreflight}.
+     */
+    private static Boolean requestedMainFlag(FormElementWriter.FormMemberRef ref,
+        List<JsonObject> properties)
+    {
+        if (FormElementWriter.kindForToken(ref.kindToken) != FormElementWriter.Kind.ATTRIBUTE)
+        {
+            return null; // NOSONAR tri-state: null means "this request writes no main flag"
+        }
+        for (JsonObject prop : properties)
+        {
+            if (PROP_MAIN.equalsIgnoreCase(asString(prop.get("name")))) //$NON-NLS-1$
+            {
+                return parseBooleanFlag(prop.get("value")); //$NON-NLS-1$
+            }
+        }
+        return null; // NOSONAR tri-state: see above
     }
 
     /**
@@ -2376,6 +2409,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * not exist (the write path answers "not found"), or ANY of the requested property changes fails
      * to validate - a retype that would strand the attribute's columns, an unbuildable {@code type}
      * payload, an unknown property, an out-of-range value. Issue #295 review.
+     *
+     * <p>TWO requests can reach the gate: a retype, and a {@code main} write that would leave the
+     * form root without its ext-info AND take bound event handlers with it. The second is asked
+     * about only in that exact shape - an empty node, or one that merely changes kind (its data is
+     * carried over), loses nothing and is written without a prompt.</p>
      *
      * @param ctx the resolved project context (the configuration references resolve against)
      * @param version the platform version the type payload is built for
@@ -2389,13 +2427,30 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         FormElementWriter.FormEditContext fctx, FormElementWriter.FormMemberRef ref,
         List<JsonObject> properties, MdNameNormalizer.Report normReport)
     {
-        if (!isFormRetypeRequest(ref, properties))
+        boolean retype = isFormRetypeRequest(ref, properties);
+        Boolean mainFlag = requestedMainFlag(ref, properties);
+        if (!retype && mainFlag == null)
         {
             return ""; //$NON-NLS-1$
         }
         return FormElementWriter.readEditableForm(fctx, "FormRetypePreflight", //$NON-NLS-1$
-            (formModel, tx) -> formRetypeVerdict(ctx.scope, version,
-                FormElementWriter.resolveFormMember(formModel, ref), properties, normReport));
+            (formModel, tx) ->
+            {
+                EObject member = FormElementWriter.resolveFormMember(formModel, ref);
+                String verdict = retype
+                    ? formRetypeVerdict(ctx.scope, version, member, properties, normReport)
+                    : ""; //$NON-NLS-1$
+                if (verdict == null || !verdict.isEmpty())
+                {
+                    // A refusal, or a retype that must be asked about - either way it decides.
+                    return verdict;
+                }
+                // Nothing destructive about the types; the main flag can still delete the form
+                // root ext-info together with the handlers bound in it.
+                return member != null && mainFlag != null
+                    && FormElementWriter.clearsBoundFormExtInfo(formModel, member,
+                        mainFlag.booleanValue()) ? null : ""; //$NON-NLS-1$
+            });
     }
 
     /**
@@ -3099,7 +3154,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // The version the type payload is built for: resolved BEFORE the gate, because the
             // pre-check validates that payload (it is the same one the write then uses).
             final Version version = platformVersionOf(ctx);
-            return gateFormRetype(formRetypePreview(normFqn),
+            return gateFormRetype(formRetypePreview(normFqn, ref, properties),
                 () -> formRetypePreflight(ctx, version, fctx, ref, properties, normReport),
                 () -> applyFormMemberProperties(ctx, normFqn, ref, properties, normReport, fctx,
                     version));

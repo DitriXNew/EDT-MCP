@@ -245,3 +245,35 @@ def test_promoting_a_second_attribute_demotes_the_first():
     assert xml.count("<main>true</main>") == 1, \
         "exactly one main attribute may remain, found %d" % (xml.count("<main>true</main>"),)
     assert EXT_INFO_TYPE not in xml, "the previous main's ext-info kind must be gone"
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_a_retype_and_a_later_list_conversion_leave_the_root_node_alone():
+    """Only a `main` write moves the form root's ext-info. In the platform the node is reached from
+    exactly one place — FormAttributeService.setMainAttribute; a retype goes to setTypeDescription,
+    which never touches it, and a query edit on some other attribute is not its business either."""
+    reg, form = _seed_record_form("Keep")
+    poll_diff_contains(EXT_INFO_TYPE, ctx="the seeded form must carry the register-manager ext-info")
+
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT, "fqn": form + ".Attribute.Record",
+        "properties": [{"name": "valueType", "value": {
+            "types": [{"kind": "CatalogObject", "ref": "Catalog"}]}}],
+    }), "retype the main attribute")
+    assert EXT_INFO_TYPE in _form_xml(reg), \
+        "a retype of the main attribute must not move the form root's ext-info"
+
+    second = form + ".Attribute.List"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": second}),
+              "seed a second form attribute")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT, "fqn": second,
+        "properties": [{"name": "queryText", "value": "SELECT Ref FROM Catalog.Catalog"}],
+    }), "turn the second attribute into a dynamic list")
+
+    xml = _form_xml(reg)
+    assert EXT_INFO_TYPE in xml, \
+        "a list conversion that promoted nothing must leave the root ext-info as it is"
+    assert xml.count("<main>true</main>") == 1, \
+        "and it must not hand the main flag to the new list either: %d" % (xml.count("<main>true</main>"),)

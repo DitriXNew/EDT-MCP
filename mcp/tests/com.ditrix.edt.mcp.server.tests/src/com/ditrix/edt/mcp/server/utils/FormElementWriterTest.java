@@ -6668,6 +6668,51 @@ public class FormElementWriterTest
     }
 
     /**
+     * The consent gate is asked about exactly one shape: the node holds handlers AND the form is
+     * left with no kind at all. Everything else - an empty node, or a kind CHANGE, whose data is
+     * carried over - loses nothing and must be written without a prompt.
+     */
+    @Test
+    public void testOnlyALossOfBoundHandlersCountsAsDestructive()
+    {
+        FormRootModel m = newFormRootModel("CatalogObject.Goods", true); //$NON-NLS-1$
+        assertEquals("CatalogFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
+
+        assertFalse("an EMPTY node carries nothing to lose", //$NON-NLS-1$
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, false));
+        assertNull(FormElementWriter.bindEventHandler(m.extInfo(), m.extInfoHandlers(), m.event,
+            "BeforeWriteAtServer", "BeforeWriteAtServer", null, new String[1])); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("main=false leaves no main attribute, so the bound handlers go with the node", //$NON-NLS-1$
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, false));
+        assertFalse("re-writing main=true keeps the kind, so nothing is lost", //$NON-NLS-1$
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, true));
+
+        // Another attribute takes over: the kind CHANGES, and copySameFeatures carries the
+        // handlers across - a change of kind is not a loss.
+        EObject register = m.addMainAttribute("Register", //$NON-NLS-1$
+            "InformationRegisterRecordManager.MyRegister"); //$NON-NLS-1$
+        assertFalse("a kind change carries the handlers over", //$NON-NLS-1$
+            FormElementWriter.clearsBoundFormExtInfo(m.form, register, true));
+        assertFalse("and demoting THIS one leaves the other main deciding", //$NON-NLS-1$
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, false));
+    }
+
+    @Test
+    public void testAPromotionToAnUnpairedCategoryIsDestructiveToo()
+    {
+        FormRootModel m = newFormRootModel("CatalogObject.Goods", true); //$NON-NLS-1$
+        assertEquals("CatalogFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
+        assertNull(FormElementWriter.bindEventHandler(m.extInfo(), m.extInfoHandlers(), m.event,
+            "BeforeWriteAtServer", "BeforeWriteAtServer", null, new String[1])); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject unpaired = m.addMainAttribute("Manager", //$NON-NLS-1$
+            "InformationRegisterManager.MyRegister"); //$NON-NLS-1$
+
+        assertTrue("promoting an attribute no writer pairs with a kind empties the node", //$NON-NLS-1$
+            FormElementWriter.clearsBoundFormExtInfo(m.form, unpaired, true));
+    }
+
+    /**
      * Taking the main flag off is the platform's {@code resetExtInfo}: {@code form.setExtInfo(null)},
      * unconditional, whatever kind the node was and whatever it held. The handlers bound inside go
      * with it, exactly as {@code copyDataOfSameFeatures} no-ops on a null destination.
