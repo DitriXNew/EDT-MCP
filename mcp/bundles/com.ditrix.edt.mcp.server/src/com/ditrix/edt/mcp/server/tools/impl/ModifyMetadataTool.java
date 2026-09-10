@@ -2554,17 +2554,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * otherwise the one it already carries. Read from the prepared change rather than from the
      * model, because the model still holds the old type when the pre-check runs.
      */
-    private static String categoryAfter(List<HolderChange> prepared, EObject member)
+    static String categoryAfter(List<HolderChange> prepared, EObject member)
     {
+        Object lastType = null;
+        boolean retyped = false;
         for (HolderChange hc : prepared)
         {
             if (!hc.onExtInfo && hc.change.isTypeChange()
                 && PROP_VALUE_TYPE.equalsIgnoreCase(hc.change.featureName()))
             {
-                return FormElementWriter.typeCategoryOf(hc.change.value());
+                // The batch is applied in ORDER, so a repeated property is decided by its LAST
+                // write - the same rule mainFlagIn follows for the main flag.
+                lastType = hc.change.value();
+                retyped = true;
             }
         }
-        return FormElementWriter.valueTypeCategoryOf(member);
+        return retyped ? FormElementWriter.typeCategoryOf(lastType)
+            : FormElementWriter.valueTypeCategoryOf(member);
     }
 
     /**
@@ -5832,7 +5838,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * ... live under {@code <extInfo>}). Threading the receiver per property lets a mixed direct +
      * extInfo batch apply each change to the correct EObject inside the one form write transaction.
      */
-    private static final class HolderChange
+    static final class HolderChange
     {
         private final boolean onExtInfo;
         private final PreparedChange change;
@@ -5998,7 +6004,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /** A validated, coerced change ready to apply to the re-fetched target inside the write tx. */
-    private static final class PreparedChange
+    static final class PreparedChange
     {
         private enum Kind
         {

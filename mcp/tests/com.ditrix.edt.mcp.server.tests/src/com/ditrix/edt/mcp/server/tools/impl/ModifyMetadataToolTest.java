@@ -38,8 +38,11 @@ import org.junit.Test;
 import org.mockito.Mockito;
 
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.QName;
+import com._1c.g5.v8.dt.mcore.Type;
+import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
@@ -2758,6 +2761,41 @@ public class ModifyMetadataToolTest
             harmlessMain.getTopNames());
         assertFalse("so the dialog must not promise a deletion that will not happen: " //$NON-NLS-1$
             + harmlessMain.getSubtitle(), harmlessMain.getSubtitle().contains("ext-info")); //$NON-NLS-1$
+    }
+
+    /**
+     * The same ordering rule as {@code mainFlagIn}, on the other property the ext-info decision
+     * keys on: a batch is applied in order, so a repeated {@code valueType} leaves the LAST one.
+     * Judged by the first, {@code [valueType=CatalogObject, valueType=String, main=true]} would
+     * promise no loss and then delete the node with its handlers.
+     */
+    @Test
+    public void testARepeatedRetypeIsJudgedByItsLastWrite()
+    {
+        EAttribute valueTypeFeature = EcoreFactory.eINSTANCE.createEAttribute();
+        valueTypeFeature.setName("valueType"); //$NON-NLS-1$
+        List<ModifyMetadataTool.HolderChange> prepared = List.of(
+            new ModifyMetadataTool.HolderChange(false,
+                ModifyMetadataTool.PreparedChange.typeDescription(valueTypeFeature,
+                    singleType("CatalogObject.Goods"))), //$NON-NLS-1$
+            new ModifyMetadataTool.HolderChange(false,
+                ModifyMetadataTool.PreparedChange.typeDescription(valueTypeFeature,
+                    singleType("String")))); //$NON-NLS-1$
+
+        assertEquals("the LAST write is what the model ends up with", //$NON-NLS-1$
+            "String", ModifyMetadataTool.categoryAfter(prepared, null)); //$NON-NLS-1$
+        assertNull("a batch that retypes nothing falls back to the member", //$NON-NLS-1$
+            ModifyMetadataTool.categoryAfter(List.of(), null));
+    }
+
+    /** A {@code TypeDescription} naming exactly one type, the shape a retype prepares. */
+    private static TypeDescription singleType(String typeName)
+    {
+        TypeDescription description = McoreFactory.eINSTANCE.createTypeDescription();
+        Type type = McoreFactory.eINSTANCE.createType();
+        type.setName(typeName);
+        description.getTypes().add(type);
+        return description;
     }
 
     /** One property list carrying a single string-valued property. */
