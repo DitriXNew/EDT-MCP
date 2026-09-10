@@ -34,6 +34,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ReturnValuesReuse;
+import com._1c.g5.v8.dt.metadata.mdclass.Role;
 import com._1c.g5.v8.dt.metadata.mdclass.ScriptVariant;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
@@ -61,6 +62,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
+import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
@@ -139,6 +141,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     private static final String ERR_NO_FQN_GENERATOR =
         "ITopObjectFqnGenerator not available (needed to attach the content form under its " //$NON-NLS-1$
             + "canonical FQN)"; //$NON-NLS-1$
+
+    /** Error: the service that registers a role's rights model is unavailable. */
+    private static final String ERR_NO_ROLE_FQN_GENERATOR =
+        "The role was not created because ITopObjectFqnGenerator is not available. The generator " //$NON-NLS-1$
+            + "is needed to register the role's rights model under its canonical FQN; without that " //$NON-NLS-1$
+            + "model, the role would be invalid for the configurator and an incremental " //$NON-NLS-1$
+            + "configuration load would fail for the whole configuration."; //$NON-NLS-1$
 
     /** Error prefix: could not resolve the V8 project. */
     private static final String ERR_NO_V8_PROJECT = "Could not resolve V8 project for: "; //$NON-NLS-1$
@@ -1088,9 +1097,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String configFeatureName = req.target.configFeatureName;
         final IModelObjectFactory factory = bm.factory;
         final Version version = bm.version;
-        // Needed to name the external-property content of a CommonForm and of an XDTOPackage
-        // (both below); resolved up front like the rest of the BM services this method uses, not
-        // inside the transaction.
+        // Needed to name the external-property content of a CommonForm, of an XDTOPackage and the
+        // rights model of a Role (all below); resolved up front like the rest of the BM services
+        // this method uses, not inside the transaction.
         final ITopObjectFqnGenerator fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
         // The FORM factory + script variant build that content form the same way the owned-form path
         // does (issue #297).
@@ -1099,8 +1108,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         // For a FORM the generator is mandatory, exactly as on the owned-form path: a form whose
         // content could not be attached under its canonical FQN is precisely the half-created object
         // issue #297 is about, so refuse rather than report success for a form nothing can be added
-        // to. Every other top type still creates without it (the XDTOPackage content below is
-        // best-effort by design), so the check is scoped to forms.
+        // to. A ROLE is the same case for a harder reason (below). The XDTOPackage content stays
+        // best-effort by design, so the checks cover these two types only.
+        if (fqnGenerator == null && MdClassPackage.Literals.ROLE.isSuperTypeOf(eClass))
+        {
+            return ToolResult.error(ERR_NO_ROLE_FQN_GENERATOR).toJson();
+        }
         if (fqnGenerator == null && MdClassPackage.Literals.BASIC_FORM.isSuperTypeOf(eClass))
         {
             return ToolResult.error(ERR_NO_FQN_GENERATOR).toJson();
@@ -1108,6 +1121,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
         final String[] xdtoContentFqnHolder = { null };
         final String[] formContentFqnHolder = { null };
+        final String[] rightsFqnHolder = { null };
         final EClass createdKind;
         try
         {
@@ -1149,6 +1163,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 {
                     FormElementWriter.enforceContentFormCommandBarId((BasicForm)newObject);
                 }
+                // A role without its rights model is not merely incomplete: the configurator then
+                // refuses to load the WHOLE configuration, and re-saving the role in EDT does not
+                // bring the file back. Attached in the CREATING transaction, like the content below.
+                if (newObject instanceof Role)
+                {
+                    rightsFqnHolder[0] =
+                        RoleRightsWriter.attachRoleDescription(tx, (Role)newObject, fqnGenerator);
+                }
                 // An XDTOPackage's content (Package.xdto) is a lazy @ExternalProperty; a live-stand
                 // finding showed the platform does NOT durably serialize it when it is first
                 // materialized in a LATER, separate transaction (the first member-edit call) - each
@@ -1171,6 +1193,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 return newObject.eClass();
             });
         }
+        catch (RoleRightsWriter.RoleWriteException e)
+        {
+            return roleCreationFailure(name, RoleRightsWriter.extractErrorMessage(e));
+        }
         catch (Exception e)
         {
             Activator.logError("Error creating metadata object", e); //$NON-NLS-1$
@@ -1183,6 +1209,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             exportFqns.add(formContentFqn);
         }
+        String rightsFqn = rightsFqnHolder[0];
+        if (rightsFqn != null && !exportFqns.contains(rightsFqn))
+        {
+            exportFqns.add(rightsFqn);
+        }
         String xdtoContentFqn = xdtoContentFqnHolder[0];
         if (xdtoContentFqn != null && !exportFqns.contains(xdtoContentFqn))
         {
@@ -1192,6 +1223,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         return success(new SuccessInfo(req.normFqn, createdKind, name, persisted, req.props,
             req.synonymLanguage, req.localesMissing, req.localeUnused, req.typeSpecific,
             req.normReport));
+    }
+
+    /** Adds the rolled-back create context without nesting the writer's error JSON. */
+    static String roleCreationFailure(String roleName, String writerMessage)
+    {
+        return ToolResult.error("Role '" + roleName + "' was not created. " + writerMessage).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
