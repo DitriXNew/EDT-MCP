@@ -3236,10 +3236,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // which properties the batch carried: a change object names the KIND of property,
                 // so a re-write of the same type looks identical to a retype.
                 String mainCategoryAfter = FormElementWriter.mainAttributeCategory(formModel);
-                boolean mainCategoryChanged = mainCategoryBefore == null
-                    ? mainCategoryAfter != null : !mainCategoryBefore.equals(mainCategoryAfter);
                 if (mainAttributeTouched
-                    && FormElementWriter.syncFormExtInfo(formModel, mainCategoryChanged) != null
+                    && FormElementWriter.syncFormExtInfo(formModel,
+                        mainCategoryReplaced(mainCategoryBefore, mainCategoryAfter)) != null
                     && !applied.contains("extInfo")) //$NON-NLS-1$
                 {
                     applied.add("extInfo"); //$NON-NLS-1$
@@ -3708,6 +3707,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return FormElementWriter.syncItemExtInfo(formModel, member) != null;
         }
         return false;
+    }
+
+    /**
+     * Whether the batch REPLACED the category the form root's ext-info is keyed on - the only
+     * transition that may leave the form without a node.
+     *
+     * <p>Gaining a FIRST main attribute ({@code null} before) is not a replacement: nothing was
+     * keyed on anything, so there is nothing to invalidate, and a bare {@code main} write does not
+     * pass the destructive-consent gate ({@code isFormRetypeRequest} looks for {@code type} /
+     * {@code valueType}). Re-writing the same category is not one either.</p>
+     *
+     * @param before the main attribute's category before the batch, may be {@code null}
+     * @param after the same after it, may be {@code null}
+     * @return {@code true} only when a category that WAS there became something else
+     */
+    static boolean mainCategoryReplaced(String before, String after)
+    {
+        return before != null && !before.equals(after);
     }
 
     /**
