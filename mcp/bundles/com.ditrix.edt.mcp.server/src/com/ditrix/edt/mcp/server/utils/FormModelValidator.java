@@ -81,6 +81,47 @@ public final class FormModelValidator
     public static final String SEVERITY_ERROR = "error"; //$NON-NLS-1$
     public static final String SEVERITY_WARNING = "warning"; //$NON-NLS-1$
 
+    // The finding codes, declared once - see CODES below for the contract they form.
+    public static final String CODE_MULTIPLE_MAIN_ATTRIBUTES = "multiple-main-attributes"; //$NON-NLS-1$
+    public static final String CODE_ORPHAN_FORM_EXT_INFO = "orphan-form-ext-info"; //$NON-NLS-1$
+    public static final String CODE_MISSING_AUTO_COMMAND_BAR = "missing-auto-command-bar"; //$NON-NLS-1$
+    public static final String CODE_INVALID_AUTO_COMMAND_BAR_ID = "invalid-auto-command-bar-id"; //$NON-NLS-1$
+    public static final String CODE_UNNAMED_MEMBER = "unnamed-member"; //$NON-NLS-1$
+    public static final String CODE_DUPLICATE_NAME = "duplicate-name"; //$NON-NLS-1$
+    public static final String CODE_MISSING_ID = "missing-id"; //$NON-NLS-1$
+    public static final String CODE_DUPLICATE_ID = "duplicate-id"; //$NON-NLS-1$
+    public static final String CODE_MISSING_DATA_PATH = "missing-data-path"; //$NON-NLS-1$
+    public static final String CODE_EMPTY_DATA_PATH = "empty-data-path"; //$NON-NLS-1$
+    public static final String CODE_UNRESOLVED_DATA_PATH = "unresolved-data-path"; //$NON-NLS-1$
+    public static final String CODE_MISSING_COMMAND_REFERENCE = "missing-command-reference"; //$NON-NLS-1$
+    public static final String CODE_UNRESOLVED_COMMAND_REFERENCE = "unresolved-command-reference"; //$NON-NLS-1$
+    public static final String CODE_INVALID_EXTENDED_TOOLTIP_TYPE = "invalid-extended-tooltip-type"; //$NON-NLS-1$
+    public static final String CODE_MISSING_EXT_INFO = "missing-ext-info"; //$NON-NLS-1$
+    public static final String CODE_STALE_EXT_INFO = "stale-ext-info"; //$NON-NLS-1$
+    public static final String CODE_EMPTY_COMMAND_ACTION = "empty-command-action"; //$NON-NLS-1$
+    public static final String CODE_EXTENSION_HANDLER_WITHOUT_CALL_TYPE =
+        "extension-handler-without-call-type"; //$NON-NLS-1$
+    public static final String CODE_INVALID_EXTENSION_CALL_TYPE = "invalid-extension-call-type"; //$NON-NLS-1$
+    public static final String CODE_DUPLICATE_HANDLER_BINDING = "duplicate-handler-binding"; //$NON-NLS-1$
+    public static final String CODE_EMPTY_HANDLER_NAME = "empty-handler-name"; //$NON-NLS-1$
+    public static final String CODE_UNRESOLVED_EVENT_REFERENCE = "unresolved-event-reference"; //$NON-NLS-1$
+
+    /**
+     * Every finding code this engine can emit. A code is documented as STABLE for a caller to
+     * branch on, so the set is declared once here and pinned against the tool guide by
+     * {@code ValidateFormModelToolTest}: a new code with no guide row now fails the build,
+     * which is what three rounds of "the guide does not list it" needed and did not have.
+     */
+    public static final List<String> CODES = List.of(
+        CODE_MULTIPLE_MAIN_ATTRIBUTES, CODE_ORPHAN_FORM_EXT_INFO, CODE_MISSING_AUTO_COMMAND_BAR,
+        CODE_INVALID_AUTO_COMMAND_BAR_ID, CODE_UNNAMED_MEMBER, CODE_DUPLICATE_NAME,
+        CODE_MISSING_ID, CODE_DUPLICATE_ID, CODE_MISSING_DATA_PATH,
+        CODE_EMPTY_DATA_PATH, CODE_UNRESOLVED_DATA_PATH, CODE_MISSING_COMMAND_REFERENCE,
+        CODE_UNRESOLVED_COMMAND_REFERENCE, CODE_INVALID_EXTENDED_TOOLTIP_TYPE, CODE_MISSING_EXT_INFO,
+        CODE_STALE_EXT_INFO, CODE_EMPTY_COMMAND_ACTION, CODE_EXTENSION_HANDLER_WITHOUT_CALL_TYPE,
+        CODE_INVALID_EXTENSION_CALL_TYPE, CODE_DUPLICATE_HANDLER_BINDING, CODE_EMPTY_HANDLER_NAME,
+        CODE_UNRESOLVED_EVENT_REFERENCE);
+
     private FormModelValidator()
     {
     }
@@ -157,13 +198,13 @@ public final class FormModelValidator
         }
         if (mains.size() > 1)
         {
-            findings.add(new Finding(SEVERITY_ERROR, "multiple-main-attributes", FORM_PATH, //$NON-NLS-1$
+            findings.add(new Finding(SEVERITY_ERROR, CODE_MULTIPLE_MAIN_ATTRIBUTES, FORM_PATH,
                 "The form has " + mains.size() + " main attributes (" + String.join(", ", mains) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                     + "); a form carries one or none. Clear 'main' on all but one.")); //$NON-NLS-1$
         }
         if (mains.isEmpty() && single(formModel, FEATURE_EXT_INFO) != null)
         {
-            findings.add(new Finding(SEVERITY_WARNING, "orphan-form-ext-info", FORM_PATH, //$NON-NLS-1$
+            findings.add(new Finding(SEVERITY_WARNING, CODE_ORPHAN_FORM_EXT_INFO, FORM_PATH,
                 "The form root carries an ext-info but no main attribute, so it advertises events " //$NON-NLS-1$
                     + "no attribute backs. Flag an attribute as main, or clear the node.")); //$NON-NLS-1$
         }
@@ -183,7 +224,7 @@ public final class FormModelValidator
         EObject bar = single(formModel, FEATURE_AUTO_COMMAND_BAR);
         if (bar == null)
         {
-            findings.add(new Finding(SEVERITY_ERROR, "missing-auto-command-bar", FORM_PATH, //$NON-NLS-1$
+            findings.add(new Finding(SEVERITY_ERROR, CODE_MISSING_AUTO_COMMAND_BAR, FORM_PATH,
                 "The form has no root auto command bar; EDT cannot lay the form out without it.")); //$NON-NLS-1$
             return;
         }
@@ -191,7 +232,7 @@ public final class FormModelValidator
         if (id instanceof Integer && ((Integer)id).intValue() != AUTO_COMMAND_BAR_ID_SENTINEL
             && ((Integer)id).intValue() <= 0)
         {
-            findings.add(new Finding(SEVERITY_ERROR, "invalid-auto-command-bar-id", FORM_PATH, //$NON-NLS-1$
+            findings.add(new Finding(SEVERITY_ERROR, CODE_INVALID_AUTO_COMMAND_BAR_ID, FORM_PATH,
                 "The root auto command bar has id " + id + "; it must be the -1 sentinel or a " //$NON-NLS-1$ //$NON-NLS-2$
                     + "positive id. A 0 id serializes without an <id> element and EDT refuses the form.")); //$NON-NLS-1$
         }
@@ -258,7 +299,7 @@ public final class FormModelValidator
             {
                 if (!isAddition(member))
                 {
-                    findings.add(new Finding(SEVERITY_ERROR, "unnamed-member", path, //$NON-NLS-1$
+                    findings.add(new Finding(SEVERITY_ERROR, CODE_UNNAMED_MEMBER, path,
                         "This " + member.eClass().getName() + " has no name, so no tool can address " //$NON-NLS-1$ //$NON-NLS-2$
                             + "it and a second unnamed one is indistinguishable from it.")); //$NON-NLS-1$
                 }
@@ -270,7 +311,7 @@ public final class FormModelValidator
                     (a, b) -> Integer.valueOf(a.intValue() + 1)).intValue();
                 if (count > 1 && reported.add(key))
                 {
-                    findings.add(new Finding(SEVERITY_ERROR, "duplicate-name", path, //$NON-NLS-1$
+                    findings.add(new Finding(SEVERITY_ERROR, CODE_DUPLICATE_NAME, path,
                         "More than one " + kindLabel + " is named '" + name //$NON-NLS-1$ //$NON-NLS-2$
                             + "'; the name no longer addresses one member. Rename all but one.")); //$NON-NLS-1$
                 }
@@ -297,7 +338,7 @@ public final class FormModelValidator
         {
             if (!isAddition(member))
             {
-                findings.add(new Finding(SEVERITY_ERROR, "missing-id", path, //$NON-NLS-1$
+                findings.add(new Finding(SEVERITY_ERROR, CODE_MISSING_ID, path,
                     "This " + kindLabel + " has no id; it serializes without an <id> element and EDT " //$NON-NLS-1$ //$NON-NLS-2$
                         + "then refuses the form.")); //$NON-NLS-1$
             }
@@ -306,7 +347,7 @@ public final class FormModelValidator
         String first = ids.putIfAbsent(Integer.valueOf(id), nameOf(member));
         if (first != null)
         {
-            findings.add(new Finding(SEVERITY_ERROR, "duplicate-id", path, //$NON-NLS-1$
+            findings.add(new Finding(SEVERITY_ERROR, CODE_DUPLICATE_ID, path,
                 "Id " + id + " is used by both '" + first + "' and '" + nameOf(member) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                     + "'; EDT addresses this " + kindLabel + " by id and refuses the form.")); //$NON-NLS-1$ //$NON-NLS-2$
         }
@@ -346,7 +387,7 @@ public final class FormModelValidator
         EObject dataPath = single(item, FEATURE_DATA_PATH);
         if (dataPath == null)
         {
-            findings.add(new Finding(SEVERITY_ERROR, "missing-data-path", path, //$NON-NLS-1$
+            findings.add(new Finding(SEVERITY_ERROR, CODE_MISSING_DATA_PATH, path,
                 "This " + eClassName + " has no data path, so it displays nothing. Set 'dataPath'.")); //$NON-NLS-1$ //$NON-NLS-2$
             return;
         }
@@ -354,13 +395,13 @@ public final class FormModelValidator
         String root = segments.isEmpty() ? null : segments.get(0);
         if (root == null || root.isEmpty())
         {
-            findings.add(new Finding(SEVERITY_ERROR, "empty-data-path", path, //$NON-NLS-1$
+            findings.add(new Finding(SEVERITY_ERROR, CODE_EMPTY_DATA_PATH, path,
                 "This " + eClassName + " has an empty data path, so it displays nothing.")); //$NON-NLS-1$ //$NON-NLS-2$
             return;
         }
         if (!dataRoots.contains(root.toLowerCase(Locale.ROOT)))
         {
-            findings.add(new Finding(SEVERITY_ERROR, "unresolved-data-path", path, //$NON-NLS-1$
+            findings.add(new Finding(SEVERITY_ERROR, CODE_UNRESOLVED_DATA_PATH, path,
                 "The data path '" + String.join(".", segments) + "' starts with '" + root //$NON-NLS-1$ //$NON-NLS-2$
                     + "', which is not a form attribute. A path roots at an attribute; nothing " //$NON-NLS-1$
                     + "binds to a form parameter by data path.")); //$NON-NLS-1$
@@ -383,13 +424,13 @@ public final class FormModelValidator
         EObject command = single(item, FEATURE_COMMAND_NAME);
         if (command == null)
         {
-            findings.add(new Finding(SEVERITY_ERROR, "missing-command-reference", path, //$NON-NLS-1$
+            findings.add(new Finding(SEVERITY_ERROR, CODE_MISSING_COMMAND_REFERENCE, path,
                 "This button runs no command. Point it at a form command or a standard command.")); //$NON-NLS-1$
             return;
         }
         if (isUnreachable(command, formModel))
         {
-            findings.add(new Finding(SEVERITY_ERROR, "unresolved-command-reference", path, //$NON-NLS-1$
+            findings.add(new Finding(SEVERITY_ERROR, CODE_UNRESOLVED_COMMAND_REFERENCE, path,
                 "This button points at a command that is not in the model any more.")); //$NON-NLS-1$
         }
     }
@@ -414,7 +455,7 @@ public final class FormModelValidator
         String type = literalOf(element, FEATURE_TYPE);
         if (type != null && !TYPE_LITERAL_LABEL.equals(type))
         {
-            findings.add(new Finding(SEVERITY_ERROR, "invalid-extended-tooltip-type", path, //$NON-NLS-1$
+            findings.add(new Finding(SEVERITY_ERROR, CODE_INVALID_EXTENDED_TOOLTIP_TYPE, path,
                 "This extended tooltip is typed '" + type //$NON-NLS-1$
                     + "'; the platform accepts only 'Label' and rejects the form otherwise.")); //$NON-NLS-1$
         }
@@ -435,7 +476,7 @@ public final class FormModelValidator
             // answer means "no opinion", not "carries none".
             if (actual != null && FormElementWriter.kindDecidesExtInfo(element))
             {
-                findings.add(new Finding(SEVERITY_ERROR, "stale-ext-info", path, //$NON-NLS-1$
+                findings.add(new Finding(SEVERITY_ERROR, CODE_STALE_EXT_INFO, path,
                     "This element carries a '" + actual.eClass().getName() + "' but its current type " //$NON-NLS-1$ //$NON-NLS-2$
                         + "pairs with no ext-info at all; the type changed and the node stayed.")); //$NON-NLS-1$
             }
@@ -443,14 +484,14 @@ public final class FormModelValidator
         }
         if (actual == null)
         {
-            findings.add(new Finding(SEVERITY_ERROR, "missing-ext-info", path, //$NON-NLS-1$
+            findings.add(new Finding(SEVERITY_ERROR, CODE_MISSING_EXT_INFO, path,
                 "This element has no '" + expected + "', so its type-specific properties " //$NON-NLS-1$ //$NON-NLS-2$
                     + "and events are unavailable.")); //$NON-NLS-1$
             return;
         }
         if (!expected.equals(actual.eClass().getName()))
         {
-            findings.add(new Finding(SEVERITY_ERROR, "stale-ext-info", path, //$NON-NLS-1$
+            findings.add(new Finding(SEVERITY_ERROR, CODE_STALE_EXT_INFO, path,
                 "This element carries a '" + actual.eClass().getName() + "' but its kind calls for a '" //$NON-NLS-1$ //$NON-NLS-2$
                     + expected + "'; the type changed and the node did not follow.")); //$NON-NLS-1$
         }
@@ -495,20 +536,20 @@ public final class FormModelValidator
             String callType = isExtension ? enumName(value(handler, FEATURE_CALL_TYPE)) : ""; //$NON-NLS-1$
             if (procedure.isEmpty())
             {
-                findings.add(new Finding(SEVERITY_ERROR, "empty-handler-name", path, //$NON-NLS-1$
+                findings.add(new Finding(SEVERITY_ERROR, CODE_EMPTY_HANDLER_NAME, path,
                     "The handler for '" + (eventName.isEmpty() ? "(unknown event)" : eventName) //$NON-NLS-1$ //$NON-NLS-2$
                         + "' names no BSL procedure.")); //$NON-NLS-1$
             }
             if (event == null || event.eIsProxy())
             {
-                findings.add(new Finding(SEVERITY_ERROR, "unresolved-event-reference", path, //$NON-NLS-1$
+                findings.add(new Finding(SEVERITY_ERROR, CODE_UNRESOLVED_EVENT_REFERENCE, path,
                     "The handler '" + (procedure.isEmpty() ? "(unnamed)" : procedure) //$NON-NLS-1$ //$NON-NLS-2$
                         + "' points at no event: the reference is empty or no longer resolves.")); //$NON-NLS-1$
                 continue;
             }
             if (isExtension && callType.isEmpty())
             {
-                findings.add(new Finding(SEVERITY_ERROR, "extension-handler-without-call-type", path, //$NON-NLS-1$
+                findings.add(new Finding(SEVERITY_ERROR, CODE_EXTENSION_HANDLER_WITHOUT_CALL_TYPE, path,
                     "The extension handler for '" + eventName + "' has no call type, so it does not " //$NON-NLS-1$ //$NON-NLS-2$
                         + "say how it intercepts the base event. Set Before, After or Instead.")); //$NON-NLS-1$
             }
@@ -516,7 +557,7 @@ public final class FormModelValidator
             // not the same as a valid one - this is the value the writer itself refuses.
             else if (isExtension && CALL_TYPE_CHANGE_AND_VALIDATE.equalsIgnoreCase(callType))
             {
-                findings.add(new Finding(SEVERITY_ERROR, "invalid-extension-call-type", path, //$NON-NLS-1$
+                findings.add(new Finding(SEVERITY_ERROR, CODE_INVALID_EXTENSION_CALL_TYPE, path,
                     "The extension handler for '" + eventName + "' uses call type '" + callType //$NON-NLS-1$ //$NON-NLS-2$
                         + "', which intercepts a METHOD, not an event. Use Before, After or Instead.")); //$NON-NLS-1$
             }
@@ -524,7 +565,7 @@ public final class FormModelValidator
             // so the key is the event plus the call type - the same rule the writer enforces.
             if (!seen.add(eventName.toLowerCase(Locale.ROOT) + "/" + callType)) //$NON-NLS-1$
             {
-                findings.add(new Finding(SEVERITY_ERROR, "duplicate-handler-binding", path, //$NON-NLS-1$
+                findings.add(new Finding(SEVERITY_ERROR, CODE_DUPLICATE_HANDLER_BINDING, path,
                     "'" + eventName + "' is bound twice" //$NON-NLS-1$ //$NON-NLS-2$
                         + (callType.isEmpty() ? "" : " with call type '" + callType + "'") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                         + "; the platform cannot say which binding to call.")); //$NON-NLS-1$
@@ -549,7 +590,7 @@ public final class FormModelValidator
             String address = "Command." + nameOf(command); //$NON-NLS-1$
             if (!actionNamesAProcedure(action))
             {
-                findings.add(new Finding(SEVERITY_ERROR, "empty-command-action", address, //$NON-NLS-1$
+                findings.add(new Finding(SEVERITY_ERROR, CODE_EMPTY_COMMAND_ACTION, address,
                     "This command has an action but names no BSL procedure to run.")); //$NON-NLS-1$
                 continue;
             }
@@ -570,7 +611,7 @@ public final class FormModelValidator
         {
             if (nameOf(handler).isEmpty())
             {
-                findings.add(new Finding(SEVERITY_ERROR, "empty-handler-name", address, //$NON-NLS-1$
+                findings.add(new Finding(SEVERITY_ERROR, CODE_EMPTY_HANDLER_NAME, address,
                     "This command's action carries a handler entry that names no BSL procedure.")); //$NON-NLS-1$
             }
         }

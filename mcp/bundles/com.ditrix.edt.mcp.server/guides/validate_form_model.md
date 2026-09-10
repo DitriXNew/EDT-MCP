@@ -25,6 +25,8 @@ modify_metadata … → validate_form_model → read findings → fix → valida
 
 | code | severity | what it means |
 |---|---|---|
+| `unnamed-member` | error | A member has no name, so nothing can address it and a second unnamed one is indistinguishable from it. |
+| `missing-id` | error | An element has no id; it serializes without an `<id>` and EDT then refuses the form. |
 | `multiple-main-attributes` | error | Two or more attributes are flagged `main`; a form carries one or none. |
 | `orphan-form-ext-info` | warning | The form root has an ext-info but no main attribute, so it advertises events nothing backs. |
 | `missing-auto-command-bar` | error | The form has no root auto command bar. |
@@ -38,8 +40,11 @@ modify_metadata … → validate_form_model → read findings → fix → valida
 | `invalid-extension-call-type` | error | An extension handler uses `ChangeAndValidate`, which intercepts a method rather than a form event. |
 | `invalid-extended-tooltip-type` | error | An extended tooltip is typed anything but `Label`, which the platform rejects outright. |
 | `missing-ext-info` / `stale-ext-info` | error | An element has no type-specific ext-info, or one that its kind does not call for. |
+| `empty-command-action` | error | A command has an action but names no BSL procedure to run. |
+| `extension-handler-without-call-type` | error | An extension handler does not say how it intercepts the base event. |
+| `duplicate-handler-binding` | error | One event is bound twice (with the same call type), so the platform cannot say which to call. |
 | `empty-handler-name` | error | A binding - an event handler, or one entry of a command action - names no BSL procedure. |
-| `unresolved-event-reference` | error | A binding names no event the element publishes. |
+| `unresolved-event-reference` | error | A binding carries no event reference, or one that does not resolve. |
 
 ### What it deliberately does NOT check
 
