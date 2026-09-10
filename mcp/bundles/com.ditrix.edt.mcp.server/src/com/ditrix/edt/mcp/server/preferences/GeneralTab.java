@@ -648,7 +648,10 @@ public class GeneralTab
             text = text + " " + Messages.GeneralTab_EndpointLockedOut; //$NON-NLS-1$
         }
         endpointLabel.setText(text);
-        endpointLabel.getParent().layout();
+        // The whole SECTION is laid out, not just the bar holding the label: a bar sizes itself
+        // during its parent's layout, so laying out only the bar would keep it at its old width
+        // and push the buttons beside a longer line out of view.
+        composite.layout(true, true);
     }
 
     /**
