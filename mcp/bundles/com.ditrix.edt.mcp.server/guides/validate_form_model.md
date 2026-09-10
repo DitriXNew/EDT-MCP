@@ -45,6 +45,7 @@ modify_metadata … → validate_form_model → read findings → fix → valida
 | `duplicate-handler-binding` | error | One event is bound twice (with the same call type), so the platform cannot say which to call. |
 | `empty-handler-name` | error | A binding - an event handler, or one entry of a command action - names no BSL procedure. |
 | `unresolved-event-reference` | error | A binding carries no event reference, or one that does not resolve. |
+| `foreign-event-reference` | error | A binding names an event published by another platform type, not by this element. |
 
 ### What it deliberately does NOT check
 

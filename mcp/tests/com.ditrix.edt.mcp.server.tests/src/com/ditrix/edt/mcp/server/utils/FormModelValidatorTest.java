@@ -25,6 +25,10 @@ import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.Type;
+import com._1c.g5.v8.dt.mcore.TypeDescription;
+
 /**
  * The structural checks themselves, driven against a dynamic-EMF form.
  *
@@ -526,6 +530,59 @@ public class FormModelValidatorTest
             message.contains("nor a form parameter")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testAnAttributesValueTypeDecidesWhetherExtInfoIsRequired()
+    {
+        Form form = new Form();
+        EObject dynamicList = form.attribute("Rows", 1, false); //$NON-NLS-1$
+        form.giveAttributeTypes(dynamicList, "DynamicList"); //$NON-NLS-1$
+        List<String> missingCodes = codes(form);
+        assertEquals("a DynamicList attribute without its paired node must be reported: " //$NON-NLS-1$
+            + missingCodes, List.of(FormModelValidator.CODE_MISSING_EXT_INFO), missingCodes);
+
+        form.giveDynamicListExtInfo(dynamicList);
+        List<String> completeCodes = codes(form);
+        assertEquals("a DynamicListExtInfo is the expected node: " + completeCodes, //$NON-NLS-1$
+            List.of(), completeCodes);
+
+        EObject primitive = form.attribute("Caption", 2, false); //$NON-NLS-1$
+        form.giveAttributeTypes(primitive, "String"); //$NON-NLS-1$
+        List<String> primitiveCodes = codes(form);
+        assertEquals("a primitive attribute takes no ext-info and must stay silent: " //$NON-NLS-1$
+            + primitiveCodes, List.of(), primitiveCodes);
+
+        EObject multi = form.attribute("Choice", 3, false); //$NON-NLS-1$
+        form.giveAttributeTypes(multi, "DynamicList", "String"); //$NON-NLS-1$ //$NON-NLS-2$
+        List<String> multiCodes = codes(form);
+        assertEquals("a MULTI-typed attribute is unknowable and must stay silent: " //$NON-NLS-1$
+            + multiCodes, List.of(), multiCodes);
+    }
+
+    @Test
+    public void testAHandlerEventMustBePublishedByItsOwnerWhenPublicationIsKnown()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        EObject event = form.event("OnOpen"); //$NON-NLS-1$
+        form.handler(form.root, "Open", event); //$NON-NLS-1$
+
+        FormModelValidator.EventPublication published =
+            container -> container == form.root ? List.of("onopen") : List.of(); //$NON-NLS-1$
+        List<String> publishedCodes = codes(form, published);
+        assertEquals("event-name publication is matched case-insensitively: " //$NON-NLS-1$
+            + publishedCodes, List.of(), publishedCodes);
+
+        FormModelValidator.EventPublication foreign =
+            container -> container == form.root ? List.of("OnCreateAtServer") : List.of(); //$NON-NLS-1$
+        List<String> foreignCodes = codes(form, foreign);
+        assertEquals("an event published by another type must be reported: " //$NON-NLS-1$
+            + foreignCodes, List.of(FormModelValidator.CODE_FOREIGN_EVENT_REFERENCE), foreignCodes);
+
+        List<String> unknownCodes = codes(form, container -> List.of());
+        assertEquals("an empty publication means cannot tell and must produce no finding: " //$NON-NLS-1$
+            + unknownCodes, List.of(), unknownCodes);
+    }
+
     // --- the synthetic form --------------------------------------------------------------------
 
     /** The message of the FIRST finding carrying {@code code}, or empty when there is none. */
@@ -545,6 +602,17 @@ public class FormModelValidatorTest
     {
         List<String> codes = new ArrayList<>();
         for (FormModelValidator.Finding finding : FormModelValidator.validate(form.root))
+        {
+            codes.add(finding.code);
+        }
+        return codes;
+    }
+
+    private static List<String> codes(Form form, FormModelValidator.EventPublication publication)
+    {
+        List<String> codes = new ArrayList<>();
+        for (FormModelValidator.Finding finding :
+            FormModelValidator.validate(form.root, publication))
         {
             codes.add(finding.code);
         }
@@ -576,6 +644,7 @@ public class FormModelValidatorTest
         final EClass eventType;
         final EClass handlerType;
         final EClass extInfoType;
+        final EClass dynamicListExtInfoType;
         final EObject root;
         /** Items are addressed by id, so the fixture allocates one per item as the platform does. */
         private int itemId = 100;
@@ -598,6 +667,7 @@ public class FormModelValidatorTest
             handlerType.getEStructuralFeatures().add(reference("event", eventType, false, false)); //$NON-NLS-1$
 
             extInfoType = eClass("CatalogFormExtInfo"); //$NON-NLS-1$
+            dynamicListExtInfoType = eClass("DynamicListExtInfo"); //$NON-NLS-1$
 
             EClass commandBase = eClass("Command"); //$NON-NLS-1$
             commandBase.setAbstract(true);
@@ -617,6 +687,10 @@ public class FormModelValidatorTest
             named(attributeType);
             attributeType.getEStructuralFeatures()
                 .add(attribute("main", EcorePackage.Literals.EBOOLEAN, false)); //$NON-NLS-1$
+            attributeType.getEStructuralFeatures()
+                .add(reference("valueType", EcorePackage.Literals.EOBJECT, false, true)); //$NON-NLS-1$
+            attributeType.getEStructuralFeatures()
+                .add(reference("extInfo", dynamicListExtInfoType, false, true)); //$NON-NLS-1$
 
             EClass itemBase = eClass("FormItem"); //$NON-NLS-1$
             itemBase.setAbstract(true);
@@ -694,6 +768,23 @@ public class FormModelValidatorTest
             set(attribute, "main", Boolean.valueOf(main)); //$NON-NLS-1$
             add(root, "attributes", attribute); //$NON-NLS-1$
             return attribute;
+        }
+
+        void giveAttributeTypes(EObject attribute, String... typeNames)
+        {
+            TypeDescription valueType = McoreFactory.eINSTANCE.createTypeDescription();
+            for (String typeName : typeNames)
+            {
+                Type type = McoreFactory.eINSTANCE.createType();
+                type.setName(typeName);
+                valueType.getTypes().add(type);
+            }
+            set(attribute, "valueType", valueType); //$NON-NLS-1$
+        }
+
+        void giveDynamicListExtInfo(EObject attribute)
+        {
+            set(attribute, "extInfo", create(dynamicListExtInfoType)); //$NON-NLS-1$
         }
 
         /** The extended tooltip nearly every visual item carries, in its own inherited slot. */

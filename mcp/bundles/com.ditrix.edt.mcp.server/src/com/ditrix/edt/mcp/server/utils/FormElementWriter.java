@@ -2914,6 +2914,16 @@ public final class FormElementWriter
     }
 
     /**
+     * The classifier the platform pairs with this attribute's value type, or {@code null} when the
+     * attribute takes none - which also covers a MULTI-typed attribute, whose category cannot be
+     * read at all.
+     */
+    public static String attributeExtInfoClassifierNameFor(EObject attribute)
+    {
+        return ATTRIBUTE_EXT_INFO_BY_TYPE_CATEGORY.get(singleValueTypeCategory(attribute));
+    }
+
+    /**
      * Brings the form attribute's {@code <extInfo>} in line with the value type it now carries - the
      * step that turns a bare {@code valueType} set into the attribute the designer would have written
      * (issue #369). Mirrors {@code ExtInfoManagementService.setExtInfo(tx, attribute, type, version)}:
@@ -5224,6 +5234,26 @@ public final class FormElementWriter
     private static String eventNameOf(EObject event, boolean russian)
     {
         return stringFeature(event, russian ? FEATURE_NAME_RU : FEATURE_NAME);
+    }
+
+    /**
+     * The English names of the events the platform publishes for {@code container}.
+     *
+     * <p>An empty list means "cannot tell" (no version or no {@link IEObjectProvider}); callers must
+     * stay silent then.</p>
+     */
+    public static List<String> availableEventNames(EObject container, Version version)
+    {
+        List<String> names = new ArrayList<>();
+        for (EObject event : availableEvents(container, version))
+        {
+            String name = eventNameOf(event, false);
+            if (name != null && !name.isEmpty())
+            {
+                names.add(name);
+            }
+        }
+        return names;
     }
 
     /**

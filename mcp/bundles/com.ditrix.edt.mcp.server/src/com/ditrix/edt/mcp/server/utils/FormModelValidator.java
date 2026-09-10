@@ -105,6 +105,7 @@ public final class FormModelValidator
     public static final String CODE_DUPLICATE_HANDLER_BINDING = "duplicate-handler-binding"; //$NON-NLS-1$
     public static final String CODE_EMPTY_HANDLER_NAME = "empty-handler-name"; //$NON-NLS-1$
     public static final String CODE_UNRESOLVED_EVENT_REFERENCE = "unresolved-event-reference"; //$NON-NLS-1$
+    public static final String CODE_FOREIGN_EVENT_REFERENCE = "foreign-event-reference"; //$NON-NLS-1$
 
     /**
      * Every finding code this engine can emit. A code is documented as STABLE for a caller to
@@ -120,10 +121,17 @@ public final class FormModelValidator
         CODE_UNRESOLVED_COMMAND_REFERENCE, CODE_INVALID_EXTENDED_TOOLTIP_TYPE, CODE_MISSING_EXT_INFO,
         CODE_STALE_EXT_INFO, CODE_EMPTY_COMMAND_ACTION, CODE_EXTENSION_HANDLER_WITHOUT_CALL_TYPE,
         CODE_INVALID_EXTENSION_CALL_TYPE, CODE_DUPLICATE_HANDLER_BINDING, CODE_EMPTY_HANDLER_NAME,
-        CODE_UNRESOLVED_EVENT_REFERENCE);
+        CODE_UNRESOLVED_EVENT_REFERENCE, CODE_FOREIGN_EVENT_REFERENCE);
 
     private FormModelValidator()
     {
+    }
+
+    @FunctionalInterface
+    public interface EventPublication
+    {
+        /** The names of the events {@code container} publishes; EMPTY means "cannot tell". */
+        List<String> publishedBy(EObject container);
     }
 
     /**
@@ -167,13 +175,26 @@ public final class FormModelValidator
      */
     public static List<Finding> validate(EObject formModel)
     {
+        return validate(formModel, container -> List.of());
+    }
+
+    /**
+     * Validates the form's structure with a source for the events each handler owner publishes.
+     *
+     * @param formModel the editable content form, on the tx-bound model (never {@code null})
+     * @param publication the platform event publication, empty when it cannot be determined
+     * @return the findings, in walk order, empty when the form is structurally sound
+     */
+    public static List<Finding> validate(EObject formModel, EventPublication publication)
+    {
         List<Finding> findings = new ArrayList<>();
         List<EObject> items = itemTree(formModel);
         checkMainAttribute(formModel, findings);
         checkAutoCommandBar(formModel, findings);
         checkNamespaces(formModel, items, findings);
+        checkAttributeExtInfos(formModel, findings);
         checkItems(formModel, items, findings);
-        checkHandlers(formModel, items, findings);
+        checkHandlers(formModel, items, publication, findings);
         checkCommandActions(formModel, findings);
         return findings;
     }
@@ -353,6 +374,36 @@ public final class FormModelValidator
         }
     }
 
+    /** Checks the ext-info whose classifier is decided by each form attribute's value type. */
+    private static void checkAttributeExtInfos(EObject formModel, List<Finding> findings)
+    {
+        for (EObject attribute : list(formModel, FEATURE_ATTRIBUTES))
+        {
+            String expected = FormElementWriter.attributeExtInfoClassifierNameFor(attribute);
+            if (expected == null)
+            {
+                // Null means either no ext-info is due or MULTI-typed and unreadable; a finding
+                // would guess.
+                continue;
+            }
+            EObject actual = FormElementWriter.extInfoInstance(attribute);
+            String path = pathOf(attribute);
+            if (actual == null)
+            {
+                findings.add(new Finding(SEVERITY_ERROR, CODE_MISSING_EXT_INFO, path,
+                    "This attribute has no '" + expected //$NON-NLS-1$
+                        + "', which its value type requires.")); //$NON-NLS-1$
+            }
+            else if (!expected.equals(actual.eClass().getName()))
+            {
+                findings.add(new Finding(SEVERITY_ERROR, CODE_STALE_EXT_INFO, path,
+                    "This attribute carries a '" + actual.eClass().getName() //$NON-NLS-1$
+                        + "' but its value type calls for a '" + expected //$NON-NLS-1$
+                        + "'.")); //$NON-NLS-1$
+            }
+        }
+    }
+
     // --- items ---------------------------------------------------------------------------------
 
     /**
@@ -503,27 +554,41 @@ public final class FormModelValidator
      * A binding names an event and a BSL procedure. Either half missing leaves a handler the
      * platform lists but cannot call; two bindings on one event leave it unable to say which.
      */
-    private static void checkHandlers(EObject formModel, List<EObject> items, List<Finding> findings)
+    private static void checkHandlers(EObject formModel, List<EObject> items,
+        EventPublication publication, List<Finding> findings)
     {
-        checkHandlerList(formModel, formModel, FORM_PATH, findings);
-        EObject rootExtInfo = single(formModel, FEATURE_EXT_INFO);
-        if (rootExtInfo != null)
-        {
-            checkHandlerList(formModel, rootExtInfo, FORM_PATH, findings);
-        }
+        checkOwnerHandlers(formModel, FORM_PATH, publication, findings);
         for (EObject item : items)
         {
-            String path = pathOf(item);
-            checkHandlerList(formModel, item, path, findings);
-            EObject extInfo = single(item, FEATURE_EXT_INFO);
-            if (extInfo != null)
-            {
-                checkHandlerList(formModel, extInfo, path, findings);
-            }
+            checkOwnerHandlers(item, pathOf(item), publication, findings);
         }
     }
 
-    private static void checkHandlerList(EObject formModel, EObject container, String path,
+    /**
+     * One handler OWNER: the list it carries itself, and the one on its ext-info. The published
+     * events are asked for the OWNER and never for the ext-info container, because the platform
+     * publishes the UNION of an element's base type and its ext type - judging an ext-info's
+     * handlers by the ext type alone would call an ordinary binding foreign. Asked once, and only
+     * when there is a handler to judge: resolving it walks the platform type payload.
+     */
+    private static void checkOwnerHandlers(EObject owner, String path, EventPublication publication,
+        List<Finding> findings)
+    {
+        EObject extInfo = single(owner, FEATURE_EXT_INFO);
+        boolean extInfoHasHandlers = extInfo != null && !list(extInfo, FEATURE_HANDLERS).isEmpty();
+        if (list(owner, FEATURE_HANDLERS).isEmpty() && !extInfoHasHandlers)
+        {
+            return;
+        }
+        List<String> published = publication.publishedBy(owner);
+        checkHandlerList(owner, path, published, findings);
+        if (extInfo != null)
+        {
+            checkHandlerList(extInfo, path, published, findings);
+        }
+    }
+
+    private static void checkHandlerList(EObject container, String path, List<String> published,
         List<Finding> findings)
     {
         Set<String> seen = new HashSet<>();
@@ -546,6 +611,16 @@ public final class FormModelValidator
                     "The handler '" + (procedure.isEmpty() ? "(unnamed)" : procedure) //$NON-NLS-1$ //$NON-NLS-2$
                         + "' points at no event: the reference is empty or no longer resolves.")); //$NON-NLS-1$
                 continue;
+            }
+            // The published names are the ENGLISH ones, so an event that answers only in Russian
+            // is not judged here: an unmatched name would then mean nothing.
+            String englishEvent = nameOf(event);
+            if (!published.isEmpty() && !englishEvent.isEmpty()
+                && !containsIgnoreCase(published, englishEvent))
+            {
+                findings.add(new Finding(SEVERITY_ERROR, CODE_FOREIGN_EVENT_REFERENCE, path,
+                    "The event '" + eventName //$NON-NLS-1$
+                        + "' is published by another type, not by this element.")); //$NON-NLS-1$
             }
             if (isExtension && callType.isEmpty())
             {
@@ -571,6 +646,18 @@ public final class FormModelValidator
                         + "; the platform cannot say which binding to call.")); //$NON-NLS-1$
             }
         }
+    }
+
+    private static boolean containsIgnoreCase(List<String> values, String wanted)
+    {
+        for (String value : values)
+        {
+            if (wanted.equalsIgnoreCase(value))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

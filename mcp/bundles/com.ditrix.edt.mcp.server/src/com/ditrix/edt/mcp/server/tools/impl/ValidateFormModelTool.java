@@ -9,7 +9,11 @@ import java.util.List;
 import java.util.Map;
 
 
+import com._1c.g5.v8.dt.core.platform.IV8Project;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.platform.version.Version;
+import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
@@ -127,9 +131,11 @@ public class ValidateFormModelTool implements IMcpTool
 
         try
         {
+            final Version version = platformVersionOf(resolved);
             List<FormModelValidator.Finding> findings = FormElementWriter.readEditableForm(
                 FormElementWriter.editContextFor(resolved.project(), mdForm), "ValidateFormModel", //$NON-NLS-1$
-                (formModel, tx) -> FormModelValidator.validate(formModel));
+                (formModel, tx) -> FormModelValidator.validate(formModel,
+                    container -> FormElementWriter.availableEventNames(container, version)));
             return report(normFqn, findings);
         }
         catch (Exception e)
@@ -144,6 +150,15 @@ public class ValidateFormModelTool implements IMcpTool
             return ToolResult.error("Could not validate '" + normFqn + "': " //$NON-NLS-1$ //$NON-NLS-2$
                 + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage())).toJson();
         }
+    }
+
+    /** The project's platform version, or {@code null} when it cannot be resolved. */
+    private static Version platformVersionOf(ProjectContext.ConfigurationResult ctx)
+    {
+        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+        IV8Project v8Project =
+            v8ProjectManager != null ? v8ProjectManager.getProject(ctx.project()) : null;
+        return v8Project != null ? v8Project.getVersion() : null;
     }
 
     /** The findings, plus the two counts a caller branches on before reading any of them. */
