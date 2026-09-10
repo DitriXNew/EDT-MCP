@@ -3130,17 +3130,23 @@ public final class FormElementWriter
      * @param formModel the editable content form, on the tx-bound model
      * @param attribute the attribute whose main flag the request writes
      * @param mainAfter the value the request writes into that flag
+     * @param categoryAfter the attribute's type category AFTER the batch - the same batch may
+     *            retype it, and the model still holds the old one when this is asked
      * @return {@code true} when the write would take bound handlers with the node
      */
     public static boolean clearsBoundFormExtInfo(EObject formModel, EObject attribute,
-        boolean mainAfter)
+        boolean mainAfter, String categoryAfter)
     {
         EObject current = singleReference(formModel, FEATURE_EXT_INFO);
         if (current == null || referenceList(current, KEY_HANDLERS).isEmpty())
         {
             return false;
         }
-        EObject deciding = mainAfter ? attribute : otherMainAttribute(formModel, attribute);
+        if (mainAfter)
+        {
+            return FORM_EXT_INFO_BY_TYPE_CATEGORY.get(categoryAfter) == null;
+        }
+        EObject deciding = otherMainAttribute(formModel, attribute);
         return deciding == null
             || FORM_EXT_INFO_BY_TYPE_CATEGORY.get(singleValueTypeCategory(deciding)) == null;
     }
@@ -3234,14 +3240,42 @@ public final class FormElementWriter
      * platform PROXY as well as for a resolved type - so an attribute typed with the Russian spelling
      * classifies identically.
      */
+    /**
+     * The type CATEGORY a form member is typed with, or {@code null} when its type is not single.
+     * The read-only counterpart of {@link #typeCategoryOf(Object)} for a member that already
+     * carries its type.
+     *
+     * @param member the form member, on the tx-bound model
+     * @return the category, or {@code null}
+     */
+    public static String valueTypeCategoryOf(EObject member)
+    {
+        return member == null ? null : singleValueTypeCategory(member);
+    }
+
     private static String singleValueTypeCategory(EObject member)
     {
         EStructuralFeature feature = member.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
-        if (feature == null || !(member.eGet(feature) instanceof EObject))
+        return feature == null ? null : typeCategoryOf(member.eGet(feature));
+    }
+
+    /**
+     * The type CATEGORY a value-type description names - the part before the first dot - or
+     * {@code null} when it does not name exactly one type.
+     *
+     * <p>Asked of the DESCRIPTION rather than of the member on purpose: a caller deciding what a
+     * batch will leave behind holds the type it is about to write, not a model that has it yet.</p>
+     *
+     * @param valueType the {@code TypeDescription}, or anything else (answered {@code null})
+     * @return the category, or {@code null}
+     */
+    public static String typeCategoryOf(Object valueType)
+    {
+        if (!(valueType instanceof EObject))
         {
             return null;
         }
-        List<EObject> types = referenceList((EObject)member.eGet(feature), "types"); //$NON-NLS-1$
+        List<EObject> types = referenceList((EObject)valueType, "types"); //$NON-NLS-1$
         if (types.size() != 1 || !(types.get(0) instanceof TypeItem))
         {
             return null;

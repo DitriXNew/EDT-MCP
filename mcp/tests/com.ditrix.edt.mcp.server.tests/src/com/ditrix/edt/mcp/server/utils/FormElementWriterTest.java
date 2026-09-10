@@ -6735,6 +6735,30 @@ public class FormElementWriterTest
             1, ((List<?>)m.extInfo().eGet(m.extInfoHandlers())).size());
     }
 
+    /** The two categories these tests move between, spelled once. */
+    private static final String CATALOG = "CatalogObject"; //$NON-NLS-1$
+    private static final String REGISTER = "InformationRegisterRecordManager"; //$NON-NLS-1$
+
+    /**
+     * The category the BATCH leaves decides the loss, not the one the model still carries. A batch
+     * that retypes the main attribute and re-writes its main flag in one call would otherwise be
+     * judged against the type it is replacing - and would promise no loss while deleting the node.
+     */
+    @Test
+    public void testTheLossIsJudgedByTheCategoryTheBatchLeaves()
+    {
+        FormRootModel m = newFormRootModel("CatalogObject.Goods", true); //$NON-NLS-1$
+        assertEquals("CatalogFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
+        assertNull(FormElementWriter.bindEventHandler(m.extInfo(), m.extInfoHandlers(), m.event,
+            "BeforeWriteAtServer", "BeforeWriteAtServer", null, new String[1])); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The model still says CatalogObject; the batch is about to write String.
+        assertTrue("a retype to an unpaired category in the SAME batch loses the handlers", //$NON-NLS-1$
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, true, "String")); //$NON-NLS-1$
+        assertFalse("a retype to another PAIRED category only changes the kind", //$NON-NLS-1$
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, true, REGISTER));
+    }
+
     /**
      * The consent gate is asked about exactly one shape: the node holds handlers AND the form is
      * left with no kind at all. Everything else - an empty node, or a kind CHANGE, whose data is
@@ -6747,23 +6771,23 @@ public class FormElementWriterTest
         assertEquals("CatalogFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
 
         assertFalse("an EMPTY node carries nothing to lose", //$NON-NLS-1$
-            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, false));
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, false, CATALOG));
         assertNull(FormElementWriter.bindEventHandler(m.extInfo(), m.extInfoHandlers(), m.event,
             "BeforeWriteAtServer", "BeforeWriteAtServer", null, new String[1])); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertTrue("main=false leaves no main attribute, so the bound handlers go with the node", //$NON-NLS-1$
-            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, false));
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, false, CATALOG));
         assertFalse("re-writing main=true keeps the kind, so nothing is lost", //$NON-NLS-1$
-            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, true));
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, true, CATALOG));
 
         // Another attribute takes over: the kind CHANGES, and copySameFeatures carries the
         // handlers across - a change of kind is not a loss.
         EObject register = m.addMainAttribute("Register", //$NON-NLS-1$
             "InformationRegisterRecordManager.MyRegister"); //$NON-NLS-1$
         assertFalse("a kind change carries the handlers over", //$NON-NLS-1$
-            FormElementWriter.clearsBoundFormExtInfo(m.form, register, true));
+            FormElementWriter.clearsBoundFormExtInfo(m.form, register, true, REGISTER));
         assertFalse("and demoting THIS one leaves the other main deciding", //$NON-NLS-1$
-            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, false));
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, false, CATALOG));
     }
 
     @Test
@@ -6777,7 +6801,7 @@ public class FormElementWriterTest
             "InformationRegisterManager.MyRegister"); //$NON-NLS-1$
 
         assertTrue("promoting an attribute no writer pairs with a kind empties the node", //$NON-NLS-1$
-            FormElementWriter.clearsBoundFormExtInfo(m.form, unpaired, true));
+            FormElementWriter.clearsBoundFormExtInfo(m.form, unpaired, true, "InformationRegisterManager")); //$NON-NLS-1$
     }
 
     /**

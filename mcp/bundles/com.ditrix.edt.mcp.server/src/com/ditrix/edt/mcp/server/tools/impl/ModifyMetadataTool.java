@@ -2475,8 +2475,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // The WHOLE batch is prepared first, whichever of the two brought us here: every
                 // refusal that pass can produce belongs above the gate, or a denial comes back
                 // instead of the actionable error (issue #295).
-                String refusal =
-                    formRetypeVerdict(ctx.scope, version, member, properties, normReport);
+                List<HolderChange> prepared = new ArrayList<>();
+                String refusal = formRetypeVerdict(ctx.scope, version, member, properties,
+                    normReport, prepared);
                 if (refusal != null)
                 {
                     // A refusal, or "" for a member the write path answers "not found" for.
@@ -2486,7 +2487,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // flag it LEAVES would take the root ext-info and the handlers bound in it. WHICH
                 // of the two it is decides what the dialog says, so it is reported back.
                 extInfoLossOut[0] = mainFlag != null && FormElementWriter.clearsBoundFormExtInfo(
-                    formModel, member, mainFlag.booleanValue());
+                    formModel, member, mainFlag.booleanValue(), categoryAfter(prepared, member));
                 return retype || extInfoLossOut[0] ? null : ""; //$NON-NLS-1$
             });
     }
@@ -2517,19 +2518,53 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     String formRetypeVerdict(MetadataScope scope, Version version, EObject member,
         List<JsonObject> properties, MdNameNormalizer.Report normReport)
     {
+        return formRetypeVerdict(scope, version, member, properties, normReport, new ArrayList<>());
+    }
+
+    /**
+     * {@link #formRetypeVerdict(MetadataScope, Version, EObject, List, MdNameNormalizer.Report)}
+     * that also hands the PREPARED batch back. The pre-check has to know what the batch will leave
+     * behind - a retype in the same call changes the very category the ext-info decision keys on -
+     * and preparing it twice would report every normalized name twice.
+     *
+     * @param preparedOut filled with the prepared changes when the preparation succeeded
+     */
+    String formRetypeVerdict(MetadataScope scope, Version version, EObject member, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        List<JsonObject> properties, MdNameNormalizer.Report normReport,
+        List<HolderChange> preparedOut)
+    {
         if (member == null)
         {
             return ""; //$NON-NLS-1$
         }
         try
         {
-            prepareFormMemberChanges(scope, version, member, properties, normReport.emptyCopy());
+            preparedOut.addAll(
+                prepareFormMemberChanges(scope, version, member, properties, normReport.emptyCopy()));
         }
         catch (FormValidationException e)
         {
             return FormValidationException.jsonOf(e);
         }
         return null;
+    }
+
+    /**
+     * The type category the member is left with: the one the batch WRITES when it retypes it,
+     * otherwise the one it already carries. Read from the prepared change rather than from the
+     * model, because the model still holds the old type when the pre-check runs.
+     */
+    private static String categoryAfter(List<HolderChange> prepared, EObject member)
+    {
+        for (HolderChange hc : prepared)
+        {
+            if (!hc.onExtInfo && hc.change.isTypeChange()
+                && PROP_VALUE_TYPE.equalsIgnoreCase(hc.change.featureName()))
+            {
+                return FormElementWriter.typeCategoryOf(hc.change.value());
+            }
+        }
+        return FormElementWriter.valueTypeCategoryOf(member);
     }
 
     /**
@@ -6097,6 +6132,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean isTypeChange()
         {
             return typeChange;
+        }
+
+        /** The value this change would write - for a type change, the built {@code TypeDescription}. */
+        Object value()
+        {
+            return scalarValue;
         }
 
         boolean isLocalized()
