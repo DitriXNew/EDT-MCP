@@ -33,6 +33,8 @@ There are TWO object filters and they behave differently on purpose:
                    owning node. Scoping it to the member alone would match nothing and answer
                    `objectsResolved` next to "# No Errors Found" - the false all-clear this
                    input exists to prevent.
+                   If none of the requested addresses resolves, the call is refused because no
+                   marker scan ran; use `objects` or `get_metadata_objects` to recover.
 
 Anything that must observe a REAL marker seeds it first (a syntax error written into a
 fixture module with write_module_source, then a forced revalidation): the live marker set
@@ -429,12 +431,8 @@ def test_exact_address_that_exists_is_not_reported_missing_and_a_typo_is():
 
     typo = "Catalog.%s" % NO_SUCH_OBJECT
     bad = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [typo]})
-    assert_ok(bad, "exact address that does not exist")
-    _assert_verdicts(bad, resolved=[], not_found=[typo], unsupported=[])
-    assert_contains(_report(bad), "objectsNotFound",
-                    "the human report must mirror the machine verdict")
-    assert_contains(_report(bad), "get_metadata_objects",
-                    "the report must point at the discovery tool")
+    error = assert_error(bad, "an all-miss exact-address call")
+    assert_error_quality(error, names=[typo], suggests=["objects", "get_metadata_objects"])
     assert_no_diff("reading project errors must not touch the project on disk")
 
 
@@ -462,16 +460,18 @@ def test_exact_form_member_leaf_is_really_checked():
     _assert_verdicts(r, resolved=[form], not_found=[], unsupported=[])
 
     ghost = "%s.Attribute.%s" % (form, NO_SUCH_ATTRIBUTE)
-    m = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [ghost]})
-    assert_ok(m, "a form member that does not exist")
-    _assert_verdicts(m, resolved=[], not_found=[ghost], unsupported=[])
+    m = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [form, ghost]})
+    assert_ok(m, "a form plus a member that does not exist")
+    _assert_verdicts(m, resolved=[form], not_found=[ghost], unsupported=[])
 
     # A CommonForm member leaf is checked the same way (its members live in the content
     # model too, while the CommonForm top object resolves on its own).
+    common_form = "CommonForm.%s" % FIXTURE_COMMON_FORM
     common_ghost = "CommonForm.%s.Attribute.%s" % (FIXTURE_COMMON_FORM, NO_SUCH_ATTRIBUTE)
-    c = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [common_ghost]})
-    assert_ok(c, "a common-form member that does not exist")
-    _assert_verdicts(c, resolved=[], not_found=[common_ghost], unsupported=[])
+    c = call("get_project_errors",
+             {"projectName": PROJECT, "objectFqns": [common_form, common_ghost]})
+    assert_ok(c, "a common form plus a member that does not exist")
+    _assert_verdicts(c, resolved=[common_form], not_found=[common_ghost], unsupported=[])
     assert_no_diff("reading project errors must not touch the project on disk")
 
 
@@ -494,13 +494,14 @@ def test_exact_form_member_kind_must_match_the_element():
     assert_ok(r, "form members addressed with their own kind")
     _assert_verdicts(r, resolved=right, not_found=[], unsupported=[])
 
-    # The SAME names with the other item's kind, plus a misspelt kind token: all misses.
+    # Keep one real member in the request so the wrong-kind verdicts remain observable as a partial.
     wrong = ["%s.Button.%s" % (form, FIXTURE_FORM_FIELD),
              "%s.Field.%s" % (form, FIXTURE_FORM_DECORATION),
              "%s.Fielld.%s" % (form, FIXTURE_FORM_FIELD)]
-    w = call("get_project_errors", {"projectName": PROJECT, "objectFqns": wrong})
+    w = call("get_project_errors", {"projectName": PROJECT,
+                                    "objectFqns": [right[0]] + wrong})
     assert_ok(w, "form members addressed with a foreign / misspelt kind")
-    _assert_verdicts(w, resolved=[], not_found=wrong, unsupported=[])
+    _assert_verdicts(w, resolved=[right[0]], not_found=wrong, unsupported=[])
     assert_contains(_report(w), "objectsNotFound",
                     "the human report must name the wrong-kind addresses")
     assert_no_diff("reading project errors must not touch the project on disk")
@@ -535,17 +536,18 @@ def test_exact_handler_address_must_name_the_owning_items_kind():
     # A FOREIGN owner kind (Code is a FormField, not a Button) and a misspelt one: both misses.
     wrong = ["%s.Button.%s.Handler.OnChange" % (form, FIXTURE_FORM_FIELD),
              "%s.Fielld.%s.Handler.OnChange" % (form, FIXTURE_FORM_FIELD)]
-    w = call("get_project_errors", {"projectName": PROJECT, "objectFqns": wrong})
+    w = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [right] + wrong})
     assert_ok(w, "handler addressed through a foreign / misspelt owner kind")
-    _assert_verdicts(w, resolved=[], not_found=wrong, unsupported=[])
+    _assert_verdicts(w, resolved=[right], not_found=wrong, unsupported=[])
     assert_contains(_report(w), "objectsNotFound",
                     "the human report must name the wrong-owner-kind addresses")
 
     # The EVENT leaf keeps its own say: a real owner with a bogus event is still a miss.
     ghost_event = "%s.Field.%s.Handler.NoSuchEvent_e2e_xyz" % (form, FIXTURE_FORM_FIELD)
-    g = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [ghost_event]})
-    assert_ok(g, "a handler address whose event is bound to nothing")
-    _assert_verdicts(g, resolved=[], not_found=[ghost_event], unsupported=[])
+    g = call("get_project_errors",
+             {"projectName": PROJECT, "objectFqns": [right, ghost_event]})
+    assert_ok(g, "a real handler plus an event that is bound to nothing")
+    _assert_verdicts(g, resolved=[right], not_found=[ghost_event], unsupported=[])
 
 
 @e2e_test(tool="get_project_errors", kind="write-metadata")
@@ -625,15 +627,13 @@ def test_exact_form_and_form_member_addresses_really_select_the_forms_problems()
         assert_contains(_report(m), location,
                         "the member's rows must be the form's own rows, location included")
 
-    # 3) The widening must not blur the MISS verdicts: a ghost member and a wrong-kind member are
-    #    still reported missing and select nothing, even though their form has a problem.
+    # 3) The widening must not blur the misses: none resolved, so the dangerous unrun scan is refused
+    #    even though their containing form has a problem.
     misses = ["%s.Field.%s" % (form, NO_SUCH_ATTRIBUTE),
               "%s.Button.%s" % (form, FIXTURE_FORM_FIELD)]
     w = call("get_project_errors", {"projectName": PROJECT, "objectFqns": misses})
-    assert_ok(w, "ghost / wrong-kind members of a form that HAS a problem")
-    _assert_verdicts(w, resolved=[], not_found=misses, unsupported=[])
-    if (w.structured or {}).get("problemsFound", 0) != 0:
-        _fail("an address that resolved to nothing must select nothing: %r" % (w.structured,))
+    error = assert_error(w, "ghost / wrong-kind members of a form that HAS a problem")
+    assert_error_quality(error, names=misses, suggests=["objects", "get_metadata_objects"])
 
 
 @e2e_test(tool="get_project_errors", kind="write-metadata")
@@ -661,12 +661,12 @@ def test_exact_address_written_with_yo_resolves_against_the_stored_ye_name():
         # The verdict keeps the caller's own spelling, whichever one resolved.
         _assert_verdicts(r, resolved=[requested], not_found=[], unsupported=[])
 
-    # A ё name that exists in NEITHER spelling is still an ordinary miss: the fallback must not
+    # A ё name that exists in NEITHER spelling still refuses an all-miss scan: the fallback must not
     # blur the verdict into "everything resolves".
     ghost = "Catalog.Полёт" + NO_SUCH_OBJECT
     g = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [ghost]})
-    assert_ok(g, "a ё address that exists in neither spelling")
-    _assert_verdicts(g, resolved=[], not_found=[ghost], unsupported=[])
+    error = assert_error(g, "a ё address that exists in neither spelling")
+    assert_error_quality(error, names=[ghost], suggests=["objects", "get_metadata_objects"])
 
 
 @e2e_test(tool="get_project_errors", kind="read")
@@ -692,15 +692,16 @@ def test_exact_form_member_kind_token_accepts_both_numbers_and_both_languages():
     # The guarantee is about SPELLING, not about accepting anything: a wrong kind is still a miss,
     # in the plural too.
     wrong = "%s.Buttons.%s" % (form, FIXTURE_FORM_FIELD)
-    w = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [wrong]})
+    right = "%s.Field.%s" % (form, FIXTURE_FORM_FIELD)
+    w = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [right, wrong]})
     assert_ok(w, "a plural token of the WRONG kind")
-    _assert_verdicts(w, resolved=[], not_found=[wrong], unsupported=[])
+    _assert_verdicts(w, resolved=[right], not_found=[wrong], unsupported=[])
     assert_no_diff("reading project errors must not touch the project on disk")
 
 
 @e2e_test(tool="get_project_errors", kind="read")
 def test_exact_address_with_unknown_head_or_kind_is_reported_missing():
-    """An unknown TYPE token and a misspelt KIND token are both plain misses.
+    """An unknown TYPE token and a misspelt KIND token are both named in the refusal.
 
     `Catalog.<real>.Fom.ItemForm` has a real head, so a build that judged the address by its
     head would call it found while the filter matched nothing - the exact failure mode the
@@ -710,8 +711,9 @@ def test_exact_address_with_unknown_head_or_kind_is_reported_missing():
     bad_head = "NoSuchType_e2e_xyz.Whatever"
     r = call("get_project_errors",
              {"projectName": PROJECT, "objectFqns": [bad_kind, bad_head]})
-    assert_ok(r, "exact addresses with an unknown kind / head")
-    _assert_verdicts(r, resolved=[], not_found=[bad_kind, bad_head], unsupported=[])
+    error = assert_error(r, "exact addresses with an unknown kind / head")
+    assert_error_quality(error, names=[bad_kind, bad_head],
+                         suggests=["objects", "get_metadata_objects"])
     assert_no_diff("reading project errors must not touch the project on disk")
 
 
@@ -724,23 +726,38 @@ def test_xdto_member_address_is_unsupported_not_missing():
     model that this tool never verified. The package level stays supported: it is an ordinary
     resolution, so a non-existent package is an ordinary miss.
     """
+    good = "Catalog.%s" % FIXTURE_CATALOG
     for member in ("XDTOPackage.P.ObjectType.T",
                    "XDTOPackage.P.Property.N",
                    "XDTOPackage.P.ObjectType.T.Property.N"):
-        r = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [member]})
+        r = call("get_project_errors", {"projectName": PROJECT,
+                                        "objectFqns": [good, member]})
         assert_ok(r, "XDTO member address %s" % member)
-        _assert_verdicts(r, resolved=[], not_found=[], unsupported=[member])
+        _assert_verdicts(r, resolved=[good], not_found=[], unsupported=[member])
         assert_contains(_report(r), "objectsUnsupported",
                         "the human report must mirror the unsupported verdict")
         assert_not_contains(_report(r), "objectsNotFound",
                             "an unsupported address must never be called missing")
 
+    # A request made ONLY of unsupported addresses is still refused - nothing was scanned, so a
+    # clean heading would be invented - but the refusal must carry the address's OWN reason.
+    # The spelling advice belongs to a MISS: an unsupported family is not a wrong FQN.
+    only = call("get_project_errors", {"projectName": PROJECT,
+                                       "objectFqns": ["XDTOPackage.P.Property.N"]})
+    err = assert_error(only, "a request made only of unsupported addresses")
+    assert_contains(err, "XDTOPackage.P.Property.N",
+                    "the refusal must name the address it could not scan")
+    assert_contains(err, "validate_xdto_package",
+                    "the address's own remedy must survive the refusal")
+    assert_not_contains(err, "get_metadata_objects",
+                        "an unsupported family is not a misspelling to look up")
+
     # The PACKAGE level is supported: this fixture has no XDTO package, so the honest verdict
     # for a package address is an ordinary miss - NOT "unsupported".
     pkg = "XDTOPackage.NoSuchPackage_e2e_xyz"
-    r = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [pkg]})
+    r = call("get_project_errors", {"projectName": PROJECT, "objectFqns": [good, pkg]})
     assert_ok(r, "XDTO package-level address")
-    _assert_verdicts(r, resolved=[], not_found=[pkg], unsupported=[])
+    _assert_verdicts(r, resolved=[good], not_found=[pkg], unsupported=[])
     assert_no_diff("reading project errors must not touch the project on disk")
 
 
