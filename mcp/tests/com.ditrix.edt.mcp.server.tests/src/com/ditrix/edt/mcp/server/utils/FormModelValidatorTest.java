@@ -378,6 +378,26 @@ public class FormModelValidatorTest
             codes(form).contains("stale-ext-info")); //$NON-NLS-1$
     }
 
+    /**
+     * A standard command is not a {@code FormCommand}, so the "is it inside this form" fallback let
+     * ANY resolved one pass. {@code resolveButtonCommand} only ever returns a standard command this
+     * form root or an item inside it publishes, so one belonging to a different form is exactly as
+     * unresolvable as a deleted custom command - and looks perfectly well-formed.
+     */
+    @Test
+    public void testAStandardCommandPublishedByAnotherFormIsReported()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        form.button("RunOwn", form.ownStandardCommand("Post")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("this form's OWN standard command resolves: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("unresolved-command-reference")); //$NON-NLS-1$
+
+        form.button("RunForeign", form.standardCommandOfAnotherForm("Post")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a standard command of ANOTHER form is not resolvable here: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("unresolved-command-reference")); //$NON-NLS-1$
+    }
+
     // --- the synthetic form --------------------------------------------------------------------
 
     private static List<String> codes(Form form)
@@ -409,6 +429,7 @@ public class FormModelValidatorTest
         final EClass extensionHandlerType;
         final EClass commandActionType;
         final EClass decorationType;
+        final EClass standardCommandType;
         final EClass tooltipType;
         final EClass dataPathType;
         final EClass eventType;
@@ -437,8 +458,15 @@ public class FormModelValidatorTest
 
             extInfoType = eClass("CatalogFormExtInfo"); //$NON-NLS-1$
 
+            EClass commandBase = eClass("Command"); //$NON-NLS-1$
+            commandBase.setAbstract(true);
             commandType = eClass("FormCommand"); //$NON-NLS-1$
+            commandType.getESuperTypes().add(commandBase);
             named(commandType);
+            // FormStandardCommand extends Command, NOT FormCommand (Form.xcore).
+            standardCommandType = eClass("FormStandardCommand"); //$NON-NLS-1$
+            standardCommandType.getESuperTypes().add(commandBase);
+            named(standardCommandType);
 
             parameterType = eClass("FormParameter"); //$NON-NLS-1$
             parameterType.getEStructuralFeatures()
@@ -465,7 +493,8 @@ public class FormModelValidatorTest
 
             buttonType = eClass("Button"); //$NON-NLS-1$
             buttonType.getESuperTypes().add(itemBase);
-            buttonType.getEStructuralFeatures().add(reference("commandName", commandType, false, false)); //$NON-NLS-1$
+            buttonType.getEStructuralFeatures()
+                .add(reference("commandName", (EClass)pkg.getEClassifier("Command"), false, false)); //$NON-NLS-1$ //$NON-NLS-2$
 
             additionType = eClass("Addition"); //$NON-NLS-1$
             additionType.getESuperTypes().add(itemBase);
@@ -500,6 +529,8 @@ public class FormModelValidatorTest
             formType.getEStructuralFeatures().add(reference("items", itemBase, true, true)); //$NON-NLS-1$
             formType.getEStructuralFeatures().add(reference("attributes", attributeType, true, true)); //$NON-NLS-1$
             formType.getEStructuralFeatures().add(reference("formCommands", commandType, true, true)); //$NON-NLS-1$
+            formType.getEStructuralFeatures()
+                .add(reference("standardCommands", standardCommandType, true, true)); //$NON-NLS-1$
             formType.getEStructuralFeatures().add(reference("parameters", parameterType, true, true)); //$NON-NLS-1$
             formType.getEStructuralFeatures().add(reference("handlers", handlerType, true, true)); //$NON-NLS-1$
             formType.getEStructuralFeatures().add(reference("autoCommandBar", barType, false, true)); //$NON-NLS-1$
@@ -531,6 +562,25 @@ public class FormModelValidatorTest
             set(tooltip, "type", ((EEnum)kind.getEAttributeType()).getEEnumLiteralByLiteral(type)); //$NON-NLS-1$
             set(item, "extendedTooltip", tooltip); //$NON-NLS-1$
             return tooltip;
+        }
+
+        /** A standard command this form publishes - the resolvable kind. */
+        EObject ownStandardCommand(String name)
+        {
+            EObject command = create(standardCommandType);
+            set(command, "name", name); //$NON-NLS-1$
+            add(root, "standardCommands", command); //$NON-NLS-1$
+            return command;
+        }
+
+        /** The same kind of command, but published by a DIFFERENT form root. */
+        EObject standardCommandOfAnotherForm(String name)
+        {
+            EObject otherForm = create(formType);
+            EObject command = create(standardCommandType);
+            set(command, "name", name); //$NON-NLS-1$
+            add(otherForm, "standardCommands", command); //$NON-NLS-1$
+            return command;
         }
 
         EObject command(String name, int id)

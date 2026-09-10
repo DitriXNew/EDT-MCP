@@ -18,6 +18,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormModelValidator;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
+import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
@@ -129,16 +130,17 @@ public class ValidateFormModelTool implements IMcpTool
             List<FormModelValidator.Finding> findings = FormElementWriter.readEditableForm(
                 FormElementWriter.editContextFor(resolved.project(), mdForm), "ValidateFormModel", //$NON-NLS-1$
                 (formModel, tx) -> FormModelValidator.validate(formModel));
-            if (findings == null)
-            {
-                return ToolResult.error("The form '" + normFqn //$NON-NLS-1$
-                    + "' has no editable content model to validate (it may be empty, an ordinary " //$NON-NLS-1$
-                    + "(legacy) form, or not yet built).").toJson(); //$NON-NLS-1$
-            }
             return report(normFqn, findings);
         }
         catch (Exception e)
         {
+            // A form with no editable content model refuses through this exception, and its text
+            // already names the form and the three reasons - returning it beats a generic wrapper.
+            String ready = FormValidationException.jsonOf(e);
+            if (ready != null)
+            {
+                return ready;
+            }
             return ToolResult.error("Could not validate '" + normFqn + "': " //$NON-NLS-1$ //$NON-NLS-2$
                 + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage())).toJson();
         }

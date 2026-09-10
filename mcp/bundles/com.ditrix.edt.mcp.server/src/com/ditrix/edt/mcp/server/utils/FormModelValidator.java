@@ -622,8 +622,23 @@ public final class FormModelValidator
         // A FORM command has to be in THIS form's list - that is the only place the button resolver
         // looks. Outside it, only the standard commands the platform infers are legitimate, and they
         // are not FormCommands.
-        return ECLASS_FORM_COMMAND.equals(target.eClass().getName())
-            || (target.eResource() == null && target.eContainer() == null);
+        if (ECLASS_FORM_COMMAND.equals(target.eClass().getName()))
+        {
+            return true;
+        }
+        // ... and only the ones THIS form or an item inside it publishes: resolveButtonCommand
+        // never reaches into another form. A command that belongs to a different form root is
+        // therefore unresolvable here, however well-formed it looks.
+        EObject root = target;
+        while (root.eContainer() != null)
+        {
+            root = root.eContainer();
+        }
+        if (root != formModel && root.eClass().getName().equals(formModel.eClass().getName()))
+        {
+            return true;
+        }
+        return target.eResource() == null && target.eContainer() == null;
     }
 
     /** An event names itself in either language; the first spelling it answers to labels it. */
