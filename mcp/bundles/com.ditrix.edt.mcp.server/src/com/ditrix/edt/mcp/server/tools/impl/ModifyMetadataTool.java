@@ -3181,6 +3181,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // gives (issue #298). The declared codes are read OUTSIDE the write transaction.
         final List<String> declaredCodes = ctx.scope.declaredLanguageCodes();
         final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
+        // Attributes this call took the main flag AWAY from - a change to a member the caller did
+        // not address, so it is reported rather than left to be discovered.
+        final List<String> demotedMains = new ArrayList<>();
 
         // Validate + apply inside ONE BM write transaction: resolve the target, validate every
         // property (a failure throws FormValidationException carrying the JSON error BEFORE any eSet,
@@ -3199,7 +3202,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // a LATER change in the same call fills in.
                 List<EObject> localizedHolders = new ArrayList<>();
                 List<PreparedChange> localizedChanges = new ArrayList<>();
-                boolean mainAttributeTouched = false;
+                boolean mainFlagWritten = false;
                 for (HolderChange hc : changes)
                 {
                     // A direct feature lands on the target; a property on the nested <extInfo> lands
@@ -3216,7 +3219,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     {
                         applied.add("extInfo"); //$NON-NLS-1$
                     }
-                    mainAttributeTouched = mainAttributeTouched || decidesFormExtInfo(hc);
+                    mainFlagWritten = mainFlagWritten || decidesFormExtInfo(hc);
                     if (hc.change.isLocalized())
                     {
                         // Remember the receiver the change actually landed on: a title on the
@@ -3225,14 +3228,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         localizedChanges.add(hc.change);
                     }
                 }
-                // The form ROOT's ext-info follows the MAIN attribute's FINAL state, so it is
-                // decided once the whole batch is applied. Per change it would depend on the
-                // order the properties arrived in: [main=false, valueType=X] and the reverse pair
-                // describe the same end state and must not leave two different ext-infos.
-                if (mainAttributeTouched && FormElementWriter.syncFormExtInfo(formModel) != null
-                    && !applied.contains("extInfo")) //$NON-NLS-1$
+                // A main-attribute promotion is the platform's setMainAttribute: it demotes the
+                // previous main first, then re-derives the root ext-info from the FINAL state of
+                // the batch (per change it would depend on the order the properties arrived in).
+                if (mainFlagWritten)
                 {
-                    applied.add("extInfo"); //$NON-NLS-1$
+                    demotedMains.addAll(
+                        FormElementWriter.demoteOtherMainAttributes(formModel, target));
+                    if (FormElementWriter.syncFormExtInfo(formModel) != null
+                        && !applied.contains("extInfo")) //$NON-NLS-1$
+                    {
+                        applied.add("extInfo"); //$NON-NLS-1$
+                    }
                 }
                 for (int i = 0; i < localizedChanges.size(); i++)
                 {
@@ -3248,6 +3255,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put(KEY_PERSISTED, persisted);
         localizedReport.addTo(result);
         normReport.addTo(result);
+        if (!demotedMains.isEmpty())
+        {
+            result.put("demotedMainAttributes", demotedMains); //$NON-NLS-1$
+        }
         return result
             .put(McpKeys.MESSAGE, MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .toJson();
@@ -3701,13 +3712,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Whether this change can move the FORM ROOT's ext-info: the main attribute's type, or the
-     * flag that decides which attribute is main. Asked per change, answered once per batch.
+     * Whether this change decides the FORM ROOT's ext-info - a write of the {@code main} flag, and
+     * nothing else. The platform re-derives that node from one place only
+     * ({@code FormAttributeService.setMainAttribute}); a retype of the main attribute goes to
+     * {@code setTypeDescription}, which never touches the root node.
      */
     private static boolean decidesFormExtInfo(HolderChange hc)
     {
-        return !hc.onExtInfo
-            && (hc.change.isTypeChange() || PROP_MAIN.equalsIgnoreCase(hc.change.featureName()));
+        return !hc.onExtInfo && PROP_MAIN.equalsIgnoreCase(hc.change.featureName());
     }
 
     /**

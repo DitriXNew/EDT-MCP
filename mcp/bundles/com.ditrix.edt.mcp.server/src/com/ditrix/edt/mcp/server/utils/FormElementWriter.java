@@ -2979,8 +2979,16 @@ public final class FormElementWriter
 
     /**
      * The MAIN attribute's value-type CATEGORY &rarr; the concrete {@code FormExtInfo} classifier the
-     * platform pairs with the form ROOT, copied from {@code ExtInfoManagementService.createFormExtInfo}.
-     * A category not listed here leaves the form without a root ext-info, exactly as the platform does.
+     * platform pairs with the form ROOT. A category not listed here leaves the form without a root
+     * ext-info, which is what the platform writes for it.
+     *
+     * <p>The platform decides this in THREE places that do not agree:
+     * {@code ExtInfoManagementService.createFormExtInfo} (the main-attribute checkbox), the form
+     * generators ({@code ItemFormContainGenerator} and its siblings, at form creation) and
+     * {@code FormExtInfoXmlPartReader} (designer-XML import). This map is their UNION, because a
+     * form on disk carries whichever of them wrote it - the DT load path re-derives nothing - and a
+     * narrower map would delete a node a different writer legitimately produced. Chart-of-accounts
+     * object forms are the case that proves it: only the generator and the importer map them.</p>
      */
     private static final Map<String, String> FORM_EXT_INFO_BY_TYPE_CATEGORY = buildFormExtInfoMap();
 
@@ -3011,6 +3019,18 @@ public final class FormElementWriter
         m.put("ExternalDataSourceTableObject", "TableObjectFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
         m.put("ExternalDataSourceTableRecordManager", "TableRecordFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
         m.put("ExternalDataSourceCubeRecordManager", "CubeRecordFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Kinds only the GENERATORS and the designer-XML importer produce; createFormExtInfo has no
+        // case for them and would clear a correct node.
+        m.put("ChartOfAccountsObject", ECLASS_OBJECT_FORM_EXT_INFO); //$NON-NLS-1$
+        m.put("ChartOfCalculationTypesObject", ECLASS_OBJECT_FORM_EXT_INFO); //$NON-NLS-1$
+        m.put("ExternalDataProcessor", ECLASS_OBJECT_FORM_EXT_INFO); //$NON-NLS-1$
+        m.put("ExternalDataProcessorObject", ECLASS_OBJECT_FORM_EXT_INFO); //$NON-NLS-1$
+        m.put("ExternalReport", "ReportFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.put("ExternalReportObject", "ReportFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        // ... and one only the record-set generator produces, for a cube.
+        m.put("ExternalDataSourceCubeRecordSet", "CubeRecordSetFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        // Deliberately absent: SpreadsheetDocument, whose importer branch casts a FormAttributeExtInfo
+        // to FormExtInfo, and InformationRegisterManager, which no writer pairs with a kind at all.
         return Collections.unmodifiableMap(m);
     }
 
@@ -3018,14 +3038,16 @@ public final class FormElementWriter
     private static final String ECLASS_RECORD_SET_FORM_EXT_INFO = "RecordSetFormExtInfo"; //$NON-NLS-1$
 
     /**
-     * Gives the form ROOT the ext-info its MAIN attribute's type calls for, mirroring
-     * {@code ExtInfoManagementService.setExtInfo(Form, FormAttribute, Version)}.
+     * Gives the form ROOT the ext-info its MAIN attribute calls for, mirroring the platform pair
+     * {@code ExtInfoManagementService.setExtInfo(Form, FormAttribute, Version)} and
+     * {@code resetExtInfo(Form, Version)}.
      *
      * <p>That node is what publishes a form's write and read events: without it a record form
      * refuses {@code BeforeWriteAtServer} outright, and no MCP property can supply it (issue #591).
-     * A MAIN attribute whose category maps to nothing clears a stale ext-info this mapping produced,
-     * as the platform does; a form with NO main attribute is left untouched, because the platform
-     * never asks the question that way ({@code setExtInfo} asserts {@code isMain}).</p>
+     * The platform reaches the question from exactly ONE place - a write of the main-attribute flag
+     * ({@code FormAttributeService.setMainAttribute}) - and answers it from the model alone: no main
+     * attribute, or a category that maps to no kind, and the node is cleared, because
+     * {@code isNeedUpdateExtInfo} returns true precisely when the new kind is {@code null}.</p>
      *
      * @param formModel the editable content form, re-fetched inside the tx
      * @return the EClass name of the ext-info now on the form root, or {@code null} when it carries none
@@ -3038,32 +3060,17 @@ public final class FormElementWriter
             return null;
         }
         EObject current = singleReference(formModel, FEATURE_EXT_INFO);
-        if (!hasMainAttribute(formModel))
-        {
-            // Having NO main attribute is not an instruction to clear. The platform only ever asks
-            // this question about a main attribute - setExtInfo asserts isMain - so a form without
-            // one is left as it is; clearing here would delete the events bound inside the node on
-            // a plain main=false.
-            return current == null ? null : current.eClass().getName();
-        }
-        String classifier = FORM_EXT_INFO_BY_TYPE_CATEGORY.get(mainAttributeCategory(formModel));
+        // The kind the main attribute calls for: none when the form has no main attribute at all
+        // (the platform's resetExtInfo) or when its category maps to nothing.
+        String classifier = hasMainAttribute(formModel)
+            ? FORM_EXT_INFO_BY_TYPE_CATEGORY.get(mainAttributeCategory(formModel)) : null;
         if (classifier == null)
         {
-            if (current == null)
-            {
-                return null;
-            }
-            // The main attribute pairs with nothing, so a node THIS mapping produced is stale by
-            // construction: it was keyed to a category that no longer applies, and leaving it would
-            // go on publishing that kind's events for a form that is not one.
-            if (FORM_EXT_INFO_BY_TYPE_CATEGORY.containsValue(current.eClass().getName()))
+            if (current != null)
             {
                 formModel.eSet(extInfoFeature, null);
-                return null;
             }
-            // A node the platform GENERATOR wrote - a cube record set's - is left alone: this
-            // mapping never keyed it, so it cannot say whether it is stale.
-            return current.eClass().getName();
+            return null;
         }
         if (current != null && classifier.equals(current.eClass().getName()))
         {
@@ -3085,10 +3092,10 @@ public final class FormElementWriter
      * The type CATEGORY of the form's MAIN attribute, or {@code null} when the form has no main
      * attribute or its type is not single.
      *
-     * <p>This is the one value {@link #syncFormExtInfo(EObject, boolean)} keys on, so a caller can
-     * read it BEFORE a batch and again AFTER and tell an actual retype from a re-write of the same
-     * value. A property-shaped signal cannot: a change object says which KIND of property it
-     * carries, not whether the value in it differs from the one already there.</p>
+     * <p>This is the one value {@link #syncFormExtInfo(EObject)} keys on. It is the FIRST main
+     * attribute in list order, exactly what {@code FormUtil.getMainAttribute} answers; a form
+     * carrying TWO of them is a state the platform reports as an error rather than resolves, so
+     * {@link #demoteOtherMainAttributes(EObject, EObject)} keeps it from arising.</p>
      *
      * @param formModel the editable content form, on the tx-bound model
      * @return the category, or {@code null}
@@ -3103,6 +3110,38 @@ public final class FormElementWriter
             }
         }
         return null;
+    }
+
+    /**
+     * Clears {@code main} on every OTHER attribute of the form, mirroring
+     * {@code FormAttributeService.setMainAttribute}, which demotes the previous main before it
+     * flags the new one. A form may hold one main attribute or none - the platform reports two as
+     * an error ({@code FormValidator.isMainFormAttributeOneOrNone}).
+     *
+     * @param formModel the editable content form, on the tx-bound model
+     * @param promoted the attribute just flagged main; nothing is demoted unless it actually is
+     * @return the names of the demoted attributes in list order, empty when there were none
+     */
+    public static List<String> demoteOtherMainAttributes(EObject formModel, EObject promoted)
+    {
+        List<EObject> attributes = referenceList(formModel, FEATURE_ATTRIBUTES);
+        // Only a member of the form's OWN attribute list can be its main one: that is the list
+        // FormUtil.getMainAttribute reads, so a flag on a nested column decides nothing.
+        if (promoted == null || !isMainAttribute(promoted) || !attributes.contains(promoted))
+        {
+            return List.of();
+        }
+        List<String> demoted = new ArrayList<>();
+        for (EObject attr : attributes)
+        {
+            if (attr == promoted || !isMainAttribute(attr))
+            {
+                continue;
+            }
+            setBooleanFeature(attr, FEATURE_MAIN, false);
+            demoted.add(stringFeature(attr, FEATURE_NAME));
+        }
+        return demoted;
     }
 
     /** The features {@code ExtInfoManagementService} refuses to carry over. */

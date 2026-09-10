@@ -212,3 +212,36 @@ def test_a_binding_inside_the_ext_info_can_be_deleted():
     poll_diff_contains("<extInfo", ctx="the form file must be rewritten after the delete")
     assert "DelBeforeWrite" not in _form_xml(reg), \
         "the binding must be gone from the file, wherever it lived"
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_promoting_a_second_attribute_demotes_the_first():
+    """A form holds ONE main attribute or none: the platform's setMainAttribute clears the flag on
+    the previous main before it sets the new one, and FormValidator reports two as an error. Left
+    undone, the root ext-info would follow whichever main came first in the attribute list."""
+    reg, form = _seed_record_form("Demote")
+    second = form + ".Attribute.Goods"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": second}),
+              "seed a second form attribute")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT, "fqn": second,
+        "properties": [{"name": "valueType", "value": {
+            "types": [{"kind": "CatalogObject", "ref": "Catalog"}]}}],
+    }), "type the second attribute as a catalog object")
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": second,
+        "properties": [{"name": "main", "value": True}],
+    })
+    assert_ok(r, "promote the second attribute to main")
+    demoted = (r.structured or {}).get("demotedMainAttributes")
+    assert demoted == ["Record"], \
+        "the attribute that lost the flag must be named back to the caller: %r" % (demoted,)
+
+    poll_diff_contains('xsi:type="form:CatalogFormExtInfo"',
+                       ctx="the root ext-info must follow the newly promoted main attribute")
+    xml = _form_xml(reg)
+    assert xml.count("<main>true</main>") == 1, \
+        "exactly one main attribute may remain, found %d" % (xml.count("<main>true</main>"),)
+    assert EXT_INFO_TYPE not in xml, "the previous main's ext-info kind must be gone"

@@ -6387,6 +6387,28 @@ public class FormElementWriterTest
                 Boolean.valueOf(main));
         }
 
+        @SuppressWarnings("unchecked")
+        EObject addMainAttribute(String name, String typeName)
+        {
+            EClass attributeType = attribute.eClass();
+            EObject added = attributeType.getEPackage().getEFactoryInstance().create(attributeType);
+            added.eSet(attributeType.getEStructuralFeature("name"), name); //$NON-NLS-1$
+            added.eSet(attributeType.getEStructuralFeature("main"), Boolean.TRUE); //$NON-NLS-1$
+            TypeDescription description = McoreFactory.eINSTANCE.createTypeDescription();
+            Type type = McoreFactory.eINSTANCE.createType();
+            type.setName(typeName);
+            description.getTypes().add(type);
+            added.eSet(attributeType.getEStructuralFeature("valueType"), description); //$NON-NLS-1$
+            ((List<EObject>)form.eGet(form.eClass().getEStructuralFeature("attributes"))).add(added); //$NON-NLS-1$
+            return added;
+        }
+
+        @SuppressWarnings("unchecked")
+        void detach(EObject attr)
+        {
+            ((List<EObject>)form.eGet(form.eClass().getEStructuralFeature("attributes"))).remove(attr); //$NON-NLS-1$
+        }
+
         void giveExtInfo(String kind)
         {
             EPackage pkg = form.eClass().getEPackage();
@@ -6451,10 +6473,10 @@ public class FormElementWriterTest
         extInfoBase.setAbstract(true);
         pkg.getEClassifiers().add(extInfoBase);
 
-        // Two kinds the mapping produces, so a test can watch the sync REPLACE one with the
-        // other, and one it never produces (the platform form GENERATOR writes that one).
+        // The kinds the tests move between: two the service maps, one only the form GENERATOR
+        // writes, and the one only the generator and the designer-XML importer map.
         for (String kind : new String[]{"InformationRegisterManagerFormExtInfo", //$NON-NLS-1$
-            "CatalogFormExtInfo", "CubeRecordSetFormExtInfo"}) //$NON-NLS-1$ //$NON-NLS-2$
+            "CatalogFormExtInfo", "CubeRecordSetFormExtInfo", "ObjectFormExtInfo"}) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         {
             EClass formExtInfo = f.createEClass();
             formExtInfo.setName(kind);
@@ -6524,43 +6546,104 @@ public class FormElementWriterTest
     }
 
     /**
-     * A kind this mapping never produced cannot be judged stale BY it:
-     * {@code CubeRecordSetFormExtInfo} comes from the platform form generator, and
-     * {@code createFormExtInfo} has no case that makes one. Clearing it would delete a node and
-     * its handlers on a guess.
+     * {@code CubeRecordSetFormExtInfo} is written by {@code RecordSetFormContainGenerator} and by
+     * nothing else - {@code createFormExtInfo} has no case for that category. The mapping carries
+     * the generator's pairing too, so the node is KEPT because it is the right one, not by an
+     * exception for kinds we cannot produce.
      */
     @Test
-    public void testSyncFormExtInfoKeepsAKindItCouldNotHaveProduced()
+    public void testSyncFormExtInfoKeepsAKindOnlyTheGeneratorWrites()
     {
         FormRootModel m = newFormRootModel("ExternalDataSourceCubeRecordSet.Sales", true); //$NON-NLS-1$
         m.giveExtInfo("CubeRecordSetFormExtInfo"); //$NON-NLS-1$
 
-        assertEquals("the node stays, and the sync reports the kind it found", //$NON-NLS-1$
+        assertEquals("the cube record set pairs with the kind the generator writes", //$NON-NLS-1$
             "CubeRecordSetFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
-        assertNotNull("a generator-authored node must not be removed on a guess", m.extInfo()); //$NON-NLS-1$
+        assertNotNull(m.extInfo());
     }
 
     /**
-     * A node this mapping DID produce, on a form whose main attribute now pairs with nothing, is
-     * stale by construction - however the form got there. The route that matters in practice is
-     * demote, retype the demoted attribute, promote it again: the node is left keyed to the old
-     * category, and keeping it would publish catalog events for a String-backed form.
+     * A chart-of-accounts object form is the case that decides WHICH platform mapping to mirror:
+     * the generator and the designer-XML importer both pair it with {@code ObjectFormExtInfo},
+     * while {@code createFormExtInfo} has no case for it and would clear the node. Every such form
+     * in a real configuration carries the node, so the narrow mapping is the wrong one to copy.
      */
     @Test
-    public void testSyncFormExtInfoClearsAKindItProducedOnceItsCategoryIsGone()
+    public void testSyncFormExtInfoPairsAChartOfAccountsFormWithTheObjectKind()
+    {
+        FormRootModel m = newFormRootModel("ChartOfAccountsObject.Main", true); //$NON-NLS-1$
+
+        assertEquals("ObjectFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
+        assertNotNull(m.extInfo());
+    }
+
+    /**
+     * {@code InformationRegisterManager} is admitted as a main attribute type by the platform
+     * ({@code FormAttributeService.MAIN_ATRRIBUTE_TYPE_PREFIX}) and paired with no kind by any of
+     * its three writers - so the node goes, handlers and all.
+     */
+    @Test
+    public void testSyncFormExtInfoClearsWhenNoWriterPairsTheCategory()
+    {
+        FormRootModel m = newFormRootModel("InformationRegisterManager.MyRegister", true); //$NON-NLS-1$
+        m.giveExtInfo("CatalogFormExtInfo"); //$NON-NLS-1$
+
+        assertNull("no writer pairs that category with a kind", //$NON-NLS-1$
+            FormElementWriter.syncFormExtInfo(m.form));
+        assertNull("a category that maps to nothing leaves no node behind", m.extInfo()); //$NON-NLS-1$
+    }
+
+    /**
+     * Promoting an attribute takes the flag off the previous main, mirroring
+     * {@code FormAttributeService.setMainAttribute}: the platform demotes first, then re-derives
+     * the node. Left undone, the form would carry two main attributes - which the platform reports
+     * as an error - and the root node would follow whichever came first in the list.
+     */
+    @Test
+    public void testPromotingAnAttributeDemotesThePreviousMain()
     {
         FormRootModel m = newFormRootModel("CatalogObject.Goods", true); //$NON-NLS-1$
         assertEquals("CatalogFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
+        EObject promoted = m.addMainAttribute("Register", //$NON-NLS-1$
+            "InformationRegisterRecordManager.MyRegister"); //$NON-NLS-1$
 
-        // demote - retype - promote, the sequence that leaves a node keyed to nothing
-        m.setMain(false);
-        m.retypeMainAttribute("String"); //$NON-NLS-1$
-        assertEquals("with no main attribute the node is left as it is", //$NON-NLS-1$
-            "CatalogFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
-        m.setMain(true);
+        assertEquals("the attribute that lost the flag is named back to the caller", //$NON-NLS-1$
+            List.of("Record"), FormElementWriter.demoteOtherMainAttributes(m.form, promoted)); //$NON-NLS-1$
+        assertFalse("the previous main must not keep the flag", //$NON-NLS-1$
+            FormElementWriter.isMainAttribute(m.attribute));
+        assertEquals("with one main attribute left, the node follows THAT one", //$NON-NLS-1$
+            "InformationRegisterManagerFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
+    }
 
-        assertNull(FormElementWriter.syncFormExtInfo(m.form));
-        assertNull("a node keyed to a category that no longer applies must go", m.extInfo()); //$NON-NLS-1$
+    @Test
+    public void testDemotingIsRefusedForAnAttributeThatIsNotItselfMain()
+    {
+        FormRootModel m = newFormRootModel("CatalogObject.Goods", true); //$NON-NLS-1$
+        EObject other = m.addMainAttribute("Other", "String"); //$NON-NLS-1$ //$NON-NLS-2$
+        other.eSet(other.eClass().getEStructuralFeature("main"), Boolean.FALSE); //$NON-NLS-1$
+
+        assertEquals("nothing is demoted on behalf of an attribute that was not promoted", //$NON-NLS-1$
+            List.of(), FormElementWriter.demoteOtherMainAttributes(m.form, other));
+        assertTrue("the real main attribute keeps its flag", //$NON-NLS-1$
+            FormElementWriter.isMainAttribute(m.attribute));
+    }
+
+    /**
+     * The flag only means anything on the form's OWN attribute list - the list
+     * {@code FormUtil.getMainAttribute} reads. A {@code main} on a nested attribute (a table
+     * column) names no main attribute, so it must not demote the one the form actually has.
+     */
+    @Test
+    public void testAMainFlagOutsideTheFormsAttributeListDemotesNothing()
+    {
+        FormRootModel m = newFormRootModel("CatalogObject.Goods", true); //$NON-NLS-1$
+        EObject nested = m.addMainAttribute("Column", "String"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.detach(nested);
+
+        assertEquals("a flag outside the form's attribute list decides nothing", //$NON-NLS-1$
+            List.of(), FormElementWriter.demoteOtherMainAttributes(m.form, nested));
+        assertTrue("the form's real main attribute keeps its flag", //$NON-NLS-1$
+            FormElementWriter.isMainAttribute(m.attribute));
     }
 
     /**
@@ -6585,20 +6668,18 @@ public class FormElementWriterTest
     }
 
     /**
-     * Setting {@code main=false} is an ordinary boolean change, and it must not take the node that
-     * holds the form's write and read bindings with it. The platform never asks this question
-     * without a main attribute at all - {@code setExtInfo} asserts {@code isMain}.
+     * Taking the main flag off is the platform's {@code resetExtInfo}: {@code form.setExtInfo(null)},
+     * unconditional, whatever kind the node was and whatever it held. The handlers bound inside go
+     * with it, exactly as {@code copyDataOfSameFeatures} no-ops on a null destination.
      */
     @Test
-    public void testSyncFormExtInfoLeavesAFormWithNoMainAttributeAlone()
+    public void testSyncFormExtInfoClearsTheNodeWhenNoAttributeIsMain()
     {
         FormRootModel m = newFormRootModel("InformationRegisterRecordManager.MyRegister", false); //$NON-NLS-1$
         m.giveExtInfo("InformationRegisterManagerFormExtInfo"); //$NON-NLS-1$
 
-        assertEquals("InformationRegisterManagerFormExtInfo", //$NON-NLS-1$
-            FormElementWriter.syncFormExtInfo(m.form));
-        assertNotNull("main=false must not destroy the ext-info nor the handlers inside it", //$NON-NLS-1$
-            m.extInfo());
+        assertNull(FormElementWriter.syncFormExtInfo(m.form));
+        assertNull("a form with no main attribute carries no root ext-info", m.extInfo()); //$NON-NLS-1$
     }
 
     @Test
