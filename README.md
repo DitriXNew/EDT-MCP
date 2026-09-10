@@ -234,7 +234,7 @@ Quickly switch between common tool configurations using presets:
 | Preset | Description |
 |--------|-------------|
 | **All Tools** | All tools enabled (default) |
-| **Analysis Only** | Read-only analysis — Core, Errors, Code Intelligence, Tags |
+| **Analysis Only** | Read-only analysis — Core except `delete_project`, plus Errors, Code Intelligence, Tags |
 | **Code Review** | Analysis + BSL code reading (excludes `write_module_source`) |
 | **Development** | Full development without debugging tools |
 
@@ -855,8 +855,10 @@ workbench) to confirm — so the AI cannot silently delete, rename or retype con
 The gated tools are `delete_metadata`, `rename_metadata_object`, `delete_project`,
 `delete_infobase`, `update_database`, `evaluate_expression` (arbitrary BSL in the running 1C app —
 its effect cannot be classified from the call, so it always asks), `git` **for its write-capable
-subcommands**, `dcs` **only for a destructive retype**, and `modify_metadata` **only when it changes
-an object's or attribute's data type** (a benign property edit is never gated).
+subcommands**, `dcs` **only for a destructive retype**, `modify_metadata` **only when it changes
+an object's or attribute's data type** (a benign property edit is never gated), and `merge_rules`
+**only when a `write` replaces the file `basedOn` names** (a write to a path that holds no file is
+never gated).
 
 Configure it in **Window → Preferences → MCP Server**:
 

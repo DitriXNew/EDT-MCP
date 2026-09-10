@@ -421,6 +421,28 @@ def test_a_zip_target_is_refused_because_edt_would_ignore_it():
 
 
 @e2e_test(tool="merge_rules", kind="action")
+def test_a_blank_comparison_id_is_refused_rather_than_read_as_omitted():
+    """A blank is not the omission it renders as. Omitting comparisonId means "validate
+    against whichever comparison is RUNNING, and write NOT VALIDATED if none is"; sending
+    it blank used to mean the same thing, so a caller whose variable resolved to nothing
+    got an unvalidated file where they had asked for a checked one - reported as a
+    successful write.
+
+    Run on the wire because the promise is about what the SERVER does with an argument it
+    was actually sent, and only a live call carries the argument as the caller spelled it.
+    """
+    target = os.path.join(_workdir(), "rules.xml")
+
+    r = call("merge_rules", {"mode": "write", "filePath": target,
+                             "comparisonId": "",
+                             "decisions": [{"path": [], "rule": "DoNotMerge"}]})
+    err = assert_error(r, "a blank comparisonId")
+    assert_error_quality(err, names=["comparisonId"], suggests=["omit"],
+                         ctx="blank comparisonId")
+    assert not os.path.exists(target), "the refused write must create nothing"
+
+
+@e2e_test(tool="merge_rules", kind="action")
 def test_a_comparison_that_is_not_running_is_refused_rather_than_quietly_unvalidated():
     target = os.path.join(_workdir(), "rules.xml")
 

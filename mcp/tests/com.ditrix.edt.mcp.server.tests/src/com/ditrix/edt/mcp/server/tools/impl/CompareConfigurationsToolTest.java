@@ -846,6 +846,49 @@ public class CompareConfigurationsToolTest
     }
 
     @Test
+    public void testAMergeRulesFileSentBlankStartsNothing()
+    {
+        // The same trap as a blank scope, one parameter along: trimToNull folds "" into an
+        // omission, and the omission is the OTHER call - "compare without pre-set rules". A caller
+        // whose variable resolved to nothing got a comparison with NONE of their decisions
+        // applied, paid EDT's single slot for it, and was told nothing.
+        String result = tool.execute(request(Map.of("mergeRulesFile", "", //$NON-NLS-1$ //$NON-NLS-2$
+            "waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // Asked BEFORE the message, and before the file check: the refusal has to arrive above the
+        // precheck, or a blank costs the caller the slot on the way to being refused.
+        assertEquals("a blank mergeRulesFile may not reach the precheck", 0, //$NON-NLS-1$
+            backend.prechecks());
+        assertEquals("a blank mergeRulesFile may not start a comparison", 0, backend.starts()); //$NON-NLS-1$
+        assertContains(errorMessage(result), "mergeRulesFile"); //$NON-NLS-1$
+        assertContains(errorMessage(result), "omit"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAMergeRulesFileOfNothingButWhitespaceStartsNothingEither()
+    {
+        // Its own method rather than a second assertion above: JUnit stops at the first failed
+        // one, so a blank of a different spelling would only be checked while the first held.
+        String result = tool.execute(request(Map.of("mergeRulesFile", "   ", //$NON-NLS-1$ //$NON-NLS-2$
+            "waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("whitespace may not reach the precheck either", 0, backend.prechecks()); //$NON-NLS-1$
+        assertContains(errorMessage(result), "mergeRulesFile"); //$NON-NLS-1$
+    }
+
+    /**
+     * The control: an OMITTED mergeRulesFile still runs, and still reaches the precheck. Without
+     * it the refusal above would be satisfied by a tool that had stopped starting comparisons.
+     */
+    @Test
+    public void testAnOmittedMergeRulesFileStillReachesThePrecheck()
+    {
+        tool.execute(request(Map.of("waitSeconds", "10"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("an omitted mergeRulesFile must still compare", 1, backend.prechecks()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAScopeSentBlankStartsNothing()
     {
         // The third way into the same trap, and the easiest one for a caller to fall into: a
@@ -3282,6 +3325,8 @@ public class CompareConfigurationsToolTest
         private final AtomicReference<LaunchRequest> lastRequest = new AtomicReference<>();
         private final AtomicReference<String> startFailure = new AtomicReference<>();
         private final AtomicReference<String> precheckFailure = new AtomicReference<>();
+        /** How many calls got as far as the precheck - the first thing a launch really costs. */
+        private final AtomicInteger prechecks = new AtomicInteger();
         private final AtomicReference<Progress> pollAnswer =
             new AtomicReference<>(Progress.finished("COMPARISON_PROCESS_FINISHED")); //$NON-NLS-1$
         /** Answers handed out in order before the standing one, so a tick can differ from its
@@ -3318,6 +3363,7 @@ public class CompareConfigurationsToolTest
         @Override
         public String precheck(LaunchRequest request)
         {
+            prechecks.incrementAndGet();
             return precheckFailure.get();
         }
 
@@ -3629,6 +3675,11 @@ public class CompareConfigurationsToolTest
         boolean awaitStartEntered() throws InterruptedException
         {
             return startEntered.await(10, TimeUnit.SECONDS);
+        }
+
+        int prechecks()
+        {
+            return prechecks.get();
         }
 
         int starts()

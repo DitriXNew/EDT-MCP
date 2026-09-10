@@ -304,6 +304,81 @@ public class ComparisonNodeRendererTest
         return attribute;
     }
 
+    // ============ Two synonyms that RENDER alike are not thereby the same synonym ============
+
+    /**
+     * The third instance of the same wrong ANSWER, and the one where the display hides STRUCTURE
+     * rather than a detail. A synonym is an {@code EMap} of language code to FREE TEXT, rendered
+     * as {@code key=value} pairs joined by {@code ", "} - both of which free text may itself
+     * contain. So a one-language synonym whose value spells a second pair renders exactly like
+     * the real two-language one, the row was compared as those rendered strings, and two
+     * different synonyms came out SAME while the document went on to state that nothing differs.
+     */
+
+    /** The Russian for "Hello", in escapes so a non-UTF-8 build cannot mangle the source. */
+    private static final String HELLO_RU = "\u041f\u0440\u0438\u0432\u0435\u0442"; //$NON-NLS-1$
+
+    @Test
+    public void testTwoSynonymsThatJoinToTheSameTextAreStillADifference()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(attributeWithSynonymText(), attributeWithSynonymMap(),
+                null)));
+
+        assertTrue("one language spelling a second pair is not two languages: " + text, //$NON-NLS-1$
+            text.contains(" (1 differing)")); //$NON-NLS-1$
+    }
+
+    /**
+     * The control against the opposite error: making the identity structural must not turn two
+     * sides holding the SAME synonym into a difference.
+     */
+    @Test
+    public void testTheSameSynonymOnBothSidesStillAgrees()
+    {
+        String text = render(topNode("TopMdObjectComparisonNode"), ComparisonNodeStatus.FINISHED, //$NON-NLS-1$
+            access(new ComparedObjects<EObject>(attributeWithSynonymMap(), attributeWithSynonymMap(),
+                null)));
+
+        assertTrue("the same synonym on both sides is not a difference: " + text, //$NON-NLS-1$
+            text.contains(" (0 differing)")); //$NON-NLS-1$
+    }
+
+    /**
+     * One language whose VALUE spells what a second pair would render as. The uuid and name are
+     * pinned, exactly as {@code attributeTypedString} pins them, so the only thing the counts
+     * above can be measuring is the synonym.
+     *
+     * @return the attribute
+     */
+    private static CatalogAttribute attributeWithSynonymText()
+    {
+        CatalogAttribute attribute = newSynonymAttribute();
+        attribute.getSynonym().put("en", "Hello, ru=" + HELLO_RU); //$NON-NLS-1$ //$NON-NLS-2$
+        return attribute;
+    }
+
+    /**
+     * The genuinely two-language synonym that renders as the same string.
+     *
+     * @return the attribute
+     */
+    private static CatalogAttribute attributeWithSynonymMap()
+    {
+        CatalogAttribute attribute = newSynonymAttribute();
+        attribute.getSynonym().put("en", "Hello"); //$NON-NLS-1$ //$NON-NLS-2$
+        attribute.getSynonym().put("ru", HELLO_RU); //$NON-NLS-1$
+        return attribute;
+    }
+
+    private static CatalogAttribute newSynonymAttribute()
+    {
+        CatalogAttribute attribute = MdClassFactory.eINSTANCE.createCatalogAttribute();
+        attribute.setName("Code"); //$NON-NLS-1$
+        attribute.setUuid(UUID.fromString("2f5e93a1-0000-0000-0000-000000000003")); //$NON-NLS-1$
+        return attribute;
+    }
+
     // ============ A target the introspector ADMITS is a value, not an empty property ============
 
     /**

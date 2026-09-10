@@ -23,9 +23,12 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFileAttributes;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HexFormat;
 import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -33,6 +36,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -370,6 +374,7 @@ public final class MergeRulesCodec
         }
         MergeRulesDocument document = parse(new ByteArrayInputStream(content));
         document.setSourceLabel(file.toString());
+        document.setSourceDigest(digestOf(content));
         return document;
     }
 
@@ -508,7 +513,54 @@ public final class MergeRulesCodec
     public static void write(Path file, MergeRulesDocument document, Target target)
         throws IOException
     {
-        write(file, document, target, null);
+        write(file, document, target, (BasicFileAttributes)null);
+    }
+
+    /**
+     * The same write, told what the caller verified the target to be.
+     * <p>
+     * The caller's own last look is taken before this method serializes the document, creates
+     * a temporary, writes it and inherits permissions - all of which stand between that look
+     * and the move that replaces the file. Handing the identity in lets the LAST step before
+     * the move be the question, exactly as {@link Target#MUST_NOT_EXIST} already asks it of its
+     * reservation. It does not make the replacement atomic; it removes the wide window in
+     * front of it.
+     * </p>
+     *
+     * @param file the target file
+     * @param document the document
+     * @param target what the caller has established about a file already on the path
+     * @param expected the attributes the caller verified the target by, or {@code null} to
+     *            replace whatever is on the path
+     * @throws IOException when the file cannot be written, or no longer holds {@code expected}
+     */
+    public static void write(Path file, MergeRulesDocument document, Target target,
+        BasicFileAttributes expected) throws IOException
+    {
+        write(file, document, target, null, NOTHING_INTERFERES, expected, null);
+    }
+
+    /**
+     * The same write, with the caller's OWN verification re-asked immediately before the move.
+     * <p>
+     * The attribute identity this class can check is cheap and blind to an in-place edit that
+     * kept the length and restored the stamps - which is exactly what the caller's content
+     * digests are for. Rather than teach this class about them, the caller hands in the
+     * question: {@code stillVerified} answers whether the target is still the one it authorized,
+     * and it is asked at the last possible instant instead of before the staging work.
+     * </p>
+     *
+     * @param file the target file
+     * @param document the document
+     * @param target what the caller has established about a file already on the path
+     * @param expected the attributes the caller verified the target by, or {@code null}
+     * @param stillVerified the caller's own re-check, or {@code null} for none
+     * @throws IOException when the file cannot be written, or is no longer the verified one
+     */
+    public static void write(Path file, MergeRulesDocument document, Target target,
+        BasicFileAttributes expected, BooleanSupplier stillVerified) throws IOException
+    {
+        write(file, document, target, null, NOTHING_INTERFERES, expected, stillVerified);
     }
 
     /**
@@ -552,6 +604,47 @@ public final class MergeRulesCodec
     }
 
     /**
+     * The zip write, told what the caller verified the target to be.
+     *
+     * @param file the target file, normally named {@code .zip}
+     * @param document the document
+     * @param target what the caller has established about a file already on the path
+     * @param entryId the comparison id the entry is named after, without an extension
+     * @param expected the attributes the caller verified the target by, or {@code null}
+     * @throws IOException when the file cannot be written, or no longer holds {@code expected}
+     */
+    public static void writeZip(Path file, MergeRulesDocument document, Target target,
+        String entryId, BasicFileAttributes expected) throws IOException
+    {
+        writeZip(file, document, target, entryId, expected, null);
+    }
+
+    /**
+     * The zip write, with the caller's own verification re-asked immediately before the move.
+     *
+     * @param file the target file, normally named {@code .zip}
+     * @param document the document
+     * @param target what the caller has established about a file already on the path
+     * @param entryId the comparison id the entry is named after, without an extension
+     * @param expected the attributes the caller verified the target by, or {@code null}
+     * @param stillVerified the caller's own re-check, or {@code null} for none
+     * @throws IOException when the file cannot be written, or is no longer the verified one
+     */
+    public static void writeZip(Path file, MergeRulesDocument document, Target target,
+        String entryId, BasicFileAttributes expected, BooleanSupplier stillVerified)
+        throws IOException
+    {
+        if (entryId == null || entryId.isBlank())
+        {
+            throw new IllegalArgumentException(
+                "A zipped merge-rules file is addressed by the entry name the comparison looks " //$NON-NLS-1$
+                    + "for, and none was supplied. EDT ignores an archive whose entry is named " //$NON-NLS-1$
+                    + "anything else, so no name can be invented here."); //$NON-NLS-1$
+        }
+        write(file, document, target, entryId, NOTHING_INTERFERES, expected, stillVerified);
+    }
+
+    /**
      * The shared write. {@code zipEntryId} picks the container: {@code null} writes the bare xml
      * document, a name writes a one-entry zip carrying it.
      *
@@ -564,7 +657,7 @@ public final class MergeRulesCodec
     private static void write(Path file, MergeRulesDocument document, Target target, String zipEntryId)
         throws IOException
     {
-        write(file, document, target, zipEntryId, NOTHING_INTERFERES);
+        write(file, document, target, zipEntryId, NOTHING_INTERFERES, null, null);
     }
 
     /**
@@ -586,6 +679,25 @@ public final class MergeRulesCodec
      */
     static void write(Path file, MergeRulesDocument document, Target target, String zipEntryId,
         Runnable afterReservation) throws IOException
+    {
+        write(file, document, target, zipEntryId, afterReservation, null, null);
+    }
+
+    /**
+     * The shared write, with the caller's verified identity re-asked immediately before each
+     * replacement move.
+     *
+     * @param file the target file
+     * @param document the document
+     * @param target what the caller has established about a file already on the path
+     * @param zipEntryId the zip entry's name without its extension, or {@code null} for bare xml
+     * @param afterReservation the test seam described above; production does nothing here
+     * @param expected the attributes the caller verified the target by, or {@code null}
+     * @throws IOException when the file cannot be written, or no longer holds {@code expected}
+     */
+    static void write(Path file, MergeRulesDocument document, Target target, String zipEntryId,
+        Runnable afterReservation, BasicFileAttributes expected, BooleanSupplier stillVerified)
+        throws IOException
     {
         // FIRST, and before a single filesystem step - not even the parent directories. This is
         // the one refusal that has to leave the path exactly as it found it, and a check made
@@ -644,6 +756,12 @@ public final class MergeRulesCodec
                 // written.
                 refuseUnlessThePathStillHoldsTheReservation(resolved, reservation);
             }
+            // The same question for a REPLACEMENT, and in the same place: everything between the
+            // caller's own last look and here - serializing, creating the temporary, writing it,
+            // inheriting permissions - is window, and this closes all of it but the step to the
+            // move itself.
+            refuseUnlessTheTargetIsStillTheFileVerified(resolved, expected);
+            refuseUnlessTheCallerStillRecognisesTheTarget(resolved, stillVerified);
             try
             {
                 Files.move(temporary, resolved, StandardCopyOption.REPLACE_EXISTING,
@@ -658,6 +776,8 @@ public final class MergeRulesCodec
                     // is another one somebody can write into.
                     refuseUnlessThePathStillHoldsTheReservation(resolved, reservation);
                 }
+                refuseUnlessTheTargetIsStillTheFileVerified(resolved, expected);
+                refuseUnlessTheCallerStillRecognisesTheTarget(resolved, stillVerified);
                 Files.move(temporary, resolved, StandardCopyOption.REPLACE_EXISTING);
             }
         }
@@ -681,6 +801,65 @@ public final class MergeRulesCodec
                 }
             }
             throw e;
+        }
+    }
+
+    /**
+     * Refuses to install the document when the CALLER no longer recognises what is on the path.
+     * <p>
+     * The attribute check beside this one cannot see an in-place edit that kept the length and
+     * restored the stamps; the caller's own comparison can, and this is where it is worth
+     * asking - after the staging work rather than before it.
+     * </p>
+     *
+     * @param resolved the target path
+     * @param stillVerified the caller's re-check, or {@code null} when there is none
+     * @throws IOException when the caller says the target is no longer the one it authorized
+     */
+    private static void refuseUnlessTheCallerStillRecognisesTheTarget(Path resolved,
+        BooleanSupplier stillVerified) throws IOException
+    {
+        if (stillVerified != null && !stillVerified.getAsBoolean())
+        {
+            throw new IOException("Nothing was written: " + resolved //$NON-NLS-1$
+                + " stopped being the file this write was authorized against while the " //$NON-NLS-1$
+                + "replacement was being prepared, so installing it would discard whatever was " //$NON-NLS-1$
+                + "saved to it since."); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Refuses to install the document when the path no longer holds the file the CALLER
+     * verified. Does nothing when the caller named no expectation.
+     *
+     * @param resolved the target path
+     * @param expected the attributes the caller verified it by, or {@code null}
+     * @throws IOException when the path now holds something else
+     */
+    private static void refuseUnlessTheTargetIsStillTheFileVerified(Path resolved,
+        BasicFileAttributes expected) throws IOException
+    {
+        if (expected == null)
+        {
+            return;
+        }
+        BasicFileAttributes present;
+        try
+        {
+            present = Files.readAttributes(resolved, BasicFileAttributes.class);
+        }
+        catch (IOException gone)
+        {
+            throw new IOException("Nothing was written: " + resolved //$NON-NLS-1$
+                + " could no longer be read when the replacement was about to be installed, so " //$NON-NLS-1$
+                + "this write cannot tell that it would replace the file it verified.", gone); //$NON-NLS-1$
+        }
+        if (!isTheFileRead(expected, present))
+        {
+            throw new IOException("Nothing was written: " + resolved //$NON-NLS-1$
+                + " changed between the last verification and the replacement - what is on that " //$NON-NLS-1$
+                + "path now is not the file this write was authorized against, and replacing it " //$NON-NLS-1$
+                + "would discard whatever was saved to it since."); //$NON-NLS-1$
         }
     }
 
@@ -907,15 +1086,176 @@ public final class MergeRulesCodec
      */
     static boolean isTheSameFile(BasicFileAttributes taken, BasicFileAttributes present)
     {
-        if (!present.isRegularFile() || present.size() != 0
-            || !taken.creationTime().equals(present.creationTime())
-            || !taken.lastModifiedTime().equals(present.lastModifiedTime()))
+        // The size is the literal 0 and not taken.size(), because the reservation is an EMPTY file
+        // by construction - identifyReservation refuses to record anything else as an identity.
+        // This is the half that holds onto the case that costs something, whatever any key says: a
+        // replacement carrying rules is not empty.
+        return present.isRegularFile() && present.size() == 0 && sameStampsAndKey(taken, present);
+    }
+
+    /**
+     * Whether the file described by {@code present} is the file that was READ - the same question
+     * {@link #isTheSameFile} asks about a reservation, asked about a file of any size.
+     * <p>
+     * The two differ in one clause and share the rest: a reservation is known to be empty, so its
+     * size is compared against zero, while a file that was read is compared against the size it
+     * had when it was read. Everything the shared tail can and cannot tell apart is the same, and
+     * {@code releaseReservation} states it: the key only NARROWS the shape, because a
+     * delete-then-create can be handed back the very inode the first file held, and the residue
+     * the check cannot see is a replacement wearing the same size and both the same instants -
+     * which a POSIX store's inode reuse and NTFS file-system tunnelling both make reachable.
+     * <p>
+     * <b>The access time is deliberately not compared.</b> The caller that holds a description
+     * taken before a prompt has ordinarily READ the file in between - that is what it holds the
+     * description for - and a read updates the access time on the stores that keep one. Comparing
+     * it would refuse every such caller, which is a false refusal rather than a strict one.
+     *
+     * @param read the description taken when the file was read
+     * @param present the description read now
+     * @return whether they describe one unchanged file
+     */
+    public static boolean isTheFileRead(BasicFileAttributes read, BasicFileAttributes present)
+    {
+        return present.isRegularFile() && present.size() == read.size()
+            && sameStampsAndKey(read, present);
+    }
+
+    /**
+     * The digest of the bytes a read consumed, recorded on the document by {@link #read} and
+     * re-taken by {@link #documentDigest} - the pair a caller compares to prove that the file it
+     * is about to replace still holds what it parsed.
+     *
+     * @param content the bytes that were parsed
+     * @return their hex SHA-256
+     */
+    static String digestOf(byte[] content)
+    {
+        MessageDigest digest;
+        try
         {
-            // Not the shape that was claimed, whatever any key says. This is the half that holds
-            // onto the case that costs something: a replacement carrying rules is not empty.
+            digest = MessageDigest.getInstance("SHA-256"); //$NON-NLS-1$
+        }
+        catch (NoSuchAlgorithmException impossible)
+        {
+            // Every conforming JRE ships SHA-256; there is no fallback that would be honest here.
+            throw new IllegalStateException("SHA-256 is required to verify the target", impossible); //$NON-NLS-1$
+        }
+        return HexFormat.of().formatHex(digest.digest(content));
+    }
+
+    /**
+     * The digest of the file as a whole, byte for byte.
+     * <p>
+     * For an ARCHIVE this is the honest snapshot: the write replaces the entire file, so the
+     * entire file is what must not have changed under it - the entry content, its name, its
+     * comment and extra field, the archive comment, the entries beside it and every structural
+     * detail this code does not model. Comparing those one at a time meant a new gap for every
+     * attribute nobody had listed yet.
+     * </p>
+     *
+     * @param file the file to digest
+     * @return the hex SHA-256 of its bytes
+     * @throws IOException when it cannot be read - which a caller comparing digests must treat
+     *             as changed
+     */
+    public static String fileDigest(Path file) throws IOException
+    {
+        return fileDigest(file, Long.MAX_VALUE);
+    }
+
+    /**
+     * The same digest, refusing to read more than {@code limit} bytes.
+     * <p>
+     * The bound belongs to the READ, not to a {@code stat} in front of it: an archive replaced
+     * between the two would be streamed whole no matter what the earlier size said. Stopping
+     * the stream itself is what makes the work bounded by construction.
+     * </p>
+     *
+     * @param file the file to digest
+     * @param limit the largest number of bytes this read may consume
+     * @return the hex SHA-256 of its bytes
+     * @throws IOException when it cannot be read, or holds more than {@code limit} bytes
+     */
+    public static String fileDigest(Path file, long limit) throws IOException
+    {
+        MessageDigest digest;
+        try
+        {
+            digest = MessageDigest.getInstance("SHA-256"); //$NON-NLS-1$
+        }
+        catch (NoSuchAlgorithmException impossible)
+        {
+            throw new IllegalStateException("SHA-256 is required to verify the target", impossible); //$NON-NLS-1$
+        }
+        byte[] buffer = new byte[8192];
+        try (InputStream in = Files.newInputStream(file))
+        {
+            long consumed = 0;
+            int read;
+            while ((read = in.read(buffer)) > 0)
+            {
+                consumed += read;
+                if (consumed > limit)
+                {
+                    throw new IOException("Nothing was written: " + file //$NON-NLS-1$
+                        + " grew past the " + limit + " bytes it held when it was read, so it is " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "no longer the file this call verified and is not read any further."); //$NON-NLS-1$
+                }
+                digest.update(buffer, 0, read);
+            }
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+    /**
+     * Re-reads a file the way {@link #read} would - the zip entry's bytes for an archive, the
+     * bounded file otherwise - and returns their digest, WITHOUT keeping the parsed document.
+     * <p>
+     * The definition of "the bytes" is deliberately the parser's, not the filesystem's: it is
+     * bounded by {@link #MAX_DOCUMENT_BYTES} the same way, and for a large archive holding a small
+     * settings entry it hashes the entry rather than the archive. That is what makes the answer
+     * comparable with {@link MergeRulesDocument#sourceDigest()}.
+     * </p>
+     *
+     * @param file the file to digest
+     * @return the digest of the bytes a read would parse
+     * @throws IOException when the file cannot be read
+     * @throws MergeRulesFormatException when it is not a readable merge-settings document - which
+     *             a caller comparing digests must treat as changed
+     */
+    public static String documentDigest(Path file) throws IOException, MergeRulesFormatException
+    {
+        return read(file).sourceDigest();
+    }
+
+    /**
+     * Whether a file of this size is small enough to be a merge-rules document at all - the same
+     * {@link #MAX_DOCUMENT_BYTES} bound {@link #read} applies, exposed so a caller can decide not
+     * to hash an input the parse would refuse anyway.
+     *
+     * @param sizeInBytes the file's size
+     * @return {@code true} when it is within the document bound
+     */
+    public static boolean withinDocumentBound(long sizeInBytes)
+    {
+        return sizeInBytes <= MAX_DOCUMENT_BYTES;
+    }
+
+    /**
+     * The half {@link #isTheSameFile} and {@link #isTheFileRead} share: both instants, and the key
+     * where the store answers one.
+     *
+     * @param before the description taken earlier
+     * @param present the description read now
+     * @return whether the two instants match and the key does not contradict them
+     */
+    private static boolean sameStampsAndKey(BasicFileAttributes before, BasicFileAttributes present)
+    {
+        if (!before.creationTime().equals(present.creationTime())
+            || !before.lastModifiedTime().equals(present.lastModifiedTime()))
+        {
             return false;
         }
-        Object claimedKey = taken.fileKey();
+        Object claimedKey = before.fileKey();
         Object presentKey = present.fileKey();
         if (claimedKey == null && presentKey == null)
         {
@@ -1655,7 +1995,7 @@ public final class MergeRulesCodec
      * @param name a zip entry name
      * @return the name a comparison id is matched against
      */
-    private static String removeExtension(String name)
+    public static String removeExtension(String name)
     {
         String base = name.substring(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1);
         int dot = base.lastIndexOf('.');
@@ -1836,6 +2176,8 @@ public final class MergeRulesCodec
             }
             MergeRulesDocument document = parse(new ByteArrayInputStream(content));
             document.setSourceLabel(file + "!" + entry.getName()); //$NON-NLS-1$
+            document.setSourceEntry(entry.getName());
+            document.setSourceDigest(digestOf(content));
             // What the archive held BESIDES the entry that was read, carried on the document
             // because this is the only moment it is knowable. An archive of one merge-settings
             // entry beside a notes file reads perfectly well - the candidate is unambiguous - and

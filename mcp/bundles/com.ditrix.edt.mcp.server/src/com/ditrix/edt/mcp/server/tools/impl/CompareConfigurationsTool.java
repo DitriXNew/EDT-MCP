@@ -377,9 +377,23 @@ public class CompareConfigurationsTool implements IMcpTool
         {
             return scopeError;
         }
+        // Presence, then value, a third time - and for the third parameter the same trap is set
+        // the same way. trimToNull folds a blank into an omission, and the omission is the OTHER
+        // call: "compare without pre-set rules". A caller whose variable resolved to empty got a
+        // comparison with none of their decisions applied, took EDT's single slot for it, and was
+        // told nothing. Asked BEFORE validateMergeRulesFile and before the precheck, so a blank
+        // costs neither a filesystem question nor the slot.
+        boolean rulesSupplied = params != null && params.containsKey(KEY_MERGE_RULES_FILE);
         List<String> scope = JsonUtils.extractArrayArgument(params, KEY_SCOPE);
         String mergeRulesFile =
             trimToNull(JsonUtils.extractStringArgument(params, KEY_MERGE_RULES_FILE));
+        if (rulesSupplied && mergeRulesFile == null)
+        {
+            return ToolResult.error("Nothing was started: '" + KEY_MERGE_RULES_FILE //$NON-NLS-1$
+                + "' was sent blank, and a blank path names no file. Pass the absolute path of a " //$NON-NLS-1$
+                + "merge-rules file to apply its decisions before the comparison starts, or omit " //$NON-NLS-1$
+                + "the parameter entirely to compare without pre-set rules.").toJson(); //$NON-NLS-1$
+        }
         String rulesError = validateMergeRulesFile(mergeRulesFile);
         if (rulesError != null)
         {
@@ -565,8 +579,9 @@ public class CompareConfigurationsTool implements IMcpTool
      * <p>
      * One place still reads this parameter the other way, deliberately: {@code namedArgumentsPresent},
      * which decides whether a RELEASE request also carries launch arguments, asks
-     * {@code trimToNull} and so counts a blank scope as absent. A release alongside
-     * {@code scope: ""} therefore proceeds instead of being refused as mixed intent. That is the
+     * {@code trimToNull} and so counts a blank scope - and, on the same rule, a blank
+     * {@code mergeRulesFile} - as absent. A release alongside {@code scope: ""} therefore
+     * proceeds instead of being refused as mixed intent. That is the
      * right reading there - a blank carries no launch intent, and refusing it would refuse a
      * release whose caller merely passed an empty variable - but it does mean "sent" is answered
      * by the key here and by the value there, and the two answers differ for exactly this input.
