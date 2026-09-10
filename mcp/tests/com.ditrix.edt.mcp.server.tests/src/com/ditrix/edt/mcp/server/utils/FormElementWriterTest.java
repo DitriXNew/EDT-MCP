@@ -6055,6 +6055,24 @@ public class FormElementWriterTest
             FormElementWriter.kindDecidesExtInfo(addNamedItem(form, "Button", "Go"))); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    /**
+     * A {@code Table} is a {@code DataItem} - a SIBLING of {@code FormField}, not a subclass, and
+     * nothing in the metamodel subclasses FormField at all. Dispatching on the hierarchy must
+     * therefore not start demanding a field node from a table: a table's ext-info follows its data
+     * path and is legitimately absent on most real ones.
+     */
+    @Test
+    public void testATableIsNotDraggedIntoTheFieldDispatchByTheHierarchy()
+    {
+        EObject form = newForm();
+        EObject table = addNamedItem(form, "Table", "Goods"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("a Table is no kind whose type decides its ext-info", //$NON-NLS-1$
+            FormElementWriter.kindDecidesExtInfo(table));
+        assertNull("nothing is expected of it, so a table carrying no node is not a defect", //$NON-NLS-1$
+            FormElementWriter.expectedExtInfoClassifier(table));
+    }
+
     @Test
     public void testEveryFieldTypeGetsItsExtInfo()
     {
