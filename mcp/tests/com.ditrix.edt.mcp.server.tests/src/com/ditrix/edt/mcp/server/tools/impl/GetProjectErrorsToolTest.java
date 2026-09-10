@@ -2616,6 +2616,33 @@ public class GetProjectErrorsToolTest
     }
 
     @Test
+    public void testAnAllUnsupportedRequestKeepsItsOwnReason()
+    {
+        // Nothing was scanned, so it stays a refusal - but an UNSUPPORTED family is not a typo:
+        // its reason already names the tool that owns it, and the FQN-lookup advice would send
+        // the caller to fix an address that was never wrong.
+        String unsupported = "XDTOPackage.P.Property.N"; //$NON-NLS-1$
+        GetProjectErrorsTool.AddressResolution resolution =
+            new GetProjectErrorsTool.AddressResolution();
+        resolution.unsupported.add(
+            unsupportedEntry(unsupported, "call validate_xdto_package instead")); //$NON-NLS-1$
+
+        String report = GetProjectErrorsTool.assembleAddressReport(
+            Collections.<ErrorInfo> emptyList(), "P", null, //$NON-NLS-1$
+            Collections.singletonList(unsupported), 100, false, resolution,
+            new int[] {0}, new int[] {0});
+
+        assertTrue("the response must be a ToolResult refusal", //$NON-NLS-1$
+            report.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("the address's OWN reason must survive the refusal: " + report, //$NON-NLS-1$
+            report.contains(unsupported) && report.contains("validate_xdto_package")); //$NON-NLS-1$
+        assertFalse("an unsupported family is not a misspelling to look up: " + report, //$NON-NLS-1$
+            report.contains("get_metadata_objects")); //$NON-NLS-1$
+        assertFalse("an unrun scan must never carry the clean heading", //$NON-NLS-1$
+            report.contains("# No Errors Found")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testEveryResolvingYoReadingOfADeferredMemberAccumulates()
     {
         // The guard that lets the deferred path ACCUMULATE was not covered: with only one yo reading

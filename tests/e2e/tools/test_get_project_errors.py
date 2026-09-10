@@ -739,6 +739,19 @@ def test_xdto_member_address_is_unsupported_not_missing():
         assert_not_contains(_report(r), "objectsNotFound",
                             "an unsupported address must never be called missing")
 
+    # A request made ONLY of unsupported addresses is still refused - nothing was scanned, so a
+    # clean heading would be invented - but the refusal must carry the address's OWN reason.
+    # The spelling advice belongs to a MISS: an unsupported family is not a wrong FQN.
+    only = call("get_project_errors", {"projectName": PROJECT,
+                                       "objectFqns": ["XDTOPackage.P.Property.N"]})
+    err = assert_error(only, "a request made only of unsupported addresses")
+    assert_contains(err, "XDTOPackage.P.Property.N",
+                    "the refusal must name the address it could not scan")
+    assert_contains(err, "validate_xdto_package",
+                    "the address's own remedy must survive the refusal")
+    assert_not_contains(err, "get_metadata_objects",
+                        "an unsupported family is not a misspelling to look up")
+
     # The PACKAGE level is supported: this fixture has no XDTO package, so the honest verdict
     # for a package address is an ordinary miss - NOT "unsupported".
     pkg = "XDTOPackage.NoSuchPackage_e2e_xyz"

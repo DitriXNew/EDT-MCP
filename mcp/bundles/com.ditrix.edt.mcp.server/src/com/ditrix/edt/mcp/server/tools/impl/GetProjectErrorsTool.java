@@ -622,12 +622,7 @@ public class GetProjectErrorsTool implements IMcpTool
             && (!resolution.notFound.isEmpty() || !resolution.unsupported.isEmpty()))
         {
             // No resolved scope means no marker was scanned, so an all-clear would be invented.
-            resolution.error = ToolResult.error("Cannot scan " + PARAM_OBJECT_FQNS //$NON-NLS-1$
-                + " because none of the requested addresses resolved: " //$NON-NLS-1$
-                + String.join(", ", objectFqns) //$NON-NLS-1$
-                + ". Use the loose '" + PARAM_OBJECTS //$NON-NLS-1$
-                + "' filter to match reported locations, or call get_metadata_objects to find valid FQNs.") //$NON-NLS-1$
-                .toJson();
+            resolution.error = ToolResult.error(unscannableRefusal(resolution)).toJson();
             return resolution.error;
         }
         StringBuilder md = new StringBuilder();
@@ -646,6 +641,36 @@ public class GetProjectErrorsTool implements IMcpTool
         appendIncompleteScopeWarning(md, resolution.incompleteFor);
         appendUnresolvedWarnings(md, unresolvedShown, unresolvedFilteredOut);
         return md.toString();
+    }
+
+    /**
+     * The refusal for a request in which NOTHING could be scanned, worded per address.
+     *
+     * <p>The two verdicts have different remedies and must not share one sentence: a MISS is
+     * fixed by another spelling or the loose filter, while an UNSUPPORTED family is not a
+     * misspelling at all - its reason already names the tool that owns it. Collapsing both into
+     * "nothing resolved" sent half the callers to look up an FQN that was never wrong.</p>
+     *
+     * @param resolution the per-address verdicts, none of which resolved
+     * @return the refusal message
+     */
+    private static String unscannableRefusal(AddressResolution resolution)
+    {
+        StringBuilder message = new StringBuilder("Cannot scan ").append(PARAM_OBJECT_FQNS) //$NON-NLS-1$
+            .append(" because no requested address could be scanned."); //$NON-NLS-1$
+        if (!resolution.notFound.isEmpty())
+        {
+            message.append(" Not found: ").append(String.join(", ", resolution.notFound)) //$NON-NLS-1$ //$NON-NLS-2$
+                .append(". Use the loose '").append(PARAM_OBJECTS) //$NON-NLS-1$
+                .append("' filter to match reported locations, or call get_metadata_objects to ") //$NON-NLS-1$
+                .append("find valid FQNs."); //$NON-NLS-1$
+        }
+        for (Map<String, String> entry : resolution.unsupported)
+        {
+            message.append(' ').append(entry.get("fqn")).append(": ") //$NON-NLS-1$ //$NON-NLS-2$
+                .append(entry.get("reason")); //$NON-NLS-1$
+        }
+        return message.toString();
     }
 
     /**
