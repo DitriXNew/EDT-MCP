@@ -15,6 +15,7 @@ import org.eclipse.jface.viewers.TreeViewer;
 import org.eclipse.jface.viewers.Viewer;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.IMemento;
+import org.eclipse.ui.navigator.CommonViewer;
 import org.eclipse.ui.navigator.ICommonContentExtensionSite;
 import org.eclipse.ui.navigator.ICommonContentProvider;
 
@@ -42,6 +43,8 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
     private StructuredViewer viewer;
     private GroupSelectionHelper selectionHelper;
     private volatile boolean listenerRegistered = false;
+    /** Set from {@link #servesNavigatorView(Viewer)}; false until the viewer is known. */
+    private volatile boolean servesNavigatorView = false;
     
     public GroupContentProvider() {
         Activator.logDebug("GroupContentProvider: constructor called");
@@ -78,6 +81,10 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
     
     @Override
     public Object[] getChildren(Object parentElement) {
+        if (!servesNavigatorView) {
+            return NO_CHILDREN;
+        }
+
         if (GroupVisibilityManager.getInstance().areGroupsHidden()) {
             return NO_CHILDREN;
         }
@@ -150,6 +157,10 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
     
     @Override
     public boolean hasChildren(Object element) {
+        if (!servesNavigatorView) {
+            return false;
+        }
+
         if (GroupVisibilityManager.getInstance().areGroupsHidden()) {
             return false;
         }
@@ -187,6 +198,12 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
         Activator.logDebug("GroupContentProvider.inputChanged called, viewer type: " 
             + (viewer != null ? viewer.getClass().getName() : "null"));
         
+        servesNavigatorView = servesNavigatorView(viewer);
+        if (!servesNavigatorView) {
+            this.viewer = null;
+            return;
+        }
+
         if (viewer instanceof StructuredViewer sv) {
             this.viewer = sv;
             // Note: Filter is added via commonFilter in plugin.xml with activeByDefault="true"
@@ -199,6 +216,26 @@ public class GroupContentProvider implements ICommonContentProvider, IGroupChang
                 Activator.logDebug("GroupContentProvider: attached GroupSelectionHelper");
             }
         }
+    }
+    
+    /**
+     * Answers whether {@code viewer} is the Navigator view itself.
+     *
+     * <p>EDT creates content services for the Navigator viewer id from metadata-editor pages and
+     * picker dialogs as well, driving them with a UI-less viewer instead of the view. Our viewer
+     * binding matches those, and a group node reaching them hits platform tree filters that cast
+     * every child to a metadata type (issue #587). Only the view gets nodes.</p>
+     */
+    static boolean servesNavigatorView(Viewer viewer) {
+        return viewer != null && isNavigatorViewer(viewer.getClass());
+    }
+    
+    /**
+     * The viewer-class half of {@link #servesNavigatorView(Viewer)}. Split out so a test can ask
+     * the question of a class: mocking a JFace viewer costs minutes of build time.
+     */
+    static boolean isNavigatorViewer(Class<?> viewerType) {
+        return CommonViewer.class.isAssignableFrom(viewerType);
     }
     
     @Override
