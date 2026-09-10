@@ -3200,7 +3200,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 List<EObject> localizedHolders = new ArrayList<>();
                 List<PreparedChange> localizedChanges = new ArrayList<>();
                 boolean mainAttributeTouched = false;
-                boolean mainAttributeRetyped = false;
+                // Read BEFORE anything is applied: what the form's ext-info is keyed on.
+                String mainCategoryBefore = FormElementWriter.mainAttributeCategory(formModel);
                 for (HolderChange hc : changes)
                 {
                     // A direct feature lands on the target; a property on the nested <extInfo> lands
@@ -3218,8 +3219,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         applied.add("extInfo"); //$NON-NLS-1$
                     }
                     mainAttributeTouched = mainAttributeTouched || decidesFormExtInfo(hc);
-                    mainAttributeRetyped =
-                        mainAttributeRetyped || (!hc.onExtInfo && hc.change.isTypeChange());
                     if (hc.change.isLocalized())
                     {
                         // Remember the receiver the change actually landed on: a title on the
@@ -3232,13 +3231,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // decided once the whole batch is applied. Per change it would depend on the
                 // order the properties arrived in: [main=false, valueType=X] and the reverse pair
                 // describe the same end state and must not leave two different ext-infos.
-                // ... and only when the retype was of the MAIN attribute itself. Every change in
-                // this batch lands on ONE member, so a retype of some other attribute or column
-                // says nothing about the node the main attribute decides.
-                boolean mainRetyped =
-                    mainAttributeRetyped && FormElementWriter.isMainAttribute(target);
+                // ... and the node may be REMOVED only when the thing it is keyed on actually
+                // became something else. Asked of the model before and after, not inferred from
+                // which properties the batch carried: a change object names the KIND of property,
+                // so a re-write of the same type looks identical to a retype.
+                String mainCategoryAfter = FormElementWriter.mainAttributeCategory(formModel);
+                boolean mainCategoryChanged = mainCategoryBefore == null
+                    ? mainCategoryAfter != null : !mainCategoryBefore.equals(mainCategoryAfter);
                 if (mainAttributeTouched
-                    && FormElementWriter.syncFormExtInfo(formModel, mainRetyped) != null
+                    && FormElementWriter.syncFormExtInfo(formModel, mainCategoryChanged) != null
                     && !applied.contains("extInfo")) //$NON-NLS-1$
                 {
                     applied.add("extInfo"); //$NON-NLS-1$

@@ -3053,17 +3053,8 @@ public final class FormElementWriter
         {
             return null;
         }
-        EObject main = null;
-        for (EObject attr : referenceList(formModel, FEATURE_ATTRIBUTES))
-        {
-            if (isMainAttribute(attr))
-            {
-                main = attr;
-                break;
-            }
-        }
         EObject current = singleReference(formModel, FEATURE_EXT_INFO);
-        if (main == null)
+        if (!hasMainAttribute(formModel))
         {
             // Having NO main attribute is not an instruction to clear. The platform only ever asks
             // this question about a main attribute - setExtInfo asserts isMain - so a form without
@@ -3071,7 +3062,7 @@ public final class FormElementWriter
             // a plain main=false.
             return current == null ? null : current.eClass().getName();
         }
-        String classifier = FORM_EXT_INFO_BY_TYPE_CATEGORY.get(singleValueTypeCategory(main));
+        String classifier = FORM_EXT_INFO_BY_TYPE_CATEGORY.get(mainAttributeCategory(formModel));
         if (classifier == null)
         {
             // A main attribute whose category pairs with nothing takes the node with it, whatever
@@ -3101,6 +3092,30 @@ public final class FormElementWriter
         // handlers bound inside it.
         copySameFeatures(current, created);
         return created.eClass().getName();
+    }
+
+    /**
+     * The type CATEGORY of the form's MAIN attribute, or {@code null} when the form has no main
+     * attribute or its type is not single.
+     *
+     * <p>This is the one value {@link #syncFormExtInfo(EObject, boolean)} keys on, so a caller can
+     * read it BEFORE a batch and again AFTER and tell an actual retype from a re-write of the same
+     * value. A property-shaped signal cannot: a change object says which KIND of property it
+     * carries, not whether the value in it differs from the one already there.</p>
+     *
+     * @param formModel the editable content form, on the tx-bound model
+     * @return the category, or {@code null}
+     */
+    public static String mainAttributeCategory(EObject formModel)
+    {
+        for (EObject attr : referenceList(formModel, FEATURE_ATTRIBUTES))
+        {
+            if (isMainAttribute(attr))
+            {
+                return singleValueTypeCategory(attr);
+            }
+        }
+        return null;
     }
 
     /** The features {@code ExtInfoManagementService} refuses to carry over. */
