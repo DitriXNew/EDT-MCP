@@ -472,8 +472,8 @@ public class GetProjectErrorsTool implements IMcpTool
 
     /**
      * What ONE project could decide about the requested addresses: the spellings that resolved
-     * HERE, the addresses this project could not decide at all, and whether its resolve pass ran to
-     * the end.
+     * HERE, the addresses this project could not decide at all, and whether it contributed any
+     * completed decision.
      *
      * <p>The undecided set is per ADDRESS on purpose. A single "was anything inspected" flag cannot
      * separate "inspected and absent" from "nobody could look": with no {@code projectName} one
@@ -490,7 +490,7 @@ public class GetProjectErrorsTool implements IMcpTool
         final Map<String, Set<String>> resolved = new LinkedHashMap<>();
         /** Requested addresses this project could not decide (infrastructure failure, never absence). */
         final Set<String> undecided = new LinkedHashSet<>();
-        /** Whether the read pass ran to the end; {@code false} when it threw and decided nothing. */
+        /** Whether this project contributed any completed decision. */
         boolean passCompleted;
 
         ProjectResolution(String projectName)
@@ -888,11 +888,9 @@ public class GetProjectErrorsTool implements IMcpTool
      *   <li><b>An EXTERNAL OBJECTS project whose root cannot be read</b>. Configuration-only
      *       families are structurally ABSENT there, while addresses rooted in a standalone external
      *       object stay UNDECIDED because the project's own roots were never inspected.</li>
-     *   <li><b>An EDT project that DOES hold a configuration but is not readable now</b> - still
-     *       indexing, or closed. It could perfectly well hold the address, so it answers UNDECIDED:
-     *       skipping it lets another project's completed pass stand in as the inspection, and the
-     *       address is then reported in {@code objectsNotFound} - absence "proved" by a project
-     *       nobody looked at.</li>
+     *   <li><b>A configuration / extension project that is not readable now</b> - still indexing,
+     *       or closed. Its configuration families stay UNDECIDED, while standalone external-object
+     *       families are structurally ABSENT there.</li>
      * </ul>
      *
      * <p>Natures that cannot be determined at all fall into the LAST bucket: unknowable is never
@@ -915,31 +913,25 @@ public class GetProjectErrorsTool implements IMcpTool
         }
         if (externalObjects)
         {
-            ProjectResolution decided = new ProjectResolution(project.getName());
-            decided.passCompleted = true;
-            for (String candidate : candidates)
-            {
-                if (isExternalObjectAddress(candidate))
-                {
-                    // Its own root was unavailable, so absence of an external object is unknown.
-                    decided.undecided.add(candidate);
-                }
-            }
-            return decided;
+            return unreadableKnownProjectKindDecision(project, candidates, true);
         }
-        if (natures != null && !containsAny(natures, V8_CONFIGURATION_NATURES))
+        if (natures != null && containsAny(natures, V8_CONFIGURATION_NATURES))
+        {
+            return unreadableKnownProjectKindDecision(project, candidates, false);
+        }
+        if (natures != null)
         {
             // Not a 1C:EDT project at all.
             return null;
         }
-        // Holds a configuration but could not be read now, or its natures are unknowable.
+        // Its project kind is unknowable, so no family can be excluded safely.
         ProjectResolution unreadable = new ProjectResolution(project.getName());
         unreadable.undecided.addAll(candidates);
         return unreadable;
     }
 
     /** Whether the address is rooted in a standalone external-object family. */
-    private static boolean isExternalObjectAddress(String fqn)
+    private static boolean isStandaloneAddress(String fqn)
     {
         String canonical = canonicalAddress(fqn);
         if (canonical == null)
@@ -950,6 +942,31 @@ public class GetProjectErrorsTool implements IMcpTool
         String typeToken = dot < 0 ? canonical : canonical.substring(0, dot);
         MetadataTypeUtils.MetadataTypeInfo info = MetadataTypeUtils.resolve(typeToken);
         return info != null && info.isStandalone();
+    }
+
+    /** Decides incompatible families before an unreadable project root can obscure them. */
+    private static ProjectResolution unreadableKnownProjectKindDecision(IProject project,
+        List<String> candidates, boolean externalObjects)
+    {
+        ProjectResolution decided = new ProjectResolution(project.getName());
+        for (String candidate : candidates)
+        {
+            if (isStandaloneAddress(candidate) == externalObjects)
+            {
+                decided.undecided.add(candidate);
+            }
+            else
+            {
+                decided.passCompleted = true;
+            }
+        }
+        return decided;
+    }
+
+    /** Whether this project kind can own the address family. */
+    private static boolean belongsToProjectKind(MetadataScope metadataScope, String fqn)
+    {
+        return metadataScope.isExternalObjects() == isStandaloneAddress(fqn);
     }
 
     /** Whether {@code natures} carries any of {@code wanted}. */
@@ -1073,9 +1090,7 @@ public class GetProjectErrorsTool implements IMcpTool
         boolean inspectedAny = false;
         for (ProjectResolution decided : perProject)
         {
-            // Counted as inspected only when the pass really COMPLETED: a pass that threw decided
-            // nothing, so treating it as an inspection would turn its undecided addresses into
-            // "not found" (see resolveInProject).
+            // Structural absence is completed before a model read; a total read failure is not.
             inspectedAny |= decided.passCompleted;
             for (String fqn : candidates)
             {
@@ -1123,7 +1138,7 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param resolution the resolution being filled
      * @param candidates the addresses that need resolution, in request order
      * @param knowledge what is known about each address across the whole universe
-     * @param inspectedAny whether ANY project completed a resolve pass
+     * @param inspectedAny whether ANY project contributed a completed decision
      */
     private static void applyWireContract(AddressResolution resolution, List<String> candidates,
         Map<String, AddressKnowledge> knowledge, boolean inspectedAny)
@@ -1217,17 +1232,34 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param candidates the addresses to decide
      * @return what this project decided: the spellings that resolved HERE, the addresses it could
      *     not decide at all (the pass threw, or a form's content model could not be read - never a
-     *     "does not exist"), and whether the pass ran to the end
+     *     "does not exist"), and whether any decision completed
      */
     static ProjectResolution resolveInProject(IProject project, IBmModel bmModel,
         MetadataScope metadataScope, List<String> candidates)
     {
         ProjectResolution decided = new ProjectResolution(project.getName());
+        List<String> ownedCandidates = new ArrayList<>();
+        for (String candidate : candidates)
+        {
+            if (belongsToProjectKind(metadataScope, candidate))
+            {
+                ownedCandidates.add(candidate);
+            }
+            else
+            {
+                // This absence is structural, so a later model failure cannot erase it.
+                decided.passCompleted = true;
+            }
+        }
+        if (ownedCandidates.isEmpty())
+        {
+            return decided;
+        }
         List<DeferredMember> deferred = new ArrayList<>();
         try
         {
             BmTransactions.<Void>read(bmModel, "ResolveErrorObjectAddresses", (tx, pm) -> { //$NON-NLS-1$
-                for (String fqn : candidates)
+                for (String fqn : ownedCandidates)
                 {
                     resolveCandidate(metadataScope, fqn, decided.resolved, deferred);
                 }
@@ -1236,13 +1268,11 @@ public class GetProjectErrorsTool implements IMcpTool
         }
         catch (Exception e)
         {
-            // A failure here is a failure to DECIDE, never a "does not exist": every address this
-            // project was asked about stays undecided, so another project in scope can still answer
-            // for it and a lone failure refuses the call instead of answering it.
+            // Only families this project can own become unknown; the others are already absent.
             Activator.logError("Failed to resolve " + PARAM_OBJECT_FQNS + " in project " //$NON-NLS-1$ //$NON-NLS-2$
                 + project.getName(), e);
             decided.resolved.clear();
-            decided.undecided.addAll(candidates);
+            decided.undecided.addAll(ownedCandidates);
             return decided;
         }
 
@@ -1907,6 +1937,11 @@ public class GetProjectErrorsTool implements IMcpTool
      */
     static Set<String> resolvedSpellings(MetadataScope metadataScope, String normFqn)
     {
+        if (!belongsToProjectKind(metadataScope, normFqn))
+        {
+            // A linked base configuration belongs to another project, never to this scope.
+            return Collections.emptySet();
+        }
         // A Subsystem chain nests the same kind token repeatedly, which the generic child-feature
         // navigation does not model - SubsystemUtils owns that grammar. It is also the only family
         // whose depth is UNBOUNDED, so its yo fallback is applied level by level (linear, and it

@@ -1978,6 +1978,67 @@ public class GetProjectErrorsToolTest
                 "Catalog.Products.Predefined.Sample").isEmpty()); //$NON-NLS-1$
     }
 
+    @Test
+    public void testConfigurationOnlyFamiliesCannotResolveThroughAnExternalProjectsBase()
+    {
+        Configuration base = MdClassFactory.eINSTANCE.createConfiguration();
+        Subsystem subsystem = MdClassFactory.eINSTANCE.createSubsystem();
+        subsystem.setName("X"); //$NON-NLS-1$
+        base.getSubsystems().add(subsystem);
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName("Products"); //$NON-NLS-1$
+        assertFalse(PredefinedWriter.create(catalog, "Sample", //$NON-NLS-1$
+            new PredefinedWriter.ItemProps(), false).isError());
+        base.getCatalogs().add(catalog);
+
+        List<String> candidates = Arrays.asList("Subsystem.X", //$NON-NLS-1$
+            "Catalog.Products.Predefined.Sample"); //$NON-NLS-1$
+        GetProjectErrorsTool.ProjectResolution decided = GetProjectErrorsTool.resolveInProject(
+            project("external"), readModel(), //$NON-NLS-1$
+            MetadataScopeTestFixtures.externalObjectsWithBase(base), candidates);
+
+        assertTrue("the structural absence is a completed decision", decided.passCompleted); //$NON-NLS-1$
+        assertTrue("a linked base must never resolve objects for the external project", //$NON-NLS-1$
+            decided.resolved.isEmpty());
+        assertTrue("configuration families are absent here, not unknown", //$NON-NLS-1$
+            decided.undecided.isEmpty());
+    }
+
+    @Test
+    public void testUnreadableConfigurationProjectDecidesStandaloneFamiliesAbsent()
+    {
+        String standalone = "ExternalDataProcessor.X"; //$NON-NLS-1$
+
+        GetProjectErrorsTool.ProjectResolution decided = GetProjectErrorsTool.projectDecision(
+            natureProject("loading", "com._1c.g5.v8.dt.core.V8ConfigurationNature"), //$NON-NLS-1$ //$NON-NLS-2$
+            null, null, Collections.singletonList(standalone));
+
+        assertTrue("the incompatible family is decided without reading the model", //$NON-NLS-1$
+            decided.passCompleted);
+        assertTrue("a configuration project can never own a standalone root", //$NON-NLS-1$
+            decided.resolved.isEmpty());
+        assertTrue("structural absence must not become undecided", decided.undecided.isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFailingExternalRootPreservesConfigurationFamilyAbsence()
+    {
+        String catalog = "Catalog.Nope"; //$NON-NLS-1$
+        String standalone = "ExternalDataProcessor.X"; //$NON-NLS-1$
+
+        GetProjectErrorsTool.ProjectResolution decided = GetProjectErrorsTool.resolveInProject(
+            project("external"), readModel(), MetadataScopeTestFixtures.failingExternalObjects(), //$NON-NLS-1$
+            Arrays.asList(catalog, standalone));
+
+        assertTrue("the configuration-family absence survives the failed root read", //$NON-NLS-1$
+            decided.passCompleted);
+        assertTrue(decided.resolved.isEmpty());
+        assertEquals("only the family owned by this project becomes undecided", //$NON-NLS-1$
+            singleton(standalone), decided.undecided);
+        assertFalse("the external failure cannot erase a structural absence", //$NON-NLS-1$
+            decided.undecided.contains(catalog));
+    }
+
 
     @Test
     public void testADeepSubsystemChainResolvesWithYoMixedPerLevel()
