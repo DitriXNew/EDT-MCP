@@ -64,6 +64,7 @@ public final class FormModelValidator
     private static final String ECLASS_EXTENDED_TOOLTIP = "ExtendedTooltip"; //$NON-NLS-1$
     private static final String FEATURE_TYPE = "type"; //$NON-NLS-1$
     private static final String TYPE_LITERAL_LABEL = "Label"; //$NON-NLS-1$
+    private static final String CALL_TYPE_CHANGE_AND_VALIDATE = "ChangeAndValidate"; //$NON-NLS-1$
     private static final String ECLASS_BUTTON = "Button"; //$NON-NLS-1$
     private static final String ECLASS_FORM_COMMAND = "FormCommand"; //$NON-NLS-1$
     private static final String ECLASS_FORM_FIELD = "FormField"; //$NON-NLS-1$
@@ -510,6 +511,14 @@ public final class FormModelValidator
                     "The extension handler for '" + eventName + "' has no call type, so it does not " //$NON-NLS-1$ //$NON-NLS-2$
                         + "say how it intercepts the base event. Set Before, After or Instead.")); //$NON-NLS-1$
             }
+            // A form EVENT takes any call type except the method-only one, so a non-empty value is
+            // not the same as a valid one - this is the value the writer itself refuses.
+            else if (isExtension && CALL_TYPE_CHANGE_AND_VALIDATE.equalsIgnoreCase(callType))
+            {
+                findings.add(new Finding(SEVERITY_ERROR, "invalid-extension-call-type", path, //$NON-NLS-1$
+                    "The extension handler for '" + eventName + "' uses call type '" + callType //$NON-NLS-1$ //$NON-NLS-2$
+                        + "', which intercepts a METHOD, not an event. Use Before, After or Instead.")); //$NON-NLS-1$
+            }
             // One base handler per event; an extension COEXISTS with it and with other call types,
             // so the key is the event plus the call type - the same rule the writer enforces.
             if (!seen.add(eventName.toLowerCase(Locale.ROOT) + "/" + callType)) //$NON-NLS-1$
@@ -535,14 +544,36 @@ public final class FormModelValidator
             {
                 continue;
             }
-            EObject handler = single(action, FEATURE_HANDLER);
-            if (handler == null || nameOf(handler).isEmpty())
+            if (!actionNamesAProcedure(action))
             {
                 findings.add(new Finding(SEVERITY_ERROR, "empty-command-action", //$NON-NLS-1$
                     "Command." + nameOf(command), //$NON-NLS-1$
                     "This command has an action but names no BSL procedure to run.")); //$NON-NLS-1$
             }
         }
+    }
+
+    /**
+     * Whether a command action names a procedure. An action has TWO shapes: the singular
+     * {@code handler} slot, and - for an extension command - a {@code handlers} LIST. Reading only
+     * the singular one calls a fully populated extension action empty, so both are read here, the
+     * same way {@code FormStructureReader.actionHandlerOf} reads them.
+     */
+    private static boolean actionNamesAProcedure(EObject action)
+    {
+        EObject single = single(action, FEATURE_HANDLER);
+        if (single != null && !nameOf(single).isEmpty())
+        {
+            return true;
+        }
+        for (EObject handler : list(action, FEATURE_HANDLERS))
+        {
+            if (!nameOf(handler).isEmpty())
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     // --- shared reading ------------------------------------------------------------------------

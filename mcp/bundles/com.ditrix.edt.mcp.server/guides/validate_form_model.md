@@ -35,6 +35,7 @@ modify_metadata … → validate_form_model → read findings → fix → valida
 | `unresolved-data-path` | error | The path starts with a name that is neither a form attribute nor a form parameter. |
 | `missing-command-reference` | error | A button runs no command. |
 | `unresolved-command-reference` | error | Its command is no longer in the model. |
+| `invalid-extension-call-type` | error | An extension handler uses `ChangeAndValidate`, which intercepts a method rather than a form event. |
 | `invalid-extended-tooltip-type` | error | An extended tooltip is typed anything but `Label`, which the platform rejects outright. |
 | `missing-ext-info` / `stale-ext-info` | error | An element has no type-specific ext-info, or one that its kind does not call for. |
 | `empty-handler-name` | error | A binding names no BSL procedure. |

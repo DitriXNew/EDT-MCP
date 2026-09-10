@@ -437,6 +437,47 @@ public class FormModelValidatorTest
             codes(form).contains("invalid-extended-tooltip-type")); //$NON-NLS-1$
     }
 
+    /**
+     * An extension command's action names its procedures in the plural {@code handlers} list, and
+     * the singular slot stays empty. Reading only the singular one calls a fully populated
+     * extension action empty - a false finding on a healthy form.
+     */
+    @Test
+    public void testAnExtensionActionNamesItsProcedureInTheHandlersList()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        EObject command = form.command("Print", 1); //$NON-NLS-1$
+        form.giveCommandActionHandlers(command, "PrintCommand"); //$NON-NLS-1$
+        assertFalse("the action names a procedure, in the shape an extension uses: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("empty-command-action")); //$NON-NLS-1$
+
+        // An action with an EMPTY list still runs nothing.
+        form.giveCommandActionHandlers(command);
+        assertTrue("an action naming no procedure at all runs nothing: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("empty-command-action")); //$NON-NLS-1$
+    }
+
+    /**
+     * A form EVENT accepts any call type except the method-only one, so a non-empty value is not the
+     * same as a valid one - the writer refuses exactly this value with the same reasoning.
+     */
+    @Test
+    public void testAnExtensionHandlerWithTheMethodOnlyCallTypeIsReported()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        EObject event = form.event("OnCreateAtServer"); //$NON-NLS-1$
+        form.extensionHandler(form.root, "before", event, "Before"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("Before is an ordinary event call type: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("invalid-extension-call-type")); //$NON-NLS-1$
+
+        EObject other = form.event("OnOpen"); //$NON-NLS-1$
+        form.extensionHandler(form.root, "method", other, "ChangeAndValidate"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("ChangeAndValidate intercepts a METHOD, not an event: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("invalid-extension-call-type")); //$NON-NLS-1$
+    }
+
     // --- the synthetic form --------------------------------------------------------------------
 
     private static List<String> codes(Form form)
@@ -546,6 +587,9 @@ public class FormModelValidatorTest
             commandActionType = eClass("FormCommandHandlerContainer"); //$NON-NLS-1$
             commandActionType.getEStructuralFeatures()
                 .add(reference("handler", handlerType, false, true)); //$NON-NLS-1$
+            // An EXTENSION command names its procedures in a list instead of the singular slot.
+            commandActionType.getEStructuralFeatures()
+                .add(reference("handlers", handlerType, true, true)); //$NON-NLS-1$
             commandType.getEStructuralFeatures()
                 .add(reference("action", commandActionType, false, true)); //$NON-NLS-1$
 
@@ -707,6 +751,19 @@ public class FormModelValidatorTest
                 EObject handler = create(handlerType);
                 set(handler, "name", procedure); //$NON-NLS-1$
                 set(action, "handler", handler); //$NON-NLS-1$
+            }
+            set(command, "action", action); //$NON-NLS-1$
+        }
+
+        /** The extension shape of an action: procedures in the plural list, singular slot empty. */
+        void giveCommandActionHandlers(EObject command, String... procedures)
+        {
+            EObject action = create(commandActionType);
+            for (String procedure : procedures)
+            {
+                EObject handler = create(handlerType);
+                set(handler, "name", procedure); //$NON-NLS-1$
+                add(action, "handlers", handler); //$NON-NLS-1$
             }
             set(command, "action", action); //$NON-NLS-1$
         }
