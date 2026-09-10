@@ -64,7 +64,8 @@ public enum ToolGroup
         "search_in_code", "read_method_source", "get_method_call_hierarchy", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         "get_outgoing_structures", "go_to_definition", "get_symbol_info", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         "get_form_layout_snapshot", //$NON-NLS-1$
-        "get_form_screenshot", "get_template_screenshot", "validate_query"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "get_form_screenshot", "get_template_screenshot", "validate_query", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "validate_form_model"), //$NON-NLS-1$
 
     REFACTORING("refactoring", "Refactoring", //$NON-NLS-1$ //$NON-NLS-2$
         "Metadata and DCS create, inspect, rename, adopt, delete, and property management", //$NON-NLS-1$

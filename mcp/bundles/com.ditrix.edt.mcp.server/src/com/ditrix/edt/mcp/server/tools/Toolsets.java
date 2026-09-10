@@ -46,7 +46,7 @@ public final class Toolsets
     public static final String TESTING = "testing"; //$NON-NLS-1$
     /** Performance profiling (start / stop / results). */
     public static final String PROFILING = "profiling"; //$NON-NLS-1$
-    /** Form rendering (layout snapshot / screenshot). */
+    /** Form rendering (layout snapshot / screenshot) and structural validation. */
     public static final String FORMS = "forms"; //$NON-NLS-1$
     /** Tag-based organization and lookup. */
     public static final String TAGS = "tags"; //$NON-NLS-1$
@@ -112,7 +112,8 @@ public final class Toolsets
         define(PROFILING, "Profiling",
             "Performance profiling: start/stop a measurement and read the results."); //$NON-NLS-1$
         define(FORMS, "Forms",
-            "Form and template rendering: form layout snapshot, form screenshot, template screenshot."); //$NON-NLS-1$
+            "Forms: layout snapshot, form screenshot, template screenshot, and structural " //$NON-NLS-1$
+                + "validation of a form model."); //$NON-NLS-1$
         define(TAGS, "Tags",
             "Tag-based organization: list tags and find objects by tag."); //$NON-NLS-1$
         define(TRANSLATION, "Translation",
@@ -163,7 +164,8 @@ public final class Toolsets
             "start_profiling", "stop_profiling", "get_profiling_results"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
         assign(FORMS,
-            "get_form_layout_snapshot", "get_form_screenshot", "get_template_screenshot"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "get_form_layout_snapshot", "get_form_screenshot", "get_template_screenshot", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "validate_form_model"); //$NON-NLS-1$
 
         assign(TAGS,
             "get_tags", "get_objects_by_tags"); //$NON-NLS-1$ //$NON-NLS-2$
