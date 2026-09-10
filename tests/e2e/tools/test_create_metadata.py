@@ -69,6 +69,11 @@ def _objects_text(metadata_type):
     return r.text
 
 
+def _role_rights_file(role_name):
+    """The separate rights resource create_metadata must export for a Role top object."""
+    return "src/Roles/%s/Rights.rights" % role_name
+
+
 def _xml_local(tag):
     return tag.rsplit("}", 1)[-1]
 
@@ -119,6 +124,37 @@ def test_create_top_level_catalog_appears_in_readback():
 
     assert_contains(_objects_text("catalogs"), name,
                     "the new catalog must appear in the model read-back")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_created_role_gets_its_rights_model():
+    """A created role must immediately own its separate Rights.rights resource.
+
+    Without that file the 1C configurator refuses to load the WHOLE configuration, while the failure
+    surfaces far from the create_metadata call that caused it. This pins the resource and its three
+    default properties at creation time, before any later modify_metadata call can materialize it."""
+    name = "E2ECreatedRoleRights"
+    fqn = "Role." + name
+    rights_file = _role_rights_file(name)
+
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(r, "create %s with its rights model" % fqn)
+    assert (r.structured or {}).get("persisted") is True, (
+        "role creation must report persisted=true after exporting Role.mdo and Rights.rights: %r"
+        % (r.structured,))
+
+    poll_disk_contains(rights_file, "<setForNewObjects>",
+                       ctx="create_metadata must export the role's Rights.rights resource")
+    rights_xml = read_disk(rights_file)
+    for prop in ("setForNewObjects", "setForAttributesByDefault",
+                 "independentRightsOfChildObjects"):
+        assert_contains(rights_xml, "<%s>" % prop,
+                        "the created rights resource must carry its %s default" % prop)
+    assert_not_contains(rights_xml, "<object>",
+                        "the created rights model must be empty before any rights write")
+
+    assert_contains(_objects_text("roles"), name,
+                    "MODEL read-back: the role with the exported rights model must resolve")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")

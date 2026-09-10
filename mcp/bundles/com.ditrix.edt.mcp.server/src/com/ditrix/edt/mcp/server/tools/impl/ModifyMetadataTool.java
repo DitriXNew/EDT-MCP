@@ -166,15 +166,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * raise a destructive dialog, because a denial or a timeout would come back INSTEAD of the
      * actionable validation error (issue #295 review).
      *
-     * @param preview what the user is being asked to authorize
+     * @param preview what the user is being asked to authorize, built AFTER the pre-check ran: the
+     *            request alone cannot say which of the two losses is actually at stake, and a
+     *            dialog that names a loss that will not happen teaches the reader to ignore it
      * @param preflight the deterministic pre-check, run BEFORE any prompt: a ready JSON error refuses
      *            the write with no prompt at all, {@code ""} means nothing destructive happens (write
      *            without asking), {@code null} means a real retype - ask
      * @param write the mutation, invoked only when the pre-check passed and consent was granted
      * @return the mutation's result, the pre-check's refusal, or the consent refusal
      */
-    String gateFormRetype(ConsentPreview preview, java.util.function.Supplier<String> preflight,
-        java.util.function.Supplier<String> write)
+    String gateFormRetype(java.util.function.Supplier<ConsentPreview> preview,
+        java.util.function.Supplier<String> preflight, java.util.function.Supplier<String> write)
     {
         String verdict = preflight.get();
         if (verdict != null && !verdict.isEmpty())
@@ -184,7 +186,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         if (verdict == null)
         {
-            ConsentDecision decision = consentRequester.request(NAME, preview);
+            ConsentDecision decision = consentRequester.request(NAME, preview.get());
             if (decision != ConsentDecision.ALLOW)
             {
                 return ToolResult.error(
@@ -251,6 +253,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /** The form attribute's value-type feature / property alias. */
     private static final String PROP_VALUE_TYPE = "valueType"; //$NON-NLS-1$
+    /** The form-attribute flag that names the form's main data source. */
+    private static final String PROP_MAIN = "main"; //$NON-NLS-1$
 
     /** A ScheduledJob's method-reference property (guarded by {@link MethodReferenceValidator}). */
     private static final String PROP_METHOD_NAME = "methodName"; //$NON-NLS-1$
@@ -2358,12 +2362,100 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /** What the user authorizes when a form attribute (or column) changes its data type. */
-    private static ConsentPreview formRetypePreview(String normFqn)
+    static ConsentPreview formRetypePreview(String normFqn,
+        FormElementWriter.FormMemberRef ref, List<JsonObject> properties, boolean extInfoLoss)
     {
+        boolean retype = isFormRetypeRequest(ref, properties);
+        if (retype && extInfoLoss)
+        {
+            // One batch, two different losses - the dialog has to name both, or the answer
+            // authorizes something the question never mentioned.
+            return new ConsentPreview(
+                "Change the data type of " + normFqn + " and rewrite its main flag", //$NON-NLS-1$ //$NON-NLS-2$
+                "Retyping a form attribute can drop stored values on the next database update, " //$NON-NLS-1$
+                    + "and the main flag leaves the form without its root ext-info, deleting the " //$NON-NLS-1$
+                    + "event handlers bound inside it.", //$NON-NLS-1$
+                2, List.of(PROP_VALUE_TYPE, PROP_MAIN));
+        }
+        if (extInfoLoss)
+        {
+            // The only other thing this gate authorizes: a main-flag write that leaves the form
+            // root without its ext-info, and the event handlers bound inside it with it.
+            return new ConsentPreview(
+                "Remove the root ext-info of " + ref.formPath, //$NON-NLS-1$
+                "Writing the main flag leaves this form without a root ext-info, deleting the " //$NON-NLS-1$
+                    + "event handlers bound inside it.", //$NON-NLS-1$
+                1, java.util.Collections.singletonList(PROP_MAIN));
+        }
+        // Only the retype is at stake: the main flag either was not written, or writing it takes
+        // nothing with it (an empty node, or a kind change that carries its handlers over).
         return new ConsentPreview(
             "Change the data type of " + normFqn, //$NON-NLS-1$
             "Retyping a form attribute can drop stored values on the next database update.", //$NON-NLS-1$
             1, java.util.Collections.singletonList(PROP_VALUE_TYPE));
+    }
+
+    /**
+     * The {@code main} value this request writes on an ATTRIBUTE, or {@code null} when it writes
+     * none. Reads only the request; whether that write actually destroys anything is a question
+     * for the model, answered in {@link #formRetypePreflight}.
+     */
+    private static Boolean requestedMainFlag(FormElementWriter.FormMemberRef ref,
+        List<JsonObject> properties)
+    {
+        if (FormElementWriter.kindForToken(ref.kindToken) != FormElementWriter.Kind.ATTRIBUTE)
+        {
+            return null; // NOSONAR tri-state: null means "this request writes no main flag"
+        }
+        return mainFlagIn(properties);
+    }
+
+    /**
+     * The {@code main} value a property list LEAVES on the member: the batch is applied in order,
+     * so a repeated property is decided by its last write, and the gate has to judge the state the
+     * model actually ends up in.
+     *
+     * <p>Read with the SAME parser the write uses - {@link #parseBoolean} also takes
+     * {@code 1}/{@code 0}/{@code yes}/{@code no}, and a gate that recognized a narrower set would
+     * miss exactly the writes it exists to catch. Package-private so a test can pin both.</p>
+     *
+     * @param properties the requested property changes
+     * @return the value the list leaves in {@code main}, or {@code null} when it writes none (or
+     *         writes something that is not a boolean at all, which the write itself refuses)
+     */
+    /**
+     * Whether the batch flags this member main AT ANY POINT. The demotion of the OTHER attributes
+     * follows from that, not from the flag the batch is left with: applied in order,
+     * {@code [main=true, main=false]} promotes and takes it back, and the previous main is demoted
+     * on the way through - which is what the platform's two calls would do.
+     *
+     * @param properties the requested property changes
+     * @return {@code true} when any {@code main} write in the list is true
+     */
+    static boolean mainPromotedIn(List<JsonObject> properties)
+    {
+        for (JsonObject prop : properties)
+        {
+            if (PROP_MAIN.equalsIgnoreCase(asString(prop.get("name"))) //$NON-NLS-1$
+                && Boolean.TRUE.equals(parseBoolean(asString(prop.get("value"))))) //$NON-NLS-1$
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static Boolean mainFlagIn(List<JsonObject> properties)
+    {
+        Boolean last = null;
+        for (JsonObject prop : properties)
+        {
+            if (PROP_MAIN.equalsIgnoreCase(asString(prop.get("name")))) //$NON-NLS-1$
+            {
+                last = parseBoolean(asString(prop.get("value"))); //$NON-NLS-1$
+            }
+        }
+        return last; // NOSONAR tri-state: see above
     }
 
     /**
@@ -2375,6 +2467,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * to validate - a retype that would strand the attribute's columns, an unbuildable {@code type}
      * payload, an unknown property, an out-of-range value. Issue #295 review.
      *
+     * <p>TWO requests can reach the gate: a retype, and a {@code main} write that would leave the
+     * form root without its ext-info AND take bound event handlers with it. The second is asked
+     * about only in that exact shape - an empty node, or one that merely changes kind (its data is
+     * carried over), loses nothing and is written without a prompt.</p>
+     *
      * @param ctx the resolved project context (the configuration references resolve against)
      * @param version the platform version the type payload is built for
      * @param fctx the resolved form edit context
@@ -2385,15 +2482,37 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      */
     private String formRetypePreflight(ProjectContext ctx, Version version, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
         FormElementWriter.FormEditContext fctx, FormElementWriter.FormMemberRef ref,
-        List<JsonObject> properties, MdNameNormalizer.Report normReport)
+        List<JsonObject> properties, MdNameNormalizer.Report normReport, boolean[] extInfoLossOut)
     {
-        if (!isFormRetypeRequest(ref, properties))
+        boolean retype = isFormRetypeRequest(ref, properties);
+        Boolean mainFlag = requestedMainFlag(ref, properties);
+        if (!retype && mainFlag == null)
         {
             return ""; //$NON-NLS-1$
         }
         return FormElementWriter.readEditableForm(fctx, "FormRetypePreflight", //$NON-NLS-1$
-            (formModel, tx) -> formRetypeVerdict(ctx.scope, version,
-                FormElementWriter.resolveFormMember(formModel, ref), properties, normReport));
+            (formModel, tx) ->
+            {
+                EObject member = FormElementWriter.resolveFormMember(formModel, ref);
+                // The WHOLE batch is prepared first, whichever of the two brought us here: every
+                // refusal that pass can produce belongs above the gate, or a denial comes back
+                // instead of the actionable error (issue #295).
+                List<HolderChange> prepared = new ArrayList<>();
+                String refusal = formRetypeVerdict(ctx.scope, version, member, properties,
+                    normReport, prepared);
+                if (refusal != null)
+                {
+                    // A refusal, or "" for a member the write path answers "not found" for.
+                    return refusal;
+                }
+                // Prepared cleanly: ask when the request retypes stored data, or when the main
+                // flag it LEAVES would take the root ext-info and the handlers bound in it. WHICH
+                // of the two it is decides what the dialog says, so it is reported back.
+                extInfoLossOut[0] = mainFlag != null && FormElementWriter.clearsBoundFormExtInfo(
+                    formModel, member, mainFlag.booleanValue(), categoryAfter(prepared, member),
+                    mainPromotedIn(properties));
+                return retype || extInfoLossOut[0] ? null : ""; //$NON-NLS-1$
+            });
     }
 
     /**
@@ -2422,19 +2541,59 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     String formRetypeVerdict(MetadataScope scope, Version version, EObject member,
         List<JsonObject> properties, MdNameNormalizer.Report normReport)
     {
+        return formRetypeVerdict(scope, version, member, properties, normReport, new ArrayList<>());
+    }
+
+    /**
+     * {@link #formRetypeVerdict(MetadataScope, Version, EObject, List, MdNameNormalizer.Report)}
+     * that also hands the PREPARED batch back. The pre-check has to know what the batch will leave
+     * behind - a retype in the same call changes the very category the ext-info decision keys on -
+     * and preparing it twice would report every normalized name twice.
+     *
+     * @param preparedOut filled with the prepared changes when the preparation succeeded
+     */
+    String formRetypeVerdict(MetadataScope scope, Version version, EObject member, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        List<JsonObject> properties, MdNameNormalizer.Report normReport,
+        List<HolderChange> preparedOut)
+    {
         if (member == null)
         {
             return ""; //$NON-NLS-1$
         }
         try
         {
-            prepareFormMemberChanges(scope, version, member, properties, normReport.emptyCopy());
+            preparedOut.addAll(
+                prepareFormMemberChanges(scope, version, member, properties, normReport.emptyCopy()));
         }
         catch (FormValidationException e)
         {
             return FormValidationException.jsonOf(e);
         }
         return null;
+    }
+
+    /**
+     * The type category the member is left with: the one the batch WRITES when it retypes it,
+     * otherwise the one it already carries. Read from the prepared change rather than from the
+     * model, because the model still holds the old type when the pre-check runs.
+     */
+    static String categoryAfter(List<HolderChange> prepared, EObject member)
+    {
+        Object lastType = null;
+        boolean retyped = false;
+        for (HolderChange hc : prepared)
+        {
+            if (!hc.onExtInfo && hc.change.isTypeChange()
+                && PROP_VALUE_TYPE.equalsIgnoreCase(hc.change.featureName()))
+            {
+                // The batch is applied in ORDER, so a repeated property is decided by its LAST
+                // write - the same rule mainFlagIn follows for the main flag.
+                lastType = hc.change.value();
+                retyped = true;
+            }
+        }
+        return retyped ? FormElementWriter.typeCategoryOf(lastType)
+            : FormElementWriter.valueTypeCategoryOf(member);
     }
 
     /**
@@ -3097,8 +3256,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // The version the type payload is built for: resolved BEFORE the gate, because the
             // pre-check validates that payload (it is the same one the write then uses).
             final Version version = platformVersionOf(ctx);
-            return gateFormRetype(formRetypePreview(normFqn),
-                () -> formRetypePreflight(ctx, version, fctx, ref, properties, normReport),
+            // Written by the pre-check, read by the preview - in that order, which is the order
+            // gateFormRetype runs them in.
+            final boolean[] extInfoLoss = new boolean[1];
+            return gateFormRetype(() -> formRetypePreview(normFqn, ref, properties, extInfoLoss[0]),
+                () -> formRetypePreflight(ctx, version, fctx, ref, properties, normReport,
+                    extInfoLoss),
                 () -> applyFormMemberProperties(ctx, normFqn, ref, properties, normReport, fctx,
                     version));
         }
@@ -3179,6 +3342,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // gives (issue #298). The declared codes are read OUTSIDE the write transaction.
         final List<String> declaredCodes = ctx.scope.declaredLanguageCodes();
         final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
+        // Attributes this call took the main flag AWAY from - a change to a member the caller did
+        // not address, so it is reported rather than left to be discovered.
+        final List<String> demotedMains = new ArrayList<>();
 
         // Validate + apply inside ONE BM write transaction: resolve the target, validate every
         // property (a failure throws FormValidationException carrying the JSON error BEFORE any eSet,
@@ -3197,6 +3363,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // a LATER change in the same call fills in.
                 List<EObject> localizedHolders = new ArrayList<>();
                 List<PreparedChange> localizedChanges = new ArrayList<>();
+                boolean mainFlagWritten = false;
                 for (HolderChange hc : changes)
                 {
                     // A direct feature lands on the target; a property on the nested <extInfo> lands
@@ -3213,12 +3380,31 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     {
                         applied.add("extInfo"); //$NON-NLS-1$
                     }
+                    mainFlagWritten = mainFlagWritten || decidesFormExtInfo(hc);
                     if (hc.change.isLocalized())
                     {
                         // Remember the receiver the change actually landed on: a title on the
                         // member and one on its <extInfo> live in different objects.
                         localizedHolders.add(holder);
                         localizedChanges.add(hc.change);
+                    }
+                }
+                // A main-attribute promotion is the platform's setMainAttribute: it demotes the
+                // previous main first, then re-derives the root ext-info from the FINAL state of
+                // the batch (per change it would depend on the order the properties arrived in).
+                if (mainFlagWritten)
+                {
+                    // Demoted by the PROMOTION the batch performed, even when a later write in the
+                    // same batch takes the flag back off this one.
+                    if (mainPromotedIn(properties))
+                    {
+                        demotedMains.addAll(
+                            FormElementWriter.demoteOtherMainAttributes(formModel, target));
+                    }
+                    if (FormElementWriter.syncFormExtInfo(formModel) != null
+                        && !applied.contains("extInfo")) //$NON-NLS-1$
+                    {
+                        applied.add("extInfo"); //$NON-NLS-1$
                     }
                 }
                 for (int i = 0; i < localizedChanges.size(); i++)
@@ -3235,6 +3421,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .put(KEY_PERSISTED, persisted);
         localizedReport.addTo(result);
         normReport.addTo(result);
+        if (!demotedMains.isEmpty())
+        {
+            result.put("demotedMainAttributes", demotedMains); //$NON-NLS-1$
+        }
         return result
             .put(McpKeys.MESSAGE, MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .toJson();
@@ -3335,7 +3525,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             // Resolved BEFORE the gate: the conversion needs the DynamicList value type for this
             // version, and failing to build it refuses the write whatever the user answers.
             final Version version = platformVersionOf(ctx);
-            return gateFormRetype(dynamicListRetypePreview(normFqn),
+            return gateFormRetype(() -> dynamicListRetypePreview(normFqn),
                 () -> dynamicListRetypePreflight(fctx, ctx.config, version, ref, qt, mt),
                 () -> applyDynamicListQuery(ctx, normFqn, ref, qt, cq, mt, normReport, fctx, version));
         }
@@ -3685,6 +3875,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return FormElementWriter.syncItemExtInfo(formModel, member) != null;
         }
         return false;
+    }
+
+    /**
+     * Whether this change decides the FORM ROOT's ext-info - a write of the {@code main} flag, and
+     * nothing else. The platform re-derives that node from one place only
+     * ({@code FormAttributeService.setMainAttribute}); a retype of the main attribute goes to
+     * {@code setTypeDescription}, which never touches the root node.
+     */
+    private static boolean decidesFormExtInfo(HolderChange hc)
+    {
+        return !hc.onExtInfo && PROP_MAIN.equalsIgnoreCase(hc.change.featureName());
     }
 
     /**
@@ -5665,7 +5866,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * ... live under {@code <extInfo>}). Threading the receiver per property lets a mixed direct +
      * extInfo batch apply each change to the correct EObject inside the one form write transaction.
      */
-    private static final class HolderChange
+    static final class HolderChange
     {
         private final boolean onExtInfo;
         private final PreparedChange change;
@@ -5831,7 +6032,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /** A validated, coerced change ready to apply to the re-fetched target inside the write tx. */
-    private static final class PreparedChange
+    static final class PreparedChange
     {
         private enum Kind
         {
@@ -5965,6 +6166,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean isTypeChange()
         {
             return typeChange;
+        }
+
+        /** The value this change would write - for a type change, the built {@code TypeDescription}. */
+        Object value()
+        {
+            return scalarValue;
         }
 
         boolean isLocalized()

@@ -10,8 +10,10 @@ import java.io.IOException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -20,8 +22,10 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
@@ -41,6 +45,8 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
@@ -186,6 +192,27 @@ public class MergeRulesTool implements IMcpTool
     private final MergeRuleAuthoritySupplier authoritySupplier;
 
     /**
+     * Asks the destructive-consent gate. A package-private SEAM, the same one
+     * {@code DeleteMetadataTool} and {@code ModifyMetadataTool} use: the production default
+     * delegates to {@link DestructiveConsentGate#getInstance()}, which stays a singleton, while a
+     * unit test substitutes a requester answering REJECT / TIMEOUT to prove the file on the target
+     * path is left byte for byte - or one that fails outright, to prove the gate is never reached
+     * on a path that writes nothing.
+     */
+    @FunctionalInterface
+    interface ConsentRequester
+    {
+        /**
+         * @param toolName the gated tool's name
+         * @param preview what the user is being asked to authorize
+         * @return the verdict
+         */
+        DestructiveConsentGate.ConsentDecision request(String toolName, ConsentPreview preview);
+    }
+
+    private final ConsentRequester consentRequester;
+
+    /**
      * Creates the tool with the production authority - the one that asks a live comparison, over
      * {@link ComparisonEngine}, which rules each node allows.
      * <p>
@@ -198,7 +225,7 @@ public class MergeRulesTool implements IMcpTool
      */
     public MergeRulesTool()
     {
-        this(new EngineRuleAuthority());
+        this(new EngineRuleAuthority(), MergeRulesTool::askTheGate);
     }
 
     /**
@@ -211,7 +238,33 @@ public class MergeRulesTool implements IMcpTool
      */
     public MergeRulesTool(MergeRuleAuthoritySupplier authoritySupplier)
     {
+        this(authoritySupplier, MergeRulesTool::askTheGate);
+    }
+
+    /**
+     * Test seam constructor: the authority AND the consent source.
+     *
+     * @param authoritySupplier resolves the authority for a comparison id, never {@code null}
+     * @param consentRequester the consent source to use instead of the singleton gate
+     */
+    MergeRulesTool(MergeRuleAuthoritySupplier authoritySupplier, ConsentRequester consentRequester)
+    {
         this.authoritySupplier = authoritySupplier;
+        this.consentRequester = consentRequester;
+    }
+
+    /**
+     * The production consent source. A named method rather than a lambda so the two public
+     * constructors install the SAME thing and neither can drift into asking a different gate.
+     *
+     * @param tool the gated tool's name
+     * @param preview what the user is being asked to authorize
+     * @return the verdict
+     */
+    private static DestructiveConsentGate.ConsentDecision askTheGate(String tool,
+        ConsentPreview preview)
+    {
+        return DestructiveConsentGate.getInstance().requireConsent(tool, preview);
     }
 
     /**
@@ -365,11 +418,70 @@ public class MergeRulesTool implements IMcpTool
             {
                 return malformed;
             }
+            // A parameter that was SENT holding nothing is not the parameter that was omitted:
+            // both of these mean something different when absent, and reading a blank as an
+            // omission answered a call the caller did not make. See blankWriteParameterRefusal.
+            String blank = blankWriteParameterRefusal(params);
+            if (blank != null)
+            {
+                return blank;
+            }
             return write(filePath, basedOn, comparisonId, decisions, limit);
         }
         return ToolResult.error("Unknown " + KEY_MODE + " '" + mode + "'. Use '" + MODE_READ //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + "' to parse a merge-rules file, or '" + MODE_WRITE + "' to record decisions into one.") //$NON-NLS-1$ //$NON-NLS-2$
             .toJson();
+    }
+
+    /**
+     * Refuses a write-only parameter that was SENT but holds nothing.
+     *
+     * <h2>Why a blank is not an omission here</h2>
+     * Both of these parameters mean something DIFFERENT when they are absent, and in both
+     * directions the difference is the whole call. Omitting {@link #KEY_BASED_ON} means "author a
+     * fresh file"; omitting {@link #KEY_COMPARISON_ID} means "validate against whichever
+     * comparison is running, and if none is, write the file NOT VALIDATED". {@link #isSet} reads
+     * {@code ""} as absent, so a caller whose variable resolved to nothing got the OTHER call
+     * silently: a fresh document where they meant to carry decisions forward, or an unvalidated
+     * file where they meant a checked one. Neither said anything about it.
+     * <p>
+     * Judged on the RAW argument map, in schema order, so the refusal names the first parameter
+     * the caller would find in the schema rather than whichever check happened to run first.
+     * <p>
+     * <b>The one shape this cannot see</b>, and it is the transport's rule for every tool rather
+     * than a boundary drawn here: {@code McpProtocolHandler.extractToolParams} drops every
+     * argument whose JSON value is null while building the map, so {@code basedOn: null} on the
+     * wire arrives as no key at all and IS read as an omission. That is the right reading of an
+     * explicit null for an optional parameter, and telling it from a real omission would mean
+     * changing how arguments reach every tool. The blank STRING is the case worth catching,
+     * because it is the one a caller sends believing they sent a value.
+     *
+     * @param params the call arguments, may be {@code null}
+     * @return the refusal, or {@code null} when neither parameter was sent blank
+     */
+    private static String blankWriteParameterRefusal(Map<String, String> params)
+    {
+        if (params == null)
+        {
+            return null;
+        }
+        if (params.containsKey(KEY_BASED_ON) && !isSet(params.get(KEY_BASED_ON)))
+        {
+            return ToolResult.error("Nothing was written: '" + KEY_BASED_ON //$NON-NLS-1$
+                + "' was sent blank, and a blank path names no file. Pass the absolute path of " //$NON-NLS-1$
+                + "the rules file whose decisions this write should start from, or omit the " //$NON-NLS-1$
+                + "parameter entirely to author a fresh file.").toJson(); //$NON-NLS-1$
+        }
+        if (params.containsKey(KEY_COMPARISON_ID) && !isSet(params.get(KEY_COMPARISON_ID)))
+        {
+            return ToolResult.error("Nothing was written: '" + KEY_COMPARISON_ID //$NON-NLS-1$
+                + "' was sent blank, and a blank id names no comparison. Pass the " //$NON-NLS-1$
+                + KEY_COMPARISON_ID + " that compare_configurations returned to validate against " //$NON-NLS-1$
+                + "that comparison, or omit the parameter entirely - with no id this tool " //$NON-NLS-1$
+                + "validates against whichever comparison is RUNNING when its tree is finished, " //$NON-NLS-1$
+                + "and otherwise writes the file and reports it NOT VALIDATED.").toJson(); //$NON-NLS-1$
+        }
+        return null;
     }
 
     // ==================== read ====================
@@ -634,7 +746,10 @@ public class MergeRulesTool implements IMcpTool
         }
 
         Path base = null;
-        if (isSet(basedOn))
+        // Presence, not content: a blank basedOn was refused in execute(), so anything that
+        // reaches here and is not null is a path the caller meant. isSet would answer the same
+        // today and would go back to lying the moment that refusal moved.
+        if (basedOn != null)
         {
             Path givenBase;
             try
@@ -690,10 +805,15 @@ public class MergeRulesTool implements IMcpTool
      *
      * <h2>What it does NOT guarantee</h2>
      * <ul>
-     * <li><b>Nothing across processes.</b> It is a lock in this JVM only. Another EDT, an editor,
-     * or a person with a text editor can still write the file between this read and this write.
-     * The single filesystem step the codec performs keeps the file from being seen half-written;
-     * it cannot keep a foreign write from being lost.</li>
+     * <li><b>Nothing across processes - that is {@code targetChangedRefusal}'s job, not the
+     * mutex's.</b> It is a lock in this JVM only, so another EDT, an editor or a person with a
+     * text editor can still write the file between this read and this write; what keeps such a
+     * write from being LOST is the identity check taken after consent, which refuses when the
+     * target is no longer the file that was read. What is left afterwards is the interval that
+     * check cannot cover - the document is serialised, staged in a temporary and then moved - and
+     * it is WIDER than the residual the reservation accepts on the neighbouring branch, whose own
+     * check sits immediately before the move; closing that difference means asking the question
+     * inside the codec, which is a new {@code write} signature rather than a line here.</li>
      * <li><b>Nothing across spellings.</b> The key is the absolute, normalised path, so the same
      * file reached through a symbolic link, a junction, or - on a case-insensitive filesystem - a
      * different case is a DIFFERENT key and is not serialised against this one. Widening the key
@@ -728,6 +848,13 @@ public class MergeRulesTool implements IMcpTool
         // reads decides what this write produces.
         boolean zipped = MergeRulesCodec.isZip(file);
         MergeRulesCodec.Target targetPolicy = MergeRulesCodec.Target.MUST_NOT_EXIST;
+        BasicFileAttributes targetAsRead = null;
+        String targetDigestAsRead = null;
+        // Separate from the content digest, and only for an archive: the content digest binds
+        // the RULES, this one binds everything around them - the entry name and metadata, the
+        // archive comment, the entries beside it, every structural detail this code does not
+        // model. One value could not do both, because only one of them can be window-free.
+        String targetArchiveDigestAsRead = null;
         if (Files.exists(file))
         {
             if (!isSameFile(file, base))
@@ -745,6 +872,23 @@ public class MergeRulesTool implements IMcpTool
             if (detached != null)
             {
                 return detached;
+            }
+            // Taken BEFORE the document is read, and the order is the whole point: a change
+            // between this line and the read costs a REFUSAL, which is cheap, while the opposite
+            // order would let a change made between the read and the snapshot pass as
+            // "unchanged", which is the loss. Following symbolic links - readAttributes' default
+            // - is what matches the rest of this path: the Files.exists above follows too, and
+            // the codec resolves the link and replaces the file behind it.
+            try
+            {
+                targetAsRead = Files.readAttributes(file, BasicFileAttributes.class);
+            }
+            catch (IOException e)
+            {
+                return ToolResult.error("Nothing was written: what is on " + file //$NON-NLS-1$
+                    + " could not be read (" + describe(e) //$NON-NLS-1$
+                    + "), so this call could not later show that the file it replaces is the " //$NON-NLS-1$
+                    + "file it read. Check the path and re-send the write.").toJson(); //$NON-NLS-1$
             }
             targetPolicy = MergeRulesCodec.Target.MAY_BE_REPLACED;
         }
@@ -770,6 +914,52 @@ public class MergeRulesTool implements IMcpTool
         {
             document = MergeRulesDocument.empty();
         }
+        // The target's content digest, for the residue the attributes cannot see: a replacement of
+        // the same length that preserves or restores both instants.
+        if (targetAsRead != null)
+        {
+            if (isSameTarget(base, file))
+            {
+                // The codec's own digest of the very bytes it parsed. Reopening the path here
+                // instead would leave a window: a writer that replaced the archive between the
+                // parse and the digest would be snapshotted as the NEW file while this call
+                // still held the OLD rules, and the confirm point would then wave through a
+                // write that discards it. Off the parsed bytes there is no such instant.
+                targetDigestAsRead = document.sourceDigest();
+            }
+            else if (targetPolicy == MergeRulesCodec.Target.MAY_BE_REPLACED)
+            {
+                // The replacement was authorized a few lines above by "basedOn and filePath are the SAME file", and that
+                // answer has just changed - a symlink retargeted under this call is the way it
+                // happens. Taking the new answer would fingerprint the file now addressed while
+                // the document still came from the old one, and write one file's decisions over
+                // another. The authorization is what stops holding, so the call stops.
+                return ToolResult.error("Nothing was written: " + file + " and " + KEY_BASED_ON //$NON-NLS-1$ //$NON-NLS-2$
+                    + " '" + base //$NON-NLS-1$
+                    + "' named the same file when this call authorized the replacement and no " //$NON-NLS-1$
+                    + "longer do, so what is on that path now is not what this write was " //$NON-NLS-1$
+                    + "authorized to replace. Read the path again with mode '" + MODE_READ //$NON-NLS-1$
+                    + "' and re-send the write against it.").toJson(); //$NON-NLS-1$
+            }
+            else
+            {
+                // Reached only when there is nothing on the path to replace - a fresh file, or
+                // one written beside its base. An EXISTING target that is not the base was
+                // already refused above, and one that STOPPED being the base is refused in the
+                // branch before this. Read it the way the parser WOULD - bounded, and for an
+                // archive the settings entry instead of the whole file - so the confirm point
+                // compares like with like. Unreadable or unparseable leaves the digest null,
+                // and the attribute check stands alone.
+                try
+                {
+                    targetDigestAsRead = MergeRulesCodec.read(file).sourceDigest();
+                }
+                catch (IOException | MergeRulesFormatException notComparable) // NOSONAR: see above
+                {
+                    targetDigestAsRead = null;
+                }
+            }
+        }
         int existingDecisions = document.decisions().size();
         // Asked the moment the starting document is in hand, and BEFORE a single decision is
         // parsed: nothing below this line may run for a write that is not going to happen.
@@ -777,6 +967,44 @@ public class MergeRulesTool implements IMcpTool
         if (sidecars != null)
         {
             return sidecars;
+        }
+        // AFTER the sidecar refusal, and that order is the point: this streams the whole
+        // archive, and a container that can never reach consent must not pay for a read of a
+        // multi-gigabyte neighbour first. Everything above it is bounded.
+        if (targetAsRead != null && zipped)
+        {
+            // BEFORE the stream, and cheap: an archive replaced since the attributes were read
+            // is refused here rather than hashed. Without it the bounded refusal above could be
+            // undone by an atomic replacement - the clean archive swapped for one carrying a
+            // multi-gigabyte neighbour - and this thread would stream all of it, holding the
+            // path mutex, only for the re-check below to reject the result.
+            String grew = sizeChangedRefusal(file, targetAsRead);
+            if (grew != null)
+            {
+                return grew;
+            }
+            targetArchiveDigestAsRead = wholeFileDigest(file, targetAsRead.size());
+            if (targetArchiveDigestAsRead == null)
+            {
+                // Fail CLOSED. The alternative is a rewrite guarded by size and timestamps
+                // alone - exactly the residue the digest exists for - and the caller cannot
+                // see that its protection quietly dropped to that.
+                return ToolResult.error("Nothing was written: " + file //$NON-NLS-1$
+                    + " could not be read to fingerprint it, so this call cannot tell later " //$NON-NLS-1$
+                    + "whether the archive changed under it. Retry once the file is readable.") //$NON-NLS-1$
+                    .toJson();
+            }
+            // The hash is one read and the bounded checks above it were another, so a writer
+            // could have slipped between them - adding the very sidecar the refusal exists for,
+            // and having it destroyed by a write that never saw it. Re-running those checks
+            // against the hashed file closes the window from the other side: a change inside it
+            // is either seen HERE, or it happened after the hash and the confirm point sees it.
+            String moved = archiveStillTheOneHashed(file, targetPolicy, targetDigestAsRead,
+                document.sourceEntry(), document.readEntryCarriedMetadata());
+            if (moved != null)
+            {
+                return moved;
+            }
         }
 
         List<RequestedDecision> requested = new ArrayList<>();
@@ -816,7 +1044,10 @@ public class MergeRulesTool implements IMcpTool
             requestedPaths.add(fullPathOf(decision.path));
         }
 
-        boolean idGiven = isSet(comparisonId);
+        // The same reading as basedOn above: a blank comparisonId is refused in execute(), so
+        // presence is the honest question here. Read as isSet, a blank id meant "no id given",
+        // which is the OTHER mode - author against whatever is running, and say NOT VALIDATED.
+        boolean idGiven = comparisonId != null;
         Optional<MergeRuleAuthority> comparison = Optional.empty();
         // The two halves of what a live comparison gives this write, kept apart on purpose. The
         // ADDRESS is a fact about which projects the comparison runs over, and it is known the
@@ -967,15 +1198,49 @@ public class MergeRulesTool implements IMcpTool
             return refusal;
         }
 
+        // Destructive-operation consent: the LAST check before the file on the path is replaced,
+        // after every refusal above, so the human is never asked to authorize a write that was
+        // going to be refused anyway. Only the SAME-PATH rewrite is gated, because it is the only
+        // write here that destroys something: a write to a free path adds a file, which is why
+        // import_configuration_from_xml is not destructive and write_module_source is not gated.
+        // The preview costs no new work - existingDecisions, replaced and requested are already
+        // computed for the report. Holding the path mutex across the dialog is deliberate: a
+        // second rewrite of the same path must wait and re-read, not race this one.
+        if (targetPolicy == MergeRulesCodec.Target.MAY_BE_REPLACED)
+        {
+            DestructiveConsentGate.ConsentDecision decision = consentRequester.request(NAME,
+                replacementPreview(file, existingDecisions, replaced, requested.size(),
+                    document.readEntryCarriedMetadata(), document.sourceEntry(), zipEntryId));
+            if (decision != DestructiveConsentGate.ConsentDecision.ALLOW)
+            {
+                return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(decision, NAME))
+                    .toJson();
+            }
+            // UNCONDITIONALLY, not only when the gate actually stopped to ask: the level that
+            // answers without a prompt still leaves the whole interval above - the read, the
+            // parse, the comparison's BM read - for a foreign writer to land in, and a check that
+            // ran only at the Ask level would guard the slow path and leave the fast one open.
+            String changed = targetChangedRefusal(file, targetAsRead, targetDigestAsRead,
+                targetArchiveDigestAsRead);
+            if (changed != null)
+            {
+                return changed;
+            }
+        }
+
         try
         {
             if (zipEntryId == null)
             {
-                MergeRulesCodec.write(file, document, targetPolicy);
+                MergeRulesCodec.write(file, document, targetPolicy, targetAsRead,
+                    stillTheTargetThisCallVerified(file, targetAsRead, targetDigestAsRead,
+                        targetArchiveDigestAsRead));
             }
             else
             {
-                MergeRulesCodec.writeZip(file, document, targetPolicy, zipEntryId);
+                MergeRulesCodec.writeZip(file, document, targetPolicy, zipEntryId, targetAsRead,
+                    stillTheTargetThisCallVerified(file, targetAsRead, targetDigestAsRead,
+                        targetArchiveDigestAsRead));
             }
         }
         catch (FileAlreadyExistsException e)
@@ -1006,6 +1271,392 @@ public class MergeRulesTool implements IMcpTool
         }
         return renderWrite(file, basedOn, existingDecisions, requested, replaced, comparison, validated,
             document, limit, zipEntryId);
+    }
+
+    /**
+     * What the human is asked to authorize before a same-path rewrite: the file that will be
+     * replaced, what the replacement carries out of it, and what does not survive.
+     * <p>
+     * Shaped like {@code delete_project}'s preview - one named target, {@code totalCount} 1 - and
+     * built from numbers this write has already computed for its own report, so the dialog costs
+     * no extra work. It states the LOSS in the same terms the report states the gain: the rules
+     * this call writes over are gone, and so is the file OBJECT, whose owner and access rights the
+     * replacing move does not carry (see the guide's gotcha on that).
+     *
+     * <h2>The dialog may not list FEWER losses than the report</h2>
+     * A zip rewrite whose merge-settings entry carried a comment or an extra field loses that too,
+     * and {@link #replacedEntryMetadataClause} tells the caller so AFTER the write. Leaving it out
+     * here would have the operator consent to a shorter list than the one they are then shown -
+     * the same shape of dishonesty this gate exists to remove. The sentence is the report's own,
+     * word for word rather than paraphrased, so the two describe one fact in one wording; and it
+     * appears only when the entry really carried something, because a clause printed
+     * unconditionally would tell every caller they lost what they never had.
+     *
+     * <h2>What it still does NOT name</h2>
+     * That the entry's NAME can change - the archive was read under whatever entry it held, and
+     * the replacement is named after the live comparison's three projects, which need not be the
+     * same. The report does not name it either: it prints the old label under {@code Based on:}
+     * and the new one under {@code Container:} and leaves the caller to compare them. Saying it
+     * here alone would make the dialog claim something the report never states, and stating it
+     * honestly needs the entry NAME as a value - {@link MergeRulesDocument} keeps only the
+     * composite {@code <file>!<entry>} label, and {@code !} is legal in both halves, so the name
+     * cannot be recovered from it by splitting. That is a change to the document and to BOTH
+     * texts, not a clause to add to one of them.
+     *
+     * @param file the absolute, normalised target that will be replaced
+     * @param existingDecisions how many addressable decisions the file already holds
+     * @param replaced how many of them this call writes over
+     * @param requested how many decisions this call records
+     * @param entryCarriedMetadata whether the zip entry read from carried a comment or an extra
+     *            field, which the replacement does not carry
+     * @return the preview
+     */
+    private static ConsentPreview replacementPreview(Path file, int existingDecisions, int replaced,
+        int requested, boolean entryCarriedMetadata, String entryAsRead, String entryToWrite)
+    {
+        // A rewrite may put the rules under a DIFFERENT entry name than the one they were read
+        // from, and that changes which comparison can consume them - an address change the
+        // operator must see BEFORE authorizing, not afterwards by diffing two report fields.
+        // Compared through the READER's own normalization, which is what decides whether an
+        // entry answers to an id at all: removeExtension drops the directory AND the extension,
+        // so 'settings/A_B_C.xml' IS the entry 'A_B_C' - announcing that as a rename would be
+        // false, exactly as the codec's own lookup test says. Comparing the raw values would
+        // also fire on every ordinary rewrite, since one side carries the extension.
+        // Compared as ADDRESSES (the reader's normalization), shown as NAMES: the operator reads
+        // the entry that will exist in the archive, not the identifier the tool addresses it by.
+        String readAddress = entryAsRead == null ? null : MergeRulesCodec.removeExtension(entryAsRead);
+        String renameClause = readAddress != null && entryToWrite != null
+            && !readAddress.equals(entryToWrite)
+                ? " The rules also change address inside the archive: they were read from entry '" //$NON-NLS-1$
+                    + entryAsRead + "' and will be written as '" //$NON-NLS-1$
+                    + entryToWrite + MergeRulesCodec.XML_EXTENSION
+                    + "', so a comparison looking for the old name will no longer find them." //$NON-NLS-1$
+                : ""; //$NON-NLS-1$
+        return new ConsentPreview("Replace merge-rules file", //$NON-NLS-1$
+            "This replaces " + file + " with a new file. It carries " //$NON-NLS-1$ //$NON-NLS-2$
+                + (existingDecisions - replaced) + " of the " + existingDecisions //$NON-NLS-1$
+                + " decision(s) the file holds, plus its Properties, Correspondences and every " //$NON-NLS-1$
+                + "section this tool does not interpret, and adds " + requested //$NON-NLS-1$
+                + " decision(s) from this call, " + replaced //$NON-NLS-1$
+                + " of which replace a rule the file holds. Lost: those " + replaced //$NON-NLS-1$
+                + " previous rule(s), and the file object itself - its owner and access rights " //$NON-NLS-1$
+                + "are not carried over." //$NON-NLS-1$
+                + (entryCarriedMetadata
+                    ? " Also lost: the merge-settings entry this write started from carried a zip " //$NON-NLS-1$
+                        + "entry comment or an extra field, and that did not come across." //$NON-NLS-1$
+                    : "") //$NON-NLS-1$
+                + renameClause
+                // A PROMISE, not a disclaimer: every number above was computed from the file as it
+                // stood before this dialog opened, and the sentence says what happens if that
+                // stops being true rather than warning that it might. See targetChangedRefusal.
+                + " The file is described as it was read; if it changes before this dialog is " //$NON-NLS-1$
+                + "answered, nothing is written.", //$NON-NLS-1$
+            1, List.of(file.toString()));
+    }
+
+    /**
+     * Refuses the rewrite when the target is no longer the file this call read.
+     *
+     * <h2>Why the target is looked at again at all</h2>
+     * Everything the caller is shown and everything this call is about to write was derived from
+     * ONE reading of the target, and the consent gate can hold that reading open for up to two
+     * minutes - {@code ASK_ALWAYS} is the default level, so the prompt is the ordinary case rather
+     * than an unusual one. The path mutex does not help here: it is a lock in this JVM, and the
+     * writer this guards against is an EDT editor, a second workbench or a person with a text
+     * editor. Writing regardless would replace a file nobody looked at with a document assembled
+     * from a file that no longer exists, and report it as a success - the shape this tool refuses
+     * everywhere else.
+     * <p>
+     * The neighbouring branch already works this way: {@code MergeRulesCodec} records the identity
+     * of the empty file a {@code MUST_NOT_EXIST} write reserves and refuses at the move when the
+     * path stops holding it. {@code MAY_BE_REPLACED} moves unconditionally, which is what makes
+     * this the tool's question to ask.
+     *
+     * <h2>Attributes AND content, and a refusal rather than a second prompt</h2>
+     * The first comparison is {@link MergeRulesCodec#isTheFileRead} - the same identity the
+     * reservation is recognised by - and it settles the ordinary writer outright: a save stamps
+     * the file with the current instant, and the instant this call read it precedes the dialog by
+     * seconds at least, so even a store with two-second timestamp granularity cannot hide it.
+     * What it cannot see is named in its own note: a replacement of the same length that preserves
+     * or restores both instants, which inode reuse, NTFS tunnelling and any timestamp-copying sync
+     * tool make reachable. So when every attribute still matches, the content is compared too
+     * ({@link MergeRulesCodec#contentDigest}) - one read of a file this call has already read,
+     * which turns "a writer would have stamped the mtime" from an assumption into a check.
+     * <p>
+     * Re-prompting was the alternative and is worse: an honest second prompt means re-running the
+     * pipeline from the read - the sidecar check, the duplicate paths, the comparison's snapshot,
+     * the validation - and showing the operator a SECOND dialog with different numbers inside one
+     * call, which against an active writer is a loop. A refusal is one round trip and it is the
+     * shape this tool already uses for the mirror case, where a file appears on a path that was
+     * free.
+     *
+     * <h2>Absent is not the same observation as changed</h2>
+     * A target that is GONE is refused rather than created: the operator authorised replacing a
+     * file, not creating one where somebody has just removed it. A target that is no longer a
+     * regular file is named as that. A target that cannot be read at all is refused too -
+     * unverifiable is treated as changed, which is the direction {@code isSameFile} and the
+     * reservation's own clean-up already reason in.
+     *
+     * @param file the absolute, normalised target, as read before the gate
+     * @param asRead the target's description taken before the document was read, never
+     *            {@code null} for a rewrite
+     * @param digestAsRead the target's content digest taken once the document was parsed; {@code null}
+     *            when there was no existing target, or it is too large to be one
+     * @return the refusal, or {@code null} when the target is still the file that was read
+     */
+    /**
+     * The question the codec asks at the last instant before it replaces the file: is this still
+     * the target this call verified?
+     * <p>
+     * It is {@code targetChangedRefusal} and nothing new - the same attributes, the same content
+     * digest, the same archive digest - asked once more after the document has been serialized
+     * and staged, which is work the caller's own check stands in front of.
+     * </p>
+     *
+     * @param file the target
+     * @param asRead its attributes when this call read it, or {@code null} when it did not exist
+     * @param digestAsRead the content digest snapshotted for it
+     * @param archiveDigestAsRead the whole-file digest snapshotted for an archive
+     * @return the re-check, or {@code null} when there was no file to verify
+     */
+    private static BooleanSupplier stillTheTargetThisCallVerified(Path file,
+        BasicFileAttributes asRead, String digestAsRead, String archiveDigestAsRead)
+    {
+        return asRead == null ? null
+            : () -> targetChangedRefusal(file, asRead, digestAsRead, archiveDigestAsRead) == null;
+    }
+
+    /**
+     * Refuses when the target is no longer the size it was read at - checked before any
+     * whole-file work, so a container substituted since then is rejected rather than streamed.
+     *
+     * @param file the target
+     * @param asRead its attributes when this call read it
+     * @return a refusal, or {@code null} when the size still matches
+     */
+    private static String sizeChangedRefusal(Path file, BasicFileAttributes asRead)
+    {
+        try
+        {
+            BasicFileAttributes present = Files.readAttributes(file, BasicFileAttributes.class);
+            return present.isRegularFile() && present.size() == asRead.size()
+                ? null
+                : targetMovedRefusal(file);
+        }
+        catch (IOException gone) // NOSONAR: unreadable means changed, the direction every clause here takes
+        {
+            return targetMovedRefusal(file);
+        }
+    }
+    /**
+     * Re-runs the BOUNDED checks against the file that was just hashed: it still holds nothing
+     * but the merge-settings entry, and that entry is still the one this call parsed.
+     * <p>
+     * Cheap by construction - the same bounded read as the first parse, never the whole archive -
+     * so the giant-neighbour container the refusal above rejects is still rejected before any
+     * full-file work. What it buys is that the whole-file digest describes a snapshot whose
+     * sidecar-freedom and content were verified, rather than one nobody looked at again.
+     * </p>
+     *
+     * @param file the archive that was hashed
+     * @param targetPolicy whether this write may replace that file
+     * @param contentDigestAsRead the content digest snapshotted for it, or {@code null} when it
+     *            could not be parsed at all - in which case there is nothing to contradict
+     * @return a refusal, or {@code null} when the file is still the one that was hashed
+     */
+    private static String archiveStillTheOneHashed(Path file, MergeRulesCodec.Target targetPolicy,
+        String contentDigestAsRead, String entryAsRead, boolean entryMetadataAsRead)
+    {
+        MergeRulesDocument again;
+        try
+        {
+            again = MergeRulesCodec.read(file);
+        }
+        catch (IOException | MergeRulesFormatException noLongerReadable) // NOSONAR: see below
+        {
+            // Unparseable NOW. That is a change only if it parsed a moment ago; a target that
+            // never parsed was snapshotted with a null digest and is guarded by the attributes.
+            return contentDigestAsRead == null ? null : targetMovedRefusal(file);
+        }
+        String sidecars = sidecarEntriesRefusal(file, targetPolicy, again);
+        if (sidecars != null)
+        {
+            return sidecars;
+        }
+        // The ADDRESS as well as the bytes: an entry renamed to an equal-length name, with the
+        // same expanded XML behind it, moves nothing this far except sourceEntry() - and the
+        // preview and the in-memory document would still describe the old name while the write
+        // put it back, silently undoing the rename.
+        if (entryAsRead != null && !entryAsRead.equals(again.sourceEntry()))
+        {
+            return targetMovedRefusal(file);
+        }
+        // And the entry METADATA, for the same reason: the preview promises what a rewrite
+        // destroys, and it promises it from the FIRST read. A comment or extra field that
+        // appeared in the window would be lost without ever being named.
+        if (entryMetadataAsRead != again.readEntryCarriedMetadata())
+        {
+            return targetMovedRefusal(file);
+        }
+        return contentDigestAsRead != null && !contentDigestAsRead.equals(again.sourceDigest())
+            ? targetMovedRefusal(file)
+            : null;
+    }
+
+    /**
+     * The refusal for a target that changed between the parse and the fingerprint.
+     *
+     * @param file the target
+     * @return the refusal JSON
+     */
+    private static String targetMovedRefusal(Path file)
+    {
+        return ToolResult.error("Nothing was written: " + file //$NON-NLS-1$
+            + " changed while it was being read - what this call parsed is no longer what is on " //$NON-NLS-1$
+            + "the path, so the preview would describe one file and the write would replace " //$NON-NLS-1$
+            + "another. Read what is on the path now with mode '" + MODE_READ //$NON-NLS-1$
+            + "' and re-send this write against it.").toJson(); //$NON-NLS-1$
+    }
+    /**
+     * The whole file's digest, or {@code null} when it cannot be read - which the caller treats
+     * as changed, the direction every clause here reasons in.
+     *
+     * @param file the target
+     * @return the digest, or {@code null}
+     */
+    private static String wholeFileDigest(Path file, long limit)
+    {
+        try
+        {
+            return MergeRulesCodec.fileDigest(file, limit);
+        }
+        catch (IOException unreadable) // NOSONAR: unreadable means changed, see the javadoc
+        {
+            return null;
+        }
+    }
+    /**
+     * The target's content digest as it is NOW, defined the way the parser reads it so it is
+     * comparable with the one taken before the prompt.
+     *
+     * @param file the target
+     * @return the digest, or {@code null} when the file cannot be read or parsed - which the
+     *         caller treats as changed, the direction the whole check reasons in
+     */
+
+    private static String currentDocumentDigest(Path file)
+    {
+        try
+        {
+            return MergeRulesCodec.read(file).sourceDigest();
+        }
+        catch (IOException | MergeRulesFormatException unverifiable) // NOSONAR: unverifiable is changed
+        {
+            return null;
+        }
+    }
+
+    /**
+     * Whether two paths name the SAME target. Compared by identity on the filesystem rather than
+     * by spelling: a caller may pass the target as {@code basedOn} through a different but
+     * equivalent path, and the digest taken from the parsed document is only reusable when the
+     * two really are one file.
+     * <p>
+     * A {@code false} here is not a safe default at the call site, whatever it is for the
+     * predicate: on an EXISTING target the replacement was authorized by this very relation, so
+     * a {@code false} - a retargeted link, or an answer that could not be obtained - means the
+     * authorization stopped holding, and the caller REFUSES rather than continuing another way.
+     * A predicate whose failure mode reads like an ordinary answer cannot decide that on its
+     * own, so it does not: it reports, and the consumer decides.
+     * </p>
+     *
+     * @param base the basedOn path, or {@code null}
+     * @param file the target
+     * @return whether they are the same existing file
+     */
+    private static boolean isSameTarget(Path base, Path file)
+    {
+        if (base == null)
+        {
+            return false;
+        }
+        if (base.equals(file))
+        {
+            return true;
+        }
+        try
+        {
+            return Files.isSameFile(base, file);
+        }
+        catch (IOException cannotTell) // NOSONAR: unverifiable is reported as "not the same"; see the javadoc
+        {
+            return false;
+        }
+    }
+
+    private static String targetChangedRefusal(Path file, BasicFileAttributes asRead,
+        String digestAsRead, String archiveDigestAsRead)
+    {
+        String observed;
+        try
+        {
+            BasicFileAttributes present = Files.readAttributes(file, BasicFileAttributes.class);
+            if (!present.isRegularFile())
+            {
+                observed = "what is on that path now is not a regular file"; //$NON-NLS-1$
+            }
+            else if (!MergeRulesCodec.isTheFileRead(asRead, present))
+            {
+                observed = "its size or timestamps are not those of the file that was read"; //$NON-NLS-1$
+            }
+            else if (digestAsRead != null && !digestAsRead.equals(currentDocumentDigest(file)))
+            {
+                // The residue the attributes cannot see: same length, both instants preserved or
+                // restored. Reached only when every attribute still matches, so it costs one read
+                // of a file this call has already read - and it turns "a writer would have stamped
+                // the mtime" from an assumption into something the code checked.
+                observed = "its content is not the content that was read"; //$NON-NLS-1$
+            }
+            else if (archiveDigestAsRead != null
+                && !archiveDigestAsRead.equals(wholeFileDigest(file, asRead.size())))
+            {
+                // Reached with the RULES unchanged: what moved is the archive around them - the
+                // entry name or its metadata, the archive comment, an entry beside it. The write
+                // replaces the whole file, so it would take that with it.
+                observed = "the archive around it is not the archive that was read"; //$NON-NLS-1$
+            }
+            else if (!MergeRulesCodec.isTheFileRead(asRead,
+                Files.readAttributes(file, BasicFileAttributes.class)))
+            {
+                // Sampled AGAIN, after the digests were read. An open stream keeps reading the
+                // inode it was given, so a replacement dropped onto the path while those reads
+                // were in flight would hash the detached old file and agree with everything.
+                // Re-reading the path afterwards catches that: the identity it names now is not
+                // the one this call verified.
+                observed = "it was replaced on that path while it was being verified"; //$NON-NLS-1$
+            }
+            else
+            {
+                return null;
+            }
+        }
+        catch (NoSuchFileException e) // NOSONAR the absence is the observation
+        {
+            observed = "it is no longer there"; //$NON-NLS-1$
+        }
+        catch (IOException e)
+        {
+            observed = "what is on that path now could not be read (" + describe(e) + ')'; //$NON-NLS-1$
+        }
+        return ToolResult.error("Nothing was written: " + file //$NON-NLS-1$
+            + " changed while consent was being asked - " + observed //$NON-NLS-1$
+            + ". The preview the operator authorized, and the decisions this call was about to " //$NON-NLS-1$
+            + "carry forward, describe the file as it was read BEFORE the prompt, so writing now " //$NON-NLS-1$
+            + "would discard whatever was saved to it since. Read what is on the path now with " //$NON-NLS-1$
+            + "mode '" + MODE_READ + "' and re-send this write against it: with " + KEY_BASED_ON //$NON-NLS-1$ //$NON-NLS-2$
+            + "='" + file + "' to carry its current decisions in, or without " + KEY_BASED_ON //$NON-NLS-1$ //$NON-NLS-2$
+            + " if it is gone and a fresh file is what you want. A fresh prompt then describes " //$NON-NLS-1$
+            + "the file as it is now.").toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -1326,8 +1977,11 @@ public class MergeRulesTool implements IMcpTool
         out.append(containerClause(zipEntryId));
         out.append("- Decisions recorded: ").append(requested.size()).append(" (") //$NON-NLS-1$ //$NON-NLS-2$
             .append(requested.size() - replaced).append(" new, ").append(replaced).append(" replaced)\n"); //$NON-NLS-1$ //$NON-NLS-2$
-        if (isSet(basedOn))
+        if (basedOn != null)
         {
+            // Presence, not emptiness: a blank 'basedOn' is refused before any of this runs, so by
+            // here the two questions have the same answer - and asking the one that matches the
+            // refusal keeps them from drifting apart if that refusal is ever narrowed.
             // The same label, through the same helper, for the same reason: 'basedOn' may name a
             // zip, and the label then ends in that archive's ENTRY name. See renderRead.
             out.append("- Based on: ").append(MarkdownUtils.inlineCode(document.sourceLabel())) //$NON-NLS-1$

@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils.compare;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -3039,6 +3040,181 @@ public class MergeRulesCodecTest
             MergeRulesCodec.isTheSameFile(taken, touchedSince));
     }
 
+    // ==== The same identity, asked about a file of any size: "is this still the file I read?" ====
+    //
+    // isTheFileRead is what merge_rules asks after the destructive-consent gate returns ALLOW,
+    // about the file it is about to replace. It shares every clause with isTheSameFile except the
+    // size, which is compared against the size the file HAD rather than against zero. These tests
+    // exercise one clause each, on built descriptions, because that is the only place the clauses
+    // can be separated: on Linux JDK 17 creationTime() can mirror lastModifiedTime, so a
+    // file-based test cannot tell a missing mtime comparison from a present one.
+
+    /**
+     * The size a read file carries here. Any non-zero value would do; what it must NOT be is zero,
+     * which is the constant {@link MergeRulesCodec#isTheSameFile} compares against - at zero the
+     * two predicates would agree by accident and a size clause that had gone missing would hide.
+     */
+    private static final long AS_READ_SIZE = 4096L;
+
+    /**
+     * The residue the attribute comparison cannot see, on a REAL file rather than a built
+     * description: a replacement of the same length whose timestamps are put back, which inode
+     * reuse, NTFS tunnelling and any timestamp-copying sync tool all produce. The attributes say
+     * "same file" - that is the point of this test - and only the content digest disagrees.
+     */
+    @Test
+    public void testTheContentDigestSeesAReplacementTheAttributesCannotTellApart() throws Exception
+    {
+        Path file = workDir.resolve("rules-digest.xml"); //$NON-NLS-1$
+        Files.writeString(file, RULE_BESIDE_THE_ROOT, StandardCharsets.UTF_8);
+        BasicFileAttributes asRead = Files.readAttributes(file, BasicFileAttributes.class);
+        String digestAsRead = MergeRulesCodec.documentDigest(file);
+
+        // Same LENGTH, different content, and the timestamps put back - inode reuse, NTFS
+        // tunnelling and any timestamp-copying sync tool all produce exactly this.
+        Files.writeString(file, RULE_BESIDE_THE_ROOT.replace("commonModules", "commonModuleX"), //$NON-NLS-1$ //$NON-NLS-2$
+            StandardCharsets.UTF_8);
+        Files.setLastModifiedTime(file, asRead.lastModifiedTime());
+        BasicFileAttributes present = Files.readAttributes(file, BasicFileAttributes.class);
+
+        assertTrue("the attribute check cannot tell this replacement apart - that is the residue " //$NON-NLS-1$
+            + "the digest exists for; if this ever fails, the test has stopped modelling it", //$NON-NLS-1$
+            MergeRulesCodec.isTheFileRead(asRead, present));
+        assertNotEquals("but the document digest must see it", //$NON-NLS-1$
+            digestAsRead, MergeRulesCodec.documentDigest(file));
+    }
+
+    /**
+     * The mirror direction: a file nobody touched keeps its digest, so the new clause cannot
+     * refuse the rewrites this tool exists to perform.
+     */
+    @Test
+    public void testTheContentDigestOfAnUntouchedFileIsUnchanged() throws Exception
+    {
+        Path file = workDir.resolve("rules-digest-stable.xml"); //$NON-NLS-1$
+        Files.writeString(file, RULE_BESIDE_THE_ROOT, StandardCharsets.UTF_8);
+
+        assertEquals("re-reading the same bytes must give the same digest", //$NON-NLS-1$
+            MergeRulesCodec.documentDigest(file), MergeRulesCodec.documentDigest(file));
+    }
+
+    /**
+     * The control, and it does more than keep the rest from being satisfied by "never the same
+     * file": a non-empty file recognised as itself is what pins the size being compared against
+     * the size that was READ. A predicate that had kept the reservation's literal zero would
+     * refuse every real file, and every other test here would still pass.
+     */
+    @Test
+    public void testTheFileNobodyTouchedIsStillTheFileThatWasRead()
+    {
+        assertTrue("a file of the same size, key and both instants is the file that was read - " //$NON-NLS-1$
+            + "refusing it would refuse every rewrite this tool performs", //$NON-NLS-1$
+            MergeRulesCodec.isTheFileRead(theFileAsRead(aFileKey()), theFileAsRead(aFileKey())));
+    }
+
+    /** A save that changed the length: the coarsest change, and the one a size clause is for. */
+    @Test
+    public void testAFileThatGrewSinceItWasReadIsNotTheFileThatWasRead()
+    {
+        BasicFileAttributes present =
+            new DescribedFile(aFileKey(), AS_READ_SIZE + 1, true, CLAIMED_AT, CLAIMED_AT);
+
+        assertEquals("the keys have to MATCH, or this would pass on a predicate that only looks " //$NON-NLS-1$
+            + "at the key", theFileAsRead(aFileKey()).fileKey(), present.fileKey()); //$NON-NLS-1$
+        assertFalse("a file of another size is not the file that was read", //$NON-NLS-1$
+            MergeRulesCodec.isTheFileRead(theFileAsRead(aFileKey()), present));
+    }
+
+    /**
+     * A save that kept the length - an edit in place, one character for another. The size cannot
+     * see it and the modification instant can, which is why both clauses are there.
+     */
+    @Test
+    public void testAFileSavedAtAnotherInstantIsNotTheFileThatWasRead()
+    {
+        BasicFileAttributes present = new DescribedFile(aFileKey(), AS_READ_SIZE, true, CLAIMED_AT,
+            FileTime.fromMillis(1_500_000_060_000L));
+
+        assertEquals("the SIZE is held equal, so only the modification instant can decide this", //$NON-NLS-1$
+            AS_READ_SIZE, present.size());
+        assertFalse("a file last modified at another instant is not the file that was read", //$NON-NLS-1$
+            MergeRulesCodec.isTheFileRead(theFileAsRead(aFileKey()), present));
+    }
+
+    /**
+     * And a replacement that restored the modification instant - which a writer can simply set -
+     * while the file itself is a new one. Only the creation instant separates these two, so this
+     * is the clause's own test; no file-based test can be it, because a store that mirrors
+     * creationTime onto lastModifiedTime cannot produce this pair at all.
+     */
+    @Test
+    public void testAFileCreatedAtAnotherInstantIsNotTheFileThatWasRead()
+    {
+        BasicFileAttributes present = new DescribedFile(aFileKey(), AS_READ_SIZE, true,
+            FileTime.fromMillis(1_500_000_060_000L), CLAIMED_AT);
+
+        assertEquals("the size is held equal", AS_READ_SIZE, present.size()); //$NON-NLS-1$
+        assertEquals("...and so is the modification instant, so only the creation instant can " //$NON-NLS-1$
+            + "decide this", theFileAsRead(aFileKey()).lastModifiedTime(), //$NON-NLS-1$
+            present.lastModifiedTime());
+        assertFalse("a file created at another instant is not the file that was read", //$NON-NLS-1$
+            MergeRulesCodec.isTheFileRead(theFileAsRead(aFileKey()), present));
+    }
+
+    /**
+     * The key still NARROWS here too: same size, same shape, both instants restored, a different
+     * inode. This is the case nothing else can see.
+     */
+    @Test
+    public void testAFileWearingADifferentInodeIsNotTheFileThatWasRead()
+    {
+        BasicFileAttributes present =
+            new DescribedFile(List.of(2049L, 999L), AS_READ_SIZE, true, CLAIMED_AT, CLAIMED_AT);
+
+        assertFalse("a file the store answers a DIFFERENT key for is a different file, even " //$NON-NLS-1$
+            + "though it wears the read file's size, shape and both instants", //$NON-NLS-1$
+            MergeRulesCodec.isTheFileRead(theFileAsRead(aFileKey()), present));
+    }
+
+    /**
+     * A key on one side only is a different file by that alone. Kept as its own case because the
+     * two sides are read through the same view: a store that answers a key for one and none for
+     * the other has changed under this call, and "no key" may not be read as "the same key".
+     */
+    @Test
+    public void testAKeyAnsweredOnOneSideOnlyIsNotTheFileThatWasRead()
+    {
+        assertFalse("read with a key, present without one", MergeRulesCodec //$NON-NLS-1$
+            .isTheFileRead(theFileAsRead(aFileKey()), theFileAsRead(null)));
+        assertFalse("read without a key, present with one", MergeRulesCodec //$NON-NLS-1$
+            .isTheFileRead(theFileAsRead(null), theFileAsRead(aFileKey())));
+    }
+
+    /**
+     * And what is on the path has to BE a file. An empty directory is size zero on the stores that
+     * report a size for one, and a directory of any size is not what was read.
+     */
+    @Test
+    public void testADirectoryIsNotTheFileThatWasRead()
+    {
+        BasicFileAttributes present =
+            new DescribedFile(aFileKey(), AS_READ_SIZE, false, CLAIMED_AT, CLAIMED_AT);
+
+        assertEquals("the size, the key and both instants are held equal, so only the SHAPE can " //$NON-NLS-1$
+            + "decide this", AS_READ_SIZE, present.size()); //$NON-NLS-1$
+        assertFalse("a directory is not the file that was read", //$NON-NLS-1$
+            MergeRulesCodec.isTheFileRead(theFileAsRead(aFileKey()), present));
+    }
+
+    /**
+     * @param key the key the store answers for it, or {@code null} where it answers none
+     * @return the description of an ordinary, non-empty file as it stood when it was read
+     */
+    private static BasicFileAttributes theFileAsRead(Object key)
+    {
+        return new DescribedFile(key, AS_READ_SIZE, true, CLAIMED_AT, CLAIMED_AT);
+    }
+
     /**
      * @return a file key shaped like the {@code (device, inode)} pair a POSIX store answers - a
      *         fresh object each call, so the comparison under test has to be an {@code equals} one
@@ -4896,5 +5072,99 @@ public class MergeRulesCodecTest
             }
         }
         return names;
+    }
+
+    /**
+     * A REPLACEMENT refuses when the path stopped being the file the caller verified, and it
+     * refuses at the last possible moment rather than at the caller's own last look.
+     * <p>
+     * Between that look and the move there is a serialization, a temporary file, a write and a
+     * permission copy - all of it window. The interference here lands inside exactly that window,
+     * through the same seam the reservation tests use.
+     * </p>
+     * <p>
+     * The assertion is on the CONTENT that ends up on disk, not on the outcome: a refusal that
+     * had already replaced the bytes would be no refusal at all.
+     * </p>
+     *
+     * @throws Exception when the fixture cannot be written or read back
+     */
+    @Test
+    public void testAReplacementRefusesWhenTheTargetChangedAfterItWasVerified() throws Exception
+    {
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+        Files.write(target, FIXTURE.getBytes(StandardCharsets.UTF_8));
+        BasicFileAttributes verified = Files.readAttributes(target, BasicFileAttributes.class);
+
+        try
+        {
+            MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+                MergeRulesCodec.Target.MAY_BE_REPLACED, null, replaceReservationAndCarryOn(target),
+                verified, null);
+            fail("a replacement whose target changed since it was verified must refuse"); //$NON-NLS-1$
+        }
+        catch (IOException expected)
+        {
+            assertTrue("the refusal has to say WHAT it observed: " + expected.getMessage(), //$NON-NLS-1$
+                expected.getMessage().contains("changed between the last verification")); //$NON-NLS-1$
+        }
+
+        assertEquals("the file that replaced the target is not this call's to overwrite", //$NON-NLS-1$
+            FOREIGN_DECISIONS,
+            new String(Files.readAllBytes(target), StandardCharsets.UTF_8));
+    }
+
+    /**
+     * The control that keeps the guard from becoming a blanket refusal: with nothing touching the
+     * path, the very same call installs the document. Without this, refusing every replacement
+     * would pass the test above.
+     *
+     * @throws Exception when the fixture cannot be written or read back
+     */
+    @Test
+    public void testAReplacementStillInstallsWhenTheTargetIsTheFileVerified() throws Exception
+    {
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+        Files.write(target, FOREIGN_DECISIONS.getBytes(StandardCharsets.UTF_8));
+        BasicFileAttributes verified = Files.readAttributes(target, BasicFileAttributes.class);
+
+        MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+            MergeRulesCodec.Target.MAY_BE_REPLACED, null, () -> { /* nothing interferes */ },
+            verified, null);
+
+        assertTrue("the document must actually have been installed", //$NON-NLS-1$
+            new String(Files.readAllBytes(target), StandardCharsets.UTF_8)
+                .contains("MergeSettings")); //$NON-NLS-1$
+    }
+
+    /**
+     * The attributes this class compares cannot see an in-place edit that kept the length and put
+     * the timestamps back - the caller has digests for that. So the caller hands in the question,
+     * and it is asked at the last instant rather than before the staging work.
+     *
+     * @throws Exception when the fixture cannot be written or read back
+     */
+    @Test
+    public void testAReplacementRefusesWhenTheCallerNoLongerRecognisesTheTarget() throws Exception
+    {
+        Path target = workDir.resolve("rules.xml"); //$NON-NLS-1$
+        Files.write(target, FOREIGN_DECISIONS.getBytes(StandardCharsets.UTF_8));
+        BasicFileAttributes verified = Files.readAttributes(target, BasicFileAttributes.class);
+
+        try
+        {
+            MergeRulesCodec.write(target, MergeRulesCodec.parse(FIXTURE),
+                MergeRulesCodec.Target.MAY_BE_REPLACED, null, () -> { /* nothing interferes */ },
+                verified, () -> false);
+            fail("the caller said the target is no longer the one it authorized"); //$NON-NLS-1$
+        }
+        catch (IOException expected)
+        {
+            assertTrue("the refusal has to say what it observed: " + expected.getMessage(), //$NON-NLS-1$
+                expected.getMessage().contains("stopped being the file this write was authorized")); //$NON-NLS-1$
+        }
+
+        assertEquals("nothing may be installed over a target the caller disowned", //$NON-NLS-1$
+            FOREIGN_DECISIONS, new String(Files.readAllBytes(target), StandardCharsets.UTF_8));
     }
 }

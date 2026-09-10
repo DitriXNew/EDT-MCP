@@ -87,6 +87,12 @@ The kind + modifiers map to ONE canonical 8-flag combination; an illegal mix (e.
 ### XDTOPackage namespace (top-object `XDTOPackage` only; create-time-only)
 - `targetNamespace`: the package URI namespace. A non-empty namespace is required for the package to be valid; defaults to `http://example.org/<Name>` when omitted. The success payload echoes the written `targetNamespace`.
 
+### Role rights model (top-object `Role` only)
+A `Role` is created together with its own rights model, exported beside the role as
+`src/Roles/<Name>/Rights.rights` and carrying the three role properties at their defaults. That
+file is what makes the role valid for the configurator: without it an incremental configuration
+load fails on the whole configuration, not just on the role. No follow-up call is needed to make
+a created role usable - `modify_metadata` is only for granting rights or changing the properties.
 ### Edition-gated top types
 `Bot`, `WebSocketClient` and `IntegrationService` are created only when the loaded platform version exposes their Configuration collection. On a build that lacks the collection feature the create returns a clear "Could not resolve configuration collection" error rather than crashing (the feature is probed on the live `Configuration` EClass, never assumed). On the 2026.1 target platform all three resolve and create.
 

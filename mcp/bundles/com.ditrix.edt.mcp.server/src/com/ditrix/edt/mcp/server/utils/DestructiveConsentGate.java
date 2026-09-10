@@ -64,8 +64,8 @@ import com.ditrix.edt.mcp.server.ui.DestructiveConsentDialog;
  *       opens directly and a pre-scheduled {@link Display#timerExec} closer fires
  *       inside {@code open()}'s nested event loop to auto-close it on timeout
  *       ({@link #promptOnUiThread}). Otherwise (an MCP worker thread —
- *       {@code delete_project} / {@code delete_infobase} / {@code update_database}
- *       call the gate straight from the worker) the dialog is opened via
+ *       {@code delete_project} / {@code delete_infobase} / {@code update_database} /
+ *       {@code merge_rules} call the gate straight from the worker) the dialog is opened via
  *       {@code display.asyncExec} (NOT {@code syncExec}, so the UI thread is never
  *       blocked waiting on the worker) and the worker awaits a decision up to the
  *       timeout ({@link #promptWithTimeout}). Both paths race through the same
@@ -127,9 +127,9 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      * The frozen set of destructive tool NAMEs the gate protects: the five
      * always-destructive tools plus the conditionally destructive ones —
      * {@code modify_metadata} and {@code dcs} (gated only for a destructive retype),
-     * {@code git} (gated per write-capable subcommand) and {@code evaluate_expression}
-     * (gated always, because arbitrary BSL cannot be classified). Each tool decides
-     * when to call, the gate does not.
+     * {@code git} (gated per write-capable subcommand), {@code merge_rules} (gated only
+     * for the same-path rewrite) and {@code evaluate_expression} (gated always, because
+     * arbitrary BSL cannot be classified). Each tool decides when to call, the gate does not.
      *
      * <p>Related to but deliberately NOT equal to
      * {@code ToolAnnotationClassifier.DESTRUCTIVE_TOOLS}: that MCP-hint list carries
@@ -153,6 +153,9 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
         // whether one destroys work depends on git's per-subcommand option grammar - see
         // GitTool.destructiveForm.
         "git", //$NON-NLS-1$
+        // Gated for the same-path rewrite only: the one write that replaces a file; a write to a
+        // free path asks nothing — see MergeRulesTool#writeUnderMutex.
+        "merge_rules", //$NON-NLS-1$
         // Arbitrary BSL in the running application: its own description says so ("executes
         // arbitrary code in the running application - it can change state, not just read it"),
         // and unlike every other entry here the damage is unbounded and undeclarable - the
@@ -450,8 +453,8 @@ public final class DestructiveConsentGate // NOSONAR intentional singleton (Ecli
      *       against, so {@link #promptOnUiThread} bounds it with a
      *       {@link Display#timerExec} closer instead;</li>
      *   <li><b>a worker thread</b> — {@code delete_project} / {@code delete_infobase}
-     *       / {@code update_database} call the gate straight from the MCP worker —
-     *       bounded by {@link #promptWithTimeout}'s latch await.</li>
+     *       / {@code update_database} / {@code merge_rules} call the gate straight from the MCP
+     *       worker — bounded by {@link #promptWithTimeout}'s latch await.</li>
      * </ul>
      */
     private ConsentDecision promptForConsent(String toolName, ConsentPreview preview, Display display,
