@@ -894,7 +894,9 @@ public class GetProjectErrorsTool implements IMcpTool
      * </ul>
      *
      * <p>Natures that cannot be determined at all fall into the LAST bucket: unknowable is never
-     * evidence that a project holds nothing.</p>
+     * evidence that a project holds nothing. Nor does the nature list overrule the scope: a
+     * project whose Configuration was read IS a 1C:EDT project, and only a project with no such
+     * evidence is judged by its descriptor.</p>
      *
      * @param project the in-scope project whose configuration could not be read
      * @param metadataScope the project's metadata scope, when its kind could be resolved
@@ -915,7 +917,11 @@ public class GetProjectErrorsTool implements IMcpTool
         {
             return unreadableKnownProjectKindDecision(project, candidates, true);
         }
-        if (natures != null && containsAny(natures, V8_CONFIGURATION_NATURES))
+        // A project that HANDED OVER a Configuration is a 1C:EDT project by evidence, whatever
+        // its .project descriptor lists: the nature allowlist is the fallback for a root that
+        // could not be read, never a veto over a root that was.
+        boolean holdsConfiguration = metadataScope != null && metadataScope.configuration() != null;
+        if (holdsConfiguration || (natures != null && containsAny(natures, V8_CONFIGURATION_NATURES)))
         {
             return unreadableKnownProjectKindDecision(project, candidates, false);
         }

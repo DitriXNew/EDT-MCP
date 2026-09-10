@@ -1928,6 +1928,31 @@ public class GetProjectErrorsToolTest
     }
 
     @Test
+    public void testAReadConfigurationOutranksAnUnrecognisedNature()
+    {
+        // Its BM model is not up, but the project already handed over its Configuration - so it IS
+        // a 1C:EDT project. Judged by the nature allowlist alone it would leave the universe, and a
+        // workspace scan next to one readable project would then call the address a proven MISS
+        // although the configuration that may own it was never looked at.
+        List<String> candidates = Collections.singletonList("Catalog.Nope"); //$NON-NLS-1$
+
+        GetProjectErrorsTool.ProjectResolution decided = GetProjectErrorsTool.projectDecision(
+            natureProject("cfg-odd-nature", "org.example.SomeOtherNature"), null, //$NON-NLS-1$ //$NON-NLS-2$
+            scope(MdClassFactory.eINSTANCE.createConfiguration()), candidates);
+        assertNotNull("a project that handed over a configuration is not a non-EDT project", //$NON-NLS-1$
+            decided);
+        assertEquals(singleton("Catalog.Nope"), decided.undecided); //$NON-NLS-1$
+        assertFalse("its pass did NOT complete - nothing was looked at", decided.passCompleted); //$NON-NLS-1$
+
+        // The other edge: WITHOUT that evidence the same descriptor still leaves the universe, or
+        // one ordinary Eclipse project would mute the missing-address report for the workspace.
+        assertNull("an unrecognised nature and no readable root is still not an EDT project", //$NON-NLS-1$
+            GetProjectErrorsTool.projectDecision(
+                natureProject("plain-odd-nature", "org.example.SomeOtherNature"), null, null, //$NON-NLS-1$ //$NON-NLS-2$
+                candidates));
+    }
+
+    @Test
     public void testExternalDataProcessorResolvesAgainstAnExternalObjectsScope()
     {
         ExternalDataProcessor processor = MdClassFactory.eINSTANCE.createExternalDataProcessor();
