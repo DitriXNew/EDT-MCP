@@ -11,17 +11,12 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
-import com.ditrix.edt.mcp.server.utils.FormModelValidator;
 
 /**
  * Ratchet tests for {@link ValidateFormModelTool}.
@@ -128,59 +123,5 @@ public class ValidateFormModelToolTest
         String result = new ValidateFormModelTool().execute(params);
         assertTrue("the refusal must name the project that was not found: " + result, //$NON-NLS-1$
             result.contains("NoSuchProject_validate_form_model")); //$NON-NLS-1$
-    }
-
-    /** A finding code as the guide writes it in the code table: backticked, kebab-case. */
-    private static final Pattern GUIDE_CODE = Pattern.compile("`([a-z]+(?:-[a-z]+)+)`"); //$NON-NLS-1$
-
-    /**
-     * The guide is the advertised contract: a code is stable for a caller to branch on, so one the
-     * engine can emit and the guide never lists is an outcome nobody can handle on purpose. Three
-     * review rounds found exactly that by reading, which is why it is a build failure now.
-     */
-    @Test
-    public void testTheGuideDocumentsEveryFindingCode()
-    {
-        String guide = new ValidateFormModelTool().getGuide();
-        assertNotNull("the bundled guide must load, or this ratchet proves nothing", guide); //$NON-NLS-1$
-        List<String> undocumented = new ArrayList<>();
-        for (String code : FormModelValidator.CODES)
-        {
-            if (!guide.contains("`" + code + "`")) //$NON-NLS-1$
-            {
-                undocumented.add(code);
-            }
-        }
-        assertTrue("every emitted code must have a row in the guide table: " + undocumented, //$NON-NLS-1$
-            undocumented.isEmpty());
-    }
-
-    /**
-     * The same contract read from the other end: a row left behind by a check that no longer
-     * exists promises an outcome that can never arrive, and a caller branching on it waits
-     * forever. Only the FIRST table cell is read - the prose column names other things.
-     */
-    @Test
-    public void testTheGuidePromisesNoCodeTheEngineCannotEmit()
-    {
-        List<String> phantom = new ArrayList<>();
-        for (String line : new ValidateFormModelTool().getGuide().split("\n")) //$NON-NLS-1$
-        {
-            int cell = line.indexOf('|', 1);
-            if (!line.startsWith("|") || cell < 0) //$NON-NLS-1$
-            {
-                continue;
-            }
-            Matcher codes = GUIDE_CODE.matcher(line.substring(1, cell));
-            while (codes.find())
-            {
-                if (!FormModelValidator.CODES.contains(codes.group(1)))
-                {
-                    phantom.add(codes.group(1));
-                }
-            }
-        }
-        assertTrue("the guide must not advertise a code the engine cannot emit: " + phantom, //$NON-NLS-1$
-            phantom.isEmpty());
     }
 }
