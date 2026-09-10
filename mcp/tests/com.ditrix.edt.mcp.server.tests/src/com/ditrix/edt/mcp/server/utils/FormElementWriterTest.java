@@ -6534,6 +6534,23 @@ public class FormElementWriterTest
         assertEquals("CubeRecordSetFormExtInfo", m.extInfo().eClass().getName()); //$NON-NLS-1$
     }
 
+    /**
+     * Setting {@code main=false} is an ordinary boolean change, and it must not take the node that
+     * holds the form's write and read bindings with it. The platform never asks this question
+     * without a main attribute at all - {@code setExtInfo} asserts {@code isMain}.
+     */
+    @Test
+    public void testSyncFormExtInfoLeavesAFormWithNoMainAttributeAlone()
+    {
+        FormRootModel m = newFormRootModel("InformationRegisterRecordManager.MyRegister", false); //$NON-NLS-1$
+        m.giveExtInfo("InformationRegisterManagerFormExtInfo"); //$NON-NLS-1$
+
+        assertEquals("InformationRegisterManagerFormExtInfo", //$NON-NLS-1$
+            FormElementWriter.syncFormExtInfo(m.form));
+        assertNotNull("main=false must not destroy the ext-info nor the handlers inside it", //$NON-NLS-1$
+            m.extInfo());
+    }
+
     @Test
     public void testSyncFormExtInfoIgnoresAnAttributeThatIsNotMain()
     {

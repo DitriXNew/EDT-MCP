@@ -2833,6 +2833,10 @@ public final class FormElementWriter
         {
             applyMainTable(extInfo, config, mainTableFqn, applied);
         }
+        // This branch sets valueType (and main) itself, outside the property loop that syncs the
+        // form root - so it has to ask for the root ext-info here, or a main dynamic list leaves
+        // the form without its DynamicListFormExtInfo.
+        syncFormExtInfo(formModel);
         return applied;
     }
 
@@ -3019,7 +3023,9 @@ public final class FormElementWriter
      *
      * <p>That node is what publishes a form's write and read events: without it a record form
      * refuses {@code BeforeWriteAtServer} outright, and no MCP property can supply it (issue #591).
-     * A main attribute whose category maps to nothing CLEARS a stale ext-info, as the platform does.</p>
+     * A MAIN attribute whose category maps to nothing clears a stale ext-info this mapping produced,
+     * as the platform does; a form with NO main attribute is left untouched, because the platform
+     * never asks the question that way ({@code setExtInfo} asserts {@code isMain}).</p>
      *
      * @param formModel the editable content form, re-fetched inside the tx
      * @return the EClass name of the ext-info now on the form root, or {@code null} when it carries none
@@ -3031,16 +3037,25 @@ public final class FormElementWriter
         {
             return null;
         }
-        String classifier = null;
+        EObject main = null;
         for (EObject attr : referenceList(formModel, FEATURE_ATTRIBUTES))
         {
             if (isMainAttribute(attr))
             {
-                classifier = FORM_EXT_INFO_BY_TYPE_CATEGORY.get(singleValueTypeCategory(attr));
+                main = attr;
                 break;
             }
         }
         EObject current = singleReference(formModel, FEATURE_EXT_INFO);
+        if (main == null)
+        {
+            // Having NO main attribute is not an instruction to clear. The platform only ever asks
+            // this question about a main attribute - setExtInfo asserts isMain - so a form without
+            // one is left as it is; clearing here would delete the events bound inside the node on
+            // a plain main=false.
+            return current == null ? null : current.eClass().getName();
+        }
+        String classifier = FORM_EXT_INFO_BY_TYPE_CATEGORY.get(singleValueTypeCategory(main));
         if (classifier == null)
         {
             // Clear only a kind THIS mapping could have produced. The platform generator writes

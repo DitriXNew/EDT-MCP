@@ -139,6 +139,36 @@ def test_second_binding_of_the_same_write_event_is_refused():
         "exactly one binding for the event: %d" % (xml.count("<event>BeforeWriteAtServer</event>"),)
 
 
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_a_main_dynamic_list_gets_the_list_form_ext_info():
+    """The dynamic-list branch writes valueType and main itself, outside the property loop that
+    syncs the form root - so it has to ask for the root ext-info on its own."""
+    base = "Catalog.E2ERootExtDynList"
+    list_form = base + ".Form.ListForm"
+    list_attr = list_form + ".Attribute.List"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": base}), "seed catalog")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": list_form}), "seed list form")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": list_attr}), "seed attribute")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": list_attr,
+        "properties": [
+            {"name": "queryText",
+             "value": "SELECT Ref, Description AS Description FROM " + base},
+            {"name": "customQuery", "value": True},
+        ],
+    })
+    assert_ok(r, "convert the attribute into a dynamic list")
+    assert "dynamicList" in (r.structured.get("applied") or []), \
+        "the attribute must really be converted: %r" % (r.structured,)
+
+    poll_diff_contains('xsi:type="form:DynamicListFormExtInfo"',
+                       ctx="a MAIN dynamic list must give the form root its list ext-info")
+
+
 @e2e_test(tool="delete_metadata", kind="write-metadata")
 def test_a_binding_inside_the_ext_info_can_be_deleted():
     reg, form = _seed_record_form("Del")
