@@ -2360,10 +2360,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /** What the user authorizes when a form attribute (or column) changes its data type. */
-    private static ConsentPreview formRetypePreview(String normFqn,
+    static ConsentPreview formRetypePreview(String normFqn,
         FormElementWriter.FormMemberRef ref, List<JsonObject> properties)
     {
-        if (!isFormRetypeRequest(ref, properties))
+        boolean retype = isFormRetypeRequest(ref, properties);
+        boolean mainWrite = requestedMainFlag(ref, properties) != null;
+        if (retype && mainWrite)
+        {
+            // One batch, two different losses - the dialog has to name both, or the answer
+            // authorizes something the question never mentioned.
+            return new ConsentPreview(
+                "Change the data type of " + normFqn + " and rewrite its main flag", //$NON-NLS-1$ //$NON-NLS-2$
+                "Retyping a form attribute can drop stored values on the next database update, " //$NON-NLS-1$
+                    + "and the main flag can leave the form without its root ext-info, deleting " //$NON-NLS-1$
+                    + "the event handlers bound inside it.", //$NON-NLS-1$
+                2, List.of(PROP_VALUE_TYPE, PROP_MAIN));
+        }
+        if (mainWrite)
         {
             // The only other thing this gate authorizes: a main-flag write that leaves the form
             // root without its ext-info, and the event handlers bound inside it with it.
@@ -2395,25 +2408,29 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * The {@code main} value a property list carries, read with the SAME parser the write uses -
-     * {@link #parseBoolean} also takes {@code 1}/{@code 0}/{@code yes}/{@code no}, and a gate that
-     * recognized a narrower set would miss exactly the writes it exists to catch. Package-private
-     * so a test can pin that equivalence.
+     * The {@code main} value a property list LEAVES on the member: the batch is applied in order,
+     * so a repeated property is decided by its last write, and the gate has to judge the state the
+     * model actually ends up in.
+     *
+     * <p>Read with the SAME parser the write uses - {@link #parseBoolean} also takes
+     * {@code 1}/{@code 0}/{@code yes}/{@code no}, and a gate that recognized a narrower set would
+     * miss exactly the writes it exists to catch. Package-private so a test can pin both.</p>
      *
      * @param properties the requested property changes
-     * @return the value written into {@code main}, or {@code null} when the list writes none (or
+     * @return the value the list leaves in {@code main}, or {@code null} when it writes none (or
      *         writes something that is not a boolean at all, which the write itself refuses)
      */
     static Boolean mainFlagIn(List<JsonObject> properties)
     {
+        Boolean last = null;
         for (JsonObject prop : properties)
         {
             if (PROP_MAIN.equalsIgnoreCase(asString(prop.get("name")))) //$NON-NLS-1$
             {
-                return parseBoolean(asString(prop.get("value"))); //$NON-NLS-1$
+                last = parseBoolean(asString(prop.get("value"))); //$NON-NLS-1$
             }
         }
-        return null; // NOSONAR tri-state: see above
+        return last; // NOSONAR tri-state: see above
     }
 
     /**
@@ -2452,19 +2469,20 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             (formModel, tx) ->
             {
                 EObject member = FormElementWriter.resolveFormMember(formModel, ref);
-                String verdict = retype
-                    ? formRetypeVerdict(ctx.scope, version, member, properties, normReport)
-                    : ""; //$NON-NLS-1$
-                if (verdict == null || !verdict.isEmpty())
+                // The WHOLE batch is prepared first, whichever of the two brought us here: every
+                // refusal that pass can produce belongs above the gate, or a denial comes back
+                // instead of the actionable error (issue #295).
+                String refusal =
+                    formRetypeVerdict(ctx.scope, version, member, properties, normReport);
+                if (refusal != null)
                 {
-                    // A refusal, or a retype that must be asked about - either way it decides.
-                    return verdict;
+                    // A refusal, or "" for a member the write path answers "not found" for.
+                    return refusal;
                 }
-                // Nothing destructive about the types; the main flag can still delete the form
-                // root ext-info together with the handlers bound in it.
-                return member != null && mainFlag != null
-                    && FormElementWriter.clearsBoundFormExtInfo(formModel, member,
-                        mainFlag.booleanValue()) ? null : ""; //$NON-NLS-1$
+                // Prepared cleanly: ask when the request retypes stored data, or when the main
+                // flag it LEAVES would take the root ext-info and the handlers bound in it.
+                return retype || (mainFlag != null && FormElementWriter.clearsBoundFormExtInfo(
+                    formModel, member, mainFlag.booleanValue())) ? null : ""; //$NON-NLS-1$
             });
     }
 

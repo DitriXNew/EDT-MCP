@@ -2690,6 +2690,55 @@ public class ModifyMetadataToolTest
             ModifyMetadataTool.mainFlagIn(props("main", "maybe"))); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    /**
+     * A batch is applied in ORDER, so a repeated property is decided by its last write. The gate
+     * judges the state the model is left in: reading the first {@code main} would wave
+     * {@code [main=true, main=false]} through and prompt for {@code [main=false, main=true]},
+     * which deletes nothing.
+     */
+    @Test
+    public void testARepeatedMainWriteIsJudgedByItsLastValue()
+    {
+        assertEquals("the LAST write is what the model ends up with", //$NON-NLS-1$
+            Boolean.FALSE,
+            ModifyMetadataTool.mainFlagIn(List.of(boolProp("main", true), //$NON-NLS-1$
+                boolProp("main", false)))); //$NON-NLS-1$
+        assertEquals("and the other way round", Boolean.TRUE, //$NON-NLS-1$
+            ModifyMetadataTool.mainFlagIn(List.of(boolProp("main", false), //$NON-NLS-1$
+                boolProp("main", true)))); //$NON-NLS-1$
+    }
+
+    /**
+     * One batch can carry two different destructions - a retype and a main flag that empties the
+     * form root. The dialog has to name both, or a single answer authorizes a loss the question
+     * never mentioned.
+     */
+    @Test
+    public void testTheConsentPreviewNamesEveryLossTheBatchCarries()
+    {
+        FormElementWriter.FormMemberRef ref = FormElementWriter.parse(
+            "InformationRegister.Reg.Form.RecordForm.Attribute.Record"); //$NON-NLS-1$
+        String fqn = "InformationRegister.Reg.Form.RecordForm.Attribute.Record"; //$NON-NLS-1$
+
+        ConsentPreview retypeOnly =
+            ModifyMetadataTool.formRetypePreview(fqn, ref, props("valueType", "String")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(List.of("valueType"), retypeOnly.getTopNames()); //$NON-NLS-1$
+
+        ConsentPreview mainOnly =
+            ModifyMetadataTool.formRetypePreview(fqn, ref, props("main", "false")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(List.of("main"), mainOnly.getTopNames()); //$NON-NLS-1$
+        assertTrue("a main-only prompt is about the ext-info, not about stored values: " //$NON-NLS-1$
+            + mainOnly.getSubtitle(),
+            mainOnly.getSubtitle().contains("ext-info")); //$NON-NLS-1$
+
+        ConsentPreview both = ModifyMetadataTool.formRetypePreview(fqn, ref,
+            List.of(props("valueType", "String").get(0), props("main", "false").get(0))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertEquals("both losses are named", List.of("valueType", "main"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            both.getTopNames());
+        assertTrue("and the subtitle spells out the second one: " + both.getSubtitle(), //$NON-NLS-1$
+            both.getSubtitle().contains("ext-info")); //$NON-NLS-1$
+    }
+
     /** One property list carrying a single string-valued property. */
     private static List<JsonObject> props(String name, String value)
     {
