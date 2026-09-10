@@ -478,7 +478,68 @@ public class FormModelValidatorTest
             codes(form).contains("invalid-extension-call-type")); //$NON-NLS-1$
     }
 
+    /**
+     * Each entry of an extension action names its own procedure - {@code CommandHandlerExtension}
+     * declares {@code name} as {@code String[1]} - so a blank entry runs nothing however well its
+     * neighbour is filled in. Stopping at the first named entry hid exactly that.
+     */
+    @Test
+    public void testABlankHandlerEntryIsReportedBesideANamedOne()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        EObject command = form.command("Print", 1); //$NON-NLS-1$
+        form.giveCommandActionHandlers(command, "PrintCommand", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a blank entry beside a named one still runs nothing: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("empty-handler-name")); //$NON-NLS-1$
+        assertFalse("the action is NOT empty - it does name a procedure: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("empty-command-action")); //$NON-NLS-1$
+
+        // The other edge: an action whose entries all name a procedure says nothing at all.
+        form.giveCommandActionHandlers(command, "PrintCommand", "PrintCommandEnd"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("every entry names a procedure: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("empty-handler-name")); //$NON-NLS-1$
+
+        // ...and an action whose entries are ALL blank is reported ONCE, as a whole.
+        form.giveCommandActionHandlers(command, ""); //$NON-NLS-1$
+        assertTrue("an action naming nothing at all is the whole-action verdict: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("empty-command-action")); //$NON-NLS-1$
+        assertFalse("and it is not ALSO reported per entry: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("empty-handler-name")); //$NON-NLS-1$
+    }
+
+    /**
+     * A data path roots at an ATTRIBUTE. A form PARAMETER is not a data-path root - nothing binds
+     * to one that way - and the refusal has to say so, because the guide used to promise otherwise
+     * and a caller following it would build a binding this very tool rejects.
+     */
+    @Test
+    public void testTheDataPathRefusalNamesTheAttributeRule()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        form.field("Price", "Parameters"); //$NON-NLS-1$ //$NON-NLS-2$
+        String message = messageFor(form, "unresolved-data-path"); //$NON-NLS-1$
+        assertTrue("the refusal must state the rule it applied: " + message, //$NON-NLS-1$
+            message.contains("not a form attribute")); //$NON-NLS-1$
+        assertFalse("and must not promise a parameter root the validator rejects: " + message, //$NON-NLS-1$
+            message.contains("nor a form parameter")); //$NON-NLS-1$
+    }
+
     // --- the synthetic form --------------------------------------------------------------------
+
+    /** The message of the FIRST finding carrying {@code code}, or empty when there is none. */
+    private static String messageFor(Form form, String code)
+    {
+        for (FormModelValidator.Finding finding : FormModelValidator.validate(form.root))
+        {
+            if (code.equals(finding.code))
+            {
+                return finding.message;
+            }
+        }
+        return ""; //$NON-NLS-1$
+    }
 
     private static List<String> codes(Form form)
     {

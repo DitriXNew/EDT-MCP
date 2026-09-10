@@ -32,18 +32,19 @@ modify_metadata … → validate_form_model → read findings → fix → valida
 | `duplicate-name` | error | Two members of ONE namespace share a name, so the name addresses neither. |
 | `duplicate-id` | error | Two members of one id space share an id. |
 | `missing-data-path` / `empty-data-path` | error | A field or table displays nothing. |
-| `unresolved-data-path` | error | The path starts with a name that is neither a form attribute nor a form parameter. |
+| `unresolved-data-path` | error | The path starts with a name that is not a form attribute. |
 | `missing-command-reference` | error | A button runs no command. |
 | `unresolved-command-reference` | error | Its command is no longer in the model. |
 | `invalid-extension-call-type` | error | An extension handler uses `ChangeAndValidate`, which intercepts a method rather than a form event. |
 | `invalid-extended-tooltip-type` | error | An extended tooltip is typed anything but `Label`, which the platform rejects outright. |
 | `missing-ext-info` / `stale-ext-info` | error | An element has no type-specific ext-info, or one that its kind does not call for. |
-| `empty-handler-name` | error | A binding names no BSL procedure. |
+| `empty-handler-name` | error | A binding - an event handler, or one entry of a command action - names no BSL procedure. |
 | `unresolved-event-reference` | error | A binding names no event the element publishes. |
 
 ### What it deliberately does NOT check
 
-- **Data path segments past the first.** The first segment must name a form attribute or parameter;
+- **Data path segments past the first.** The first segment must name a form attribute (nothing
+  binds to a form parameter by data path);
   the rest walk that attribute's own type, and a wrong answer there would be worse than no answer.
 - **The `-1` id on the root auto command bar.** That sentinel is what the platform wants: a `0` id
   serializes without an `<id>` element and EDT then flags the form itself.

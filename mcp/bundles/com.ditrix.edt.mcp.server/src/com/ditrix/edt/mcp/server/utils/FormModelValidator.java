@@ -331,9 +331,9 @@ public final class FormModelValidator
     }
 
     /**
-     * A field or table reads its data through a path whose FIRST segment names a form attribute or
-     * a form parameter. Later segments walk the attribute's own type, which this validator does not
-     * resolve - a wrong answer there would be worse than no answer.
+     * A field or table reads its data through a path whose FIRST segment names a form ATTRIBUTE.
+     * Later segments walk that attribute's own type, which this validator does not resolve - a
+     * wrong answer there would be worse than no answer.
      */
     private static void checkDataPath(EObject item, Set<String> dataRoots, String path,
         List<Finding> findings)
@@ -362,7 +362,8 @@ public final class FormModelValidator
         {
             findings.add(new Finding(SEVERITY_ERROR, "unresolved-data-path", path, //$NON-NLS-1$
                 "The data path '" + String.join(".", segments) + "' starts with '" + root //$NON-NLS-1$ //$NON-NLS-2$
-                    + "', which is neither a form attribute nor a form parameter.")); //$NON-NLS-1$
+                    + "', which is not a form attribute. A path roots at an attribute; nothing " //$NON-NLS-1$
+                    + "binds to a form parameter by data path.")); //$NON-NLS-1$
         }
     }
 
@@ -532,8 +533,9 @@ public final class FormModelValidator
     }
 
     /**
-     * A form command runs a BSL procedure through its {@code action} container, which is a shape of
-     * its own ({@code FormCommandHandlerContainer}) rather than a {@code handlers} list.
+     * A form command runs a BSL procedure through its {@code action} container, in either of two
+     * shapes: the base {@code FormCommandHandlerContainer} with a single {@code handler}, or the
+     * extension {@code FormExtensionCommandHandlerContainer} with a {@code handlers} list.
      */
     private static void checkCommandActions(EObject formModel, List<Finding> findings)
     {
@@ -544,11 +546,32 @@ public final class FormModelValidator
             {
                 continue;
             }
+            String address = "Command." + nameOf(command); //$NON-NLS-1$
             if (!actionNamesAProcedure(action))
             {
-                findings.add(new Finding(SEVERITY_ERROR, "empty-command-action", //$NON-NLS-1$
-                    "Command." + nameOf(command), //$NON-NLS-1$
+                findings.add(new Finding(SEVERITY_ERROR, "empty-command-action", address, //$NON-NLS-1$
                     "This command has an action but names no BSL procedure to run.")); //$NON-NLS-1$
+                continue;
+            }
+            checkActionHandlerNames(action, address, findings);
+        }
+    }
+
+    /**
+     * Every entry of an extension action's {@code handlers} list is a binding of its own, and
+     * {@code CommandHandlerExtension} declares {@code name} as {@code String[1]} - required - so a
+     * named entry says nothing about its neighbours. Reported per ENTRY, and only for an action
+     * that names a procedure somewhere: one that names none is already reported as a whole.
+     */
+    private static void checkActionHandlerNames(EObject action, String address,
+        List<Finding> findings)
+    {
+        for (EObject handler : list(action, FEATURE_HANDLERS))
+        {
+            if (nameOf(handler).isEmpty())
+            {
+                findings.add(new Finding(SEVERITY_ERROR, "empty-handler-name", address, //$NON-NLS-1$
+                    "This command's action carries a handler entry that names no BSL procedure.")); //$NON-NLS-1$
             }
         }
     }
