@@ -2391,11 +2391,26 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return null; // NOSONAR tri-state: null means "this request writes no main flag"
         }
+        return mainFlagIn(properties);
+    }
+
+    /**
+     * The {@code main} value a property list carries, read with the SAME parser the write uses -
+     * {@link #parseBoolean} also takes {@code 1}/{@code 0}/{@code yes}/{@code no}, and a gate that
+     * recognized a narrower set would miss exactly the writes it exists to catch. Package-private
+     * so a test can pin that equivalence.
+     *
+     * @param properties the requested property changes
+     * @return the value written into {@code main}, or {@code null} when the list writes none (or
+     *         writes something that is not a boolean at all, which the write itself refuses)
+     */
+    static Boolean mainFlagIn(List<JsonObject> properties)
+    {
         for (JsonObject prop : properties)
         {
             if (PROP_MAIN.equalsIgnoreCase(asString(prop.get("name")))) //$NON-NLS-1$
             {
-                return parseBooleanFlag(prop.get("value")); //$NON-NLS-1$
+                return parseBoolean(asString(prop.get("value"))); //$NON-NLS-1$
             }
         }
         return null; // NOSONAR tri-state: see above

@@ -2664,4 +2664,47 @@ public class ModifyMetadataToolTest
         return valueType;
     }
 
+
+    /**
+     * The consent gate for a main-flag write reads the value with the same parser the WRITE uses.
+     * {@code prepareBoolean} accepts {@code 1}/{@code 0}/{@code yes}/{@code no} as well as
+     * {@code true}/{@code false}, so a gate that only knew the last pair would let
+     * {@code {"main":"no"}} delete a form root ext-info - handlers and all - with no prompt.
+     */
+    @Test
+    public void testTheMainFlagGateReadsEverySpellingTheWriteAccepts()
+    {
+        for (String yes : new String[]{"true", "1", "yes", "YES"}) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            assertEquals(yes, Boolean.TRUE, ModifyMetadataTool.mainFlagIn(props("main", yes))); //$NON-NLS-1$
+        }
+        for (String no : new String[]{"false", "0", "no", "No"}) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            assertEquals(no, Boolean.FALSE, ModifyMetadataTool.mainFlagIn(props("main", no))); //$NON-NLS-1$
+        }
+        assertEquals("a JSON boolean is the ordinary form", //$NON-NLS-1$
+            Boolean.TRUE, ModifyMetadataTool.mainFlagIn(List.of(boolProp("main", true)))); //$NON-NLS-1$
+        assertNull("a list that writes no main flag asks for no consent", //$NON-NLS-1$
+            ModifyMetadataTool.mainFlagIn(props("savedData", "true"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("a value the write itself refuses is not a main write either", //$NON-NLS-1$
+            ModifyMetadataTool.mainFlagIn(props("main", "maybe"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** One property list carrying a single string-valued property. */
+    private static List<JsonObject> props(String name, String value)
+    {
+        JsonObject prop = new JsonObject();
+        prop.addProperty("name", name); //$NON-NLS-1$
+        prop.addProperty("value", value); //$NON-NLS-1$
+        return List.of(prop);
+    }
+
+    /** One property carrying a JSON boolean, the shape a schema-driven client sends. */
+    private static JsonObject boolProp(String name, boolean value)
+    {
+        JsonObject prop = new JsonObject();
+        prop.addProperty("name", name); //$NON-NLS-1$
+        prop.addProperty("value", Boolean.valueOf(value)); //$NON-NLS-1$
+        return prop;
+    }
 }
