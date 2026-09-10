@@ -2423,6 +2423,28 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * @return the value the list leaves in {@code main}, or {@code null} when it writes none (or
      *         writes something that is not a boolean at all, which the write itself refuses)
      */
+    /**
+     * Whether the batch flags this member main AT ANY POINT. The demotion of the OTHER attributes
+     * follows from that, not from the flag the batch is left with: applied in order,
+     * {@code [main=true, main=false]} promotes and takes it back, and the previous main is demoted
+     * on the way through - which is what the platform's two calls would do.
+     *
+     * @param properties the requested property changes
+     * @return {@code true} when any {@code main} write in the list is true
+     */
+    static boolean mainPromotedIn(List<JsonObject> properties)
+    {
+        for (JsonObject prop : properties)
+        {
+            if (PROP_MAIN.equalsIgnoreCase(asString(prop.get("name"))) //$NON-NLS-1$
+                && Boolean.TRUE.equals(parseBoolean(asString(prop.get("value"))))) //$NON-NLS-1$
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static Boolean mainFlagIn(List<JsonObject> properties)
     {
         Boolean last = null;
@@ -2487,7 +2509,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // flag it LEAVES would take the root ext-info and the handlers bound in it. WHICH
                 // of the two it is decides what the dialog says, so it is reported back.
                 extInfoLossOut[0] = mainFlag != null && FormElementWriter.clearsBoundFormExtInfo(
-                    formModel, member, mainFlag.booleanValue(), categoryAfter(prepared, member));
+                    formModel, member, mainFlag.booleanValue(), categoryAfter(prepared, member),
+                    mainPromotedIn(properties));
                 return retype || extInfoLossOut[0] ? null : ""; //$NON-NLS-1$
             });
     }
@@ -3371,8 +3394,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // the batch (per change it would depend on the order the properties arrived in).
                 if (mainFlagWritten)
                 {
-                    demotedMains.addAll(
-                        FormElementWriter.demoteOtherMainAttributes(formModel, target));
+                    // Demoted by the PROMOTION the batch performed, even when a later write in the
+                    // same batch takes the flag back off this one.
+                    if (mainPromotedIn(properties))
+                    {
+                        demotedMains.addAll(
+                            FormElementWriter.demoteOtherMainAttributes(formModel, target));
+                    }
                     if (FormElementWriter.syncFormExtInfo(formModel) != null
                         && !applied.contains("extInfo")) //$NON-NLS-1$
                     {

@@ -6683,17 +6683,60 @@ public class FormElementWriterTest
             "InformationRegisterManagerFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
     }
 
+    /**
+     * A batch of {@code [main=true, main=false]} promotes the attribute and takes it back, and the
+     * platform's two calls would have demoted the previous main on the way through. The demotion
+     * therefore follows the PROMOTION the batch performed, not the flag it is left with - so the
+     * form is left with no main attribute at all, and its root ext-info goes with it.
+     */
     @Test
-    public void testDemotingIsRefusedForAnAttributeThatIsNotItselfMain()
+    public void testAPromotionTakenBackInTheSameBatchStillDemotesThePrevious()
     {
         FormRootModel m = newFormRootModel("CatalogObject.Goods", true); //$NON-NLS-1$
-        EObject other = m.addMainAttribute("Other", "String"); //$NON-NLS-1$ //$NON-NLS-2$
-        other.eSet(other.eClass().getEStructuralFeature("main"), Boolean.FALSE); //$NON-NLS-1$
+        assertEquals("CatalogFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
+        EObject promoted = m.addMainAttribute("Register", //$NON-NLS-1$
+            "InformationRegisterRecordManager.MyRegister"); //$NON-NLS-1$
+        // ... and the batch takes the flag back off it.
+        promoted.eSet(promoted.eClass().getEStructuralFeature("main"), Boolean.FALSE); //$NON-NLS-1$
 
-        assertEquals("nothing is demoted on behalf of an attribute that was not promoted", //$NON-NLS-1$
-            List.of(), FormElementWriter.demoteOtherMainAttributes(m.form, other));
-        assertTrue("the real main attribute keeps its flag", //$NON-NLS-1$
+        assertEquals("the previous main was demoted on the way through", //$NON-NLS-1$
+            List.of("Record"), FormElementWriter.demoteOtherMainAttributes(m.form, promoted)); //$NON-NLS-1$
+        assertNull("with no main attribute left, the root node goes", //$NON-NLS-1$
+            FormElementWriter.syncFormExtInfo(m.form));
+        assertNull(m.extInfo());
+    }
+
+    @Test
+    public void testAMainFlagOutsideTheFormsAttributeListDemotesNothingEvenWhenPromoted()
+    {
+        FormRootModel m = newFormRootModel("CatalogObject.Goods", true); //$NON-NLS-1$
+        EObject nested = m.addMainAttribute("Column", "String"); //$NON-NLS-1$ //$NON-NLS-2$
+        m.detach(nested);
+
+        assertEquals("a flag outside the form's attribute list decides nothing", //$NON-NLS-1$
+            List.of(), FormElementWriter.demoteOtherMainAttributes(m.form, nested));
+        assertTrue("the form's real main attribute keeps its flag", //$NON-NLS-1$
             FormElementWriter.isMainAttribute(m.attribute));
+    }
+
+    /**
+     * The map says the category pairs with a kind; THIS form model may still not have that EClass.
+     * {@code replaceExtInfoClassifier} then clears the slot rather than leave a stale node, so the
+     * handlers are lost - and the consent gate has to know that before it decides not to ask.
+     */
+    @Test
+    public void testAKindThisModelCannotCreateCountsAsALoss()
+    {
+        FormRootModel m = newFormRootModel("CatalogObject.Goods", true); //$NON-NLS-1$
+        assertEquals("CatalogFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
+        assertNull(FormElementWriter.bindEventHandler(m.extInfo(), m.extInfoHandlers(), m.event,
+            "BeforeWriteAtServer", "BeforeWriteAtServer", null, new String[1])); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("this package HAS the catalog kind", //$NON-NLS-1$
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, true, CATALOG, false));
+        // TaskObject is in the mapping, and this test package declares no TaskFormExtInfo.
+        assertTrue("a kind this model cannot create loses the node just the same", //$NON-NLS-1$
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, true, "TaskObject", false)); //$NON-NLS-1$
     }
 
     /**
@@ -6754,9 +6797,9 @@ public class FormElementWriterTest
 
         // The model still says CatalogObject; the batch is about to write String.
         assertTrue("a retype to an unpaired category in the SAME batch loses the handlers", //$NON-NLS-1$
-            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, true, "String")); //$NON-NLS-1$
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, true, "String", false)); //$NON-NLS-1$
         assertFalse("a retype to another PAIRED category only changes the kind", //$NON-NLS-1$
-            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, true, REGISTER));
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, true, REGISTER, false));
     }
 
     /**
@@ -6771,23 +6814,23 @@ public class FormElementWriterTest
         assertEquals("CatalogFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
 
         assertFalse("an EMPTY node carries nothing to lose", //$NON-NLS-1$
-            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, false, CATALOG));
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, false, CATALOG, false));
         assertNull(FormElementWriter.bindEventHandler(m.extInfo(), m.extInfoHandlers(), m.event,
             "BeforeWriteAtServer", "BeforeWriteAtServer", null, new String[1])); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertTrue("main=false leaves no main attribute, so the bound handlers go with the node", //$NON-NLS-1$
-            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, false, CATALOG));
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, false, CATALOG, false));
         assertFalse("re-writing main=true keeps the kind, so nothing is lost", //$NON-NLS-1$
-            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, true, CATALOG));
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, true, CATALOG, false));
 
         // Another attribute takes over: the kind CHANGES, and copySameFeatures carries the
         // handlers across - a change of kind is not a loss.
         EObject register = m.addMainAttribute("Register", //$NON-NLS-1$
             "InformationRegisterRecordManager.MyRegister"); //$NON-NLS-1$
         assertFalse("a kind change carries the handlers over", //$NON-NLS-1$
-            FormElementWriter.clearsBoundFormExtInfo(m.form, register, true, REGISTER));
+            FormElementWriter.clearsBoundFormExtInfo(m.form, register, true, REGISTER, false));
         assertFalse("and demoting THIS one leaves the other main deciding", //$NON-NLS-1$
-            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, false, CATALOG));
+            FormElementWriter.clearsBoundFormExtInfo(m.form, m.attribute, false, CATALOG, false));
     }
 
     @Test
@@ -6801,7 +6844,7 @@ public class FormElementWriterTest
             "InformationRegisterManager.MyRegister"); //$NON-NLS-1$
 
         assertTrue("promoting an attribute no writer pairs with a kind empties the node", //$NON-NLS-1$
-            FormElementWriter.clearsBoundFormExtInfo(m.form, unpaired, true, "InformationRegisterManager")); //$NON-NLS-1$
+            FormElementWriter.clearsBoundFormExtInfo(m.form, unpaired, true, "InformationRegisterManager", false)); //$NON-NLS-1$
     }
 
     /**

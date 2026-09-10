@@ -3132,10 +3132,12 @@ public final class FormElementWriter
      * @param mainAfter the value the request writes into that flag
      * @param categoryAfter the attribute's type category AFTER the batch - the same batch may
      *            retype it, and the model still holds the old one when this is asked
+     * @param demotesOthers whether the batch takes the flag off every OTHER attribute, which it
+     *            does as soon as it flags this one main at any point
      * @return {@code true} when the write would take bound handlers with the node
      */
-    public static boolean clearsBoundFormExtInfo(EObject formModel, EObject attribute,
-        boolean mainAfter, String categoryAfter)
+    public static boolean clearsBoundFormExtInfo(EObject formModel, EObject attribute, // NOSONAR the decision needs all four; a parameter object would not make it clearer
+        boolean mainAfter, String categoryAfter, boolean demotesOthers)
     {
         EObject current = singleReference(formModel, FEATURE_EXT_INFO);
         if (current == null || referenceList(current, KEY_HANDLERS).isEmpty())
@@ -3144,11 +3146,25 @@ public final class FormElementWriter
         }
         if (mainAfter)
         {
-            return FORM_EXT_INFO_BY_TYPE_CATEGORY.get(categoryAfter) == null;
+            return !pairsWithACreatableKind(formModel, categoryAfter);
         }
-        EObject deciding = otherMainAttribute(formModel, attribute);
+        // With the others demoted the form is left with no main attribute at all, whatever it
+        // carried before the batch.
+        EObject deciding = demotesOthers ? null : otherMainAttribute(formModel, attribute);
         return deciding == null
-            || FORM_EXT_INFO_BY_TYPE_CATEGORY.get(singleValueTypeCategory(deciding)) == null;
+            || !pairsWithACreatableKind(formModel, singleValueTypeCategory(deciding));
+    }
+
+    /**
+     * Whether a category pairs with an ext-info kind THIS form model can actually create. The map
+     * alone is not enough: on a platform whose form EPackage has no such EClass,
+     * {@code replaceExtInfoClassifier} clears the slot rather than leave a stale node, so the
+     * handlers go the same way as for a category that pairs with nothing.
+     */
+    private static boolean pairsWithACreatableKind(EObject formModel, String category)
+    {
+        String classifier = FORM_EXT_INFO_BY_TYPE_CATEGORY.get(category);
+        return classifier != null && formEClass(formModel, classifier) != null;
     }
 
     /** The form's main attribute other than the given one, or {@code null} when there is none. */
@@ -3170,8 +3186,12 @@ public final class FormElementWriter
      * flags the new one. A form may hold one main attribute or none - the platform reports two as
      * an error ({@code FormValidator.isMainFormAttributeOneOrNone}).
      *
+     * <p>Called when the batch flags the attribute main AT ANY POINT, not when it is left main: a
+     * batch of {@code [main=true, main=false]} promotes it and takes it back, and the platform's
+     * two calls would have demoted the previous main on the way through.</p>
+     *
      * @param formModel the editable content form, on the tx-bound model
-     * @param promoted the attribute just flagged main; nothing is demoted unless it actually is
+     * @param promoted the attribute the batch flagged main
      * @return the names of the demoted attributes in list order, empty when there were none
      */
     public static List<String> demoteOtherMainAttributes(EObject formModel, EObject promoted)
@@ -3179,7 +3199,7 @@ public final class FormElementWriter
         List<EObject> attributes = referenceList(formModel, FEATURE_ATTRIBUTES);
         // Only a member of the form's OWN attribute list can be its main one: that is the list
         // FormUtil.getMainAttribute reads, so a flag on a nested column decides nothing.
-        if (promoted == null || !isMainAttribute(promoted) || !attributes.contains(promoted))
+        if (promoted == null || !attributes.contains(promoted))
         {
             return List.of();
         }
