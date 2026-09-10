@@ -28,7 +28,7 @@ from harness import (
     call, assert_ok, assert_error, assert_error_quality, assert_contains,
     assert_not_contains, assert_no_diff, assert_no_diff_rel, poll_diff_contains_rel,
     read_fixture_file, reset_fixture_rel, wait_for_project_ready, e2e_test, PROJECT,
-    EXT_OBJECTS_PROJECT, EXT_OBJECTS_REL,
+    EXT_OBJECTS_PROJECT, EXT_OBJECTS_REL, _fail,
 )
 
 # The Russian TYPE tokens for the two external-objects types. The bilingual token catalogue
@@ -125,6 +125,32 @@ def test_extobj_details_resolve_the_russian_type_token():
                     "the Russian token must resolve to the same object")
     assert_contains(r.text, "ExternalReport: ExtReport", "and so must the report token")
     assert_no_diff_rel(EXT_OBJECTS_REL, "a read tool must not touch the fixture")
+
+
+@e2e_test(tool="get_project_errors", kind="read")
+def test_extobj_project_errors_resolve_its_own_object():
+    """Exact error scopes resolve against this project's roots in both token languages."""
+    english = "ExternalDataProcessor.ExtProc"
+    r = call("get_project_errors",
+             {"projectName": EXT_OBJECTS_PROJECT, "objectFqns": [english]})
+    assert_ok(r, "get_project_errors on an external-objects project")
+    if (r.structured or {}).get("objectsResolved") != [english]:
+        _fail("the external data processor must resolve: %r" % (r.structured,))
+    if (r.structured or {}).get("objectsNotFound") != []:
+        _fail("the resolved external data processor must not be reported missing: %r"
+              % (r.structured,))
+
+    russian = RU_EXTERNAL_DATA_PROCESSOR + ".ExtProc"
+    ru = call("get_project_errors",
+              {"projectName": EXT_OBJECTS_PROJECT, "objectFqns": [russian]})
+    assert_ok(ru, "get_project_errors with the Russian external-object type token")
+    if (ru.structured or {}).get("objectsResolved") != [russian]:
+        _fail("the Russian type token must resolve the same external data processor: %r"
+              % (ru.structured,))
+    if (ru.structured or {}).get("objectsNotFound") != []:
+        _fail("the Russian spelling must not be reported missing: %r" % (ru.structured,))
+    assert_no_diff("a read tool must not touch the base project on disk")
+    assert_no_diff_rel(EXT_OBJECTS_REL, "a read tool must not touch the external fixture")
 
 
 @e2e_test(tool="get_metadata_details", kind="error")

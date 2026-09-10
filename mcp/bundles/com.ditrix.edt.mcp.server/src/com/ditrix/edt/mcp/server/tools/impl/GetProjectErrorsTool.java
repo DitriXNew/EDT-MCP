@@ -54,6 +54,7 @@ import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
@@ -139,10 +140,11 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     /**
-     * The exact-address call returns a machine-readable payload (the Markdown report plus the
-     * {@code objectsResolved} / {@code objectsNotFound} / {@code objectsUnsupported} verdicts) in
-     * {@code structuredContent}; every other call keeps the historical Markdown response byte for
-     * byte. Mirrors {@code list_projects}' per-call format switch.
+     * A successful exact-address call returns a machine-readable payload (the Markdown report plus
+     * the {@code objectsResolved} / {@code objectsNotFound} / {@code objectsUnsupported} verdicts)
+     * in {@code structuredContent}; an all-miss exact call is refused, and every other call keeps
+     * the historical Markdown response byte for byte. Mirrors {@code list_projects}' per-call
+     * format switch.
      */
     @Override
     public ResponseType getResponseType(Map<String, String> params)
@@ -464,7 +466,7 @@ public class GetProjectErrorsTool implements IMcpTool
          * a partial answer must not read as a full one.
          */
         final Map<String, Set<String>> incompleteFor = new LinkedHashMap<>();
-        /** A ready JSON error payload when no verdict could be reached at all; {@code null} otherwise. */
+        /** A ready JSON refusal when resolution or the resulting scan could not support an answer. */
         String error;
     }
 
@@ -558,9 +560,13 @@ public class GetProjectErrorsTool implements IMcpTool
                     bmModelManager, collectContext);
             }
 
-            return addressPayload(assembleAddressReport(errors, projectName, severity, objectFqns,
-                limit, detailed, resolution, unresolvedShown, unresolvedFilteredOut),
-                errors.size(), resolution);
+            String report = assembleAddressReport(errors, projectName, severity, objectFqns,
+                limit, detailed, resolution, unresolvedShown, unresolvedFilteredOut);
+            if (resolution.error != null)
+            {
+                return resolution.error;
+            }
+            return addressPayload(report, errors.size(), resolution);
         }
         catch (Exception e)
         {
@@ -589,8 +595,8 @@ public class GetProjectErrorsTool implements IMcpTool
 
 
     /**
-     * Assembles the Markdown an {@code objectFqns} call returns: the table or the empty-report
-     * banner, then EVERY caveat that applies.
+     * Assembles the result body an {@code objectFqns} call returns: a refusal when nothing resolved,
+     * or the Markdown table / empty-report banner followed by EVERY applicable caveat.
      *
      * <p>Extracted so a test can pin that each warning is really EMITTED, not merely that its
      * renderer works when called by hand. A revert sweep found this gap the hard way: dropping the
@@ -606,12 +612,24 @@ public class GetProjectErrorsTool implements IMcpTool
      * @param resolution the per-address verdicts, including the partial-answer map
      * @param unresolvedShown out-counter of markers shown with a placeholder location
      * @param unresolvedFilteredOut out-counter of markers excluded because their location was unknown
-     * @return the assembled Markdown
+     * @return the assembled Markdown, or a {@link ToolResult#error(String)} JSON refusal
      */
     static String assembleAddressReport(List<ErrorInfo> errors, String projectName, String severity,
         List<String> objectFqns, int limit, boolean detailed, AddressResolution resolution,
         int[] unresolvedShown, int[] unresolvedFilteredOut)
     {
+        if (resolution.resolved.isEmpty()
+            && (!resolution.notFound.isEmpty() || !resolution.unsupported.isEmpty()))
+        {
+            // No resolved scope means no marker was scanned, so an all-clear would be invented.
+            resolution.error = ToolResult.error("Cannot scan " + PARAM_OBJECT_FQNS //$NON-NLS-1$
+                + " because none of the requested addresses resolved: " //$NON-NLS-1$
+                + String.join(", ", objectFqns) //$NON-NLS-1$
+                + ". Use the loose '" + PARAM_OBJECTS //$NON-NLS-1$
+                + "' filter to match reported locations, or call get_metadata_objects to find valid FQNs.") //$NON-NLS-1$
+                .toJson();
+            return resolution.error;
+        }
         StringBuilder md = new StringBuilder();
         if (errors.isEmpty())
         {
@@ -728,17 +746,23 @@ public class GetProjectErrorsTool implements IMcpTool
         for (IProject project : scope)
         {
             IBmModel bmModel = null;
-            Configuration config = null;
+            MetadataScope metadataScope = null;
             if (project.isOpen())
             {
                 // Only an OPEN project can be asked; a closed one goes straight to the unreadable
                 // branch instead of being probed (and instead of being silently dropped).
                 bmModel = bmModelManager != null ? bmModelManager.getModel(project) : null;
-                ProjectContext.ConfigurationResult configResult =
-                    ProjectContext.of(project.getName()).resolveConfiguration();
-                config = configResult.ok() ? configResult.configuration() : null;
+                ProjectContext.ConfigurationResult rootResult =
+                    ProjectContext.of(project.getName()).resolveMetadataRoot();
+                metadataScope = rootResult.scope();
+                if (metadataScope == null)
+                {
+                    // Preserve the project kind when root resolution failed, because it decides
+                    // whether an external-object address is absent or merely unreadable.
+                    metadataScope = MetadataScope.of(project, rootResult.configuration());
+                }
             }
-            ProjectResolution decided = projectDecision(project, bmModel, config, resolvable);
+            ProjectResolution decided = projectDecision(project, bmModel, metadataScope, resolvable);
             if (decided != null)
             {
                 perProject.add(decided);
@@ -818,11 +842,9 @@ public class GetProjectErrorsTool implements IMcpTool
     /**
      * The EDT nature of a project that holds EXTERNAL objects (external reports / data processors).
      *
-     * <p>It is a 1C:EDT project, but it has no {@link Configuration} BY DESIGN - not "not yet". So a
-     * missing configuration here is knowledge, not a failure to look: such a project can never own an
-     * mdclass / form / Subsystem / Predefined address, which is exactly what {@code objectFqns}
-     * addresses. Classifying it as unreadable (its nature IS a V8 one) turned ordinary misses into
-     * {@code Cannot decide} across a workspace-wide scan.</p>
+     * <p>It is a 1C:EDT project, but its addressable roots are standalone external data processors
+     * and reports rather than a {@link Configuration}. Configuration-only families are absent there;
+     * its own external-object families require the project's root set to be readable.</p>
      */
     private static final List<String> V8_EXTERNAL_OBJECTS_NATURE = Collections.singletonList(
         "com._1c.g5.v8.dt.core.V8ExternalObjectsNature"); //$NON-NLS-1$
@@ -837,23 +859,24 @@ public class GetProjectErrorsTool implements IMcpTool
      *
      * @param project the project in scope
      * @param bmModel its BM model, or {@code null} when it could not be obtained
-     * @param config its configuration, or {@code null} when it could not be resolved
+     * @param metadataScope its metadata root, or {@code null} when it could not be resolved
      * @param candidates the addresses this request is asking about
      * @return this project's decision, or {@code null} when it contributes nothing at all
      */
-    static ProjectResolution projectDecision(IProject project, IBmModel bmModel, Configuration config,
-        List<String> candidates)
+    static ProjectResolution projectDecision(IProject project, IBmModel bmModel,
+        MetadataScope metadataScope, List<String> candidates)
     {
-        if (bmModel == null || config == null)
+        if (bmModel == null || metadataScope == null || metadataScope.externalRootUnavailable()
+            || (!metadataScope.isExternalObjects() && metadataScope.configuration() == null))
         {
             // It cannot answer - but WHY decides everything (see unreadableProjectDecision).
-            return unreadableProjectDecision(project, candidates);
+            return unreadableProjectDecision(project, metadataScope, candidates);
         }
-        return resolveInProject(project, bmModel, config, candidates);
+        return resolveInProject(project, bmModel, metadataScope, candidates);
     }
 
     /**
-     * What a project whose configuration could NOT be read contributes to the request.
+     * What a project whose metadata root could NOT be read contributes to the request.
      *
      * <p>"No configuration" has THREE causes and they are three different facts. Collapsing any two
      * of them is what produced this defect twice:</p>
@@ -862,11 +885,9 @@ public class GetProjectErrorsTool implements IMcpTool
      *       DEFINITION and cannot hold 1C metadata. It leaves the universe ({@code null}) - treating
      *       it as undecidable would let ONE such project mute the missing-address report for the
      *       whole workspace.</li>
-     *   <li><b>An EDT project that holds NO configuration by design</b> - an EXTERNAL OBJECTS
-     *       project. Its nature is a V8 one, but it structurally cannot own an mdclass / form /
-     *       Subsystem / Predefined address, and that is KNOWLEDGE, not a failure to look. It answers
-     *       ABSENT: a completed pass that resolves nothing. Calling it unreadable (its nature is
-     *       V8!) turned ordinary misses into {@code Cannot decide} on every workspace-wide scan.</li>
+     *   <li><b>An EXTERNAL OBJECTS project whose root cannot be read</b>. Configuration-only
+     *       families are structurally ABSENT there, while addresses rooted in a standalone external
+     *       object stay UNDECIDED because the project's own roots were never inspected.</li>
      *   <li><b>An EDT project that DOES hold a configuration but is not readable now</b> - still
      *       indexing, or closed. It could perfectly well hold the address, so it answers UNDECIDED:
      *       skipping it lets another project's completed pass stand in as the inspection, and the
@@ -878,30 +899,57 @@ public class GetProjectErrorsTool implements IMcpTool
      * evidence that a project holds nothing.</p>
      *
      * @param project the in-scope project whose configuration could not be read
+     * @param metadataScope the project's metadata scope, when its kind could be resolved
      * @param candidates the addresses this request is asking about
      * @return an UNDECIDED resolution, an ABSENT (completed, empty) one, or {@code null} to leave
      *     the universe entirely
      */
-    static ProjectResolution unreadableProjectDecision(IProject project, List<String> candidates)
+    static ProjectResolution unreadableProjectDecision(IProject project, MetadataScope metadataScope,
+        List<String> candidates)
     {
         Set<String> natures = ProjectContext.naturesOf(project);
+        boolean externalObjects = metadataScope != null && metadataScope.isExternalObjects();
+        if (!externalObjects && natures != null)
+        {
+            externalObjects = containsAny(natures, V8_EXTERNAL_OBJECTS_NATURE);
+        }
+        if (externalObjects)
+        {
+            ProjectResolution decided = new ProjectResolution(project.getName());
+            decided.passCompleted = true;
+            for (String candidate : candidates)
+            {
+                if (isExternalObjectAddress(candidate))
+                {
+                    // Its own root was unavailable, so absence of an external object is unknown.
+                    decided.undecided.add(candidate);
+                }
+            }
+            return decided;
+        }
         if (natures != null && !containsAny(natures, V8_CONFIGURATION_NATURES))
         {
-            if (!containsAny(natures, V8_EXTERNAL_OBJECTS_NATURE))
-            {
-                // Not a 1C:EDT project at all.
-                return null;
-            }
-            // An external-objects project: KNOWN to hold no addressable metadata, so this is a
-            // decided ABSENCE - a completed pass that resolves nothing - not an inability to look.
-            ProjectResolution absent = new ProjectResolution(project.getName());
-            absent.passCompleted = true;
-            return absent;
+            // Not a 1C:EDT project at all.
+            return null;
         }
         // Holds a configuration but could not be read now, or its natures are unknowable.
         ProjectResolution unreadable = new ProjectResolution(project.getName());
         unreadable.undecided.addAll(candidates);
         return unreadable;
+    }
+
+    /** Whether the address is rooted in a standalone external-object family. */
+    private static boolean isExternalObjectAddress(String fqn)
+    {
+        String canonical = canonicalAddress(fqn);
+        if (canonical == null)
+        {
+            return false;
+        }
+        int dot = canonical.indexOf('.');
+        String typeToken = dot < 0 ? canonical : canonical.substring(0, dot);
+        MetadataTypeUtils.MetadataTypeInfo info = MetadataTypeUtils.resolve(typeToken);
+        return info != null && info.isStandalone();
     }
 
     /** Whether {@code natures} carries any of {@code wanted}. */
@@ -1165,14 +1213,14 @@ public class GetProjectErrorsTool implements IMcpTool
      *
      * @param project the project being inspected
      * @param bmModel its BM model
-     * @param config its configuration
+     * @param metadataScope its metadata resolution root
      * @param candidates the addresses to decide
      * @return what this project decided: the spellings that resolved HERE, the addresses it could
      *     not decide at all (the pass threw, or a form's content model could not be read - never a
      *     "does not exist"), and whether the pass ran to the end
      */
     static ProjectResolution resolveInProject(IProject project, IBmModel bmModel,
-        Configuration config, List<String> candidates)
+        MetadataScope metadataScope, List<String> candidates)
     {
         ProjectResolution decided = new ProjectResolution(project.getName());
         List<DeferredMember> deferred = new ArrayList<>();
@@ -1181,7 +1229,7 @@ public class GetProjectErrorsTool implements IMcpTool
             BmTransactions.<Void>read(bmModel, "ResolveErrorObjectAddresses", (tx, pm) -> { //$NON-NLS-1$
                 for (String fqn : candidates)
                 {
-                    resolveCandidate(config, fqn, decided.resolved, deferred);
+                    resolveCandidate(metadataScope, fqn, decided.resolved, deferred);
                 }
                 return null;
             });
@@ -1201,7 +1249,7 @@ public class GetProjectErrorsTool implements IMcpTool
         // Addresses whose ONLY attempt failed to read the form content model. They are undecided,
         // exactly like the addresses of a pass that threw - never "not found".
         resolveDeferredMembers(deferred, decided,
-            member -> formMemberScopeSpellings(project, config, member));
+            member -> formMemberScopeSpellings(project, metadataScope, member));
         decided.passCompleted = true;
         return decided;
     }
@@ -1289,12 +1337,12 @@ public class GetProjectErrorsTool implements IMcpTool
      * resolves wins, and a form-MEMBER probe is deferred out of the transaction instead (see
      * {@link #resolveInProject}).
      *
-     * @param config the configuration to resolve against
+     * @param metadataScope the metadata root to resolve against
      * @param fqn the requested address, as the caller wrote it
      * @param found this project's accumulator: requested address -&gt; the spellings that resolved
      * @param deferred the accumulator of form-member probes to decide after the transaction
      */
-    private static void resolveCandidate(Configuration config, String fqn,
+    private static void resolveCandidate(MetadataScope metadataScope, String fqn,
         Map<String, Set<String>> found, List<DeferredMember> deferred)
     {
         if (found.containsKey(fqn))
@@ -1324,7 +1372,7 @@ public class GetProjectErrorsTool implements IMcpTool
             }
             else
             {
-                Set<String> storedSet = resolvedSpellings(config, probe);
+                Set<String> storedSet = resolvedSpellings(metadataScope, probe);
                 if (!storedSet.isEmpty())
                 {
                     if (asTyped)
@@ -1836,7 +1884,7 @@ public class GetProjectErrorsTool implements IMcpTool
     }
 
     /**
-     * The spelling {@code normFqn} really resolved to in {@code config}, dispatching to the
+     * The spelling {@code normFqn} really resolved to in {@code metadataScope}, dispatching to the
      * specialized resolver of the address family it belongs to, or {@code null} when it resolves to
      * nothing. Form MEMBERS are NOT decided here (see {@link #formMemberScopeSpellings}); every
      * other supported family is.
@@ -1851,13 +1899,13 @@ public class GetProjectErrorsTool implements IMcpTool
      * differently spelled node; the caller would stop enumerating on that hit, scope the scan by a
      * name the model does not store, and never look for the other nodes the address can mean.</p>
      *
-     * <p>Call inside a BM read transaction bound to this configuration's model.</p>
+     * <p>Call inside a BM read transaction bound to this project's model.</p>
      *
-     * @param config the configuration to resolve against
+     * @param metadataScope the metadata root to resolve against
      * @param normFqn the type-normalized address
      * @return the resolved (stored) spelling, or {@code null} when the address resolves to nothing
      */
-    static Set<String> resolvedSpellings(Configuration config, String normFqn)
+    static Set<String> resolvedSpellings(MetadataScope metadataScope, String normFqn)
     {
         // A Subsystem chain nests the same kind token repeatedly, which the generic child-feature
         // navigation does not model - SubsystemUtils owns that grammar. It is also the only family
@@ -1865,6 +1913,11 @@ public class GetProjectErrorsTool implements IMcpTool
         // never builds a combination) rather than by probing whole-address spellings.
         if (SubsystemUtils.parseSubsystemPath(normFqn) != null)
         {
+            Configuration config = metadataScope.configuration();
+            if (config == null)
+            {
+                return Collections.emptySet();
+            }
             Set<String> chains = new LinkedHashSet<>();
             for (String[] stored : SubsystemUtils.resolveStoredChain(config, normFqn))
             {
@@ -1877,6 +1930,11 @@ public class GetProjectErrorsTool implements IMcpTool
         PredefinedWriter.PredefinedRef predefined = PredefinedWriter.parseRef(normFqn);
         if (predefined != null)
         {
+            Configuration config = metadataScope.configuration();
+            if (config == null)
+            {
+                return Collections.emptySet();
+            }
             MetadataNodeResolver.MetadataNode owner =
                 MetadataNodeResolver.resolveExisting(config, predefined.ownerFqn());
             if (owner == null)
@@ -1895,10 +1953,10 @@ public class GetProjectErrorsTool implements IMcpTool
         String formPath = FormElementWriter.parseFormPath(normFqn);
         if (formPath != null)
         {
-            return FormStructureReader.resolveMdForm(config, formPath) != null
+            return FormStructureReader.resolveMdForm(metadataScope, formPath) != null
                 ? Collections.singleton(normFqn) : Collections.<String> emptySet();
         }
-        return MetadataNodeResolver.resolveExisting(config, normFqn) != null
+        return MetadataNodeResolver.resolveExisting(metadataScope, normFqn) != null
             ? Collections.singleton(normFqn) : Collections.<String> emptySet();
     }
 
@@ -1940,24 +1998,24 @@ public class GetProjectErrorsTool implements IMcpTool
      * <p>Call OUTSIDE a BM transaction: {@link FormElementWriter#readEditableForm} opens its own.</p>
      *
      * @param project the project owning the form
-     * @param config the project configuration
+     * @param metadataScope the project's metadata resolution root
      * @param member the deferred member probe (its ref and the spelling being probed)
      * @return the scan-scoping spellings (never empty) when the form AND the addressed leaf exist;
      *     an EMPTY list when the address is PROVEN absent; and {@code null} when the form content
      *     model could not be read at all - an infrastructure failure decides nothing and must never
      *     be reported as "this address does not exist"
      */
-    private static List<String> formMemberScopeSpellings(IProject project, Configuration config,
+    private static List<String> formMemberScopeSpellings(IProject project, MetadataScope metadataScope,
         DeferredMember member)
     {
         FormElementWriter.FormMemberRef ref = member.ref;
         FormElementWriter.FormEditContext ctx;
         try
         {
-            MdObject mdForm = FormStructureReader.resolveMdForm(config, ref.formPath);
+            MdObject mdForm = FormStructureReader.resolveMdForm(metadataScope, ref.formPath);
             if (mdForm == null)
             {
-                // The form itself is absent from this configuration: a decided "not here".
+                // The form itself is absent from this project's root: a decided "not here".
                 return Collections.emptyList();
             }
             ctx = FormElementWriter.editContextFor(project, mdForm);
