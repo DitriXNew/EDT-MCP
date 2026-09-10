@@ -6381,6 +6381,12 @@ public class FormElementWriterTest
             return extInfo().eClass().getEStructuralFeature("handlers"); //$NON-NLS-1$
         }
 
+        void setMain(boolean main)
+        {
+            attribute.eSet(attribute.eClass().getEStructuralFeature("main"), //$NON-NLS-1$
+                Boolean.valueOf(main));
+        }
+
         void giveExtInfo(String kind)
         {
             EPackage pkg = form.eClass().getEPackage();
@@ -6513,42 +6519,48 @@ public class FormElementWriterTest
 
         // Retyped to a category the platform pairs with nothing: the stale node is CLEARED, not kept.
         m.retypeMainAttribute("String"); //$NON-NLS-1$
-        assertNull(FormElementWriter.syncFormExtInfo(m.form, true));
+        assertNull(FormElementWriter.syncFormExtInfo(m.form));
         assertNull("a form whose main type maps to no ext-info must carry none", m.extInfo()); //$NON-NLS-1$
     }
 
     /**
-     * A MAIN attribute whose category pairs with nothing takes the node with it, whatever kind it
-     * was - {@code CubeRecordSetFormExtInfo} comes from the form GENERATOR and
-     * {@code createFormExtInfo} cannot produce it, but the platform still answers {@code null} for
-     * that category and {@code isNeedUpdateExtInfo(null, old)} clears the node.
+     * A kind this mapping never produced cannot be judged stale BY it:
+     * {@code CubeRecordSetFormExtInfo} comes from the platform form generator, and
+     * {@code createFormExtInfo} has no case that makes one. Clearing it would delete a node and
+     * its handlers on a guess.
      */
     @Test
-    public void testSyncFormExtInfoClearsEvenAKindItCouldNotHaveProduced()
-    {
-        FormRootModel m = newFormRootModel("ExternalDataSourceCubeRecordSet.Sales", true); //$NON-NLS-1$
-        m.giveExtInfo("CubeRecordSetFormExtInfo"); //$NON-NLS-1$
-
-        assertNull("this mapping produces no ext-info for that category", //$NON-NLS-1$
-            FormElementWriter.syncFormExtInfo(m.form, true));
-        assertNull("a main attribute that pairs with nothing leaves no node behind", //$NON-NLS-1$
-            m.extInfo());
-    }
-
-    /**
-     * The same form, the same unmapped category - but reached by a bare {@code main} write instead
-     * of a retype. Only a retype passes the destructive-consent gate, so only a retype may clear;
-     * otherwise re-writing an already-true flag would destroy the node for no change at all.
-     */
-    @Test
-    public void testAMainOnlyWriteNeverClearsTheExtInfo()
+    public void testSyncFormExtInfoKeepsAKindItCouldNotHaveProduced()
     {
         FormRootModel m = newFormRootModel("ExternalDataSourceCubeRecordSet.Sales", true); //$NON-NLS-1$
         m.giveExtInfo("CubeRecordSetFormExtInfo"); //$NON-NLS-1$
 
         assertEquals("the node stays, and the sync reports the kind it found", //$NON-NLS-1$
             "CubeRecordSetFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
-        assertNotNull("a main-only write must not destroy the node", m.extInfo()); //$NON-NLS-1$
+        assertNotNull("a generator-authored node must not be removed on a guess", m.extInfo()); //$NON-NLS-1$
+    }
+
+    /**
+     * A node this mapping DID produce, on a form whose main attribute now pairs with nothing, is
+     * stale by construction - however the form got there. The route that matters in practice is
+     * demote, retype the demoted attribute, promote it again: the node is left keyed to the old
+     * category, and keeping it would publish catalog events for a String-backed form.
+     */
+    @Test
+    public void testSyncFormExtInfoClearsAKindItProducedOnceItsCategoryIsGone()
+    {
+        FormRootModel m = newFormRootModel("CatalogObject.Goods", true); //$NON-NLS-1$
+        assertEquals("CatalogFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
+
+        // demote - retype - promote, the sequence that leaves a node keyed to nothing
+        m.setMain(false);
+        m.retypeMainAttribute("String"); //$NON-NLS-1$
+        assertEquals("with no main attribute the node is left as it is", //$NON-NLS-1$
+            "CatalogFormExtInfo", FormElementWriter.syncFormExtInfo(m.form)); //$NON-NLS-1$
+        m.setMain(true);
+
+        assertNull(FormElementWriter.syncFormExtInfo(m.form));
+        assertNull("a node keyed to a category that no longer applies must go", m.extInfo()); //$NON-NLS-1$
     }
 
     /**

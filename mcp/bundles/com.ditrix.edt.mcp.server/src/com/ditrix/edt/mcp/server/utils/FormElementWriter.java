@@ -3032,22 +3032,6 @@ public final class FormElementWriter
      */
     public static String syncFormExtInfo(EObject formModel)
     {
-        return syncFormExtInfo(formModel, false);
-    }
-
-    /**
-     * {@link #syncFormExtInfo(EObject)} with the CLEAR allowed.
-     *
-     * <p>Only a change of the main attribute's TYPE may clear the node, because only that request
-     * passes the destructive-consent gate ({@code isFormRetypeRequest} looks for {@code type} /
-     * {@code valueType}). A bare {@code main} write must not turn destructive: re-writing an
-     * already-true flag on a form whose kind this mapping cannot produce would otherwise delete the
-     * node and every handler inside it, un-gated and for no change at all.</p>
-     *
-     * @param retypeMayClear whether this call may leave the form without an ext-info
-     */
-    public static String syncFormExtInfo(EObject formModel, boolean retypeMayClear)
-    {
         EStructuralFeature extInfoFeature = formModel.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
         if (!(extInfoFeature instanceof EReference) || extInfoFeature.isMany())
         {
@@ -3065,18 +3049,21 @@ public final class FormElementWriter
         String classifier = FORM_EXT_INFO_BY_TYPE_CATEGORY.get(mainAttributeCategory(formModel));
         if (classifier == null)
         {
-            // A main attribute whose category pairs with nothing takes the node with it, whatever
-            // kind it was: createFormExtInfo answers null here, and isNeedUpdateExtInfo(null, old)
-            // makes the platform set it to null. Only a RETYPE gets to do that (see the overload).
-            if (!retypeMayClear)
+            if (current == null)
             {
-                return current == null ? null : current.eClass().getName();
+                return null;
             }
-            if (current != null)
+            // The main attribute pairs with nothing, so a node THIS mapping produced is stale by
+            // construction: it was keyed to a category that no longer applies, and leaving it would
+            // go on publishing that kind's events for a form that is not one.
+            if (FORM_EXT_INFO_BY_TYPE_CATEGORY.containsValue(current.eClass().getName()))
             {
                 formModel.eSet(extInfoFeature, null);
+                return null;
             }
-            return null;
+            // A node the platform GENERATOR wrote - a cube record set's - is left alone: this
+            // mapping never keyed it, so it cannot say whether it is stale.
+            return current.eClass().getName();
         }
         if (current != null && classifier.equals(current.eClass().getName()))
         {

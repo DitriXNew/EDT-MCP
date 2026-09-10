@@ -2664,27 +2664,4 @@ public class ModifyMetadataToolTest
         return valueType;
     }
 
-    /**
-     * The one transition that may leave a form without its root ext-info (issues #591 / #592).
-     *
-     * <p>Four review rounds landed on this boundary, each time because the right to CLEAR was
-     * inferred from the shape of the request instead of from what actually changed. The rule is
-     * pure, so every transition is pinned here rather than argued about.</p>
-     */
-    @Test
-    public void testOnlyAReplacedMainCategoryMayClearTheFormExtInfo()
-    {
-        assertTrue("one category became another - that is the retype the gate consented to", //$NON-NLS-1$
-            ModifyMetadataTool.mainCategoryReplaced("CatalogObject", "DocumentObject")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("a category that became nothing was replaced too", //$NON-NLS-1$
-            ModifyMetadataTool.mainCategoryReplaced("CatalogObject", null)); //$NON-NLS-1$
-
-        assertFalse("gaining a FIRST main attribute invalidates nothing", //$NON-NLS-1$
-            ModifyMetadataTool.mainCategoryReplaced(null, "String")); //$NON-NLS-1$
-        assertFalse("a form that had no main attribute and still has none", //$NON-NLS-1$
-            ModifyMetadataTool.mainCategoryReplaced(null, null));
-        assertFalse("re-writing the SAME category is not a retype", //$NON-NLS-1$
-            ModifyMetadataTool.mainCategoryReplaced("ExternalDataSourceCubeRecordSet", //$NON-NLS-1$
-                "ExternalDataSourceCubeRecordSet")); //$NON-NLS-1$
-    }
 }
