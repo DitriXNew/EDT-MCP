@@ -74,12 +74,17 @@ import com.ditrix.edt.mcp.server.ui.DestructiveConsentDialog;
  *       shell is closed (best-effort) so it does not linger.</li>
  * </ol>
  *
- * <p><b>Invariant:</b> the gate NEVER blocks indefinitely in EITHER dialog path — it
- * waits at most {@link #CONSENT_PROMPT_TIMEOUT_SECONDS} (issue #277); it NEVER blocks
- * at all in a headless / env-bypass / non-ASK (level-2/session/per-tool-allowed)
- * path; it does not deadlock when already on the UI thread; and a non-
+ * <p><b>Invariant:</b> every path is bounded. Two return without
+ * waiting for anything: the env bypass (step 1) and a display-less EDT (the probe answers
+ * NO_SHELL immediately when there is no display). On a live workbench EVERY remaining path
+ * first waits on the shell probe for at most {@link #SHELL_PROBE_TIMEOUT_MS} ms — the non-ASK
+ * ones (level-2 / session / per-tool-allowed) included, because the probe deliberately precedes
+ * the policy (see step 2). Beyond it the dialog paths wait at most
+ * {@link #CONSENT_PROMPT_TIMEOUT_SECONDS} (issue #277). It does not deadlock when already on
+ * the UI thread (the probe reads the shell inline there); and a non-
  * {@link ConsentDecision#ALLOW} verdict ({@link ConsentDecision#REJECT},
- * {@link ConsentDecision#TIMEOUT} or {@link ConsentDecision#UNATTENDED}) mutates nothing
+ * {@link ConsentDecision#TIMEOUT}, {@link ConsentDecision#UNATTENDED} or
+ * {@link ConsentDecision#UI_UNRESPONSIVE}) mutates nothing
  * (it only returns the decision, and the caller turns it into an error via
  * {@link #consentDeniedMessage(ConsentDecision, String)}).
  */
