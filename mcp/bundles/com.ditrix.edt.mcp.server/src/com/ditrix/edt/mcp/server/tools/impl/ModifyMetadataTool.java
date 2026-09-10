@@ -3199,6 +3199,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // a LATER change in the same call fills in.
                 List<EObject> localizedHolders = new ArrayList<>();
                 List<PreparedChange> localizedChanges = new ArrayList<>();
+                boolean mainAttributeTouched = false;
                 for (HolderChange hc : changes)
                 {
                     // A direct feature lands on the target; a property on the nested <extInfo> lands
@@ -3215,6 +3216,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     {
                         applied.add("extInfo"); //$NON-NLS-1$
                     }
+                    mainAttributeTouched = mainAttributeTouched || decidesFormExtInfo(hc);
                     if (hc.change.isLocalized())
                     {
                         // Remember the receiver the change actually landed on: a title on the
@@ -3222,6 +3224,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         localizedHolders.add(holder);
                         localizedChanges.add(hc.change);
                     }
+                }
+                // The form ROOT's ext-info follows the MAIN attribute's FINAL state, so it is
+                // decided once the whole batch is applied. Per change it would depend on the
+                // order the properties arrived in: [main=false, valueType=X] and the reverse pair
+                // describe the same end state and must not leave two different ext-infos.
+                if (mainAttributeTouched && FormElementWriter.syncFormExtInfo(formModel) != null
+                    && !applied.contains("extInfo")) //$NON-NLS-1$
+                {
+                    applied.add("extInfo"); //$NON-NLS-1$
                 }
                 for (int i = 0; i < localizedChanges.size(); i++)
                 {
@@ -3680,21 +3691,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         if (hc.change.isTypeChange())
         {
-            boolean onMember = FormElementWriter.syncAttributeExtInfo(formModel, member) != null;
-            // The MAIN attribute's type also decides the FORM root's ext-info - the node that
-            // publishes a record/object form's write and read events (#591).
-            boolean onForm = FormElementWriter.syncFormExtInfo(formModel) != null;
-            return onMember || onForm;
-        }
-        if (PROP_MAIN.equalsIgnoreCase(hc.change.featureName()))
-        {
-            return FormElementWriter.syncFormExtInfo(formModel) != null;
+            return FormElementWriter.syncAttributeExtInfo(formModel, member) != null;
         }
         if ("type".equalsIgnoreCase(hc.change.featureName())) //$NON-NLS-1$
         {
             return FormElementWriter.syncItemExtInfo(formModel, member) != null;
         }
         return false;
+    }
+
+    /**
+     * Whether this change can move the FORM ROOT's ext-info: the main attribute's type, or the
+     * flag that decides which attribute is main. Asked per change, answered once per batch.
+     */
+    private static boolean decidesFormExtInfo(HolderChange hc)
+    {
+        return !hc.onExtInfo
+            && (hc.change.isTypeChange() || PROP_MAIN.equalsIgnoreCase(hc.change.featureName()));
     }
 
     /**

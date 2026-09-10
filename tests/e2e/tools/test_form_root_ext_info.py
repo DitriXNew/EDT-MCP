@@ -81,6 +81,35 @@ def test_record_form_gets_its_root_ext_info():
         "exactly one root ext-info, not one per write: %d" % (xml.count(EXT_INFO_TYPE),)
 
 
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_type_and_main_in_one_batch_still_decide_the_ext_info():
+    """The root ext-info is decided ONCE, after the whole batch: per property it would depend on
+    the order the properties arrived in ([main, valueType] vs the reverse describe one end state)."""
+    reg = "E2ERecFormBatch"
+    reg_fqn = "InformationRegister." + reg
+    attr_fqn = reg_fqn + ".Form.RecordForm.Attribute.Record"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": reg_fqn}), "seed register")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT,
+                                       "fqn": reg_fqn + ".Form.RecordForm"}), "seed record form")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": attr_fqn}), "seed attribute")
+    wait_for_project_ready()
+
+    # main FIRST, then the type - the order that used to leave the root ext-info behind.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": attr_fqn,
+        "properties": [
+            {"name": "main", "value": True},
+            {"name": "valueType", "value": {
+                "types": [{"kind": "InformationRegisterRecordManager", "ref": reg}]}},
+        ],
+    })
+    assert_ok(r, "set main and the type in ONE batch")
+    poll_diff_contains(EXT_INFO_TYPE,
+                       ctx="the batch decides the root ext-info whatever order it arrived in")
+
+
 @e2e_test(tool="create_metadata", kind="write-metadata")
 def test_write_event_binds_and_lands_inside_the_ext_info():
     reg, form = _seed_record_form("Bind")
