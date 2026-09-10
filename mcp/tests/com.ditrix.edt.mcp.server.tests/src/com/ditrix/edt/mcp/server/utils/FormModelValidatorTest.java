@@ -178,6 +178,124 @@ public class FormModelValidatorTest
             codes(form).contains("invalid-auto-command-bar-id")); //$NON-NLS-1$
     }
 
+    /**
+     * The one item kind that carries neither a name nor an id, and legitimately so: across a full
+     * real configuration those 176 unnamed and 209 id-less items are ALL additions. Judged like any
+     * other item, every table with a search string would report two defects.
+     */
+    @Test
+    public void testAnAdditionIsExemptFromTheNameAndIdRules()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        form.addition();
+
+        assertEquals("an addition carries neither and is still fine: " + codes(form), //$NON-NLS-1$
+            List.of(), codes(form));
+    }
+
+    @Test
+    public void testAnItemWithoutANameOrAnIdIsReported()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        EObject nameless = form.group("Placeholder"); //$NON-NLS-1$
+        nameless.eSet(nameless.eClass().getEStructuralFeature("name"), ""); //$NON-NLS-1$ //$NON-NLS-2$
+        nameless.eSet(nameless.eClass().getEStructuralFeature("id"), Integer.valueOf(0)); //$NON-NLS-1$
+
+        List<String> codes = codes(form);
+        assertTrue("an unaddressable item is a defect: " + codes, //$NON-NLS-1$
+            codes.contains("unnamed-member")); //$NON-NLS-1$
+        assertTrue("and so is an id that serializes as nothing: " + codes, //$NON-NLS-1$
+            codes.contains("missing-id")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCommandIdsAreJudgedToo()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        form.command("Print", 7); //$NON-NLS-1$
+        assertFalse(codes(form).contains("duplicate-id")); //$NON-NLS-1$
+
+        form.command("Send", 7); //$NON-NLS-1$
+        assertTrue("commands are their own id space and it is judged: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("duplicate-id")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testABlankFirstSegmentIsAnEmptyDataPath()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        form.field("Blank", "", "Description"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertTrue("a path that starts nowhere displays nothing: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("empty-data-path")); //$NON-NLS-1$
+    }
+
+    /**
+     * A command removed from the form does NOT turn the button's reference into a proxy, so the
+     * proxy test alone would call this form valid - and this is exactly the state the tools produce
+     * today, verified live: delete_metadata removes the command and rewrites no button.
+     */
+    @Test
+    public void testAButtonPointingAtARemovedCommandIsReported()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        EObject command = form.command("Print", 1); //$NON-NLS-1$
+        form.button("RunPrint", command); //$NON-NLS-1$
+        assertFalse(codes(form).contains("unresolved-command-reference")); //$NON-NLS-1$
+
+        form.removeCommand(command);
+        assertTrue("the button now runs a command that is not in the form: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("unresolved-command-reference")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTwoBindingsOfOneEventAreReportedButABaseAndAnExtensionAreNot()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        EObject event = form.event("OnCreateAtServer"); //$NON-NLS-1$
+        form.handler(form.root, "OnCreateAtServer", event); //$NON-NLS-1$
+        form.extensionHandler(form.root, "ext", event, "After"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a base handler and an extension coexist: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("duplicate-handler-binding")); //$NON-NLS-1$
+
+        form.handler(form.root, "second", event); //$NON-NLS-1$
+        assertTrue("two base handlers on one event leave the platform guessing: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("duplicate-handler-binding")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnExtensionHandlerWithoutACallTypeIsReported()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        EObject event = form.event("OnCreateAtServer"); //$NON-NLS-1$
+        form.extensionHandler(form.root, "ext", event, null); //$NON-NLS-1$
+
+        assertTrue("an extension that does not say HOW it intercepts is half-built: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("extension-handler-without-call-type")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testACommandActionWithoutAProcedureIsReported()
+    {
+        Form form = new Form();
+        form.attribute("Object", 1, true); //$NON-NLS-1$
+        EObject command = form.command("Print", 1); //$NON-NLS-1$
+        form.giveCommandAction(command, "PrintCommand"); //$NON-NLS-1$
+        assertFalse("a command that names its procedure is fine: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("empty-command-action")); //$NON-NLS-1$
+
+        form.giveCommandAction(command, null);
+        assertTrue("an action with no handler runs nothing: " + codes(form), //$NON-NLS-1$
+            codes(form).contains("empty-command-action")); //$NON-NLS-1$
+    }
+
     // --- the synthetic form --------------------------------------------------------------------
 
     private static List<String> codes(Form form)
@@ -205,11 +323,16 @@ public class FormModelValidatorTest
         final EClass fieldType;
         final EClass buttonType;
         final EClass barType;
+        final EClass additionType;
+        final EClass extensionHandlerType;
+        final EClass commandActionType;
         final EClass dataPathType;
         final EClass eventType;
         final EClass handlerType;
         final EClass extInfoType;
         final EObject root;
+        /** Items are addressed by id, so the fixture allocates one per item as the platform does. */
+        private int itemId = 100;
 
         Form()
         {
@@ -258,6 +381,20 @@ public class FormModelValidatorTest
             buttonType = eClass("Button"); //$NON-NLS-1$
             buttonType.getESuperTypes().add(itemBase);
             buttonType.getEStructuralFeatures().add(reference("commandName", commandType, false, false)); //$NON-NLS-1$
+
+            additionType = eClass("Addition"); //$NON-NLS-1$
+            additionType.getESuperTypes().add(itemBase);
+
+            extensionHandlerType = eClass("EventHandlerExtension"); //$NON-NLS-1$
+            extensionHandlerType.getESuperTypes().add(handlerType);
+            extensionHandlerType.getEStructuralFeatures()
+                .add(attribute("callType", EcorePackage.Literals.ESTRING, false)); //$NON-NLS-1$
+
+            commandActionType = eClass("FormCommandHandlerContainer"); //$NON-NLS-1$
+            commandActionType.getEStructuralFeatures()
+                .add(reference("handler", handlerType, false, true)); //$NON-NLS-1$
+            commandType.getEStructuralFeatures()
+                .add(reference("action", commandActionType, false, true)); //$NON-NLS-1$
 
             barType = eClass("AutoCommandBar"); //$NON-NLS-1$
             barType.getESuperTypes().add(itemBase);
@@ -308,6 +445,7 @@ public class FormModelValidatorTest
         {
             EObject group = create(groupType);
             set(group, "name", name); //$NON-NLS-1$
+            set(group, "id", Integer.valueOf(++itemId)); //$NON-NLS-1$
             add(root, "items", group); //$NON-NLS-1$
             return group;
         }
@@ -316,6 +454,7 @@ public class FormModelValidatorTest
         {
             EObject field = create(fieldType);
             set(field, "name", name); //$NON-NLS-1$
+            set(field, "id", Integer.valueOf(++itemId)); //$NON-NLS-1$
             if (segments.length > 0)
             {
                 EObject dataPath = create(dataPathType);
@@ -333,12 +472,52 @@ public class FormModelValidatorTest
         {
             EObject button = create(buttonType);
             set(button, "name", name); //$NON-NLS-1$
+            set(button, "id", Integer.valueOf(++itemId)); //$NON-NLS-1$
             if (command != null)
             {
                 set(button, "commandName", command); //$NON-NLS-1$
             }
             add(root, "items", button); //$NON-NLS-1$
             return button;
+        }
+
+        /** A table addition - the one item kind that legitimately carries neither name nor id. */
+        EObject addition()
+        {
+            EObject addition = create(additionType);
+            add(root, "items", addition); //$NON-NLS-1$
+            return addition;
+        }
+
+        void extensionHandler(EObject container, String procedure, EObject event, String callType)
+        {
+            EObject handler = create(extensionHandlerType);
+            set(handler, "name", procedure); //$NON-NLS-1$
+            set(handler, "event", event); //$NON-NLS-1$
+            if (callType != null)
+            {
+                set(handler, "callType", callType); //$NON-NLS-1$
+            }
+            add(container, "handlers", handler); //$NON-NLS-1$
+        }
+
+        void giveCommandAction(EObject command, String procedure)
+        {
+            EObject action = create(commandActionType);
+            if (procedure != null)
+            {
+                EObject handler = create(handlerType);
+                set(handler, "name", procedure); //$NON-NLS-1$
+                set(action, "handler", handler); //$NON-NLS-1$
+            }
+            set(command, "action", action); //$NON-NLS-1$
+        }
+
+        @SuppressWarnings("unchecked")
+        void removeCommand(EObject command)
+        {
+            ((List<EObject>)root.eGet(root.eClass().getEStructuralFeature("formCommands"))) //$NON-NLS-1$
+                .remove(command);
         }
 
         EObject event(String name)

@@ -5,6 +5,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -14,7 +15,6 @@ import java.util.Set;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
-import org.eclipse.emf.ecore.InternalEObject;
 
 /**
  * Structural validation of a managed form's model - the connectivity a form needs to be openable
@@ -30,31 +30,47 @@ import org.eclipse.emf.ecore.InternalEObject;
  * and a global-command-source marker - none of them authored by anyone. Judged through
  * {@code eAllContents()} they would each fail an "unnamed" or "no id" check, and the report would be
  * a list of defects the user cannot fix and did not create.</p>
+ *
+ * <p><b>What the rules were measured against.</b> The name and id rules exempt {@code Addition}
+ * (a table's search string, view status and search control). Across a full real configuration -
+ * 323 668 persisted items - those are the ONLY items carrying no name (176) and the only ones whose
+ * id is absent (209). Negative ids are normal for the singular nested items (an extended tooltip's
+ * id is negative), so only a MISSING id is judged.</p>
  */
 public final class FormModelValidator
 {
-    /** A form is judged against several NAMESPACES; a name may repeat across them, not inside one. */
     private static final String FEATURE_ATTRIBUTES = "attributes"; //$NON-NLS-1$
     private static final String FEATURE_COLUMNS = "columns"; //$NON-NLS-1$
     private static final String FEATURE_FORM_COMMANDS = "formCommands"; //$NON-NLS-1$
     private static final String FEATURE_PARAMETERS = "parameters"; //$NON-NLS-1$
     private static final String FEATURE_HANDLERS = "handlers"; //$NON-NLS-1$
     private static final String FEATURE_NAME = "name"; //$NON-NLS-1$
+    private static final String FEATURE_NAME_RU = "nameRu"; //$NON-NLS-1$
     private static final String FEATURE_ID = "id"; //$NON-NLS-1$
     private static final String FEATURE_EVENT = "event"; //$NON-NLS-1$
+    private static final String FEATURE_CALL_TYPE = "callType"; //$NON-NLS-1$
     private static final String FEATURE_DATA_PATH = "dataPath"; //$NON-NLS-1$
     private static final String FEATURE_SEGMENTS = "segments"; //$NON-NLS-1$
     private static final String FEATURE_COMMAND_NAME = "commandName"; //$NON-NLS-1$
     private static final String FEATURE_AUTO_COMMAND_BAR = "autoCommandBar"; //$NON-NLS-1$
     private static final String FEATURE_MAIN = "main"; //$NON-NLS-1$
     private static final String FEATURE_EXT_INFO = "extInfo"; //$NON-NLS-1$
+    private static final String FEATURE_ACTION = "action"; //$NON-NLS-1$
+    private static final String FEATURE_HANDLER = "handler"; //$NON-NLS-1$
 
+    private static final String ECLASS_FORM_ITEM = "FormItem"; //$NON-NLS-1$
+    private static final String ECLASS_ADDITION = "Addition"; //$NON-NLS-1$
     private static final String ECLASS_BUTTON = "Button"; //$NON-NLS-1$
     private static final String ECLASS_FORM_FIELD = "FormField"; //$NON-NLS-1$
     private static final String ECLASS_TABLE = "Table"; //$NON-NLS-1$
+    private static final String ECLASS_EVENT_HANDLER_EXTENSION = "EventHandlerExtension"; //$NON-NLS-1$
+    private static final String ECLASS_ADDITIONAL_COLUMNS = "FormAttributeAdditionalColumns"; //$NON-NLS-1$
 
     /** The id the platform WANTS on a form's root auto command bar; see the check that spares it. */
     private static final int AUTO_COMMAND_BAR_ID_SENTINEL = -1;
+
+    /** The label the handler table uses for a form-level owner; kept identical on purpose. */
+    private static final String FORM_PATH = "(form)"; //$NON-NLS-1$
 
     public static final String SEVERITY_ERROR = "error"; //$NON-NLS-1$
     public static final String SEVERITY_WARNING = "warning"; //$NON-NLS-1$
@@ -96,11 +112,13 @@ public final class FormModelValidator
     public static List<Finding> validate(EObject formModel)
     {
         List<Finding> findings = new ArrayList<>();
+        List<EObject> items = itemTree(formModel);
         checkMainAttribute(formModel, findings);
         checkAutoCommandBar(formModel, findings);
-        checkNamespaces(formModel, findings);
-        checkItems(formModel, findings);
-        checkHandlers(formModel, findings);
+        checkNamespaces(formModel, items, findings);
+        checkItems(formModel, items, findings);
+        checkHandlers(formModel, items, findings);
+        checkCommandActions(formModel, findings);
         return findings;
     }
 
@@ -143,8 +161,7 @@ public final class FormModelValidator
      */
     private static void checkAutoCommandBar(EObject formModel, List<Finding> findings)
     {
-        EStructuralFeature feature = formModel.eClass().getEStructuralFeature(FEATURE_AUTO_COMMAND_BAR);
-        if (feature == null)
+        if (formModel.eClass().getEStructuralFeature(FEATURE_AUTO_COMMAND_BAR) == null)
         {
             return;
         }
@@ -172,71 +189,99 @@ public final class FormModelValidator
      * so each list is judged on its own. Getting this wrong in both directions is a defect this
      * repository has already had once, in the rename path.
      */
-    private static void checkNamespaces(EObject formModel, List<Finding> findings)
+    private static void checkNamespaces(EObject formModel, List<EObject> items, List<Finding> findings)
     {
-        reportDuplicateNames(list(formModel, FEATURE_ATTRIBUTES), "Attribute", findings); //$NON-NLS-1$
-        reportDuplicateNames(list(formModel, FEATURE_FORM_COMMANDS), "Command", findings); //$NON-NLS-1$
-        reportDuplicateNames(list(formModel, FEATURE_PARAMETERS), "Parameter", findings); //$NON-NLS-1$
-        reportDuplicateIds(list(formModel, FEATURE_ATTRIBUTES), "Attribute", findings); //$NON-NLS-1$
+        judgeNamespace(list(formModel, FEATURE_ATTRIBUTES), "Attribute", findings); //$NON-NLS-1$
+        judgeNamespace(list(formModel, FEATURE_FORM_COMMANDS), "Command", findings); //$NON-NLS-1$
+        judgeNamespace(list(formModel, FEATURE_PARAMETERS), "Parameter", findings); //$NON-NLS-1$
+        judgeNamespace(items, "item", findings); //$NON-NLS-1$
         for (EObject attribute : list(formModel, FEATURE_ATTRIBUTES))
         {
-            List<EObject> columns = list(attribute, FEATURE_COLUMNS);
-            if (columns.isEmpty())
+            // Each columns list is its OWN id scope - the platform's normalization repairs
+            // duplicates per list - and an attribute's additional-columns groups carry lists too.
+            String label = "Attribute." + nameOf(attribute) + ".Column"; //$NON-NLS-1$ //$NON-NLS-2$
+            judgeColumns(attribute, label, findings);
+            for (EObject group : additionalColumnGroups(attribute))
             {
-                continue;
+                judgeColumns(group, label, findings);
             }
-            String owner = "Attribute." + nameOf(attribute) + ".Column"; //$NON-NLS-1$ //$NON-NLS-2$
-            reportDuplicateNames(columns, owner, findings);
-            reportDuplicateIds(columns, owner, findings);
         }
-        List<EObject> items = itemTree(formModel);
-        reportDuplicateNames(items, "item", findings); //$NON-NLS-1$
-        reportDuplicateIds(items, "item", findings); //$NON-NLS-1$
     }
 
-    private static void reportDuplicateNames(List<EObject> members, String kindLabel,
-        List<Finding> findings)
+    private static void judgeColumns(EObject owner, String label, List<Finding> findings)
     {
-        Map<String, Integer> seen = new HashMap<>();
+        List<EObject> columns = list(owner, FEATURE_COLUMNS);
+        if (!columns.isEmpty())
+        {
+            judgeNamespace(columns, label, findings);
+        }
+    }
+
+    /** Names and ids of ONE list, plus the members that carry neither. */
+    private static void judgeNamespace(List<EObject> members, String kindLabel, List<Finding> findings)
+    {
+        Map<String, Integer> names = new HashMap<>();
         Set<String> reported = new LinkedHashSet<>();
+        Map<Integer, String> ids = new HashMap<>();
         for (EObject member : members)
         {
             String name = nameOf(member);
+            String path = kindLabel + "." + (name.isEmpty() ? "(unnamed)" : name); //$NON-NLS-1$ //$NON-NLS-2$
             if (name.isEmpty())
             {
-                continue;
+                if (!isAddition(member))
+                {
+                    findings.add(new Finding(SEVERITY_ERROR, "unnamed-member", path, //$NON-NLS-1$
+                        "This " + member.eClass().getName() + " has no name, so no tool can address " //$NON-NLS-1$ //$NON-NLS-2$
+                            + "it and a second unnamed one is indistinguishable from it.")); //$NON-NLS-1$
+                }
             }
-            String key = name.toLowerCase(Locale.ROOT);
-            int count = seen.merge(key, Integer.valueOf(1), (a, b) -> Integer.valueOf(a.intValue() + 1))
-                .intValue();
-            if (count > 1 && reported.add(key))
+            else
             {
-                findings.add(new Finding(SEVERITY_ERROR, "duplicate-name", kindLabel + "." + name, //$NON-NLS-1$ //$NON-NLS-2$
-                    "More than one " + kindLabel + " is named '" + name //$NON-NLS-1$ //$NON-NLS-2$
-                        + "'; the name no longer addresses one member. Rename all but one.")); //$NON-NLS-1$
+                String key = name.toLowerCase(Locale.ROOT);
+                int count = names.merge(key, Integer.valueOf(1),
+                    (a, b) -> Integer.valueOf(a.intValue() + 1)).intValue();
+                if (count > 1 && reported.add(key))
+                {
+                    findings.add(new Finding(SEVERITY_ERROR, "duplicate-name", path, //$NON-NLS-1$
+                        "More than one " + kindLabel + " is named '" + name //$NON-NLS-1$ //$NON-NLS-2$
+                            + "'; the name no longer addresses one member. Rename all but one.")); //$NON-NLS-1$
+                }
             }
+            judgeId(member, kindLabel, path, ids, findings);
         }
     }
 
-    private static void reportDuplicateIds(List<EObject> members, String kindLabel,
+    /**
+     * A member is addressed by id, so it needs one. Only a MISSING id (the {@code 0} the model
+     * answers when the {@code <id>} element is absent) is judged: negative ids are what the platform
+     * writes for the singular nested items, and an {@code Addition} legitimately carries none.
+     */
+    private static void judgeId(EObject member, String kindLabel, String path, Map<Integer, String> ids,
         List<Finding> findings)
     {
-        Map<Integer, String> seen = new HashMap<>();
-        for (EObject member : members)
+        Object raw = value(member, FEATURE_ID);
+        if (!(raw instanceof Integer))
         {
-            Object id = value(member, FEATURE_ID);
-            if (!(id instanceof Integer) || ((Integer)id).intValue() <= 0)
+            return;
+        }
+        int id = ((Integer)raw).intValue();
+        if (id == 0)
+        {
+            if (!isAddition(member))
             {
-                continue;
+                findings.add(new Finding(SEVERITY_ERROR, "missing-id", path, //$NON-NLS-1$
+                    "This " + kindLabel + " has no id; it serializes without an <id> element and EDT " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "then refuses the form.")); //$NON-NLS-1$
             }
-            String first = seen.putIfAbsent((Integer)id, nameOf(member));
-            if (first != null)
-            {
-                findings.add(new Finding(SEVERITY_ERROR, "duplicate-id", //$NON-NLS-1$
-                    kindLabel + "." + nameOf(member), //$NON-NLS-1$
-                    "Id " + id + " is used by both '" + first + "' and '" + nameOf(member) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                        + "'; EDT addresses this " + kindLabel + " by id and refuses the form.")); //$NON-NLS-1$ //$NON-NLS-2$
-            }
+            return;
+        }
+        String first = ids.putIfAbsent(Integer.valueOf(id), nameOf(member));
+        if (first != null)
+        {
+            findings.add(new Finding(SEVERITY_ERROR, "duplicate-id", path, //$NON-NLS-1$
+                "Id " + id + " is used by both '" + first + "' and '" + nameOf(member) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "'; EDT addresses this " + kindLabel + " by id and refuses the form.")); //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 
@@ -246,19 +291,15 @@ public final class FormModelValidator
      * Per-item checks: the data path a field reads through, the command a button runs, and the
      * type-specific ext-info the element's own kind calls for.
      */
-    private static void checkItems(EObject formModel, List<Finding> findings)
+    private static void checkItems(EObject formModel, List<EObject> items, List<Finding> findings)
     {
         Set<String> dataRoots = dataPathRoots(formModel);
-        for (EObject item : itemTree(formModel))
+        for (EObject item : items)
         {
             String path = pathOf(item);
             checkDataPath(item, dataRoots, path, findings);
-            checkButtonCommand(item, path, findings);
-            checkMemberExtInfo(item, path, findings);
-        }
-        for (EObject attribute : list(formModel, FEATURE_ATTRIBUTES))
-        {
-            checkMemberExtInfo(attribute, "Attribute." + nameOf(attribute), findings); //$NON-NLS-1$
+            checkButtonCommand(formModel, item, path, findings);
+            checkItemExtInfo(item, path, findings);
         }
     }
 
@@ -283,14 +324,14 @@ public final class FormModelValidator
             return;
         }
         List<String> segments = strings(dataPath, FEATURE_SEGMENTS);
-        if (segments.isEmpty())
+        String root = segments.isEmpty() ? null : segments.get(0);
+        if (root == null || root.isEmpty())
         {
             findings.add(new Finding(SEVERITY_ERROR, "empty-data-path", path, //$NON-NLS-1$
-                "This " + eClassName + " has an empty data path.")); //$NON-NLS-1$ //$NON-NLS-2$
+                "This " + eClassName + " has an empty data path, so it displays nothing.")); //$NON-NLS-1$ //$NON-NLS-2$
             return;
         }
-        String root = segments.get(0);
-        if (!root.isEmpty() && !dataRoots.contains(root.toLowerCase(Locale.ROOT)))
+        if (!dataRoots.contains(root.toLowerCase(Locale.ROOT)))
         {
             findings.add(new Finding(SEVERITY_ERROR, "unresolved-data-path", path, //$NON-NLS-1$
                 "The data path '" + String.join(".", segments) + "' starts with '" + root //$NON-NLS-1$ //$NON-NLS-2$
@@ -300,10 +341,11 @@ public final class FormModelValidator
 
     /**
      * A button runs a command, and the reference may point at a form command OR at a standard
-     * command the platform infers - both are legitimate, so only a MISSING or unresolvable target
+     * command the platform infers - both are legitimate, so only a MISSING or unreachable target
      * is a defect.
      */
-    private static void checkButtonCommand(EObject item, String path, List<Finding> findings)
+    private static void checkButtonCommand(EObject formModel, EObject item, String path,
+        List<Finding> findings)
     {
         if (!ECLASS_BUTTON.equals(item.eClass().getName())
             || item.eClass().getEStructuralFeature(FEATURE_COMMAND_NAME) == null)
@@ -317,7 +359,7 @@ public final class FormModelValidator
                 "This button runs no command. Point it at a form command or a standard command.")); //$NON-NLS-1$
             return;
         }
-        if (isUnresolvable(command))
+        if (isUnreachable(command, formModel))
         {
             findings.add(new Finding(SEVERITY_ERROR, "unresolved-command-reference", path, //$NON-NLS-1$
                 "This button points at a command that is not in the model any more.")); //$NON-NLS-1$
@@ -329,7 +371,7 @@ public final class FormModelValidator
      * the element. A missing one means the element was built by something that did not know the
      * rule; a MISMATCHED one means the element's type changed and the node did not follow.
      */
-    private static void checkMemberExtInfo(EObject element, String path, List<Finding> findings)
+    private static void checkItemExtInfo(EObject element, String path, List<Finding> findings)
     {
         if (element.eClass().getEStructuralFeature(FEATURE_EXT_INFO) == null)
         {
@@ -340,87 +382,126 @@ public final class FormModelValidator
         {
             return;
         }
-        String expectedName = expected.getName();
         EObject actual = FormElementWriter.extInfoInstance(element);
         if (actual == null)
         {
             findings.add(new Finding(SEVERITY_ERROR, "missing-ext-info", path, //$NON-NLS-1$
-                "This element has no '" + expectedName + "', so its type-specific properties and " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "events are unavailable.")); //$NON-NLS-1$
+                "This element has no '" + expected.getName() + "', so its type-specific properties " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "and events are unavailable.")); //$NON-NLS-1$
             return;
         }
-        if (!expectedName.equals(actual.eClass().getName()))
+        if (!expected.getName().equals(actual.eClass().getName()))
         {
             findings.add(new Finding(SEVERITY_ERROR, "stale-ext-info", path, //$NON-NLS-1$
                 "This element carries a '" + actual.eClass().getName() + "' but its kind calls for a '" //$NON-NLS-1$ //$NON-NLS-2$
-                    + expectedName + "'; the type changed and the node did not follow.")); //$NON-NLS-1$
+                    + expected.getName() + "'; the type changed and the node did not follow.")); //$NON-NLS-1$
         }
     }
 
     // --- handlers ------------------------------------------------------------------------------
 
     /**
-     * A binding names an event and a BSL procedure. Either half missing leaves a handler that the
-     * platform lists but cannot call.
+     * A binding names an event and a BSL procedure. Either half missing leaves a handler the
+     * platform lists but cannot call; two bindings on one event leave it unable to say which.
      */
-    private static void checkHandlers(EObject formModel, List<Finding> findings)
+    private static void checkHandlers(EObject formModel, List<EObject> items, List<Finding> findings)
     {
-        checkHandlerList(formModel, FORM_PATH, findings);
+        checkHandlerList(formModel, formModel, FORM_PATH, findings);
         EObject rootExtInfo = single(formModel, FEATURE_EXT_INFO);
         if (rootExtInfo != null)
         {
-            checkHandlerList(rootExtInfo, FORM_PATH, findings);
+            checkHandlerList(formModel, rootExtInfo, FORM_PATH, findings);
         }
-        for (EObject item : itemTree(formModel))
+        for (EObject item : items)
         {
             String path = pathOf(item);
-            checkHandlerList(item, path, findings);
+            checkHandlerList(formModel, item, path, findings);
             EObject extInfo = single(item, FEATURE_EXT_INFO);
             if (extInfo != null)
             {
-                checkHandlerList(extInfo, path, findings);
+                checkHandlerList(formModel, extInfo, path, findings);
             }
         }
     }
 
-    private static void checkHandlerList(EObject container, String path, List<Finding> findings)
+    private static void checkHandlerList(EObject formModel, EObject container, String path,
+        List<Finding> findings)
     {
+        Set<String> seen = new HashSet<>();
         for (EObject handler : list(container, FEATURE_HANDLERS))
         {
             String procedure = nameOf(handler);
             EObject event = single(handler, FEATURE_EVENT);
-            String eventName = event == null ? "" : nameOf(event); //$NON-NLS-1$
+            String eventName = event == null ? "" : eventLabel(event); //$NON-NLS-1$
+            boolean isExtension = ECLASS_EVENT_HANDLER_EXTENSION.equals(handler.eClass().getName());
+            String callType = isExtension ? enumName(value(handler, FEATURE_CALL_TYPE)) : ""; //$NON-NLS-1$
             if (procedure.isEmpty())
             {
                 findings.add(new Finding(SEVERITY_ERROR, "empty-handler-name", path, //$NON-NLS-1$
                     "The handler for '" + (eventName.isEmpty() ? "(unknown event)" : eventName) //$NON-NLS-1$ //$NON-NLS-2$
                         + "' names no BSL procedure.")); //$NON-NLS-1$
             }
-            if (event == null || isUnresolvable(event))
+            if (event == null || event.eIsProxy())
             {
                 findings.add(new Finding(SEVERITY_ERROR, "unresolved-event-reference", path, //$NON-NLS-1$
                     "The handler '" + (procedure.isEmpty() ? "(unnamed)" : procedure) //$NON-NLS-1$ //$NON-NLS-2$
                         + "' is bound to no event this element publishes.")); //$NON-NLS-1$
+                continue;
+            }
+            if (isExtension && callType.isEmpty())
+            {
+                findings.add(new Finding(SEVERITY_ERROR, "extension-handler-without-call-type", path, //$NON-NLS-1$
+                    "The extension handler for '" + eventName + "' has no call type, so it does not " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "say how it intercepts the base event. Set Before, After or Instead.")); //$NON-NLS-1$
+            }
+            // One base handler per event; an extension COEXISTS with it and with other call types,
+            // so the key is the event plus the call type - the same rule the writer enforces.
+            if (!seen.add(eventName.toLowerCase(Locale.ROOT) + "/" + callType)) //$NON-NLS-1$
+            {
+                findings.add(new Finding(SEVERITY_ERROR, "duplicate-handler-binding", path, //$NON-NLS-1$
+                    "'" + eventName + "' is bound twice" //$NON-NLS-1$ //$NON-NLS-2$
+                        + (callType.isEmpty() ? "" : " with call type '" + callType + "'") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        + "; the platform cannot say which binding to call.")); //$NON-NLS-1$
+            }
+        }
+    }
+
+    /**
+     * A form command runs a BSL procedure through its {@code action} container, which is a shape of
+     * its own ({@code FormCommandHandlerContainer}) rather than a {@code handlers} list.
+     */
+    private static void checkCommandActions(EObject formModel, List<Finding> findings)
+    {
+        for (EObject command : list(formModel, FEATURE_FORM_COMMANDS))
+        {
+            EObject action = single(command, FEATURE_ACTION);
+            if (action == null)
+            {
+                continue;
+            }
+            EObject handler = single(action, FEATURE_HANDLER);
+            if (handler == null || nameOf(handler).isEmpty())
+            {
+                findings.add(new Finding(SEVERITY_ERROR, "empty-command-action", //$NON-NLS-1$
+                    "Command." + nameOf(command), //$NON-NLS-1$
+                    "This command has an action but names no BSL procedure to run.")); //$NON-NLS-1$
             }
         }
     }
 
     // --- shared reading ------------------------------------------------------------------------
 
-    /** The label the handler table uses for a form-level owner; kept identical on purpose. */
-    private static final String FORM_PATH = "(form)"; //$NON-NLS-1$
-
     /**
-     * Every PERSISTED item of the form, in walk order. Persisted is the point: the computed
-     * containments of a form root are not authored by anyone and must not be judged.
+     * Every PERSISTED item of the form, in walk order - judged by the metamodel, not by whether the
+     * item has a public address token: an {@code Addition} has none and still carries an id and a
+     * type-specific ext-info.
      */
     private static List<EObject> itemTree(EObject formModel)
     {
         List<EObject> items = new ArrayList<>();
         for (EObject descendant : PersistedContents.descendants(formModel))
         {
-            FormElementWriter.Kind kind = FormElementWriter.addressableKind(descendant);
-            if (kind != null && ITEM_KINDS.contains(kind))
+            if (isFormItem(descendant.eClass()))
             {
                 items.add(descendant);
             }
@@ -428,15 +509,40 @@ public final class FormModelValidator
         return items;
     }
 
-    /**
-     * The kinds that live in the ITEM tree. {@code addressableKind} also answers for attributes,
-     * columns, commands and parameters - they are members, not items, and each has its own
-     * namespace, so folding them in here would report a command and an item that share a name as a
-     * duplicate.
-     */
-    private static final Set<FormElementWriter.Kind> ITEM_KINDS = Set.of(FormElementWriter.Kind.BUTTON,
-        FormElementWriter.Kind.FIELD, FormElementWriter.Kind.TABLE, FormElementWriter.Kind.DECORATION,
-        FormElementWriter.Kind.GROUP);
+    private static boolean isFormItem(EClass eClass)
+    {
+        if (ECLASS_FORM_ITEM.equals(eClass.getName()))
+        {
+            return true;
+        }
+        for (EClass superType : eClass.getEAllSuperTypes())
+        {
+            if (ECLASS_FORM_ITEM.equals(superType.getName()))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isAddition(EObject element)
+    {
+        return ECLASS_ADDITION.equals(element.eClass().getName());
+    }
+
+    /** The additional-columns groups of an attribute - each carries a {@code columns} list of its own. */
+    private static List<EObject> additionalColumnGroups(EObject attribute)
+    {
+        List<EObject> groups = new ArrayList<>();
+        for (EObject child : PersistedContents.of(attribute))
+        {
+            if (ECLASS_ADDITIONAL_COLUMNS.equals(child.eClass().getName()))
+            {
+                groups.add(child);
+            }
+        }
+        return groups;
+    }
 
     /** The names a data path may START with: the form's own attributes and parameters. */
     private static Set<String> dataPathRoots(EObject formModel)
@@ -456,16 +562,12 @@ public final class FormModelValidator
     /** {@code Kind.Name}, the address every other form tool accepts. */
     private static String pathOf(EObject element)
     {
-        FormElementWriter.Kind kind = FormElementWriter.addressableKind(element);
         String name = nameOf(element);
-        if (kind == null)
-        {
-            return name.isEmpty() ? element.eClass().getName() : name;
-        }
-        List<String> tokens = FormElementWriter.tokensForKind(kind);
+        FormElementWriter.Kind kind = FormElementWriter.addressableKind(element);
+        List<String> tokens = kind == null ? List.of() : FormElementWriter.tokensForKind(kind);
         // The tokens are matched case-insensitively and stored lower-case; an ADDRESS is written
-        // capitalized, and this path is meant to be pasted into another call as it stands.
-        String token = tokens.isEmpty() ? kind.name() : capitalize(tokens.get(0));
+        // capitalized. An item with no public token (an Addition) is named by its class instead.
+        String token = tokens.isEmpty() ? element.eClass().getName() : capitalize(tokens.get(0));
         return token + "." + (name.isEmpty() ? "(unnamed)" : name); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
@@ -476,16 +578,47 @@ public final class FormModelValidator
     }
 
     /**
-     * Whether a reference target is gone: a proxy the model cannot resolve, or an object that no
-     * longer belongs to a resource at all.
+     * Whether a COMMAND reference is gone: a proxy the model cannot resolve, or an object no longer
+     * inside the form. Removing a command from its containment does NOT turn the buttons' reference
+     * into a proxy, so the proxy test alone misses exactly the in-transaction removal this engine is
+     * meant to catch before a commit.
+     *
+     * <p>Deliberately NOT used for an event: events are published by the platform TYPE, not by the
+     * form, so "not inside the form" is their ordinary state and would flag every binding.</p>
      */
-    private static boolean isUnresolvable(EObject target)
+    private static boolean isUnreachable(EObject target, EObject formModel)
     {
-        if (!(target instanceof InternalEObject))
+        if (target.eIsProxy())
         {
-            return false;
+            return true;
         }
-        return target.eIsProxy();
+        for (EObject owner = target; owner != null; owner = owner.eContainer())
+        {
+            if (owner == formModel)
+            {
+                return false;
+            }
+        }
+        // Outside the form is not by itself wrong - a standard command the platform infers lives in
+        // its own source - so only an object that belongs to nothing at all is judged gone.
+        return target.eResource() == null && target.eContainer() == null;
+    }
+
+    /** An event names itself in either language; the first spelling it answers to labels it. */
+    private static String eventLabel(EObject event)
+    {
+        String name = nameOf(event);
+        if (!name.isEmpty())
+        {
+            return name;
+        }
+        Object ru = value(event, FEATURE_NAME_RU);
+        return ru instanceof String ? (String)ru : ""; //$NON-NLS-1$
+    }
+
+    private static String enumName(Object literal)
+    {
+        return literal == null ? "" : String.valueOf(literal); //$NON-NLS-1$
     }
 
     private static String nameOf(EObject object)
