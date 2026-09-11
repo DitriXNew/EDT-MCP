@@ -2978,11 +2978,11 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "List or terminate sessions on a running standalone-server infobase. DESTRUCTIVE for terminate: pass confirm=true; the EDT Designer agent is never terminated. Full parameters and examples: call get_tool_guide('infobase_sessions').",
+    "description": "List or terminate sessions on a running standalone-server infobase. DESTRUCTIVE for terminate: pass confirm=true; bulk termination skips Designer, while its exact full UUID can target it. Full parameters and examples: call get_tool_guide('infobase_sessions').",
     "inputSchema": {
       "properties": {
         "action": {
-          "description": "list (default) reads sessions; terminate ends the selected non-agent session(s).",
+          "description": "list (default) reads sessions; terminate ends the selected session(s).",
           "enum": [
             "list",
             "terminate"
@@ -3008,7 +3008,7 @@
           "type": "string"
         },
         "sessionId": {
-          "description": "For terminate, the full session UUID or numeric session-id returned by list.",
+          "description": "For terminate, the full session UUID or numeric session-id returned by list; a Designer session requires its exact full UUID.",
           "type": "string"
         }
       },
@@ -3025,6 +3025,9 @@
         },
         "applicationId": {
           "type": "string"
+        },
+        "attemptedCount": {
+          "type": "integer"
         },
         "count": {
           "type": "integer"

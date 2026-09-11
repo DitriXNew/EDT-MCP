@@ -658,6 +658,7 @@ public class UpdateDatabaseTool implements IMcpTool
         boolean updateApiEntered = false;
         boolean updateApiReturned = false;
         String sessionCheckUnreachableReason = null;
+        List<SessionInfo> designerSessionsSeen = List.of();
         try
         {
             ApplicationSupport.ManagerResult mr = ApplicationSupport.resolveManager(projectName);
@@ -762,9 +763,11 @@ public class UpdateDatabaseTool implements IMcpTool
                     ReadResult sessions = InfobaseSessionSupport.listSessions(application);
                     if (sessions.isReadable())
                     {
+                        designerSessionsSeen = sessions.sessions().stream()
+                            .filter(InfobaseSessionsTool::isDesignerSession)
+                            .toList();
                         List<SessionInfo> blockers = sessions.sessions().stream()
-                            .filter(session -> !session.edtAgent()
-                                && !"Designer".equalsIgnoreCase(session.applicationKind())) //$NON-NLS-1$
+                            .filter(session -> !InfobaseSessionsTool.isDesignerSession(session))
                             .toList();
                         if (!blockers.isEmpty())
                         {
@@ -827,7 +830,8 @@ public class UpdateDatabaseTool implements IMcpTool
                         if (watch.portConflicted())
                         {
                             return portConflictError(watch, projectName, applicationId,
-                                terminatedClient, sessionCheckUnreachableReason);
+                                terminatedClient, sessionCheckUnreachableReason,
+                                designerSessionsSeen);
                         }
                         // The cancel can ABORT the update instead of letting it return a state: the
                         // reason is still in the window, and it explains the failure far better than
@@ -835,7 +839,7 @@ public class UpdateDatabaseTool implements IMcpTool
                         if (watch.cancelled())
                         {
                             return declinedUpdateResult(watch, externalChanges,
-                                sessionCheckUnreachableReason);
+                                sessionCheckUnreachableReason, designerSessionsSeen);
                         }
                         throw ex;
                     }
@@ -854,7 +858,8 @@ public class UpdateDatabaseTool implements IMcpTool
                     if (watch.portConflicted())
                     {
                         return portConflictError(watch, projectName, applicationId,
-                            terminatedClient, sessionCheckUnreachableReason);
+                            terminatedClient, sessionCheckUnreachableReason,
+                            designerSessionsSeen);
                     }
                     // A cancelled external-changes modal means the update wrote NOTHING. Reporting
                     // "updated" here would be a false success — and the returned state cannot be
@@ -865,7 +870,7 @@ public class UpdateDatabaseTool implements IMcpTool
                     if (watch.cancelled())
                     {
                         return declinedUpdateResult(watch, externalChanges,
-                            sessionCheckUnreachableReason);
+                            sessionCheckUnreachableReason, designerSessionsSeen);
                     }
                 }
             }
@@ -877,7 +882,8 @@ public class UpdateDatabaseTool implements IMcpTool
         {
             Activator.logError("Error updating database for application: " + applicationId, e); //$NON-NLS-1$
             String error = buildApplicationErrorResult(e, projectName, applicationId,
-                terminatedClient, portsReassigned, sessionCheckUnreachableReason);
+                terminatedClient, portsReassigned, sessionCheckUnreachableReason,
+                designerSessionsSeen);
             if (updateApiReturned || portsReassigned)
             {
                 return ToolResult.markErrorAfterMutation(error);
@@ -888,7 +894,7 @@ public class UpdateDatabaseTool implements IMcpTool
         {
             Activator.logError("Unexpected error during database update", e); //$NON-NLS-1$
             String error = buildUnexpectedErrorResult(e, terminatedClient, portsReassigned,
-                sessionCheckUnreachableReason);
+                sessionCheckUnreachableReason, designerSessionsSeen);
             if (updateApiReturned || portsReassigned)
             {
                 return ToolResult.markErrorAfterMutation(error);
@@ -1036,8 +1042,8 @@ public class UpdateDatabaseTool implements IMcpTool
             + " non-agent infobase session(s) remain: " + details //$NON-NLS-1$
             + ". Clear them first with infobase_sessions(action='terminate', projectName='" //$NON-NLS-1$
             + projectName + "', applicationId='" + applicationId //$NON-NLS-1$
-            + "', all=true, confirm=true), then retry update_database. The EDT Designer " //$NON-NLS-1$
-            + "agent is not a blocker and is never terminated." //$NON-NLS-1$
+            + "', all=true, confirm=true), then retry update_database. Designer sessions are not " //$NON-NLS-1$
+            + "blockers and are always excluded from all=true." //$NON-NLS-1$
             + (terminatedClient
                 ? " This call already terminated a client it had launched; a session listed above " //$NON-NLS-1$
                     + "may be that client still closing, in which case retrying is enough." //$NON-NLS-1$
@@ -1055,33 +1061,54 @@ public class UpdateDatabaseTool implements IMcpTool
         return result.toJson();
     }
 
-    /** Qualifies a later update failure without turning an unreadable lookup into an empty list. */
-    private static String sessionCheckFailureNote(String reason)
+    /** Qualifies later failures with unreadable checks or ambiguous Designer sessions. */
+    private static String sessionCheckFailureNote(String reason, List<SessionInfo> designerSessions)
     {
-        if (reason == null || reason.isBlank())
+        StringBuilder note = new StringBuilder();
+        if (reason != null && !reason.isBlank())
         {
-            return ""; //$NON-NLS-1$
+            note.append(" Pre-update infobase session inspection was unreachable: ").append(reason) //$NON-NLS-1$
+                .append(endsSentence(reason) ? "" : ".") //$NON-NLS-1$ //$NON-NLS-2$
+                .append(" This was not treated as proof that no foreign sessions existed."); //$NON-NLS-1$
         }
-        return " Pre-update infobase session inspection was unreachable: " + reason //$NON-NLS-1$
-            + (endsSentence(reason) ? "" : ".") //$NON-NLS-1$ //$NON-NLS-2$
-            + " This was not treated as proof that no foreign sessions existed."; //$NON-NLS-1$
+        if (designerSessions != null && !designerSessions.isEmpty())
+        {
+            List<String> ids = designerSessions.stream()
+                .map(SessionInfo::sessionId)
+                .toList();
+            note.append(" Pre-update session inspection saw app-id: Designer session(s): ") //$NON-NLS-1$
+                .append(String.join(", ", ids)) //$NON-NLS-1$
+                .append(". EDT cannot tell whether each is its update agent or a human " //$NON-NLS-1$
+                    + "Configurator; after this update failure, they are the most likely holders " //$NON-NLS-1$
+                    + "of the exclusive lock."); //$NON-NLS-1$
+        }
+        return note.toString();
     }
 
     private static String portConflictError(LaunchUpdateDialogAutoConfirmer.ConflictWatch watch,
         String projectName, String applicationId, boolean terminatedClient,
         String sessionCheckUnreachableReason)
     {
+        return portConflictError(watch, projectName, applicationId, terminatedClient,
+            sessionCheckUnreachableReason, List.of());
+    }
+
+    /** Same port-conflict payload, including Designer sessions seen by the pre-flight. */
+    private static String portConflictError(LaunchUpdateDialogAutoConfirmer.ConflictWatch watch,
+        String projectName, String applicationId, boolean terminatedClient,
+        String sessionCheckUnreachableReason, List<SessionInfo> designerSessionsSeen)
+    {
         ToolResult result = watch.portsReassigned()
             ? ToolResult.errorAfterMutation("Database update failed: " //$NON-NLS-1$
                 + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail(),
                     watch.portConflictReason())
                 + " The infobase was NOT changed, but the standalone-server configuration was." //$NON-NLS-1$
-                + sessionCheckFailureNote(sessionCheckUnreachableReason))
+                + sessionCheckFailureNote(sessionCheckUnreachableReason, designerSessionsSeen))
             : ToolResult.error("Database update failed: " //$NON-NLS-1$
                 + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail(),
                     watch.portConflictReason())
                 + " The infobase was NOT changed." //$NON-NLS-1$
-                + sessionCheckFailureNote(sessionCheckUnreachableReason));
+                + sessionCheckFailureNote(sessionCheckUnreachableReason, designerSessionsSeen));
         result.put(McpKeys.PROJECT, projectName)
             .put(McpKeys.APPLICATION_ID, applicationId);
         if (watch.portsReassigned())
@@ -1113,6 +1140,15 @@ public class UpdateDatabaseTool implements IMcpTool
     private static String declinedUpdateResult(LaunchUpdateDialogAutoConfirmer.ConflictWatch watch,
         ExternalInfobaseChangesPolicy externalChanges, String sessionCheckUnreachableReason)
     {
+        return declinedUpdateResult(watch, externalChanges, sessionCheckUnreachableReason,
+            List.of());
+    }
+
+    /** Same declined-update payload, including Designer sessions seen by the pre-flight. */
+    private static String declinedUpdateResult(LaunchUpdateDialogAutoConfirmer.ConflictWatch watch,
+        ExternalInfobaseChangesPolicy externalChanges, String sessionCheckUnreachableReason,
+        List<SessionInfo> designerSessionsSeen)
+    {
         boolean reassigned = watch.portsReassigned();
         String message = ExternalInfobaseChangesPolicy.declinedUpdateError(externalChanges, watch.reason())
                 + (reassigned
@@ -1120,7 +1156,7 @@ public class UpdateDatabaseTool implements IMcpTool
                         + "rewritten its configuration " //$NON-NLS-1$
                         + "(standaloneServerPortConflict=reassign) — that change stands." //$NON-NLS-1$
                     : "") //$NON-NLS-1$
-                + sessionCheckFailureNote(sessionCheckUnreachableReason);
+                + sessionCheckFailureNote(sessionCheckUnreachableReason, designerSessionsSeen);
         ToolResult result = reassigned ? ToolResult.errorAfterMutation(message) : ToolResult.error(message);
         if (reassigned)
         {
@@ -1271,6 +1307,15 @@ public class UpdateDatabaseTool implements IMcpTool
             String applicationId, boolean terminatedClient, boolean portsReassigned,
             String sessionCheckUnreachableReason)
     {
+        return buildApplicationErrorResult(e, projectName, applicationId, terminatedClient,
+            portsReassigned, sessionCheckUnreachableReason, List.of());
+    }
+
+    /** Same application failure payload, including Designer sessions seen by the pre-flight. */
+    static String buildApplicationErrorResult(ApplicationException e, String projectName,
+            String applicationId, boolean terminatedClient, boolean portsReassigned,
+            String sessionCheckUnreachableReason, List<SessionInfo> designerSessionsSeen)
+    {
         String internalInfoHint = describeInternalInfoHint(e);
         String hint = internalInfoHint.isEmpty() ? describeAuthHint(e) : internalInfoHint;
         String described = PlatformFailures.describe(e);
@@ -1288,7 +1333,7 @@ public class UpdateDatabaseTool implements IMcpTool
                     + "ports and rewritten its configuration " //$NON-NLS-1$
                     + "(standaloneServerPortConflict=reassign) — that change stands." //$NON-NLS-1$
                 : "") //$NON-NLS-1$
-            + sessionCheckFailureNote(sessionCheckUnreachableReason));
+            + sessionCheckFailureNote(sessionCheckUnreachableReason, designerSessionsSeen));
         errorResult.put(McpKeys.APPLICATION_ID, applicationId);
         errorResult.put(McpKeys.PROJECT, projectName);
         if (terminatedClient)
@@ -1348,6 +1393,15 @@ public class UpdateDatabaseTool implements IMcpTool
     static String buildUnexpectedErrorResult(Exception e, boolean terminatedClient,
             boolean portsReassigned, String sessionCheckUnreachableReason)
     {
+        return buildUnexpectedErrorResult(e, terminatedClient, portsReassigned,
+            sessionCheckUnreachableReason, List.of());
+    }
+
+    /** Same unexpected failure payload, including Designer sessions seen by the pre-flight. */
+    static String buildUnexpectedErrorResult(Exception e, boolean terminatedClient,
+            boolean portsReassigned, String sessionCheckUnreachableReason,
+            List<SessionInfo> designerSessionsSeen)
+    {
         ToolResult errorResult = ToolResult.error("Unexpected error: " //$NON-NLS-1$
             + PlatformFailures.describe(e)
             + (portsReassigned
@@ -1355,7 +1409,7 @@ public class UpdateDatabaseTool implements IMcpTool
                     + "free ports and rewritten its configuration " //$NON-NLS-1$
                     + "(standaloneServerPortConflict=reassign) — that change stands." //$NON-NLS-1$
                 : "") //$NON-NLS-1$
-            + sessionCheckFailureNote(sessionCheckUnreachableReason)
+            + sessionCheckFailureNote(sessionCheckUnreachableReason, designerSessionsSeen)
             + " The update may have applied partially, so do not retry blindly: check the actual " //$NON-NLS-1$
             + "state with get_applications (updateState) and the EDT Error Log first."); //$NON-NLS-1$
         if (terminatedClient)

@@ -37,7 +37,7 @@ public class InfobaseSessionSupportTest
             + "user-name: User\n" //$NON-NLS-1$
             + "host: desk\n"; //$NON-NLS-1$
 
-        List<SessionInfo> sessions = InfobaseSessionSupport.parseSessions(output);
+        List<SessionInfo> sessions = InfobaseSessionSupport.parseSessions(output).sessions();
 
         assertEquals(2, sessions.size());
         assertEquals(Long.valueOf(7), sessions.get(0).sessionNumber());
@@ -65,7 +65,7 @@ public class InfobaseSessionSupportTest
             + "hibernate                        : no\n" //$NON-NLS-1$
             + "db-proc-took-at                  : 0001-01-01T00:00:00\n"; //$NON-NLS-1$
 
-        List<SessionInfo> sessions = InfobaseSessionSupport.parseSessions(output);
+        List<SessionInfo> sessions = InfobaseSessionSupport.parseSessions(output).sessions();
 
         assertEquals("padded keys must still yield one session", 1, sessions.size()); //$NON-NLS-1$
         assertEquals("fe63b824-630f-4c3e-b5e9-08a9e5edae74", sessions.get(0).sessionId()); //$NON-NLS-1$
@@ -89,6 +89,54 @@ public class InfobaseSessionSupportTest
         assertFalse(unreachable.isReadable());
         assertNull(unreachable.sessions());
         assertEquals("The standalone server is not running.", unreachable.unreachableReason()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void partialParseIsUnreachableAndNamesTheUnreadableBlockCount()
+    {
+        String output = "session: 11111111-1111-1111-1111-111111111111\n" //$NON-NLS-1$
+            + "app-id: 1CV8C\n\n" //$NON-NLS-1$
+            + "session-id: 9\n" //$NON-NLS-1$
+            + "app-id: 1CV8C\n"; //$NON-NLS-1$
+
+        ReadResult result = InfobaseSessionSupport.readSessionsOutput(output);
+
+        assertFalse(result.isReadable());
+        assertNull(result.sessions());
+        assertTrue(result.unreachableReason().contains("1 unreadable session block")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void twoUsableBlocksAreReadableWithBothSessions()
+    {
+        String output = "session: 11111111-1111-1111-1111-111111111111\n\n" //$NON-NLS-1$
+            + "session: 22222222-2222-2222-2222-222222222222\n"; //$NON-NLS-1$
+
+        ReadResult result = InfobaseSessionSupport.readSessionsOutput(output);
+
+        assertTrue(result.isReadable());
+        assertEquals(2, result.sessions().size());
+    }
+
+    @Test
+    public void trailingBlankLineDoesNotCreateAnUnreadableBlock()
+    {
+        ReadResult result = InfobaseSessionSupport.readSessionsOutput(
+            "session: 11111111-1111-1111-1111-111111111111\n"); //$NON-NLS-1$
+
+        assertTrue(result.isReadable());
+        assertEquals(1, result.sessions().size());
+    }
+
+    @Test
+    public void whollyUnrecognizedOutputRemainsUnreachable()
+    {
+        ReadResult result = InfobaseSessionSupport.readSessionsOutput(
+            "ibcmd emitted an unknown response"); //$NON-NLS-1$
+
+        assertFalse(result.isReadable());
+        assertNull(result.sessions());
+        assertTrue(result.unreachableReason().contains("unrecognized output")); //$NON-NLS-1$
     }
 
     @Test(expected = IllegalArgumentException.class)

@@ -66,8 +66,8 @@ public class InfobaseSessionsTool implements IMcpTool
     public String getDescription()
     {
         return "List or terminate sessions on a running standalone-server infobase. " //$NON-NLS-1$
-            + "DESTRUCTIVE for terminate: pass confirm=true; the EDT Designer agent is never " //$NON-NLS-1$
-            + "terminated. Full parameters and examples: call " //$NON-NLS-1$
+            + "DESTRUCTIVE for terminate: pass confirm=true; bulk termination skips Designer, " //$NON-NLS-1$
+            + "while its exact full UUID can target it. Full parameters and examples: call " //$NON-NLS-1$
             + "get_tool_guide('infobase_sessions')."; //$NON-NLS-1$
     }
 
@@ -80,10 +80,11 @@ public class InfobaseSessionsTool implements IMcpTool
             .stringProperty(McpKeys.APPLICATION_ID,
                 "Application ID from get_applications; defaults to the project's default application.") //$NON-NLS-1$
             .enumProperty(McpKeys.ACTION,
-                "list (default) reads sessions; terminate ends the selected non-agent session(s).", //$NON-NLS-1$
+                "list (default) reads sessions; terminate ends the selected session(s).", //$NON-NLS-1$
                 ACTION_LIST, ACTION_TERMINATE)
             .stringProperty("sessionId", //$NON-NLS-1$
-                "For terminate, the full session UUID or numeric session-id returned by list.") //$NON-NLS-1$
+                "For terminate, the full session UUID or numeric session-id returned by list; " //$NON-NLS-1$
+                    + "a Designer session requires its exact full UUID.") //$NON-NLS-1$
             .booleanProperty("all", //$NON-NLS-1$
                 "For terminate, true selects every non-agent session; Designer is always excluded.") //$NON-NLS-1$
             .booleanProperty("confirm", //$NON-NLS-1$
@@ -110,6 +111,8 @@ public class InfobaseSessionsTool implements IMcpTool
             .integerProperty("count", "Number of observed sessions on a readable list.") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("terminatedCount", //$NON-NLS-1$
                 "Number of sessions observed gone after the terminate command.") //$NON-NLS-1$
+            .integerProperty("attemptedCount", //$NON-NLS-1$
+                "Number of terminate commands accepted when the session list could not be re-read.") //$NON-NLS-1$
             .enumProperty(KEY_VERIFICATION,
                 "Terminate read-back: verified, mismatched, or not_verifiable.", //$NON-NLS-1$
                 VERIFICATION_VERIFIED, VERIFICATION_MISMATCHED, VERIFICATION_NOT_VERIFIABLE)
@@ -261,7 +264,7 @@ public class InfobaseSessionsTool implements IMcpTool
                 : "Read " + sessions.size() + " infobase session(s).").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    /** Lists first, protects Designer, obtains consent, and terminates only the selected sessions. */
+    /** Lists first, applies Designer selection rules, obtains consent, and terminates the selection. */
     private static String terminate(String projectName, IApplication application,
         String requestedSessionId, boolean all, String message)
     {
@@ -294,8 +297,12 @@ public class InfobaseSessionsTool implements IMcpTool
         {
             targets.add(displayId(session));
         }
+        boolean designerSelected = selection.sessions.stream()
+            .anyMatch(InfobaseSessionsTool::isDesignerSession);
         ConsentPreview preview = new ConsentPreview("Terminate infobase sessions", //$NON-NLS-1$
-            "This terminates " + selection.sessions.size() + " live non-agent session(s) on " //$NON-NLS-1$ //$NON-NLS-2$
+            "This terminates " + (designerSelected
+                ? "the exact Designer/configurator session" //$NON-NLS-1$
+                : selection.sessions.size() + " live non-agent session(s)") + " on " //$NON-NLS-1$ //$NON-NLS-2$
                 + "application '" + application.getName() + "'.", //$NON-NLS-1$ //$NON-NLS-2$
             selection.sessions.size(), targets);
         DestructiveConsentGate.ConsentDecision decision =
@@ -338,23 +345,31 @@ public class InfobaseSessionsTool implements IMcpTool
         // session was terminated. A terminate completes before ibcmd returns, so re-reading the
         // list once reports what is actually gone.
         ReadResult after = InfobaseSessionSupport.listSessions(application);
+        return terminationReadBackResult(projectName, application.getId(), terminated, after);
+    }
+
+    /** Builds the terminate result from the accepted targets and the authoritative re-read. */
+    static String terminationReadBackResult(String projectName, String applicationId,
+        List<SessionInfo> attempted, ReadResult after)
+    {
         if (!after.isReadable())
         {
-            return baseResult(ACTION_TERMINATE, projectName, application)
+            return ToolResult.success().put(McpKeys.ACTION, ACTION_TERMINATE)
+                .put(McpKeys.PROJECT, projectName)
+                .put(McpKeys.APPLICATION_ID, applicationId)
                 .put(KEY_REACHABLE, true)
-                .put(KEY_SESSIONS, sessionMaps(terminated))
-                .put("terminatedCount", terminated.size()) //$NON-NLS-1$
+                .put("attemptedCount", attempted.size()) //$NON-NLS-1$
                 .put(KEY_VERIFICATION, VERIFICATION_NOT_VERIFIABLE)
                 .put(KEY_VERIFICATION_REASON, after.unreachableReason())
-                .put(McpKeys.MESSAGE, "ibcmd accepted the termination of " + terminated.size() //$NON-NLS-1$
-                    + " non-agent session(s), but the list could not be re-read to confirm they " //$NON-NLS-1$
+                .put(McpKeys.MESSAGE, "ibcmd accepted " + attempted.size() //$NON-NLS-1$
+                    + " termination attempt(s), but the list could not be re-read to confirm they " //$NON-NLS-1$
                     + "are gone. List again before treating the infobase as clear.") //$NON-NLS-1$
                 .toJson();
         }
 
         List<SessionInfo> gone = new ArrayList<>();
         List<String> stillPresent = new ArrayList<>();
-        for (SessionInfo session : terminated)
+        for (SessionInfo session : attempted)
         {
             if (containsSessionId(after.sessions(), session.sessionId()))
             {
@@ -368,12 +383,12 @@ public class InfobaseSessionsTool implements IMcpTool
         if (!stillPresent.isEmpty())
         {
             return ToolResult.errorAfterMutation("ibcmd accepted every termination, but " //$NON-NLS-1$
-                + stillPresent.size() + " of " + terminated.size() + " session(s) are still " //$NON-NLS-1$ //$NON-NLS-2$
+                + stillPresent.size() + " of " + attempted.size() + " session(s) are still " //$NON-NLS-1$ //$NON-NLS-2$
                 + "present and still block a database update: " //$NON-NLS-1$
                 + String.join(", ", stillPresent) + ".") //$NON-NLS-1$ //$NON-NLS-2$
                     .put(McpKeys.ACTION, ACTION_TERMINATE)
                     .put(McpKeys.PROJECT, projectName)
-                    .put(McpKeys.APPLICATION_ID, application.getId())
+                    .put(McpKeys.APPLICATION_ID, applicationId)
                     .put(KEY_REACHABLE, true)
                     .put(KEY_SESSIONS, sessionMaps(gone))
                     .put("terminatedCount", gone.size()) //$NON-NLS-1$
@@ -383,14 +398,23 @@ public class InfobaseSessionsTool implements IMcpTool
                     .toJson();
         }
 
-        return baseResult(ACTION_TERMINATE, projectName, application)
+        ToolResult result = ToolResult.success().put(McpKeys.ACTION, ACTION_TERMINATE)
+            .put(McpKeys.PROJECT, projectName)
+            .put(McpKeys.APPLICATION_ID, applicationId)
             .put(KEY_REACHABLE, true)
             .put(KEY_SESSIONS, sessionMaps(gone))
             .put("terminatedCount", gone.size()) //$NON-NLS-1$
-            .put(KEY_VERIFICATION, VERIFICATION_VERIFIED)
-            .put(McpKeys.MESSAGE, "Terminated " + gone.size() //$NON-NLS-1$
-                + " non-agent infobase session(s), confirmed gone by re-reading the session " //$NON-NLS-1$
-                + "list; the EDT Designer agent was not targeted.") //$NON-NLS-1$
+            .put(KEY_VERIFICATION, VERIFICATION_VERIFIED);
+        if (gone.stream().anyMatch(InfobaseSessionsTool::isDesignerSession))
+        {
+            return result.put(McpKeys.MESSAGE, "Terminated EDT's Designer/configurator session, " //$NON-NLS-1$
+                + "confirmed gone by re-reading the session list. EDT re-creates its agent on " //$NON-NLS-1$
+                + "its next connect, but an update running at the moment of termination can fail.") //$NON-NLS-1$
+                .toJson();
+        }
+        return result.put(McpKeys.MESSAGE, "Terminated " + gone.size() //$NON-NLS-1$
+            + " non-agent infobase session(s), confirmed gone by re-reading the session " //$NON-NLS-1$
+            + "list; the EDT Designer agent was not targeted.") //$NON-NLS-1$
             .toJson();
     }
 
@@ -416,7 +440,7 @@ public class InfobaseSessionsTool implements IMcpTool
             List<SessionInfo> selected = new ArrayList<>();
             for (SessionInfo session : sessions)
             {
-                if (!isProtectedAgent(session))
+                if (!isDesignerSession(session))
                 {
                     selected.add(session);
                 }
@@ -425,15 +449,17 @@ public class InfobaseSessionsTool implements IMcpTool
         }
         for (SessionInfo session : sessions)
         {
-            if (requestedSessionId.equalsIgnoreCase(session.sessionId())
-                || session.sessionNumber() != null
-                    && requestedSessionId.equals(session.sessionNumber().toString()))
+            if (requestedSessionId.equalsIgnoreCase(session.sessionId()))
             {
-                if (isProtectedAgent(session))
+                return Selection.of(List.of(session));
+            }
+            if (session.sessionNumber() != null
+                && requestedSessionId.equals(session.sessionNumber().toString()))
+            {
+                if (isDesignerSession(session))
                 {
-                    return Selection.error("Session " + displayId(session) //$NON-NLS-1$
-                        + " is the EDT Designer update agent. It is not a blocker and must not " //$NON-NLS-1$
-                        + "be terminated because doing so can break the update operation."); //$NON-NLS-1$
+                    return Selection.error("A Designer/configurator session may be terminated only " //$NON-NLS-1$
+                        + "by its exact full UUID, not its numeric session-id."); //$NON-NLS-1$
                 }
                 return Selection.of(List.of(session));
             }
@@ -463,7 +489,7 @@ public class InfobaseSessionsTool implements IMcpTool
             item.put("host", session.host()); //$NON-NLS-1$
             item.put("startedAt", session.startedAt()); //$NON-NLS-1$
             item.put("lastActiveAt", session.lastActiveAt()); //$NON-NLS-1$
-            item.put("isEdtAgent", isProtectedAgent(session)); //$NON-NLS-1$
+            item.put("isEdtAgent", isDesignerSession(session)); //$NON-NLS-1$
             result.add(item);
         }
         return result;
@@ -475,8 +501,8 @@ public class InfobaseSessionsTool implements IMcpTool
             : session.sessionId() + " (session-id " + session.sessionNumber() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    /** Protects Designer by both parsed flag and raw app-id as a defense-in-depth invariant. */
-    private static boolean isProtectedAgent(SessionInfo session)
+    /** Recognises the ambiguous Designer kind by both parsed flag and raw app-id. */
+    static boolean isDesignerSession(SessionInfo session)
     {
         return session.edtAgent()
             || "Designer".equalsIgnoreCase(session.applicationKind()); //$NON-NLS-1$

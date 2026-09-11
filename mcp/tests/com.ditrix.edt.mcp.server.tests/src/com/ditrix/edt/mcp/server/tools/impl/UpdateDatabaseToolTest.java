@@ -38,6 +38,7 @@ import org.junit.Test;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.UpdateDatabaseTool.ApplicationFallback; // same package: explicit for the nested seam type
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
+import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.e1c.g5.dt.applications.ApplicationException;
@@ -250,6 +251,31 @@ public class UpdateDatabaseToolTest
 
         assertTrue(result.contains("session inspection was unreachable")); //$NON-NLS-1$
         assertTrue(result.contains("not treated as proof")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void failedUpdateNamesDesignerSessionSeenDuringPreflight()
+    {
+        SessionInfo designer = new SessionInfo(
+            "11111111-1111-1111-1111-111111111111", 1L, "Designer", "agent", "host", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "2026-01-01T10:00:00", "2026-01-01T10:01:00", true); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = UpdateDatabaseTool.buildApplicationErrorResult(
+            new ApplicationException("exclusive lock"), "Demo", "ServerApplication.Demo", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            false, false, null, List.of(designer));
+
+        assertTrue(result.contains(designer.sessionId()));
+        assertTrue(result.contains("human Configurator")); //$NON-NLS-1$
+        assertTrue(result.contains("most likely holders of the exclusive lock")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void failedUpdateWithoutDesignerPreflightHasNoDesignerNote()
+    {
+        String result = UpdateDatabaseTool.buildApplicationErrorResult(
+            new ApplicationException("exclusive lock"), "Demo", "ServerApplication.Demo", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            false, false, null, List.of());
+
+        assertFalse(result.contains("Pre-update session inspection saw app-id: Designer")); //$NON-NLS-1$
     }
 
     @Test

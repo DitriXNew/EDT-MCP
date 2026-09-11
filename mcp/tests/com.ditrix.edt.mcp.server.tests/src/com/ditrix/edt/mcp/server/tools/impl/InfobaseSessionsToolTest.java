@@ -17,6 +17,7 @@ import java.util.List;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.ReadResult;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -71,7 +72,7 @@ public class InfobaseSessionsToolTest
         String schema = new InfobaseSessionsTool().getOutputSchema();
         assertNotNull(schema);
         for (String key : List.of("reachable", "unreachableReason", "sessions", "count", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            "terminatedCount", "verification", "verificationReason", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "terminatedCount", "attemptedCount", "verification", "verificationReason", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "verified", "mismatched", "not_verifiable")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         {
             assertTrue(key, schema.contains("\"" + key + "\"")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -90,8 +91,16 @@ public class InfobaseSessionsToolTest
             guide.contains("proves there are no sessions")); //$NON-NLS-1$
         assertTrue("the guide must spell out the exact clearing call", //$NON-NLS-1$
             guide.contains("all=true, confirm=true")); //$NON-NLS-1$
-        assertTrue("the guide must document the protected agent session", //$NON-NLS-1$
+        assertTrue("the guide must document the ambiguous Designer session", //$NON-NLS-1$
             guide.contains("app-id: Designer")); //$NON-NLS-1$
+        assertTrue("the guide must name the human Configurator ambiguity", //$NON-NLS-1$
+            guide.contains("OR a human Configurator")); //$NON-NLS-1$
+        assertTrue("the guide must say the tool cannot distinguish Designer ownership", //$NON-NLS-1$
+            guide.contains("cannot tell them apart")); //$NON-NLS-1$
+        assertTrue("the guide must keep bulk Designer termination disabled", //$NON-NLS-1$
+            guide.contains("all=true` always skips it")); //$NON-NLS-1$
+        assertTrue("the guide must require an exact id for explicit Designer termination", //$NON-NLS-1$
+            guide.contains("exact full session UUID")); //$NON-NLS-1$
         assertTrue("the guide must say a terminate is verified by a re-read, not assumed", //$NON-NLS-1$
             guide.contains("Termination is verified, not assumed")); //$NON-NLS-1$
         assertTrue("the guide must warn that ibcmd exits 0 for a session that is already gone", //$NON-NLS-1$
@@ -141,7 +150,24 @@ public class InfobaseSessionsToolTest
         InfobaseSessionsTool.Selection designer = InfobaseSessionsTool.selectSessions(
             List.of(DESIGNER, CLIENT), "1", false); //$NON-NLS-1$
         assertTrue(designer.sessions.isEmpty());
-        assertTrue(designer.error.contains("must not be terminated")); //$NON-NLS-1$
+        assertTrue(designer.error.contains("exact full UUID")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void exactUuidSelectorAllowsDesignerAndVerifiedMessageNamesTheConsequence()
+    {
+        InfobaseSessionsTool.Selection selection = InfobaseSessionsTool.selectSessions(
+            List.of(DESIGNER, CLIENT), DESIGNER.sessionId(), false);
+
+        assertNull(selection.error);
+        assertEquals(List.of(DESIGNER), selection.sessions);
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
+            "Demo", "ServerApplication.Demo", selection.sessions, //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.readable(List.of()))).getAsJsonObject();
+        String message = result.get("message").getAsString(); //$NON-NLS-1$
+        assertTrue(message.contains("EDT's Designer/configurator session")); //$NON-NLS-1$
+        assertTrue(message.contains("re-creates its agent on its next connect")); //$NON-NLS-1$
+        assertTrue(message.contains("update running at the moment of termination can fail")); //$NON-NLS-1$
     }
 
     @Test
@@ -152,5 +178,32 @@ public class InfobaseSessionsToolTest
         assertNull(selection.error);
         assertEquals(List.of(CLIENT), selection.sessions);
         assertFalse(selection.sessions.get(0).edtAgent());
+    }
+
+    @Test
+    public void notVerifiableTerminationReportsOnlyAttemptedCount()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.unreachable("server stopped before verification"))).getAsJsonObject(); //$NON-NLS-1$
+
+        assertEquals("not_verifiable", result.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, result.get("attemptedCount").getAsInt()); //$NON-NLS-1$
+        assertFalse(result.has("terminatedCount")); //$NON-NLS-1$
+        assertFalse(result.has("sessions")); //$NON-NLS-1$
+        assertTrue(result.get("message").getAsString().contains("List again")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void verifiedTerminationStillReportsObservedSessionsAndNoAttemptedCount()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.readable(List.of()))).getAsJsonObject();
+
+        assertEquals("verified", result.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, result.get("terminatedCount").getAsInt()); //$NON-NLS-1$
+        assertEquals(1, result.getAsJsonArray("sessions").size()); //$NON-NLS-1$
+        assertFalse(result.has("attemptedCount")); //$NON-NLS-1$
     }
 }

@@ -213,13 +213,7 @@ public final class InfobaseSessionSupport
             {
                 return ReadResult.unreachable(commandFailure);
             }
-            List<SessionInfo> sessions = parseSessions(command.stdout);
-            if (sessions.isEmpty() && !command.stdout.isBlank())
-            {
-                return ReadResult.unreachable("ibcmd session list returned unrecognized output: " //$NON-NLS-1$
-                    + concise(command.stdout));
-            }
-            return ReadResult.readable(sessions);
+            return readSessionsOutput(command.stdout);
         }
         catch (RuntimeException e)
         {
@@ -558,17 +552,45 @@ public final class InfobaseSessionSupport
         }
     }
 
+    /** Parsed sessions plus contentful key/value blocks that had no usable session UUID. */
+    static record ParsedSessions(List<SessionInfo> sessions, int unreadableBlocks)
+    {
+        ParsedSessions
+        {
+            sessions = List.copyOf(sessions);
+        }
+    }
+
+    /** Turns successful command output into a readable list only when every parsed block is usable. */
+    static ReadResult readSessionsOutput(String output)
+    {
+        ParsedSessions parsed = parseSessions(output);
+        if (parsed.unreadableBlocks() > 0)
+        {
+            return ReadResult.unreachable("ibcmd session list returned " //$NON-NLS-1$
+                + parsed.unreadableBlocks() + " unreadable session block" //$NON-NLS-1$
+                + (parsed.unreadableBlocks() == 1 ? "" : "s") + ": " + concise(output)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        if (parsed.sessions().isEmpty() && output != null && !output.isBlank())
+        {
+            return ReadResult.unreachable("ibcmd session list returned unrecognized output: " //$NON-NLS-1$
+                + concise(output));
+        }
+        return ReadResult.readable(parsed.sessions());
+    }
+
     /** Parses one blank-line-separated key/value block per session. */
-    static List<SessionInfo> parseSessions(String output)
+    static ParsedSessions parseSessions(String output)
     {
         List<SessionInfo> sessions = new ArrayList<>();
         Map<String, String> current = new LinkedHashMap<>();
+        int unreadableBlocks = 0;
         String normalized = output == null ? "" : output; //$NON-NLS-1$
         for (String line : normalized.split("\\R", -1)) //$NON-NLS-1$
         {
             if (line.isBlank())
             {
-                addSession(current, sessions);
+                unreadableBlocks += addSession(current, sessions);
                 current.clear();
                 continue;
             }
@@ -581,28 +603,33 @@ public final class InfobaseSessionSupport
             String value = line.substring(colon + 1).trim();
             if ("session".equals(key) && current.containsKey("session")) //$NON-NLS-1$ //$NON-NLS-2$
             {
-                addSession(current, sessions);
+                unreadableBlocks += addSession(current, sessions);
                 current.clear();
             }
             current.put(key, value);
         }
-        addSession(current, sessions);
-        return sessions;
+        unreadableBlocks += addSession(current, sessions);
+        return new ParsedSessions(sessions, unreadableBlocks);
     }
 
-    /** Converts a parsed block only when it contains the session UUID key. */
-    private static void addSession(Map<String, String> values, List<SessionInfo> sessions)
+    /** Converts a parsed block, returning one only for content that lacks a usable session UUID. */
+    private static int addSession(Map<String, String> values, List<SessionInfo> sessions)
     {
+        if (values.isEmpty())
+        {
+            return 0;
+        }
         String id = values.get("session"); //$NON-NLS-1$
         if (id == null || id.isBlank())
         {
-            return;
+            return 1;
         }
         String applicationKind = value(values, "app-id"); //$NON-NLS-1$
         sessions.add(new SessionInfo(id, parseSessionNumber(values.get("session-id")), //$NON-NLS-1$
             applicationKind, value(values, "user-name"), value(values, "host"), //$NON-NLS-1$ //$NON-NLS-2$
             value(values, "started-at"), value(values, "last-active-at"), //$NON-NLS-1$ //$NON-NLS-2$
             "Designer".equalsIgnoreCase(applicationKind))); //$NON-NLS-1$
+        return 0;
     }
 
     /** Null-safe parsed value; ibcmd uses empty strings for unavailable fields. */

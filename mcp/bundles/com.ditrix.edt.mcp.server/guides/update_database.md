@@ -58,7 +58,7 @@ With the default `checkInfobaseSessions=true`, `update_database(confirm=true)` p
 infobase_sessions(action='terminate', projectName='MyProject', applicationId='ServerApplication.MyServer', all=true, confirm=true)
 ```
 
-Then retry `update_database`. A session whose raw `app-id` is `Designer` is EDT's update agent: it is not a blocker and `infobase_sessions` never terminates it.
+Then retry `update_database`. A session whose raw `app-id` is `Designer` may be EDT's update agent or a human Configurator; the tool cannot distinguish them. It is not treated as a blocker because EDT's agent is present during normal updates, and `all=true` always skips it. If an update fails after seeing Designer sessions, the error names their IDs as likely exclusive-lock holders; terminate one only by its exact full UUID when that risk is intentional.
 
 Reachability matters. `reachable=true` with `sessions=[]` proves the list is empty; `reachable=false` names why it could not be read and is **not** proof that no sessions exist. The update still proceeds on an unreachable pre-flight because EDT may remain able to update through a different path. If that update later fails, its error includes the earlier `unreachableReason`. Set `checkInfobaseSessions=false` only to opt out of this safety pre-flight entirely.
 
