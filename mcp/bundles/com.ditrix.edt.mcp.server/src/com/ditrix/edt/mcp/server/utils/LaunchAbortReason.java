@@ -6,8 +6,10 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -28,18 +30,35 @@ public final class LaunchAbortReason implements AutoCloseable
         "com.e1c.g5.v8.dt.platform.standaloneserver", //$NON-NLS-1$
         "com._1c.g5.v8.dt.debug"); //$NON-NLS-1$
 
+    private static final Object WINDOW_LOCK = new Object();
+    private static final List<LaunchAbortReason> OPEN_WINDOWS = new ArrayList<>();
+
     private final AtomicReference<IStatus> lastError = new AtomicReference<>();
     private final AtomicBoolean closed = new AtomicBoolean(false);
+    private final AtomicBoolean sawConcurrentWindow = new AtomicBoolean(false);
     private final ILogListener listener = this::logged;
+    private final String expectedName;
 
-    private LaunchAbortReason()
+    private LaunchAbortReason(String expectedName)
     {
+        this.expectedName = trimToNull(expectedName);
     }
 
     /** Opens a per-launch log window. */
     public static LaunchAbortReason open()
     {
-        LaunchAbortReason window = new LaunchAbortReason();
+        return open(null);
+    }
+
+    /** Opens a log window associated with the application or infobase this launch targets. */
+    public static LaunchAbortReason open(String expectedName)
+    {
+        LaunchAbortReason window = new LaunchAbortReason(expectedName);
+        synchronized (WINDOW_LOCK)
+        {
+            OPEN_WINDOWS.add(window);
+            markConcurrentWindows();
+        }
         Platform.addLogListener(window.listener);
         return window;
     }
@@ -54,6 +73,14 @@ public final class LaunchAbortReason implements AutoCloseable
         String pluginId = status.getPlugin();
         if (Activator.PLUGIN_ID.equals(sourcePlugin) || Activator.PLUGIN_ID.equals(pluginId)
             || !isAllowlisted(pluginId))
+        {
+            return;
+        }
+        synchronized (WINDOW_LOCK)
+        {
+            markConcurrentWindows();
+        }
+        if (sawConcurrentWindow.get() && !namesExpectedLaunch(status))
         {
             return;
         }
@@ -98,13 +125,49 @@ public final class LaunchAbortReason implements AutoCloseable
         return message + " Caused by: " + rootCause; //$NON-NLS-1$
     }
 
+    /** Whether the captured status message names the application this window owns. */
+    private boolean namesExpectedLaunch(IStatus status)
+    {
+        String message = status == null ? null : status.getMessage();
+        return expectedName != null && message != null
+            && message.toLowerCase(Locale.ROOT).contains(expectedName.toLowerCase(Locale.ROOT));
+    }
+
+    /** Normalizes an optional ownership name. */
+    private static String trimToNull(String value)
+    {
+        if (value == null || value.trim().isEmpty())
+        {
+            return null;
+        }
+        return value.trim();
+    }
+
+    /** Makes concurrency sticky for every window that currently observes another open window. */
+    private static void markConcurrentWindows()
+    {
+        if (OPEN_WINDOWS.size() > 1)
+        {
+            for (LaunchAbortReason window : OPEN_WINDOWS)
+            {
+                window.sawConcurrentWindow.set(true);
+            }
+        }
+    }
+
     /** Removes this window's listener. */
     @Override
     public void close()
     {
         if (closed.compareAndSet(false, true))
         {
+            synchronized (WINDOW_LOCK)
+            {
+                markConcurrentWindows();
+                OPEN_WINDOWS.remove(this);
+            }
             Platform.removeLogListener(listener);
         }
     }
+
 }

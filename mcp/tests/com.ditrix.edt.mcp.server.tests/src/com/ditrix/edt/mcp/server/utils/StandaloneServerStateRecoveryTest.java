@@ -16,11 +16,16 @@ import static org.junit.Assert.assertTrue;
 import java.lang.reflect.Proxy;
 
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.MultiStatus;
+import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.debug.core.ILaunch;
+import org.eclipse.debug.core.ILaunchConfiguration;
+import org.eclipse.debug.core.ILaunchManager;
 import org.junit.Test;
+import org.mockito.Mockito;
 
 import com.e1c.g5.dt.applications.ApplicationException;
 
@@ -350,6 +355,38 @@ public class StandaloneServerStateRecoveryTest
         finally
         {
             StandaloneServerStateRecovery.endOperation();
+        }
+    }
+
+    @Test
+    public void testAttributedAbandonmentRestoresAStoppedServerBeforeTheRecordIsCleared()
+        throws Exception
+    {
+        ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
+        Mockito.when(config.getName()).thenReturn("Cancelled launch"); //$NON-NLS-1$
+        Mockito.when(config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, "")) //$NON-NLS-1$
+            .thenReturn(""); //$NON-NLS-1$
+        Mockito.when(config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, "")) //$NON-NLS-1$
+            .thenReturn("InfobaseApplication.Test"); //$NON-NLS-1$
+        Mockito.doAnswer(invocation -> {
+            StandaloneServerStateRecovery.recordStoppedServer("ServerApplication.Test"); //$NON-NLS-1$
+            ((IProgressMonitor)invocation.getArgument(1)).setCanceled(true);
+            return Mockito.mock(ILaunch.class);
+        }).when(config).launch(Mockito.eq(ILaunchManager.DEBUG_MODE),
+            Mockito.any(IProgressMonitor.class));
+
+        try
+        {
+            StandaloneServerStateRecovery.launchWithRecovery(config, ILaunchManager.DEBUG_MODE,
+                new NullProgressMonitor(), () -> "launch was abandoned"); //$NON-NLS-1$
+            throw new AssertionError("an attributed cancellation must fail the launch"); //$NON-NLS-1$
+        }
+        catch (CoreException failure)
+        {
+            assertTrue(StandaloneServerStateRecovery.isAbandonedLaunch(failure));
+            assertTrue(failure.getMessage().contains("launch was abandoned")); //$NON-NLS-1$
+            assertTrue(failure.getMessage().contains(
+                "was stopped for this operation and could NOT be started again")); //$NON-NLS-1$
         }
     }
 

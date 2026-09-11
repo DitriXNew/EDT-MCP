@@ -15,6 +15,8 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isA;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -25,6 +27,7 @@ import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
@@ -43,10 +46,15 @@ import org.mockito.Mockito;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.AlreadyRunningContext;
+import com.ditrix.edt.mcp.server.utils.AttributableCancel;
 import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
+import com.ditrix.edt.mcp.server.utils.LaunchOverrides;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
+import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
+import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
+import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.ApplicationUpdateType;
 import com.e1c.g5.dt.applications.ExecutionContext;
@@ -475,7 +483,7 @@ public class LaunchToolTest
         ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
         String error = new LaunchTool().performLaunch(config, false, ExternalInfobaseChangesPolicy.DEFAULT);
         assertNull("successful headless launch must return null", error);
-        Mockito.verify(config).launch(ILaunchManager.DEBUG_MODE, null);
+        Mockito.verify(config).launch(eq(ILaunchManager.DEBUG_MODE), isA(AttributableCancel.class));
     }
 
     @Test
@@ -487,7 +495,7 @@ public class LaunchToolTest
             ExternalInfobaseChangesPolicy.DEFAULT, null, ILaunchManager.RUN_MODE);
 
         assertNull("successful headless run launch must return null", error);
-        Mockito.verify(config).launch(ILaunchManager.RUN_MODE, null);
+        Mockito.verify(config).launch(eq(ILaunchManager.RUN_MODE), isA(AttributableCancel.class));
         Mockito.verify(config, never()).launch(eq(ILaunchManager.DEBUG_MODE), any());
     }
 
@@ -497,7 +505,7 @@ public class LaunchToolTest
         // The synchronous (headless) path is the only one that can still report a
         // launch failure to the caller — keep that contract real, not dead code.
         ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
-        Mockito.when(config.launch(ILaunchManager.DEBUG_MODE, null)).thenThrow(
+        Mockito.when(config.launch(eq(ILaunchManager.DEBUG_MODE), any(IProgressMonitor.class))).thenThrow(
             new CoreException(new Status(IStatus.ERROR, "test", "launch refused"))); //$NON-NLS-1$ //$NON-NLS-2$
         String error = new LaunchTool().performLaunch(config, false, ExternalInfobaseChangesPolicy.DEFAULT);
         assertNotNull("headless launch failure must be surfaced synchronously", error);
@@ -520,7 +528,7 @@ public class LaunchToolTest
     // observable pairing contract).
 
     @Test
-    public void testRunLaunchJobBodySuccessReturnsOkAndPassesMonitor() throws Exception
+    public void testRunLaunchJobBodySuccessReturnsOkAndWrapsMonitor() throws Exception
     {
         // The Job body launches with the JOB'S monitor (so the Progress view shows the
         // delegate's steps) and reports OK — and the arm/disarm pair around the launch
@@ -530,7 +538,7 @@ public class LaunchToolTest
         IStatus status = LaunchTool.runLaunchJobBody(config, true, ExternalInfobaseChangesPolicy.DEFAULT, monitor);
         assertNotNull(status);
         assertTrue("successful launch must report OK", status.isOK());
-        Mockito.verify(config).launch(ILaunchManager.DEBUG_MODE, monitor);
+        Mockito.verify(config).launch(eq(ILaunchManager.DEBUG_MODE), isA(AttributableCancel.class));
     }
 
     @Test
@@ -539,7 +547,10 @@ public class LaunchToolTest
         ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
         when(config.getName()).thenReturn("Cancelled launch"); //$NON-NLS-1$
         NullProgressMonitor monitor = new NullProgressMonitor();
-        monitor.setCanceled(true);
+        doAnswer(invocation -> {
+            ((IProgressMonitor)invocation.getArgument(1)).setCanceled(true);
+            return mock(ILaunch.class);
+        }).when(config).launch(eq(ILaunchManager.DEBUG_MODE), any(IProgressMonitor.class));
 
         IStatus status = LaunchTool.runLaunchJobBody(config, false,
             ExternalInfobaseChangesPolicy.DEFAULT, monitor);
@@ -551,6 +562,44 @@ public class LaunchToolTest
         assertTrue(AsyncLaunchOutcomes.recent().stream().anyMatch(outcome ->
             "Cancelled launch".equals(outcome.launchConfiguration()) //$NON-NLS-1$
                 && expected.equals(outcome.message())));
+    }
+
+    @Test
+    public void testRunLaunchJobBodyIgnoresCancellationFromAnotherThread() throws Exception
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        NullProgressMonitor monitor = new NullProgressMonitor();
+        doAnswer(invocation -> {
+            IProgressMonitor launchMonitor = invocation.getArgument(1);
+            Thread external = new Thread(() -> launchMonitor.setCanceled(true),
+                "external-launch-canceller"); //$NON-NLS-1$
+            external.start();
+            external.join();
+            return mock(ILaunch.class);
+        }).when(config).launch(eq(ILaunchManager.DEBUG_MODE), any(IProgressMonitor.class));
+
+        IStatus status = LaunchTool.runLaunchJobBody(config, false,
+            ExternalInfobaseChangesPolicy.DEFAULT, monitor);
+
+        assertTrue("an external cancellation does not claim EDT abandoned the launch", status.isOK());
+        assertTrue("the underlying Job monitor still receives the cancellation", monitor.isCanceled());
+    }
+
+    @Test
+    public void testRunLaunchJobBodyIgnoresMonitorCancelledBeforeLaunch() throws Exception
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        NullProgressMonitor monitor = new NullProgressMonitor();
+        monitor.setCanceled(true);
+        doAnswer(invocation -> {
+            ((IProgressMonitor)invocation.getArgument(1)).setCanceled(true);
+            return mock(ILaunch.class);
+        }).when(config).launch(eq(ILaunchManager.DEBUG_MODE), any(IProgressMonitor.class));
+
+        IStatus status = LaunchTool.runLaunchJobBody(config, false,
+            ExternalInfobaseChangesPolicy.DEFAULT, monitor);
+
+        assertTrue("a monitor already cancelled on entry is not attributed to EDT", status.isOK());
     }
 
     @Test
@@ -608,6 +657,96 @@ public class LaunchToolTest
         assertFalse(error.get("success").getAsBoolean()); //$NON-NLS-1$
         assertTrue(error.get("error").getAsString().contains("server start refused")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(error.get("error").getAsString().contains("thin-client configuration")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testStandaloneServerStartReportsItsCapturedPortConflict()
+    {
+        String failure = LaunchTool.startStandaloneServerWithPolicy(
+            new PortConflictingStandaloneStartService(), new Object(), "Standalone", //$NON-NLS-1$
+            ILaunchManager.DEBUG_MODE, null, null, StandaloneServerPortConflictPolicy.CANCEL);
+
+        assertNotNull(failure);
+        assertTrue(failure.contains("network ports are already in use")); //$NON-NLS-1$
+        assertTrue(failure.contains("standaloneServerPortConflict='reassign'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerRecoversStaleStateBeforeDispatchingStart()
+    {
+        AtomicInteger order = new AtomicInteger();
+
+        String result = LaunchTool.startStandaloneServerGuarded("Standalone", //$NON-NLS-1$
+            () -> assertTrue("the preflight runs first", order.compareAndSet(0, 1)),
+            () -> {
+                assertTrue("the service starts only after recovery", order.compareAndSet(1, 2));
+                return null;
+            });
+
+        assertNull(result);
+        assertEquals(2, order.get());
+    }
+
+    @Test
+    public void testStandaloneServerDoesNotStartWhenRecoveryRefuses()
+    {
+        AtomicInteger starts = new AtomicInteger();
+
+        String result = LaunchTool.startStandaloneServerGuarded("Standalone", //$NON-NLS-1$
+            () -> { throw new ApplicationException("the stale server is still stopping"); }, //$NON-NLS-1$
+            () -> {
+                starts.incrementAndGet();
+                return null;
+            });
+
+        assertEquals(0, starts.get());
+        assertTrue(result.contains("the stale server is still stopping")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerPortPolicyKeepsTheCallersReassignChoice() throws Exception
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        when(config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, "")) //$NON-NLS-1$
+            .thenReturn("Project"); //$NON-NLS-1$
+        when(config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, "")) //$NON-NLS-1$
+            .thenReturn("ServerApplication.Test"); //$NON-NLS-1$
+
+        assertSame(StandaloneServerPortConflictPolicy.REASSIGN,
+            LaunchTool.standaloneServerPortPolicy(config,
+                StandaloneServerPortConflictPolicy.REASSIGN));
+    }
+
+    @Test
+    public void testStandaloneServerRefusesEveryClientOnlyParameterByName()
+    {
+        String startup = LaunchTool.standaloneOverridesRefusal("Standalone", //$NON-NLS-1$
+            LaunchOverrides.of("run tests", null, null)); //$NON-NLS-1$
+        assertTrue(startup.contains("'startupOption'")); //$NON-NLS-1$
+        assertTrue(startup.contains("standalone server starts no client")); //$NON-NLS-1$
+
+        String project = LaunchTool.standaloneOverridesRefusal("Standalone", //$NON-NLS-1$
+            LaunchOverrides.of(null, "ExternalObjects", null)); //$NON-NLS-1$
+        assertTrue(project.contains("'externalObjectProjectName'")); //$NON-NLS-1$
+        assertTrue(project.contains("standalone server starts no client")); //$NON-NLS-1$
+
+        String object = LaunchTool.standaloneOverridesRefusal("Standalone", //$NON-NLS-1$
+            LaunchOverrides.of(null, null, "Runner")); //$NON-NLS-1$
+        assertTrue(object.contains("'externalObjectName'")); //$NON-NLS-1$
+        assertTrue(object.contains("standalone server starts no client")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerWithNoClientOnlyParametersStillStarts()
+    {
+        assertNull(LaunchTool.standaloneOverridesRefusal("Standalone", //$NON-NLS-1$
+            LaunchOverrides.of(null, null, null)));
+        AtomicInteger starts = new AtomicInteger();
+        assertNull(LaunchTool.startStandaloneServerGuarded("Standalone", () -> { }, () -> { //$NON-NLS-1$
+            starts.incrementAndGet();
+            return null;
+        }));
+        assertEquals(1, starts.get());
     }
 
     @Test
@@ -679,7 +818,7 @@ public class LaunchToolTest
         ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
         String error = new LaunchTool().performLaunch(config, true, ExternalInfobaseChangesPolicy.DEFAULT);
         assertNull("successful headless launch must return null even with update auto-confirm", error);
-        Mockito.verify(config).launch(ILaunchManager.DEBUG_MODE, null);
+        Mockito.verify(config).launch(eq(ILaunchManager.DEBUG_MODE), isA(AttributableCancel.class));
     }
 
     // ============ alreadyRunning detects a live CLIENT session only ============
@@ -1233,6 +1372,26 @@ public class LaunchToolTest
         public IStatus startServer(Object server, String launchMode, Object monitor)
         {
             return status;
+        }
+    }
+
+    /** A service that exposes a port-conflict event while the direct start window is open. */
+    public static final class PortConflictingStandaloneStartService
+    {
+        public IStatus startServer(Object server, String launchMode, Object monitor)
+        {
+            try
+            {
+                Method method = LaunchUpdateDialogAutoConfirmer.class.getDeclaredMethod(
+                    "recordPortConflictForTest", String.class); //$NON-NLS-1$
+                method.setAccessible(true);
+                method.invoke(null, "8429 - HTTP gate port"); //$NON-NLS-1$
+                return Status.OK_STATUS;
+            }
+            catch (ReflectiveOperationException e)
+            {
+                throw new AssertionError(e);
+            }
         }
     }
 }

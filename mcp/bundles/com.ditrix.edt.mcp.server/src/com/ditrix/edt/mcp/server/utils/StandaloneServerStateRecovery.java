@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
@@ -74,6 +75,8 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  */
 public final class StandaloneServerStateRecovery
 {
+    private static final int ABANDONED_LAUNCH_STATUS_CODE = 0x4C4143;
+
     /**
      * EDT's refusal, verbatim and NOT localized (it is a hardcoded {@code IllegalStateException}
      * message in the standalone-server behaviour delegate, not a message bundle entry), so
@@ -248,6 +251,16 @@ public final class StandaloneServerStateRecovery
     public static ILaunch launchWithRecovery(ILaunchConfiguration config, String mode,
         IProgressMonitor monitor) throws CoreException
     {
+        return launchWithRecovery(config, mode, monitor,
+            () -> "Launch of '" + config.getName() + "' was abandoned by EDT " //$NON-NLS-1$ //$NON-NLS-2$
+                + "(the launch delegate cancelled it); no reason was logged. " //$NON-NLS-1$
+                + "Check the EDT error log."); //$NON-NLS-1$
+    }
+
+    /** Starts a launch and classifies abandonment while its stopped server can still be restored. */
+    public static ILaunch launchWithRecovery(ILaunchConfiguration config, String mode,
+        IProgressMonitor monitor, Supplier<String> abandonedMessage) throws CoreException
+    {
         Target target = resolveTarget(config);
         beginOperation();
         try
@@ -264,16 +277,21 @@ public final class StandaloneServerStateRecovery
             }
             try
             {
-                return config.launch(mode, monitor);
+                return launchOnce(config, mode, monitor, abandonedMessage);
             }
             catch (CoreException | RuntimeException e)
             {
+                if (e instanceof CoreException && isAbandonedLaunch((CoreException)e))
+                {
+                    throw e;
+                }
                 String refusal = refusalMessage(e);
                 if (refusal == null)
                 {
                     throw e;
                 }
-                return relaunchAfterStop(config, mode, monitor, e, refusal, target);
+                return relaunchAfterStop(config, mode, monitor, abandonedMessage, e, refusal,
+                    target);
             }
         }
         catch (CoreException failure)
@@ -283,8 +301,7 @@ public final class StandaloneServerStateRecovery
             {
                 throw failure;
             }
-            throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID, restored,
-                failure));
+            throw new CoreException(failureStatus(restored, failure));
         }
         catch (RuntimeException failure)
         {
@@ -302,6 +319,25 @@ public final class StandaloneServerStateRecovery
         }
     }
 
+    /** Runs one synchronous delegate call and rejects only a cancellation attributable to it. */
+    private static ILaunch launchOnce(ILaunchConfiguration config, String mode,
+        IProgressMonitor monitor, Supplier<String> abandonedMessage) throws CoreException
+    {
+        AttributableCancel attributable = new AttributableCancel(monitor);
+        ILaunch launch = config.launch(mode, attributable);
+        if (attributable.wasCanceledByLaunchingThread())
+        {
+            String message = abandonedMessage == null ? null : abandonedMessage.get();
+            if (message == null || message.isEmpty())
+            {
+                message = "The launch delegate cancelled the launch."; //$NON-NLS-1$
+            }
+            throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID,
+                ABANDONED_LAUNCH_STATUS_CODE, message, null));
+        }
+        return launch;
+    }
+
     /**
      * Stops the stale server and starts the launch again, once.
      *
@@ -316,7 +352,8 @@ public final class StandaloneServerStateRecovery
      * @throws CoreException when the server could not be stopped or the retry failed too
      */
     private static ILaunch relaunchAfterStop(ILaunchConfiguration config, String mode,
-        IProgressMonitor monitor, Exception failure, String refusal, Target target)
+        IProgressMonitor monitor, Supplier<String> abandonedMessage, Exception failure,
+        String refusal, Target target)
         throws CoreException
     {
         String applicationId = target.applicationId;
@@ -329,14 +366,30 @@ public final class StandaloneServerStateRecovery
         }
         try
         {
-            return config.launch(mode, monitor);
+            return launchOnce(config, mode, monitor, abandonedMessage);
         }
         catch (CoreException | RuntimeException retry)
         {
-            throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID,
-                staleStateError(applicationId, refusal, recovery, PlatformFailures.describe(retry)),
-                retry));
+            String message = staleStateError(applicationId, refusal, recovery,
+                PlatformFailures.describe(retry));
+            throw new CoreException(failureStatus(message, retry));
         }
+    }
+
+    /** Whether a failure represents a normal delegate return after its own cancellation. */
+    public static boolean isAbandonedLaunch(CoreException failure)
+    {
+        return failure != null && failure.getStatus() != null
+            && Activator.PLUGIN_ID.equals(failure.getStatus().getPlugin())
+            && failure.getStatus().getCode() == ABANDONED_LAUNCH_STATUS_CODE;
+    }
+
+    /** Preserves the abandonment classification while adding recovery detail. */
+    private static IStatus failureStatus(String message, Throwable failure)
+    {
+        int code = failure instanceof CoreException && isAbandonedLaunch((CoreException)failure)
+            ? ABANDONED_LAUNCH_STATUS_CODE : 0;
+        return new Status(IStatus.ERROR, Activator.PLUGIN_ID, code, message, failure);
     }
 
     /**

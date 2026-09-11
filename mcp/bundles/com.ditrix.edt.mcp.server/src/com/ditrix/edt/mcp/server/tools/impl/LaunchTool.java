@@ -6,8 +6,11 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
@@ -259,20 +262,18 @@ public class LaunchTool implements IMcpTool
             JsonUtils.extractStringArgument(params, KEY_STARTUP_OPTION),
             JsonUtils.extractStringArgument(params, KEY_EXTERNAL_OBJECT_PROJECT_NAME),
             JsonUtils.extractStringArgument(params, KEY_EXTERNAL_OBJECT_NAME));
-        // Validated up front, alongside the enum parses above and before EITHER launch mode: both
-        // of them can terminate a live client session and update the infobase on the way to the
-        // launch, and a mistyped external object must not cost the caller those.
-        LaunchOverrides.Prepared prepared = overrides.prepare();
-        if (prepared.errorJson != null)
-        {
-            return prepared.errorJson;
-        }
-
         // Target form 1: explicit config name — no project/application required.
         if (configName != null && !configName.isEmpty())
         {
             return launchByConfigName(configName, updateBeforeLaunch, restartIfRunning, policy,
-                portPolicy, overrides, prepared, mode);
+                portPolicy, overrides, mode);
+        }
+
+        // Validate before the project/application route can terminate a client or update data.
+        LaunchOverrides.Prepared prepared = overrides.prepare();
+        if (prepared.errorJson != null)
+        {
+            return prepared.errorJson;
         }
 
         // Target form 2: project + application (runtime-client only).
@@ -340,8 +341,7 @@ public class LaunchTool implements IMcpTool
      */
     private String launchByConfigName(String configName, boolean updateBeforeLaunch, // NOSONAR one argument per independent caller-visible decision; a parameter object would only rename them
         boolean restartIfRunning, ExternalInfobaseChangesPolicy policy,
-        StandaloneServerPortConflictPolicy portPolicy, LaunchOverrides overrides,
-        LaunchOverrides.Prepared prepared, String mode)
+        StandaloneServerPortConflictPolicy portPolicy, LaunchOverrides overrides, String mode)
     {
         try
         {
@@ -375,7 +375,20 @@ public class LaunchTool implements IMcpTool
 
             if (isStandaloneServerConfiguration(typeId))
             {
-                return launchStandaloneServer(config, typeId, configProject, mode);
+                String refusal = standaloneOverridesRefusal(config.getName(), overrides);
+                if (refusal != null)
+                {
+                    return refusal;
+                }
+                return launchStandaloneServer(config, typeId, configProject, mode, portPolicy);
+            }
+
+            // Validate after resolving the type so standalone configurations reject client-only
+            // parameters without trying to resolve an external object they cannot launch.
+            LaunchOverrides.Prepared prepared = overrides.prepare();
+            if (prepared.errorJson != null)
+            {
+                return prepared.errorJson;
             }
 
             if (isAttach && MODE_RUN.equals(mode))
@@ -512,9 +525,39 @@ public class LaunchTool implements IMcpTool
         return LaunchConfigUtils.STANDALONE_SERVER_LAUNCH_CONFIG_TYPE_ID.equals(typeId);
     }
 
+    /** Refuses parameters that require a runtime client before a standalone server is started. */
+    static String standaloneOverridesRefusal(String configName, LaunchOverrides overrides)
+    {
+        if (overrides == null || overrides.isEmpty())
+        {
+            return null;
+        }
+        List<String> parameters = new ArrayList<>();
+        if (!LaunchOverrides.blank(overrides.startupOption()))
+        {
+            parameters.add(KEY_STARTUP_OPTION);
+        }
+        if (!LaunchOverrides.blank(overrides.externalObjectProjectName()))
+        {
+            parameters.add(KEY_EXTERNAL_OBJECT_PROJECT_NAME);
+        }
+        if (!LaunchOverrides.blank(overrides.externalObjectName()))
+        {
+            parameters.add(KEY_EXTERNAL_OBJECT_NAME);
+        }
+        String names = parameters.stream().map(name -> "'" + name + "'") //$NON-NLS-1$ //$NON-NLS-2$
+            .collect(java.util.stream.Collectors.joining(", ")); //$NON-NLS-1$
+        String subject = parameters.size() == 1 ? "Parameter " : "Parameters "; //$NON-NLS-1$ //$NON-NLS-2$
+        String remove = parameters.size() == 1 ? "Remove it" : "Remove them"; //$NON-NLS-1$ //$NON-NLS-2$
+        return ToolResult.error(subject + names + " cannot be used with standalone-server " //$NON-NLS-1$
+            + "launch configuration '" + configName + "' because a standalone server starts " //$NON-NLS-1$ //$NON-NLS-2$
+            + "no client. " + remove + " or use a runtime-client configuration.") //$NON-NLS-1$ //$NON-NLS-2$
+            .toJson();
+    }
+
     /** Starts a standalone server through its self-contained EDT service operation. */
     private String launchStandaloneServer(ILaunchConfiguration config, String typeId,
-        String projectName, String requestedMode)
+        String projectName, String requestedMode, StandaloneServerPortConflictPolicy portPolicy)
     {
         String configName = config.getName();
         ProjectContext context = ProjectContext.of(projectName);
@@ -573,13 +616,35 @@ public class LaunchTool implements IMcpTool
                 "the application's standalone server could not be resolved"); //$NON-NLS-1$
         }
 
-        String failure = startStandaloneServerBounded(service, server, configName,
-            eclipseLaunchMode(requestedMode));
-        if (failure != null)
+        StandaloneServerPortConflictPolicy launchPortPolicy =
+            standaloneServerPortPolicy(config, portPolicy);
+        String startError = startStandaloneServerGuarded(configName,
+            () -> StandaloneServerStateRecovery.ensureStartable(context.project(), application,
+                applicationId),
+            () -> startStandaloneServerWithPolicy(service, server, configName,
+                eclipseLaunchMode(requestedMode), launchInfobaseName(config),
+                launchServerName(config), launchPortPolicy));
+        if (startError != null)
         {
-            return standaloneAttemptError(configName, failure);
+            return startError;
         }
         return standaloneStartSuccess(configName, typeId, projectName, applicationId);
+    }
+
+    /** Runs stale-state recovery before dispatching the standalone service start. */
+    static String startStandaloneServerGuarded(String configName, Runnable preflight,
+        Supplier<String> starter)
+    {
+        try
+        {
+            preflight.run();
+        }
+        catch (ApplicationException e)
+        {
+            return standalonePreconditionError(configName, PlatformFailures.describe(e));
+        }
+        String failure = starter.get();
+        return failure == null ? null : standaloneAttemptError(configName, failure);
     }
 
     /** Builds the completed standalone-server result with EDT's effective DEBUG mode. */
@@ -618,6 +683,32 @@ public class LaunchTool implements IMcpTool
             return status[0].isOK() ? null : PlatformFailures.describeStatus(status[0]);
         }
         return StandaloneServerSupport.startFailureReason(result);
+    }
+
+    /** Arms the targeted port-conflict answer while the bounded service start is running. */
+    static String startStandaloneServerWithPolicy(Object service, Object server, String configName,
+        String launchMode, String infobaseName, String serverName,
+        StandaloneServerPortConflictPolicy portPolicy)
+    {
+        LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = portPolicy == null
+            ? null : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName, serverName);
+        LaunchUpdateDialogAutoConfirmer.arm(false, false, false, null, infobaseName, portPolicy,
+            serverName);
+        try
+        {
+            String failure = startStandaloneServerBounded(service, server, configName, launchMode);
+            String conflict = declinedConflictMessage(null, conflicts);
+            return conflict == null ? failure : conflict;
+        }
+        finally
+        {
+            LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, null, infobaseName,
+                portPolicy, serverName);
+            if (conflicts != null)
+            {
+                conflicts.close();
+            }
+        }
     }
 
     /** Builds a precondition error without suggesting an inapplicable thin-client fallback. */
@@ -1367,7 +1458,7 @@ public class LaunchTool implements IMcpTool
      * @param requested the policy the caller passed (may be {@code null})
      * @return the policy to arm with, or {@code null} to leave the matcher unarmed
      */
-    private static StandaloneServerPortConflictPolicy standaloneServerPortPolicy(
+    static StandaloneServerPortConflictPolicy standaloneServerPortPolicy(
         ILaunchConfiguration config, StandaloneServerPortConflictPolicy requested)
     {
         if (requested == null || config == null)
@@ -1733,7 +1824,7 @@ public class LaunchTool implements IMcpTool
         LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = policy == null
             ? null
             : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase, launchServer);
-        LaunchAbortReason abortReason = LaunchAbortReason.open();
+        LaunchAbortReason abortReason = LaunchAbortReason.open(launchInfobase);
         LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, debugMode,
             autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy, launchServer);
         // Keep the infobase auth-dialog suppression active for the WHOLE async launch
@@ -1750,7 +1841,8 @@ public class LaunchTool implements IMcpTool
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
-            StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, monitor);
+            StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, monitor,
+                () -> abandonedLaunchMessage(config.getName(), abortReason.reason()));
             String declined = declinedConflictMessage(launchPolicy, conflicts);
             if (declined != null)
             {
@@ -1760,15 +1852,6 @@ public class LaunchTool implements IMcpTool
                 Activator.logError(ERR_ASYNC_PREFIX + declined, null);
                 // The launch itself did not throw, but the update inside it wrote nothing.
                 return new Status(IStatus.ERROR, Activator.PLUGIN_ID, declined);
-            }
-            if (monitor != null && monitor.isCanceled())
-            {
-                String message = appendAccessSettingsDialogFailure(
-                    abandonedLaunchMessage(config.getName(), abortReason.reason()),
-                    accessDialogsBefore, InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
-                recordAsyncFailure(config, message);
-                Activator.logError(ERR_ASYNC_PREFIX + message, null);
-                return new Status(IStatus.ERROR, Activator.PLUGIN_ID, message);
             }
             return Status.OK_STATUS;
         }
@@ -1786,6 +1869,14 @@ public class LaunchTool implements IMcpTool
                 recordAsyncFailure(config, declined);
                 Activator.logError(ERR_ASYNC_PREFIX + e.getMessage(), e);
                 return new Status(IStatus.ERROR, Activator.PLUGIN_ID, declined, e);
+            }
+            if (StandaloneServerStateRecovery.isAbandonedLaunch(e))
+            {
+                String message = appendAccessSettingsDialogFailure(e.getMessage(),
+                    accessDialogsBefore, InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
+                recordAsyncFailure(config, message);
+                Activator.logError(ERR_ASYNC_PREFIX + message, e);
+                return new Status(IStatus.ERROR, Activator.PLUGIN_ID, message, e);
             }
             String recorded = appendAccessSettingsDialogFailure(ERR_ASYNC_PREFIX + e.getMessage(),
                 accessDialogsBefore, InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
