@@ -13,6 +13,10 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.Test;
 
@@ -178,6 +182,35 @@ public class ReadModuleSourceToolTest
     {
         // MARKDOWN tools return content, not structuredContent → no output schema.
         assertNull(new ReadModuleSourceTool().getOutputSchema());
+    }
+
+    @Test
+    public void boundedFooterWaitReturnsTheComputedValue()
+    {
+        AtomicReference<String> value = new AtomicReference<>();
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicBoolean deadlineElapsed = new AtomicBoolean();
+        Thread computation = new Thread(() -> {
+            value.set("footer"); //$NON-NLS-1$
+            finished.countDown();
+        });
+        computation.start();
+
+        assertEquals("footer", ReadModuleSourceTool.awaitComputedValue( //$NON-NLS-1$
+            value, finished, 1, TimeUnit.SECONDS, deadlineElapsed));
+        assertFalse(deadlineElapsed.get());
+    }
+
+    @Test
+    public void boundedFooterWaitReturnsNullAtTheDeadline()
+    {
+        AtomicReference<String> value = new AtomicReference<>("late footer"); //$NON-NLS-1$
+        CountDownLatch unfinished = new CountDownLatch(1);
+        AtomicBoolean deadlineElapsed = new AtomicBoolean();
+
+        assertNull(ReadModuleSourceTool.awaitComputedValue(
+            value, unfinished, 1, TimeUnit.MILLISECONDS, deadlineElapsed));
+        assertTrue(deadlineElapsed.get());
     }
 
     // ==================== Required parameter validation ====================

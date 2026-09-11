@@ -27,6 +27,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -44,7 +45,9 @@ import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.platform.services.model.InfobaseAccess;
+import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.StoreResult;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 
 /**
@@ -64,6 +67,16 @@ import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
  */
 public class SetInfobaseCredentialsToolTest
 {
+    private static final String INFOBASE_UUID = "eb53270d-489b-4f58-9f22-ae7fd9426bc9"; //$NON-NLS-1$
+
+    private static InfobaseReference storedFor()
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        when(ref.getName()).thenReturn("Main infobase"); //$NON-NLS-1$
+        when(ref.getUuid()).thenReturn(UUID.fromString(INFOBASE_UUID));
+        return ref;
+    }
+
     /** Reflective baseline-safe access to the new launch-target resolution seam. */
     private static Object resolveLaunchTarget(ILaunchConfiguration config,
             BiFunction<ILaunchConfiguration, String, String> applicationIdResolver)
@@ -212,6 +225,12 @@ public class SetInfobaseCredentialsToolTest
         assertTrue("outputSchema must declare user", schema.contains("\"user\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must declare access", schema.contains("\"access\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must declare passwordSet", schema.contains("\"passwordSet\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("outputSchema must declare the UUID-keyed storage target", //$NON-NLS-1$
+            schema.contains("\"storedFor\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare the three-state verification outcome", //$NON-NLS-1$
+            schema.contains("\"verification\"") && schema.contains("not_verifiable")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("outputSchema must expose only a boolean password comparison", //$NON-NLS-1$
+            schema.contains("\"passwordMatched\"")); //$NON-NLS-1$
         assertTrue("outputSchema must declare clientConfigured (issue #359): the caller has no " //$NON-NLS-1$
             + "other way to tell whether the launched client was covered", //$NON-NLS-1$
             schema.contains("\"clientConfigured\"")); //$NON-NLS-1$
@@ -324,11 +343,11 @@ public class SetInfobaseCredentialsToolTest
 
         Method buildSuccess = SetInfobaseCredentialsTool.class.getDeclaredMethod("buildSuccess", //$NON-NLS-1$
             String.class, String.class, boolean.class, String.class, String.class,
-            boolean.class, InfobaseAccess.class, String.class, String.class);
+            boolean.class, InfobaseAccess.class, StoreResult.class, String.class, String.class);
         buildSuccess.setAccessible(true);
         String success = (String)buildSuccess.invoke(null, "B", "app-derived", true, //$NON-NLS-1$ //$NON-NLS-2$
             "Infobase B", "Admin", true, InfobaseAccess.INFOBASE, //$NON-NLS-1$ //$NON-NLS-2$
-            "B Thin Client", null); //$NON-NLS-1$
+            StoreResult.verified(storedFor()), "B Thin Client", null); //$NON-NLS-1$
         assertTrue("the caller must see exactly which application the tool derived", //$NON-NLS-1$
             success.contains("project-default application 'app-derived' was derived for project 'B'")); //$NON-NLS-1$
     }
@@ -648,7 +667,7 @@ public class SetInfobaseCredentialsToolTest
         // now work", ran the tests, and got the platform's login dialog. With no launch
         // configuration named, the answer has to say the client is NOT covered and how to cover it.
         String json = SetInfobaseCredentialsTool.buildSuccess("TestProject", "app1", "My Infobase", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            "Admin", true, InfobaseAccess.INFOBASE, null, null); //$NON-NLS-1$
+            "Admin", true, InfobaseAccess.INFOBASE, StoreResult.verified(storedFor()), null, null); //$NON-NLS-1$
 
         assertTrue("clientConfigured must be false with no launch configuration named", //$NON-NLS-1$
             json.contains("\"clientConfigured\":false")); //$NON-NLS-1$
@@ -656,13 +675,19 @@ public class SetInfobaseCredentialsToolTest
             json.contains("NOT covered")); //$NON-NLS-1$
         assertTrue("the message must name the way to cover it: " + json, //$NON-NLS-1$
             json.contains("launchConfigurationName")); //$NON-NLS-1$
+        assertTrue(json.contains("\"storedFor\"")); //$NON-NLS-1$
+        assertTrue(json.contains("\"name\":\"Main infobase\"")); //$NON-NLS-1$
+        assertTrue(json.contains("\"uuid\":\"" + INFOBASE_UUID + "\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(json.contains("\"verification\":\"verified\"")); //$NON-NLS-1$
+        assertTrue(json.contains("\"passwordMatched\":true")); //$NON-NLS-1$
+        assertFalse(json.contains("will now authenticate")); //$NON-NLS-1$
     }
 
     @Test
     public void successReportsTheClientAsConfiguredWhenTheLaunchConfigWasUpdated()
     {
         String json = SetInfobaseCredentialsTool.buildSuccess("TestProject", "app1", "My Infobase", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            "Admin", true, InfobaseAccess.INFOBASE, CONFIG_NAME, null); //$NON-NLS-1$
+            "Admin", true, InfobaseAccess.INFOBASE, StoreResult.verified(storedFor()), CONFIG_NAME, null); //$NON-NLS-1$
 
         assertTrue("clientConfigured must be true once the launch config was updated", //$NON-NLS-1$
             json.contains("\"clientConfigured\":true")); //$NON-NLS-1$
@@ -675,13 +700,51 @@ public class SetInfobaseCredentialsToolTest
         // The agent-side credentials committed, so this is still a success - but claiming the
         // client is configured when its write failed is exactly the lie this field exists to stop.
         String json = SetInfobaseCredentialsTool.buildSuccess("TestProject", "app1", "My Infobase", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            "Admin", true, InfobaseAccess.INFOBASE, CONFIG_NAME, "launch config is read-only"); //$NON-NLS-1$ //$NON-NLS-2$
+            "Admin", true, InfobaseAccess.INFOBASE, StoreResult.verified(storedFor()), CONFIG_NAME, //$NON-NLS-1$
+            "launch config is read-only"); //$NON-NLS-1$
 
         assertTrue("a failed client write is NOT a configured client", //$NON-NLS-1$
             json.contains("\"clientConfigured\":false")); //$NON-NLS-1$
         assertTrue("the message must carry the reason: " + json, json.contains("read-only")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("the message must point at the manual fix: " + json, //$NON-NLS-1$
             json.contains("Client application user")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void mismatchProducesAnErrorWithoutReturningThePassword()
+    {
+        StoreResult mismatch = StoreResult.mismatched(
+            "Requested access=INFOBASE, user='Admin', passwordSet=true; read back access=OS, " //$NON-NLS-1$
+                + "user='Other', passwordSet=true, passwordMatched=false.", false, storedFor()); //$NON-NLS-1$
+
+        String json = SetInfobaseCredentialsTool.buildVerificationError(
+            "TestProject", "app1", mismatch); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(json.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue(json.contains("\"verification\":\"mismatched\"")); //$NON-NLS-1$
+        assertTrue(json.contains("\"passwordMatched\":false")); //$NON-NLS-1$
+        assertTrue(json.contains("access=INFOBASE")); //$NON-NLS-1$
+        assertTrue(json.contains("access=OS")); //$NON-NLS-1$
+        assertTrue(json.contains("user='Admin'")); //$NON-NLS-1$
+        assertTrue(json.contains("user='Other'")); //$NON-NLS-1$
+        assertFalse(json.contains("secret-value")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void defaultShapeSuccessNamesWhyItCannotBeVerified()
+    {
+        StoreResult notVerifiable = StoreResult.notVerifiable(
+            "OS access with an empty user and empty password is also EDT's default fallback, " //$NON-NLS-1$
+                + "so the read-back cannot prove that a stored entry exists.", storedFor()); //$NON-NLS-1$
+
+        String json = SetInfobaseCredentialsTool.buildSuccess("TestProject", "app1", //$NON-NLS-1$ //$NON-NLS-2$
+            "My Infobase", "", false, InfobaseAccess.OS, notVerifiable, null, null); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(json.contains("\"verification\":\"not_verifiable\"")); //$NON-NLS-1$
+        assertTrue(json.contains("default fallback")); //$NON-NLS-1$
+        assertFalse(json.contains("\"passwordMatched\"")); //$NON-NLS-1$
+        assertFalse(json.contains("Stored infobase access credentials")); //$NON-NLS-1$
+        assertFalse(json.contains("secret-value")); //$NON-NLS-1$
     }
 
     @Test

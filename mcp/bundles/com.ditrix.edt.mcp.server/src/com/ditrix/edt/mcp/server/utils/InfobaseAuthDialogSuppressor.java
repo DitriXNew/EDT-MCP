@@ -11,6 +11,7 @@ import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.SWTException;
@@ -175,6 +176,8 @@ public final class InfobaseAuthDialogSuppressor
      */
     static final AtomicInteger IN_FLIGHT = new AtomicInteger();
 
+    private static final AtomicLong ACCESS_SETTINGS_AUTO_CANCELLED = new AtomicLong();
+
     /**
      * {@link System#currentTimeMillis()} of the most recent {@link #markActivityEnd()}. Combined with
      * {@link #DEFAULT_ACTIVITY_GRACE_MILLIS} it bridges the gap to an asynchronous read-back Job's
@@ -222,6 +225,32 @@ public final class InfobaseAuthDialogSuppressor
             IN_FLIGHT.set(0);
         }
         lastActivityEndMillis = System.currentTimeMillis();
+    }
+
+    /** Returns the number of access-settings dialogs this process has auto-cancelled. */
+    public static long accessSettingsAutoCancelCount()
+    {
+        return ACCESS_SETTINGS_AUTO_CANCELLED.get();
+    }
+
+    /** Returns the diagnostic sentence when the access-settings counter moved in the interval. */
+    public static String accessSettingsDialogFailureNote(long before, long after)
+    {
+        if (before < 0 || after <= before)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        return "EDT raised its infobase access-settings dialog while this call ran and it was " //$NON-NLS-1$
+            + "auto-cancelled, which means the stored credentials were missing or refused — set " //$NON-NLS-1$
+            + "them with set_infobase_credentials."; //$NON-NLS-1$
+    }
+
+    static void recordAutoCancelledDialog(boolean hintDialog)
+    {
+        if (!hintDialog)
+        {
+            ACCESS_SETTINGS_AUTO_CANCELLED.incrementAndGet();
+        }
     }
 
     /**
@@ -440,6 +469,7 @@ public final class InfobaseAuthDialogSuppressor
                     + "set_infobase_credentials)"); //$NON-NLS-1$
             }
             shell.close();
+            recordAutoCancelledDialog(isHint);
         }
         catch (RuntimeException e)
         {

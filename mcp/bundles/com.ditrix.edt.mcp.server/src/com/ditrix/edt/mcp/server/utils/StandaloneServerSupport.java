@@ -50,6 +50,9 @@ public final class StandaloneServerSupport
     /** Application type id of a standalone (WST) server application. */
     public static final String WST_SERVER_APP_TYPE = "com.e1c.g5.dt.applications.type.wst-server"; //$NON-NLS-1$
 
+    /** Start and stop share this bound because both are self-contained EDT server operations. */
+    public static final long SERVER_OPERATION_TIMEOUT_MS = 60_000L;
+
     /** Symbolic name of the bundle that owns the standalone-server WST service. */
     private static final String WST_CORE_BUNDLE_ID =
         "com.e1c.g5.v8.dt.platform.standaloneserver.wst.core"; //$NON-NLS-1$
@@ -186,6 +189,62 @@ public final class StandaloneServerSupport
             }
             throw new IllegalStateException(cause != null ? cause : ite);
         }
+    }
+
+    /** Reflectively calls the standalone-server service's three-argument start operation. */
+    public static IStatus startServer(Object service, Object server, String launchMode,
+        IProgressMonitor monitor) throws Exception
+    {
+        Method start = findMethod(service.getClass(), "startServer", 3); //$NON-NLS-1$
+        if (start == null)
+        {
+            Activator.logError("standalone-server: IStandaloneServerService.startServer not found", null); //$NON-NLS-1$
+            return new Status(IStatus.ERROR, PLUGIN_ID,
+                "IStandaloneServerService.startServer(IServer, String, IProgressMonitor) was not " //$NON-NLS-1$
+                    + "found in this EDT — the standalone-server API may have changed."); //$NON-NLS-1$
+        }
+        try
+        {
+            Object status = start.invoke(service, server, launchMode, monitor);
+            return (status instanceof IStatus) ? (IStatus)status : null;
+        }
+        catch (InvocationTargetException ite)
+        {
+            Throwable cause = ite.getCause();
+            if (cause instanceof Exception)
+            {
+                throw (Exception)cause;
+            }
+            if (cause instanceof Error)
+            {
+                throw (Error)cause;
+            }
+            throw new IllegalStateException(cause != null ? cause : ite);
+        }
+    }
+
+    /** Describes an unsuccessful bounded start without hiding an operation still in flight. */
+    public static String startFailureReason(BoundedJob.Result result)
+    {
+        BoundedJob.Outcome outcome = result.getOutcome();
+        switch (outcome)
+        {
+        case TIMED_OUT:
+            return "starting it did not finish within " //$NON-NLS-1$
+                + (SERVER_OPERATION_TIMEOUT_MS / 1000) + "s and may still be running"; //$NON-NLS-1$
+        case TIMED_OUT_BEFORE_START:
+            return "the bounded start timed out before it began"; //$NON-NLS-1$
+        case INTERRUPTED:
+            return "the wait for the standalone-server start was interrupted; " //$NON-NLS-1$
+                + "the start may still be running"; //$NON-NLS-1$
+        default:
+            break;
+        }
+        if (result.getFailure() != null)
+        {
+            return PlatformFailures.describe(result.getFailure());
+        }
+        return "the standalone-server start did not run (" + outcome + ")"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

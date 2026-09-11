@@ -265,6 +265,94 @@ public class StandaloneServerStateRecoveryTest
             StandaloneServerStateRecovery.Recovery.failedInFlight("x").recovered());
     }
 
+    @Test
+    public void testNoRestorationMessageWhenThisOperationStoppedNothing()
+    {
+        int[] restores = new int[1];
+        StandaloneServerStateRecovery.beginOperation();
+        try
+        {
+            String message = StandaloneServerStateRecovery.appendRestoration("operation failed", //$NON-NLS-1$
+                "Standalone", applicationId -> { //$NON-NLS-1$
+                    restores[0]++;
+                    return null;
+                });
+            assertNull(message);
+            assertEquals(0, restores[0]);
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.endOperation();
+        }
+    }
+
+    @Test
+    public void testSuccessfulRestoreIsAppendedExactly()
+    {
+        int[] restores = new int[1];
+        StandaloneServerStateRecovery.beginOperation();
+        try
+        {
+            StandaloneServerStateRecovery.recordStoppedServer("ServerApplication.Test"); //$NON-NLS-1$
+            String message = StandaloneServerStateRecovery.appendRestoration("operation failed.", //$NON-NLS-1$
+                "Standalone", applicationId -> { //$NON-NLS-1$
+                    restores[0]++;
+                    return null;
+                });
+            assertEquals("operation failed. The standalone server 'ServerApplication.Test' was " //$NON-NLS-1$
+                + "stopped for this operation and has been started again.", message); //$NON-NLS-1$
+            assertEquals(1, restores[0]);
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.endOperation();
+        }
+    }
+
+    @Test
+    public void testFailedRestoreIsAppendedExactly()
+    {
+        int[] restores = new int[1];
+        StandaloneServerStateRecovery.beginOperation();
+        try
+        {
+            StandaloneServerStateRecovery.recordStoppedServer("ServerApplication.Test"); //$NON-NLS-1$
+            String message = StandaloneServerStateRecovery.appendRestoration("operation failed.", //$NON-NLS-1$
+                "Standalone for Test", applicationId -> { //$NON-NLS-1$
+                    restores[0]++;
+                    return "ports are busy"; //$NON-NLS-1$
+                });
+            assertEquals("operation failed. The standalone server 'ServerApplication.Test' was " //$NON-NLS-1$
+                + "stopped for this operation and could NOT be started again: ports are busy. " //$NON-NLS-1$
+                + "Start it with launch(launchConfigurationName='Standalone for Test').", message); //$NON-NLS-1$
+            assertEquals(1, restores[0]);
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.endOperation();
+        }
+    }
+
+    @Test
+    public void testStoppedServerRecordDoesNotLeakIntoTheNextOperation()
+    {
+        StandaloneServerStateRecovery.beginOperation();
+        StandaloneServerStateRecovery.recordStoppedServer("ServerApplication.First"); //$NON-NLS-1$
+        StandaloneServerStateRecovery.endOperation();
+
+        StandaloneServerStateRecovery.beginOperation();
+        try
+        {
+            String message = StandaloneServerStateRecovery.appendRestoration("second failed", //$NON-NLS-1$
+                "Second", applicationId -> null); //$NON-NLS-1$
+            assertNull(message);
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.endOperation();
+        }
+    }
+
     /** A WST server as the pre-flight addresses it: by the two public accessors it reads. */
     public static final class FakeServer
     {

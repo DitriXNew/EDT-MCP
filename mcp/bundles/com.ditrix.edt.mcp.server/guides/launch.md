@@ -1,4 +1,4 @@
-Starts a 1C application through EDT in debug mode (default) or regular run mode. There are two ways to select the launch configuration, plus an idempotency guard that prevents a second client over a session that is already alive.
+Starts a 1C application through EDT in debug mode (default) or regular run mode. A named standalone-server configuration starts its server directly through EDT's server service. There are two ways to select the launch configuration, plus an idempotency guard that prevents a second client over a session that is already alive.
 
 ## When to use
 
@@ -6,12 +6,12 @@ Use `mode="run"` for the same regular launch as EDT's green Run button. Omit `mo
 
 ## Target selection (choose ONE)
 
-1. **launchConfigurationName** — start an existing EDT launch configuration by its EXACT name. Works for both runtime-client configs (spawns 1cv8c) AND Attach configs (attaches to ragent/rphost for server-side code). Does NOT require applicationId. This is the only mode that can start an Attach session.
+1. **launchConfigurationName** — start an existing EDT launch configuration by its EXACT name. Runtime-client configs spawn 1cv8c, Attach configs connect to ragent/rphost for server-side code, and standalone-server configs start their server through EDT's standalone-server service. Does NOT require applicationId. This is the only mode that can start an Attach session or directly start a standalone server.
 2. **projectName + applicationId** — searches the runtime-client configs of that project for a match and launches it. Runtime-client only; cannot reach an Attach config. Get the applicationId from `get_applications`.
 
 ## Parameter details
 
-- **mode** (`debug` or `run`, default `debug`) — chooses the EDT launch mode. `debug` starts or attaches a debugger; `run` performs a regular non-debug runtime-client launch. Attach configurations support `debug` only. The response echoes the selected mode.
+- **mode** (`debug` or `run`, default `debug`) — chooses the EDT launch mode. `debug` starts or attaches a debugger; `run` performs a regular non-debug runtime-client launch. Attach configurations support `debug` only. EDT's standalone-server service always starts a server in DEBUG mode even when `run` was requested, so a standalone-server result reports the effective `mode: "debug"` instead of echoing the request.
 - **launchConfigurationName** (string) — exact config name; if set, projectName and applicationId are ignored. Use `list_configurations` to find the name.
 - **projectName** (string) — EDT project name; required when launchConfigurationName is absent.
 - **applicationId** (string) — from `get_applications`; required in the projectName+applicationId mode.
@@ -78,13 +78,15 @@ If the unlikely preflight→launch race still lets the 1003 modal appear during 
 - Regular run by name: `launchConfigurationName="MyApp / ThinClient"`, `mode="run"`.
 - Debug runtime client by name (default mode): `launchConfigurationName="MyApp / ThinClient"`.
 - Attach to debug server-side code: `launchConfigurationName="Attach to 1C:Enterprise Debug Server"`, `mode="debug"`.
+- Start a standalone server directly: `launchConfigurationName="Standalone server for MyApp"` (the completed result reports `mode: "debug"`).
 - Regular run by project + app: `projectName="MyProject"`, `applicationId="<id from get_applications>"`, `mode="run"`.
 - Skip the DB update: add `updateBeforeLaunch=false`.
 
 ## Notes
 
-- Returns JSON. On a fresh launch: `launchConfiguration`, `configurationType`, `attach`, `mode`, `status: "launching"`, `project`/`applicationId` (when known), and a `message`. The `alreadyRunning: true` short-circuit returns the same identity fields but no `status` (nothing was launched).
-- The launch is ASYNCHRONOUS and non-blocking: the tool schedules `config.launch(DEBUG_MODE, ...)` for `mode="debug"` or `config.launch(RUN_MODE, ...)` for `mode="run"` as a **background EDT Job** (the same shape EDT's own launch UI uses) and returns `status: "launching"` immediately, WITHOUT waiting for the 1C client to finish starting (it may show login / database-update dialogs). Because the launch runs OFF the UI thread, the EDT workbench stays responsive for its whole duration — including a standalone-server mode-switch restart, which can take minutes; the job's progress is visible in the EDT **Progress view**. Poll `debug_status` until the session appears running; for debug mode, then use `wait_for_break`. Because the launch runs after the call returns, a launch failure is NOT reported in this response — it is recorded and surfaced by the NEXT `debug_status` call as `recentLaunchFailures` (last hour), besides going to the EDT error log and the job's result status. That covers both an outright launch exception and an external-changes conflict your `externalInfobaseChanges` policy declined to resolve while EDT updated the infobase inside the launch — the standalone-server path, where that update is the launch delegate's job rather than the pre-launch step.
+- Returns JSON. On a fresh runtime-client or Attach launch: `launchConfiguration`, `configurationType`, `attach`, `mode`, `status: "launching"`, `project`/`applicationId` (when known), and a `message`. A completed direct standalone-server start reports `status: "running"` and effective `mode: "debug"`. The `alreadyRunning: true` client short-circuit returns the same identity fields but no `status` (nothing was launched).
+- Runtime-client and Attach launches are ASYNCHRONOUS and non-blocking: the tool schedules `config.launch(DEBUG_MODE, ...)` for `mode="debug"` or `config.launch(RUN_MODE, ...)` for `mode="run"` as a **background EDT Job** (the same shape EDT's own launch UI uses) and returns `status: "launching"` immediately, WITHOUT waiting for the 1C client to finish starting. The workbench stays responsive and the job remains visible in the **Progress view**. Poll `debug_status` until the session appears running; for debug mode, then use `wait_for_break`. A direct standalone-server start instead uses EDT's self-contained start operation and waits for its real status under a 60-second bound.
+- Because an asynchronous launch runs after the call returns, a later launch failure is recorded and surfaced by the NEXT `debug_status` call as `recentLaunchFailures` (last hour), besides going to the EDT error log and the job's result status. This includes a delegate that returns normally after cancelling its progress monitor: the reported failure says EDT abandoned the launch and includes the last relevant EDT error logged during it, when one was available.
 - On a not-found config the error payload includes `availableConfigurations` (every debug-capable config: runtime client + attach), so you can pick a valid name.
 - The launch goes through a direct `config.launch(...)` with the selected mode to avoid modal EDT dialogs that would block the MCP worker thread. While the background job runs, an auto-confirmer (`LaunchUpdateDialogAutoConfirmer`) is armed to dismiss the launch delegate's 'Application update' modal non-interactively; the delegate's dialogs marshal themselves to the EDT UI thread, where the confirmer's filter fires (the modal's own nested event loop dispatches the button press), and because the MCP worker has already returned `status: "launching"`, the server is never blocked on the dialog.
 
@@ -142,4 +144,6 @@ The state is therefore settled BEFORE the launch: a STARTED server with a live l
 alone, one whose launch is gone is stopped through EDT's own application lifecycle, and a
 STARTING/STOPPING one is waited for (bounded, 30s) rather than stopped underneath the operation
 holding it. A refusal that still arrives is repaired the same way and the launch retried ONCE. See
-the `update_database` guide for the full description.
+the `update_database` guide for the full description. If this recovery stopped a server and the
+operation then fails, it makes one attempt to start that same server again and appends the restore
+outcome to the failure; a server this operation did not stop is never restored or disturbed.

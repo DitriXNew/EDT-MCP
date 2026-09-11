@@ -13,6 +13,7 @@ import org.eclipse.core.runtime.Platform;
 import org.osgi.framework.Bundle;
 
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager;
+import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessSettings;
 import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAccessSettings;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseAccess;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
@@ -54,6 +55,103 @@ public final class InfobaseAccessSupport
 
     private InfobaseAccessSupport()
     {
+    }
+
+    /** The result of storing settings and reading them back through the consumer-facing resolver. */
+    public static final class StoreResult
+    {
+        /** The three possible conclusions of the read-back. */
+        public enum Verification
+        {
+            VERIFIED,
+            MISMATCHED,
+            NOT_VERIFIABLE
+        }
+
+        private final String error;
+        private final Verification verification;
+        private final String verificationReason;
+        private final Boolean passwordMatched;
+        private final String storedForName;
+        private final String storedForUuid;
+
+        private StoreResult(String error, Verification verification, String verificationReason,
+                Boolean passwordMatched, InfobaseReference ref)
+        {
+            this.error = error;
+            this.verification = verification;
+            this.verificationReason = verificationReason;
+            this.passwordMatched = passwordMatched;
+            String name = ""; //$NON-NLS-1$
+            String uuid = ""; //$NON-NLS-1$
+            try
+            {
+                if (ref != null)
+                {
+                    name = ref.getName() == null ? "" : ref.getName(); //$NON-NLS-1$
+                    uuid = ref.getUuid() == null ? "" : ref.getUuid().toString(); //$NON-NLS-1$
+                }
+            }
+            catch (RuntimeException e)
+            {
+                name = ""; //$NON-NLS-1$
+                uuid = ""; //$NON-NLS-1$
+            }
+            storedForName = name;
+            storedForUuid = uuid;
+        }
+
+        public String error()
+        {
+            return error;
+        }
+
+        public Verification verification()
+        {
+            return verification;
+        }
+
+        public String verificationReason()
+        {
+            return verificationReason;
+        }
+
+        public Boolean passwordMatched()
+        {
+            return passwordMatched;
+        }
+
+        public String storedForName()
+        {
+            return storedForName;
+        }
+
+        public String storedForUuid()
+        {
+            return storedForUuid;
+        }
+
+        private static StoreResult failed(String error, InfobaseReference ref)
+        {
+            return new StoreResult(error, null, null, null, ref);
+        }
+
+        public static StoreResult verified(InfobaseReference ref)
+        {
+            return new StoreResult(null, Verification.VERIFIED, null, Boolean.TRUE, ref);
+        }
+
+        public static StoreResult mismatched(String reason, boolean passwordMatched,
+                InfobaseReference ref)
+        {
+            return new StoreResult(null, Verification.MISMATCHED, reason,
+                Boolean.valueOf(passwordMatched), ref);
+        }
+
+        public static StoreResult notVerifiable(String reason, InfobaseReference ref)
+        {
+            return new StoreResult(null, Verification.NOT_VERIFIABLE, reason, null, ref);
+        }
     }
 
     /**
@@ -132,11 +230,9 @@ public final class InfobaseAccessSupport
      * @param user the infobase user name (empty allowed — demo bases use an empty password user)
      * @param password the infobase user password (empty allowed)
      * @param access the access kind (INFOBASE = 1C user auth, OS = OS auth)
-     * @return {@code null} on success, otherwise an actionable error message describing why the
-     *         credentials could not be stored (no infobase reference could be resolved for this
-     *         application, access manager unavailable, or the {@code updateSettings} call failed)
+     * @return the store and consumer-facing read-back result
      */
-    public static String storeCredentials(IApplication application, String user, String password,
+    public static StoreResult storeCredentials(IApplication application, String user, String password,
             InfobaseAccess access)
     {
         InfobaseReference ref = resolveInfobaseReference(application);
@@ -144,9 +240,9 @@ public final class InfobaseAccessSupport
         {
             return storeCredentials(ref, user, password, access);
         }
-        return "Application '" + application.getId() //$NON-NLS-1$
+        return StoreResult.failed("Application '" + application.getId() //$NON-NLS-1$
             + "' exposes no infobase reference — credentials apply to infobases and to standalone " //$NON-NLS-1$
-            + "servers wrapping a registered infobase (issue #275); this application is neither."; //$NON-NLS-1$
+            + "servers wrapping a registered infobase; this application is neither.", null); //$NON-NLS-1$
     }
 
     /**
@@ -248,32 +344,97 @@ public final class InfobaseAccessSupport
      * @param user the infobase user name (empty allowed)
      * @param password the infobase user password (empty allowed)
      * @param access the access kind (INFOBASE = 1C user auth, OS = OS auth)
-     * @return {@code null} on success, otherwise an actionable error message
+     * @return the store and consumer-facing read-back result
      */
-    public static String storeCredentials(InfobaseReference ref, String user, String password,
+    public static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
             InfobaseAccess access)
     {
         if (ref == null)
         {
-            return "No infobase reference to store credentials for."; //$NON-NLS-1$
+            return StoreResult.failed("No infobase reference to store credentials for.", null); //$NON-NLS-1$
         }
         IInfobaseAccessManager manager = resolveAccessManager();
         if (manager == null)
         {
-            return "EDT infobase access manager is not available (the platform-services plugin may " //$NON-NLS-1$
-                + "not be ready)."; //$NON-NLS-1$
+            return StoreResult.failed("EDT infobase access manager is not available " //$NON-NLS-1$
+                + "(the platform-services plugin may not be ready).", ref); //$NON-NLS-1$
         }
+        return storeCredentials(ref, user, password, access, manager);
+    }
+
+    static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
+            InfobaseAccess access, IInfobaseAccessManager manager)
+    {
+        String requestedUser = user == null ? "" : user; //$NON-NLS-1$
+        String requestedPassword = password == null ? "" : password; //$NON-NLS-1$
         try
         {
             manager.updateSettings(ref, new InfobaseAccessSettings(access,
-                user == null ? "" : user, password == null ? "" : password, "")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            return null;
+                requestedUser, requestedPassword, "")); //$NON-NLS-1$
         }
         catch (Exception e) // NOSONAR a StorageException (secure-storage) or CoreException must surface
         {
+            String message = "Failed to store infobase access settings: " //$NON-NLS-1$
+                + PlatformFailures.describeWithRootCause(e);
             Activator.logError("set credentials: updateSettings failed", e); //$NON-NLS-1$
-            return "Failed to store infobase access settings: " + e.getMessage(); //$NON-NLS-1$
+            return StoreResult.failed(message, ref);
         }
+
+        IInfobaseAccessSettings readBack;
+        try
+        {
+            readBack = manager.resolveSettings(ref);
+        }
+        catch (Exception e) // NOSONAR the completed write remains valid when verification cannot run
+        {
+            String failureType = e.getClass().getSimpleName();
+            Activator.logError("set credentials: resolveSettings failed after the write (" //$NON-NLS-1$
+                + failureType + ")", null); //$NON-NLS-1$
+            return StoreResult.notVerifiable(
+                "The settings were stored, but EDT could not read them back for verification (" //$NON-NLS-1$
+                    + failureType + ").", ref); //$NON-NLS-1$
+        }
+        if (readBack == null)
+        {
+            return StoreResult.notVerifiable(
+                "The settings were stored, but EDT returned no settings during verification.", ref); //$NON-NLS-1$
+        }
+
+        InfobaseAccess actualAccess;
+        String actualUser;
+        String actualPassword;
+        try
+        {
+            actualAccess = readBack.access();
+            actualUser = readBack.userName() == null ? "" : readBack.userName(); //$NON-NLS-1$
+            actualPassword = readBack.password() == null ? "" : readBack.password(); //$NON-NLS-1$
+        }
+        catch (RuntimeException e)
+        {
+            String failureType = e.getClass().getSimpleName();
+            Activator.logError("set credentials: reading resolved settings failed (" //$NON-NLS-1$
+                + failureType + ")", null); //$NON-NLS-1$
+            return StoreResult.notVerifiable(
+                "The settings were stored, but EDT could not inspect their read-back (" //$NON-NLS-1$
+                    + failureType + ").", ref); //$NON-NLS-1$
+        }
+        boolean accessMatches = access == actualAccess;
+        boolean userMatches = requestedUser.equals(actualUser);
+        boolean passwordMatches = requestedPassword.equals(actualPassword);
+        if (!accessMatches || !userMatches || !passwordMatches)
+        {
+            return StoreResult.mismatched("Requested access=" + access.name() + ", user='" //$NON-NLS-1$ //$NON-NLS-2$
+                + requestedUser + "', passwordSet=" + !requestedPassword.isEmpty() + "; read back access=" //$NON-NLS-1$ //$NON-NLS-2$
+                + (actualAccess == null ? "null" : actualAccess.name()) + ", user='" //$NON-NLS-1$ //$NON-NLS-2$
+                + actualUser + "', passwordSet=" + !actualPassword.isEmpty() //$NON-NLS-1$ //$NON-NLS-2$
+                + ", passwordMatched=" + passwordMatches + ".", passwordMatches, ref); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (InfobaseAccess.OS == access && requestedUser.isEmpty() && requestedPassword.isEmpty())
+        {
+            return StoreResult.notVerifiable("OS access with an empty user and empty password is " //$NON-NLS-1$
+                + "also EDT's default fallback, so the read-back cannot prove that a stored entry exists.", ref); //$NON-NLS-1$
+        }
+        return StoreResult.verified(ref);
     }
 
     /**

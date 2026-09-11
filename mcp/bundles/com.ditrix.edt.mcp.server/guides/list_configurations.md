@@ -27,3 +27,4 @@ Lists EDT launch configurations — runtime client, Attach (RemoteRuntime / Loca
 ## Notes
 - Returns JSON: a `configurations` array plus a `count`.
 - Only the `launchConfigurationName` mode of `launch` can start an Attach session — the `projectName + applicationId` mode reaches runtime-client configs only.
+- A standalone-server row can also be passed to `launch` by name. That path starts the server directly and reports effective DEBUG mode after the bounded start completes.

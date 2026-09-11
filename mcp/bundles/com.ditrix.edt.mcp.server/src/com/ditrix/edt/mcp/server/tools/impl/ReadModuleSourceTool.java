@@ -8,6 +8,9 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IFile;
@@ -44,6 +47,9 @@ public class ReadModuleSourceTool implements IMcpTool
 
     /** Fallback when the {@code maxLines} tool parameter is not configured */
     private static final int DEFAULT_MAX_LINES = 500;
+
+    /** Maximum time spent waiting for the optional UI-thread interception footer. */
+    private static final long INTERCEPTION_FOOTER_TIMEOUT_SECONDS = 3;
 
     @Override
     public String getName()
@@ -263,7 +269,22 @@ public class ReadModuleSourceTool implements IMcpTool
     private static String interceptionFooterOnUi(IProject project, String modulePath)
     {
         AtomicReference<String> ref = new AtomicReference<>();
-        Runnable task = () -> ref.set(InterceptionUtils.moduleFooter(BslModuleUtils.loadModule(project, modulePath)));
+        AtomicReference<RuntimeException> failure = new AtomicReference<>();
+        CountDownLatch finished = new CountDownLatch(1);
+        Runnable task = () -> {
+            try
+            {
+                ref.set(InterceptionUtils.moduleFooter(BslModuleUtils.loadModule(project, modulePath)));
+            }
+            catch (RuntimeException e)
+            {
+                failure.set(e);
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        };
         try
         {
             Display display = PlatformUI.getWorkbench().getDisplay();
@@ -273,13 +294,58 @@ public class ReadModuleSourceTool implements IMcpTool
             }
             else
             {
-                display.syncExec(task);
+                display.asyncExec(task);
+                AtomicBoolean deadlineElapsed = new AtomicBoolean();
+                String result = awaitComputedValue(ref, finished,
+                    INTERCEPTION_FOOTER_TIMEOUT_SECONDS, TimeUnit.SECONDS, deadlineElapsed);
+                if (deadlineElapsed.get() || Thread.currentThread().isInterrupted())
+                {
+                    String reason = Thread.currentThread().isInterrupted()
+                        ? "waiting was interrupted" //$NON-NLS-1$
+                        : "the UI thread did not respond within " //$NON-NLS-1$
+                            + INTERCEPTION_FOOTER_TIMEOUT_SECONDS + " seconds"; //$NON-NLS-1$
+                    Activator.logWarning("read_module_source: interception footer unavailable: " //$NON-NLS-1$
+                        + reason + "; returning the source without it"); //$NON-NLS-1$
+                    return null;
+                }
+                RuntimeException taskFailure = failure.get();
+                if (taskFailure != null)
+                {
+                    Activator.logWarning("read_module_source: interception footer unavailable: " //$NON-NLS-1$
+                        + taskFailure.getMessage());
+                }
+                return result;
             }
         }
         catch (RuntimeException e)
         {
             Activator.logWarning("read_module_source: interception footer unavailable: " + e.getMessage()); //$NON-NLS-1$
         }
+        RuntimeException taskFailure = failure.get();
+        if (taskFailure != null)
+        {
+            Activator.logWarning("read_module_source: interception footer unavailable: " //$NON-NLS-1$
+                + taskFailure.getMessage());
+        }
         return ref.get();
+    }
+
+    static <T> T awaitComputedValue(AtomicReference<T> value, CountDownLatch finished,
+            long timeout, TimeUnit unit, AtomicBoolean deadlineElapsed)
+    {
+        try
+        {
+            if (finished.await(timeout, unit))
+            {
+                return value.get();
+            }
+            deadlineElapsed.set(true);
+            return null;
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return null;
+        }
     }
 }

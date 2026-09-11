@@ -16,6 +16,8 @@ import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
+import org.eclipse.debug.core.ILaunchConfigurationType;
+import org.eclipse.debug.core.ILaunchManager;
 import org.eclipse.swt.widgets.Shell;
 
 import com.ditrix.edt.mcp.server.Activator;
@@ -81,14 +83,6 @@ public final class StandaloneServerStateRecovery
         "Can only start server that is stopped but current server state is"; //$NON-NLS-1$
 
     /**
-     * How long the recovery stop may take before the caller stops waiting. EDT's stop terminates
-     * whatever the launch still owns and waits for the process to disappear (its own wait is ~6
-     * seconds), so a normal stop is far below this; the bound exists so a wedged platform call
-     * cannot hold an unattended MCP request open.
-     */
-    private static final long STOP_TIMEOUT_MS = 60_000L;
-
-    /**
      * The state whose refusal this class recovers from. Only a server EDT believes is RUNNING can
      * be stuck forever: {@code STARTING}/{@code STOPPING} are states a concurrent operation is
      * legitimately holding for a moment, and stopping a server somebody else is starting would
@@ -136,6 +130,9 @@ public final class StandaloneServerStateRecovery
      * by construction one that nobody owns.
      */
     private static final Map<String, Object> STOP_LOCKS = new ConcurrentHashMap<>();
+
+    /** The server a successful recovery stop changes during the current operation. */
+    private static final ThreadLocal<OperationStop> OPERATION_STOP = new ThreadLocal<>();
 
     private StandaloneServerStateRecovery()
     {
@@ -252,30 +249,56 @@ public final class StandaloneServerStateRecovery
         IProgressMonitor monitor) throws CoreException
     {
         Target target = resolveTarget(config);
+        beginOperation();
         try
         {
-            ensureStartable(target.project, null, target.applicationId);
-        }
-        catch (ApplicationException abort)
-        {
-            // The pre-flight refused to start on top of a stop that may still be running. This
-            // path reports every failure as a CoreException, so hand the caller the same reason
-            // in the shape it already handles.
-            throw new CoreException(
-                new Status(IStatus.ERROR, Activator.PLUGIN_ID, abort.getMessage(), abort));
-        }
-        try
-        {
-            return config.launch(mode, monitor);
-        }
-        catch (CoreException | RuntimeException e)
-        {
-            String refusal = refusalMessage(e);
-            if (refusal == null)
+            try
             {
-                throw e;
+                ensureStartable(target.project, null, target.applicationId);
             }
-            return relaunchAfterStop(config, mode, monitor, e, refusal, target);
+            catch (ApplicationException abort)
+            {
+                // The launch path reports the pre-flight refusal in the same CoreException shape.
+                throw new CoreException(
+                    new Status(IStatus.ERROR, Activator.PLUGIN_ID, abort.getMessage(), abort));
+            }
+            try
+            {
+                return config.launch(mode, monitor);
+            }
+            catch (CoreException | RuntimeException e)
+            {
+                String refusal = refusalMessage(e);
+                if (refusal == null)
+                {
+                    throw e;
+                }
+                return relaunchAfterStop(config, mode, monitor, e, refusal, target);
+            }
+        }
+        catch (CoreException failure)
+        {
+            String restored = appendRestoration(PlatformFailures.describe(failure), target.project);
+            if (restored == null)
+            {
+                throw failure;
+            }
+            throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID, restored,
+                failure));
+        }
+        catch (RuntimeException failure)
+        {
+            String restored = appendRestoration(PlatformFailures.describe(failure), target.project);
+            if (restored == null)
+            {
+                throw failure;
+            }
+            throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID, restored,
+                failure));
+        }
+        finally
+        {
+            endOperation();
         }
     }
 
@@ -336,33 +359,50 @@ public final class StandaloneServerStateRecovery
         IProject project, IApplication application, String applicationId,
         ApplicationUpdateType updateType, ExecutionContext context, IProgressMonitor monitor)
     {
-        ensureStartable(project, application, applicationId);
+        beginOperation();
         try
         {
-            return manager.update(application, updateType, context, monitor);
-        }
-        catch (RuntimeException e)
-        {
-            String refusal = refusalMessage(e);
-            if (refusal == null)
-            {
-                throw e;
-            }
-            Recovery recovery = stopServerForRefusal(project, applicationId, refusal);
-            if (!recovery.recovered())
-            {
-                throw new ApplicationException(
-                    staleStateError(applicationId, refusal, recovery, null), e);
-            }
+            ensureStartable(project, application, applicationId);
             try
             {
                 return manager.update(application, updateType, context, monitor);
             }
-            catch (RuntimeException retry)
+            catch (RuntimeException e)
             {
-                throw new ApplicationException(staleStateError(applicationId, refusal, recovery,
-                    PlatformFailures.describe(retry)), retry);
+                String refusal = refusalMessage(e);
+                if (refusal == null)
+                {
+                    throw e;
+                }
+                Recovery recovery = stopServerForRefusal(project, applicationId, refusal);
+                if (!recovery.recovered())
+                {
+                    throw new ApplicationException(
+                        staleStateError(applicationId, refusal, recovery, null), e);
+                }
+                try
+                {
+                    return manager.update(application, updateType, context, monitor);
+                }
+                catch (RuntimeException retry)
+                {
+                    throw new ApplicationException(staleStateError(applicationId, refusal, recovery,
+                        PlatformFailures.describe(retry)), retry);
+                }
             }
+        }
+        catch (RuntimeException failure)
+        {
+            String restored = appendRestoration(PlatformFailures.describe(failure), project);
+            if (restored == null)
+            {
+                throw failure;
+            }
+            throw new ApplicationException(restored, failure);
+        }
+        finally
+        {
+            endOperation();
         }
     }
 
@@ -525,9 +565,11 @@ public final class StandaloneServerStateRecovery
         Activator.logInfo("Stale standalone server: stopping it so the operation can proceed: " //$NON-NLS-1$
             + applicationId);
         BoundedJob.Result result = BoundedJob.run("Stopping standalone server: " + applicationId, //$NON-NLS-1$
-            STOP_TIMEOUT_MS, monitor -> manager.cleanup(application, context, monitor));
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
+            monitor -> manager.cleanup(application, context, monitor));
         if (result.isSuccess())
         {
+            recordStoppedServer(applicationId);
             Activator.logInfo("Stale standalone server: stopped: " + applicationId); //$NON-NLS-1$
             return Recovery.stopped();
         }
@@ -542,7 +584,8 @@ public final class StandaloneServerStateRecovery
                 + outcome + "): " + applicationId, result.getFailure()); //$NON-NLS-1$
             return Recovery.failedInFlight(outcome == BoundedJob.Outcome.INTERRUPTED
                 ? "the wait for it was interrupted" //$NON-NLS-1$
-                : "stopping it did not finish within " + (STOP_TIMEOUT_MS / 1000) + "s"); //$NON-NLS-1$
+                : "stopping it did not finish within " //$NON-NLS-1$
+                    + (StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS / 1000) + "s"); //$NON-NLS-1$
         }
         if (result.getFailure() != null)
         {
@@ -554,6 +597,192 @@ public final class StandaloneServerStateRecovery
         Activator.logError("Stale standalone server: stopping it did not run (" //$NON-NLS-1$
             + outcome + "): " + applicationId, null); //$NON-NLS-1$
         return Recovery.failed("it never ran (" + outcome + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Starts a fresh operation-local stop record. */
+    static void beginOperation()
+    {
+        OPERATION_STOP.set(new OperationStop());
+    }
+
+    /** Clears the current operation-local stop record. */
+    static void endOperation()
+    {
+        OPERATION_STOP.remove();
+    }
+
+    /** Marks that this operation completed the stop of the named server. */
+    static void recordStoppedServer(String applicationId)
+    {
+        OperationStop operation = OPERATION_STOP.get();
+        if (operation != null)
+        {
+            operation.applicationId = applicationId;
+        }
+    }
+
+    /** Appends one restore outcome when the current operation stopped a server. */
+    private static String appendRestoration(String original, IProject project)
+    {
+        OperationStop stopped = OPERATION_STOP.get();
+        if (stopped == null || stopped.applicationId == null)
+        {
+            return null;
+        }
+        String name;
+        try
+        {
+            name = standaloneLaunchConfigurationName(project, stopped.applicationId);
+        }
+        catch (Exception failure) // NOSONAR configuration discovery must not prevent restoration
+        {
+            Activator.logError("Standalone server: cannot resolve its launch configuration", //$NON-NLS-1$
+                failure);
+            name = stopped.applicationId;
+        }
+        return appendRestoration(original, name,
+            applicationId -> restoreStoppedServer(project, applicationId));
+    }
+
+    /** Testable composition of the operation record, restore attempt, and exact message. */
+    static String appendRestoration(String original, String launchConfigurationName,
+        Restarter restarter)
+    {
+        OperationStop stopped = OPERATION_STOP.get();
+        if (stopped == null || stopped.applicationId == null)
+        {
+            return null;
+        }
+        String applicationId = stopped.applicationId;
+        String restoreFailure = restarter.restore(applicationId);
+        String separator = original.endsWith(".") || original.endsWith("!") //$NON-NLS-1$ //$NON-NLS-2$
+            || original.endsWith("?") ? " " : ". "; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (restoreFailure == null)
+        {
+            return original + separator + "The standalone server '" + applicationId //$NON-NLS-1$
+                + "' was stopped for this operation and has been started again."; //$NON-NLS-1$
+        }
+        String reason = restoreFailure.trim();
+        if (reason.endsWith(".")) //$NON-NLS-1$
+        {
+            reason = reason.substring(0, reason.length() - 1);
+        }
+        String name = launchConfigurationName == null || launchConfigurationName.isEmpty()
+            ? applicationId : launchConfigurationName;
+        return original + separator + "The standalone server '" + applicationId //$NON-NLS-1$
+            + "' was stopped for this operation and could NOT be started again: " //$NON-NLS-1$
+            + reason + ". Start it with launch(launchConfigurationName='" + name + "')."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Starts the stopped server once and returns a failure reason, or {@code null}. */
+    private static String restoreStoppedServer(IProject project, String applicationId)
+    {
+        try
+        {
+            if (project == null)
+            {
+                return "the project is unknown"; //$NON-NLS-1$
+            }
+            Activator activator = Activator.getDefault();
+            IApplicationManager manager = activator == null ? null : activator.getApplicationManager();
+            if (manager == null)
+            {
+                return "the EDT application manager is not available"; //$NON-NLS-1$
+            }
+            IApplication application = manager.getApplication(project, applicationId).orElse(null);
+            if (application == null)
+            {
+                return "the application could not be resolved"; //$NON-NLS-1$
+            }
+            Object server = StandaloneServerSupport.serverOfApplication(application);
+            if (server == null)
+            {
+                return "the application's standalone server could not be resolved"; //$NON-NLS-1$
+            }
+            Object service = StandaloneServerSupport.acquireService();
+            if (service == null)
+            {
+                return "the EDT standalone-server service is not available"; //$NON-NLS-1$
+            }
+
+            IStatus[] status = new IStatus[1];
+            BoundedJob.Result result = BoundedJob.run(
+                "Restoring standalone server: " + applicationId, //$NON-NLS-1$
+                StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
+                operationMonitor -> status[0] = StandaloneServerSupport.startServer(service,
+                    server, ILaunchManager.DEBUG_MODE, operationMonitor));
+            if (result.isSuccess())
+            {
+                if (status[0] == null)
+                {
+                    return "EDT returned no status from the standalone-server start"; //$NON-NLS-1$
+                }
+                return status[0].isOK() ? null : PlatformFailures.describeStatus(status[0]);
+            }
+            return StandaloneServerSupport.startFailureReason(result);
+        }
+        catch (Exception failure) // NOSONAR restoration must not hide the operation's original failure
+        {
+            return PlatformFailures.describe(failure);
+        }
+    }
+
+    /** Finds the standalone configuration that addresses this project application. */
+    private static String standaloneLaunchConfigurationName(IProject project, String applicationId)
+    {
+        if (project == null || applicationId == null)
+        {
+            return applicationId;
+        }
+        ILaunchManager launchManager = LaunchConfigUtils.getLaunchManager();
+        if (launchManager == null)
+        {
+            return applicationId;
+        }
+        ILaunchConfigurationType type = launchManager.getLaunchConfigurationType(
+            LaunchConfigUtils.STANDALONE_SERVER_LAUNCH_CONFIG_TYPE_ID);
+        if (type == null)
+        {
+            return applicationId;
+        }
+        ILaunchConfiguration exact = LaunchConfigUtils.findLaunchConfig(launchManager, type,
+            project.getName(), applicationId);
+        if (exact != null)
+        {
+            return exact.getName();
+        }
+        try
+        {
+            for (ILaunchConfiguration config : launchManager.getLaunchConfigurations(type))
+            {
+                String projectName = LaunchConfigUtils.readAttribute(config,
+                    LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+                if (project.getName().equals(projectName)
+                    && applicationId.equals(
+                        LaunchLifecycleUtils.resolveDelegateApplicationId(config, projectName)))
+                {
+                    return config.getName();
+                }
+            }
+        }
+        catch (CoreException e)
+        {
+            Activator.logError("Standalone server: cannot find its launch configuration", e); //$NON-NLS-1$
+        }
+        return applicationId;
+    }
+
+    /** One operation's successfully stopped application. */
+    private static final class OperationStop
+    {
+        String applicationId;
+    }
+
+    /** Performs one restoration; {@code null} means it succeeded. */
+    @FunctionalInterface
+    interface Restarter
+    {
+        String restore(String applicationId);
     }
 
     /**

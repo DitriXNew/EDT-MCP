@@ -31,6 +31,7 @@ import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
+import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
@@ -44,6 +45,10 @@ import com.e1c.g5.dt.applications.ApplicationUpdateType;
 import com.e1c.g5.dt.applications.ExecutionContext;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
+
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Tool to update database (infobase) for an application.
@@ -129,7 +134,8 @@ public class UpdateDatabaseTool implements IMcpTool
             .stringProperty(KEY_APPLICATION_NAME, "Display name of the target application.") //$NON-NLS-1$
             .stringProperty(KEY_UPDATE_TYPE, "Update mode applied: FULL or INCREMENTAL.") //$NON-NLS-1$
             .stringProperty(KEY_STATE_BEFORE, "Application update state before the update.") //$NON-NLS-1$
-            .stringProperty("stateAfter", "Application update state after the update.") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("stateAfter", //$NON-NLS-1$
+                "Authoritative state returned by the update operation after this call.") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable status message for the update.") //$NON-NLS-1$
             .booleanProperty(KEY_TERMINATED_CLIENT,
                 "Present and true ONLY when an applied update (confirm=true) terminated a running " //$NON-NLS-1$
@@ -635,6 +641,7 @@ public class UpdateDatabaseTool implements IMcpTool
         boolean portsReassigned = false;
         boolean updateApiEntered = false;
         boolean updateApiReturned = false;
+        long accessDialogsBefore = -1;
         try
         {
             ApplicationSupport.ManagerResult mr = ApplicationSupport.resolveManager(projectName);
@@ -712,6 +719,9 @@ public class UpdateDatabaseTool implements IMcpTool
 
             IProgressMonitor monitor = new NullProgressMonitor();
 
+            // The counter is global, so movement proves only that a dialog appeared while this call ran.
+            accessDialogsBefore = InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount();
+
             // Free the infobase and apply the update under the SAME per-IB lock the launch path
             // uses (LaunchLifecycleUtils.lockFor), so a concurrent run_yaxunit_tests / launch
             // on this infobase cannot interleave its own terminate+update (two updates racing, or a
@@ -780,15 +790,18 @@ public class UpdateDatabaseTool implements IMcpTool
                         // carries what the dialog actually said, so report THAT instead.
                         if (watch.portConflicted())
                         {
-                            return portConflictError(watch, projectName, applicationId,
-                                terminatedClient);
+                            return appendAccessSettingsDialogFailure(portConflictError(watch,
+                                projectName, applicationId, terminatedClient), accessDialogsBefore,
+                                InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
                         }
                         // The cancel can ABORT the update instead of letting it return a state: the
                         // reason is still in the window, and it explains the failure far better than
                         // EDT's own message - it names the knob that would have let it through.
                         if (watch.cancelled())
                         {
-                            return declinedUpdateResult(watch, externalChanges);
+                            return appendAccessSettingsDialogFailure(
+                                declinedUpdateResult(watch, externalChanges), accessDialogsBefore,
+                                InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
                         }
                         throw ex;
                     }
@@ -806,8 +819,9 @@ public class UpdateDatabaseTool implements IMcpTool
                     // of throwing: nothing was published, so this is a failure whatever it says.
                     if (watch.portConflicted())
                     {
-                        return portConflictError(watch, projectName, applicationId,
-                            terminatedClient);
+                        return appendAccessSettingsDialogFailure(portConflictError(watch,
+                            projectName, applicationId, terminatedClient), accessDialogsBefore,
+                            InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
                     }
                     // A cancelled external-changes modal means the update wrote NOTHING. Reporting
                     // "updated" here would be a false success — and the returned state cannot be
@@ -817,7 +831,9 @@ public class UpdateDatabaseTool implements IMcpTool
                     // construction and is a failure whatever the state says.
                     if (watch.cancelled())
                     {
-                        return declinedUpdateResult(watch, externalChanges);
+                        return appendAccessSettingsDialogFailure(
+                            declinedUpdateResult(watch, externalChanges), accessDialogsBefore,
+                            InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
                     }
                 }
             }
@@ -832,9 +848,12 @@ public class UpdateDatabaseTool implements IMcpTool
                 terminatedClient, portsReassigned);
             if (updateApiReturned || portsReassigned)
             {
-                return ToolResult.markErrorAfterMutation(error);
+                return appendAccessSettingsDialogFailure(ToolResult.markErrorAfterMutation(error),
+                    accessDialogsBefore, InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
             }
-            return updateApiEntered ? ToolResult.markErrorWithUnknownMutationOutcome(error) : error;
+            String marked = updateApiEntered ? ToolResult.markErrorWithUnknownMutationOutcome(error) : error;
+            return appendAccessSettingsDialogFailure(marked, accessDialogsBefore,
+                InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
         }
         catch (Exception e)
         {
@@ -842,9 +861,42 @@ public class UpdateDatabaseTool implements IMcpTool
             String error = buildUnexpectedErrorResult(e, terminatedClient, portsReassigned);
             if (updateApiReturned || portsReassigned)
             {
-                return ToolResult.markErrorAfterMutation(error);
+                return appendAccessSettingsDialogFailure(ToolResult.markErrorAfterMutation(error),
+                    accessDialogsBefore, InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
             }
-            return updateApiEntered ? ToolResult.markErrorWithUnknownMutationOutcome(error) : error;
+            String marked = updateApiEntered ? ToolResult.markErrorWithUnknownMutationOutcome(error) : error;
+            return appendAccessSettingsDialogFailure(marked, accessDialogsBefore,
+                InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
+        }
+    }
+
+    static String appendAccessSettingsDialogFailure(String result, long before, long after)
+    {
+        String note = InfobaseAuthDialogSuppressor.accessSettingsDialogFailureNote(before, after);
+        if (note.isEmpty())
+        {
+            return result;
+        }
+        try
+        {
+            JsonElement parsed = JsonParser.parseString(result);
+            if (!parsed.isJsonObject())
+            {
+                return result;
+            }
+            JsonObject object = parsed.getAsJsonObject();
+            JsonElement success = object.get("success"); //$NON-NLS-1$
+            JsonElement error = object.get("error"); //$NON-NLS-1$
+            if (success == null || success.getAsBoolean() || error == null || !error.isJsonPrimitive())
+            {
+                return result;
+            }
+            object.addProperty("error", error.getAsString() + " " + note); //$NON-NLS-1$ //$NON-NLS-2$
+            return object.toString();
+        }
+        catch (RuntimeException e)
+        {
+            return result;
         }
     }
 
@@ -1059,7 +1111,7 @@ public class UpdateDatabaseTool implements IMcpTool
      * client was actually terminated (truthful; "swept but none / not confirmed" and opt-out are
      * indistinguishable by absence — the confirmationRequired idiom). Side-effect-free.
      */
-    private static String buildUpdatedResult(String projectName, String applicationId, // NOSONAR every value is already resolved by the caller
+    static String buildUpdatedResult(String projectName, String applicationId, // NOSONAR every value is already resolved by the caller
             IApplication application, ApplicationUpdateType updateType,
             ApplicationUpdateState stateBefore, ApplicationUpdateState stateAfter,
             boolean terminatedClient, boolean portsReassigned)
@@ -1105,12 +1157,11 @@ public class UpdateDatabaseTool implements IMcpTool
         }
         else if (stateAfter == null)
         {
-            // Honest about what is and is not known: the call returned without an error, but the
-            // platform reported no resulting state, so "updated successfully" would be a claim
-            // nothing backs. get_applications re-reads the state authoritatively.
+            // The state returned by the update API is authoritative for this completed call.
             result.put(McpKeys.MESSAGE, "The update call returned without an error but EDT " //$NON-NLS-1$
-                + "reported no resulting state; verify with get_applications (updateState) " //$NON-NLS-1$
-                + "before relying on the infobase being up to date." + reassignNote); //$NON-NLS-1$
+                + "reported no resulting state; stateAfter is UNKNOWN, which is the authoritative " //$NON-NLS-1$
+                + "post-update answer. get_applications updateState is cached and may briefly " //$NON-NLS-1$
+                + "show its pre-update value." + reassignNote); //$NON-NLS-1$
         }
         else
         {
@@ -1200,9 +1251,9 @@ public class UpdateDatabaseTool implements IMcpTool
      *
      * <p>The message ends with a NEXT STEP rather than the diagnosis alone. This tool changes an
      * infobase irreversibly and the failure can land after a partial restructuring, so the one
-     * reaction the wording must not invite is an immediate blind re-call: the state is read back
-     * with {@code get_applications}, and the reason the platform did not put in the exception is
-     * in the EDT Error Log. The sentence comes AFTER the port-reassignment note, which keeps its
+     * reaction the wording must not invite is an immediate blind re-call: this failure has no
+     * authoritative {@code stateAfter}, the cached {@code get_applications} state may lag, and the
+     * omitted platform reason is in the EDT Error Log. The sentence comes AFTER the port-reassignment note, which keeps its
      * place directly behind the failure description — that note is a claim about a change that
      * already outlived this call, and nothing may push it away from the failure it qualifies.
      *
@@ -1224,8 +1275,9 @@ public class UpdateDatabaseTool implements IMcpTool
                     + "free ports and rewritten its configuration " //$NON-NLS-1$
                     + "(standaloneServerPortConflict=reassign) — that change stands." //$NON-NLS-1$
                 : "") //$NON-NLS-1$
-            + " The update may have applied partially, so do not retry blindly: check the actual " //$NON-NLS-1$
-            + "state with get_applications (updateState) and the EDT Error Log first."); //$NON-NLS-1$
+            + " The update may have applied partially, so do not retry blindly. EDT returned no " //$NON-NLS-1$
+            + "authoritative stateAfter for this failed call; get_applications updateState is " //$NON-NLS-1$
+            + "cached and may lag, so inspect the EDT Error Log first."); //$NON-NLS-1$
         if (terminatedClient)
         {
             errorResult.put(KEY_TERMINATED_CLIENT, true);

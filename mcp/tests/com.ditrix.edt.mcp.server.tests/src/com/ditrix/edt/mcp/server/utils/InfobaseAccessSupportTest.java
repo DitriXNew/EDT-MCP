@@ -7,18 +7,24 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager;
+import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAccessSettings;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseAccess;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
+import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.StoreResult;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
 
@@ -109,13 +115,15 @@ public class InfobaseAccessSupportTest
         IApplication app = mock(IApplication.class);
         when(app.getId()).thenReturn("wst-app-1"); //$NON-NLS-1$
 
-        String error = InfobaseAccessSupport.storeCredentials(app, "Admin", "", InfobaseAccess.INFOBASE); //$NON-NLS-1$ //$NON-NLS-2$
+        StoreResult result =
+            InfobaseAccessSupport.storeCredentials(app, "Admin", "", InfobaseAccess.INFOBASE); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertNotNull("must reject when neither the app nor its module adapts to an InfobaseReference", //$NON-NLS-1$
-            error);
-        assertTrue("error must name the application id", error.contains("wst-app-1")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("error must mention infobases", error.toLowerCase().contains("infobase")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("error must mention standalone servers", error.toLowerCase().contains("standalone")); //$NON-NLS-1$ //$NON-NLS-2$
+            result.error());
+        assertTrue("error must name the application id", result.error().contains("wst-app-1")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must mention infobases", result.error().toLowerCase().contains("infobase")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("error must mention standalone servers", //$NON-NLS-1$
+            result.error().toLowerCase().contains("standalone")); //$NON-NLS-1$
     }
 
     @Test
@@ -189,5 +197,106 @@ public class InfobaseAccessSupportTest
         IApplication app = mock(IApplication.class);
 
         assertNull(InfobaseAccessSupport.resolveInfobaseReference(app));
+    }
+
+    @Test
+    public void matchingCredentialReadBackIsVerified() throws Exception
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        IInfobaseAccessManager manager = mock(IInfobaseAccessManager.class);
+        when(manager.resolveSettings(ref)).thenReturn(new InfobaseAccessSettings(
+            InfobaseAccess.INFOBASE, "Admin", "secret-value", "")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        StoreResult result = InfobaseAccessSupport.storeCredentials(ref, "Admin", //$NON-NLS-1$
+            "secret-value", InfobaseAccess.INFOBASE, manager); //$NON-NLS-1$
+
+        assertNull(result.error());
+        assertEquals(StoreResult.Verification.VERIFIED, result.verification());
+        assertTrue(result.passwordMatched());
+    }
+
+    @Test
+    public void updateFailureReportsItsHeadlineAndDistinctRootCause() throws Exception
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        IInfobaseAccessManager manager = mock(IInfobaseAccessManager.class);
+        RuntimeException failure = new RuntimeException("secure preferences write failed", //$NON-NLS-1$
+            new IllegalStateException("secure storage is locked by another process")); //$NON-NLS-1$
+        doThrow(failure).when(manager).updateSettings(
+            org.mockito.ArgumentMatchers.eq(ref), any(InfobaseAccessSettings.class));
+
+        StoreResult result = InfobaseAccessSupport.storeCredentials(ref, "Admin", //$NON-NLS-1$
+            "secret-value", InfobaseAccess.INFOBASE, manager); //$NON-NLS-1$
+
+        assertEquals("Failed to store infobase access settings: secure preferences write failed " //$NON-NLS-1$
+            + "Caused by: secure storage is locked by another process", result.error()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void differingAccessIsAMismatch() throws Exception
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        IInfobaseAccessManager manager = mock(IInfobaseAccessManager.class);
+        when(manager.resolveSettings(ref)).thenReturn(new InfobaseAccessSettings(
+            InfobaseAccess.OS, "Admin", "secret-value", "")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        StoreResult result = InfobaseAccessSupport.storeCredentials(ref, "Admin", //$NON-NLS-1$
+            "secret-value", InfobaseAccess.INFOBASE, manager); //$NON-NLS-1$
+
+        assertEquals(StoreResult.Verification.MISMATCHED, result.verification());
+        assertTrue(result.verificationReason().contains("access=INFOBASE")); //$NON-NLS-1$
+        assertTrue(result.verificationReason().contains("access=OS")); //$NON-NLS-1$
+        assertFalse(result.verificationReason().contains("secret-value")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void differingUserIsAMismatch() throws Exception
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        IInfobaseAccessManager manager = mock(IInfobaseAccessManager.class);
+        when(manager.resolveSettings(ref)).thenReturn(new InfobaseAccessSettings(
+            InfobaseAccess.INFOBASE, "Other", "secret-value", "")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        StoreResult result = InfobaseAccessSupport.storeCredentials(ref, "Admin", //$NON-NLS-1$
+            "secret-value", InfobaseAccess.INFOBASE, manager); //$NON-NLS-1$
+
+        assertEquals(StoreResult.Verification.MISMATCHED, result.verification());
+        assertTrue(result.verificationReason().contains("user='Admin'")); //$NON-NLS-1$
+        assertTrue(result.verificationReason().contains("user='Other'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void differingPasswordIsReportedOnlyAsABoolean() throws Exception
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        IInfobaseAccessManager manager = mock(IInfobaseAccessManager.class);
+        when(manager.resolveSettings(ref)).thenReturn(new InfobaseAccessSettings(
+            InfobaseAccess.INFOBASE, "Admin", "different-secret", "")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        StoreResult result = InfobaseAccessSupport.storeCredentials(ref, "Admin", //$NON-NLS-1$
+            "secret-value", InfobaseAccess.INFOBASE, manager); //$NON-NLS-1$
+
+        assertEquals(StoreResult.Verification.MISMATCHED, result.verification());
+        assertFalse(result.passwordMatched());
+        assertTrue(result.verificationReason().contains("passwordMatched=false")); //$NON-NLS-1$
+        assertFalse(result.verificationReason().contains("secret-value")); //$NON-NLS-1$
+        assertFalse(result.verificationReason().contains("different-secret")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void defaultShapeReadBackIsNotVerifiable() throws Exception
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        IInfobaseAccessManager manager = mock(IInfobaseAccessManager.class);
+        when(manager.resolveSettings(ref)).thenReturn(new InfobaseAccessSettings(
+            InfobaseAccess.OS, null, null, "")); //$NON-NLS-1$
+
+        StoreResult result = InfobaseAccessSupport.storeCredentials(ref, "", "", //$NON-NLS-1$ //$NON-NLS-2$
+            InfobaseAccess.OS, manager);
+
+        assertEquals(StoreResult.Verification.NOT_VERIFIABLE, result.verification());
+        assertNull(result.passwordMatched());
+        assertTrue(result.verificationReason().contains("default fallback")); //$NON-NLS-1$
+        assertTrue(result.verificationReason().contains("cannot prove")); //$NON-NLS-1$
     }
 }

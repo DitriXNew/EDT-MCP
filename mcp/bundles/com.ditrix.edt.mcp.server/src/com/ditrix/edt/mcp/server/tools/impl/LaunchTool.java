@@ -29,9 +29,11 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
+import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
+import com.ditrix.edt.mcp.server.utils.LaunchAbortReason;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchOverrides;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
@@ -43,6 +45,7 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery;
+import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -56,9 +59,9 @@ import com.google.gson.JsonObject;
  * <p>Two target-selection forms:
  * <ul>
  *   <li>{@code launchConfigurationName} — start an existing EDT launch configuration
- *       by its exact name. Works for both runtime-client configs (spawns 1cv8c) and
- *       Attach configurations (attaches to {@code ragent}/{@code rphost} for
- *       server-side code). Does not require {@code applicationId}.</li>
+ *       by its exact name. Runtime-client configs spawn 1cv8c, Attach configurations connect
+ *       to {@code ragent}/{@code rphost}, and standalone-server configurations start their
+ *       server through EDT's server service. Does not require {@code applicationId}.</li>
  *   <li>{@code projectName} + {@code applicationId} — legacy path: searches the
  *       runtime-client configs for a match and launches it.</li>
  * </ul>
@@ -90,6 +93,11 @@ public class LaunchTool implements IMcpTool
 
     /** Error-log prefix for an asynchronous launch failure. */
     private static final String ERR_ASYNC_PREFIX = "launch failed asynchronously: "; //$NON-NLS-1$
+
+    /** Recovery advice retained when the standalone-server start itself fails. */
+    private static final String STANDALONE_THIN_CLIENT_FALLBACK =
+        "Try launch with the project's thin-client configuration instead: launching that client " //$NON-NLS-1$
+            + "has been observed to bring its standalone server up with it."; //$NON-NLS-1$
 
     /**
      * Input param AND response field: the {@code /C} startup option applied to this launch only.
@@ -131,9 +139,11 @@ public class LaunchTool implements IMcpTool
             .stringProperty(McpKeys.APPLICATION_ID,
                 "Application ID from get_applications; required in the projectName+applicationId mode.") //$NON-NLS-1$
             .stringProperty("launchConfigurationName", //$NON-NLS-1$
-                "Exact name of an EDT launch config (runtime client or Attach); skips projectName/applicationId.") //$NON-NLS-1$
+                "Exact name of an EDT launch config (runtime client, Attach, or standalone server); " //$NON-NLS-1$
+                    + "skips projectName/applicationId.") //$NON-NLS-1$
             .enumProperty(KEY_MODE,
-                "Launch mode: debug (default) or run. Attach configurations support debug only.", //$NON-NLS-1$
+                "Launch mode: debug (default) or run. Attach configurations support debug only; " //$NON-NLS-1$
+                    + "standalone servers always start in debug mode.", //$NON-NLS-1$
                 MODE_DEBUG, MODE_RUN)
             .booleanProperty("updateBeforeLaunch", //$NON-NLS-1$
                 "Default true: silently apply the configuration->DB update before launching so no " //$NON-NLS-1$
@@ -189,9 +199,10 @@ public class LaunchTool implements IMcpTool
             .stringProperty(KEY_EXTERNAL_OBJECT_NAME,
                 "The external data processor / report this launch runs; absent when none was requested.") //$NON-NLS-1$
             .stringProperty(KEY_MODE,
-                "Requested launch mode, or the existing session mode when alreadyRunning is true") //$NON-NLS-1$
+                "Effective launch mode; standalone servers report debug because EDT always starts them in debug mode") //$NON-NLS-1$
             .stringProperty(KEY_STATUS, "\"launching\" when the launch was dispatched asynchronously and is " //$NON-NLS-1$
-                + "still starting; absent on the alreadyRunning short-circuit. Poll debug_status for readiness.") //$NON-NLS-1$
+                + "still starting, or \"running\" after a bounded standalone-server start; absent on the " //$NON-NLS-1$
+                + "alreadyRunning short-circuit. Poll debug_status for asynchronous-launch readiness.") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable status message") //$NON-NLS-1$
             .build();
     }
@@ -205,8 +216,7 @@ public class LaunchTool implements IMcpTool
     @Override
     public boolean connectsToInfobase()
     {
-        // config.launch(...) connects a runtime client to the infobase, synchronously or
-        // via the fire-and-forget background launch Job (issue #270).
+        // Runtime-client launches and standalone-server starts both connect to an infobase.
         return true;
     }
 
@@ -363,6 +373,11 @@ public class LaunchTool implements IMcpTool
                 LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
             String effectiveAppId = LaunchConfigUtils.getApplicationIdFor(config);
 
+            if (isStandaloneServerConfiguration(typeId))
+            {
+                return launchStandaloneServer(config, typeId, configProject, mode);
+            }
+
             if (isAttach && MODE_RUN.equals(mode))
             {
                 return ToolResult.error("mode 'run' is not supported for Attach launch " //$NON-NLS-1$
@@ -472,20 +487,7 @@ public class LaunchTool implements IMcpTool
         }
     }
 
-    /**
-     * Resolves a by-name launch target without changing the supported launch domain.
-     *
-     * <p>The existing runtime-client/Attach lookup runs first and is returned unchanged. Only when
-     * it finds nothing do we inspect the standalone-server type, solely to replace the false
-     * "not found; create it" advice with the real capability boundary and measured workaround.
-     * The standalone type is intentionally not added to
-     * {@link LaunchConfigUtils#ALL_DEBUG_CONFIG_TYPE_IDS}, because the other callers of the shared
-     * lookup do not thereby gain standalone-server support.
-     *
-     * @param launchManager Eclipse launch manager
-     * @param configName exact configuration name
-     * @return the supported configuration, an honest standalone refusal, or neither when absent
-     */
+    /** Resolves by-name targets supported here without expanding the shared debug lookup. */
     static NamedConfigurationResolution resolveNamedConfiguration(ILaunchManager launchManager,
             String configName)
     {
@@ -501,18 +503,137 @@ public class LaunchTool implements IMcpTool
         {
             return NamedConfigurationResolution.notFound();
         }
-        String typeId = LaunchConfigUtils.getConfigTypeId(standalone);
-        return NamedConfigurationResolution.error(ToolResult.error("Launch configuration '" //$NON-NLS-1$
-            + standalone.getName() + "' has type '" + typeId + "'. " + NAME //$NON-NLS-1$ //$NON-NLS-2$
-            + " starts runtime " //$NON-NLS-1$
-            + "CLIENT configurations; it does not start standalone-server configurations " //$NON-NLS-1$
-            + "directly. Try " + NAME //$NON-NLS-1$
-            + " with the project's thin-client configuration instead: " //$NON-NLS-1$
-            + "launching that client has been observed to bring its standalone server up with " //$NON-NLS-1$
-            + "it. " //$NON-NLS-1$
-            + TerminateLaunchTool.NAME
-            + " does accept this same standalone-server configuration when it " //$NON-NLS-1$
-            + "is running.").toJson()); //$NON-NLS-1$
+        return NamedConfigurationResolution.config(standalone);
+    }
+
+    /** Whether the configuration type routes to the standalone-server service. */
+    static boolean isStandaloneServerConfiguration(String typeId)
+    {
+        return LaunchConfigUtils.STANDALONE_SERVER_LAUNCH_CONFIG_TYPE_ID.equals(typeId);
+    }
+
+    /** Starts a standalone server through its self-contained EDT service operation. */
+    private String launchStandaloneServer(ILaunchConfiguration config, String typeId,
+        String projectName, String requestedMode)
+    {
+        String configName = config.getName();
+        ProjectContext context = ProjectContext.of(projectName);
+        if (!context.exists())
+        {
+            return standalonePreconditionError(configName,
+                ProjectContext.notFoundMessage(projectName));
+        }
+        if (!context.isOpen())
+        {
+            return standalonePreconditionError(configName,
+                "Project is closed: " + projectName); //$NON-NLS-1$
+        }
+
+        String applicationId =
+            LaunchLifecycleUtils.resolveDelegateApplicationId(config, projectName);
+        if (applicationId == null || applicationId.isEmpty())
+        {
+            return standalonePreconditionError(configName,
+                "the configuration's application could not be resolved"); //$NON-NLS-1$
+        }
+        Activator activator = Activator.getDefault();
+        IApplicationManager manager = activator == null ? null : activator.getApplicationManager();
+        if (manager == null)
+        {
+            return standalonePreconditionError(configName,
+                "the EDT application manager is not available"); //$NON-NLS-1$
+        }
+
+        IApplication application;
+        try
+        {
+            application = manager.getApplication(context.project(), applicationId).orElse(null);
+        }
+        catch (ApplicationException e)
+        {
+            return standalonePreconditionError(configName,
+                "the application could not be resolved: " + PlatformFailures.describe(e)); //$NON-NLS-1$
+        }
+        if (application == null)
+        {
+            return standalonePreconditionError(configName,
+                "application '" + applicationId + "' was not found in project " + projectName); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        Object service = StandaloneServerSupport.acquireService();
+        if (service == null)
+        {
+            return standalonePreconditionError(configName,
+                "the EDT standalone-server service is not available"); //$NON-NLS-1$
+        }
+        Object server = StandaloneServerSupport.serverOfApplication(application);
+        if (server == null)
+        {
+            return standalonePreconditionError(configName,
+                "the application's standalone server could not be resolved"); //$NON-NLS-1$
+        }
+
+        String failure = startStandaloneServerBounded(service, server, configName,
+            eclipseLaunchMode(requestedMode));
+        if (failure != null)
+        {
+            return standaloneAttemptError(configName, failure);
+        }
+        return standaloneStartSuccess(configName, typeId, projectName, applicationId);
+    }
+
+    /** Builds the completed standalone-server result with EDT's effective DEBUG mode. */
+    static String standaloneStartSuccess(String configName, String typeId, String projectName,
+        String applicationId)
+    {
+        return ToolResult.success()
+            .put(KEY_LAUNCH_CONFIGURATION, configName)
+            .put(KEY_CONFIGURATION_TYPE, typeId)
+            .put(KEY_ATTACH, false)
+            .put(KEY_MODE, MODE_DEBUG)
+            .put(KEY_STATUS, "running") //$NON-NLS-1$
+            .put(McpKeys.PROJECT, projectName)
+            .put(McpKeys.APPLICATION_ID, applicationId)
+            .put(McpKeys.MESSAGE, "Standalone server '" + configName //$NON-NLS-1$
+                + "' is running in DEBUG mode. EDT starts standalone servers in DEBUG mode " //$NON-NLS-1$
+                + "regardless of the requested mode.") //$NON-NLS-1$
+            .toJson();
+    }
+
+    /** Runs the service start under a deadline and returns its failure reason. */
+    static String startStandaloneServerBounded(Object service, Object server, String configName,
+        String launchMode)
+    {
+        IStatus[] status = new IStatus[1];
+        BoundedJob.Result result = BoundedJob.run("Starting standalone server: " + configName, //$NON-NLS-1$
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
+            monitor -> status[0] = StandaloneServerSupport.startServer(service, server,
+                launchMode, monitor));
+        if (result.isSuccess())
+        {
+            if (status[0] == null)
+            {
+                return "EDT returned no status from the standalone-server start"; //$NON-NLS-1$
+            }
+            return status[0].isOK() ? null : PlatformFailures.describeStatus(status[0]);
+        }
+        return StandaloneServerSupport.startFailureReason(result);
+    }
+
+    /** Builds a precondition error without suggesting an inapplicable thin-client fallback. */
+    static String standalonePreconditionError(String configName, String reason)
+    {
+        return ToolResult.error("Failed to start standalone server '" + configName + "': " //$NON-NLS-1$ //$NON-NLS-2$
+            + reason).toJson();
+    }
+
+    /** Builds an attempted-start error with the measured thin-client fallback. */
+    static String standaloneAttemptError(String configName, String reason)
+    {
+        String separator = reason.endsWith(".") || reason.endsWith("!") || reason.endsWith("?") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            ? " " : ". "; //$NON-NLS-1$ //$NON-NLS-2$
+        return ToolResult.error("Failed to start standalone server '" + configName + "': " //$NON-NLS-1$ //$NON-NLS-2$
+            + reason + separator + STANDALONE_THIN_CLIENT_FALLBACK).toJson();
     }
 
     /** Result of the supported-plus-diagnostic by-name lookup. */
@@ -530,11 +651,6 @@ public class LaunchTool implements IMcpTool
         static NamedConfigurationResolution config(ILaunchConfiguration config)
         {
             return new NamedConfigurationResolution(config, null);
-        }
-
-        static NamedConfigurationResolution error(String error)
-        {
-            return new NamedConfigurationResolution(null, error);
         }
 
         static NamedConfigurationResolution notFound()
@@ -1189,16 +1305,12 @@ public class LaunchTool implements IMcpTool
      * cancelled while the launch delegate performed the DB update — or {@code null} when neither
      * happened.
      *
-     * <p>Also RECORDS it, so {@code debug_status} can report an outcome that happened long after
-     * this Job's caller received its "launching" answer.
-     *
-     * @param config the launch configuration that was started
      * @param policy the policy the call ran with (may be {@code null})
      * @param conflicts the cancel window opened around the launch
      * @return the message, or {@code null}
      */
-    private static String declinedConflictMessage(ILaunchConfiguration config,
-        ExternalInfobaseChangesPolicy policy, LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts)
+    private static String declinedConflictMessage(ExternalInfobaseChangesPolicy policy,
+        LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts)
     {
         if (conflicts == null)
         {
@@ -1213,8 +1325,6 @@ public class LaunchTool implements IMcpTool
             String message =
                 LaunchUpdateDialogAutoConfirmer.portConflictError(conflicts.portConflictDetail(),
                     conflicts.portConflictReason());
-            recordAsyncFailure(config, message);
-            Activator.logError(ERR_ASYNC_PREFIX + message, null);
             return message;
         }
         // Consulted ONLY when this launch armed the external-changes matcher: the window also
@@ -1225,9 +1335,19 @@ public class LaunchTool implements IMcpTool
             return null;
         }
         String message = ExternalInfobaseChangesPolicy.declinedUpdateError(policy, conflicts.reason());
-        recordAsyncFailure(config, message);
-        Activator.logError(ERR_ASYNC_PREFIX + message, null);
         return message;
+    }
+
+    /** Describes a launch delegate that returned normally after cancelling its monitor. */
+    static String abandonedLaunchMessage(String configName, String reason)
+    {
+        String prefix = "Launch of '" + configName //$NON-NLS-1$
+            + "' was abandoned by EDT (the launch delegate cancelled it)"; //$NON-NLS-1$
+        if (reason == null || reason.isEmpty())
+        {
+            return prefix + "; no reason was logged. Check the EDT error log."; //$NON-NLS-1$
+        }
+        return prefix + ". EDT logged while it ran: " + reason; //$NON-NLS-1$
     }
 
     /**
@@ -1613,6 +1733,7 @@ public class LaunchTool implements IMcpTool
         LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = policy == null
             ? null
             : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase, launchServer);
+        LaunchAbortReason abortReason = LaunchAbortReason.open();
         LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, debugMode,
             autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy, launchServer);
         // Keep the infobase auth-dialog suppression active for the WHOLE async launch
@@ -1624,15 +1745,30 @@ public class LaunchTool implements IMcpTool
         // grace window — must therefore cover it, so a "Configure Infobase access Settings"
         // dialog raised by this connect (missing/wrong stored creds) is still auto-cancelled
         // instead of hanging the unattended call (mirrors the arm/disarm pattern above).
+        // The counter is global, so movement proves only that a dialog appeared while this call ran.
+        long accessDialogsBefore = InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount();
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
             StandaloneServerStateRecovery.launchWithRecovery(config, launchMode, monitor);
-            String declined = declinedConflictMessage(config, launchPolicy, conflicts);
+            String declined = declinedConflictMessage(launchPolicy, conflicts);
             if (declined != null)
             {
+                declined = appendAccessSettingsDialogFailure(declined, accessDialogsBefore,
+                    InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
+                recordAsyncFailure(config, declined);
+                Activator.logError(ERR_ASYNC_PREFIX + declined, null);
                 // The launch itself did not throw, but the update inside it wrote nothing.
                 return new Status(IStatus.ERROR, Activator.PLUGIN_ID, declined);
+            }
+            if (monitor != null && monitor.isCanceled())
+            {
+                String message = appendAccessSettingsDialogFailure(
+                    abandonedLaunchMessage(config.getName(), abortReason.reason()),
+                    accessDialogsBefore, InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
+                recordAsyncFailure(config, message);
+                Activator.logError(ERR_ASYNC_PREFIX + message, null);
+                return new Status(IStatus.ERROR, Activator.PLUGIN_ID, message);
             }
             return Status.OK_STATUS;
         }
@@ -1642,30 +1778,40 @@ public class LaunchTool implements IMcpTool
             // log is the only place the reason would otherwise exist. A cancelled conflict is
             // preferred over the delegate's own message: it is the actual cause AND it names the
             // knob that would have let the launch through.
-            String declined = declinedConflictMessage(config, launchPolicy, conflicts);
+            String declined = declinedConflictMessage(launchPolicy, conflicts);
             if (declined != null)
             {
+                declined = appendAccessSettingsDialogFailure(declined, accessDialogsBefore,
+                    InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
+                recordAsyncFailure(config, declined);
                 Activator.logError(ERR_ASYNC_PREFIX + e.getMessage(), e);
                 return new Status(IStatus.ERROR, Activator.PLUGIN_ID, declined, e);
             }
-            recordAsyncFailure(config, ERR_ASYNC_PREFIX + e.getMessage());
+            String recorded = appendAccessSettingsDialogFailure(ERR_ASYNC_PREFIX + e.getMessage(),
+                accessDialogsBefore, InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
+            recordAsyncFailure(config, recorded);
             Activator.logError(ERR_ASYNC_PREFIX + e.getMessage(), e);
-            return e.getStatus();
+            return appendAccessSettingsDialogFailure(e.getStatus(), accessDialogsBefore,
+                InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
         }
         catch (Throwable t)
         {
             // Never let the Job die on an uncaught exception — it would vanish
             // without a trace for the MCP caller. Log + report an error status.
-            String declined = declinedConflictMessage(config, launchPolicy, conflicts);
+            String declined = declinedConflictMessage(launchPolicy, conflicts);
             if (declined != null)
             {
+                declined = appendAccessSettingsDialogFailure(declined, accessDialogsBefore,
+                    InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
+                recordAsyncFailure(config, declined);
                 Activator.logError(ERR_ASYNC_PREFIX + t.getMessage(), t);
                 return new Status(IStatus.ERROR, Activator.PLUGIN_ID, declined, t);
             }
-            recordAsyncFailure(config, ERR_ASYNC_PREFIX + t.getMessage());
+            String message = appendAccessSettingsDialogFailure(ERR_ASYNC_PREFIX + t.getMessage(),
+                accessDialogsBefore, InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
+            recordAsyncFailure(config, message);
             Activator.logError(ERR_ASYNC_PREFIX + t.getMessage(), t);
-            return new Status(IStatus.ERROR, Activator.PLUGIN_ID,
-                ERR_ASYNC_PREFIX + t.getMessage(), t);
+            return new Status(IStatus.ERROR, Activator.PLUGIN_ID, message, t);
         }
         finally
         {
@@ -1677,7 +1823,35 @@ public class LaunchTool implements IMcpTool
             {
                 conflicts.close();
             }
+            abortReason.close();
         }
+    }
+
+    static IStatus appendAccessSettingsDialogFailure(IStatus status, long before, long after)
+    {
+        if (status == null || status.isOK())
+        {
+            return status;
+        }
+        String note = InfobaseAuthDialogSuppressor.accessSettingsDialogFailureNote(before, after);
+        if (note.isEmpty())
+        {
+            return status;
+        }
+        String original = status.getMessage();
+        String message = original == null || original.isEmpty() ? note : original + " " + note; //$NON-NLS-1$
+        return new Status(status.getSeverity(), status.getPlugin(), status.getCode(), message,
+            status.getException());
+    }
+
+    private static String appendAccessSettingsDialogFailure(String message, long before, long after)
+    {
+        String note = InfobaseAuthDialogSuppressor.accessSettingsDialogFailureNote(before, after);
+        if (note.isEmpty())
+        {
+            return message;
+        }
+        return message == null || message.isEmpty() ? note : message + " " + note; //$NON-NLS-1$
     }
 
     /**

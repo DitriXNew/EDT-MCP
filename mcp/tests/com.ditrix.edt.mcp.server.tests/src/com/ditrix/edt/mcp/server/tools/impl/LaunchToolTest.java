@@ -43,6 +43,7 @@ import org.mockito.Mockito;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.AlreadyRunningContext;
+import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
@@ -131,6 +132,25 @@ public class LaunchToolTest
         // #270: config.launch(...) connects a runtime client to the infobase — it must arm
         // the auth-dialog suppressor's activity window.
         assertTrue(new LaunchTool().connectsToInfobase());
+    }
+
+    @Test
+    public void failedLaunchStatusGainsAccessDialogDiagnosticOnlyWhenCounterMoved()
+    {
+        IStatus failure = new Status(IStatus.ERROR, "test", "launch failed"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertSame(failure, LaunchTool.appendAccessSettingsDialogFailure(failure, 7, 7));
+        IStatus observed = LaunchTool.appendAccessSettingsDialogFailure(failure, 7, 8);
+
+        assertTrue(observed.getMessage().contains("while this call ran")); //$NON-NLS-1$
+        assertFalse(observed.getMessage().contains("by this call")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void successfulLaunchStatusNeverGainsAccessDialogDiagnostic()
+    {
+        assertSame(Status.OK_STATUS,
+            LaunchTool.appendAccessSettingsDialogFailure(Status.OK_STATUS, 7, 8));
     }
 
     @Test
@@ -388,7 +408,7 @@ public class LaunchToolTest
     }
 
     @Test
-    public void testStandaloneServerConfigurationGetsAnHonestRefusal() throws Exception
+    public void testStandaloneServerConfigurationRoutesToTheStandaloneBranch() throws Exception
     {
         String name = "Standalone server for B"; //$NON-NLS-1$
         assertEquals(STANDALONE_SERVER_TYPE_ID, LaunchConfigUtils.class
@@ -410,26 +430,11 @@ public class LaunchToolTest
         when(standaloneType.getIdentifier()).thenReturn(STANDALONE_SERVER_TYPE_ID);
 
         Object resolution = resolveNamedConfiguration(launchManager, name);
-        String error = (String)namedResolutionValue(resolution, "error"); //$NON-NLS-1$
 
-        assertNotNull(error);
-        assertTrue(error.contains(name));
-        assertTrue(error.contains(STANDALONE_SERVER_TYPE_ID));
-        assertTrue(error.contains(". " + LaunchTool.NAME //$NON-NLS-1$
-            + " starts runtime CLIENT configurations")); //$NON-NLS-1$
-        assertTrue(error.contains("Try " + LaunchTool.NAME //$NON-NLS-1$
-            + " with the project's thin-client configuration")); //$NON-NLS-1$
-        assertFalse("the refusal must not name the unadvertised legacy alias: " + error, //$NON-NLS-1$
-            error.contains("debug_launch")); //$NON-NLS-1$
-        assertTrue(error.contains("thin-client configuration")); //$NON-NLS-1$
-        // The workaround is stated as OBSERVED, not guaranteed: it is the issue reporter's
-        // measurement on one workspace, and the platform sources do not show a client launch
-        // starting the server. Promising it outright would repeat, in the fix, the very defect
-        // this issue is about - a tool asserting more than it knows.
-        assertTrue(error, error.contains("observed to bring its standalone server up")); //$NON-NLS-1$
-        assertFalse("the workaround must not be promised as a guaranteed side effect: " + error, //$NON-NLS-1$
-            error.contains("starts its standalone server as a side effect")); //$NON-NLS-1$
-        assertTrue(error.contains(TerminateLaunchTool.NAME));
+        assertSame(standalone, namedResolutionValue(resolution, "config")); //$NON-NLS-1$
+        assertNull(namedResolutionValue(resolution, "error")); //$NON-NLS-1$
+        assertTrue(LaunchTool.isStandaloneServerConfiguration(
+            LaunchConfigUtils.getConfigTypeId(standalone)));
     }
 
     @Test
@@ -529,6 +534,34 @@ public class LaunchToolTest
     }
 
     @Test
+    public void testRunLaunchJobBodyReportsADelegateCancelledMonitor() throws Exception
+    {
+        ILaunchConfiguration config = Mockito.mock(ILaunchConfiguration.class);
+        when(config.getName()).thenReturn("Cancelled launch"); //$NON-NLS-1$
+        NullProgressMonitor monitor = new NullProgressMonitor();
+        monitor.setCanceled(true);
+
+        IStatus status = LaunchTool.runLaunchJobBody(config, false,
+            ExternalInfobaseChangesPolicy.DEFAULT, monitor);
+
+        String expected = "Launch of 'Cancelled launch' was abandoned by EDT " //$NON-NLS-1$
+            + "(the launch delegate cancelled it); no reason was logged. Check the EDT error log."; //$NON-NLS-1$
+        assertEquals(IStatus.ERROR, status.getSeverity());
+        assertEquals(expected, status.getMessage());
+        assertTrue(AsyncLaunchOutcomes.recent().stream().anyMatch(outcome ->
+            "Cancelled launch".equals(outcome.launchConfiguration()) //$NON-NLS-1$
+                && expected.equals(outcome.message())));
+    }
+
+    @Test
+    public void testAbandonedLaunchMessageIncludesTheCapturedReason()
+    {
+        assertEquals("Launch of 'Client' was abandoned by EDT (the launch delegate cancelled it). " //$NON-NLS-1$
+            + "EDT logged while it ran: update failed", //$NON-NLS-1$
+            LaunchTool.abandonedLaunchMessage("Client", "update failed")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
     public void testRunLaunchJobBodyCoreExceptionReturnsItsStatusNotThrown() throws Exception
     {
         // A CoreException from the delegate is logged and surfaced as the Job's result
@@ -558,6 +591,46 @@ public class LaunchToolTest
         assertSame("the status must carry the original exception", boom, status.getException());
         assertTrue("the status message must name the failure",
             status.getMessage().contains("boom")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerStartSurfacesTheReturnedStatusMessage()
+    {
+        IStatus refusal = new Status(IStatus.ERROR, "test", "server start refused"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String failure = LaunchTool.startStandaloneServerBounded(
+            new FakeStandaloneStartService(refusal), new Object(), "Standalone", //$NON-NLS-1$
+            ILaunchManager.RUN_MODE);
+
+        assertNotNull(failure);
+        JsonObject error = JsonParser.parseString(
+            LaunchTool.standaloneAttemptError("Standalone", failure)).getAsJsonObject(); //$NON-NLS-1$
+        assertFalse(error.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(error.get("error").getAsString().contains("server start refused")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(error.get("error").getAsString().contains("thin-client configuration")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testStandalonePreconditionErrorOmitsTheThinClientFallback()
+    {
+        JsonObject error = JsonParser.parseString(LaunchTool.standalonePreconditionError(
+            "Standalone", "Project is closed: Project")).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(error.get("error").getAsString().contains("Project is closed: Project")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(error.get("error").getAsString().contains("thin-client configuration")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testStandaloneServerSuccessReportsEffectiveDebugMode()
+    {
+        JsonObject result = JsonParser.parseString(LaunchTool.standaloneStartSuccess(
+            "Standalone", STANDALONE_SERVER_TYPE_ID, "Project", //$NON-NLS-1$ //$NON-NLS-2$
+            "ServerApplication.Test")).getAsJsonObject(); //$NON-NLS-1$
+
+        assertTrue(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("debug", result.get("mode").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("running", result.get("status").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(result.get("message").getAsString().contains("regardless of the requested mode")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -1145,5 +1218,21 @@ public class LaunchToolTest
         assertFalse("the alreadyRunning short-circuit must never carry status:launching",
             obj.has("status")); //$NON-NLS-1$
         assertFalse("attach must be omitted when unset", obj.has("attach")); //$NON-NLS-1$
+    }
+
+    /** A standalone-server service that returns a chosen start status. */
+    public static final class FakeStandaloneStartService
+    {
+        private final IStatus status;
+
+        FakeStandaloneStartService(IStatus status)
+        {
+            this.status = status;
+        }
+
+        public IStatus startServer(Object server, String launchMode, Object monitor)
+        {
+            return status;
+        }
     }
 }

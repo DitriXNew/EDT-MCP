@@ -41,6 +41,8 @@ import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.e1c.g5.dt.applications.ApplicationException;
+import com.e1c.g5.dt.applications.ApplicationUpdateState;
+import com.e1c.g5.dt.applications.ApplicationUpdateType;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.google.gson.JsonObject;
@@ -113,6 +115,27 @@ public class UpdateDatabaseToolTest
         // #270: update_database opens a live connection to run the update — it must arm
         // the auth-dialog suppressor's activity window.
         assertTrue(new UpdateDatabaseTool().connectsToInfobase());
+    }
+
+    @Test
+    public void failureGainsAccessDialogDiagnosticOnlyWhenCounterMoved()
+    {
+        String failure = "{\"success\":false,\"error\":\"update failed\"}"; //$NON-NLS-1$
+
+        String unchanged = UpdateDatabaseTool.appendAccessSettingsDialogFailure(failure, 4, 4);
+        String observed = UpdateDatabaseTool.appendAccessSettingsDialogFailure(failure, 4, 5);
+
+        assertEquals(failure, unchanged);
+        assertTrue(observed.contains("while this call ran")); //$NON-NLS-1$
+        assertFalse(observed.contains("by this call")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void successNeverGainsAccessDialogDiagnostic()
+    {
+        String success = "{\"success\":true,\"message\":\"updated\"}"; //$NON-NLS-1$
+
+        assertEquals(success, UpdateDatabaseTool.appendAccessSettingsDialogFailure(success, 4, 5));
     }
 
     @Test
@@ -615,8 +638,9 @@ public class UpdateDatabaseToolTest
 
     /** The next-step sentence, spelled out in full for the same reason as the note above. */
     private static final String NEXT_STEP =
-        " The update may have applied partially, so do not retry blindly: check the actual state " //$NON-NLS-1$
-            + "with get_applications (updateState) and the EDT Error Log first."; //$NON-NLS-1$
+        " The update may have applied partially, so do not retry blindly. EDT returned no " //$NON-NLS-1$
+            + "authoritative stateAfter for this failed call; get_applications updateState is " //$NON-NLS-1$
+            + "cached and may lag, so inspect the EDT Error Log first."; //$NON-NLS-1$
 
     @Test
     public void testUnexpectedFailureWithNoMessageIsNotRenderedAsNull()
@@ -723,6 +747,23 @@ public class UpdateDatabaseToolTest
 
         assertTrue("the failure must tell the caller what to do next", //$NON-NLS-1$
             result.contains(NEXT_STEP));
+        assertFalse(result.contains("check the actual state with get_applications (updateState)")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void missingReturnedStateNamesStateAfterInsteadOfLaggyVerification()
+    {
+        IApplication application = mock(IApplication.class);
+        when(application.getName()).thenReturn("Main infobase"); //$NON-NLS-1$
+
+        String result = UpdateDatabaseTool.buildUpdatedResult("Project", "app", application, //$NON-NLS-1$ //$NON-NLS-2$
+            ApplicationUpdateType.INCREMENTAL, ApplicationUpdateState.INCREMENTAL_UPDATE_REQUIRED,
+            null, false, false);
+
+        assertTrue(result.contains("\"stateAfter\":\"UNKNOWN\"")); //$NON-NLS-1$
+        assertTrue(result.contains("stateAfter is UNKNOWN")); //$NON-NLS-1$
+        assertTrue(result.contains("authoritative post-update answer")); //$NON-NLS-1$
+        assertFalse(result.contains("verify with get_applications (updateState)")); //$NON-NLS-1$
     }
 
     @Test

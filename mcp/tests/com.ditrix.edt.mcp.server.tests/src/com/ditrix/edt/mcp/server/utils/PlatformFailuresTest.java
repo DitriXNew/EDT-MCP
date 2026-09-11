@@ -385,6 +385,35 @@ public class PlatformFailuresTest
     }
 
     @Test
+    public void testDescribeStatusAppendsItsDeepestDistinctCause()
+    {
+        String cause = "another process still owns the standalone server ports"; //$NON-NLS-1$
+        IStatus status = new Status(IStatus.ERROR, PLUGIN, "server start failed", //$NON-NLS-1$
+            new RuntimeException("start operation failed", new IllegalStateException(cause))); //$NON-NLS-1$
+
+        assertEquals("server start failed Caused by: " + cause, //$NON-NLS-1$
+            PlatformFailures.describeStatus(status));
+    }
+
+    @Test
+    public void testDescribeStatusDoesNotRepeatItsHeadlineAsTheCause()
+    {
+        String headline = "server start failed"; //$NON-NLS-1$
+        IStatus status = new Status(IStatus.ERROR, PLUGIN, headline,
+            new IllegalStateException(headline));
+
+        assertEquals(headline, PlatformFailures.describeStatus(status));
+    }
+
+    @Test
+    public void testDescribeStatusWithoutAnExceptionReturnsItsMessage()
+    {
+        IStatus status = new Status(IStatus.ERROR, PLUGIN, "server start failed"); //$NON-NLS-1$
+
+        assertEquals("server start failed", PlatformFailures.describeStatus(status)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testRootCauseHonoursTheCauseChainCap()
     {
         Throwable failure = new RuntimeException("level-11"); //$NON-NLS-1$

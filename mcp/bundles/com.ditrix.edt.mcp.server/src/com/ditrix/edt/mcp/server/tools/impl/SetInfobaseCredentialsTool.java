@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -32,6 +33,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
+import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.StoreResult;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
@@ -48,8 +50,8 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  *
  * <p>Without stored credentials the update agent is started without the infobase
  * user and fails to authenticate, popping a blocking "Configure Infobase access
- * Settings" dialog that hangs the unattended call. After this tool the headless
- * update authenticates as the given user.
+ * Settings" dialog that hangs the unattended call. This tool reports the UUID-keyed
+ * storage target and what the same consumer-facing resolver reads back.
  *
  * <p>These credentials select an <b>existing</b> infobase user — they do NOT
  * create users. Demo bases typically have a user with an empty password, so an
@@ -66,13 +68,12 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  *
  * <p><strong>Unattended-safety:</strong> the model work (resolve application -&gt;
  * {@link InfobaseAccessSupport#storeCredentials(IApplication, String, String, InfobaseAccess)}
- * -&gt; {@code IInfobaseAccessManager.updateSettings} -&gt; read-back display name) runs in a
+ * -&gt; settings read-back -&gt; display-name read-back) runs in a
  * bounded background Eclipse Job joined with a short {@link #CREDENTIALS_TIMEOUT_SECONDS}-second
  * timeout — never on the UI thread. Resolving an application can provoke EDT's background
  * application-update-state recompute, which can loop for a long time on an unbounded worker
- * thread; the bounded Job guarantees the call returns. The credentials are recorded as a success
- * the instant {@code updateSettings} commits (before the cosmetic name read-back), so a timeout
- * AFTER the commit still reports success.
+ * thread; the bounded Job guarantees the call returns. A conclusive or honestly inconclusive
+ * verification is recorded before the cosmetic name read-back, so a later timeout keeps that result.
  *
  * <p>A Job that outran the deadline is cancelled, but cancellation is cooperative and this one has
  * no monitor poll to honour it, so it keeps running. It therefore checks — on the writing side —
@@ -160,7 +161,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     public String getOutputSchema()
     {
         return JsonSchemaBuilder.object()
-            .booleanProperty("success", "Whether the credentials were stored", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty("success", "Whether storage and its required read-back checks succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.PROJECT, "Target EDT project name.") //$NON-NLS-1$
             .stringProperty(McpKeys.APPLICATION_ID, "Target application ID.") //$NON-NLS-1$
             .stringProperty(KEY_APPLICATION_NAME,
@@ -168,6 +169,15 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             .stringProperty(KEY_USER, "Stored infobase user name.") //$NON-NLS-1$
             .stringProperty(KEY_ACCESS, "Stored access kind (INFOBASE or OS).") //$NON-NLS-1$
             .booleanProperty(KEY_PASSWORD_SET, "True when a non-empty password was stored.") //$NON-NLS-1$
+            .objectProperty("storedFor", //$NON-NLS-1$
+                "Infobase name and UUID key used by EDT secure preferences.") //$NON-NLS-1$
+            .enumProperty("verification", //$NON-NLS-1$
+                "Read-back outcome: verified, mismatched, or not_verifiable.", //$NON-NLS-1$
+                "verified", "mismatched", "not_verifiable") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .stringProperty("verificationReason", //$NON-NLS-1$
+                "Why read-back mismatched or could not prove a stored entry exists.") //$NON-NLS-1$
+            .booleanProperty("passwordMatched", //$NON-NLS-1$
+                "Whether the read-back password matched; omitted when no comparison ran.") //$NON-NLS-1$
             .booleanProperty(KEY_CLIENT_CONFIGURED,
                 "True when THIS call also wrote the launched client's own authentication onto a " //$NON-NLS-1$
                 + "launch configuration - only possible when the target was given as " //$NON-NLS-1$
@@ -565,23 +575,27 @@ public class SetInfobaseCredentialsTool implements IMcpTool
                 IApplication application = appOpt.get();
 
                 InfobaseAccess accessKind = InfobaseAccessSupport.parseAccess(finalAccess);
-                String error =
+                StoreResult storeResult =
                     InfobaseAccessSupport.storeCredentials(application, finalUser, finalPassword, accessKind);
-                if (error != null)
+                if (storeResult.error() != null)
                 {
-                    jobResult.set(ToolResult.error(error).toJson());
+                    jobResult.set(ToolResult.error(storeResult.error()).toJson());
+                    return Status.OK_STATUS;
+                }
+                if (StoreResult.Verification.MISMATCHED == storeResult.verification())
+                {
+                    jobResult.set(buildVerificationError(finalProjectName, finalApplicationId, storeResult));
                     return Status.OK_STATUS;
                 }
 
-                // Persist-first: the credentials have committed (updateSettings returned null). Record the
-                // success NOW, keyed on the applicationId as the display name, so a later read-back or a
-                // timeout cannot lose the persisted success. The client half has not been attempted yet,
-                // so this provisional record says so rather than claiming a configured client.
+                // The credentials have committed and verification has concluded. Record the result
+                // before the cosmetic display-name read-back and before the client half starts.
                 boolean passwordSet = finalPassword != null && !finalPassword.isEmpty();
                 String storedUser = finalUser == null ? "" : finalUser; //$NON-NLS-1$
                 jobResult.set(buildSuccess(finalProjectName, finalApplicationId,
                     finalDerivedApplicationId, finalApplicationId,
-                    storedUser, passwordSet, accessKind, finalClientConfigName, CLIENT_WRITE_UNFINISHED));
+                    storedUser, passwordSet, accessKind, storeResult, finalClientConfigName,
+                    CLIENT_WRITE_UNFINISHED));
 
                 // The agent half has committed, so now — and only now — the CLIENT half. Writing it
                 // after the commit means a failure of the agent half leaves the launch configuration
@@ -591,7 +605,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
                     InfobaseAccessSupport.isOsAccess(finalAccess));
                 jobResult.set(buildSuccess(finalProjectName, finalApplicationId,
                     finalDerivedApplicationId, finalApplicationId,
-                    storedUser, passwordSet, accessKind, finalClientConfigName, clientError));
+                    storedUser, passwordSet, accessKind, storeResult, finalClientConfigName, clientError));
 
                 // Best-effort enrich: replace the applicationId-named success with the real display name.
                 try
@@ -601,7 +615,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
                     {
                         jobResult.set(buildSuccess(finalProjectName, finalApplicationId,
                             finalDerivedApplicationId, name, storedUser, passwordSet, accessKind,
-                            finalClientConfigName, clientError));
+                            storeResult, finalClientConfigName, clientError));
                     }
                 }
                 catch (Exception e) // NOSONAR cosmetic read-back — keep the applicationId-named success
@@ -659,29 +673,36 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     }
 
     /**
-     * Builds the SUCCESS tool-result JSON. The same field set (success + clientConfigured + project
-     * + applicationId + applicationName + user + access + passwordSet + message) is emitted whether
+     * Builds the SUCCESS tool-result JSON. The same field set, including storage and verification,
+     * is emitted whether
      * the display name is the applicationId (persist-first) or the real read-back name, so the
      * output shape is identical across branches.
      */
     static String buildSuccess(String projectName, String applicationId, String displayName,
-            String storedUser, boolean passwordSet, InfobaseAccess accessKind, String clientConfigName,
-            String clientError)
+            String storedUser, boolean passwordSet, InfobaseAccess accessKind, StoreResult storeResult,
+            String clientConfigName, String clientError)
     {
         return buildSuccess(projectName, applicationId, false, displayName, storedUser,
-            passwordSet, accessKind, clientConfigName, clientError);
+            passwordSet, accessKind, storeResult, clientConfigName, clientError);
     }
 
     /** Same success payload, explicitly reporting a project-default application derivation. */
     static String buildSuccess(String projectName, String applicationId,
             boolean derivedApplicationId, String displayName, String storedUser, boolean passwordSet,
-            InfobaseAccess accessKind, String clientConfigName, String clientError)
+            InfobaseAccess accessKind, StoreResult storeResult, String clientConfigName,
+            String clientError)
     {
         String derivedNote = derivedApplicationId
             ? " The launch configuration had no applicationId attribute, so EDT's project-default " //$NON-NLS-1$
                 + "application '" + applicationId + "' was derived for project '" + projectName + "'." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             : ""; //$NON-NLS-1$
-        return ToolResult.success()
+        String storageStatement = StoreResult.Verification.VERIFIED == storeResult.verification()
+            ? "Stored infobase access credentials" //$NON-NLS-1$
+            : "EDT accepted the infobase access-settings update"; //$NON-NLS-1$
+        String locationConnector = StoreResult.Verification.VERIFIED == storeResult.verification()
+            ? ") in EDT secure preferences keyed by infobase '" //$NON-NLS-1$
+            : ") targeting EDT secure preferences keyed by infobase '"; //$NON-NLS-1$
+        ToolResult result = ToolResult.success()
             .put(KEY_CLIENT_CONFIGURED, clientConfigName != null && clientError == null)
             .put(McpKeys.PROJECT, projectName)
             .put(McpKeys.APPLICATION_ID, applicationId)
@@ -689,13 +710,59 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             .put(KEY_USER, storedUser)
             .put(KEY_ACCESS, accessKind.getName())
             .put(KEY_PASSWORD_SET, passwordSet)
-            .put(McpKeys.MESSAGE, "Stored infobase access credentials for application '" //$NON-NLS-1$
+            .put("storedFor", storedFor(storeResult)) //$NON-NLS-1$
+            .put("verification", verificationName(storeResult)) //$NON-NLS-1$
+            .put("verificationReason", storeResult.verificationReason()); //$NON-NLS-1$
+        if (storeResult.passwordMatched() != null)
+        {
+            result.put("passwordMatched", storeResult.passwordMatched().booleanValue()); //$NON-NLS-1$
+        }
+        return result.put(McpKeys.MESSAGE, storageStatement + " for application '" //$NON-NLS-1$
                 + displayName + "' (user '" + storedUser + "', access " //$NON-NLS-1$ //$NON-NLS-2$
-                + accessKind.getName() + ")." + derivedNote //$NON-NLS-1$
-                + " The update agent used by update_database / " //$NON-NLS-1$
-                + "launch will now authenticate with them. " //$NON-NLS-1$
+                + accessKind.name() + locationConnector //$NON-NLS-1$
+                + storeResult.storedForName() + "' (UUID " + storeResult.storedForUuid() + ")." //$NON-NLS-1$ //$NON-NLS-2$
+                + derivedNote + verificationNote(storeResult) //$NON-NLS-1$
+                + " A wrong credential value is reported only when EDT connects. " //$NON-NLS-1$
                 + clientNote(clientConfigName, clientError))
             .toJson();
+    }
+
+    static String buildVerificationError(String projectName, String applicationId,
+            StoreResult storeResult)
+    {
+        ToolResult result = ToolResult.error(
+            "Infobase access-settings read-back did not match the requested values: " //$NON-NLS-1$
+                + storeResult.verificationReason())
+            .put(McpKeys.PROJECT, projectName)
+            .put(McpKeys.APPLICATION_ID, applicationId)
+            .put("storedFor", storedFor(storeResult)) //$NON-NLS-1$
+            .put("verification", verificationName(storeResult)) //$NON-NLS-1$
+            .put("passwordMatched", storeResult.passwordMatched().booleanValue()); //$NON-NLS-1$
+        return result.toJson();
+    }
+
+    private static Map<String, String> storedFor(StoreResult storeResult)
+    {
+        Map<String, String> storedFor = new LinkedHashMap<>();
+        storedFor.put("name", storeResult.storedForName()); //$NON-NLS-1$
+        storedFor.put("uuid", storeResult.storedForUuid()); //$NON-NLS-1$
+        return storedFor;
+    }
+
+    private static String verificationName(StoreResult storeResult)
+    {
+        return storeResult.verification().name().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private static String verificationNote(StoreResult storeResult)
+    {
+        if (StoreResult.Verification.NOT_VERIFIABLE == storeResult.verification())
+        {
+            return " Verification could not distinguish the stored settings from EDT's fallback: " //$NON-NLS-1$
+                + storeResult.verificationReason();
+        }
+        return " The access kind, user name, and password matched when read back; the password " //$NON-NLS-1$
+            + "itself is not returned."; //$NON-NLS-1$
     }
 
     /**

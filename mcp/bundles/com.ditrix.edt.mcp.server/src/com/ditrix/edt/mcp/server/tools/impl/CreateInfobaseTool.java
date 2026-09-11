@@ -636,14 +636,21 @@ public class CreateInfobaseTool implements IMcpTool
      * secure storage refusing, would otherwise turn a completed creation into an internal tool error.
      * Here it is structural (and logged, so a real failure stays visible).
      *
-     * @param store the store call, returning its own error text or {@code null} on success
+     * @param store the store call, returning its write and read-back result
      * @return the error text to report, or {@code null} when the credentials were stored
      */
-    private static String storeSafely(java.util.function.Supplier<String> store)
+    private static String storeSafely(
+            java.util.function.Supplier<InfobaseAccessSupport.StoreResult> store)
     {
         try
         {
-            return store.get();
+            InfobaseAccessSupport.StoreResult result = store.get();
+            if (result.error() != null)
+            {
+                return result.error();
+            }
+            return InfobaseAccessSupport.StoreResult.Verification.MISMATCHED == result.verification()
+                ? result.verificationReason() : null;
         }
         catch (Exception e)
         {
