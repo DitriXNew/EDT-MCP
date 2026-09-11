@@ -117,9 +117,9 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
-    public void testReturnsInfobaseDataIsTrueForSessionBlockerDetails()
+    public void testReturnsInfobaseDataIsFalseWithoutSuccessfulPersonalData()
     {
-        assertTrue(new UpdateDatabaseTool().returnsInfobaseData());
+        assertFalse(new UpdateDatabaseTool().returnsInfobaseData());
     }
 
     @Test
@@ -226,20 +226,40 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
-    public void testBlockingSessionsErrorNamesDetailsAndExactClearingCall()
+    public void testBlockingSessionsErrorOmitsPersonalDataAndNamesExactFollowUpCalls()
     {
-        com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo blocker =
-            new com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo(
-                "22222222-2222-2222-2222-222222222222", 42L, "1CV8C", "User", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                "desk", "2026-01-01T10:00:00", "2026-01-01T10:01:00", false); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        String result = UpdateDatabaseTool.blockingSessionsError("Demo", //$NON-NLS-1$
-            "ServerApplication.Demo", List.of(blocker), false); //$NON-NLS-1$
+        SessionInfo blocker = new SessionInfo(
+            "22222222-2222-2222-2222-222222222222", 42L, "1CV8C", "User", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "desk", "2026-01-01T10:00:00", "2026-01-01T10:01:00", false); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        JsonObject result = JsonParser.parseString(UpdateDatabaseTool.blockingSessionsError(
+            "Demo", "ServerApplication.Demo", List.of(blocker), false)).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject expected = JsonParser.parseString("{" //$NON-NLS-1$
+            + "\"success\":false," //$NON-NLS-1$
+            + "\"error\":\"Database update refused because 1 non-agent infobase session(s) " //$NON-NLS-1$
+            + "remain: sessionId=22222222-2222-2222-2222-222222222222, sessionNumber=42, " //$NON-NLS-1$
+            + "applicationKind=1CV8C, startedAt=2026-01-01T10:00:00, " //$NON-NLS-1$
+            + "lastActiveAt=2026-01-01T10:01:00. Run infobase_sessions(action='list', " //$NON-NLS-1$
+            + "projectName='Demo', applicationId='ServerApplication.Demo') to see who holds them. " //$NON-NLS-1$
+            + "Clear them first with infobase_sessions(action='terminate', projectName='Demo', " //$NON-NLS-1$
+            + "applicationId='ServerApplication.Demo', all=true, confirm=true), then retry " //$NON-NLS-1$
+            + "update_database. Designer sessions are not blockers and are always excluded from " //$NON-NLS-1$
+            + "all=true.\",\"project\":\"Demo\"," //$NON-NLS-1$
+            + "\"applicationId\":\"ServerApplication.Demo\",\"reachable\":true," //$NON-NLS-1$
+            + "\"sessions\":[{\"sessionId\":\"22222222-2222-2222-2222-222222222222\"," //$NON-NLS-1$
+            + "\"sessionNumber\":42,\"applicationKind\":\"1CV8C\"," //$NON-NLS-1$
+            + "\"startedAt\":\"2026-01-01T10:00:00\"," //$NON-NLS-1$
+            + "\"lastActiveAt\":\"2026-01-01T10:01:00\"}]}") //$NON-NLS-1$
+            .getAsJsonObject();
 
-        assertTrue(result.contains("sessionNumber")); //$NON-NLS-1$
-        assertTrue(result.contains("applicationKind")); //$NON-NLS-1$
-        assertTrue(result.contains("infobase_sessions(action='terminate', projectName='Demo', " //$NON-NLS-1$
-            + "applicationId='ServerApplication.Demo', all=true, confirm=true)")); //$NON-NLS-1$
-        assertTrue(result.contains("Designer")); //$NON-NLS-1$
+        assertEquals(expected, result);
+        JsonObject session = result.getAsJsonArray("sessions").get(0).getAsJsonObject(); //$NON-NLS-1$
+        assertTrue(session.has("sessionId")); //$NON-NLS-1$
+        assertTrue(session.has("sessionNumber")); //$NON-NLS-1$
+        assertTrue(session.has("applicationKind")); //$NON-NLS-1$
+        assertTrue(session.has("startedAt")); //$NON-NLS-1$
+        assertTrue(session.has("lastActiveAt")); //$NON-NLS-1$
+        assertFalse(session.has("userName")); //$NON-NLS-1$
+        assertFalse(session.has("host")); //$NON-NLS-1$
     }
 
     @Test
@@ -254,18 +274,32 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
-    public void failedUpdateNamesDesignerSessionSeenDuringPreflight()
+    public void failedUpdateDesignerNoteContainsNoPersonalData()
     {
         SessionInfo designer = new SessionInfo(
-            "11111111-1111-1111-1111-111111111111", 1L, "Designer", "agent", "host", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "11111111-1111-1111-1111-111111111111", 1L, "Designer", //$NON-NLS-1$ //$NON-NLS-2$
+            "agent@example.com", "private-host", //$NON-NLS-1$ //$NON-NLS-2$
             "2026-01-01T10:00:00", "2026-01-01T10:01:00", true); //$NON-NLS-1$ //$NON-NLS-2$
-        String result = UpdateDatabaseTool.buildApplicationErrorResult(
-            new ApplicationException("exclusive lock"), "Demo", "ServerApplication.Demo", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            false, false, null, List.of(designer));
+        JsonObject result = JsonParser.parseString(UpdateDatabaseTool.buildUnexpectedErrorResult(
+            new IllegalStateException("update failed"), false, false, null, //$NON-NLS-1$
+            List.of(designer))).getAsJsonObject();
+        JsonObject expected = JsonParser.parseString("{" //$NON-NLS-1$
+            + "\"success\":false," //$NON-NLS-1$
+            + "\"error\":\"Unexpected error: update failed Pre-update session inspection saw " //$NON-NLS-1$
+            + "app-id: Designer session(s): " //$NON-NLS-1$
+            + "sessionId=11111111-1111-1111-1111-111111111111, sessionNumber=1, " //$NON-NLS-1$
+            + "applicationKind=Designer, startedAt=2026-01-01T10:00:00, " //$NON-NLS-1$
+            + "lastActiveAt=2026-01-01T10:01:00. EDT cannot tell whether each is its update agent " //$NON-NLS-1$
+            + "or a human Configurator; after this update failure, they are the most likely " //$NON-NLS-1$
+            + "holders of the exclusive lock. Run infobase_sessions(action='list', ...) to see " //$NON-NLS-1$
+            + "who holds them. The update may have applied partially, so do not retry blindly: " //$NON-NLS-1$
+            + "check the actual state with get_applications (updateState) and the EDT Error Log " //$NON-NLS-1$
+            + "first.\"}") //$NON-NLS-1$
+            .getAsJsonObject();
 
-        assertTrue(result.contains(designer.sessionId()));
-        assertTrue(result.contains("human Configurator")); //$NON-NLS-1$
-        assertTrue(result.contains("most likely holders of the exclusive lock")); //$NON-NLS-1$
+        assertEquals(expected, result);
+        assertFalse(result.toString().contains("agent@example.com")); //$NON-NLS-1$
+        assertFalse(result.toString().contains("private-host")); //$NON-NLS-1$
     }
 
     @Test

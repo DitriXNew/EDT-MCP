@@ -131,6 +131,7 @@ public class InfobaseSessionsTool implements IMcpTool
     @Override
     public boolean returnsInfobaseData()
     {
+        // Successful list and verified-termination payloads carry live user and host values.
         return true;
     }
 
@@ -313,39 +314,52 @@ public class InfobaseSessionsTool implements IMcpTool
                 projectName, application).put(KEY_REACHABLE, true).toJson();
         }
 
-        List<SessionInfo> terminated = new ArrayList<>();
+        List<SessionInfo> attempted = new ArrayList<>();
         for (SessionInfo session : selection.sessions)
         {
             TerminationResult result = InfobaseSessionSupport.terminateSession(application,
                 session.sessionId(), message);
             if (!result.terminated())
             {
-                ToolResult error = terminated.isEmpty()
-                    ? baseError("Session termination failed: " + result.unreachableReason(), //$NON-NLS-1$
-                        projectName, application)
-                    : ToolResult.errorAfterMutation("Session termination stopped after " //$NON-NLS-1$
-                        + terminated.size() + " completed session(s): " //$NON-NLS-1$
-                        + result.unreachableReason())
-                            .put(McpKeys.ACTION, ACTION_TERMINATE)
-                            .put(McpKeys.PROJECT, projectName)
-                            .put(McpKeys.APPLICATION_ID, application.getId());
-                error.put(KEY_REACHABLE, false)
-                    .put(KEY_UNREACHABLE_REASON, result.unreachableReason())
-                    .put("terminatedCount", terminated.size()); //$NON-NLS-1$
-                if (!terminated.isEmpty())
+                if (attempted.isEmpty())
                 {
-                    error.put(KEY_SESSIONS, sessionMaps(terminated));
+                    return baseError("Session termination failed: " + result.unreachableReason(), //$NON-NLS-1$
+                        projectName, application).put(KEY_REACHABLE, false)
+                            .put(KEY_UNREACHABLE_REASON, result.unreachableReason())
+                            .put("terminatedCount", 0).toJson(); //$NON-NLS-1$
                 }
-                return error.toJson();
+                return terminationSequenceStoppedResult(projectName, application.getId(),
+                    attempted.size(), result.unreachableReason());
             }
-            terminated.add(session);
+            attempted.add(session);
         }
 
         // ibcmd exits 0 for a session UUID that no longer exists, so its exit code cannot say a
         // session was terminated. A terminate completes before ibcmd returns, so re-reading the
         // list once reports what is actually gone.
         ReadResult after = InfobaseSessionSupport.listSessions(application);
-        return terminationReadBackResult(projectName, application.getId(), terminated, after);
+        return terminationReadBackResult(projectName, application.getId(), attempted, after);
+    }
+
+    /** Builds an unverified error after a later terminate command stops the sequence. */
+    static String terminationSequenceStoppedResult(String projectName, String applicationId,
+        int attemptedCount, String reason)
+    {
+        return ToolResult.errorAfterMutation("Session termination stopped after " //$NON-NLS-1$
+            + attemptedCount + " accepted attempt(s): " + reason //$NON-NLS-1$
+            + " The session list was not re-read, so no attempted termination is reported as " //$NON-NLS-1$
+            + "completed. Run infobase_sessions(action='list', projectName='" + projectName //$NON-NLS-1$
+            + "', applicationId='" + applicationId + "') to see who still holds sessions.") //$NON-NLS-1$ //$NON-NLS-2$
+                .put(McpKeys.ACTION, ACTION_TERMINATE)
+                .put(McpKeys.PROJECT, projectName)
+                .put(McpKeys.APPLICATION_ID, applicationId)
+                .put(KEY_REACHABLE, false)
+                .put(KEY_UNREACHABLE_REASON, reason)
+                .put("attemptedCount", attemptedCount) //$NON-NLS-1$
+                .put(KEY_VERIFICATION, VERIFICATION_NOT_VERIFIABLE)
+                .put(KEY_VERIFICATION_REASON, "The session list was not re-read because the " //$NON-NLS-1$
+                    + "termination sequence stopped after a later command failed.") //$NON-NLS-1$
+                .toJson();
     }
 
     /** Builds the terminate result from the accepted targets and the authoritative re-read. */
@@ -368,12 +382,12 @@ public class InfobaseSessionsTool implements IMcpTool
         }
 
         List<SessionInfo> gone = new ArrayList<>();
-        List<String> stillPresent = new ArrayList<>();
+        List<SessionInfo> stillPresent = new ArrayList<>();
         for (SessionInfo session : attempted)
         {
             if (containsSessionId(after.sessions(), session.sessionId()))
             {
-                stillPresent.add(displayId(session));
+                stillPresent.add(session);
             }
             else
             {
@@ -382,20 +396,34 @@ public class InfobaseSessionsTool implements IMcpTool
         }
         if (!stillPresent.isEmpty())
         {
-            return ToolResult.errorAfterMutation("ibcmd accepted every termination, but " //$NON-NLS-1$
-                + stillPresent.size() + " of " + attempted.size() + " session(s) are still " //$NON-NLS-1$ //$NON-NLS-2$
-                + "present and still block a database update: " //$NON-NLS-1$
-                + String.join(", ", stillPresent) + ".") //$NON-NLS-1$ //$NON-NLS-2$
-                    .put(McpKeys.ACTION, ACTION_TERMINATE)
-                    .put(McpKeys.PROJECT, projectName)
-                    .put(McpKeys.APPLICATION_ID, applicationId)
-                    .put(KEY_REACHABLE, true)
-                    .put(KEY_SESSIONS, sessionMaps(gone))
-                    .put("terminatedCount", gone.size()) //$NON-NLS-1$
-                    .put(KEY_VERIFICATION, VERIFICATION_MISMATCHED)
-                    .put(KEY_VERIFICATION_REASON, "The session list still reports them after a " //$NON-NLS-1$
-                        + "terminate command that reported success.") //$NON-NLS-1$
-                    .toJson();
+            List<String> stillPresentIds = stillPresent.stream()
+                .map(InfobaseSessionsTool::displayId)
+                .toList();
+            boolean onlyDesignerSessions = stillPresent.stream()
+                .allMatch(InfobaseSessionsTool::isDesignerSession);
+            String message = "ibcmd accepted every termination, but " + stillPresent.size() //$NON-NLS-1$
+                + " of " + attempted.size() //$NON-NLS-1$
+                + (onlyDesignerSessions ? " Designer session(s)" : " session(s)") //$NON-NLS-1$ //$NON-NLS-2$
+                + " are still present after a terminate command that reported success: " //$NON-NLS-1$
+                + String.join(", ", stillPresentIds) + ". " //$NON-NLS-1$ //$NON-NLS-2$
+                + (onlyDesignerSessions
+                    ? "Designer sessions are not treated as blockers by update_database. " //$NON-NLS-1$
+                    : "Non-Designer sessions in that list still block a database update. ") //$NON-NLS-1$
+                + "Run infobase_sessions(action='list', projectName='" + projectName //$NON-NLS-1$
+                + "', applicationId='" + applicationId + "') to see who holds them."; //$NON-NLS-1$ //$NON-NLS-2$
+            // Unlike an unread sequence stop, this re-read is evidence that nothing changed.
+            ToolResult result = gone.isEmpty() ? ToolResult.error(message)
+                : ToolResult.errorAfterMutation(message);
+            return result.put(McpKeys.ACTION, ACTION_TERMINATE)
+                .put(McpKeys.PROJECT, projectName)
+                .put(McpKeys.APPLICATION_ID, applicationId)
+                .put(KEY_REACHABLE, true)
+                .put(KEY_SESSIONS, errorSessionMaps(gone))
+                .put("terminatedCount", gone.size()) //$NON-NLS-1$
+                .put(KEY_VERIFICATION, VERIFICATION_MISMATCHED)
+                .put(KEY_VERIFICATION_REASON, "The session list still reports them after a " //$NON-NLS-1$
+                    + "terminate command that reported success.") //$NON-NLS-1$
+                .toJson();
         }
 
         ToolResult result = ToolResult.success().put(McpKeys.ACTION, ACTION_TERMINATE)
@@ -490,6 +518,24 @@ public class InfobaseSessionsTool implements IMcpTool
             item.put("startedAt", session.startedAt()); //$NON-NLS-1$
             item.put("lastActiveAt", session.lastActiveAt()); //$NON-NLS-1$
             item.put("isEdtAgent", isDesignerSession(session)); //$NON-NLS-1$
+            result.add(item);
+        }
+        return result;
+    }
+
+    /** Converts session records to the non-personal fields permitted in error payloads. */
+    static List<Map<String, Object>> errorSessionMaps(List<SessionInfo> sessions)
+    {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (SessionInfo session : sessions)
+        {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("sessionId", session.sessionId()); //$NON-NLS-1$
+            item.put("sessionNumber", session.sessionNumber() == null //$NON-NLS-1$
+                ? JsonNull.INSTANCE : session.sessionNumber());
+            item.put("applicationKind", session.applicationKind()); //$NON-NLS-1$
+            item.put("startedAt", session.startedAt()); //$NON-NLS-1$
+            item.put("lastActiveAt", session.lastActiveAt()); //$NON-NLS-1$
             result.add(item);
         }
         return result;

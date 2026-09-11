@@ -186,12 +186,148 @@ public class InfobaseSessionsToolTest
         JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
             "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
             ReadResult.unreachable("server stopped before verification"))).getAsJsonObject(); //$NON-NLS-1$
+        JsonObject expected = JsonParser.parseString("{" //$NON-NLS-1$
+            + "\"success\":true,\"action\":\"terminate\",\"project\":\"Demo\"," //$NON-NLS-1$
+            + "\"applicationId\":\"ServerApplication.Demo\",\"reachable\":true," //$NON-NLS-1$
+            + "\"attemptedCount\":1,\"verification\":\"not_verifiable\"," //$NON-NLS-1$
+            + "\"verificationReason\":\"server stopped before verification\"," //$NON-NLS-1$
+            + "\"message\":\"ibcmd accepted 1 termination attempt(s), but the list could not " //$NON-NLS-1$
+            + "be re-read to confirm they are gone. List again before treating the infobase as " //$NON-NLS-1$
+            + "clear.\"}") //$NON-NLS-1$
+            .getAsJsonObject();
 
+        assertEquals(expected, result);
         assertEquals("not_verifiable", result.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(1, result.get("attemptedCount").getAsInt()); //$NON-NLS-1$
         assertFalse(result.has("terminatedCount")); //$NON-NLS-1$
         assertFalse(result.has("sessions")); //$NON-NLS-1$
         assertTrue(result.get("message").getAsString().contains("List again")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void stoppedTerminationSequenceReportsAcceptedAttemptsWithoutUnverifiedCompletions()
+    {
+        JsonObject result = JsonParser.parseString(
+            InfobaseSessionsTool.terminationSequenceStoppedResult("Demo", //$NON-NLS-1$
+                "ServerApplication.Demo", 1, "second command failed.")) //$NON-NLS-1$ //$NON-NLS-2$
+            .getAsJsonObject();
+        JsonObject expected = JsonParser.parseString("{" //$NON-NLS-1$
+            + "\"success\":false," //$NON-NLS-1$
+            + "\"error\":\"Session termination stopped after 1 accepted attempt(s): second " //$NON-NLS-1$
+            + "command failed. The session list was not re-read, so no attempted termination is " //$NON-NLS-1$
+            + "reported as completed. Run infobase_sessions(action='list', projectName='Demo', " //$NON-NLS-1$
+            + "applicationId='ServerApplication.Demo') to see who still holds sessions.\"," //$NON-NLS-1$
+            + "\"mutationCommitted\":true," //$NON-NLS-1$
+            + "\"action\":\"terminate\",\"project\":\"Demo\"," //$NON-NLS-1$
+            + "\"applicationId\":\"ServerApplication.Demo\",\"reachable\":false," //$NON-NLS-1$
+            + "\"unreachableReason\":\"second command failed.\",\"attemptedCount\":1," //$NON-NLS-1$
+            + "\"verification\":\"not_verifiable\"," //$NON-NLS-1$
+            + "\"verificationReason\":\"The session list was not re-read because the " //$NON-NLS-1$
+            + "termination sequence stopped after a later command failed.\"}") //$NON-NLS-1$
+            .getAsJsonObject();
+
+        assertEquals(expected, result);
+        assertTrue(result.has("attemptedCount")); //$NON-NLS-1$
+        assertTrue(result.has("verificationReason")); //$NON-NLS-1$
+        assertFalse(result.has("terminatedCount")); //$NON-NLS-1$
+        assertFalse(result.has("sessions")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void readBackWithNoDisappearanceDoesNotClaimMutationCommitted()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.readable(List.of(CLIENT)))).getAsJsonObject();
+        JsonObject expected = JsonParser.parseString("{" //$NON-NLS-1$
+            + "\"success\":false," //$NON-NLS-1$
+            + "\"error\":\"ibcmd accepted every termination, but 1 of 1 session(s) are still " //$NON-NLS-1$
+            + "present after a terminate command that reported success: " + CLIENT.sessionId()
+            + " (session-id 42). Non-Designer sessions in that list still block a database " //$NON-NLS-1$
+            + "update. Run infobase_sessions(action='list', projectName='Demo', " //$NON-NLS-1$
+            + "applicationId='ServerApplication.Demo') to see who holds them.\"," //$NON-NLS-1$
+            + "\"action\":\"terminate\",\"project\":\"Demo\"," //$NON-NLS-1$
+            + "\"applicationId\":\"ServerApplication.Demo\",\"reachable\":true," //$NON-NLS-1$
+            + "\"sessions\":[],\"terminatedCount\":0,\"verification\":\"mismatched\"," //$NON-NLS-1$
+            + "\"verificationReason\":\"The session list still reports them after a terminate " //$NON-NLS-1$
+            + "command that reported success.\"}") //$NON-NLS-1$
+            .getAsJsonObject();
+
+        assertEquals(expected, result);
+        assertFalse(result.has("mutationCommitted")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void survivingDesignerSessionIsReportedNeutrally()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
+            "Demo", "ServerApplication.Demo", List.of(DESIGNER), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.readable(List.of(DESIGNER)))).getAsJsonObject();
+        JsonObject expected = JsonParser.parseString("{" //$NON-NLS-1$
+            + "\"success\":false," //$NON-NLS-1$
+            + "\"error\":\"ibcmd accepted every termination, but 1 of 1 Designer session(s) " //$NON-NLS-1$
+            + "are still present after a terminate command that reported success: " //$NON-NLS-1$
+            + DESIGNER.sessionId()
+            + " (session-id 1). Designer sessions are not treated as blockers by update_database. " //$NON-NLS-1$
+            + "Run infobase_sessions(action='list', projectName='Demo', " //$NON-NLS-1$
+            + "applicationId='ServerApplication.Demo') to see who holds them.\"," //$NON-NLS-1$
+            + "\"action\":\"terminate\",\"project\":\"Demo\"," //$NON-NLS-1$
+            + "\"applicationId\":\"ServerApplication.Demo\",\"reachable\":true," //$NON-NLS-1$
+            + "\"sessions\":[],\"terminatedCount\":0,\"verification\":\"mismatched\"," //$NON-NLS-1$
+            + "\"verificationReason\":\"The session list still reports them after a terminate " //$NON-NLS-1$
+            + "command that reported success.\"}") //$NON-NLS-1$
+            .getAsJsonObject();
+
+        assertEquals(expected, result);
+        assertFalse(result.get("error").getAsString().contains("still block")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void mixedTerminationErrorContainsOnlyNonPersonalSessionFields()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
+            "Demo", "ServerApplication.Demo", List.of(DESIGNER, CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.readable(List.of(CLIENT)))).getAsJsonObject();
+        JsonObject expected = JsonParser.parseString("{" //$NON-NLS-1$
+            + "\"success\":false," //$NON-NLS-1$
+            + "\"error\":\"ibcmd accepted every termination, but 1 of 2 session(s) are still " //$NON-NLS-1$
+            + "present after a terminate command that reported success: " + CLIENT.sessionId()
+            + " (session-id 42). Non-Designer sessions in that list still block a database " //$NON-NLS-1$
+            + "update. Run infobase_sessions(action='list', projectName='Demo', " //$NON-NLS-1$
+            + "applicationId='ServerApplication.Demo') to see who holds them.\"," //$NON-NLS-1$
+            + "\"mutationCommitted\":true," //$NON-NLS-1$
+            + "\"action\":\"terminate\",\"project\":\"Demo\"," //$NON-NLS-1$
+            + "\"applicationId\":\"ServerApplication.Demo\",\"reachable\":true," //$NON-NLS-1$
+            + "\"sessions\":[{\"sessionId\":\"" + DESIGNER.sessionId() + "\"," //$NON-NLS-1$ //$NON-NLS-2$
+            + "\"sessionNumber\":1,\"applicationKind\":\"Designer\"," //$NON-NLS-1$
+            + "\"startedAt\":\"2026-01-01T10:00:00\"," //$NON-NLS-1$
+            + "\"lastActiveAt\":\"2026-01-01T10:01:00\"}]," //$NON-NLS-1$
+            + "\"terminatedCount\":1,\"verification\":\"mismatched\"," //$NON-NLS-1$
+            + "\"verificationReason\":\"The session list still reports them after a terminate " //$NON-NLS-1$
+            + "command that reported success.\"}") //$NON-NLS-1$
+            .getAsJsonObject();
+
+        assertEquals(expected, result);
+        JsonObject session = result.getAsJsonArray("sessions").get(0).getAsJsonObject(); //$NON-NLS-1$
+        assertTrue(session.has("sessionId")); //$NON-NLS-1$
+        assertTrue(session.has("sessionNumber")); //$NON-NLS-1$
+        assertTrue(session.has("applicationKind")); //$NON-NLS-1$
+        assertTrue(session.has("startedAt")); //$NON-NLS-1$
+        assertTrue(session.has("lastActiveAt")); //$NON-NLS-1$
+        assertFalse(session.has("userName")); //$NON-NLS-1$
+        assertFalse(session.has("host")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void successfulSessionPayloadKeepsPersonalFieldsForTheWireRedactor()
+    {
+        JsonObject session = JsonParser.parseString(
+            com.ditrix.edt.mcp.server.protocol.ToolResult.toJsonStatic(
+                InfobaseSessionsTool.sessionMaps(List.of(CLIENT))))
+            .getAsJsonArray().get(0).getAsJsonObject();
+
+        assertEquals("User", session.get("userName").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("desk", session.get("host").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

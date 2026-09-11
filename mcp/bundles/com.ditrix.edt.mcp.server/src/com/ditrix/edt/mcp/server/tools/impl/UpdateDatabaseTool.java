@@ -162,13 +162,6 @@ public class UpdateDatabaseTool implements IMcpTool
     }
 
     @Override
-    public boolean returnsInfobaseData()
-    {
-        // A blocker refusal includes user and host fields read from live infobase sessions.
-        return true;
-    }
-
-    @Override
     public boolean connectsToInfobase()
     {
         // getUpdateState()/update() open a live connection to run the database update
@@ -1033,14 +1026,14 @@ public class UpdateDatabaseTool implements IMcpTool
             details.append("sessionId=").append(session.sessionId()) //$NON-NLS-1$
                 .append(", sessionNumber=").append(session.sessionNumber()) //$NON-NLS-1$
                 .append(", applicationKind=").append(session.applicationKind()) //$NON-NLS-1$
-                .append(", userName=").append(session.userName()) //$NON-NLS-1$
-                .append(", host=").append(session.host()) //$NON-NLS-1$
                 .append(", startedAt=").append(session.startedAt()) //$NON-NLS-1$
                 .append(", lastActiveAt=").append(session.lastActiveAt()); //$NON-NLS-1$
         }
         String message = "Database update refused because " + blockers.size() //$NON-NLS-1$
             + " non-agent infobase session(s) remain: " + details //$NON-NLS-1$
-            + ". Clear them first with infobase_sessions(action='terminate', projectName='" //$NON-NLS-1$
+            + ". Run infobase_sessions(action='list', projectName='" + projectName //$NON-NLS-1$
+            + "', applicationId='" + applicationId + "') to see who holds them. " //$NON-NLS-1$ //$NON-NLS-2$
+            + "Clear them first with infobase_sessions(action='terminate', projectName='" //$NON-NLS-1$
             + projectName + "', applicationId='" + applicationId //$NON-NLS-1$
             + "', all=true, confirm=true), then retry update_database. Designer sessions are not " //$NON-NLS-1$
             + "blockers and are always excluded from all=true." //$NON-NLS-1$
@@ -1053,7 +1046,7 @@ public class UpdateDatabaseTool implements IMcpTool
         result.put(McpKeys.PROJECT, projectName)
             .put(McpKeys.APPLICATION_ID, applicationId)
             .put("reachable", true) //$NON-NLS-1$
-            .put("sessions", InfobaseSessionsTool.sessionMaps(blockers)); //$NON-NLS-1$
+            .put("sessions", InfobaseSessionsTool.errorSessionMaps(blockers)); //$NON-NLS-1$
         if (terminatedClient)
         {
             result.put(KEY_TERMINATED_CLIENT, true);
@@ -1073,14 +1066,19 @@ public class UpdateDatabaseTool implements IMcpTool
         }
         if (designerSessions != null && !designerSessions.isEmpty())
         {
-            List<String> ids = designerSessions.stream()
-                .map(SessionInfo::sessionId)
+            List<String> details = designerSessions.stream()
+                .map(session -> "sessionId=" + session.sessionId() //$NON-NLS-1$
+                    + ", sessionNumber=" + session.sessionNumber() //$NON-NLS-1$
+                    + ", applicationKind=" + session.applicationKind() //$NON-NLS-1$
+                    + ", startedAt=" + session.startedAt() //$NON-NLS-1$
+                    + ", lastActiveAt=" + session.lastActiveAt()) //$NON-NLS-1$
                 .toList();
             note.append(" Pre-update session inspection saw app-id: Designer session(s): ") //$NON-NLS-1$
-                .append(String.join(", ", ids)) //$NON-NLS-1$
+                .append(String.join("; ", details)) //$NON-NLS-1$
                 .append(". EDT cannot tell whether each is its update agent or a human " //$NON-NLS-1$
                     + "Configurator; after this update failure, they are the most likely holders " //$NON-NLS-1$
-                    + "of the exclusive lock."); //$NON-NLS-1$
+                    + "of the exclusive lock. Run infobase_sessions(action='list', ...) to see " //$NON-NLS-1$
+                    + "who holds them."); //$NON-NLS-1$
         }
         return note.toString();
     }
