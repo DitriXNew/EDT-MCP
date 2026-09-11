@@ -85,6 +85,39 @@ def test_a_deleted_command_leaves_the_button_pointing_at_nothing():
         "and say what is wrong with it: %r" % (about_button[0],)
 
 
+@e2e_test(tool="validate_form_model", kind="write-metadata")
+def test_a_real_event_binding_is_not_called_foreign():
+    """`foreign-event-reference` judges a binding against the events the platform publishes for
+    its owner, so the risk it carries is noise on healthy forms: an incomplete published set would
+    accuse an ordinary handler. Measured live before this test was written.
+
+    The second half is what makes the first half mean anything. The check stays silent when it
+    cannot tell, so a clean verdict alone would also be what a broken, always-empty publication
+    looks like. Binding a FIELD event to the form ROOT is refused by the writer, and the refusal
+    lists the events the root does publish - which proves the set is populated on this stand and
+    the clean verdict above is a real comparison."""
+    handler = FORM + ".Handler.OnCreateAtServer"
+    assert_ok(call("create_metadata",
+                   {"projectName": PROJECT, "fqn": handler,
+                    "properties": [{"name": "procedure", "value": "E2EValidateOnCreate"}]}),
+              "bind an event the form root really publishes")
+    wait_for_project_ready()
+
+    r = call("validate_form_model", {"projectName": PROJECT, "formFqn": FORM})
+    assert_ok(r, "validate the form carrying a real binding")
+    codes = [f.get("code") for f in _findings(r)]
+    assert "foreign-event-reference" not in codes, \
+        "a binding to an event the root publishes must not be called foreign: %r" % (codes,)
+
+    # The published set is not simply empty - the writer names it back when it refuses.
+    refused = call("create_metadata",
+                   {"projectName": PROJECT, "fqn": FORM + ".Handler.OnChange",
+                    "properties": [{"name": "procedure", "value": "E2EValidateOnChange"}]})
+    err = assert_error(refused, "a FIELD event bound to the form root")
+    assert "OnChange" in err and "Available events" in err, \
+        "the refusal must name the events the root does publish: %r" % (err,)
+
+
 @e2e_test(tool="validate_form_model", kind="read")
 def test_an_unknown_form_is_refused_with_the_address_shape():
     r = call("validate_form_model",
