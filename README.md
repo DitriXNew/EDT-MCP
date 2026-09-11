@@ -641,14 +641,14 @@ with `python docs/generate_tool_docs.py`.
 | [`get_problem_summary`](docs/tools/get_problem_summary.md) | Get problem summary with counts grouped by project and EDT severity level (ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL). Use this for severity totals on… |
 | [`get_project_errors`](docs/tools/get_project_errors.md) | List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. Each row carries the check code, message,… |
 | [`import_configuration_from_xml`](docs/tools/import_configuration_from_xml.md) | Import a configuration from a directory of XML files into a NEW EDT project (EDT menu: Import); the reverse of export_configuration_to_xml. The projectName m… |
-| [`infobase_sessions`](docs/tools/infobase_sessions.md) | List or terminate sessions on a running standalone-server infobase. Designer is protected; unreachable inspection is distinct from an empty list. |
+| [`infobase_sessions`](docs/tools/infobase_sessions.md) | List or terminate sessions on a running standalone-server infobase. DESTRUCTIVE for terminate: pass confirm=true; bulk termination skips Designer, while its… |
 | [`list_git_branches`](docs/tools/list_git_branches.md) | List a project's git branches: local and remote-tracking, with the CURRENT branch marked (detached HEAD flagged), plus the 1C application/infobase each branc… |
 | [`resync_to_disk`](docs/tools/resync_to_disk.md) | Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files and report BM-to-disk desync. Direction: MODEL -> DISK (writes the model out to src… |
 | [`revalidate_objects`](docs/tools/revalidate_objects.md) | Revalidate EDT project or specific objects. If objects array is empty or missing, revalidates entire project. FQN examples: 'Document.SalesOrder', 'Catalog.P… |
 | [`set_branch_infobase`](docs/tools/set_branch_infobase.md) | Attach or detach an EXISTING infobase (application) to/from a specific git branch context, so switch_git_branch's automatic binding follows that branch. Targ… |
 | [`set_infobase_credentials`](docs/tools/set_infobase_credentials.md) | Store infobase connection credentials (user/password) so update_database and launch can authenticate the update agent on an infobase that has a user list… |
 | [`switch_git_branch`](docs/tools/switch_git_branch.md) | Switch a project's git repository to another branch (headless EGit checkout). branch may be a short local name (e.g. 'feature/x') or a full ref ('refs/heads/… |
-| [`update_database`](docs/tools/update_database.md) | Apply an EDT configuration to an infobase. List standalone-server sessions first; clear non-agent blockers with `infobase_sessions` before updating. |
+| [`update_database`](docs/tools/update_database.md) | Apply the current EDT configuration to an infobase. Before applying, call infobase_sessions(action='list'); any non-agent session blocks the update, so clear… |
 | [`validate_xdto_package`](docs/tools/validate_xdto_package.md) | Validate a single XDTO package by running EDT's OWN configuration validation (the same check engine behind get_project_errors) scoped to that package, and re… |
 
 ### Comparison
@@ -679,8 +679,10 @@ Before applying `update_database` to a standalone-server application, call
 impossible and must never be read as an empty list. Any non-agent session blocks the default
 update preflight. Clear blockers with
 `infobase_sessions(action='terminate', projectName='...', applicationId='...', all=true,
-confirm=true)`, then retry the update. The `Designer` session is EDT's update agent, is not a
-blocker, and is never terminated.
+confirm=true)`, then retry the update. A `Designer` session may be EDT's update agent OR a
+human Configurator, and EDT exposes no discriminator. It is therefore not treated as a
+blocker — EDT's own agent is present during every normal update — and `all=true` always
+skips it. Terminating one is possible only by its exact full session UUID.
 
 ## Three-way configuration comparison
 

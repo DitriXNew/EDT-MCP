@@ -1,14 +1,14 @@
 # infobase_sessions
 
-List or terminate sessions on a running standalone-server infobase. DESTRUCTIVE for terminate: pass confirm=true; the EDT Designer agent is never terminated. Full parameters and examples: call get_tool_guide('infobase_sessions').
+List or terminate sessions on a running standalone-server infobase. DESTRUCTIVE for terminate: pass confirm=true; bulk termination skips Designer, while its exact full UUID can target it. Full parameters and examples: call get_tool_guide('infobase_sessions').
 
 ## Parameters
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
 | projectName | yes | string | EDT project whose standalone-server application owns the sessions (required). |
 | applicationId | — | string | Application ID from get_applications; defaults to the project's default application. |
-| action | — | string (one of: list, terminate) | list (default) reads sessions; terminate ends the selected non-agent session(s). |
-| sessionId | — | string | For terminate, the full session UUID or numeric session-id returned by list. |
+| action | — | string (one of: list, terminate) | list (default) reads sessions; terminate ends the selected session(s). |
+| sessionId | — | string | For terminate, the full session UUID or numeric session-id returned by list; a Designer session requires its exact full UUID. |
 | all | — | boolean | For terminate, true selects every non-agent session; Designer is always excluded. |
 | confirm | — | boolean | Required true for terminate; list never changes sessions. |
 | message | — | string | Optional text shown to a terminated user through ibcmd --error-message. |
@@ -32,16 +32,18 @@ Each session reports `sessionId` (full UUID), `sessionNumber` (numeric `session-
 
 There is no OS process id: `ibcmd` leaves the `process` and `connection` fields empty for standalone-server sessions, so none is reported. Terminating the session ends the client process it belongs to, which is what a process id would have been used for.
 
-## The protected Designer session
+## The ambiguous Designer session
 
-An `app-id: Designer` session is the EDT configurator/update agent. It is not a foreign-client blocker. The tool marks it with `isEdtAgent=true`, refuses a direct termination request for it, and always excludes it from `all=true`. Killing it can break the database update that created it.
+An `app-id: Designer` session can be EDT's configurator/update agent OR a human Configurator; EDT exposes no discriminator, so the tool cannot tell them apart. The compatibility field `isEdtAgent=true` therefore means the raw application kind is `Designer`, not that EDT ownership was proved.
+
+Treating every Designer session as a blocker would refuse every normal EDT update. For that reason `update_database` does not block on it and `all=true` always skips it. You can terminate one only as an explicit per-id act using its exact full session UUID. If it is EDT's agent, EDT re-creates it on its next connect; an update running at the moment you terminate it can fail.
 
 ## Parameters
 
 - `projectName` (required) — the EDT configuration project.
 - `applicationId` — an ID from `get_applications`; omitted means the project's default application.
 - `action` — `list` (default) or `terminate`.
-- `sessionId` — for `terminate`, either the full UUID or numeric session number returned by `list`.
+- `sessionId` — for `terminate`, either the full UUID or numeric session number returned by `list`. A Designer session requires its exact full UUID.
 - `all` — for `terminate`, `true` selects every non-agent session. Use exactly one of `sessionId` or `all=true`.
 - `confirm` — must be `true` for `terminate`.
 - `message` — optional text passed to `ibcmd --error-message` and shown to the terminated user.
@@ -70,7 +72,7 @@ Termination is verified, not assumed. `ibcmd` exits 0 even for a session UUID th
 
 - `verified` — every targeted session is absent from the re-read list;
 - `mismatched` — a session is still present after a terminate that reported success; this is an error, and those sessions still block an update;
-- `not_verifiable` — the list could not be re-read, with `verificationReason` naming why; list again before treating the infobase as clear.
+- `not_verifiable` — the list could not be re-read, with `attemptedCount` and `verificationReason` naming what was attempted and why it could not be checked. `sessions` and `terminatedCount` are omitted because none was observed gone; list again before treating the infobase as clear.
 
 If a multi-session termination stops partway, the error carries `mutationCommitted=true`, `terminatedCount`, and the already terminated session records.
 
