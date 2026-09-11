@@ -116,6 +116,12 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
+    public void testReturnsInfobaseDataIsTrueForSessionBlockerDetails()
+    {
+        assertTrue(new UpdateDatabaseTool().returnsInfobaseData());
+    }
+
+    @Test
     public void testDescriptionNotEmpty()
     {
         String desc = new UpdateDatabaseTool().getDescription();
@@ -135,6 +141,8 @@ public class UpdateDatabaseToolTest
         assertTrue("schema must declare the confirm gate", schema.contains("\"confirm\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("schema must declare the terminateRunningClients opt-out", //$NON-NLS-1$
             schema.contains("\"terminateRunningClients\"")); //$NON-NLS-1$
+        assertTrue("schema must declare the default-on session safety pre-flight", //$NON-NLS-1$
+            schema.contains("\"checkInfobaseSessions\"")); //$NON-NLS-1$
         // autoRestructure was removed: the EDT update API (IApplicationManager.update /
         // ExecutionContext) has no per-call restructure-confirmation switch, so the parameter
         // could never influence the update — advertising it misled unattended clients.
@@ -190,6 +198,8 @@ public class UpdateDatabaseToolTest
             schema.contains("\"terminatedClient\"")); //$NON-NLS-1$
         assertTrue("outputSchema must declare willTerminateRunningClients", //$NON-NLS-1$
             schema.contains("\"willTerminateRunningClients\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare willCheckInfobaseSessions", //$NON-NLS-1$
+            schema.contains("\"willCheckInfobaseSessions\"")); //$NON-NLS-1$
     }
 
     @Test
@@ -200,6 +210,46 @@ public class UpdateDatabaseToolTest
         String desc = new UpdateDatabaseTool().getDescription();
         assertTrue("description must mention the confirm-preview gate", //$NON-NLS-1$
             desc.toLowerCase().contains("confirm")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDescriptionAndGuideRequireSessionInspectionFirst()
+    {
+        String description = new UpdateDatabaseTool().getDescription();
+        String guide = new UpdateDatabaseTool().getGuide();
+        assertTrue(description.contains("infobase_sessions(action='list')")); //$NON-NLS-1$
+        assertTrue(description.contains("action='terminate'")); //$NON-NLS-1$
+        assertTrue(guide.contains("checkInfobaseSessions")); //$NON-NLS-1$
+        assertTrue(guide.contains("reachable=false")); //$NON-NLS-1$
+        assertTrue(guide.contains("all=true, confirm=true")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testBlockingSessionsErrorNamesDetailsAndExactClearingCall()
+    {
+        com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo blocker =
+            new com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo(
+                "22222222-2222-2222-2222-222222222222", 42L, "1CV8C", "User", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "desk", "2026-01-01T10:00:00", "2026-01-01T10:01:00", false); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String result = UpdateDatabaseTool.blockingSessionsError("Demo", //$NON-NLS-1$
+            "ServerApplication.Demo", List.of(blocker), false); //$NON-NLS-1$
+
+        assertTrue(result.contains("sessionNumber")); //$NON-NLS-1$
+        assertTrue(result.contains("applicationKind")); //$NON-NLS-1$
+        assertTrue(result.contains("infobase_sessions(action='terminate', projectName='Demo', " //$NON-NLS-1$
+            + "applicationId='ServerApplication.Demo', all=true, confirm=true)")); //$NON-NLS-1$
+        assertTrue(result.contains("Designer")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnreachableSessionReasonQualifiesLaterUpdateFailure()
+    {
+        String result = UpdateDatabaseTool.buildUnexpectedErrorResult(
+            new IllegalStateException("update failed"), false, false, //$NON-NLS-1$
+            "The standalone server is not running."); //$NON-NLS-1$
+
+        assertTrue(result.contains("session inspection was unreachable")); //$NON-NLS-1$
+        assertTrue(result.contains("not treated as proof")); //$NON-NLS-1$
     }
 
     @Test
@@ -423,6 +473,29 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
+    public void blockingSessionRefusalMentionsItsOwnSweepOnlyWhenOneHappened()
+    {
+        com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo blocker =
+            new com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo(
+                "11111111-1111-1111-1111-111111111111", 6L, //$NON-NLS-1$
+            "1CV8C", "", "", "2026-09-11T22:07:13", "2026-09-11T22:07:19", false); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        String swept = JsonParser.parseString(UpdateDatabaseTool.blockingSessionsError(
+            "ProjectB", "app-b", List.of(blocker), true)).getAsJsonObject() //$NON-NLS-1$ //$NON-NLS-2$
+            .get("error").getAsString(); //$NON-NLS-1$
+        String untouched = JsonParser.parseString(UpdateDatabaseTool.blockingSessionsError(
+            "ProjectB", "app-b", List.of(blocker), false)).getAsJsonObject() //$NON-NLS-1$ //$NON-NLS-2$
+            .get("error").getAsString(); //$NON-NLS-1$
+
+        assertTrue("a refusal after our own sweep must say the listed session may be that client: " //$NON-NLS-1$
+            + swept, swept.contains("already terminated a client it had launched")); //$NON-NLS-1$
+        assertFalse("with no sweep there is no client of ours to blame, so the note must be absent: " //$NON-NLS-1$
+            + untouched, untouched.contains("already terminated a client it had launched")); //$NON-NLS-1$
+        assertTrue("both forms must still name the clearing call", //$NON-NLS-1$
+            swept.contains("infobase_sessions(action='terminate'") //$NON-NLS-1$
+                && untouched.contains("infobase_sessions(action='terminate'")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testGenericFailureAddsTerminalCauseWithoutChangingSpecificRefusals() throws Exception
     {
         ApplicationException generic = new ApplicationException(
@@ -463,17 +536,28 @@ public class UpdateDatabaseToolTest
                 LaunchUpdateDialogAutoConfirmer.PORT_REASON_POLICY);
             Method formatPortConflict = UpdateDatabaseTool.class.getDeclaredMethod(
                 "portConflictError", portWatch.getClass(), String.class, String.class, //$NON-NLS-1$
-                boolean.class);
+                boolean.class, String.class);
             formatPortConflict.setAccessible(true);
             JsonObject portResult = JsonParser.parseString((String)formatPortConflict.invoke(null,
-                portWatch, "ProjectB", "app-b", false)).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+                portWatch, "ProjectB", "app-b", false, null)).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
             String expectedPortError = "Database update failed: " //$NON-NLS-1$
                 + LaunchUpdateDialogAutoConfirmer.portConflictError(
                     "port 8429 is already in use", //$NON-NLS-1$
                     LaunchUpdateDialogAutoConfirmer.PORT_REASON_POLICY)
                 + " The infobase was NOT changed."; //$NON-NLS-1$
-            assertEquals("the specific port-conflict path must remain byte-for-byte unchanged", //$NON-NLS-1$
+            assertEquals("a readable session check leaves the port-conflict path byte-for-byte unchanged", //$NON-NLS-1$
                 expectedPortError, portResult.get("error").getAsString()); //$NON-NLS-1$
+
+            // An unreadable session lookup QUALIFIES this failure: it appends, never rewrites, and
+            // never reads as proof that no foreign session existed.
+            String qualifiedPortError = JsonParser.parseString((String)formatPortConflict.invoke(
+                null, portWatch, "ProjectB", "app-b", false, //$NON-NLS-1$ //$NON-NLS-2$
+                "the standalone server is not running")).getAsJsonObject() //$NON-NLS-1$
+                .get("error").getAsString(); //$NON-NLS-1$
+            assertTrue("the session note must APPEND to the unchanged sentence: " + qualifiedPortError, //$NON-NLS-1$
+                qualifiedPortError.startsWith(expectedPortError));
+            assertTrue("an unreadable check must not read as proof of no sessions: " + qualifiedPortError, //$NON-NLS-1$
+                qualifiedPortError.contains("not treated as proof that no foreign sessions existed")); //$NON-NLS-1$
         }
         finally
         {
@@ -489,15 +573,24 @@ public class UpdateDatabaseToolTest
             recordCancel.invoke(cancelWatch, LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_POLICY);
             Method formatCancellation = UpdateDatabaseTool.class.getDeclaredMethod(
                 "declinedUpdateResult", cancelWatch.getClass(), //$NON-NLS-1$
-                ExternalInfobaseChangesPolicy.class);
+                ExternalInfobaseChangesPolicy.class, String.class);
             formatCancellation.setAccessible(true);
             JsonObject cancelResult = JsonParser.parseString((String)formatCancellation.invoke(null,
-                cancelWatch, ExternalInfobaseChangesPolicy.OVERRIDE)).getAsJsonObject();
-            assertEquals("the specific cancellation path must remain byte-for-byte unchanged", //$NON-NLS-1$
-                ExternalInfobaseChangesPolicy.declinedUpdateError(
-                    ExternalInfobaseChangesPolicy.OVERRIDE,
-                    LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_POLICY),
-                cancelResult.get("error").getAsString()); //$NON-NLS-1$
+                cancelWatch, ExternalInfobaseChangesPolicy.OVERRIDE, null)).getAsJsonObject();
+            String expectedCancelError = ExternalInfobaseChangesPolicy.declinedUpdateError(
+                ExternalInfobaseChangesPolicy.OVERRIDE,
+                LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_POLICY);
+            assertEquals("a readable session check leaves the cancellation path byte-for-byte unchanged", //$NON-NLS-1$
+                expectedCancelError, cancelResult.get("error").getAsString()); //$NON-NLS-1$
+
+            String qualifiedCancelError = JsonParser.parseString((String)formatCancellation.invoke(
+                null, cancelWatch, ExternalInfobaseChangesPolicy.OVERRIDE,
+                "ibcmd was not found in the runtime")).getAsJsonObject() //$NON-NLS-1$
+                .get("error").getAsString(); //$NON-NLS-1$
+            assertTrue("the session note must APPEND to the unchanged sentence: " + qualifiedCancelError, //$NON-NLS-1$
+                qualifiedCancelError.startsWith(expectedCancelError));
+            assertTrue("an unreadable check must not read as proof of no sessions: " + qualifiedCancelError, //$NON-NLS-1$
+                qualifiedCancelError.contains("not treated as proof that no foreign sessions existed")); //$NON-NLS-1$
         }
         finally
         {

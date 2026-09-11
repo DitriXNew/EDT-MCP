@@ -153,6 +153,26 @@ def test_terminate_running_clients_param_accepted_without_mutation():
     assert_no_diff("a rejected update (even with terminateRunningClients) must not touch the project on disk")
 
 
+@e2e_test(tool="update_database", kind="action")
+def test_infobase_session_preflight_opt_out_param_is_accepted_without_mutation():
+    """checkInfobaseSessions=false is parsed without changing target resolution.
+
+    The bogus application stops the call before confirmation, session inspection, or update, so
+    this pins the new parameter at the live protocol boundary without touching an infobase.
+    """
+    r = call("update_database", {
+        "projectName": PROJECT,
+        "applicationId": BOGUS_APP_ID,
+        "checkInfobaseSessions": False,
+    })
+    e = assert_error(r, "session preflight opt-out with non-existent application")
+    assert_error_quality(e, names=[BOGUS_APP_ID], suggests=["get_applications"],
+                         ctx="session opt-out still reaches the application lookup")
+    assert_contains(e, "Application not found",
+                    "checkInfobaseSessions must not alter target resolution")
+    assert_no_diff("a rejected update with session opt-out must not touch project sources")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # NEGATIVE MATRIX — targeting argument validation (XOR-ish projectName+applicationId
 # vs launchConfigurationName), plus invalid targets. Every call leaves the tree clean.

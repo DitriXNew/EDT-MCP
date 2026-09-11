@@ -31,6 +31,9 @@ import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
+import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport;
+import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.ReadResult;
+import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
@@ -85,9 +88,11 @@ public class UpdateDatabaseTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Apply the current EDT configuration to an infobase. DESTRUCTIVE - restructures data and can " //$NON-NLS-1$
-            + "evict live sessions. Two-phase: call once WITHOUT confirm to preview, then again with " //$NON-NLS-1$
-            + "confirm=true to apply. Parameters and examples: get_tool_guide('update_database')."; //$NON-NLS-1$
+        return "Apply the current EDT configuration to an infobase. Before applying, call " //$NON-NLS-1$
+            + "infobase_sessions(action='list'); any non-agent session blocks the update, so " //$NON-NLS-1$
+            + "clear it with action='terminate' and confirm=true. DESTRUCTIVE: call once WITHOUT " //$NON-NLS-1$
+            + "confirm to preview, then again with confirm=true to apply. Full parameters and " //$NON-NLS-1$
+            + "examples: call get_tool_guide('update_database')."; //$NON-NLS-1$
     }
 
     @Override
@@ -113,6 +118,9 @@ public class UpdateDatabaseTool implements IMcpTool
                 "Before applying, terminate any 1C client THIS EDT launched on the target infobase " //$NON-NLS-1$
                 + "to free the exclusive lock (default true). false keeps a running client — the " //$NON-NLS-1$
                 + "update then fails if that client holds the infobase exclusively.") //$NON-NLS-1$
+            .booleanProperty("checkInfobaseSessions", //$NON-NLS-1$
+                "Before applying, refuse when infobase_sessions finds a non-agent standalone-server " //$NON-NLS-1$
+                + "session (default true). false skips this safety pre-flight.") //$NON-NLS-1$
             .build();
     }
 
@@ -138,6 +146,8 @@ public class UpdateDatabaseTool implements IMcpTool
             .booleanProperty("willTerminateRunningClients", //$NON-NLS-1$
                 "On a preview: whether confirm=true would first terminate a running client " //$NON-NLS-1$
                 + "(reflects terminateRunningClients).") //$NON-NLS-1$
+            .booleanProperty("willCheckInfobaseSessions", //$NON-NLS-1$
+                "On a preview: whether confirm=true checks standalone-server sessions before updating.") //$NON-NLS-1$
             .booleanProperty(KEY_PORTS_REASSIGNED,
                 "Present and true ONLY when standaloneServerPortConflict=reassign was applied: " //$NON-NLS-1$
                 + "EDT moved the standalone server to free ports and REWROTE its configuration, " //$NON-NLS-1$
@@ -149,6 +159,13 @@ public class UpdateDatabaseTool implements IMcpTool
     public ResponseType getResponseType()
     {
         return ResponseType.JSON;
+    }
+
+    @Override
+    public boolean returnsInfobaseData()
+    {
+        // A blocker refusal includes user and host fields read from live infobase sessions.
+        return true;
     }
 
     @Override
@@ -169,6 +186,8 @@ public class UpdateDatabaseTool implements IMcpTool
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
         boolean terminateRunningClients =
             JsonUtils.extractBooleanArgument(params, "terminateRunningClients", true); //$NON-NLS-1$
+        boolean checkInfobaseSessions =
+            JsonUtils.extractBooleanArgument(params, "checkInfobaseSessions", true); //$NON-NLS-1$
         String rawPolicy = JsonUtils.extractStringArgument(params, "externalInfobaseChanges"); //$NON-NLS-1$
         ExternalInfobaseChangesPolicy externalChanges = ExternalInfobaseChangesPolicy.parse(rawPolicy);
         if (externalChanges == null)
@@ -263,7 +282,7 @@ public class UpdateDatabaseTool implements IMcpTool
         }
 
         return updateDatabase(projectName, applicationId, fullUpdate, confirm,
-            terminateRunningClients, externalChanges, portPolicy);
+            terminateRunningClients, checkInfobaseSessions, externalChanges, portPolicy);
     }
 
     /**
@@ -622,19 +641,23 @@ public class UpdateDatabaseTool implements IMcpTool
      * @param confirm false previews without mutating; true applies the update
      * @param terminateRunningClients true (default) frees the infobase by terminating a 1C client
      *            this EDT launched on it before the update; false leaves a running client in place
+     * @param checkInfobaseSessions true (default) refuses a readable non-agent standalone-server
+     *            session before entering the update API
      * @param externalChanges how to answer EDT's "Infobase configuration changes" modal when the
      *            infobase was changed outside EDT since the last EDT interaction
      * @return JSON string with result
      */
     private String updateDatabase(String projectName, String applicationId, // NOSONAR one resolved plan, not a bag of concerns
             boolean fullUpdate, boolean confirm,
-            boolean terminateRunningClients, ExternalInfobaseChangesPolicy externalChanges,
+            boolean terminateRunningClients, boolean checkInfobaseSessions,
+            ExternalInfobaseChangesPolicy externalChanges,
             StandaloneServerPortConflictPolicy portPolicy)
     {
         boolean terminatedClient = false;
         boolean portsReassigned = false;
         boolean updateApiEntered = false;
         boolean updateApiReturned = false;
+        String sessionCheckUnreachableReason = null;
         try
         {
             ApplicationSupport.ManagerResult mr = ApplicationSupport.resolveManager(projectName);
@@ -675,7 +698,8 @@ public class UpdateDatabaseTool implements IMcpTool
             if (!confirm)
             {
                 return buildPreviewResult(projectName, applicationId, application, updateType,
-                    stateBefore, terminateRunningClients, externalChanges, portPolicy);
+                    stateBefore, terminateRunningClients, checkInfobaseSessions, externalChanges,
+                    portPolicy);
             }
 
             // Destructive-operation consent gate: the LAST check before the (irreversible) infobase
@@ -733,6 +757,28 @@ public class UpdateDatabaseTool implements IMcpTool
                             + "infobase: project=" + projectName + ", application=" + applicationId); //$NON-NLS-1$ //$NON-NLS-2$
                     }
                 }
+                if (checkInfobaseSessions)
+                {
+                    ReadResult sessions = InfobaseSessionSupport.listSessions(application);
+                    if (sessions.isReadable())
+                    {
+                        List<SessionInfo> blockers = sessions.sessions().stream()
+                            .filter(session -> !session.edtAgent()
+                                && !"Designer".equalsIgnoreCase(session.applicationKind())) //$NON-NLS-1$
+                            .toList();
+                        if (!blockers.isEmpty())
+                        {
+                            return blockingSessionsError(projectName, applicationId, blockers,
+                                terminatedClient);
+                        }
+                    }
+                    else
+                    {
+                        // Unreadable is not an empty list. The update may still work through EDT,
+                        // so retain the reason and qualify any later failure instead of blocking.
+                        sessionCheckUnreachableReason = sessions.unreachableReason();
+                    }
+                }
                 // EDT pops a blocking "Restructure data" / «Реорганизация информации» modal
                 // (InfobaseUpdateConfirmDialog) whenever the config changes the DB structure; it
                 // hangs this unattended call. Arm the restructure matcher to auto-press its default
@@ -781,14 +827,15 @@ public class UpdateDatabaseTool implements IMcpTool
                         if (watch.portConflicted())
                         {
                             return portConflictError(watch, projectName, applicationId,
-                                terminatedClient);
+                                terminatedClient, sessionCheckUnreachableReason);
                         }
                         // The cancel can ABORT the update instead of letting it return a state: the
                         // reason is still in the window, and it explains the failure far better than
                         // EDT's own message - it names the knob that would have let it through.
                         if (watch.cancelled())
                         {
-                            return declinedUpdateResult(watch, externalChanges);
+                            return declinedUpdateResult(watch, externalChanges,
+                                sessionCheckUnreachableReason);
                         }
                         throw ex;
                     }
@@ -807,7 +854,7 @@ public class UpdateDatabaseTool implements IMcpTool
                     if (watch.portConflicted())
                     {
                         return portConflictError(watch, projectName, applicationId,
-                            terminatedClient);
+                            terminatedClient, sessionCheckUnreachableReason);
                     }
                     // A cancelled external-changes modal means the update wrote NOTHING. Reporting
                     // "updated" here would be a false success — and the returned state cannot be
@@ -817,7 +864,8 @@ public class UpdateDatabaseTool implements IMcpTool
                     // construction and is a failure whatever the state says.
                     if (watch.cancelled())
                     {
-                        return declinedUpdateResult(watch, externalChanges);
+                        return declinedUpdateResult(watch, externalChanges,
+                            sessionCheckUnreachableReason);
                     }
                 }
             }
@@ -829,7 +877,7 @@ public class UpdateDatabaseTool implements IMcpTool
         {
             Activator.logError("Error updating database for application: " + applicationId, e); //$NON-NLS-1$
             String error = buildApplicationErrorResult(e, projectName, applicationId,
-                terminatedClient, portsReassigned);
+                terminatedClient, portsReassigned, sessionCheckUnreachableReason);
             if (updateApiReturned || portsReassigned)
             {
                 return ToolResult.markErrorAfterMutation(error);
@@ -839,7 +887,8 @@ public class UpdateDatabaseTool implements IMcpTool
         catch (Exception e)
         {
             Activator.logError("Unexpected error during database update", e); //$NON-NLS-1$
-            String error = buildUnexpectedErrorResult(e, terminatedClient, portsReassigned);
+            String error = buildUnexpectedErrorResult(e, terminatedClient, portsReassigned,
+                sessionCheckUnreachableReason);
             if (updateApiReturned || portsReassigned)
             {
                 return ToolResult.markErrorAfterMutation(error);
@@ -964,18 +1013,75 @@ public class UpdateDatabaseTool implements IMcpTool
         return last == '.' || last == '!' || last == '?' || last == ':';
     }
 
+    /** Refuses an update when a real list still contains non-agent sessions. */
+    static String blockingSessionsError(String projectName, String applicationId,
+        List<SessionInfo> blockers, boolean terminatedClient)
+    {
+        StringBuilder details = new StringBuilder();
+        for (SessionInfo session : blockers)
+        {
+            if (details.length() > 0)
+            {
+                details.append("; "); //$NON-NLS-1$
+            }
+            details.append("sessionId=").append(session.sessionId()) //$NON-NLS-1$
+                .append(", sessionNumber=").append(session.sessionNumber()) //$NON-NLS-1$
+                .append(", applicationKind=").append(session.applicationKind()) //$NON-NLS-1$
+                .append(", userName=").append(session.userName()) //$NON-NLS-1$
+                .append(", host=").append(session.host()) //$NON-NLS-1$
+                .append(", startedAt=").append(session.startedAt()) //$NON-NLS-1$
+                .append(", lastActiveAt=").append(session.lastActiveAt()); //$NON-NLS-1$
+        }
+        String message = "Database update refused because " + blockers.size() //$NON-NLS-1$
+            + " non-agent infobase session(s) remain: " + details //$NON-NLS-1$
+            + ". Clear them first with infobase_sessions(action='terminate', projectName='" //$NON-NLS-1$
+            + projectName + "', applicationId='" + applicationId //$NON-NLS-1$
+            + "', all=true, confirm=true), then retry update_database. The EDT Designer " //$NON-NLS-1$
+            + "agent is not a blocker and is never terminated." //$NON-NLS-1$
+            + (terminatedClient
+                ? " This call already terminated a client it had launched; a session listed above " //$NON-NLS-1$
+                    + "may be that client still closing, in which case retrying is enough." //$NON-NLS-1$
+                : ""); //$NON-NLS-1$
+        ToolResult result = terminatedClient ? ToolResult.errorAfterMutation(message)
+            : ToolResult.error(message);
+        result.put(McpKeys.PROJECT, projectName)
+            .put(McpKeys.APPLICATION_ID, applicationId)
+            .put("reachable", true) //$NON-NLS-1$
+            .put("sessions", InfobaseSessionsTool.sessionMaps(blockers)); //$NON-NLS-1$
+        if (terminatedClient)
+        {
+            result.put(KEY_TERMINATED_CLIENT, true);
+        }
+        return result.toJson();
+    }
+
+    /** Qualifies a later update failure without turning an unreadable lookup into an empty list. */
+    private static String sessionCheckFailureNote(String reason)
+    {
+        if (reason == null || reason.isBlank())
+        {
+            return ""; //$NON-NLS-1$
+        }
+        return " Pre-update infobase session inspection was unreachable: " + reason //$NON-NLS-1$
+            + (endsSentence(reason) ? "" : ".") //$NON-NLS-1$ //$NON-NLS-2$
+            + " This was not treated as proof that no foreign sessions existed."; //$NON-NLS-1$
+    }
+
     private static String portConflictError(LaunchUpdateDialogAutoConfirmer.ConflictWatch watch,
-        String projectName, String applicationId, boolean terminatedClient)
+        String projectName, String applicationId, boolean terminatedClient,
+        String sessionCheckUnreachableReason)
     {
         ToolResult result = watch.portsReassigned()
             ? ToolResult.errorAfterMutation("Database update failed: " //$NON-NLS-1$
                 + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail(),
                     watch.portConflictReason())
-                + " The infobase was NOT changed, but the standalone-server configuration was.") //$NON-NLS-1$
+                + " The infobase was NOT changed, but the standalone-server configuration was." //$NON-NLS-1$
+                + sessionCheckFailureNote(sessionCheckUnreachableReason))
             : ToolResult.error("Database update failed: " //$NON-NLS-1$
                 + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail(),
                     watch.portConflictReason())
-                + " The infobase was NOT changed."); //$NON-NLS-1$
+                + " The infobase was NOT changed." //$NON-NLS-1$
+                + sessionCheckFailureNote(sessionCheckUnreachableReason));
         result.put(McpKeys.PROJECT, projectName)
             .put(McpKeys.APPLICATION_ID, applicationId);
         if (watch.portsReassigned())
@@ -1005,7 +1111,7 @@ public class UpdateDatabaseTool implements IMcpTool
      * @return the error payload
      */
     private static String declinedUpdateResult(LaunchUpdateDialogAutoConfirmer.ConflictWatch watch,
-        ExternalInfobaseChangesPolicy externalChanges)
+        ExternalInfobaseChangesPolicy externalChanges, String sessionCheckUnreachableReason)
     {
         boolean reassigned = watch.portsReassigned();
         String message = ExternalInfobaseChangesPolicy.declinedUpdateError(externalChanges, watch.reason())
@@ -1013,7 +1119,8 @@ public class UpdateDatabaseTool implements IMcpTool
                     ? " NOTE: EDT had already moved the standalone server to free ports and " //$NON-NLS-1$
                         + "rewritten its configuration " //$NON-NLS-1$
                         + "(standaloneServerPortConflict=reassign) — that change stands." //$NON-NLS-1$
-                    : ""); //$NON-NLS-1$
+                    : "") //$NON-NLS-1$
+                + sessionCheckFailureNote(sessionCheckUnreachableReason);
         ToolResult result = reassigned ? ToolResult.errorAfterMutation(message) : ToolResult.error(message);
         if (reassigned)
         {
@@ -1029,6 +1136,7 @@ public class UpdateDatabaseTool implements IMcpTool
     private static String buildPreviewResult(String projectName, String applicationId, // NOSONAR every value is already resolved by the caller; a parameter object would only move the list
             IApplication application, ApplicationUpdateType updateType,
             ApplicationUpdateState stateBefore, boolean terminateRunningClients,
+            boolean checkInfobaseSessions,
             ExternalInfobaseChangesPolicy externalChanges,
             StandaloneServerPortConflictPolicy portPolicy)
     {
@@ -1041,6 +1149,7 @@ public class UpdateDatabaseTool implements IMcpTool
             .put(KEY_UPDATE_TYPE, updateType.name())
             .put(KEY_STATE_BEFORE, stateBefore.name())
             .put("willTerminateRunningClients", terminateRunningClients) //$NON-NLS-1$
+            .put("willCheckInfobaseSessions", checkInfobaseSessions) //$NON-NLS-1$
             .put(McpKeys.MESSAGE, "PREVIEW: this would apply a " + updateType.name() //$NON-NLS-1$
                 + " configuration update to the database of application '" + application.getName() //$NON-NLS-1$
                 + "' (project " + projectName + "). This mutates the infobase and is " //$NON-NLS-1$ //$NON-NLS-2$
@@ -1048,6 +1157,11 @@ public class UpdateDatabaseTool implements IMcpTool
                 + (terminateRunningClients
                     ? " It will first terminate any 1C client this EDT launched on the infobase." //$NON-NLS-1$
                     : "") //$NON-NLS-1$
+                + (checkInfobaseSessions
+                    ? " It will then list standalone-server sessions and refuse while any " //$NON-NLS-1$
+                        + "non-agent session remains; clear those with infobase_sessions " //$NON-NLS-1$
+                        + "action='terminate' and confirm=true." //$NON-NLS-1$
+                    : " It will skip the standalone-server session safety check.") //$NON-NLS-1$
                 + externalChangesConsentNote(externalChanges)
                 + portConflictConsentNote(portPolicy)
                 + " Re-call with confirm=true to apply it.") //$NON-NLS-1$
@@ -1148,6 +1262,15 @@ public class UpdateDatabaseTool implements IMcpTool
     static String buildApplicationErrorResult(ApplicationException e, String projectName,
             String applicationId, boolean terminatedClient, boolean portsReassigned)
     {
+        return buildApplicationErrorResult(e, projectName, applicationId, terminatedClient,
+            portsReassigned, null);
+    }
+
+    /** Same application failure payload, qualified when the session pre-flight was unreachable. */
+    static String buildApplicationErrorResult(ApplicationException e, String projectName,
+            String applicationId, boolean terminatedClient, boolean portsReassigned,
+            String sessionCheckUnreachableReason)
+    {
         String internalInfoHint = describeInternalInfoHint(e);
         String hint = internalInfoHint.isEmpty() ? describeAuthHint(e) : internalInfoHint;
         String described = PlatformFailures.describe(e);
@@ -1164,7 +1287,8 @@ public class UpdateDatabaseTool implements IMcpTool
                 ? " NOTE: before this failure EDT had already moved the standalone server to free " //$NON-NLS-1$
                     + "ports and rewritten its configuration " //$NON-NLS-1$
                     + "(standaloneServerPortConflict=reassign) — that change stands." //$NON-NLS-1$
-                : "")); //$NON-NLS-1$
+                : "") //$NON-NLS-1$
+            + sessionCheckFailureNote(sessionCheckUnreachableReason));
         errorResult.put(McpKeys.APPLICATION_ID, applicationId);
         errorResult.put(McpKeys.PROJECT, projectName);
         if (terminatedClient)
@@ -1217,6 +1341,13 @@ public class UpdateDatabaseTool implements IMcpTool
     static String buildUnexpectedErrorResult(Exception e, boolean terminatedClient,
             boolean portsReassigned)
     {
+        return buildUnexpectedErrorResult(e, terminatedClient, portsReassigned, null);
+    }
+
+    /** Same unexpected failure payload, qualified when the session pre-flight was unreachable. */
+    static String buildUnexpectedErrorResult(Exception e, boolean terminatedClient,
+            boolean portsReassigned, String sessionCheckUnreachableReason)
+    {
         ToolResult errorResult = ToolResult.error("Unexpected error: " //$NON-NLS-1$
             + PlatformFailures.describe(e)
             + (portsReassigned
@@ -1224,6 +1355,7 @@ public class UpdateDatabaseTool implements IMcpTool
                     + "free ports and rewritten its configuration " //$NON-NLS-1$
                     + "(standaloneServerPortConflict=reassign) — that change stands." //$NON-NLS-1$
                 : "") //$NON-NLS-1$
+            + sessionCheckFailureNote(sessionCheckUnreachableReason)
             + " The update may have applied partially, so do not retry blindly: check the actual " //$NON-NLS-1$
             + "state with get_applications (updateState) and the EDT Error Log first."); //$NON-NLS-1$
         if (terminatedClient)

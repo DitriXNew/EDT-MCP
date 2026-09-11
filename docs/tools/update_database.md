@@ -1,6 +1,6 @@
 # update_database
 
-Apply the current EDT configuration to an infobase. DESTRUCTIVE - restructures data and can evict live sessions. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply. Parameters and examples: get_tool_guide('update_database').
+Apply the current EDT configuration to an infobase. Before applying, call infobase_sessions(action='list'); any non-agent session blocks the update, so clear it with action='terminate' and confirm=true. DESTRUCTIVE: call once WITHOUT confirm to preview, then again with confirm=true to apply. Full parameters and examples: call get_tool_guide('update_database').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -13,6 +13,7 @@ Apply the current EDT configuration to an infobase. DESTRUCTIVE - restructures d
 | externalInfobaseChanges | — | string | How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT interaction: 'override' (default) keeps the project configuration and overwrites the infobase, 'import' pulls the external changes into the PROJECT sources, 'cancel' aborts the update with an error. Omitted, the modal is still answered (with 'override'), so an unattended call never blocks on it. |
 | standaloneServerPortConflict | — | string | Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration). |
 | terminateRunningClients | — | boolean | Before applying, terminate any 1C client THIS EDT launched on the target infobase to free the exclusive lock (default true). false keeps a running client — the update then fails if that client holds the infobase exclusively. |
+| checkInfobaseSessions | — | boolean | Before applying, refuse when infobase_sessions finds a non-agent standalone-server session (default true). false skips this safety pre-flight. |
 
 ## Guide
 Applies the EDT configuration to an application's database (infobase) — the equivalent of "Update database configuration" in Designer. Supports a full reload or an incremental (changes-only) update.
@@ -59,6 +60,25 @@ If you pass `launchConfigurationName` **and** an explicit `applicationId`, the c
 - **confirm** (boolean, default false) — false previews the resolved update without touching the infobase; true applies it.
 - `externalInfobaseChanges` — how to answer EDT's blocking "Infobase configuration changes" modal when the infobase was changed OUTSIDE EDT (Designer, `ibcmd`, a CLI pipeline) since the last EDT interaction: `override` (default) keeps the project configuration and overwrites the infobase, `import` pulls the external changes into the PROJECT sources, `cancel` aborts the update with an error. See ## Infobase changed outside EDT.
 - **terminateRunningClients** (boolean, default true) — before applying, terminate any 1C client THIS EDT launched on the target infobase to free the exclusive lock and stop it running stale modules. Set false to leave a running client in place (the update then fails if that client holds the infobase exclusively). Only affects the apply phase (confirm=true); the preview reports `willTerminateRunningClients` but terminates nothing.
+- **checkInfobaseSessions** (boolean, default true) — after the EDT-launched-client sweep and before entering the update API, list standalone-server sessions and refuse while any non-agent session remains. Set false only when you intentionally accept that risk. The preview reports `willCheckInfobaseSessions`.
+
+## Check standalone-server sessions first
+
+Before applying an update, call:
+
+```text
+infobase_sessions(action='list', projectName='MyProject', applicationId='ServerApplication.MyServer')
+```
+
+With the default `checkInfobaseSessions=true`, `update_database(confirm=true)` performs the same check after its existing EDT-launched-client sweep. A readable list containing any non-agent session blocks the update and reports the session details. Clear those sessions with:
+
+```text
+infobase_sessions(action='terminate', projectName='MyProject', applicationId='ServerApplication.MyServer', all=true, confirm=true)
+```
+
+Then retry `update_database`. A session whose raw `app-id` is `Designer` is EDT's update agent: it is not a blocker and `infobase_sessions` never terminates it.
+
+Reachability matters. `reachable=true` with `sessions=[]` proves the list is empty; `reachable=false` names why it could not be read and is **not** proof that no sessions exist. The update still proceeds on an unreachable pre-flight because EDT may remain able to update through a different path. If that update later fails, its error includes the earlier `unreachableReason`. Set `checkInfobaseSessions=false` only to opt out of this safety pre-flight entirely.
 
 ## Exclusive-lock handling (automatic)
 

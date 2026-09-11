@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**95 tools.**
+**96 tools.**
 
 ## Core
 
@@ -135,7 +135,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 
 ## Project
 
-> Project operations: clean/revalidate, update DB, export/import XML, problems and markers, docs.
+> Project operations: clean/revalidate, inspect infobase sessions/update DB, export/import XML, problems and markers, docs.
 
 | Tool | Description |
 |------|-------------|
@@ -156,13 +156,14 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`get_problem_summary`](get_problem_summary.md) | Get problem summary with counts grouped by project and EDT severity level (ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL). Use this for severity totals on… |
 | [`get_project_errors`](get_project_errors.md) | List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. Each row carries the check code, message,… |
 | [`import_configuration_from_xml`](import_configuration_from_xml.md) | Import a configuration from a directory of XML files into a NEW EDT project (EDT menu: Import); the reverse of export_configuration_to_xml. The projectName m… |
+| [`infobase_sessions`](infobase_sessions.md) | List or terminate sessions on a running standalone-server infobase. Designer is protected; unreachable inspection is distinct from an empty list. |
 | [`list_git_branches`](list_git_branches.md) | List a project's git branches: local and remote-tracking, with the CURRENT branch marked (detached HEAD flagged), plus the 1C application/infobase each branc… |
 | [`resync_to_disk`](resync_to_disk.md) | Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files and report BM-to-disk desync. Direction: MODEL -> DISK (writes the model out to src… |
 | [`revalidate_objects`](revalidate_objects.md) | Revalidate EDT project or specific objects. If objects array is empty or missing, revalidates entire project. FQN examples: 'Document.SalesOrder', 'Catalog.P… |
 | [`set_branch_infobase`](set_branch_infobase.md) | Attach or detach an EXISTING infobase (application) to/from a specific git branch context, so switch_git_branch's automatic binding follows that branch. Targ… |
 | [`set_infobase_credentials`](set_infobase_credentials.md) | Store infobase connection credentials (user/password) so update_database and launch can authenticate the update agent on an infobase that has a user li… |
 | [`switch_git_branch`](switch_git_branch.md) | Switch a project's git repository to another branch (headless EGit checkout). branch may be a short local name (e.g. 'feature/x') or a full ref ('refs/heads/… |
-| [`update_database`](update_database.md) | Apply configuration changes to an application's database (infobase), full or incremental. Target by launchConfigurationName (preferred) or projectName + appl… |
+| [`update_database`](update_database.md) | Apply an EDT configuration to an infobase. List standalone-server sessions first; clear non-agent blockers with `infobase_sessions` before updating. |
 | [`validate_xdto_package`](validate_xdto_package.md) | Validate a single XDTO package by running EDT's OWN configuration validation (the same check engine behind get_project_errors) scoped to that package, and re… |
 
 ## Comparison
