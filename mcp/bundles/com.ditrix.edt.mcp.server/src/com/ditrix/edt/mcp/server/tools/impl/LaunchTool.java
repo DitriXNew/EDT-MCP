@@ -262,18 +262,21 @@ public class LaunchTool implements IMcpTool
             JsonUtils.extractStringArgument(params, KEY_STARTUP_OPTION),
             JsonUtils.extractStringArgument(params, KEY_EXTERNAL_OBJECT_PROJECT_NAME),
             JsonUtils.extractStringArgument(params, KEY_EXTERNAL_OBJECT_NAME));
-        // Target form 1: explicit config name — no project/application required.
-        if (configName != null && !configName.isEmpty())
-        {
-            return launchByConfigName(configName, updateBeforeLaunch, restartIfRunning, policy,
-                portPolicy, overrides, mode);
-        }
-
-        // Validate before the project/application route can terminate a client or update data.
+        // Validated up front, before EITHER launch route: both can terminate a live client
+        // session and update the infobase on the way to the launch, and a mistyped external object
+        // must not cost the caller those. The standalone-server refusal stays after type
+        // resolution, where the type is known.
         LaunchOverrides.Prepared prepared = overrides.prepare();
         if (prepared.errorJson != null)
         {
             return prepared.errorJson;
+        }
+
+        // Target form 1: explicit config name — no project/application required.
+        if (configName != null && !configName.isEmpty())
+        {
+            return launchByConfigName(configName, updateBeforeLaunch, restartIfRunning, policy,
+                portPolicy, overrides, prepared, mode);
         }
 
         // Target form 2: project + application (runtime-client only).
@@ -341,7 +344,8 @@ public class LaunchTool implements IMcpTool
      */
     private String launchByConfigName(String configName, boolean updateBeforeLaunch, // NOSONAR one argument per independent caller-visible decision; a parameter object would only rename them
         boolean restartIfRunning, ExternalInfobaseChangesPolicy policy,
-        StandaloneServerPortConflictPolicy portPolicy, LaunchOverrides overrides, String mode)
+        StandaloneServerPortConflictPolicy portPolicy, LaunchOverrides overrides,
+        LaunchOverrides.Prepared prepared, String mode)
     {
         try
         {
@@ -381,14 +385,6 @@ public class LaunchTool implements IMcpTool
                     return refusal;
                 }
                 return launchStandaloneServer(config, typeId, configProject, mode, portPolicy);
-            }
-
-            // Validate after resolving the type so standalone configurations reject client-only
-            // parameters without trying to resolve an external object they cannot launch.
-            LaunchOverrides.Prepared prepared = overrides.prepare();
-            if (prepared.errorJson != null)
-            {
-                return prepared.errorJson;
             }
 
             if (isAttach && MODE_RUN.equals(mode))
