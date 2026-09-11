@@ -587,17 +587,20 @@ public final class FormModelValidator
             return;
         }
         List<String> published = publication.publishedBy(owner);
-        checkHandlerList(owner, path, published, findings);
+        // ONE binding namespace across both lists, the way FormElementWriter.handlersAroundContainer
+        // reads them when it refuses a duplicate: a fresh set per list would miss the duplicate that
+        // spans them, which is exactly the one no single list can show.
+        Set<String> seen = new HashSet<>();
+        checkHandlerList(owner, path, published, seen, findings);
         if (extInfo != null)
         {
-            checkHandlerList(extInfo, path, published, findings);
+            checkHandlerList(extInfo, path, published, seen, findings);
         }
     }
 
     private static void checkHandlerList(EObject container, String path, List<String> published,
-        List<Finding> findings)
+        Set<String> seen, List<Finding> findings)
     {
-        Set<String> seen = new HashSet<>();
         for (EObject handler : list(container, FEATURE_HANDLERS))
         {
             String procedure = nameOf(handler);

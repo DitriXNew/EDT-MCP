@@ -5568,27 +5568,33 @@ public final class FormElementWriter
     /**
      * The English names of the events the platform publishes for {@code container}.
      *
-     * <p>An empty list means "cannot tell", and there are THREE ways to get there: no version, no
-     * {@link IEObjectProvider}, and - the one that bites - an element whose own base type is not in
-     * {@link #PLATFORM_TYPE_BY_ECLASS}. That map is keyed by EXACT EClass name, so a subclass (an
-     * {@code ExtendedTooltip} under {@code Decoration}) would answer with its ext type's events
-     * alone; a caller told "these are the events" would then call an ordinary base-type binding
-     * foreign. An incomplete union is reported as no union at all.</p>
+     * <p>An empty list means "cannot tell": no version, no {@link IEObjectProvider}, or a type the
+     * platform-type map does not cover on either side - see {@link #publishesKnownEventSet}. An
+     * incomplete union is reported as no union at all.</p>
      */
     /**
-     * Whether {@code element}'s OWN base platform type is known, i.e. whether an event union built
-     * for it can be complete. {@link #PLATFORM_TYPE_BY_ECLASS} is keyed by EXACT EClass name, so a
-     * SUBCLASS answers {@code false}: its union would carry the ext type's events without the base
-     * type's, and a caller reading that as "these are the events" would be wrong.
+     * Whether an event union built for {@code element} can be COMPLETE - both halves of it.
+     *
+     * <p>{@link #PLATFORM_TYPE_BY_ECLASS} is keyed by EXACT EClass name and covers neither every
+     * subclass nor every ext-info. An {@code ExtendedTooltip} misses its {@code Decoration} base;
+     * a {@code FormGroup} typed {@code ButtonGroup} - the DEFAULT group type - carries a
+     * {@code ButtonGroupExtInfo} that the map does not list, so its extension events are missing
+     * while the base ones are there. Either way the union is a subset, and a caller told "these
+     * are the events" would call an ordinary binding foreign.</p>
      */
-    static boolean hasKnownPlatformBaseType(EObject element)
+    static boolean publishesKnownEventSet(EObject element)
     {
-        return element != null && PLATFORM_TYPE_BY_ECLASS.get(element.eClass().getName()) != null;
+        if (element == null || PLATFORM_TYPE_BY_ECLASS.get(element.eClass().getName()) == null)
+        {
+            return false;
+        }
+        EObject ext = singleReference(element, FEATURE_EXT_INFO);
+        return ext == null || PLATFORM_TYPE_BY_ECLASS.get(ext.eClass().getName()) != null;
     }
 
     public static List<String> availableEventNames(EObject container, Version version)
     {
-        if (!hasKnownPlatformBaseType(container))
+        if (!publishesKnownEventSet(container))
         {
             return Collections.emptyList();
         }

@@ -1440,13 +1440,43 @@ public class FormElementWriterTest
      * treating that as the full set would call an ordinary base-type binding foreign.
      */
     @Test
-    public void testOnlyAnElementWithItsOwnBaseTypeHasAKnownEventSet()
+    public void testAnEventSetIsKnownOnlyWhenBOTHItsHalvesAre()
     {
         assertTrue("a Decoration is keyed in the platform-type map by its own name", //$NON-NLS-1$
-            FormElementWriter.hasKnownPlatformBaseType(bareElement("Decoration"))); //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(bareElement("Decoration"))); //$NON-NLS-1$
         assertFalse("an ExtendedTooltip inherits its base events, and the map is keyed by EXACT " //$NON-NLS-1$
             + "name, so its union would silently omit them", //$NON-NLS-1$
-            FormElementWriter.hasKnownPlatformBaseType(bareElement("ExtendedTooltip"))); //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(bareElement("ExtendedTooltip"))); //$NON-NLS-1$
+
+        // The other half: a mapped BASE with an unmapped ext-info is just as incomplete, and this
+        // is the common case - ButtonGroup is the default group type.
+        assertTrue("a FormGroup carrying a MAPPED ext-info is complete", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet( //$NON-NLS-1$
+                elementWithExtInfo("FormGroup", "PagesGroupExtInfo"))); //$NON-NLS-1$
+        assertFalse("a ButtonGroupExtInfo is not in the map, so the union misses its events", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet( //$NON-NLS-1$
+                elementWithExtInfo("FormGroup", "ButtonGroupExtInfo"))); //$NON-NLS-1$
+    }
+
+    /** A dynamic element of {@code eClassName} carrying an {@code extInfo} of {@code extClassName}. */
+    private static EObject elementWithExtInfo(String eClassName, String extClassName)
+    {
+        EPackage pack = EcoreFactory.eINSTANCE.createEPackage();
+        pack.setName("probe"); //$NON-NLS-1$
+        EClass extClass = EcoreFactory.eINSTANCE.createEClass();
+        extClass.setName(extClassName);
+        EClass eClass = EcoreFactory.eINSTANCE.createEClass();
+        eClass.setName(eClassName);
+        EReference extInfo = EcoreFactory.eINSTANCE.createEReference();
+        extInfo.setName("extInfo"); //$NON-NLS-1$
+        extInfo.setEType(extClass);
+        extInfo.setContainment(true);
+        eClass.getEStructuralFeatures().add(extInfo);
+        pack.getEClassifiers().add(extClass);
+        pack.getEClassifiers().add(eClass);
+        EObject element = pack.getEFactoryInstance().create(eClass);
+        element.eSet(extInfo, pack.getEFactoryInstance().create(extClass));
+        return element;
     }
 
     /** A dynamic object whose EClass carries only the name the platform-type map is keyed by. */
