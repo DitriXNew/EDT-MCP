@@ -5578,12 +5578,17 @@ public final class FormElementWriter
      * the platform publishes for it - the only state in which "not in this set" means anything.
      *
      * <p>The union is the element's base type plus its ext-info's type, so it is complete exactly
-     * when three things hold: the base type is in {@link #PLATFORM_TYPE_BY_ECLASS}, the node the
-     * element CARRIES is the one it REQUIRES, and that node's type is mapped too. Stated as one
-     * rule rather than as a list of cases, because the cases do not end: an unmapped subclass
-     * ({@code ExtendedTooltip} under {@code Decoration}), an unmapped node ({@code ButtonGroupExtInfo}
-     * - the DEFAULT group type), a node deleted though required, a node left from a previous type,
-     * a {@code Table} whose pairing comes from its dataPath and cannot be read here at all.</p>
+     * when four things hold: the base type is in {@link #PLATFORM_TYPE_BY_ECLASS}, the pairing can
+     * be READ at all, the node the element CARRIES is the one it REQUIRES, and that node's type is
+     * mapped too. Stated as one rule rather than as a list of cases, because the cases do not end:
+     * an unmapped subclass ({@code ExtendedTooltip} under {@code Decoration}), an unmapped node
+     * ({@code ButtonGroupExtInfo} - the DEFAULT group type), a node deleted though required, a node
+     * left from a previous type.</p>
+     *
+     * <p>The readability clause is what equality alone cannot give: a {@code Table} pairs through
+     * its dataPath, so {@link #extInfoClassifierNameFor} declines to answer for one. "Nothing is
+     * required" and "nothing can be said" both read as {@code null}, and a table that LOST its
+     * {@code DynamicListTableExtInfo} looks exactly like a plain table that never needed one.</p>
      *
      * <p>Each of those is a structural defect the validator ALREADY reports on its own. Judging the
      * events besides would add a second, wrong verdict about the same defect - so where the set is
@@ -5595,6 +5600,10 @@ public final class FormElementWriter
         {
             return false;
         }
+        if (!extInfoPairingIsReadable(element))
+        {
+            return false;
+        }
         EObject ext = singleReference(element, FEATURE_EXT_INFO);
         String carried = ext == null ? null : ext.eClass().getName();
         if (!Objects.equals(requiredExtInfoClassifier(element), carried))
@@ -5602,6 +5611,19 @@ public final class FormElementWriter
             return false;
         }
         return carried == null || PLATFORM_TYPE_BY_ECLASS.get(carried) != null;
+    }
+
+    /**
+     * Whether the ext-info an element calls for can be READ from the element at all.
+     *
+     * <p>One kind cannot: a {@code Table} pairs through its {@code dataPath} rather than its type,
+     * which {@link #extInfoClassifierNameFor} says of itself and answers {@code null} for. That
+     * {@code null} is indistinguishable from "no node is due", so without this clause a table that
+     * lost its node would pass as complete.</p>
+     */
+    private static boolean extInfoPairingIsReadable(EObject element)
+    {
+        return !ECLASS_TABLE.equals(element.eClass().getName());
     }
 
     /**

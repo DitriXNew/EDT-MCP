@@ -1470,6 +1470,12 @@ public class FormElementWriterTest
         // Nothing required and nothing carried is whole - otherwise the check would never run.
         assertTrue("a Decoration with no type calls for no node, so base-only is the whole set", //$NON-NLS-1$
             FormElementWriter.publishesKnownEventSet(bareElement("Decoration"))); //$NON-NLS-1$
+
+        // A TABLE pairs through its dataPath, so "no node" and "cannot say" read alike on one: a
+        // table that lost its DynamicListTableExtInfo is indistinguishable from a plain table.
+        // Equality alone would call both whole, which is why readability is its own clause.
+        assertFalse("a Table pairs through its dataPath, so its requirement cannot be read here", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(bareElement("Table"))); //$NON-NLS-1$
     }
 
     /**
