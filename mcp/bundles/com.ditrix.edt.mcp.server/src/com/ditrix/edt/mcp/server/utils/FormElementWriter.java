@@ -5581,6 +5581,12 @@ public final class FormElementWriter
      * {@code ButtonGroupExtInfo} that the map does not list, so its extension events are missing
      * while the base ones are there. Either way the union is a subset, and a caller told "these
      * are the events" would call an ordinary binding foreign.</p>
+     *
+     * <p>A MISSING node is the third way, and it is a defect that hides itself: an element whose
+     * type calls for an ext-info still publishes that extension's events, so once the node is
+     * deleted the union is base-only while the handlers stay. Judged complete, it would report
+     * every one of them foreign ON TOP of the missing-node finding - two verdicts for one defect,
+     * and the louder one wrong.</p>
      */
     static boolean publishesKnownEventSet(EObject element)
     {
@@ -5589,7 +5595,25 @@ public final class FormElementWriter
             return false;
         }
         EObject ext = singleReference(element, FEATURE_EXT_INFO);
-        return ext == null || PLATFORM_TYPE_BY_ECLASS.get(ext.eClass().getName()) != null;
+        if (ext == null)
+        {
+            return requiredExtInfoClassifier(element) == null;
+        }
+        return PLATFORM_TYPE_BY_ECLASS.get(ext.eClass().getName()) != null;
+    }
+
+    /**
+     * The ext-info classifier {@code element} calls for, from whichever pairing decides it: the
+     * MAIN ATTRIBUTE for a form root, the element's own kind and type for everything else.
+     */
+    private static String requiredExtInfoClassifier(EObject element)
+    {
+        if (element.eClass().getEStructuralFeature(FEATURE_ATTRIBUTES) != null)
+        {
+            return hasMainAttribute(element)
+                ? FORM_EXT_INFO_BY_TYPE_CATEGORY.get(mainAttributeCategory(element)) : null;
+        }
+        return extInfoClassifierNameFor(element);
     }
 
     public static List<String> availableEventNames(EObject container, Version version)

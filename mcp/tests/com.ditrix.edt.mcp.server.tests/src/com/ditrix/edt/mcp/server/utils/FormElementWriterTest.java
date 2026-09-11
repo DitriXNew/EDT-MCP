@@ -1456,6 +1456,13 @@ public class FormElementWriterTest
         assertFalse("a ButtonGroupExtInfo is not in the map, so the union misses its events", //$NON-NLS-1$
             FormElementWriter.publishesKnownEventSet( //$NON-NLS-1$
                 elementWithExtInfo("FormGroup", "ButtonGroupExtInfo"))); //$NON-NLS-1$
+
+        // The third way: a node that is REQUIRED but absent leaves the union base-only while the
+        // element still publishes the extension's events. A group always calls for one.
+        assertFalse("a FormGroup with no ext-info is missing the events of the node it calls for", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(bareElement("FormGroup"))); //$NON-NLS-1$
+        assertTrue("a Decoration with no TYPE calls for no node, so base-only is complete there", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(bareElement("Decoration"))); //$NON-NLS-1$
     }
 
     /** A dynamic element of {@code eClassName} carrying an {@code extInfo} of {@code extClassName}. */
