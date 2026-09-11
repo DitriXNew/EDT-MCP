@@ -180,7 +180,9 @@ Both are handled before the operation runs: the server state is read first, and
 
 A refusal that still arrives (the state can go stale between the check and the start) is repaired
 the same way and the operation is retried ONCE. If the retry fails too, the error says so and names
-the likely reason: an `ibsrv` left over from the previous run still holding the ports.
+the likely reason: an `ibsrv` left over from the previous run still holding the ports. Whenever
+this operation successfully stopped the server and then failed, it attempts one restore and appends
+the outcome to the error. It never restores a server this operation did not stop.
 
 EDT's own background jobs - notably its external-object dump - can still lose this race on their
 own, which is logged in the workbench log without failing the MCP call.

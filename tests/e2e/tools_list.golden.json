@@ -2998,7 +2998,7 @@
           "type": "string"
         },
         "mode": {
-          "description": "Launch mode: debug (default) or run. Attach configurations support debug only.",
+          "description": "Launch mode: debug (default) or run. Attach configurations support debug only; standalone servers always start in debug mode.",
           "enum": [
             "debug",
             "run"
@@ -4290,16 +4290,33 @@
         "message": {
           "type": "string"
         },
+        "passwordMatched": {
+          "type": "boolean"
+        },
         "passwordSet": {
           "type": "boolean"
         },
         "project": {
           "type": "string"
         },
+        "storedFor": {
+          "type": "object"
+        },
         "success": {
           "type": "boolean"
         },
         "user": {
+          "type": "string"
+        },
+        "verification": {
+          "enum": [
+            "verified",
+            "mismatched",
+            "not_verifiable"
+          ],
+          "type": "string"
+        },
+        "verificationReason": {
           "type": "string"
         }
       },
