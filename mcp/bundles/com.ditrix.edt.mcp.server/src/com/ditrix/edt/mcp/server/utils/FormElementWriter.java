@@ -18,6 +18,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -2926,6 +2927,16 @@ public final class FormElementWriter
     }
 
     /**
+     * The classifier the platform pairs with this attribute's value type, or {@code null} when the
+     * attribute takes none - which also covers a MULTI-typed attribute, whose category cannot be
+     * read at all.
+     */
+    public static String attributeExtInfoClassifierNameFor(EObject attribute)
+    {
+        return ATTRIBUTE_EXT_INFO_BY_TYPE_CATEGORY.get(singleValueTypeCategory(attribute));
+    }
+
+    /**
      * Brings the form attribute's {@code <extInfo>} in line with the value type it now carries - the
      * step that turns a bare {@code valueType} set into the attribute the designer would have written
      * (issue #369). Mirrors {@code ExtInfoManagementService.setExtInfo(tx, attribute, type, version)}:
@@ -2985,8 +2996,8 @@ public final class FormElementWriter
 
     /**
      * The MAIN attribute's value-type CATEGORY &rarr; the concrete {@code FormExtInfo} classifier the
-     * platform pairs with the form ROOT. A category not listed here leaves the form without a root
-     * ext-info, which is what the platform writes for it.
+     * platform pairs with the form ROOT. A category not listed here normally leaves the form without
+     * a root ext-info; importer-only ambiguity is named alongside the map.
      *
      * <p>The platform decides this in THREE places that do not agree:
      * {@code ExtInfoManagementService.createFormExtInfo} (the main-attribute checkbox), the form
@@ -2997,6 +3008,11 @@ public final class FormElementWriter
      * object forms are the case that proves it: only the generator and the importer map them.</p>
      */
     private static final Map<String, String> FORM_EXT_INFO_BY_TYPE_CATEGORY = buildFormExtInfoMap();
+
+    // Deliberately absent: SpreadsheetDocument may still receive an importer node, while
+    // InformationRegisterManager has no pairing from any writer.
+    private static final Set<String> FORM_EXT_INFO_CATEGORIES_WITH_POSSIBLE_WRITER_NODE =
+        Set.of("SpreadsheetDocument"); //$NON-NLS-1$
 
     private static Map<String, String> buildFormExtInfoMap()
     {
@@ -3035,8 +3051,6 @@ public final class FormElementWriter
         m.put("ExternalReportObject", "ReportFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
         // ... and one only the record-set generator produces, for a cube.
         m.put("ExternalDataSourceCubeRecordSet", "CubeRecordSetFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
-        // Deliberately absent: SpreadsheetDocument, whose importer branch casts a FormAttributeExtInfo
-        // to FormExtInfo, and InformationRegisterManager, which no writer pairs with a kind at all.
         return Collections.unmodifiableMap(m);
     }
 
@@ -3092,6 +3106,44 @@ public final class FormElementWriter
         // handlers bound inside it.
         copySameFeatures(current, created);
         return created.eClass().getName();
+    }
+
+    /**
+     * Brings a table's ext-info in line with its data-path pairing. An unreadable path preserves the
+     * node; a readable pairing replaces or clears it exactly as the platform does.
+     *
+     * @param formModel the editable content form owning {@code table}
+     * @param table the table whose data path has just been built
+     * @return the EClass name of the ext-info now on the table, or {@code null} when it carries none
+     */
+    public static String syncTableExtInfo(EObject formModel, EObject table)
+    {
+        EStructuralFeature extInfoFeature = table.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
+        if (!(extInfoFeature instanceof EReference) || extInfoFeature.isMany())
+        {
+            return null;
+        }
+        EObject current = singleReference(table, FEATURE_EXT_INFO);
+        ExtInfoRequirement requirement = extInfoRequirement(formModel, table);
+        if (!requirement.readable())
+        {
+            return current == null ? null : current.eClass().getName();
+        }
+        String classifier = requirement.classifier();
+        if (classifier == null)
+        {
+            if (current != null)
+            {
+                table.eSet(extInfoFeature, null);
+            }
+            return null;
+        }
+        if (current != null && classifier.equals(current.eClass().getName()))
+        {
+            return classifier;
+        }
+        EObject created = replaceExtInfoClassifier(formModel, table, extInfoFeature, classifier);
+        return created == null ? null : created.eClass().getName();
     }
 
     /**
@@ -3273,7 +3325,15 @@ public final class FormElementWriter
         return member == null ? null : singleValueTypeCategory(member);
     }
 
-    private static String singleValueTypeCategory(EObject member)
+    /**
+     * The category of a member's SINGLE value type ({@code DynamicList}, {@code String}, the head of
+     * a qualified name), or {@code null} when the member does not carry exactly one type - which is
+     * the difference between "this type takes no ext-info" and "the type cannot be read at all".
+     *
+     * @param member the form attribute or column to read
+     * @return the type category, or {@code null} when the value type is absent or not single
+     */
+    public static String singleValueTypeCategory(EObject member)
     {
         EStructuralFeature feature = member.eClass().getEStructuralFeature(FEATURE_VALUE_TYPE);
         return feature == null ? null : typeCategoryOf(member.eGet(feature));
@@ -4156,6 +4216,7 @@ public final class FormElementWriter
         applyVisibleDefaults(table);
         setIntFeature(table, FEATURE_ID, nextItemId(formModel));
         buildDataPath(formModel, table, dataPath);
+        syncTableExtInfo(formModel, table);
         setEnumFeature(table, "titleLocation", "None"); //$NON-NLS-1$ //$NON-NLS-2$
         applyTableDefaults(table);
         setUndefinedRowFilter(table);
@@ -4968,24 +5029,62 @@ public final class FormElementWriter
      * slot ({@link #resolveExtInfoEClass}), and which class a live instance must be REPLACED by when
      * the type changed under it ({@link #syncItemExtInfo}).</p>
      */
+    /**
+     * The ext-info classifier the element's CURRENT type calls for, or {@code null} when its type
+     * pairs with none. Read-only counterpart of the dispatch the writer uses, for a validator that
+     * has to tell "this type wants none" from "this kind has no opinion" - see
+     * {@link #kindDecidesExtInfo(EObject)}.
+     */
+    static String expectedExtInfoClassifier(EObject element)
+    {
+        return element == null ? null : extInfoClassifierNameFor(element);
+    }
+
+    /**
+     * Whether this element's KIND has an opinion at all about which ext-info it carries - by its
+     * {@code type} for most, by the class alone for an {@code ExtendedTooltip}. A {@code null}
+     * answer from {@link #expectedExtInfoClassifier} means "this type pairs with none" only for
+     * these; for every other kind it means "no opinion".
+     */
+    static boolean kindDecidesExtInfo(EObject element)
+    {
+        if (element == null)
+        {
+            return false;
+        }
+        EClass eClass = element.eClass();
+        return isOrInherits(eClass, ECLASS_FORM_GROUP) || isOrInherits(eClass, ECLASS_FORM_FIELD)
+            || isOrInherits(eClass, ECLASS_DECORATION) || isOrInherits(eClass, ECLASS_ADDITION);
+    }
+
     private static String extInfoClassifierNameFor(EObject element)
     {
-        String eClassName = element.eClass().getName();
+        EClass eClass = element.eClass();
         String typeLiteral = enumLiteralOf(element, FEATURE_TYPE);
-        if (ECLASS_FORM_GROUP.equals(eClassName))
+        if (isOrInherits(eClass, ECLASS_EXTENDED_TOOLTIP))
         {
-            // An unset type still means UsualGroup - the platform's own default group shape.
+            // A tooltip is pinned to the label node whatever its type says: the platform's own
+            // check overrides the type switch with a plain "is it an ExtendedTooltip", and pins the
+            // type to Label separately. Reading the type here would demand a picture node for a
+            // tooltip the platform rejects for its TYPE, and call a correct node stale.
+            return ECLASS_LABEL_DECORATION_EXT_INFO;
+        }
+        if (isOrInherits(eClass, ECLASS_FORM_GROUP))
+        {
+            // EMF answers ButtonGroup for an unset type (the first literal of
+            // ManagedFormGroupType), so this fallback is reached only by a model whose group has no
+            // type feature at all - there the plain-group shape is the honest guess.
             return groupExtInfoClassifierFor(typeLiteral != null ? typeLiteral : TYPE_LITERAL_USUAL_GROUP);
         }
-        if (ECLASS_FORM_FIELD.equals(eClassName))
+        if (isOrInherits(eClass, ECLASS_FORM_FIELD))
         {
             return FIELD_EXT_INFO_BY_TYPE.get(typeLiteral);
         }
-        if (ECLASS_DECORATION.equals(eClassName))
+        if (isOrInherits(eClass, ECLASS_DECORATION))
         {
             return DECORATION_EXT_INFO_BY_TYPE.get(typeLiteral);
         }
-        if (ECLASS_ADDITION.equals(eClassName))
+        if (isOrInherits(eClass, ECLASS_ADDITION))
         {
             return ADDITION_EXT_INFO_BY_TYPE.get(typeLiteral);
         }
@@ -5232,7 +5331,7 @@ public final class FormElementWriter
             return "The form element '" + container.eClass().getName() //$NON-NLS-1$
                 + "' cannot hold event handlers."; //$NON-NLS-1$
         }
-        List<AvailableEvent> events = availableEvents(container, version);
+        List<AvailableEvent> events = availableEvents(container, version).events();
         if (events.isEmpty())
         {
             return "Could not resolve the available events for this form element."; //$NON-NLS-1$
@@ -5510,6 +5609,163 @@ public final class FormElementWriter
     }
 
     /**
+     * What ext-info an element requires: a classifier, none, or a pairing that cannot be read here.
+     */
+    public record ExtInfoRequirement(boolean readable, String classifier)
+    {
+        /** A readable pairing that requires no ext-info node. */
+        public static final ExtInfoRequirement NONE = new ExtInfoRequirement(true, null);
+
+        /** A pairing that cannot be derived from this model. */
+        public static final ExtInfoRequirement UNREADABLE = new ExtInfoRequirement(false, null);
+
+        public ExtInfoRequirement
+        {
+            if (!readable && classifier != null)
+            {
+                throw new IllegalArgumentException(
+                    "An unreadable ext-info requirement cannot carry a classifier."); //$NON-NLS-1$
+            }
+        }
+
+        /** A readable requirement; {@code null} means {@link #NONE}. */
+        public static ExtInfoRequirement of(String classifier)
+        {
+            return classifier == null ? NONE : new ExtInfoRequirement(true, classifier);
+        }
+    }
+
+    /**
+     * The ext-info {@code element} requires, resolving its content form from containment and keeping
+     * readable-none distinct from unreadable.
+     *
+     * @param element the form root or item to inspect
+     * @return its three-valued ext-info requirement
+     */
+    public static ExtInfoRequirement extInfoRequirement(EObject element)
+    {
+        EObject formModel = element == null ? null : contentFormOf(element);
+        return extInfoRequirement(formModel, element);
+    }
+
+    /**
+     * The ext-info {@code element} requires when its content-form root is already known.
+     *
+     * <p>A Table's dotted path ends at a metadata leaf this model does not resolve, and the platform
+     * decides from that leaf, so its requirement cannot be read here.</p>
+     *
+     * <p>For a single-segment Table path, a multi-typed attribute requires no node: the platform
+     * likewise answers null unless the value type holds exactly one type.</p>
+     *
+     * @param formModel the content form owning {@code element}, or {@code null} when unavailable
+     * @param element the form root or item to inspect
+     * @return its three-valued ext-info requirement
+     */
+    public static ExtInfoRequirement extInfoRequirement(EObject formModel, EObject element)
+    {
+        if (element == null)
+        {
+            return ExtInfoRequirement.UNREADABLE;
+        }
+        if (element.eClass().getEStructuralFeature(FEATURE_ATTRIBUTES) != null)
+        {
+            if (!hasMainAttribute(element))
+            {
+                return ExtInfoRequirement.NONE;
+            }
+            String category = mainAttributeCategory(element);
+            if (category == null
+                || FORM_EXT_INFO_CATEGORIES_WITH_POSSIBLE_WRITER_NODE.contains(category))
+            {
+                return ExtInfoRequirement.UNREADABLE;
+            }
+            return ExtInfoRequirement.of(FORM_EXT_INFO_BY_TYPE_CATEGORY.get(category));
+        }
+        if (ECLASS_TABLE.equals(element.eClass().getName()))
+        {
+            String dataPath = String.join(".", dataPathSegments(element)); //$NON-NLS-1$
+            if (dataPath.isEmpty())
+            {
+                return ExtInfoRequirement.UNREADABLE;
+            }
+            if (dataPath.indexOf('.') >= 0)
+            {
+                return ExtInfoRequirement.UNREADABLE;
+            }
+            if (formModel == null)
+            {
+                return ExtInfoRequirement.UNREADABLE;
+            }
+            EObject attribute = findFormAttribute(formModel, dataPath);
+            if (attribute == null)
+            {
+                return ExtInfoRequirement.UNREADABLE;
+            }
+            String category = singleValueTypeCategory(attribute);
+            return "DynamicList".equals(category) //$NON-NLS-1$
+                ? ExtInfoRequirement.of("DynamicListTableExtInfo") //$NON-NLS-1$
+                : ExtInfoRequirement.NONE;
+        }
+        if (element.eClass().getEStructuralFeature(FEATURE_EXT_INFO) == null)
+        {
+            return ExtInfoRequirement.NONE;
+        }
+        return kindDecidesExtInfo(element)
+            ? ExtInfoRequirement.of(extInfoClassifierNameFor(element))
+            : ExtInfoRequirement.UNREADABLE;
+    }
+
+    /**
+     * Whether the event union {@link #availableEvents} builds for {@code element} is the WHOLE set
+     * the platform publishes: its ext-info pairing must be readable and exactly the node it carries.
+     *
+     * <p>Map membership is deliberately not a condition. {@link #PLATFORM_TYPE_BY_ECLASS} is the
+     * platform's own map, and its lookup is keyed by exact EClass, so a miss on either side is the
+     * platform answering "no type, no events", not a gap in our knowledge.</p>
+     *
+     * <p>This cannot create a false accusation: a whole union with no mapped type produces an empty
+     * name list, and {@link #availableEventNames} also rejects an incompletely resolved union. The
+     * caller never accuses from any empty list.</p>
+     */
+    static boolean publishesKnownEventSet(EObject element)
+    {
+        ExtInfoRequirement required = extInfoRequirement(element);
+        if (!required.readable())
+        {
+            return false;
+        }
+        EObject ext = singleReference(element, FEATURE_EXT_INFO);
+        return Objects.equals(required.classifier(), ext == null ? null : ext.eClass().getName());
+    }
+
+    /**
+     * The English event names the platform publishes for {@code container}. Empty means "publishes
+     * nothing", "cannot tell", or "the union could not be fully resolved"; none may accuse.
+     */
+    public static List<String> availableEventNames(EObject container, Version version)
+    {
+        if (!publishesKnownEventSet(container))
+        {
+            return Collections.emptyList();
+        }
+        EventUnion union = availableEvents(container, version);
+        if (!union.complete())
+        {
+            return Collections.emptyList();
+        }
+        List<String> names = new ArrayList<>();
+        for (AvailableEvent available : union.events())
+        {
+            String name = eventNameOf(available.event, false);
+            if (name != null && !name.isEmpty())
+            {
+                names.add(name);
+            }
+        }
+        return names;
+    }
+
+    /**
      * The available platform events for a form element (the form root OR a form item), replicating
      * {@code FormItemInformationService.getAllowedEvents}'s pure-model logic (no form-service
      * dependency): the union of the events of the element's platform BASE type and, when present, its
@@ -5525,21 +5781,25 @@ public final class FormElementWriter
      * and the events it publishes bind INSIDE it - that is where EDT puts a record form's
      * {@code BeforeWriteAtServer} (issue #592, and {@code EventHandlerCollectionModel} does the same
      * split). Item ext-infos hold no handler list, so they keep answering with the item.</p>
+     *
+     * <p>The union is incomplete when a non-null mapped type cannot be resolved. Validators then
+     * receive no union, while writer callers retain the successfully resolved events.</p>
      */
-    private static List<AvailableEvent> availableEvents(EObject element, Version version)
+    private static EventUnion availableEvents(EObject element, Version version)
     {
         if (version == null)
         {
-            return Collections.emptyList();
+            return new EventUnion(Collections.emptyList(), false);
         }
         IEObjectProvider provider =
             IEObjectProvider.Registry.INSTANCE.get(McorePackage.Literals.TYPE_ITEM, version);
         if (provider == null)
         {
-            return Collections.emptyList();
+            return new EventUnion(Collections.emptyList(), false);
         }
         List<EObject> base = new ArrayList<>();
-        addTypeEvents(provider, element, PLATFORM_TYPE_BY_ECLASS.get(element.eClass().getName()), base);
+        boolean complete = addTypeEvents(provider, element,
+            PLATFORM_TYPE_BY_ECLASS.get(element.eClass().getName()), base);
         List<AvailableEvent> events = new ArrayList<>();
         for (EObject event : base)
         {
@@ -5548,16 +5808,22 @@ public final class FormElementWriter
         EObject ext = singleReference(element, FEATURE_EXT_INFO);
         if (ext == null)
         {
-            return events;
+            return new EventUnion(events, complete);
         }
         List<EObject> extEvents = new ArrayList<>();
-        addTypeEvents(provider, element, PLATFORM_TYPE_BY_ECLASS.get(ext.eClass().getName()), extEvents);
+        complete &= addTypeEvents(provider, element,
+            PLATFORM_TYPE_BY_ECLASS.get(ext.eClass().getName()), extEvents);
         EObject extOwner = holdsHandlerList(ext) ? ext : element;
         for (EObject event : extEvents)
         {
             events.add(new AvailableEvent(event, extOwner));
         }
-        return events;
+        return new EventUnion(events, complete);
+    }
+
+    /** The successfully resolved events and whether every non-null mapped type resolved. */
+    private record EventUnion(List<AvailableEvent> events, boolean complete)
+    {
     }
 
     /** An available form event and the object whose {@code handlers} list its binding belongs in. */
@@ -5616,15 +5882,19 @@ public final class FormElementWriter
         return all;
     }
 
-    /** Resolves {@code typeName} to a platform {@code Type} and appends its {@code events} to the list. */
+    /** Resolves a mapped type and appends its events; null means the platform publishes no type. */
     @SuppressWarnings("unchecked")
-    private static void addTypeEvents(IEObjectProvider provider, EObject context, String typeName,
+    private static boolean addTypeEvents(IEObjectProvider provider, EObject context, String typeName,
         List<EObject> accumulator)
     {
+        if (typeName == null)
+        {
+            return true;
+        }
         EObject type = resolveTypeName(provider, context, typeName);
         if (type == null)
         {
-            return;
+            return false;
         }
         EStructuralFeature eventsFeat = type.eClass().getEStructuralFeature("events"); //$NON-NLS-1$
         Object value = eventsFeat != null ? type.eGet(eventsFeat) : null;
@@ -5632,6 +5902,7 @@ public final class FormElementWriter
         {
             accumulator.addAll((List<EObject>)value);
         }
+        return true;
     }
 
     /**
@@ -6728,7 +6999,7 @@ public final class FormElementWriter
      * Whether {@code eClass} IS the named form EClass or inherits from it. Matched by NAME so this
      * stays reflective (no compile dependency on {@code com._1c.g5.v8.dt.form.model}).
      */
-    private static boolean isOrInherits(EClass eClass, String eClassName)
+    static boolean isOrInherits(EClass eClass, String eClassName)
     {
         if (eClassName.equals(eClass.getName()))
         {
@@ -6954,7 +7225,7 @@ public final class FormElementWriter
         {
             return owner.eClass().getEStructuralFeature(FEATURE_ACTION) != null && isActionToken(leaf);
         }
-        for (AvailableEvent candidate : availableEvents(owner, version))
+        for (AvailableEvent candidate : availableEvents(owner, version).events())
         {
             EObject event = candidate.event;
             if (leaf.equalsIgnoreCase(eventNameOf(event, false))

@@ -4734,6 +4734,59 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "Check ONE managed form for structural defects: duplicate names or ids, a data path that names no attribute, a button with no command, a handler with no procedure or no event, a missing type-specific extInfo, more than one main attribute. Computed from the model NOW, so it is current right after an edit - unlike get_project_errors, which reports what EDT validated earlier. Changes nothing. Full parameters and examples: call get_tool_guide('validate_form_model').",
+    "inputSchema": {
+      "properties": {
+        "formFqn": {
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName",
+        "formFqn"
+      ],
+      "type": "object"
+    },
+    "name": "validate_form_model",
+    "outputSchema": {
+      "properties": {
+        "errors": {
+          "type": "integer"
+        },
+        "findings": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "formPath": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Check a 1C query for syntax and metadata-reference errors. Parameters and examples: get_tool_guide('validate_query').",
     "inputSchema": {
       "properties": {
