@@ -76,6 +76,93 @@ public class FormModelValidatorTest
     }
 
     @Test
+    public void testAFormRootExtInfoFollowsItsMainAttribute()
+    {
+        Form form = new Form();
+        EObject main = form.attribute("Object", 1, true); //$NON-NLS-1$
+        form.giveAttributeTypes(main, "CatalogObject.Goods"); //$NON-NLS-1$
+
+        List<FormModelValidator.Finding> missing = findings(form,
+            FormModelValidator.CODE_MISSING_EXT_INFO);
+        assertEquals("the main attribute requires one root node: " + codes(form), //$NON-NLS-1$
+            1, missing.size());
+        assertEquals("the root finding uses the form address", "(form)", missing.get(0).path); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(missing.get(0).message.contains("CatalogFormExtInfo")); //$NON-NLS-1$
+        assertTrue(missing.get(0).message.contains("CatalogObject")); //$NON-NLS-1$
+
+        form.giveRootExtInfo(form.documentFormExtInfoType);
+        List<FormModelValidator.Finding> stale = findings(form,
+            FormModelValidator.CODE_STALE_EXT_INFO);
+        assertEquals("a root node left from another main type is stale: " + codes(form), //$NON-NLS-1$
+            1, stale.size());
+        assertTrue(stale.get(0).message.contains("DocumentFormExtInfo")); //$NON-NLS-1$
+        assertTrue(stale.get(0).message.contains("CatalogFormExtInfo")); //$NON-NLS-1$
+
+        form.giveRootExtInfo(form.extInfoType);
+        assertEquals("the correctly paired root is clean: " + codes(form), List.of(), codes(form)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAMainAttributeWithNoRootPairingIsSilent()
+    {
+        Form form = new Form();
+        EObject main = form.attribute("Caption", 1, true); //$NON-NLS-1$
+        form.giveAttributeTypes(main, "String"); //$NON-NLS-1$
+        form.giveRootExtInfo();
+
+        assertEquals("an unmapped category cannot prove its existing root node stale: " //$NON-NLS-1$
+            + codes(form),
+            List.of(), codes(form));
+    }
+
+    @Test
+    public void testMissingAttributePresentationHoldersAreReportedSeparately()
+    {
+        Form form = new Form();
+        EObject attribute = form.attribute("Rows", 1, false); //$NON-NLS-1$
+        form.removePresentationHolder(attribute, "view"); //$NON-NLS-1$
+
+        List<FormModelValidator.Finding> one = findings(form,
+            FormModelValidator.CODE_MISSING_PRESENTATION_FLAG);
+        assertEquals("one absent holder produces one finding: " + codes(form), 1, one.size()); //$NON-NLS-1$
+        assertTrue("the message must name the holder to add: " + one.get(0).message, //$NON-NLS-1$
+            one.get(0).message.contains("view")); //$NON-NLS-1$
+        assertTrue(one.get(0).message.contains("attribute")); //$NON-NLS-1$
+
+        form.removePresentationHolder(attribute, "edit"); //$NON-NLS-1$
+        List<FormModelValidator.Finding> both = findings(form,
+            FormModelValidator.CODE_MISSING_PRESENTATION_FLAG);
+        assertEquals("each absent holder needs its own repair: " + codes(form), 2, both.size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnEmptyPresentationHolderIsPresent()
+    {
+        Form form = new Form();
+        form.attribute("Rows", 1, false); //$NON-NLS-1$
+
+        assertTrue("an empty AdjustableBoolean holder is still present", //$NON-NLS-1$
+            findings(form, FormModelValidator.CODE_MISSING_PRESENTATION_FLAG).isEmpty());
+    }
+
+    @Test
+    public void testAColumnMissingAPresentationHolderUsesTheColumnAddress()
+    {
+        Form form = new Form();
+        EObject attribute = form.attribute("Rows", 1, false); //$NON-NLS-1$
+        EObject column = form.column(attribute, "Price", 2); //$NON-NLS-1$
+        form.removePresentationHolder(column, "edit"); //$NON-NLS-1$
+
+        List<FormModelValidator.Finding> findings = findings(form,
+            FormModelValidator.CODE_MISSING_PRESENTATION_FLAG);
+        assertEquals(1, findings.size());
+        assertEquals("the direct-column label must match the namespace walk", //$NON-NLS-1$
+            "Attribute.Rows.Column.Price", findings.get(0).path); //$NON-NLS-1$
+        assertTrue(findings.get(0).message.contains("edit")); //$NON-NLS-1$
+        assertTrue(findings.get(0).message.contains("column")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testDuplicateNamesAreJudgedPerNamespace()
     {
         Form form = new Form();
@@ -619,6 +706,19 @@ public class FormModelValidatorTest
         return ""; //$NON-NLS-1$
     }
 
+    private static List<FormModelValidator.Finding> findings(Form form, String code)
+    {
+        List<FormModelValidator.Finding> matches = new ArrayList<>();
+        for (FormModelValidator.Finding finding : FormModelValidator.validate(form.root))
+        {
+            if (code.equals(finding.code))
+            {
+                matches.add(finding);
+            }
+        }
+        return matches;
+    }
+
     private static List<String> codes(Form form)
     {
         List<String> codes = new ArrayList<>();
@@ -649,6 +749,8 @@ public class FormModelValidatorTest
         final EPackage pkg = EcoreFactory.eINSTANCE.createEPackage();
         final EClass formType;
         final EClass attributeType;
+        final EClass columnType;
+        final EClass presentationFlagType;
         final EClass commandType;
         final EClass parameterType;
         final EClass groupType;
@@ -665,6 +767,7 @@ public class FormModelValidatorTest
         final EClass eventType;
         final EClass handlerType;
         final EClass extInfoType;
+        final EClass documentFormExtInfoType;
         final EClass dynamicListExtInfoType;
         final EObject root;
         /** Items are addressed by id, so the fixture allocates one per item as the platform does. */
@@ -688,7 +791,9 @@ public class FormModelValidatorTest
             handlerType.getEStructuralFeatures().add(reference("event", eventType, false, false)); //$NON-NLS-1$
 
             extInfoType = eClass("CatalogFormExtInfo"); //$NON-NLS-1$
+            documentFormExtInfoType = eClass("DocumentFormExtInfo"); //$NON-NLS-1$
             dynamicListExtInfoType = eClass("DynamicListExtInfo"); //$NON-NLS-1$
+            presentationFlagType = eClass("AdjustableBoolean"); //$NON-NLS-1$
 
             EClass commandBase = eClass("Command"); //$NON-NLS-1$
             commandBase.setAbstract(true);
@@ -712,6 +817,24 @@ public class FormModelValidatorTest
                 .add(reference("valueType", EcorePackage.Literals.EOBJECT, false, true)); //$NON-NLS-1$
             attributeType.getEStructuralFeatures()
                 .add(reference("extInfo", dynamicListExtInfoType, false, true)); //$NON-NLS-1$
+            attributeType.getEStructuralFeatures()
+                .add(reference("view", presentationFlagType, false, true)); //$NON-NLS-1$
+            attributeType.getEStructuralFeatures()
+                .add(reference("edit", presentationFlagType, false, true)); //$NON-NLS-1$
+
+            columnType = eClass("FormAttributeColumn"); //$NON-NLS-1$
+            named(columnType);
+            columnType.getEStructuralFeatures()
+                .add(reference("view", presentationFlagType, false, true)); //$NON-NLS-1$
+            columnType.getEStructuralFeatures()
+                .add(reference("edit", presentationFlagType, false, true)); //$NON-NLS-1$
+            attributeType.getEStructuralFeatures()
+                .add(reference("columns", columnType, true, true)); //$NON-NLS-1$
+            EClass additionalColumnsType = eClass("FormAttributeAdditionalColumns"); //$NON-NLS-1$
+            additionalColumnsType.getEStructuralFeatures()
+                .add(reference("columns", columnType, true, true)); //$NON-NLS-1$
+            attributeType.getEStructuralFeatures()
+                .add(reference("additionalColumns", additionalColumnsType, true, true)); //$NON-NLS-1$
 
             EClass itemBase = eClass("FormItem"); //$NON-NLS-1$
             itemBase.setAbstract(true);
@@ -773,7 +896,8 @@ public class FormModelValidatorTest
             formType.getEStructuralFeatures().add(reference("parameters", parameterType, true, true)); //$NON-NLS-1$
             formType.getEStructuralFeatures().add(reference("handlers", handlerType, true, true)); //$NON-NLS-1$
             formType.getEStructuralFeatures().add(reference("autoCommandBar", barType, false, true)); //$NON-NLS-1$
-            formType.getEStructuralFeatures().add(reference("extInfo", extInfoType, false, true)); //$NON-NLS-1$
+            formType.getEStructuralFeatures()
+                .add(reference("extInfo", EcorePackage.Literals.EOBJECT, false, true)); //$NON-NLS-1$
 
             root = create(formType);
             // Every form EDT writes has one - all 9851 forms of a real configuration included - so a
@@ -787,8 +911,26 @@ public class FormModelValidatorTest
             set(attribute, "name", name); //$NON-NLS-1$
             set(attribute, "id", Integer.valueOf(id)); //$NON-NLS-1$
             set(attribute, "main", Boolean.valueOf(main)); //$NON-NLS-1$
+            set(attribute, "view", create(presentationFlagType)); //$NON-NLS-1$
+            set(attribute, "edit", create(presentationFlagType)); //$NON-NLS-1$
             add(root, "attributes", attribute); //$NON-NLS-1$
             return attribute;
+        }
+
+        EObject column(EObject attribute, String name, int id)
+        {
+            EObject column = create(columnType);
+            set(column, "name", name); //$NON-NLS-1$
+            set(column, "id", Integer.valueOf(id)); //$NON-NLS-1$
+            set(column, "view", create(presentationFlagType)); //$NON-NLS-1$
+            set(column, "edit", create(presentationFlagType)); //$NON-NLS-1$
+            add(attribute, "columns", column); //$NON-NLS-1$
+            return column;
+        }
+
+        void removePresentationHolder(EObject member, String featureName)
+        {
+            set(member, featureName, null);
         }
 
         void giveAttributeTypes(EObject attribute, String... typeNames)
@@ -984,7 +1126,12 @@ public class FormModelValidatorTest
 
         void giveRootExtInfo()
         {
-            set(root, "extInfo", create(extInfoType)); //$NON-NLS-1$
+            giveRootExtInfo(extInfoType);
+        }
+
+        void giveRootExtInfo(EClass classifier)
+        {
+            set(root, "extInfo", create(classifier)); //$NON-NLS-1$
         }
 
         void giveAutoCommandBar(int id)

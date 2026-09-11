@@ -15,6 +15,8 @@ from harness import (
     assert_ok,
     assert_error,
     assert_error_quality,
+    poll_diff_contains,
+    read_disk,
     wait_for_project_ready,
     e2e_test,
     PROJECT,
@@ -116,6 +118,93 @@ def test_a_real_event_binding_is_not_called_foreign():
     err = assert_error(refused, "a FIELD event bound to the form root")
     assert "OnChange" in err and "Available events" in err, \
         "the refusal must name the events the root does publish: %r" % (err,)
+
+
+@e2e_test(tool="validate_form_model", kind="write-metadata")
+def test_writer_output_satisfies_the_new_ext_info_and_presentation_checks():
+    """The two new checks do not fire on a form, attribute, and table produced by our writers.
+
+    Their negative direction is covered by unit tests because the writers cannot produce a model
+    with a missing presentation holder or a mismatched readable root ext-info."""
+    form = "Catalog.Catalog.Form.E2EValidateWriterOutput"
+    attribute = form + ".Attribute.Rows"
+    table = form + ".Table.RowsTable"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": form}),
+              "create the managed form")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": attribute}),
+              "create its form attribute")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": attribute,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ValueTable"}]}}],
+    }), "make the attribute a table row source")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": table,
+        "properties": [{"name": "dataPath", "value": "Rows"}],
+    }), "create a table bound to the attribute")
+    wait_for_project_ready()
+    poll_diff_contains("<name>RowsTable</name>",
+                       ctx="the ValueTable-bound table must reach its form file")
+    value_table_xml = read_disk(
+        "src/Catalogs/Catalog/Forms/E2EValidateWriterOutput/Form.form")
+    assert 'xsi:type="form:DynamicListTableExtInfo"' not in value_table_xml, \
+        "a ValueTable-bound table must not gain a dynamic-list node: %s" % value_table_xml
+
+    result = call("validate_form_model", {"projectName": PROJECT, "formFqn": form})
+    assert_ok(result, "validate the writer-produced form")
+    findings = _findings(result)
+    assert not [f for f in findings if f.get("code") == "missing-presentation-flag"], \
+        "writer-created attributes and columns must carry both holders: %r" % (findings,)
+    root_ext_info = [
+        f for f in findings
+        if f.get("path") == "(form)"
+        and f.get("code") in ("missing-ext-info", "stale-ext-info", "orphan-form-ext-info")
+    ]
+    assert not root_ext_info, \
+        "the writer-created form root must match its main attribute: %r" % (root_ext_info,)
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_a_dynamic_list_table_gets_its_ext_info_on_disk():
+    """A DynamicList-bound table gets its node on disk; the preceding ValueTable case pins the
+    opposite no-node pairing."""
+    base = "Catalog.E2EValidateDynTableExt"
+    form = base + ".Form.ListForm"
+    attribute = form + ".Attribute.List"
+    table = form + ".Table.ListTable"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": base}), "seed catalog")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": form}), "seed list form")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": attribute}),
+              "seed list attribute")
+    wait_for_project_ready()
+
+    converted = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": attribute,
+        "properties": [
+            {"name": "queryText",
+             "value": "SELECT Ref, Description AS Description FROM " + base},
+            {"name": "customQuery", "value": True},
+        ],
+    })
+    assert_ok(converted, "convert the attribute into a dynamic list")
+    assert "dynamicList" in ((converted.structured or {}).get("applied") or []), \
+        "the attribute must really be converted: %r" % (converted.structured,)
+    wait_for_project_ready()
+
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": table,
+        "properties": [{"name": "dataPath", "value": "List"}],
+    }), "create a table bound to the dynamic list")
+    poll_diff_contains('xsi:type="form:DynamicListTableExtInfo"',
+                       ctx="a DynamicList-bound table must carry its ext-info on disk")
 
 
 @e2e_test(tool="validate_form_model", kind="read")

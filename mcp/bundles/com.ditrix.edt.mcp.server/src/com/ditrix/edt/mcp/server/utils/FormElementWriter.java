@@ -3106,6 +3106,44 @@ public final class FormElementWriter
     }
 
     /**
+     * Brings a table's ext-info in line with its data-path pairing. An unreadable path preserves the
+     * node; a readable pairing replaces or clears it exactly as the platform does.
+     *
+     * @param formModel the editable content form owning {@code table}
+     * @param table the table whose data path has just been built
+     * @return the EClass name of the ext-info now on the table, or {@code null} when it carries none
+     */
+    public static String syncTableExtInfo(EObject formModel, EObject table)
+    {
+        EStructuralFeature extInfoFeature = table.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
+        if (!(extInfoFeature instanceof EReference) || extInfoFeature.isMany())
+        {
+            return null;
+        }
+        EObject current = singleReference(table, FEATURE_EXT_INFO);
+        ExtInfoRequirement requirement = extInfoRequirement(formModel, table);
+        if (!requirement.readable())
+        {
+            return current == null ? null : current.eClass().getName();
+        }
+        String classifier = requirement.classifier();
+        if (classifier == null)
+        {
+            if (current != null)
+            {
+                table.eSet(extInfoFeature, null);
+            }
+            return null;
+        }
+        if (current != null && classifier.equals(current.eClass().getName()))
+        {
+            return classifier;
+        }
+        EObject created = replaceExtInfoClassifier(formModel, table, extInfoFeature, classifier);
+        return created == null ? null : created.eClass().getName();
+    }
+
+    /**
      * The type CATEGORY of the form's MAIN attribute, or {@code null} when the form has no main
      * attribute or its type is not single.
      *
@@ -4175,6 +4213,7 @@ public final class FormElementWriter
         applyVisibleDefaults(table);
         setIntFeature(table, FEATURE_ID, nextItemId(formModel));
         buildDataPath(formModel, table, dataPath);
+        syncTableExtInfo(formModel, table);
         setEnumFeature(table, "titleLocation", "None"); //$NON-NLS-1$ //$NON-NLS-2$
         applyTableDefaults(table);
         setUndefinedRowFilter(table);
@@ -5289,7 +5328,7 @@ public final class FormElementWriter
             return "The form element '" + container.eClass().getName() //$NON-NLS-1$
                 + "' cannot hold event handlers."; //$NON-NLS-1$
         }
-        List<AvailableEvent> events = availableEvents(container, version);
+        List<AvailableEvent> events = availableEvents(container, version).events();
         if (events.isEmpty())
         {
             return "Could not resolve the available events for this form element."; //$NON-NLS-1$
@@ -5567,87 +5606,143 @@ public final class FormElementWriter
     }
 
     /**
-     * The English names of the events the platform publishes for {@code container}.
-     *
-     * <p>An empty list means "cannot tell": no version, no {@link IEObjectProvider}, or a type the
-     * platform-type map does not cover on either side - see {@link #publishesKnownEventSet}. An
-     * incomplete union is reported as no union at all.</p>
+     * What ext-info an element requires: a classifier, none, or a pairing that cannot be read here.
      */
+    public record ExtInfoRequirement(boolean readable, String classifier)
+    {
+        /** A readable pairing that requires no ext-info node. */
+        public static final ExtInfoRequirement NONE = new ExtInfoRequirement(true, null);
+
+        /** A pairing that cannot be derived from this model. */
+        public static final ExtInfoRequirement UNREADABLE = new ExtInfoRequirement(false, null);
+
+        public ExtInfoRequirement
+        {
+            if (!readable && classifier != null)
+            {
+                throw new IllegalArgumentException(
+                    "An unreadable ext-info requirement cannot carry a classifier."); //$NON-NLS-1$
+            }
+        }
+
+        /** A readable requirement; {@code null} means {@link #NONE}. */
+        public static ExtInfoRequirement of(String classifier)
+        {
+            return classifier == null ? NONE : new ExtInfoRequirement(true, classifier);
+        }
+    }
+
+    /**
+     * The ext-info {@code element} requires, resolving its content form from containment and keeping
+     * readable-none distinct from unreadable.
+     *
+     * @param element the form root or item to inspect
+     * @return its three-valued ext-info requirement
+     */
+    public static ExtInfoRequirement extInfoRequirement(EObject element)
+    {
+        EObject formModel = element == null ? null : contentFormOf(element);
+        return extInfoRequirement(formModel, element);
+    }
+
+    /**
+     * The ext-info {@code element} requires when its content-form root is already known.
+     * <p>For a Table, a dotted path requires no node because all 3256 measured occurrences of a single DynamicList value type are top-level attributes, never columns or nested members.</p>
+     * <p>For a Table, a multi-typed attribute requires no node because the platform likewise returns null unless the value type contains exactly one type.</p>
+     *
+     * @param formModel the content form owning {@code element}, or {@code null} when unavailable
+     * @param element the form root or item to inspect
+     * @return its three-valued ext-info requirement
+     */
+    public static ExtInfoRequirement extInfoRequirement(EObject formModel, EObject element)
+    {
+        if (element == null)
+        {
+            return ExtInfoRequirement.UNREADABLE;
+        }
+        if (element.eClass().getEStructuralFeature(FEATURE_ATTRIBUTES) != null)
+        {
+            if (!hasMainAttribute(element))
+            {
+                return ExtInfoRequirement.NONE;
+            }
+            String category = mainAttributeCategory(element);
+            return category == null ? ExtInfoRequirement.UNREADABLE
+                : ExtInfoRequirement.of(FORM_EXT_INFO_BY_TYPE_CATEGORY.get(category));
+        }
+        if (ECLASS_TABLE.equals(element.eClass().getName()))
+        {
+            String dataPath = String.join(".", dataPathSegments(element)); //$NON-NLS-1$
+            if (dataPath.isEmpty())
+            {
+                return ExtInfoRequirement.UNREADABLE;
+            }
+            if (dataPath.indexOf('.') >= 0)
+            {
+                return ExtInfoRequirement.NONE;
+            }
+            if (formModel == null)
+            {
+                return ExtInfoRequirement.UNREADABLE;
+            }
+            EObject attribute = findFormAttribute(formModel, dataPath);
+            if (attribute == null)
+            {
+                return ExtInfoRequirement.UNREADABLE;
+            }
+            return "DynamicList".equals(singleValueTypeCategory(attribute)) //$NON-NLS-1$
+                ? ExtInfoRequirement.of("DynamicListTableExtInfo") //$NON-NLS-1$
+                : ExtInfoRequirement.NONE;
+        }
+        if (element.eClass().getEStructuralFeature(FEATURE_EXT_INFO) == null)
+        {
+            return ExtInfoRequirement.NONE;
+        }
+        return kindDecidesExtInfo(element)
+            ? ExtInfoRequirement.of(extInfoClassifierNameFor(element))
+            : ExtInfoRequirement.UNREADABLE;
+    }
+
     /**
      * Whether the event union {@link #availableEvents} builds for {@code element} is the WHOLE set
-     * the platform publishes for it - the only state in which "not in this set" means anything.
+     * the platform publishes: its ext-info pairing must be readable and exactly the node it carries.
      *
-     * <p>The union is the element's base type plus its ext-info's type, so it is complete exactly
-     * when four things hold: the base type is in {@link #PLATFORM_TYPE_BY_ECLASS}, the pairing can
-     * be READ at all, the node the element CARRIES is the one it REQUIRES, and that node's type is
-     * mapped too. Stated as one rule rather than as a list of cases, because the cases do not end:
-     * an unmapped subclass ({@code ExtendedTooltip} under {@code Decoration}), an unmapped node
-     * ({@code ButtonGroupExtInfo} - the DEFAULT group type), a node deleted though required, a node
-     * left from a previous type.</p>
+     * <p>Map membership is deliberately not a condition. {@link #PLATFORM_TYPE_BY_ECLASS} is the
+     * platform's own map, and its lookup is keyed by exact EClass, so a miss on either side is the
+     * platform answering "no type, no events", not a gap in our knowledge.</p>
      *
-     * <p>The readability clause is what equality alone cannot give: a {@code Table} pairs through
-     * its dataPath, so {@link #extInfoClassifierNameFor} declines to answer for one. "Nothing is
-     * required" and "nothing can be said" both read as {@code null}, and a table that LOST its
-     * {@code DynamicListTableExtInfo} looks exactly like a plain table that never needed one.</p>
-     *
-     * <p>Each of those is a structural defect the validator ALREADY reports on its own. Judging the
-     * events besides would add a second, wrong verdict about the same defect - so where the set is
-     * not provably whole, this answers false and the caller stays silent.</p>
+     * <p>This cannot create a false accusation: a whole union with no mapped type produces an empty
+     * name list, and {@link #availableEventNames} also rejects an incompletely resolved union. The
+     * caller never accuses from any empty list.</p>
      */
     static boolean publishesKnownEventSet(EObject element)
     {
-        if (element == null || PLATFORM_TYPE_BY_ECLASS.get(element.eClass().getName()) == null)
-        {
-            return false;
-        }
-        if (!extInfoPairingIsReadable(element))
+        ExtInfoRequirement required = extInfoRequirement(element);
+        if (!required.readable())
         {
             return false;
         }
         EObject ext = singleReference(element, FEATURE_EXT_INFO);
-        String carried = ext == null ? null : ext.eClass().getName();
-        if (!Objects.equals(requiredExtInfoClassifier(element), carried))
-        {
-            return false;
-        }
-        return carried == null || PLATFORM_TYPE_BY_ECLASS.get(carried) != null;
+        return Objects.equals(required.classifier(), ext == null ? null : ext.eClass().getName());
     }
 
     /**
-     * Whether the ext-info an element calls for can be READ from the element at all.
-     *
-     * <p>One kind cannot: a {@code Table} pairs through its {@code dataPath} rather than its type,
-     * which {@link #extInfoClassifierNameFor} says of itself and answers {@code null} for. That
-     * {@code null} is indistinguishable from "no node is due", so without this clause a table that
-     * lost its node would pass as complete.</p>
+     * The English event names the platform publishes for {@code container}. Empty means "publishes
+     * nothing", "cannot tell", or "the union could not be fully resolved"; none may accuse.
      */
-    private static boolean extInfoPairingIsReadable(EObject element)
-    {
-        return !ECLASS_TABLE.equals(element.eClass().getName());
-    }
-
-    /**
-     * The ext-info classifier {@code element} calls for, from whichever pairing decides it: the
-     * MAIN ATTRIBUTE for a form root, the element's own kind and type for everything else.
-     */
-    private static String requiredExtInfoClassifier(EObject element)
-    {
-        if (element.eClass().getEStructuralFeature(FEATURE_ATTRIBUTES) != null)
-        {
-            return hasMainAttribute(element)
-                ? FORM_EXT_INFO_BY_TYPE_CATEGORY.get(mainAttributeCategory(element)) : null;
-        }
-        return extInfoClassifierNameFor(element);
-    }
-
     public static List<String> availableEventNames(EObject container, Version version)
     {
         if (!publishesKnownEventSet(container))
         {
             return Collections.emptyList();
         }
+        EventUnion union = availableEvents(container, version);
+        if (!union.complete())
+        {
+            return Collections.emptyList();
+        }
         List<String> names = new ArrayList<>();
-        for (AvailableEvent available : availableEvents(container, version))
+        for (AvailableEvent available : union.events())
         {
             String name = eventNameOf(available.event, false);
             if (name != null && !name.isEmpty())
@@ -5674,21 +5769,25 @@ public final class FormElementWriter
      * and the events it publishes bind INSIDE it - that is where EDT puts a record form's
      * {@code BeforeWriteAtServer} (issue #592, and {@code EventHandlerCollectionModel} does the same
      * split). Item ext-infos hold no handler list, so they keep answering with the item.</p>
+     *
+     * <p>The union is incomplete when a non-null mapped type cannot be resolved. Validators then
+     * receive no union, while writer callers retain the successfully resolved events.</p>
      */
-    private static List<AvailableEvent> availableEvents(EObject element, Version version)
+    private static EventUnion availableEvents(EObject element, Version version)
     {
         if (version == null)
         {
-            return Collections.emptyList();
+            return new EventUnion(Collections.emptyList(), false);
         }
         IEObjectProvider provider =
             IEObjectProvider.Registry.INSTANCE.get(McorePackage.Literals.TYPE_ITEM, version);
         if (provider == null)
         {
-            return Collections.emptyList();
+            return new EventUnion(Collections.emptyList(), false);
         }
         List<EObject> base = new ArrayList<>();
-        addTypeEvents(provider, element, PLATFORM_TYPE_BY_ECLASS.get(element.eClass().getName()), base);
+        boolean complete = addTypeEvents(provider, element,
+            PLATFORM_TYPE_BY_ECLASS.get(element.eClass().getName()), base);
         List<AvailableEvent> events = new ArrayList<>();
         for (EObject event : base)
         {
@@ -5697,16 +5796,22 @@ public final class FormElementWriter
         EObject ext = singleReference(element, FEATURE_EXT_INFO);
         if (ext == null)
         {
-            return events;
+            return new EventUnion(events, complete);
         }
         List<EObject> extEvents = new ArrayList<>();
-        addTypeEvents(provider, element, PLATFORM_TYPE_BY_ECLASS.get(ext.eClass().getName()), extEvents);
+        complete &= addTypeEvents(provider, element,
+            PLATFORM_TYPE_BY_ECLASS.get(ext.eClass().getName()), extEvents);
         EObject extOwner = holdsHandlerList(ext) ? ext : element;
         for (EObject event : extEvents)
         {
             events.add(new AvailableEvent(event, extOwner));
         }
-        return events;
+        return new EventUnion(events, complete);
+    }
+
+    /** The successfully resolved events and whether every non-null mapped type resolved. */
+    private record EventUnion(List<AvailableEvent> events, boolean complete)
+    {
     }
 
     /** An available form event and the object whose {@code handlers} list its binding belongs in. */
@@ -5765,15 +5870,19 @@ public final class FormElementWriter
         return all;
     }
 
-    /** Resolves {@code typeName} to a platform {@code Type} and appends its {@code events} to the list. */
+    /** Resolves a mapped type and appends its events; null means the platform publishes no type. */
     @SuppressWarnings("unchecked")
-    private static void addTypeEvents(IEObjectProvider provider, EObject context, String typeName,
+    private static boolean addTypeEvents(IEObjectProvider provider, EObject context, String typeName,
         List<EObject> accumulator)
     {
+        if (typeName == null)
+        {
+            return true;
+        }
         EObject type = resolveTypeName(provider, context, typeName);
         if (type == null)
         {
-            return;
+            return false;
         }
         EStructuralFeature eventsFeat = type.eClass().getEStructuralFeature("events"); //$NON-NLS-1$
         Object value = eventsFeat != null ? type.eGet(eventsFeat) : null;
@@ -5781,6 +5890,7 @@ public final class FormElementWriter
         {
             accumulator.addAll((List<EObject>)value);
         }
+        return true;
     }
 
     /**
@@ -7103,7 +7213,7 @@ public final class FormElementWriter
         {
             return owner.eClass().getEStructuralFeature(FEATURE_ACTION) != null && isActionToken(leaf);
         }
-        for (AvailableEvent candidate : availableEvents(owner, version))
+        for (AvailableEvent candidate : availableEvents(owner, version).events())
         {
             EObject event = candidate.event;
             if (leaf.equalsIgnoreCase(eventNameOf(event, false))

@@ -15,12 +15,14 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.emf.common.notify.Notification;
@@ -1432,18 +1434,7 @@ public class FormElementWriterTest
     /** The Russian COMMAND kind token ("komanda"). */
     private static final String RU_COMMAND = fromCp(0x043a, 0x043e, 0x043c, 0x0430, 0x043d, 0x0434, 0x0430);
 
-    /** A named item of {@code eClassName} appended to {@code owner}'s {@code items}. */
-    /**
-     * An element's event union may only be called complete when its OWN base type is known. The
-     * platform-type map is keyed by exact EClass name, so an {@code ExtendedTooltip} - a
-     * {@code Decoration} SUBCLASS - would answer with its ext type's events alone, and a consumer
-     * treating that as the full set would call an ordinary base-type binding foreign.
-     */
-    /**
-     * The union is whole only when the element CARRIES the node it REQUIRES and both types are
-     * mapped. One rule, because the ways of breaking it do not end - and each of them is a defect
-     * the validator already reports, so a second verdict about the events would be noise.
-     */
+    /** The union is whole only when the readable ext-info requirement matches the carried node. */
     @Test
     public void testTheEventSetIsWholeOnlyWhenTheRequiredNodeIsTheOneCarried()
     {
@@ -1463,19 +1454,151 @@ public class FormElementWriterTest
             FormElementWriter.publishesKnownEventSet( //$NON-NLS-1$
                 typedElement("FormGroup", "Pages", null))); //$NON-NLS-1$ //$NON-NLS-2$
 
-        // UNMAPPED base: the map is keyed by EXACT name, so a subclass loses its base events.
-        assertFalse("an ExtendedTooltip is a Decoration subclass the map does not list", //$NON-NLS-1$
-            FormElementWriter.publishesKnownEventSet(bareElement("ExtendedTooltip"))); //$NON-NLS-1$
+        // A tooltip requires its pinned label node even when its type says something else.
+        assertFalse("an ExtendedTooltip without LabelDecorationExtInfo is missing events", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(
+                formLikeObject("ExtendedTooltip"))); //$NON-NLS-1$
 
-        // Nothing required and nothing carried is whole - otherwise the check would never run.
-        assertTrue("a Decoration with no type calls for no node, so base-only is the whole set", //$NON-NLS-1$
-            FormElementWriter.publishesKnownEventSet(bareElement("Decoration"))); //$NON-NLS-1$
+        // An element with no ext-info feature can carry no node, so none is missing.
+        assertTrue("a Button has no ext-info feature, so its base-only set is whole", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(bareElement("Button"))); //$NON-NLS-1$
 
-        // A TABLE pairs through its dataPath, so "no node" and "cannot say" read alike on one: a
-        // table that lost its DynamicListTableExtInfo is indistinguishable from a plain table.
-        // Equality alone would call both whole, which is why readability is its own clause.
-        assertFalse("a Table pairs through its dataPath, so its requirement cannot be read here", //$NON-NLS-1$
+        // A bare Table has no dataPath; an auto table derives that binding elsewhere.
+        assertFalse("a Table with an empty dataPath has an unreadable ext-info requirement", //$NON-NLS-1$
             FormElementWriter.publishesKnownEventSet(bareElement("Table"))); //$NON-NLS-1$
+    }
+
+    /** The platform creates a Table ext-info if and only if the resolved category is DynamicList. */
+    @Test
+    public void testATableEventSetFollowsItsDataPathPairing()
+    {
+        EObject form = newForm();
+        EObject list = newDynamicListAttribute(form, "List"); //$NON-NLS-1$
+        EObject dynamicListTable = boundTable(form, "List"); //$NON-NLS-1$
+        setContainedClassifier(dynamicListTable, "extInfo", //$NON-NLS-1$
+            "DynamicListTableExtInfo"); //$NON-NLS-1$
+        assertTrue("a dynamic-list table carrying its required node publishes a known set", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(dynamicListTable));
+
+        // The handler list lives on the Table, so losing only this node must suppress event judgment.
+        dynamicListTable.eUnset(feature(dynamicListTable, "extInfo")); //$NON-NLS-1$
+        assertFalse("a dynamic-list table missing its required node has an incomplete set", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(dynamicListTable));
+
+        list.eUnset(feature(list, "extInfo")); //$NON-NLS-1$
+        FormElementWriter.ExtInfoRequirement declaredDynamicList =
+            FormElementWriter.extInfoRequirement(dynamicListTable);
+        assertEquals("the declared type still requires the table node when the attribute lost its own", //$NON-NLS-1$
+            "DynamicListTableExtInfo", declaredDynamicList.classifier()); //$NON-NLS-1$
+        assertFalse("the missing attribute node must not turn the table requirement into NONE", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(dynamicListTable));
+
+        newCollectionAttribute(form, "Rows"); //$NON-NLS-1$
+        assertTrue("a ValueTable table requires no node and publishes a known set", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(boundTable(form, "Rows"))); //$NON-NLS-1$
+
+        EObject valueList = formLikeObject("FormAttribute"); //$NON-NLS-1$
+        valueList.eSet(feature(valueList, "name"), "Choices"); //$NON-NLS-1$ //$NON-NLS-2$
+        setFormLikeValueType(valueList, "ValueList"); //$NON-NLS-1$
+        addTo(form, "attributes", valueList); //$NON-NLS-1$
+        assertTrue("a ValueList table requires no node and publishes a known set", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(
+                boundTable(form, "Choices"))); //$NON-NLS-1$
+
+        EObject staleDynamicList = formLikeObject("FormAttribute"); //$NON-NLS-1$
+        staleDynamicList.eSet(feature(staleDynamicList, "name"), "StaleList"); //$NON-NLS-1$ //$NON-NLS-2$
+        setFormLikeValueType(staleDynamicList, "ValueList"); //$NON-NLS-1$
+        setContainedClassifier(staleDynamicList, "extInfo", "DynamicListExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", staleDynamicList); //$NON-NLS-1$
+        EObject scalarTable = boundTable(form, "StaleList"); //$NON-NLS-1$
+        FormElementWriter.ExtInfoRequirement scalarRequirement =
+            FormElementWriter.extInfoRequirement(scalarTable);
+        assertTrue("the scalar declaration is readable despite its stale attribute node", //$NON-NLS-1$
+            scalarRequirement.readable());
+        assertNull("a scalar declaration requires no table ext-info", scalarRequirement.classifier()); //$NON-NLS-1$
+        assertTrue("a scalar table carrying no node publishes a known set", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(scalarTable));
+
+        EObject multi = formLikeObject("FormAttribute"); //$NON-NLS-1$
+        multi.eSet(feature(multi, "name"), "Choice"); //$NON-NLS-1$ //$NON-NLS-2$
+        setFormLikeValueTypes(multi, "DynamicList", "String"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "attributes", multi); //$NON-NLS-1$
+        EObject multiTable = boundTable(form, "Choice"); //$NON-NLS-1$
+        FormElementWriter.ExtInfoRequirement multiRequirement =
+            FormElementWriter.extInfoRequirement(multiTable);
+        assertTrue("the platform gives a multi-typed attribute a readable no-node answer", //$NON-NLS-1$
+            multiRequirement.readable());
+        assertNull("a multi-typed attribute requires no table ext-info", //$NON-NLS-1$
+            multiRequirement.classifier());
+        assertTrue("a multi-typed table carrying no node publishes a known set", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(multiTable));
+
+        EObject object = form.eClass().getEPackage().getEFactoryInstance()
+            .create(MODEL.formAttribute);
+        object.eSet(feature(object, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
+        setFormLikeValueType(object, "DocumentObject.Order"); //$NON-NLS-1$
+        addTo(form, "attributes", object); //$NON-NLS-1$
+        assertTrue("a dotted tabular-section path requires no node and publishes a known set", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(
+                boundTable(form, "Object.Goods"))); //$NON-NLS-1$
+        assertTrue("a split tabular-section path joins to the same binding", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(
+                boundTable(form, "Object", "Goods"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("a table naming no form attribute has an unreadable pairing", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(
+                boundTable(form, "NoSuchAttribute"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateTableSynchronizesTheDataPathExtInfoPairing()
+    {
+        EObject dynamicForm = newForm();
+        newDynamicListAttribute(dynamicForm, "List"); //$NON-NLS-1$
+        assertNull(FormElementWriter.createTable(dynamicForm, "ListTable", null, "List", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.emptyList(), null, null, false, new String[1]));
+        EObject dynamicTable = FormElementWriter.findFormItem(dynamicForm, "ListTable"); //$NON-NLS-1$
+        EObject dynamicExtInfo = FormElementWriter.extInfoInstance(dynamicTable);
+        assertNotNull("a DynamicList table must carry its platform-created ext-info", dynamicExtInfo); //$NON-NLS-1$
+        assertEquals("DynamicListTableExtInfo", dynamicExtInfo.eClass().getName()); //$NON-NLS-1$
+        assertTrue("the written pairing must make the table's event union whole", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(dynamicTable));
+
+        EObject collectionForm = newForm();
+        newCollectionAttribute(collectionForm, "Rows"); //$NON-NLS-1$
+        assertNull(FormElementWriter.createTable(collectionForm, "RowsTable", null, "Rows", //$NON-NLS-1$ //$NON-NLS-2$
+            Collections.emptyList(), null, null, false, new String[1]));
+        EObject collectionTable = FormElementWriter.findFormItem(collectionForm, "RowsTable"); //$NON-NLS-1$
+        assertNull("a ValueTable table requires no ext-info node", //$NON-NLS-1$
+            FormElementWriter.extInfoInstance(collectionTable));
+        assertTrue("the no-node pairing must also make the table's event union whole", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(collectionTable));
+    }
+
+    @Test
+    public void testAnUnmappedDynamicListFormExtInfoStillPublishesAKnownSet()
+        throws ReflectiveOperationException
+    {
+        FormRootModel model = newFormRootModel("DynamicList.List", true); //$NON-NLS-1$
+        model.giveExtInfo("DynamicListFormExtInfo"); //$NON-NLS-1$
+
+        assertFalse("the platform's exact map must still omit this form ext-info", //$NON-NLS-1$
+            hasPlatformTypeMapping("DynamicListFormExtInfo")); //$NON-NLS-1$
+        assertTrue("the platform map's miss means no events, not an unknown event set", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(model.form));
+    }
+
+    @Test
+    public void testAnUnmappedExtendedTooltipStillPublishesAKnownSet()
+        throws ReflectiveOperationException
+    {
+        EObject tooltip = formLikeObject("ExtendedTooltip"); //$NON-NLS-1$
+        setContainedClassifier(tooltip, "extInfo", "LabelDecorationExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("the platform's exact map must still omit ExtendedTooltip", //$NON-NLS-1$
+            hasPlatformTypeMapping("ExtendedTooltip")); //$NON-NLS-1$
+        assertTrue("the tooltip carries its required label node, so its union is whole", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(tooltip));
     }
 
     /**
@@ -1532,6 +1655,68 @@ public class FormElementWriterTest
         eClass.setName(eClassName);
         pack.getEClassifiers().add(eClass);
         return pack.getEFactoryInstance().create(eClass);
+    }
+
+    /** Creates one classifier from the package-backed form fixture. */
+    private static EObject formLikeObject(String eClassName)
+    {
+        EClass eClass = modelClass(eClassName);
+        return eClass.getEPackage().getEFactoryInstance().create(eClass);
+    }
+
+    /** A Table attached to {@code form}, with its path built through the form package factory. */
+    @SuppressWarnings("unchecked")
+    private static EObject boundTable(EObject form, String... segments)
+    {
+        EPackage pack = form.eClass().getEPackage();
+        EObject table = pack.getEFactoryInstance().create(MODEL.table);
+        EClass dataPathClass = (EClass)pack.getEClassifier("DataPath"); //$NON-NLS-1$
+        EObject dataPath = pack.getEFactoryInstance().create(dataPathClass);
+        ((List<String>)dataPath.eGet(feature(dataPath, "segments"))) //$NON-NLS-1$
+            .addAll(Arrays.asList(segments));
+        table.eSet(feature(table, "dataPath"), dataPath); //$NON-NLS-1$
+        addTo(form, "items", table); //$NON-NLS-1$
+        return table;
+    }
+
+    /** Sets a contained classifier through the element's package factory. */
+    private static void setContainedClassifier(EObject element, String featureName,
+        String classifierName)
+    {
+        EPackage pack = element.eClass().getEPackage();
+        EClass classifier = (EClass)pack.getEClassifier(classifierName);
+        element.eSet(feature(element, featureName), pack.getEFactoryInstance().create(classifier));
+    }
+
+    /** Sets the synthetic form fixture's value type through its package-backed holder. */
+    private static void setFormLikeValueType(EObject attribute, String typeName)
+    {
+        setFormLikeValueTypes(attribute, typeName);
+    }
+
+    /** Sets one or more declared types on the synthetic form attribute. */
+    @SuppressWarnings("unchecked")
+    private static void setFormLikeValueTypes(EObject attribute, String... typeNames)
+    {
+        EPackage pack = attribute.eClass().getEPackage();
+        EClass typeDescriptionClass = (EClass)pack.getEClassifier("TypeDescription"); //$NON-NLS-1$
+        EObject typeDescription = pack.getEFactoryInstance().create(typeDescriptionClass);
+        for (String typeName : typeNames)
+        {
+            Type type = McoreFactory.eINSTANCE.createType();
+            type.setName(typeName);
+            ((List<EObject>)typeDescription.eGet(feature(typeDescription, "types"))).add(type); //$NON-NLS-1$
+        }
+        attribute.eSet(feature(attribute, "valueType"), typeDescription); //$NON-NLS-1$
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean hasPlatformTypeMapping(String eClassName)
+        throws ReflectiveOperationException
+    {
+        Field field = FormElementWriter.class.getDeclaredField("PLATFORM_TYPE_BY_ECLASS"); //$NON-NLS-1$
+        field.setAccessible(true);
+        return ((Map<String, String>)field.get(null)).containsKey(eClassName);
     }
 
     private static EObject addNamedItem(EObject owner, String eClassName, String name)
@@ -4068,8 +4253,7 @@ public class FormElementWriterTest
             adopted.setEType(EcorePackage.eINSTANCE.getEBooleanObject());
             extensionAdoptedProperty.getEStructuralFeatures().add(adopted);
 
-            // The extInfo family: an abstract base plus the concrete classes the writer resolves by
-            // name (group ext-infos, the input-field ext-info and the tooltip's label ext-info).
+            // The extInfo family used by the group, table, input-field and tooltip tests.
             EClass extInfoBase = f.createEClass();
             extInfoBase.setName("FormItemExtInfo"); //$NON-NLS-1$
             extInfoBase.setAbstract(true);
@@ -4089,6 +4273,8 @@ public class FormElementWriterTest
             EClass commandBarExtInfo = subExtInfo(f, extInfoBase, "CommandBarExtInfo"); //$NON-NLS-1$
             EClass buttonGroupExtInfo = subExtInfo(f, extInfoBase, "ButtonGroupExtInfo"); //$NON-NLS-1$
             EClass labelDecorationExtInfo = subExtInfo(f, extInfoBase, "LabelDecorationExtInfo"); //$NON-NLS-1$
+            EClass dynamicListTableExtInfo =
+                subExtInfo(f, extInfoBase, "DynamicListTableExtInfo"); //$NON-NLS-1$
             addEnum(f, labelDecorationExtInfo, "horizontalAlign", horizontalAlign); //$NON-NLS-1$
             EClass inputFieldExtInfo = subExtInfo(f, extInfoBase, "InputFieldExtInfo"); //$NON-NLS-1$
             addBoolean(f, inputFieldExtInfo, "autoMaxWidth"); //$NON-NLS-1$
@@ -4336,6 +4522,8 @@ public class FormElementWriterTest
             // back to find the tables that need the attribute's rows. The fixture declared the feature
             // only on FormField, so buildDataPath was a silent no-op here (issue #295 review).
             table.getEStructuralFeatures().add(containment(f, "dataPath", dataPath, false)); //$NON-NLS-1$
+            table.getEStructuralFeatures().add(
+                containment(f, "extInfo", extInfoBase, false)); //$NON-NLS-1$
             table.getEStructuralFeatures().add(containment(f, "items", formItem, true)); //$NON-NLS-1$
             table.getEStructuralFeatures().add(
                 containment(f, "autoCommandBar", autoCommandBar, false)); //$NON-NLS-1$
@@ -4424,6 +4612,7 @@ public class FormElementWriterTest
             pkg.getEClassifiers().add(commandBarExtInfo);
             pkg.getEClassifiers().add(buttonGroupExtInfo);
             pkg.getEClassifiers().add(labelDecorationExtInfo);
+            pkg.getEClassifiers().add(dynamicListTableExtInfo);
             pkg.getEClassifiers().add(inputFieldExtInfo);
             pkg.getEClassifiers().add(contextMenu);
             pkg.getEClassifiers().add(extendedTooltip);
@@ -5375,6 +5564,7 @@ public class FormElementWriterTest
     {
         EObject attribute = newObject(MODEL.formAttribute);
         attribute.eSet(feature(attribute, "name"), name); //$NON-NLS-1$
+        setFormLikeValueType(attribute, "DynamicList"); //$NON-NLS-1$
         attribute.eSet(feature(attribute, "extInfo"), //$NON-NLS-1$
             newObject(modelClass("DynamicListExtInfo"))); //$NON-NLS-1$
         addTo(form, "attributes", attribute); //$NON-NLS-1$
@@ -6699,10 +6889,10 @@ public class FormElementWriterTest
         extInfoBase.setAbstract(true);
         pkg.getEClassifiers().add(extInfoBase);
 
-        // The kinds the tests move between: two the service maps, one only the form GENERATOR
-        // writes, and the one only the generator and the designer-XML importer map.
+        // The form ext-info kinds used by the root synchronization and publication tests.
         for (String kind : new String[]{"InformationRegisterManagerFormExtInfo", //$NON-NLS-1$
-            "CatalogFormExtInfo", "CubeRecordSetFormExtInfo", "ObjectFormExtInfo"}) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "CatalogFormExtInfo", "CubeRecordSetFormExtInfo", "ObjectFormExtInfo", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "DynamicListFormExtInfo"}) //$NON-NLS-1$
         {
             EClass formExtInfo = f.createEClass();
             formExtInfo.setName(kind);

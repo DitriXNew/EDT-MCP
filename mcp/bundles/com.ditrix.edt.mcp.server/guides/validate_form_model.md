@@ -39,7 +39,8 @@ modify_metadata … → validate_form_model → read findings → fix → valida
 | `unresolved-command-reference` | error | Its command is no longer in the model. |
 | `invalid-extension-call-type` | error | An extension handler uses `ChangeAndValidate`, which intercepts a method rather than a form event. |
 | `invalid-extended-tooltip-type` | error | An extended tooltip is typed anything but `Label`, which the platform rejects outright. |
-| `missing-ext-info` / `stale-ext-info` | error | An element has no type-specific ext-info, or one that its kind does not call for. |
+| `missing-ext-info` / `stale-ext-info` | error | A form root, attribute, or element lacks required ext-info or carries a node that does not match its main-attribute, value-type, or kind pairing. |
+| `missing-presentation-flag` | error | A form attribute or attribute column lacks its required `view` or `edit` AdjustableBoolean holder. |
 | `empty-command-action` | error | A command has an action but names no BSL procedure to run. |
 | `extension-handler-without-call-type` | error | An extension handler does not say how it intercepts the base event. |
 | `duplicate-handler-binding` | error | One event is bound twice (with the same call type), so the platform cannot say which to call. |

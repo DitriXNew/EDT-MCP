@@ -56,6 +56,8 @@ public final class FormModelValidator
     private static final String FEATURE_AUTO_COMMAND_BAR = "autoCommandBar"; //$NON-NLS-1$
     private static final String FEATURE_MAIN = "main"; //$NON-NLS-1$
     private static final String FEATURE_EXT_INFO = "extInfo"; //$NON-NLS-1$
+    private static final String FEATURE_VIEW = "view"; //$NON-NLS-1$
+    private static final String FEATURE_EDIT = "edit"; //$NON-NLS-1$
     private static final String FEATURE_ACTION = "action"; //$NON-NLS-1$
     private static final String FEATURE_HANDLER = "handler"; //$NON-NLS-1$
 
@@ -69,6 +71,8 @@ public final class FormModelValidator
     private static final String ECLASS_FORM_COMMAND = "FormCommand"; //$NON-NLS-1$
     private static final String ECLASS_FORM_FIELD = "FormField"; //$NON-NLS-1$
     private static final String ECLASS_TABLE = "Table"; //$NON-NLS-1$
+    private static final String ECLASS_FORM_ATTRIBUTE = "FormAttribute"; //$NON-NLS-1$
+    private static final String ECLASS_FORM_ATTRIBUTE_COLUMN = "FormAttributeColumn"; //$NON-NLS-1$
     private static final String ECLASS_EVENT_HANDLER_EXTENSION = "EventHandlerExtension"; //$NON-NLS-1$
     private static final String ECLASS_ADDITIONAL_COLUMNS = "FormAttributeAdditionalColumns"; //$NON-NLS-1$
 
@@ -98,6 +102,7 @@ public final class FormModelValidator
     public static final String CODE_INVALID_EXTENDED_TOOLTIP_TYPE = "invalid-extended-tooltip-type"; //$NON-NLS-1$
     public static final String CODE_MISSING_EXT_INFO = "missing-ext-info"; //$NON-NLS-1$
     public static final String CODE_STALE_EXT_INFO = "stale-ext-info"; //$NON-NLS-1$
+    public static final String CODE_MISSING_PRESENTATION_FLAG = "missing-presentation-flag"; //$NON-NLS-1$
     public static final String CODE_EMPTY_COMMAND_ACTION = "empty-command-action"; //$NON-NLS-1$
     public static final String CODE_EXTENSION_HANDLER_WITHOUT_CALL_TYPE =
         "extension-handler-without-call-type"; //$NON-NLS-1$
@@ -119,9 +124,10 @@ public final class FormModelValidator
         CODE_MISSING_ID, CODE_DUPLICATE_ID, CODE_MISSING_DATA_PATH,
         CODE_EMPTY_DATA_PATH, CODE_UNRESOLVED_DATA_PATH, CODE_MISSING_COMMAND_REFERENCE,
         CODE_UNRESOLVED_COMMAND_REFERENCE, CODE_INVALID_EXTENDED_TOOLTIP_TYPE, CODE_MISSING_EXT_INFO,
-        CODE_STALE_EXT_INFO, CODE_EMPTY_COMMAND_ACTION, CODE_EXTENSION_HANDLER_WITHOUT_CALL_TYPE,
-        CODE_INVALID_EXTENSION_CALL_TYPE, CODE_DUPLICATE_HANDLER_BINDING, CODE_EMPTY_HANDLER_NAME,
-        CODE_UNRESOLVED_EVENT_REFERENCE, CODE_FOREIGN_EVENT_REFERENCE);
+        CODE_STALE_EXT_INFO, CODE_MISSING_PRESENTATION_FLAG, CODE_EMPTY_COMMAND_ACTION,
+        CODE_EXTENSION_HANDLER_WITHOUT_CALL_TYPE, CODE_INVALID_EXTENSION_CALL_TYPE,
+        CODE_DUPLICATE_HANDLER_BINDING, CODE_EMPTY_HANDLER_NAME, CODE_UNRESOLVED_EVENT_REFERENCE,
+        CODE_FOREIGN_EVENT_REFERENCE);
 
     private FormModelValidator()
     {
@@ -190,6 +196,7 @@ public final class FormModelValidator
         List<Finding> findings = new ArrayList<>();
         List<EObject> items = itemTree(formModel);
         checkMainAttribute(formModel, findings);
+        checkFormExtInfo(formModel, findings);
         checkAutoCommandBar(formModel, findings);
         checkNamespaces(formModel, items, findings);
         checkAttributeExtInfos(formModel, findings);
@@ -228,6 +235,38 @@ public final class FormModelValidator
             findings.add(new Finding(SEVERITY_WARNING, CODE_ORPHAN_FORM_EXT_INFO, FORM_PATH,
                 "The form root carries an ext-info but no main attribute, so it advertises events " //$NON-NLS-1$
                     + "no attribute backs. Flag an attribute as main, or clear the node.")); //$NON-NLS-1$
+        }
+    }
+
+    /** Checks the form root's ext-info against the type of its main attribute when readable. */
+    private static void checkFormExtInfo(EObject formModel, List<Finding> findings)
+    {
+        FormElementWriter.ExtInfoRequirement requirement =
+            FormElementWriter.extInfoRequirement(formModel);
+        if (!requirement.readable())
+        {
+            return;
+        }
+        if (requirement.classifier() == null)
+        {
+            // NONE is deliberate silence: the union cannot distinguish no pairing from an unknown one.
+            return;
+        }
+        String expected = requirement.classifier();
+        String mainType = FormElementWriter.mainAttributeCategory(formModel);
+        EObject actual = FormElementWriter.extInfoInstance(formModel);
+        if (actual == null)
+        {
+            findings.add(new Finding(SEVERITY_ERROR, CODE_MISSING_EXT_INFO, FORM_PATH,
+                "The form root has no '" + expected + "', which its main attribute's '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + mainType + "' type requires.")); //$NON-NLS-1$
+        }
+        else if (!expected.equals(actual.eClass().getName()))
+        {
+            findings.add(new Finding(SEVERITY_ERROR, CODE_STALE_EXT_INFO, FORM_PATH,
+                "The form root carries a '" + actual.eClass().getName() //$NON-NLS-1$
+                    + "' but its main attribute's '" + mainType + "' type calls for a '" //$NON-NLS-1$ //$NON-NLS-2$
+                    + expected + "'.")); //$NON-NLS-1$
         }
     }
 
@@ -316,6 +355,11 @@ public final class FormModelValidator
             // back, and only the element itself knows its kind token.
             String path = itemPaths ? pathOf(member)
                 : kindLabel + "." + (name.isEmpty() ? "(unnamed)" : name); //$NON-NLS-1$ //$NON-NLS-2$
+            if (FormElementWriter.isOrInherits(member.eClass(), ECLASS_FORM_ATTRIBUTE)
+                || FormElementWriter.isOrInherits(member.eClass(), ECLASS_FORM_ATTRIBUTE_COLUMN))
+            {
+                checkPresentationFlags(member, path, findings);
+            }
             if (name.isEmpty())
             {
                 if (!isAddition(member))
@@ -338,6 +382,28 @@ public final class FormModelValidator
                 }
             }
             judgeId(member, kindLabel, path, ids, findings);
+        }
+    }
+
+    /** Both platform-created form attributes and columns carry view and edit holders. */
+    private static void checkPresentationFlags(EObject member, String path, List<Finding> findings)
+    {
+        String memberKind = FormElementWriter.isOrInherits(member.eClass(),
+            ECLASS_FORM_ATTRIBUTE_COLUMN) ? "column" : "attribute"; //$NON-NLS-1$ //$NON-NLS-2$
+        checkPresentationFlag(member, memberKind, FEATURE_VIEW, path, findings);
+        checkPresentationFlag(member, memberKind, FEATURE_EDIT, path, findings);
+    }
+
+    private static void checkPresentationFlag(EObject member, String memberKind, String featureName,
+        String path, List<Finding> findings)
+    {
+        if (single(member, featureName) == null)
+        {
+            findings.add(new Finding(SEVERITY_ERROR, CODE_MISSING_PRESENTATION_FLAG, path,
+                "This " + memberKind + " has no '" + featureName + "' holder. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "The platform's own factory gives every form attribute and column both " //$NON-NLS-1$
+                    + "'view' and 'edit', and a form written without them can be refused when " //$NON-NLS-1$
+                    + "the configuration loads.")); //$NON-NLS-1$
         }
     }
 
