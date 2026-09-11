@@ -1439,50 +1439,81 @@ public class FormElementWriterTest
      * {@code Decoration} SUBCLASS - would answer with its ext type's events alone, and a consumer
      * treating that as the full set would call an ordinary base-type binding foreign.
      */
+    /**
+     * The union is whole only when the element CARRIES the node it REQUIRES and both types are
+     * mapped. One rule, because the ways of breaking it do not end - and each of them is a defect
+     * the validator already reports, so a second verdict about the events would be noise.
+     */
     @Test
-    public void testAnEventSetIsKnownOnlyWhenBOTHItsHalvesAre()
+    public void testTheEventSetIsWholeOnlyWhenTheRequiredNodeIsTheOneCarried()
     {
-        assertTrue("a Decoration is keyed in the platform-type map by its own name", //$NON-NLS-1$
-            FormElementWriter.publishesKnownEventSet(bareElement("Decoration"))); //$NON-NLS-1$
-        assertFalse("an ExtendedTooltip inherits its base events, and the map is keyed by EXACT " //$NON-NLS-1$
-            + "name, so its union would silently omit them", //$NON-NLS-1$
+        // A typed group carrying exactly its own node: the one state that is provably whole.
+        assertTrue("a Pages group carrying PagesGroupExtInfo publishes a known set", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet( //$NON-NLS-1$
+                typedElement("FormGroup", "Pages", "PagesGroupExtInfo"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // STALE: the node is mapped, but it is the previous type's, so the events are the wrong
+        // ones. Mapped is not the question - REQUIRED is.
+        assertFalse("a Pages group still carrying UsualGroupExtInfo publishes the wrong events", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet( //$NON-NLS-1$
+                typedElement("FormGroup", "Pages", "UsualGroupExtInfo"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // MISSING though required: base-only union while the element still publishes the rest.
+        assertFalse("a Pages group with no node at all is missing the events it calls for", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet( //$NON-NLS-1$
+                typedElement("FormGroup", "Pages", null))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // UNMAPPED base: the map is keyed by EXACT name, so a subclass loses its base events.
+        assertFalse("an ExtendedTooltip is a Decoration subclass the map does not list", //$NON-NLS-1$
             FormElementWriter.publishesKnownEventSet(bareElement("ExtendedTooltip"))); //$NON-NLS-1$
 
-        // The other half: a mapped BASE with an unmapped ext-info is just as incomplete, and this
-        // is the common case - ButtonGroup is the default group type.
-        assertTrue("a FormGroup carrying a MAPPED ext-info is complete", //$NON-NLS-1$
-            FormElementWriter.publishesKnownEventSet( //$NON-NLS-1$
-                elementWithExtInfo("FormGroup", "PagesGroupExtInfo"))); //$NON-NLS-1$
-        assertFalse("a ButtonGroupExtInfo is not in the map, so the union misses its events", //$NON-NLS-1$
-            FormElementWriter.publishesKnownEventSet( //$NON-NLS-1$
-                elementWithExtInfo("FormGroup", "ButtonGroupExtInfo"))); //$NON-NLS-1$
-
-        // The third way: a node that is REQUIRED but absent leaves the union base-only while the
-        // element still publishes the extension's events. A group always calls for one.
-        assertFalse("a FormGroup with no ext-info is missing the events of the node it calls for", //$NON-NLS-1$
-            FormElementWriter.publishesKnownEventSet(bareElement("FormGroup"))); //$NON-NLS-1$
-        assertTrue("a Decoration with no TYPE calls for no node, so base-only is complete there", //$NON-NLS-1$
+        // Nothing required and nothing carried is whole - otherwise the check would never run.
+        assertTrue("a Decoration with no type calls for no node, so base-only is the whole set", //$NON-NLS-1$
             FormElementWriter.publishesKnownEventSet(bareElement("Decoration"))); //$NON-NLS-1$
     }
 
-    /** A dynamic element of {@code eClassName} carrying an {@code extInfo} of {@code extClassName}. */
-    private static EObject elementWithExtInfo(String eClassName, String extClassName)
+    /**
+     * A dynamic element of {@code eClassName} whose {@code type} reads {@code typeLiteral}, carrying
+     * an {@code extInfo} of {@code extClassName} - or none when that is {@code null}. The type
+     * matters: the classifier an element REQUIRES is read from it.
+     */
+    private static EObject typedElement(String eClassName, String typeLiteral, String extClassName)
     {
         EPackage pack = EcoreFactory.eINSTANCE.createEPackage();
         pack.setName("probe"); //$NON-NLS-1$
-        EClass extClass = EcoreFactory.eINSTANCE.createEClass();
-        extClass.setName(extClassName);
+        EEnum typeEnum = EcoreFactory.eINSTANCE.createEEnum();
+        typeEnum.setName("ManagedFormGroupType"); //$NON-NLS-1$
+        EEnumLiteral literal = EcoreFactory.eINSTANCE.createEEnumLiteral();
+        literal.setName(typeLiteral);
+        literal.setLiteral(typeLiteral);
+        typeEnum.getELiterals().add(literal);
         EClass eClass = EcoreFactory.eINSTANCE.createEClass();
         eClass.setName(eClassName);
-        EReference extInfo = EcoreFactory.eINSTANCE.createEReference();
+        EAttribute type = EcoreFactory.eINSTANCE.createEAttribute();
+        type.setName("type"); //$NON-NLS-1$
+        type.setEType(typeEnum);
+        eClass.getEStructuralFeatures().add(type);
+        pack.getEClassifiers().add(typeEnum);
+        pack.getEClassifiers().add(eClass);
+        EClass extClass = null;
+        EReference extInfo = null;
+        if (extClassName != null)
+        {
+            extClass = EcoreFactory.eINSTANCE.createEClass();
+            extClass.setName(extClassName);
+            pack.getEClassifiers().add(extClass);
+        }
+        extInfo = EcoreFactory.eINSTANCE.createEReference();
         extInfo.setName("extInfo"); //$NON-NLS-1$
-        extInfo.setEType(extClass);
+        extInfo.setEType(extClass != null ? extClass : EcorePackage.Literals.EOBJECT);
         extInfo.setContainment(true);
         eClass.getEStructuralFeatures().add(extInfo);
-        pack.getEClassifiers().add(extClass);
-        pack.getEClassifiers().add(eClass);
         EObject element = pack.getEFactoryInstance().create(eClass);
-        element.eSet(extInfo, pack.getEFactoryInstance().create(extClass));
+        element.eSet(type, literal.getInstance());
+        if (extClass != null)
+        {
+            element.eSet(extInfo, pack.getEFactoryInstance().create(extClass));
+        }
         return element;
     }
 

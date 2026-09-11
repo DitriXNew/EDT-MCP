@@ -18,6 +18,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -5573,20 +5574,20 @@ public final class FormElementWriter
      * incomplete union is reported as no union at all.</p>
      */
     /**
-     * Whether an event union built for {@code element} can be COMPLETE - both halves of it.
+     * Whether the event union {@link #availableEvents} builds for {@code element} is the WHOLE set
+     * the platform publishes for it - the only state in which "not in this set" means anything.
      *
-     * <p>{@link #PLATFORM_TYPE_BY_ECLASS} is keyed by EXACT EClass name and covers neither every
-     * subclass nor every ext-info. An {@code ExtendedTooltip} misses its {@code Decoration} base;
-     * a {@code FormGroup} typed {@code ButtonGroup} - the DEFAULT group type - carries a
-     * {@code ButtonGroupExtInfo} that the map does not list, so its extension events are missing
-     * while the base ones are there. Either way the union is a subset, and a caller told "these
-     * are the events" would call an ordinary binding foreign.</p>
+     * <p>The union is the element's base type plus its ext-info's type, so it is complete exactly
+     * when three things hold: the base type is in {@link #PLATFORM_TYPE_BY_ECLASS}, the node the
+     * element CARRIES is the one it REQUIRES, and that node's type is mapped too. Stated as one
+     * rule rather than as a list of cases, because the cases do not end: an unmapped subclass
+     * ({@code ExtendedTooltip} under {@code Decoration}), an unmapped node ({@code ButtonGroupExtInfo}
+     * - the DEFAULT group type), a node deleted though required, a node left from a previous type,
+     * a {@code Table} whose pairing comes from its dataPath and cannot be read here at all.</p>
      *
-     * <p>A MISSING node is the third way, and it is a defect that hides itself: an element whose
-     * type calls for an ext-info still publishes that extension's events, so once the node is
-     * deleted the union is base-only while the handlers stay. Judged complete, it would report
-     * every one of them foreign ON TOP of the missing-node finding - two verdicts for one defect,
-     * and the louder one wrong.</p>
+     * <p>Each of those is a structural defect the validator ALREADY reports on its own. Judging the
+     * events besides would add a second, wrong verdict about the same defect - so where the set is
+     * not provably whole, this answers false and the caller stays silent.</p>
      */
     static boolean publishesKnownEventSet(EObject element)
     {
@@ -5595,11 +5596,12 @@ public final class FormElementWriter
             return false;
         }
         EObject ext = singleReference(element, FEATURE_EXT_INFO);
-        if (ext == null)
+        String carried = ext == null ? null : ext.eClass().getName();
+        if (!Objects.equals(requiredExtInfoClassifier(element), carried))
         {
-            return requiredExtInfoClassifier(element) == null;
+            return false;
         }
-        return PLATFORM_TYPE_BY_ECLASS.get(ext.eClass().getName()) != null;
+        return carried == null || PLATFORM_TYPE_BY_ECLASS.get(carried) != null;
     }
 
     /**
