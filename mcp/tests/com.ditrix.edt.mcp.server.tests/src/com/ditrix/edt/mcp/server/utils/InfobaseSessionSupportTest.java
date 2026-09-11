@@ -92,18 +92,30 @@ public class InfobaseSessionSupportTest
     }
 
     @Test
-    public void partialParseIsUnreachableAndNamesTheUnreadableBlockCount()
+    public void partialParseSanitizesDiagnosticAndNamesTheUnreadableBlockCount()
     {
         String output = "session: 11111111-1111-1111-1111-111111111111\n" //$NON-NLS-1$
-            + "app-id: 1CV8C\n\n" //$NON-NLS-1$
+            + "app-id: 1CV8C\n" //$NON-NLS-1$
+            + "user-name: Ivanov\n" //$NON-NLS-1$
+            + "host: WKS-01\n" //$NON-NLS-1$
+            + "future-owner: Petrov\n\n" //$NON-NLS-1$
             + "session-id: 9\n" //$NON-NLS-1$
             + "app-id: 1CV8C\n"; //$NON-NLS-1$
 
         ReadResult result = InfobaseSessionSupport.readSessionsOutput(output);
+        String reason = result.unreachableReason();
 
         assertFalse(result.isReadable());
         assertNull(result.sessions());
-        assertTrue(result.unreachableReason().contains("1 unreadable session block")); //$NON-NLS-1$
+        assertTrue(reason.contains("1 unreadable session block")); //$NON-NLS-1$
+        assertTrue(reason.contains("session: 11111111-1111-1111-1111-111111111111")); //$NON-NLS-1$
+        assertTrue(reason.contains("app-id: 1CV8C")); //$NON-NLS-1$
+        assertTrue(reason.contains("user-name: ***")); //$NON-NLS-1$
+        assertTrue(reason.contains("host: ***")); //$NON-NLS-1$
+        assertTrue(reason.contains("future-owner: ***")); //$NON-NLS-1$
+        assertFalse(reason.contains("Ivanov")); //$NON-NLS-1$
+        assertFalse(reason.contains("WKS-01")); //$NON-NLS-1$
+        assertFalse(reason.contains("Petrov")); //$NON-NLS-1$
     }
 
     @Test
@@ -137,6 +149,7 @@ public class InfobaseSessionSupportTest
         assertFalse(result.isReadable());
         assertNull(result.sessions());
         assertTrue(result.unreachableReason().contains("unrecognized output")); //$NON-NLS-1$
+        assertTrue(result.unreachableReason().contains("ibcmd emitted an unknown response")); //$NON-NLS-1$
     }
 
     @Test(expected = IllegalArgumentException.class)

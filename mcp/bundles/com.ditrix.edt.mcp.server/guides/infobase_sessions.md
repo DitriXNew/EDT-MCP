@@ -58,4 +58,4 @@ Termination is verified, not assumed. `ibcmd` exits 0 even for a session UUID th
 - `mismatched` — a session is still present after a terminate that reported success; this is an error, and those sessions still block an update;
 - `not_verifiable` — the list could not be re-read, with `attemptedCount` and `verificationReason` naming what was attempted and why it could not be checked. `sessions` and `terminatedCount` are omitted because none was observed gone; list again before treating the infobase as clear.
 
-If a multi-session termination stops partway, the error carries `mutationCommitted=true`, `terminatedCount`, and the already terminated session records.
+If a multi-session termination stops partway, the error carries `mutationCommitted=true` because termination commands were accepted and state may have changed. It also carries `attemptedCount` and `verification: not_verifiable` with a `verificationReason`. `terminatedCount` and `sessions` are absent on this path because no read-back confirmed which attempts completed; list again to learn which sessions are actually gone.
