@@ -1499,7 +1499,7 @@ public class FormElementWriterTest
         EObject rowTable = boundTable(form, "Rows", "QueryField"); //$NON-NLS-1$ //$NON-NLS-2$
         FormElementWriter.ExtInfoRequirement rowRequirement =
             FormElementWriter.extInfoRequirement(rowTable);
-        assertFalse("a dotted path under a row-owning attribute is unreadable", //$NON-NLS-1$
+        assertFalse("a dotted path is unreadable because its metadata leaf is unresolved", //$NON-NLS-1$
             rowRequirement.readable());
         assertFalse("an unreadable dotted table cannot publish a provably complete set", //$NON-NLS-1$
             FormElementWriter.publishesKnownEventSet(rowTable));
@@ -1545,16 +1545,14 @@ public class FormElementWriterTest
         object.eSet(feature(object, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
         setFormLikeValueType(object, "DocumentObject.Order"); //$NON-NLS-1$
         addTo(form, "attributes", object); //$NON-NLS-1$
-        EObject tabularTable = boundTable(form, "Object.Goods"); //$NON-NLS-1$
-        FormElementWriter.ExtInfoRequirement tabularRequirement =
-            FormElementWriter.extInfoRequirement(tabularTable);
-        assertTrue("an object-headed tabular-section path is readable", //$NON-NLS-1$
-            tabularRequirement.readable());
-        assertNull("a metadata tabular section requires no table ext-info", //$NON-NLS-1$
-            tabularRequirement.classifier());
-        assertTrue("a dotted tabular-section path requires no node and publishes a known set", //$NON-NLS-1$
-            FormElementWriter.publishesKnownEventSet(tabularTable));
-        assertTrue("a split tabular-section path joins to the same binding", //$NON-NLS-1$
+        EObject dottedTable = boundTable(form, "Object.Goods"); //$NON-NLS-1$
+        FormElementWriter.ExtInfoRequirement dottedRequirement =
+            FormElementWriter.extInfoRequirement(dottedTable);
+        assertFalse("a dotted path's metadata leaf cannot be read from the form model", //$NON-NLS-1$
+            dottedRequirement.readable());
+        assertFalse("an unresolved metadata leaf cannot prove a complete event set", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(dottedTable));
+        assertFalse("split segments still form an unreadable dotted path", //$NON-NLS-1$
             FormElementWriter.publishesKnownEventSet(
                 boundTable(form, "Object", "Goods"))); //$NON-NLS-1$ //$NON-NLS-2$
 

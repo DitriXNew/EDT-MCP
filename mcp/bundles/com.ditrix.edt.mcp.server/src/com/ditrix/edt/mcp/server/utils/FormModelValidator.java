@@ -486,8 +486,8 @@ public final class FormModelValidator
     // --- items ---------------------------------------------------------------------------------
 
     /**
-     * Per-item checks: the data path a field reads through, the command a button runs, and the
-     * type-specific ext-info the element's own kind calls for.
+     * Per-item checks: the data path a field reads through, the command a button runs, and every
+     * ext-info pairing the shared requirement query can prove.
      */
     private static void checkItems(EObject formModel, List<EObject> items, List<Finding> findings)
     {
@@ -497,7 +497,7 @@ public final class FormModelValidator
             String path = pathOf(item);
             checkDataPath(item, dataRoots, path, findings);
             checkButtonCommand(formModel, item, path, findings);
-            checkItemExtInfo(item, path, findings);
+            checkItemExtInfo(formModel, item, path, findings);
         }
     }
 
@@ -566,11 +566,6 @@ public final class FormModelValidator
     }
 
     /**
-     * An element's ext-info is decided by its own kind, and the platform creates it together with
-     * the element. A missing one means the element was built by something that did not know the
-     * rule; a MISMATCHED one means the element's type changed and the node did not follow.
-     */
-    /**
      * An {@code ExtendedTooltip} is pinned to type {@code Label}, and the platform rejects any other
      * type for the TYPE itself - independently of the node the tooltip carries. Carrying the right
      * ext-info is therefore no evidence here: every one of the 347938 tooltips in a real
@@ -591,20 +586,31 @@ public final class FormModelValidator
         }
     }
 
-    private static void checkItemExtInfo(EObject element, String path, List<Finding> findings)
+    /**
+     * The ext-info an item carries against the one its pairing requires, for EVERY kind that has a
+     * readable pairing - by kind and type for most, by the dataPath for a Table, which is why this
+     * asks {@code FormElementWriter.extInfoRequirement} rather than the type-driven helper: that one
+     * answers {@code null} for a table and left a table missing its node unreported (issue #612).
+     *
+     * <p>An unreadable requirement says nothing. A missing node means the element was built by
+     * something that did not know the rule; a MISMATCHED one means its type changed and the node did
+     * not follow.</p>
+     */
+    private static void checkItemExtInfo(EObject formModel, EObject element, String path,
+        List<Finding> findings)
     {
         checkExtendedTooltipType(element, path, findings);
-        if (element.eClass().getEStructuralFeature(FEATURE_EXT_INFO) == null)
+        FormElementWriter.ExtInfoRequirement requirement =
+            FormElementWriter.extInfoRequirement(formModel, element);
+        if (!requirement.readable())
         {
             return;
         }
         EObject actual = FormElementWriter.extInfoInstance(element);
-        String expected = FormElementWriter.expectedExtInfoClassifier(element);
+        String expected = requirement.classifier();
         if (expected == null)
         {
-            // Only the kinds that decide their own node have an opinion here; for the rest a null
-            // answer means "no opinion", not "carries none".
-            if (actual != null && FormElementWriter.kindDecidesExtInfo(element))
+            if (actual != null)
             {
                 findings.add(new Finding(SEVERITY_ERROR, CODE_STALE_EXT_INFO, path,
                     "This element carries a '" + actual.eClass().getName() + "' but its current type " //$NON-NLS-1$ //$NON-NLS-2$

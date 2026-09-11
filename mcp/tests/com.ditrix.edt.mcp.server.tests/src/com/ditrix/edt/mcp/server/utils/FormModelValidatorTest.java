@@ -710,6 +710,54 @@ public class FormModelValidatorTest
             codes(form).contains(FormModelValidator.CODE_STALE_EXT_INFO));
     }
 
+    @Test
+    public void testATablesDataPathDecidesItsExtInfo()
+    {
+        Form dynamic = new Form();
+        EObject list = dynamic.attribute("List", 1, false); //$NON-NLS-1$
+        dynamic.giveAttributeTypes(list, "DynamicList"); //$NON-NLS-1$
+        dynamic.giveDynamicListExtInfo(list);
+        EObject listTable = dynamic.table("ListTable", "List"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        List<FormModelValidator.Finding> missing = FormModelValidator.validate(dynamic.root);
+        assertEquals("a DynamicList table without its required node has one finding", //$NON-NLS-1$
+            1, missing.size());
+        assertEquals(FormModelValidator.CODE_MISSING_EXT_INFO, missing.get(0).code);
+        assertEquals("Table.ListTable", missing.get(0).path); //$NON-NLS-1$
+        assertTrue(missing.get(0).message.contains("DynamicListTableExtInfo")); //$NON-NLS-1$
+
+        dynamic.giveTableExtInfo(listTable);
+        assertEquals("the required table node makes the form clean", //$NON-NLS-1$
+            List.of(), codes(dynamic));
+
+        Form stale = new Form();
+        EObject rows = stale.attribute("Rows", 1, false); //$NON-NLS-1$
+        stale.giveAttributeTypes(rows, "ValueTable"); //$NON-NLS-1$
+        EObject rowsTable = stale.table("RowsTable", "Rows"); //$NON-NLS-1$ //$NON-NLS-2$
+        stale.giveTableExtInfo(rowsTable);
+
+        List<FormModelValidator.Finding> staleFindings = FormModelValidator.validate(stale.root);
+        assertEquals("a ValueTable table carrying a DynamicList node has one finding", //$NON-NLS-1$
+            1, staleFindings.size());
+        assertEquals(FormModelValidator.CODE_STALE_EXT_INFO, staleFindings.get(0).code);
+        assertEquals("Table.RowsTable", staleFindings.get(0).path); //$NON-NLS-1$
+        assertTrue(staleFindings.get(0).message.contains("DynamicListTableExtInfo")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testADottedTablePathLeavesItsExtInfoUnreadable()
+    {
+        Form form = new Form();
+        EObject object = form.attribute("Object", 1, false); //$NON-NLS-1$
+        form.giveAttributeTypes(object, "DocumentObject.Order"); //$NON-NLS-1$
+        form.table("WithoutNode", "Object", "Goods"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        EObject withNode = form.table("WithNode", "Object", "OtherGoods"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        form.giveTableExtInfo(withNode);
+
+        assertEquals("neither direction is judged when the metadata leaf is unreadable", //$NON-NLS-1$
+            List.of(), codes(form));
+    }
+
     // --- the synthetic form --------------------------------------------------------------------
 
     /** The message of the FIRST finding carrying {@code code}, or empty when there is none. */
@@ -774,6 +822,7 @@ public class FormModelValidatorTest
         final EClass parameterType;
         final EClass groupType;
         final EClass fieldType;
+        final EClass tableType;
         final EClass buttonType;
         final EClass barType;
         final EClass additionType;
@@ -789,6 +838,7 @@ public class FormModelValidatorTest
         final EClass documentFormExtInfoType;
         final EClass spreadsheetDocumentExtInfoType;
         final EClass dynamicListExtInfoType;
+        final EClass dynamicListTableExtInfoType;
         final EObject root;
         /** Items are addressed by id, so the fixture allocates one per item as the platform does. */
         private int itemId = 100;
@@ -818,6 +868,8 @@ public class FormModelValidatorTest
             dynamicListExtInfoType.getESuperTypes().add(attributeExtInfoType);
             spreadsheetDocumentExtInfoType = eClass("SpreadsheetDocumentExtInfo"); //$NON-NLS-1$
             spreadsheetDocumentExtInfoType.getESuperTypes().add(attributeExtInfoType);
+            dynamicListTableExtInfoType = eClass("DynamicListTableExtInfo"); //$NON-NLS-1$
+            dynamicListTableExtInfoType.getESuperTypes().add(extInfoType);
             presentationFlagType = eClass("AdjustableBoolean"); //$NON-NLS-1$
 
             EClass commandBase = eClass("Command"); //$NON-NLS-1$
@@ -874,6 +926,10 @@ public class FormModelValidatorTest
             fieldType = eClass("FormField"); //$NON-NLS-1$
             fieldType.getESuperTypes().add(itemBase);
             fieldType.getEStructuralFeatures().add(reference("dataPath", dataPathType, false, true)); //$NON-NLS-1$
+
+            tableType = eClass("Table"); //$NON-NLS-1$
+            tableType.getESuperTypes().add(itemBase);
+            tableType.getEStructuralFeatures().add(reference("dataPath", dataPathType, false, true)); //$NON-NLS-1$
 
             buttonType = eClass("Button"); //$NON-NLS-1$
             buttonType.getESuperTypes().add(itemBase);
@@ -1055,6 +1111,21 @@ public class FormModelValidatorTest
             return field;
         }
 
+        EObject table(String name, String... segments)
+        {
+            EObject table = create(tableType);
+            set(table, "name", name); //$NON-NLS-1$
+            set(table, "id", Integer.valueOf(++itemId)); //$NON-NLS-1$
+            EObject dataPath = create(dataPathType);
+            for (String segment : segments)
+            {
+                add(dataPath, "segments", segment); //$NON-NLS-1$
+            }
+            set(table, "dataPath", dataPath); //$NON-NLS-1$
+            add(root, "items", table); //$NON-NLS-1$
+            return table;
+        }
+
         EObject button(String name, EObject command)
         {
             EObject button = create(buttonType);
@@ -1152,6 +1223,11 @@ public class FormModelValidatorTest
         void giveItemExtInfo(EObject item)
         {
             set(item, "extInfo", create(extInfoType)); //$NON-NLS-1$
+        }
+
+        void giveTableExtInfo(EObject table)
+        {
+            set(table, "extInfo", create(dynamicListTableExtInfoType)); //$NON-NLS-1$
         }
 
         void giveRootExtInfo()

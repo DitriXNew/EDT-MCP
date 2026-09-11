@@ -5651,13 +5651,11 @@ public final class FormElementWriter
     /**
      * The ext-info {@code element} requires when its content-form root is already known.
      *
-     * <p>A Table's dotted path under a non-row-owning head addresses a metadata TABULAR SECTION, and
-     * no metadata property can be a {@code DynamicList} - that category exists only on a form
-     * attribute - so the answer there is "no node". Under a row-owning head the path ends on a column
-     * or a query field whose own type this model does not resolve, so the answer is "cannot say".</p>
+     * <p>A Table's dotted path ends at a metadata leaf this model does not resolve, and the platform
+     * decides from that leaf, so its requirement cannot be read here.</p>
      *
-     * <p>A multi-typed attribute requires no node: the platform likewise answers null unless the
-     * value type holds exactly one type.</p>
+     * <p>For a single-segment Table path, a multi-typed attribute requires no node: the platform
+     * likewise answers null unless the value type holds exactly one type.</p>
      *
      * @param formModel the content form owning {@code element}, or {@code null} when unavailable
      * @param element the form root or item to inspect
@@ -5690,27 +5688,20 @@ public final class FormElementWriter
             {
                 return ExtInfoRequirement.UNREADABLE;
             }
+            if (dataPath.indexOf('.') >= 0)
+            {
+                return ExtInfoRequirement.UNREADABLE;
+            }
             if (formModel == null)
             {
                 return ExtInfoRequirement.UNREADABLE;
             }
-            int dot = dataPath.indexOf('.');
-            String head = dot < 0 ? dataPath : dataPath.substring(0, dot);
-            EObject attribute = findFormAttribute(formModel, head);
+            EObject attribute = findFormAttribute(formModel, dataPath);
             if (attribute == null)
             {
                 return ExtInfoRequirement.UNREADABLE;
             }
             String category = singleValueTypeCategory(attribute);
-            if (dot >= 0)
-            {
-                if (hasCollectionValueType(attribute) || "DynamicList".equals(category) //$NON-NLS-1$
-                    || category == null)
-                {
-                    return ExtInfoRequirement.UNREADABLE;
-                }
-                return ExtInfoRequirement.NONE;
-            }
             return "DynamicList".equals(category) //$NON-NLS-1$
                 ? ExtInfoRequirement.of("DynamicListTableExtInfo") //$NON-NLS-1$
                 : ExtInfoRequirement.NONE;
