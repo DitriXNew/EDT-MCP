@@ -237,6 +237,7 @@ public class LaunchTool implements IMcpTool
         String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
         String configName = JsonUtils.extractStringArgument(params, "launchConfigurationName"); //$NON-NLS-1$
         boolean updateBeforeLaunch = JsonUtils.extractBooleanArgument(params, "updateBeforeLaunch", true); //$NON-NLS-1$
+        boolean updateRequested = explicitUpdateRequest(params);
         boolean restartIfRunning = extractRestartIfRunning(params);
         String rawPolicy = JsonUtils.extractStringArgument(params, "externalInfobaseChanges"); //$NON-NLS-1$
         ExternalInfobaseChangesPolicy policy = ExternalInfobaseChangesPolicy.parse(rawPolicy);
@@ -275,7 +276,7 @@ public class LaunchTool implements IMcpTool
         // Target form 1: explicit config name — no project/application required.
         if (configName != null && !configName.isEmpty())
         {
-            return launchByConfigName(configName, updateBeforeLaunch, restartIfRunning, policy,
+            return launchByConfigName(configName, updateBeforeLaunch, updateRequested, restartIfRunning, policy,
                 portPolicy, overrides, prepared, mode);
         }
 
@@ -343,7 +344,7 @@ public class LaunchTool implements IMcpTool
      * Works for both runtime-client and Attach configuration types.
      */
     private String launchByConfigName(String configName, boolean updateBeforeLaunch, // NOSONAR one argument per independent caller-visible decision; a parameter object would only rename them
-        boolean restartIfRunning, ExternalInfobaseChangesPolicy policy,
+        boolean updateRequested, boolean restartIfRunning, ExternalInfobaseChangesPolicy policy,
         StandaloneServerPortConflictPolicy portPolicy, LaunchOverrides overrides,
         LaunchOverrides.Prepared prepared, String mode)
     {
@@ -379,12 +380,18 @@ public class LaunchTool implements IMcpTool
 
             if (isStandaloneServerConfiguration(typeId))
             {
+                String updateRefusal = standaloneUpdateRefusal(config.getName(),
+                    updateRequested, policy);
+                if (updateRefusal != null)
+                {
+                    return updateRefusal;
+                }
                 String refusal = standaloneOverridesRefusal(config.getName(), overrides);
                 if (refusal != null)
                 {
                     return refusal;
                 }
-                return launchStandaloneServer(config, typeId, configProject, mode, portPolicy);
+                return launchStandaloneServer(config, typeId, configProject, portPolicy);
             }
 
             if (isAttach && MODE_RUN.equals(mode))
@@ -551,9 +558,54 @@ public class LaunchTool implements IMcpTool
             .toJson();
     }
 
+    /**
+     * Whether the caller ASKED for a pre-launch update. The schema default is true, so reading
+     * the defaulted value would refuse every plain standalone start; only an explicit value counts.
+     */
+    static boolean explicitUpdateRequest(Map<String, String> params)
+    {
+        return params != null && params.containsKey("updateBeforeLaunch") //$NON-NLS-1$
+            && JsonUtils.extractBooleanArgument(params, "updateBeforeLaunch", false); //$NON-NLS-1$
+    }
+
+    /** Refuses update options that the direct standalone-server start cannot honour. */
+    static String standaloneUpdateRefusal(String configName, boolean updateRequested,
+        ExternalInfobaseChangesPolicy policy)
+    {
+        boolean customPolicy = policy != null && policy != ExternalInfobaseChangesPolicy.DEFAULT;
+        if (!updateRequested && !customPolicy)
+        {
+            return null;
+        }
+        if (updateRequested && customPolicy)
+        {
+            return ToolResult.error("Parameters 'updateBeforeLaunch' and " //$NON-NLS-1$
+                + "'externalInfobaseChanges' cannot be honoured for standalone-server launch " //$NON-NLS-1$
+                + "configuration '" + configName + "'. This direct route only starts the server " //$NON-NLS-1$ //$NON-NLS-2$
+                + "and performs no database update. Run update_database with " //$NON-NLS-1$
+                + "externalInfobaseChanges='" + policy.wireValue() //$NON-NLS-1$
+                + "' first, then call launch with updateBeforeLaunch=false and omit " //$NON-NLS-1$
+                + "externalInfobaseChanges.").toJson(); //$NON-NLS-1$
+        }
+        if (updateRequested)
+        {
+            return ToolResult.error("Parameter 'updateBeforeLaunch' cannot be true for " //$NON-NLS-1$
+                + "standalone-server launch configuration '" + configName + "'. This direct " //$NON-NLS-1$ //$NON-NLS-2$
+                + "route only starts the server and performs no database update. Run " //$NON-NLS-1$
+                + "update_database first, then call launch with updateBeforeLaunch=false.") //$NON-NLS-1$
+                .toJson();
+        }
+        return ToolResult.error("Parameter 'externalInfobaseChanges'='" + policy.wireValue() //$NON-NLS-1$
+            + "' cannot be honoured for standalone-server launch configuration '" + configName //$NON-NLS-1$
+            + "' because this direct route performs no database update. Run update_database " //$NON-NLS-1$
+            + "with externalInfobaseChanges='" + policy.wireValue() //$NON-NLS-1$
+            + "' first, then call launch with updateBeforeLaunch=false and omit " //$NON-NLS-1$
+            + "externalInfobaseChanges.").toJson(); //$NON-NLS-1$
+    }
+
     /** Starts a standalone server through its self-contained EDT service operation. */
     private String launchStandaloneServer(ILaunchConfiguration config, String typeId,
-        String projectName, String requestedMode, StandaloneServerPortConflictPolicy portPolicy)
+        String projectName, StandaloneServerPortConflictPolicy portPolicy)
     {
         String configName = config.getName();
         ProjectContext context = ProjectContext.of(projectName);
@@ -614,11 +666,12 @@ public class LaunchTool implements IMcpTool
 
         StandaloneServerPortConflictPolicy launchPortPolicy =
             standaloneServerPortPolicy(config, portPolicy);
-        String startError = startStandaloneServerGuarded(configName,
+        String startError = startStandaloneServerGuarded(configName, context.project(),
             () -> StandaloneServerStateRecovery.ensureStartable(context.project(), application,
                 applicationId),
             () -> startStandaloneServerWithPolicy(service, server, configName,
-                eclipseLaunchMode(requestedMode), launchInfobaseName(config),
+                // EDT ignores this argument and always starts standalone servers in debug.
+                ILaunchManager.DEBUG_MODE, launchInfobaseName(config),
                 launchServerName(config), launchPortPolicy));
         if (startError != null)
         {
@@ -627,20 +680,38 @@ public class LaunchTool implements IMcpTool
         return standaloneStartSuccess(configName, typeId, projectName, applicationId);
     }
 
-    /** Runs stale-state recovery before dispatching the standalone service start. */
-    static String startStandaloneServerGuarded(String configName, Runnable preflight,
-        Supplier<String> starter)
+    /** Restores a stale server stopped by this call when the following direct start fails. */
+    static String startStandaloneServerGuarded(String configName, IProject project,
+        Runnable preflight, Supplier<String> starter)
     {
+        StandaloneServerStateRecovery.beginOperation();
         try
         {
-            preflight.run();
+            try
+            {
+                preflight.run();
+            }
+            catch (ApplicationException e)
+            {
+                String failure = PlatformFailures.describe(e);
+                String restored = StandaloneServerStateRecovery.appendRestoration(failure, project,
+                    configName);
+                return standalonePreconditionError(configName,
+                    restored == null ? failure : restored);
+            }
+            String failure = starter.get();
+            if (failure == null)
+            {
+                return null;
+            }
+            String restored = StandaloneServerStateRecovery.appendRestoration(failure, project,
+                configName);
+            return standaloneAttemptError(configName, restored == null ? failure : restored);
         }
-        catch (ApplicationException e)
+        finally
         {
-            return standalonePreconditionError(configName, PlatformFailures.describe(e));
+            StandaloneServerStateRecovery.endOperation();
         }
-        String failure = starter.get();
-        return failure == null ? null : standaloneAttemptError(configName, failure);
     }
 
     /** Builds the completed standalone-server result with EDT's effective DEBUG mode. */
@@ -657,7 +728,7 @@ public class LaunchTool implements IMcpTool
             .put(McpKeys.APPLICATION_ID, applicationId)
             .put(McpKeys.MESSAGE, "Standalone server '" + configName //$NON-NLS-1$
                 + "' is running in DEBUG mode. EDT starts standalone servers in DEBUG mode " //$NON-NLS-1$
-                + "regardless of the requested mode.") //$NON-NLS-1$
+                + "regardless of the requested mode. No database update was performed.") //$NON-NLS-1$
             .toJson();
     }
 

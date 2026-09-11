@@ -359,6 +359,47 @@ public class StandaloneServerStateRecoveryTest
     }
 
     @Test
+    public void testRestorationKeepsThePortConfirmerArmedAroundTheStart()
+    {
+        boolean[] armed = new boolean[1];
+        StringBuilder order = new StringBuilder();
+
+        String result = StandaloneServerStateRecovery.guardedRestorationStart(() -> {
+            assertFalse(armed[0]);
+            armed[0] = true;
+            order.append('A');
+        }, () -> {
+            assertTrue("the confirmer must be armed while EDT starts the server", armed[0]);
+            order.append('S');
+            return "start failed"; //$NON-NLS-1$
+        }, () -> {
+            assertTrue("failure capture remains inside the armed window", armed[0]);
+            order.append('C');
+            return null;
+        }, () -> {
+            assertTrue(armed[0]);
+            armed[0] = false;
+            order.append('D');
+        });
+
+        assertEquals("start failed", result); //$NON-NLS-1$
+        assertFalse("the confirmer must be disarmed after the start", armed[0]);
+        assertEquals("ASCD", order.toString()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRestorationReportsAPortConflictInsteadOfATimeout()
+    {
+        String result = StandaloneServerStateRecovery.startRestorationWithPortGuard(
+            new PortConflictingRestorationService(), new Object(), "ServerApplication.Test", //$NON-NLS-1$
+            null, null);
+
+        assertNotNull(result);
+        assertTrue(result.contains("network ports are already in use")); //$NON-NLS-1$
+        assertFalse(result.contains("did not finish within")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAttributedAbandonmentRestoresAStoppedServerBeforeTheRecordIsCleared()
         throws Exception
     {
@@ -410,6 +451,18 @@ public class StandaloneServerStateRecoveryTest
         public Object getLaunch()
         {
             return launch;
+        }
+    }
+
+    /** A restoration service that exposes the port conflict captured by its guarded window. */
+    public static final class PortConflictingRestorationService
+    {
+        public IStatus startServer(Object server, String launchMode, Object monitor)
+        {
+            LaunchUpdateDialogAutoConfirmer.recordPortConflictForTest(
+                "8429 - HTTP gate port"); //$NON-NLS-1$
+            return new Status(IStatus.ERROR, PLUGIN,
+                "starting it did not finish within 60s"); //$NON-NLS-1$
         }
     }
 

@@ -241,8 +241,9 @@ public final class InfobaseAuthDialogSuppressor
             return ""; //$NON-NLS-1$
         }
         return "EDT raised its infobase access-settings dialog while this call ran and it was " //$NON-NLS-1$
-            + "auto-cancelled, which means the stored credentials were missing or refused — set " //$NON-NLS-1$
-            + "them with set_infobase_credentials."; //$NON-NLS-1$
+            + "auto-cancelled. That dialog means some infobase's stored credentials were missing " //$NON-NLS-1$
+            + "or refused; if it belonged to this call's infobase, set them with " //$NON-NLS-1$
+            + "set_infobase_credentials."; //$NON-NLS-1$
     }
 
     static void recordAutoCancelledDialog(boolean hintDialog)

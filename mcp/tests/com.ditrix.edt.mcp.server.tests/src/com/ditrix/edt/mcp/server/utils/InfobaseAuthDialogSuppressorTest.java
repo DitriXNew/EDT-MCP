@@ -145,10 +145,12 @@ public class InfobaseAuthDialogSuppressorTest
         String note = InfobaseAuthDialogSuppressor.accessSettingsDialogFailureNote(10, 11);
 
         assertEquals("EDT raised its infobase access-settings dialog while this call ran and it " //$NON-NLS-1$
-            + "was auto-cancelled, which means the stored credentials were missing or refused — " //$NON-NLS-1$
-            + "set them with set_infobase_credentials.", note); //$NON-NLS-1$
+            + "was auto-cancelled. That dialog means some infobase's stored credentials were " //$NON-NLS-1$
+            + "missing or refused; if it belonged to this call's infobase, set them with " //$NON-NLS-1$
+            + "set_infobase_credentials.", note); //$NON-NLS-1$
         assertTrue(note.contains("while this call ran")); //$NON-NLS-1$
         assertFalse(note.contains("by this call")); //$NON-NLS-1$
+        assertTrue(note.contains("some infobase's stored credentials")); //$NON-NLS-1$
         assertTrue(note.contains("set_infobase_credentials")); //$NON-NLS-1$
         assertEquals("", InfobaseAuthDialogSuppressor.accessSettingsDialogFailureNote(10, 10)); //$NON-NLS-1$
         assertEquals("", InfobaseAuthDialogSuppressor.accessSettingsDialogFailureNote(-1, 10)); //$NON-NLS-1$

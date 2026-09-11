@@ -54,6 +54,7 @@ import com.ditrix.edt.mcp.server.utils.LaunchOverrides;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
+import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.ApplicationUpdateType;
@@ -676,7 +677,7 @@ public class LaunchToolTest
     {
         AtomicInteger order = new AtomicInteger();
 
-        String result = LaunchTool.startStandaloneServerGuarded("Standalone", //$NON-NLS-1$
+        String result = LaunchTool.startStandaloneServerGuarded("Standalone", null, //$NON-NLS-1$
             () -> assertTrue("the preflight runs first", order.compareAndSet(0, 1)),
             () -> {
                 assertTrue("the service starts only after recovery", order.compareAndSet(1, 2));
@@ -692,7 +693,7 @@ public class LaunchToolTest
     {
         AtomicInteger starts = new AtomicInteger();
 
-        String result = LaunchTool.startStandaloneServerGuarded("Standalone", //$NON-NLS-1$
+        String result = LaunchTool.startStandaloneServerGuarded("Standalone", null, //$NON-NLS-1$
             () -> { throw new ApplicationException("the stale server is still stopping"); }, //$NON-NLS-1$
             () -> {
                 starts.incrementAndGet();
@@ -701,6 +702,29 @@ public class LaunchToolTest
 
         assertEquals(0, starts.get());
         assertTrue(result.contains("the stale server is still stopping")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerFailedStartRestoresAStaleServerStoppedByItsPreflight()
+    {
+        String result = LaunchTool.startStandaloneServerGuarded("Standalone", null, //$NON-NLS-1$
+            () -> recordOperationStop("ServerApplication.Test"), //$NON-NLS-1$
+            () -> "server start refused"); //$NON-NLS-1$
+
+        assertTrue(result.contains("server start refused")); //$NON-NLS-1$
+        assertTrue(result.contains(
+            "was stopped for this operation and could NOT be started again")); //$NON-NLS-1$
+        assertTrue(result.contains("launchConfigurationName='Standalone'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerFailedStartDoesNotClaimRestorationWhenNothingWasStopped()
+    {
+        String result = LaunchTool.startStandaloneServerGuarded("Standalone", null, () -> { }, //$NON-NLS-1$
+            () -> "server start refused"); //$NON-NLS-1$
+
+        assertTrue(result.contains("server start refused")); //$NON-NLS-1$
+        assertFalse(result.contains("stopped for this operation")); //$NON-NLS-1$
     }
 
     @Test
@@ -715,6 +739,48 @@ public class LaunchToolTest
         assertSame(StandaloneServerPortConflictPolicy.REASSIGN,
             LaunchTool.standaloneServerPortPolicy(config,
                 StandaloneServerPortConflictPolicy.REASSIGN));
+    }
+
+    @Test
+    public void theUpdateRequestIsReadFromPRESENCE_notFromTheSchemaDefault()
+    {
+        assertFalse("a caller that never passed updateBeforeLaunch has requested nothing; reading " //$NON-NLS-1$
+            + "the defaulted true here would refuse every plain standalone-server start", //$NON-NLS-1$
+            LaunchTool.explicitUpdateRequest(Map.of("launchConfigurationName", "Standalone"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("an explicit updateBeforeLaunch=true is a real request", //$NON-NLS-1$
+            LaunchTool.explicitUpdateRequest(Map.of("updateBeforeLaunch", "true"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("an explicit updateBeforeLaunch=false is not a request", //$NON-NLS-1$
+            LaunchTool.explicitUpdateRequest(Map.of("updateBeforeLaunch", "false"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testStandaloneServerRefusesOnlyAnExplicitUpdateRequest()
+    {
+        String refusal = LaunchTool.standaloneUpdateRefusal("Standalone", true, //$NON-NLS-1$
+            ExternalInfobaseChangesPolicy.DEFAULT);
+
+        assertNotNull(refusal);
+        assertTrue(refusal.contains("'updateBeforeLaunch'")); //$NON-NLS-1$
+        assertTrue(refusal.contains("update_database")); //$NON-NLS-1$
+        assertTrue(refusal.contains("updateBeforeLaunch=false")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerRefusesANonDefaultExternalChangesPolicy()
+    {
+        String refusal = LaunchTool.standaloneUpdateRefusal("Standalone", false, //$NON-NLS-1$
+            ExternalInfobaseChangesPolicy.IMPORT);
+
+        assertNotNull(refusal);
+        assertTrue(refusal.contains("'externalInfobaseChanges'='import'")); //$NON-NLS-1$
+        assertTrue(refusal.contains("update_database")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerStartOnlyPathAcceptsTheDefaultExternalChangesPolicy()
+    {
+        assertNull(LaunchTool.standaloneUpdateRefusal("Standalone", false, //$NON-NLS-1$
+            ExternalInfobaseChangesPolicy.DEFAULT));
     }
 
     @Test
@@ -742,7 +808,7 @@ public class LaunchToolTest
         assertNull(LaunchTool.standaloneOverridesRefusal("Standalone", //$NON-NLS-1$
             LaunchOverrides.of(null, null, null)));
         AtomicInteger starts = new AtomicInteger();
-        assertNull(LaunchTool.startStandaloneServerGuarded("Standalone", () -> { }, () -> { //$NON-NLS-1$
+        assertNull(LaunchTool.startStandaloneServerGuarded("Standalone", null, () -> { }, () -> { //$NON-NLS-1$
             starts.incrementAndGet();
             return null;
         }));
@@ -769,7 +835,10 @@ public class LaunchToolTest
         assertTrue(result.get("success").getAsBoolean()); //$NON-NLS-1$
         assertEquals("debug", result.get("mode").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("running", result.get("status").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue(result.get("message").getAsString().contains("regardless of the requested mode")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(result.get("message").getAsString() //$NON-NLS-1$
+            .contains("regardless of the requested mode")); //$NON-NLS-1$
+        assertTrue(result.get("message").getAsString() //$NON-NLS-1$
+            .contains("No database update was performed")); //$NON-NLS-1$
     }
 
     @Test
@@ -1392,6 +1461,22 @@ public class LaunchToolTest
             {
                 throw new AssertionError(e);
             }
+        }
+    }
+
+    /** Records the stop that {@code ensureStartable} normally records inside the guarded scope. */
+    private static void recordOperationStop(String applicationId)
+    {
+        try
+        {
+            Method method = StandaloneServerStateRecovery.class.getDeclaredMethod(
+                "recordStoppedServer", String.class); //$NON-NLS-1$
+            method.setAccessible(true);
+            method.invoke(null, applicationId);
+        }
+        catch (ReflectiveOperationException e)
+        {
+            throw new AssertionError(e);
         }
     }
 }

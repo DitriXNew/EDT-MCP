@@ -653,13 +653,13 @@ public final class StandaloneServerStateRecovery
     }
 
     /** Starts a fresh operation-local stop record. */
-    static void beginOperation()
+    public static void beginOperation()
     {
         OPERATION_STOP.set(new OperationStop());
     }
 
     /** Clears the current operation-local stop record. */
-    static void endOperation()
+    public static void endOperation()
     {
         OPERATION_STOP.remove();
     }
@@ -694,6 +694,14 @@ public final class StandaloneServerStateRecovery
             name = stopped.applicationId;
         }
         return appendRestoration(original, name,
+            applicationId -> restoreStoppedServer(project, applicationId));
+    }
+
+    /** Restores an operation-local stop, using the caller's known launch configuration name. */
+    public static String appendRestoration(String original, IProject project,
+        String launchConfigurationName)
+    {
+        return appendRestoration(original, launchConfigurationName,
             applicationId -> restoreStoppedServer(project, applicationId));
     }
 
@@ -758,26 +766,75 @@ public final class StandaloneServerStateRecovery
                 return "the EDT standalone-server service is not available"; //$NON-NLS-1$
             }
 
-            IStatus[] status = new IStatus[1];
-            BoundedJob.Result result = BoundedJob.run(
-                "Restoring standalone server: " + applicationId, //$NON-NLS-1$
-                StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
-                operationMonitor -> status[0] = StandaloneServerSupport.startServer(service,
-                    server, ILaunchManager.DEBUG_MODE, operationMonitor));
-            if (result.isSuccess())
-            {
-                if (status[0] == null)
-                {
-                    return "EDT returned no status from the standalone-server start"; //$NON-NLS-1$
-                }
-                return status[0].isOK() ? null : PlatformFailures.describeStatus(status[0]);
-            }
-            return StandaloneServerSupport.startFailureReason(result);
+            String infobaseName = LaunchLifecycleUtils.attributionInfobaseName(manager, project,
+                applicationId);
+            String serverName = LaunchLifecycleUtils.attributionServerName(manager, project,
+                applicationId);
+            return startRestorationWithPortGuard(service, server, applicationId, infobaseName,
+                serverName);
         }
         catch (Exception failure) // NOSONAR restoration must not hide the operation's original failure
         {
             return PlatformFailures.describe(failure);
         }
+    }
+
+    /** Starts a restoration while refusing any port rewrite and retaining its specific failure. */
+    static String startRestorationWithPortGuard(Object service, Object server, String applicationId,
+        String infobaseName, String serverName)
+    {
+        LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName, serverName);
+        StandaloneServerPortConflictPolicy portPolicy = StandaloneServerPortConflictPolicy.CANCEL;
+        return guardedRestorationStart(
+            () -> LaunchUpdateDialogAutoConfirmer.arm(false, false, false, null, infobaseName,
+                portPolicy, serverName),
+            () -> boundedRestorationStart(service, server, applicationId),
+            () -> conflicts.portConflicted()
+                ? LaunchUpdateDialogAutoConfirmer.portConflictError(conflicts.portConflictDetail(),
+                    conflicts.portConflictReason()) : null,
+            () -> {
+                LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, null, infobaseName,
+                    portPolicy, serverName);
+                conflicts.close();
+            });
+    }
+
+    /** Keeps the confirmer armed for the complete restoration start, including failure capture. */
+    static String guardedRestorationStart(Runnable armer, Supplier<String> starter,
+        Supplier<String> conflictFailure, Runnable disarmer)
+    {
+        armer.run();
+        try
+        {
+            String failure = starter.get();
+            String conflict = conflictFailure.get();
+            return conflict == null ? failure : conflict;
+        }
+        finally
+        {
+            disarmer.run();
+        }
+    }
+
+    /** Runs EDT's restoration start through the existing bounded server-operation helper. */
+    private static String boundedRestorationStart(Object service, Object server, String applicationId)
+    {
+        IStatus[] status = new IStatus[1];
+        BoundedJob.Result result = BoundedJob.run(
+            "Restoring standalone server: " + applicationId, //$NON-NLS-1$
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
+            operationMonitor -> status[0] = StandaloneServerSupport.startServer(service,
+                server, ILaunchManager.DEBUG_MODE, operationMonitor));
+        if (result.isSuccess())
+        {
+            if (status[0] == null)
+            {
+                return "EDT returned no status from the standalone-server start"; //$NON-NLS-1$
+            }
+            return status[0].isOK() ? null : PlatformFailures.describeStatus(status[0]);
+        }
+        return StandaloneServerSupport.startFailureReason(result);
     }
 
     /** Finds the standalone configuration that addresses this project application. */
