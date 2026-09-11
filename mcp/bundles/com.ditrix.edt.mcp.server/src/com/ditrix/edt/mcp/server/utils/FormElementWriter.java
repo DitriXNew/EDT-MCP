@@ -2996,8 +2996,8 @@ public final class FormElementWriter
 
     /**
      * The MAIN attribute's value-type CATEGORY &rarr; the concrete {@code FormExtInfo} classifier the
-     * platform pairs with the form ROOT. A category not listed here leaves the form without a root
-     * ext-info, which is what the platform writes for it.
+     * platform pairs with the form ROOT. A category not listed here normally leaves the form without
+     * a root ext-info; importer-only ambiguity is named alongside the map.
      *
      * <p>The platform decides this in THREE places that do not agree:
      * {@code ExtInfoManagementService.createFormExtInfo} (the main-attribute checkbox), the form
@@ -3008,6 +3008,11 @@ public final class FormElementWriter
      * object forms are the case that proves it: only the generator and the importer map them.</p>
      */
     private static final Map<String, String> FORM_EXT_INFO_BY_TYPE_CATEGORY = buildFormExtInfoMap();
+
+    // Deliberately absent: SpreadsheetDocument may still receive an importer node, while
+    // InformationRegisterManager has no pairing from any writer.
+    private static final Set<String> FORM_EXT_INFO_CATEGORIES_WITH_POSSIBLE_WRITER_NODE =
+        Set.of("SpreadsheetDocument"); //$NON-NLS-1$
 
     private static Map<String, String> buildFormExtInfoMap()
     {
@@ -3046,8 +3051,6 @@ public final class FormElementWriter
         m.put("ExternalReportObject", "ReportFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
         // ... and one only the record-set generator produces, for a cube.
         m.put("ExternalDataSourceCubeRecordSet", "CubeRecordSetFormExtInfo"); //$NON-NLS-1$ //$NON-NLS-2$
-        // Deliberately absent: SpreadsheetDocument, whose importer branch casts a FormAttributeExtInfo
-        // to FormExtInfo, and InformationRegisterManager, which no writer pairs with a kind at all.
         return Collections.unmodifiableMap(m);
     }
 
@@ -5647,8 +5650,14 @@ public final class FormElementWriter
 
     /**
      * The ext-info {@code element} requires when its content-form root is already known.
-     * <p>For a Table, a dotted path requires no node because all 3256 measured occurrences of a single DynamicList value type are top-level attributes, never columns or nested members.</p>
-     * <p>For a Table, a multi-typed attribute requires no node because the platform likewise returns null unless the value type contains exactly one type.</p>
+     *
+     * <p>A Table's dotted path under a non-row-owning head addresses a metadata TABULAR SECTION, and
+     * no metadata property can be a {@code DynamicList} - that category exists only on a form
+     * attribute - so the answer there is "no node". Under a row-owning head the path ends on a column
+     * or a query field whose own type this model does not resolve, so the answer is "cannot say".</p>
+     *
+     * <p>A multi-typed attribute requires no node: the platform likewise answers null unless the
+     * value type holds exactly one type.</p>
      *
      * @param formModel the content form owning {@code element}, or {@code null} when unavailable
      * @param element the form root or item to inspect
@@ -5667,8 +5676,12 @@ public final class FormElementWriter
                 return ExtInfoRequirement.NONE;
             }
             String category = mainAttributeCategory(element);
-            return category == null ? ExtInfoRequirement.UNREADABLE
-                : ExtInfoRequirement.of(FORM_EXT_INFO_BY_TYPE_CATEGORY.get(category));
+            if (category == null
+                || FORM_EXT_INFO_CATEGORIES_WITH_POSSIBLE_WRITER_NODE.contains(category))
+            {
+                return ExtInfoRequirement.UNREADABLE;
+            }
+            return ExtInfoRequirement.of(FORM_EXT_INFO_BY_TYPE_CATEGORY.get(category));
         }
         if (ECLASS_TABLE.equals(element.eClass().getName()))
         {
@@ -5677,20 +5690,28 @@ public final class FormElementWriter
             {
                 return ExtInfoRequirement.UNREADABLE;
             }
-            if (dataPath.indexOf('.') >= 0)
-            {
-                return ExtInfoRequirement.NONE;
-            }
             if (formModel == null)
             {
                 return ExtInfoRequirement.UNREADABLE;
             }
-            EObject attribute = findFormAttribute(formModel, dataPath);
+            int dot = dataPath.indexOf('.');
+            String head = dot < 0 ? dataPath : dataPath.substring(0, dot);
+            EObject attribute = findFormAttribute(formModel, head);
             if (attribute == null)
             {
                 return ExtInfoRequirement.UNREADABLE;
             }
-            return "DynamicList".equals(singleValueTypeCategory(attribute)) //$NON-NLS-1$
+            String category = singleValueTypeCategory(attribute);
+            if (dot >= 0)
+            {
+                if (hasCollectionValueType(attribute) || "DynamicList".equals(category) //$NON-NLS-1$
+                    || category == null)
+                {
+                    return ExtInfoRequirement.UNREADABLE;
+                }
+                return ExtInfoRequirement.NONE;
+            }
+            return "DynamicList".equals(category) //$NON-NLS-1$
                 ? ExtInfoRequirement.of("DynamicListTableExtInfo") //$NON-NLS-1$
                 : ExtInfoRequirement.NONE;
         }

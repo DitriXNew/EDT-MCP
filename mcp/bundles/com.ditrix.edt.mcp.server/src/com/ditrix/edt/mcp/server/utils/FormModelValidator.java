@@ -245,16 +245,23 @@ public final class FormModelValidator
             FormElementWriter.extInfoRequirement(formModel);
         if (!requirement.readable())
         {
+            // An unreadable requirement cannot prove whether an existing node is stale.
             return;
         }
+        String mainType = FormElementWriter.mainAttributeCategory(formModel);
+        EObject actual = FormElementWriter.extInfoInstance(formModel);
         if (requirement.classifier() == null)
         {
-            // NONE is deliberate silence: the union cannot distinguish no pairing from an unknown one.
+            if (mainType != null && actual != null)
+            {
+                findings.add(new Finding(SEVERITY_ERROR, CODE_STALE_EXT_INFO, FORM_PATH,
+                    "The form root carries a '" + actual.eClass().getName() //$NON-NLS-1$
+                        + "' but its main attribute's '" + mainType //$NON-NLS-1$
+                        + "' type requires no root ext-info.")); //$NON-NLS-1$
+            }
             return;
         }
         String expected = requirement.classifier();
-        String mainType = FormElementWriter.mainAttributeCategory(formModel);
-        EObject actual = FormElementWriter.extInfoInstance(formModel);
         if (actual == null)
         {
             findings.add(new Finding(SEVERITY_ERROR, CODE_MISSING_EXT_INFO, FORM_PATH,

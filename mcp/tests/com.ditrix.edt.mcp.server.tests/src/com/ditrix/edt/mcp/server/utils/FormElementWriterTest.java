@@ -1496,6 +1496,13 @@ public class FormElementWriterTest
         newCollectionAttribute(form, "Rows"); //$NON-NLS-1$
         assertTrue("a ValueTable table requires no node and publishes a known set", //$NON-NLS-1$
             FormElementWriter.publishesKnownEventSet(boundTable(form, "Rows"))); //$NON-NLS-1$
+        EObject rowTable = boundTable(form, "Rows", "QueryField"); //$NON-NLS-1$ //$NON-NLS-2$
+        FormElementWriter.ExtInfoRequirement rowRequirement =
+            FormElementWriter.extInfoRequirement(rowTable);
+        assertFalse("a dotted path under a row-owning attribute is unreadable", //$NON-NLS-1$
+            rowRequirement.readable());
+        assertFalse("an unreadable dotted table cannot publish a provably complete set", //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(rowTable));
 
         EObject valueList = formLikeObject("FormAttribute"); //$NON-NLS-1$
         valueList.eSet(feature(valueList, "name"), "Choices"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1538,9 +1545,15 @@ public class FormElementWriterTest
         object.eSet(feature(object, "name"), "Object"); //$NON-NLS-1$ //$NON-NLS-2$
         setFormLikeValueType(object, "DocumentObject.Order"); //$NON-NLS-1$
         addTo(form, "attributes", object); //$NON-NLS-1$
+        EObject tabularTable = boundTable(form, "Object.Goods"); //$NON-NLS-1$
+        FormElementWriter.ExtInfoRequirement tabularRequirement =
+            FormElementWriter.extInfoRequirement(tabularTable);
+        assertTrue("an object-headed tabular-section path is readable", //$NON-NLS-1$
+            tabularRequirement.readable());
+        assertNull("a metadata tabular section requires no table ext-info", //$NON-NLS-1$
+            tabularRequirement.classifier());
         assertTrue("a dotted tabular-section path requires no node and publishes a known set", //$NON-NLS-1$
-            FormElementWriter.publishesKnownEventSet(
-                boundTable(form, "Object.Goods"))); //$NON-NLS-1$
+            FormElementWriter.publishesKnownEventSet(tabularTable));
         assertTrue("a split tabular-section path joins to the same binding", //$NON-NLS-1$
             FormElementWriter.publishesKnownEventSet(
                 boundTable(form, "Object", "Goods"))); //$NON-NLS-1$ //$NON-NLS-2$

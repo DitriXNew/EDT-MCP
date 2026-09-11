@@ -103,16 +103,35 @@ public class FormModelValidatorTest
     }
 
     @Test
-    public void testAMainAttributeWithNoRootPairingIsSilent()
+    public void testAReadableNoRootPairingRejectsOnlyAProvablyStaleNode()
     {
-        Form form = new Form();
-        EObject main = form.attribute("Caption", 1, true); //$NON-NLS-1$
-        form.giveAttributeTypes(main, "String"); //$NON-NLS-1$
-        form.giveRootExtInfo();
+        Form stale = new Form();
+        EObject string = stale.attribute("Caption", 1, true); //$NON-NLS-1$
+        stale.giveAttributeTypes(string, "String"); //$NON-NLS-1$
+        stale.giveRootExtInfo();
 
-        assertEquals("an unmapped category cannot prove its existing root node stale: " //$NON-NLS-1$
-            + codes(form),
-            List.of(), codes(form));
+        List<FormModelValidator.Finding> staleFindings =
+            FormModelValidator.validate(stale.root);
+        assertEquals("a readable no-node requirement makes the carried root node stale", //$NON-NLS-1$
+            1, staleFindings.size());
+        assertEquals(FormModelValidator.CODE_STALE_EXT_INFO, staleFindings.get(0).code);
+        assertEquals("(form)", staleFindings.get(0).path); //$NON-NLS-1$
+        assertTrue(staleFindings.get(0).message.contains("CatalogFormExtInfo")); //$NON-NLS-1$
+        assertTrue(staleFindings.get(0).message.contains("String")); //$NON-NLS-1$
+
+        Form clean = new Form();
+        EObject cleanString = clean.attribute("Caption", 1, true); //$NON-NLS-1$
+        clean.giveAttributeTypes(cleanString, "String"); //$NON-NLS-1$
+        assertEquals("the same readable pairing is clean when it carries no root node", //$NON-NLS-1$
+            List.of(), codes(clean));
+
+        Form imported = new Form();
+        EObject spreadsheet = imported.attribute("Sheet", 1, true); //$NON-NLS-1$
+        imported.giveAttributeTypes(spreadsheet, "SpreadsheetDocument"); //$NON-NLS-1$
+        imported.giveAttributeExtInfo(spreadsheet, imported.spreadsheetDocumentExtInfoType);
+        imported.giveRootExtInfo();
+        assertEquals("an importer may legitimately give a SpreadsheetDocument form a root node", //$NON-NLS-1$
+            List.of(), codes(imported));
     }
 
     @Test
@@ -768,6 +787,7 @@ public class FormModelValidatorTest
         final EClass handlerType;
         final EClass extInfoType;
         final EClass documentFormExtInfoType;
+        final EClass spreadsheetDocumentExtInfoType;
         final EClass dynamicListExtInfoType;
         final EObject root;
         /** Items are addressed by id, so the fixture allocates one per item as the platform does. */
@@ -792,7 +812,12 @@ public class FormModelValidatorTest
 
             extInfoType = eClass("CatalogFormExtInfo"); //$NON-NLS-1$
             documentFormExtInfoType = eClass("DocumentFormExtInfo"); //$NON-NLS-1$
+            EClass attributeExtInfoType = eClass("FormAttributeExtInfo"); //$NON-NLS-1$
+            attributeExtInfoType.setAbstract(true);
             dynamicListExtInfoType = eClass("DynamicListExtInfo"); //$NON-NLS-1$
+            dynamicListExtInfoType.getESuperTypes().add(attributeExtInfoType);
+            spreadsheetDocumentExtInfoType = eClass("SpreadsheetDocumentExtInfo"); //$NON-NLS-1$
+            spreadsheetDocumentExtInfoType.getESuperTypes().add(attributeExtInfoType);
             presentationFlagType = eClass("AdjustableBoolean"); //$NON-NLS-1$
 
             EClass commandBase = eClass("Command"); //$NON-NLS-1$
@@ -816,7 +841,7 @@ public class FormModelValidatorTest
             attributeType.getEStructuralFeatures()
                 .add(reference("valueType", EcorePackage.Literals.EOBJECT, false, true)); //$NON-NLS-1$
             attributeType.getEStructuralFeatures()
-                .add(reference("extInfo", dynamicListExtInfoType, false, true)); //$NON-NLS-1$
+                .add(reference("extInfo", attributeExtInfoType, false, true)); //$NON-NLS-1$
             attributeType.getEStructuralFeatures()
                 .add(reference("view", presentationFlagType, false, true)); //$NON-NLS-1$
             attributeType.getEStructuralFeatures()
@@ -947,7 +972,12 @@ public class FormModelValidatorTest
 
         void giveDynamicListExtInfo(EObject attribute)
         {
-            set(attribute, "extInfo", create(dynamicListExtInfoType)); //$NON-NLS-1$
+            giveAttributeExtInfo(attribute, dynamicListExtInfoType);
+        }
+
+        void giveAttributeExtInfo(EObject attribute, EClass classifier)
+        {
+            set(attribute, "extInfo", create(classifier)); //$NON-NLS-1$
         }
 
         /** The extended tooltip nearly every visual item carries, in its own inherited slot. */
