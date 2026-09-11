@@ -94,6 +94,10 @@ public class LaunchTool implements IMcpTool
     /** Output key: launch status (e.g. "launching"). */
     private static final String KEY_STATUS = "status"; //$NON-NLS-1$
 
+    /** Output key: EDT reassigned a standalone server's ports during this call. */
+    private static final String KEY_STANDALONE_SERVER_PORTS_REASSIGNED =
+        "standaloneServerPortsReassigned"; //$NON-NLS-1$
+
     /** Error-log prefix for an asynchronous launch failure. */
     private static final String ERR_ASYNC_PREFIX = "launch failed asynchronously: "; //$NON-NLS-1$
 
@@ -152,7 +156,9 @@ public class LaunchTool implements IMcpTool
                 "Default true: silently apply the configuration->DB update before launching so no " //$NON-NLS-1$
                     + "'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog " //$NON-NLS-1$
                     + "is auto-confirmed); false skips the update and the platform may then show that " //$NON-NLS-1$
-                    + "modal. Ignored for Attach.") //$NON-NLS-1$
+                    + "modal. Ignored for Attach. A standalone-server configuration performs no database " //$NON-NLS-1$
+                    + "update on this route even when omitted, and an explicit true is refused - run " //$NON-NLS-1$
+                    + "update_database separately.") //$NON-NLS-1$
             .stringProperty("externalInfobaseChanges", //$NON-NLS-1$
                 "How to answer EDT's blocking 'Infobase configuration changes' modal when the infobase " //$NON-NLS-1$
                     + "was changed outside EDT (Designer, ibcmd, a CLI pipeline) since the last EDT " //$NON-NLS-1$
@@ -206,6 +212,8 @@ public class LaunchTool implements IMcpTool
             .stringProperty(KEY_STATUS, "\"launching\" when the launch was dispatched asynchronously and is " //$NON-NLS-1$
                 + "still starting, or \"running\" after a bounded standalone-server start; absent on the " //$NON-NLS-1$
                 + "alreadyRunning short-circuit. Poll debug_status for asynchronous-launch readiness.") //$NON-NLS-1$
+            .booleanProperty(KEY_STANDALONE_SERVER_PORTS_REASSIGNED,
+                "True when EDT moved a standalone server to free ports and rewrote its configuration") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable status message") //$NON-NLS-1$
             .build();
     }
@@ -240,6 +248,7 @@ public class LaunchTool implements IMcpTool
         boolean updateRequested = explicitUpdateRequest(params);
         boolean restartIfRunning = extractRestartIfRunning(params);
         String rawPolicy = JsonUtils.extractStringArgument(params, "externalInfobaseChanges"); //$NON-NLS-1$
+        boolean policyRequested = explicitPolicyRequest(params);
         ExternalInfobaseChangesPolicy policy = ExternalInfobaseChangesPolicy.parse(rawPolicy);
         if (policy == null)
         {
@@ -276,8 +285,8 @@ public class LaunchTool implements IMcpTool
         // Target form 1: explicit config name — no project/application required.
         if (configName != null && !configName.isEmpty())
         {
-            return launchByConfigName(configName, updateBeforeLaunch, updateRequested, restartIfRunning, policy,
-                portPolicy, overrides, prepared, mode);
+            return launchByConfigName(configName, updateBeforeLaunch, updateRequested, policyRequested,
+                restartIfRunning, policy, portPolicy, overrides, prepared, mode);
         }
 
         // Target form 2: project + application (runtime-client only).
@@ -344,8 +353,8 @@ public class LaunchTool implements IMcpTool
      * Works for both runtime-client and Attach configuration types.
      */
     private String launchByConfigName(String configName, boolean updateBeforeLaunch, // NOSONAR one argument per independent caller-visible decision; a parameter object would only rename them
-        boolean updateRequested, boolean restartIfRunning, ExternalInfobaseChangesPolicy policy,
-        StandaloneServerPortConflictPolicy portPolicy, LaunchOverrides overrides,
+        boolean updateRequested, boolean policyRequested, boolean restartIfRunning,
+        ExternalInfobaseChangesPolicy policy, StandaloneServerPortConflictPolicy portPolicy, LaunchOverrides overrides,
         LaunchOverrides.Prepared prepared, String mode)
     {
         try
@@ -381,7 +390,7 @@ public class LaunchTool implements IMcpTool
             if (isStandaloneServerConfiguration(typeId))
             {
                 String updateRefusal = standaloneUpdateRefusal(config.getName(),
-                    updateRequested, policy);
+                    updateRequested, policyRequested, policy);
                 if (updateRefusal != null)
                 {
                     return updateRefusal;
@@ -568,16 +577,23 @@ public class LaunchTool implements IMcpTool
             && JsonUtils.extractBooleanArgument(params, "updateBeforeLaunch", false); //$NON-NLS-1$
     }
 
+    /** Whether the caller explicitly supplied a non-blank external-change policy. */
+    static boolean explicitPolicyRequest(Map<String, String> params)
+    {
+        String value = JsonUtils.extractStringArgument(params, "externalInfobaseChanges"); //$NON-NLS-1$
+        return params != null && params.containsKey("externalInfobaseChanges") //$NON-NLS-1$
+            && value != null && !value.trim().isEmpty();
+    }
+
     /** Refuses update options that the direct standalone-server start cannot honour. */
     static String standaloneUpdateRefusal(String configName, boolean updateRequested,
-        ExternalInfobaseChangesPolicy policy)
+        boolean policyRequested, ExternalInfobaseChangesPolicy policy)
     {
-        boolean customPolicy = policy != null && policy != ExternalInfobaseChangesPolicy.DEFAULT;
-        if (!updateRequested && !customPolicy)
+        if (!updateRequested && !policyRequested)
         {
             return null;
         }
-        if (updateRequested && customPolicy)
+        if (updateRequested && policyRequested)
         {
             return ToolResult.error("Parameters 'updateBeforeLaunch' and " //$NON-NLS-1$
                 + "'externalInfobaseChanges' cannot be honoured for standalone-server launch " //$NON-NLS-1$
@@ -666,23 +682,29 @@ public class LaunchTool implements IMcpTool
 
         StandaloneServerPortConflictPolicy launchPortPolicy =
             standaloneServerPortPolicy(config, portPolicy);
-        String startError = startStandaloneServerGuarded(configName, context.project(),
+        StartOutcome start = startStandaloneServerGuarded(configName, context.project(),
             () -> StandaloneServerStateRecovery.ensureStartable(context.project(), application,
                 applicationId),
             () -> startStandaloneServerWithPolicy(service, server, configName,
                 // EDT ignores this argument and always starts standalone servers in debug.
                 ILaunchManager.DEBUG_MODE, launchInfobaseName(config),
                 launchServerName(config), launchPortPolicy));
-        if (startError != null)
+        if (start.failure() != null)
         {
-            return startError;
+            return start.failure();
         }
-        return standaloneStartSuccess(configName, typeId, projectName, applicationId);
+        return standaloneStartSuccess(configName, typeId, projectName, applicationId,
+            start.portsReassigned());
     }
 
-    /** Restores a stale server stopped by this call when the following direct start fails. */
-    static String startStandaloneServerGuarded(String configName, IProject project,
-        Runnable preflight, Supplier<String> starter)
+    /** Bounded standalone-start outcome plus any persistent port reassignment it performed. */
+    static record StartOutcome(String failure, boolean conclusive, boolean portsReassigned)
+    {
+    }
+
+    /** Restores a stale server stopped by this call only after a conclusive direct-start failure. */
+    static StartOutcome startStandaloneServerGuarded(String configName, IProject project,
+        Runnable preflight, Supplier<StartOutcome> starter)
     {
         StandaloneServerStateRecovery.beginOperation();
         try
@@ -696,17 +718,27 @@ public class LaunchTool implements IMcpTool
                 String failure = PlatformFailures.describe(e);
                 String restored = StandaloneServerStateRecovery.appendRestoration(failure, project,
                     configName);
-                return standalonePreconditionError(configName,
-                    restored == null ? failure : restored);
+                return new StartOutcome(standalonePreconditionError(configName,
+                    restored == null ? failure : restored), true, false);
             }
-            String failure = starter.get();
-            if (failure == null)
+            StartOutcome outcome = starter.get();
+            if (outcome.failure() == null)
             {
-                return null;
+                return outcome;
             }
-            String restored = StandaloneServerStateRecovery.appendRestoration(failure, project,
-                configName);
-            return standaloneAttemptError(configName, restored == null ? failure : restored);
+            if (!outcome.conclusive())
+            {
+                String notice = StandaloneServerStateRecovery.appendInconclusiveStartNotice(
+                    outcome.failure(), configName);
+                return new StartOutcome(standaloneAttemptError(configName,
+                    notice == null ? outcome.failure() : notice), false,
+                    outcome.portsReassigned());
+            }
+            String restored = StandaloneServerStateRecovery.appendRestoration(outcome.failure(),
+                project, configName);
+            return new StartOutcome(standaloneAttemptError(configName,
+                restored == null ? outcome.failure() : restored), true,
+                outcome.portsReassigned());
         }
         finally
         {
@@ -716,24 +748,33 @@ public class LaunchTool implements IMcpTool
 
     /** Builds the completed standalone-server result with EDT's effective DEBUG mode. */
     static String standaloneStartSuccess(String configName, String typeId, String projectName,
-        String applicationId)
+        String applicationId, boolean portsReassigned)
     {
-        return ToolResult.success()
+        ToolResult result = ToolResult.success()
             .put(KEY_LAUNCH_CONFIGURATION, configName)
             .put(KEY_CONFIGURATION_TYPE, typeId)
             .put(KEY_ATTACH, false)
             .put(KEY_MODE, MODE_DEBUG)
             .put(KEY_STATUS, "running") //$NON-NLS-1$
             .put(McpKeys.PROJECT, projectName)
-            .put(McpKeys.APPLICATION_ID, applicationId)
-            .put(McpKeys.MESSAGE, "Standalone server '" + configName //$NON-NLS-1$
+            .put(McpKeys.APPLICATION_ID, applicationId);
+        if (portsReassigned)
+        {
+            result.put(KEY_STANDALONE_SERVER_PORTS_REASSIGNED, true);
+        }
+        return result.put(McpKeys.MESSAGE, "Standalone server '" + configName //$NON-NLS-1$
                 + "' is running in DEBUG mode. EDT starts standalone servers in DEBUG mode " //$NON-NLS-1$
-                + "regardless of the requested mode. No database update was performed.") //$NON-NLS-1$
+                + "regardless of the requested mode. No database update was performed." //$NON-NLS-1$
+                + (portsReassigned
+                    ? " NOTE: the standalone server's ports were busy, so EDT moved it to free " //$NON-NLS-1$
+                        + "ports and rewrote its configuration " //$NON-NLS-1$
+                        + "(standaloneServerPortConflict=reassign) — clients must use the new address." //$NON-NLS-1$
+                    : "")) //$NON-NLS-1$
             .toJson();
     }
 
-    /** Runs the service start under a deadline and returns its failure reason. */
-    static String startStandaloneServerBounded(Object service, Object server, String configName,
+    /** Runs the service start under a deadline and classifies any failure. */
+    static StartOutcome startStandaloneServerBounded(Object service, Object server, String configName,
         String launchMode)
     {
         IStatus[] status = new IStatus[1];
@@ -745,15 +786,25 @@ public class LaunchTool implements IMcpTool
         {
             if (status[0] == null)
             {
-                return "EDT returned no status from the standalone-server start"; //$NON-NLS-1$
+                return new StartOutcome(
+                    "EDT returned no status from the standalone-server start", true, false); //$NON-NLS-1$
             }
-            return status[0].isOK() ? null : PlatformFailures.describeStatus(status[0]);
+            return new StartOutcome(status[0].isOK()
+                ? null : PlatformFailures.describeStatus(status[0]), true, false);
         }
-        return StandaloneServerSupport.startFailureReason(result);
+        return new StartOutcome(StandaloneServerSupport.startFailureReason(result),
+            conclusiveStartFailure(result.getOutcome()), false);
+    }
+
+    /** Whether a failed bounded start has definitely stopped running. */
+    static boolean conclusiveStartFailure(BoundedJob.Outcome outcome)
+    {
+        return outcome != BoundedJob.Outcome.TIMED_OUT
+            && outcome != BoundedJob.Outcome.INTERRUPTED;
     }
 
     /** Arms the targeted port-conflict answer while the bounded service start is running. */
-    static String startStandaloneServerWithPolicy(Object service, Object server, String configName,
+    static StartOutcome startStandaloneServerWithPolicy(Object service, Object server, String configName,
         String launchMode, String infobaseName, String serverName,
         StandaloneServerPortConflictPolicy portPolicy)
     {
@@ -763,9 +814,11 @@ public class LaunchTool implements IMcpTool
             serverName);
         try
         {
-            String failure = startStandaloneServerBounded(service, server, configName, launchMode);
+            StartOutcome outcome = startStandaloneServerBounded(service, server, configName, launchMode);
             String conflict = declinedConflictMessage(null, conflicts);
-            return conflict == null ? failure : conflict;
+            boolean portsReassigned = conflicts != null && conflicts.portsReassigned();
+            return new StartOutcome(conflict == null ? outcome.failure() : conflict,
+                outcome.conclusive(), portsReassigned);
         }
         finally
         {
@@ -1505,7 +1558,8 @@ public class LaunchTool implements IMcpTool
         {
             return prefix + "; no reason was logged. Check the EDT error log."; //$NON-NLS-1$
         }
-        return prefix + ". EDT logged while it ran: " + reason; //$NON-NLS-1$
+        return prefix + ". EDT logged while it ran: " + reason //$NON-NLS-1$
+            + ". That error may belong to another operation running at the same time."; //$NON-NLS-1$
     }
 
     /**

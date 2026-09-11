@@ -705,6 +705,24 @@ public final class StandaloneServerStateRecovery
             applicationId -> restoreStoppedServer(project, applicationId));
     }
 
+    /** Explains why an operation-local stop is not restored while the original start is in flight. */
+    public static String appendInconclusiveStartNotice(String original, String launchConfigurationName)
+    {
+        OperationStop stopped = OPERATION_STOP.get();
+        if (stopped == null || stopped.applicationId == null)
+        {
+            return null;
+        }
+        String separator = original.endsWith(".") || original.endsWith("!") //$NON-NLS-1$ //$NON-NLS-2$
+            || original.endsWith("?") ? " " : ". "; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String name = launchConfigurationName == null || launchConfigurationName.isEmpty()
+            ? stopped.applicationId : launchConfigurationName;
+        return original + separator + "The standalone server '" + stopped.applicationId //$NON-NLS-1$
+            + "' was stopped for this operation and was left stopped instead of scheduling a " //$NON-NLS-1$
+            + "second start because the original start may still be running. If it remains " //$NON-NLS-1$
+            + "stopped, call launch(launchConfigurationName='" + name + "')."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     /** Testable composition of the operation record, restore attempt, and exact message. */
     static String appendRestoration(String original, String launchConfigurationName,
         Restarter restarter)

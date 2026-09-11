@@ -49,6 +49,8 @@ import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.StoreResult;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Tests for {@link SetInfobaseCredentialsTool}.
@@ -711,7 +713,7 @@ public class SetInfobaseCredentialsToolTest
     }
 
     @Test
-    public void mismatchProducesAnErrorWithoutReturningThePassword()
+    public void mismatchProducesAPostMutationErrorWithoutReturningThePassword()
     {
         StoreResult mismatch = StoreResult.mismatched(
             "Requested access=INFOBASE, user='Admin', passwordSet=true; read back access=OS, " //$NON-NLS-1$
@@ -720,13 +722,23 @@ public class SetInfobaseCredentialsToolTest
         String json = SetInfobaseCredentialsTool.buildVerificationError(
             "TestProject", "app1", mismatch); //$NON-NLS-1$ //$NON-NLS-2$
 
-        assertTrue(json.contains("\"success\":false")); //$NON-NLS-1$
-        assertTrue(json.contains("\"verification\":\"mismatched\"")); //$NON-NLS-1$
-        assertTrue(json.contains("\"passwordMatched\":false")); //$NON-NLS-1$
-        assertTrue(json.contains("access=INFOBASE")); //$NON-NLS-1$
-        assertTrue(json.contains("access=OS")); //$NON-NLS-1$
-        assertTrue(json.contains("user='Admin'")); //$NON-NLS-1$
-        assertTrue(json.contains("user='Other'")); //$NON-NLS-1$
+        JsonObject result = JsonParser.parseString(json).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(result.has("mutationOutcomeUnknown")); //$NON-NLS-1$
+        assertEquals("Infobase access-settings read-back did not match the requested values: " //$NON-NLS-1$
+            + "Requested access=INFOBASE, user='Admin', passwordSet=true; read back access=OS, " //$NON-NLS-1$
+            + "user='Other', passwordSet=true, passwordMatched=false.", //$NON-NLS-1$
+            result.get("error").getAsString()); //$NON-NLS-1$
+        assertEquals("TestProject", result.get("project").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("app1", result.get("applicationId").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("mismatched", result.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(result.get("passwordMatched").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("Main infobase", //$NON-NLS-1$
+            result.getAsJsonObject("storedFor").get("name").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(INFOBASE_UUID,
+            result.getAsJsonObject("storedFor").get("uuid").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(result.has("password")); //$NON-NLS-1$
         assertFalse(json.contains("secret-value")); //$NON-NLS-1$
     }
 

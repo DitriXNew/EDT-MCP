@@ -46,8 +46,10 @@ import org.mockito.Mockito;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.AlreadyRunningContext;
+import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.StartOutcome;
 import com.ditrix.edt.mcp.server.utils.AttributableCancel;
 import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
+import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchOverrides;
@@ -447,6 +449,35 @@ public class LaunchToolTest
     }
 
     @Test
+    public void testSchemaAndGuideStateTheStandaloneUpdateException()
+    {
+        JsonObject update = JsonParser.parseString(new LaunchTool().getInputSchema())
+            .getAsJsonObject().getAsJsonObject("properties") //$NON-NLS-1$
+            .getAsJsonObject("updateBeforeLaunch"); //$NON-NLS-1$
+        String description = update.get("description").getAsString(); //$NON-NLS-1$
+        assertEquals("Default true: silently apply the configuration->DB update before launching " //$NON-NLS-1$
+            + "so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the " //$NON-NLS-1$
+            + "dialog is auto-confirmed); false skips the update and the platform may then show " //$NON-NLS-1$
+            + "that modal. Ignored for Attach. A standalone-server configuration performs no " //$NON-NLS-1$
+            + "database update on this route even when omitted, and an explicit true is refused " //$NON-NLS-1$
+            + "- run update_database separately.", description); //$NON-NLS-1$
+        // Both halves must survive: the standalone carve-out, and the modal behaviour it
+        // must not displace - dropping either one silently changes what a caller is told.
+        assertTrue(description.contains("apply the configuration->DB update before launching")); //$NON-NLS-1$
+        assertTrue(description.contains(
+            "performs no database update on this route even when omitted")); //$NON-NLS-1$
+
+        String guide = new LaunchTool().getGuide();
+        String contract = "For a named standalone-server launch configuration, no database " //$NON-NLS-1$
+            + "update is performed on this route, including when this parameter is omitted. An " //$NON-NLS-1$
+            + "explicit `updateBeforeLaunch=true` is refused; run `update_database` separately, " //$NON-NLS-1$
+            + "then call `launch` with `updateBeforeLaunch=false`."; //$NON-NLS-1$
+        assertTrue(guide.contains(contract));
+        assertFalse(guide.contains("For a named standalone-server launch configuration, " //$NON-NLS-1$
+            + "the default database update is performed.")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testRuntimeClientConfigurationResolutionIsUnaffected() throws Exception
     {
         String name = "B Thin Client"; //$NON-NLS-1$
@@ -606,9 +637,11 @@ public class LaunchToolTest
     @Test
     public void testAbandonedLaunchMessageIncludesTheCapturedReason()
     {
+        String message = LaunchTool.abandonedLaunchMessage("Client", "update failed"); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("Launch of 'Client' was abandoned by EDT (the launch delegate cancelled it). " //$NON-NLS-1$
-            + "EDT logged while it ran: update failed", //$NON-NLS-1$
-            LaunchTool.abandonedLaunchMessage("Client", "update failed")); //$NON-NLS-1$ //$NON-NLS-2$
+            + "EDT logged while it ran: update failed. That error may belong to another operation " //$NON-NLS-1$
+            + "running at the same time.", message); //$NON-NLS-1$
+        assertFalse(message.endsWith("EDT logged while it ran: update failed")); //$NON-NLS-1$
     }
 
     @Test
@@ -648,13 +681,14 @@ public class LaunchToolTest
     {
         IStatus refusal = new Status(IStatus.ERROR, "test", "server start refused"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        String failure = LaunchTool.startStandaloneServerBounded(
+        StartOutcome outcome = LaunchTool.startStandaloneServerBounded(
             new FakeStandaloneStartService(refusal), new Object(), "Standalone", //$NON-NLS-1$
             ILaunchManager.RUN_MODE);
 
-        assertNotNull(failure);
+        assertEquals("server start refused", outcome.failure()); //$NON-NLS-1$
+        assertTrue(outcome.conclusive());
         JsonObject error = JsonParser.parseString(
-            LaunchTool.standaloneAttemptError("Standalone", failure)).getAsJsonObject(); //$NON-NLS-1$
+            LaunchTool.standaloneAttemptError("Standalone", outcome.failure())).getAsJsonObject(); //$NON-NLS-1$
         assertFalse(error.get("success").getAsBoolean()); //$NON-NLS-1$
         assertTrue(error.get("error").getAsString().contains("server start refused")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(error.get("error").getAsString().contains("thin-client configuration")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -663,13 +697,28 @@ public class LaunchToolTest
     @Test
     public void testStandaloneServerStartReportsItsCapturedPortConflict()
     {
-        String failure = LaunchTool.startStandaloneServerWithPolicy(
+        StartOutcome outcome = LaunchTool.startStandaloneServerWithPolicy(
             new PortConflictingStandaloneStartService(), new Object(), "Standalone", //$NON-NLS-1$
             ILaunchManager.DEBUG_MODE, null, null, StandaloneServerPortConflictPolicy.CANCEL);
 
-        assertNotNull(failure);
-        assertTrue(failure.contains("network ports are already in use")); //$NON-NLS-1$
-        assertTrue(failure.contains("standaloneServerPortConflict='reassign'")); //$NON-NLS-1$
+        assertNotNull(outcome.failure());
+        assertTrue(outcome.failure().contains("network ports are already in use")); //$NON-NLS-1$
+        assertTrue(outcome.failure().contains("standaloneServerPortConflict='reassign'")); //$NON-NLS-1$
+        assertFalse(outcome.portsReassigned());
+    }
+
+    @Test
+    public void testStandaloneServerStartClassifiesOnlyFinishedFailuresAsConclusive()
+    {
+        assertFalse(LaunchTool.conclusiveStartFailure(BoundedJob.Outcome.TIMED_OUT));
+        assertFalse(LaunchTool.conclusiveStartFailure(BoundedJob.Outcome.INTERRUPTED));
+        assertTrue(LaunchTool.conclusiveStartFailure(BoundedJob.Outcome.TIMED_OUT_BEFORE_START));
+
+        StartOutcome captured = LaunchTool.startStandaloneServerBounded(
+            new ThrowingStandaloneStartService(), new Object(), "Standalone", //$NON-NLS-1$
+            ILaunchManager.DEBUG_MODE);
+        assertEquals("captured start failure", captured.failure()); //$NON-NLS-1$
+        assertTrue(captured.conclusive());
     }
 
     @Test
@@ -677,14 +726,14 @@ public class LaunchToolTest
     {
         AtomicInteger order = new AtomicInteger();
 
-        String result = LaunchTool.startStandaloneServerGuarded("Standalone", null, //$NON-NLS-1$
+        StartOutcome result = LaunchTool.startStandaloneServerGuarded("Standalone", null, //$NON-NLS-1$
             () -> assertTrue("the preflight runs first", order.compareAndSet(0, 1)),
             () -> {
                 assertTrue("the service starts only after recovery", order.compareAndSet(1, 2));
-                return null;
+                return new StartOutcome(null, true, false);
             });
 
-        assertNull(result);
+        assertNull(result.failure());
         assertEquals(2, order.get());
     }
 
@@ -693,38 +742,60 @@ public class LaunchToolTest
     {
         AtomicInteger starts = new AtomicInteger();
 
-        String result = LaunchTool.startStandaloneServerGuarded("Standalone", null, //$NON-NLS-1$
+        StartOutcome result = LaunchTool.startStandaloneServerGuarded("Standalone", null, //$NON-NLS-1$
             () -> { throw new ApplicationException("the stale server is still stopping"); }, //$NON-NLS-1$
             () -> {
                 starts.incrementAndGet();
-                return null;
+                return new StartOutcome(null, true, false);
             });
 
         assertEquals(0, starts.get());
-        assertTrue(result.contains("the stale server is still stopping")); //$NON-NLS-1$
+        assertTrue(result.failure().contains("the stale server is still stopping")); //$NON-NLS-1$
     }
 
     @Test
     public void testStandaloneServerFailedStartRestoresAStaleServerStoppedByItsPreflight()
     {
-        String result = LaunchTool.startStandaloneServerGuarded("Standalone", null, //$NON-NLS-1$
+        StartOutcome result = LaunchTool.startStandaloneServerGuarded("Standalone", null, //$NON-NLS-1$
             () -> recordOperationStop("ServerApplication.Test"), //$NON-NLS-1$
-            () -> "server start refused"); //$NON-NLS-1$
+            () -> new StartOutcome("server start refused", true, false)); //$NON-NLS-1$
 
-        assertTrue(result.contains("server start refused")); //$NON-NLS-1$
-        assertTrue(result.contains(
+        assertTrue(result.failure().contains("server start refused")); //$NON-NLS-1$
+        assertTrue(result.failure().contains(
             "was stopped for this operation and could NOT be started again")); //$NON-NLS-1$
-        assertTrue(result.contains("launchConfigurationName='Standalone'")); //$NON-NLS-1$
+        assertTrue(result.failure().contains("launchConfigurationName='Standalone'")); //$NON-NLS-1$
     }
 
     @Test
     public void testStandaloneServerFailedStartDoesNotClaimRestorationWhenNothingWasStopped()
     {
-        String result = LaunchTool.startStandaloneServerGuarded("Standalone", null, () -> { }, //$NON-NLS-1$
-            () -> "server start refused"); //$NON-NLS-1$
+        StartOutcome result = LaunchTool.startStandaloneServerGuarded("Standalone", null, () -> { }, //$NON-NLS-1$
+            () -> new StartOutcome("server start refused", true, false)); //$NON-NLS-1$
 
-        assertTrue(result.contains("server start refused")); //$NON-NLS-1$
-        assertFalse(result.contains("stopped for this operation")); //$NON-NLS-1$
+        assertTrue(result.failure().contains("server start refused")); //$NON-NLS-1$
+        assertFalse(result.failure().contains("stopped for this operation")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInconclusiveStandaloneStartDoesNotRestoreTheStoppedServer()
+    {
+        StartOutcome result = LaunchTool.startStandaloneServerGuarded("Standalone", null, //$NON-NLS-1$
+            () -> recordOperationStop("ServerApplication.Test"), //$NON-NLS-1$
+            () -> new StartOutcome("the wait for the standalone-server start was interrupted; " //$NON-NLS-1$
+                + "the start may still be running", false, false)); //$NON-NLS-1$
+
+        JsonObject error = JsonParser.parseString(result.failure()).getAsJsonObject();
+        assertFalse(error.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("Failed to start standalone server 'Standalone': the wait for the " //$NON-NLS-1$
+            + "standalone-server start was interrupted; the start may still be running. The " //$NON-NLS-1$
+            + "standalone server 'ServerApplication.Test' was stopped for this operation and was " //$NON-NLS-1$
+            + "left stopped instead of scheduling a second start because the original start may " //$NON-NLS-1$
+            + "still be running. If it remains stopped, call " //$NON-NLS-1$
+            + "launch(launchConfigurationName='Standalone'). Try launch with the project's " //$NON-NLS-1$
+            + "thin-client configuration instead: launching that client has been observed to " //$NON-NLS-1$
+            + "bring its standalone server up with it.", error.get("error").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(error.get("error").getAsString().contains("has been started again")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(error.get("error").getAsString().contains("could NOT be started again")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -754,10 +825,21 @@ public class LaunchToolTest
     }
 
     @Test
+    public void theExternalChangesPolicyRequestIsReadFromPRESENCE_notFromItsDefault()
+    {
+        assertFalse(LaunchTool.explicitPolicyRequest(
+            Map.of("launchConfigurationName", "Standalone"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(LaunchTool.explicitPolicyRequest(
+            Map.of("externalInfobaseChanges", "  "))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(LaunchTool.explicitPolicyRequest(
+            Map.of("externalInfobaseChanges", "override"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
     public void testStandaloneServerRefusesOnlyAnExplicitUpdateRequest()
     {
         String refusal = LaunchTool.standaloneUpdateRefusal("Standalone", true, //$NON-NLS-1$
-            ExternalInfobaseChangesPolicy.DEFAULT);
+            false, ExternalInfobaseChangesPolicy.DEFAULT);
 
         assertNotNull(refusal);
         assertTrue(refusal.contains("'updateBeforeLaunch'")); //$NON-NLS-1$
@@ -769,7 +851,7 @@ public class LaunchToolTest
     public void testStandaloneServerRefusesANonDefaultExternalChangesPolicy()
     {
         String refusal = LaunchTool.standaloneUpdateRefusal("Standalone", false, //$NON-NLS-1$
-            ExternalInfobaseChangesPolicy.IMPORT);
+            true, ExternalInfobaseChangesPolicy.IMPORT);
 
         assertNotNull(refusal);
         assertTrue(refusal.contains("'externalInfobaseChanges'='import'")); //$NON-NLS-1$
@@ -777,9 +859,20 @@ public class LaunchToolTest
     }
 
     @Test
-    public void testStandaloneServerStartOnlyPathAcceptsTheDefaultExternalChangesPolicy()
+    public void testStandaloneServerRefusesAnExplicitOverrideButAcceptsAnOmittedPolicy()
     {
-        assertNull(LaunchTool.standaloneUpdateRefusal("Standalone", false, //$NON-NLS-1$
+        String refusal = LaunchTool.standaloneUpdateRefusal("Standalone", false, true, //$NON-NLS-1$
+            ExternalInfobaseChangesPolicy.DEFAULT);
+        JsonObject error = JsonParser.parseString(refusal).getAsJsonObject();
+        assertFalse(error.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("Parameter 'externalInfobaseChanges'='override' cannot be honoured for " //$NON-NLS-1$
+            + "standalone-server launch configuration 'Standalone' because this direct route " //$NON-NLS-1$
+            + "performs no database update. Run update_database with " //$NON-NLS-1$
+            + "externalInfobaseChanges='override' first, then call launch with " //$NON-NLS-1$
+            + "updateBeforeLaunch=false and omit externalInfobaseChanges.", //$NON-NLS-1$
+            error.get("error").getAsString()); //$NON-NLS-1$
+        assertFalse(error.get("error").getAsString().contains("='import'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(LaunchTool.standaloneUpdateRefusal("Standalone", false, false, //$NON-NLS-1$
             ExternalInfobaseChangesPolicy.DEFAULT));
     }
 
@@ -810,8 +903,8 @@ public class LaunchToolTest
         AtomicInteger starts = new AtomicInteger();
         assertNull(LaunchTool.startStandaloneServerGuarded("Standalone", null, () -> { }, () -> { //$NON-NLS-1$
             starts.incrementAndGet();
-            return null;
-        }));
+            return new StartOutcome(null, true, false);
+        }).failure());
         assertEquals(1, starts.get());
     }
 
@@ -830,7 +923,7 @@ public class LaunchToolTest
     {
         JsonObject result = JsonParser.parseString(LaunchTool.standaloneStartSuccess(
             "Standalone", STANDALONE_SERVER_TYPE_ID, "Project", //$NON-NLS-1$ //$NON-NLS-2$
-            "ServerApplication.Test")).getAsJsonObject(); //$NON-NLS-1$
+            "ServerApplication.Test", false)).getAsJsonObject(); //$NON-NLS-1$
 
         assertTrue(result.get("success").getAsBoolean()); //$NON-NLS-1$
         assertEquals("debug", result.get("mode").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
@@ -839,6 +932,35 @@ public class LaunchToolTest
             .contains("regardless of the requested mode")); //$NON-NLS-1$
         assertTrue(result.get("message").getAsString() //$NON-NLS-1$
             .contains("No database update was performed")); //$NON-NLS-1$
+        assertFalse(result.has("standaloneServerPortsReassigned")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerSuccessReportsReassignedPorts()
+    {
+        StartOutcome outcome = LaunchTool.startStandaloneServerWithPolicy(
+            new PortReassigningStandaloneStartService(), new Object(), "Standalone", //$NON-NLS-1$
+            ILaunchManager.DEBUG_MODE, null, null, StandaloneServerPortConflictPolicy.REASSIGN);
+        assertNull(outcome.failure());
+        assertTrue(outcome.portsReassigned());
+
+        JsonObject result = JsonParser.parseString(LaunchTool.standaloneStartSuccess(
+            "Standalone", STANDALONE_SERVER_TYPE_ID, "Project", //$NON-NLS-1$ //$NON-NLS-2$
+            "ServerApplication.Test", outcome.portsReassigned())).getAsJsonObject(); //$NON-NLS-1$
+        assertTrue(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result.get("standaloneServerPortsReassigned").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(result.has("portsReassigned")); //$NON-NLS-1$
+        assertEquals("Standalone server 'Standalone' is running in DEBUG mode. EDT starts " //$NON-NLS-1$
+            + "standalone servers in DEBUG mode regardless of the requested mode. No database " //$NON-NLS-1$
+            + "update was performed. NOTE: the standalone server's ports were busy, so EDT moved " //$NON-NLS-1$
+            + "it to free ports and rewrote its configuration " //$NON-NLS-1$
+            + "(standaloneServerPortConflict=reassign) — clients must use the new address.", //$NON-NLS-1$
+            result.get("message").getAsString()); //$NON-NLS-1$
+
+        JsonObject outputProperties = JsonParser.parseString(new LaunchTool().getOutputSchema())
+            .getAsJsonObject().getAsJsonObject("properties"); //$NON-NLS-1$
+        assertTrue(outputProperties.has("standaloneServerPortsReassigned")); //$NON-NLS-1$
+        assertFalse(outputProperties.has("portsReassigned")); //$NON-NLS-1$
     }
 
     @Test
@@ -1461,6 +1583,41 @@ public class LaunchToolTest
             {
                 throw new AssertionError(e);
             }
+        }
+    }
+
+    /** A service that records a successful EDT port reassignment before returning OK. */
+    public static final class PortReassigningStandaloneStartService
+    {
+        public IStatus startServer(Object server, String launchMode, Object monitor)
+        {
+            recordPortReassign();
+            return Status.OK_STATUS;
+        }
+    }
+
+    /** A standalone-server service whose start throws inside the bounded job. */
+    public static final class ThrowingStandaloneStartService
+    {
+        public IStatus startServer(Object server, String launchMode, Object monitor)
+        {
+            throw new IllegalStateException("captured start failure"); //$NON-NLS-1$
+        }
+    }
+
+    /** Records the successful reassign event while the launch conflict window is open. */
+    private static void recordPortReassign()
+    {
+        try
+        {
+            Method method = LaunchUpdateDialogAutoConfirmer.class.getDeclaredMethod(
+                "recordPortReassignForTest", String.class); //$NON-NLS-1$
+            method.setAccessible(true);
+            method.invoke(null, "8429 - HTTP gate port"); //$NON-NLS-1$
+        }
+        catch (ReflectiveOperationException e)
+        {
+            throw new AssertionError(e);
         }
     }
 

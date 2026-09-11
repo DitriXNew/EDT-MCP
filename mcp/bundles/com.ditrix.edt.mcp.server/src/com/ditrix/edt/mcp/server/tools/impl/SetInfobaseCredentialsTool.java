@@ -730,7 +730,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     static String buildVerificationError(String projectName, String applicationId,
             StoreResult storeResult)
     {
-        ToolResult result = ToolResult.error(
+        ToolResult result = ToolResult.errorAfterMutation(
             "Infobase access-settings read-back did not match the requested values: " //$NON-NLS-1$
                 + storeResult.verificationReason())
             .put(McpKeys.PROJECT, projectName)

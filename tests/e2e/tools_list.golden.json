@@ -3020,7 +3020,7 @@
           "type": "string"
         },
         "updateBeforeLaunch": {
-          "description": "Default true: silently apply the configuration->DB update before launching so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog is auto-confirmed); false skips the update and the platform may then show that modal. Ignored for Attach.",
+          "description": "Default true: silently apply the configuration->DB update before launching so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog is auto-confirmed); false skips the update and the platform may then show that modal. Ignored for Attach. A standalone-server configuration performs no database update on this route even when omitted, and an explicit true is refused - run update_database separately.",
           "type": "boolean"
         }
       },
@@ -3059,6 +3059,9 @@
         },
         "project": {
           "type": "string"
+        },
+        "standaloneServerPortsReassigned": {
+          "type": "boolean"
         },
         "startupOption": {
           "type": "string"

@@ -20,7 +20,10 @@ import org.eclipse.core.runtime.Platform;
 
 import com.ditrix.edt.mcp.server.Activator;
 
-/** Captures the last relevant EDT error logged while one launch is running. */
+/**
+ * Captures the last allowlisted EDT error logged during a launch window. With no other tracked
+ * window, correlation is temporal only and the error may belong to another operation.
+ */
 public final class LaunchAbortReason implements AutoCloseable
 {
     /** EDT plug-in families whose errors can explain a launch delegate cancellation. */
