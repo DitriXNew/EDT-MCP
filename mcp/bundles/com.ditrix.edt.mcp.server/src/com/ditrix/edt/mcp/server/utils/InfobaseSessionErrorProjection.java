@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo;
@@ -24,16 +25,19 @@ import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo;
  */
 public final class InfobaseSessionErrorProjection
 {
-    private static final int MAX_APPLICATION_KIND_LENGTH = 64;
-
     private static final Pattern SESSION_ID = Pattern.compile(
         "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-" //$NON-NLS-1$
             + "[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"); //$NON-NLS-1$
     private static final Pattern SESSION_NUMBER = Pattern.compile("[0-9]+"); //$NON-NLS-1$
     private static final Pattern TIMESTAMP = Pattern.compile(
         "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"); //$NON-NLS-1$
-    private static final Pattern APPLICATION_KIND = Pattern.compile(
-        "[A-Za-z0-9_.-]{1," + MAX_APPLICATION_KIND_LENGTH + "}"); //$NON-NLS-1$ //$NON-NLS-2$
+
+    // These are 1C's documented application identifiers for app-id.
+    private static final Set<String> APPLICATION_KINDS = Set.of(
+        "1CV8", "1CV8C", "WebClient", "Designer", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "COMConnection", "WSConnection", "BackgroundJob", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "SystemBackgroundJob", "SrvrConsole", "COMConsole", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "JobScheduler", "Debugger", "RAS", "RAC"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
     private InfobaseSessionErrorProjection()
     {
@@ -59,7 +63,11 @@ public final class InfobaseSessionErrorProjection
             result.put("sessionNumber", sessionNumber); //$NON-NLS-1$
         }
 
-        putIfMatches(result, "applicationKind", session.applicationKind(), APPLICATION_KIND); //$NON-NLS-1$
+        String applicationKind = session.applicationKind();
+        if (isDocumentedApplicationKind(applicationKind))
+        {
+            result.put("applicationKind", applicationKind); //$NON-NLS-1$
+        }
         putIfMatches(result, "startedAt", session.startedAt(), TIMESTAMP); //$NON-NLS-1$
         putIfMatches(result, "lastActiveAt", session.lastActiveAt(), TIMESTAMP); //$NON-NLS-1$
         return result;
@@ -106,6 +114,12 @@ public final class InfobaseSessionErrorProjection
             return Optional.of("session-id " + sessionNumber); //$NON-NLS-1$
         }
         return Optional.empty();
+    }
+
+    private static boolean isDocumentedApplicationKind(String value)
+    {
+        return value != null && value.chars().allMatch(character -> character < 128)
+            && APPLICATION_KINDS.stream().anyMatch(value::equalsIgnoreCase);
     }
 
     private static void putIfMatches(Map<String, Object> target, String key, String value,

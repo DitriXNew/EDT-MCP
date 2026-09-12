@@ -263,6 +263,54 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
+    public void blockingSessionsErrorKeepsDocumentedApplicationKindsWithOriginalCase()
+    {
+        for (String applicationKind : List.of(
+            "1CV8C", "Designer", "designer")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            SessionInfo blocker = new SessionInfo(
+                "22222222-2222-2222-2222-222222222222", 42L, applicationKind, //$NON-NLS-1$
+                "User", "desk", "2026-01-01T10:00:00", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "2026-01-01T10:01:00", false); //$NON-NLS-1$
+            JsonObject result = JsonParser.parseString(UpdateDatabaseTool.blockingSessionsError(
+                "Demo", "ServerApplication.Demo", List.of(blocker), false)) //$NON-NLS-1$ //$NON-NLS-2$
+                .getAsJsonObject();
+            JsonObject session = result.getAsJsonArray("sessions").get(0).getAsJsonObject(); //$NON-NLS-1$
+
+            assertEquals(applicationKind,
+                session.get("applicationKind").getAsString()); //$NON-NLS-1$
+            assertTrue(applicationKind, result.get("error").getAsString() //$NON-NLS-1$
+                .contains("applicationKind=" + applicationKind)); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void blockingSessionsErrorOmitsUnknownApplicationKindsButKeepsCountAndRemedy()
+    {
+        for (String applicationKind : List.of("Ivanov", "WKS-01")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            SessionInfo blocker = new SessionInfo(
+                "22222222-2222-2222-2222-222222222222", 42L, applicationKind, //$NON-NLS-1$
+                "User", "desk", "2026-01-01T10:00:00", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                "2026-01-01T10:01:00", false); //$NON-NLS-1$
+            JsonObject result = JsonParser.parseString(UpdateDatabaseTool.blockingSessionsError(
+                "Demo", "ServerApplication.Demo", List.of(blocker), false)) //$NON-NLS-1$ //$NON-NLS-2$
+                .getAsJsonObject();
+            JsonObject session = result.getAsJsonArray("sessions").get(0).getAsJsonObject(); //$NON-NLS-1$
+            String error = result.get("error").getAsString(); //$NON-NLS-1$
+
+            assertFalse(applicationKind, session.has("applicationKind")); //$NON-NLS-1$
+            assertFalse(applicationKind, result.toString().contains(applicationKind));
+            assertTrue(error.contains(
+                "Database update refused because 1 non-agent infobase session(s) remain")); //$NON-NLS-1$
+            assertTrue(error.contains("Clear them first with " //$NON-NLS-1$
+                + "infobase_sessions(action='terminate', projectName='Demo', " //$NON-NLS-1$
+                + "applicationId='ServerApplication.Demo', all=true, confirm=true), then retry " //$NON-NLS-1$
+                + "update_database.")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
     public void blockingSessionsErrorOmitsFieldsThatFailTheirClosedGrammars()
     {
         SessionInfo blocker = new SessionInfo(
