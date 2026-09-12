@@ -8,8 +8,12 @@ package com.ditrix.edt.mcp.server.preferences;
 
 import static org.junit.Assert.*;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -47,49 +51,128 @@ public class ToolSettingsServiceTest
     private static final Set<String> READ_ONLY_V8_ADDITIONS = Set.of(
         "infobase_sessions"); //$NON-NLS-1$
 
-    /* Existing preset growth with no stored-profile migration; frozen so new debt fails loudly. */
-    private static final Set<String> ANALYSIS_ONLY_PRE_V8_UNMIGRATED_BASELINE = Set.of(
+    private static final int VERSION_8_ANALYSIS_ONLY_DISABLED_COUNT = 61;
+
+    private static final String VERSION_8_ANALYSIS_ONLY_DISABLED_SHA_256 =
+        "c8cdfe9de48d255bbcbfdf75a28fd90a672649f1c78a15823f8cc041a9489df9"; //$NON-NLS-1$
+
+    private static final int VERSION_8_CODE_REVIEW_DISABLED_COUNT = 47;
+
+    private static final String VERSION_8_CODE_REVIEW_DISABLED_SHA_256 =
+        "2772bc6245f6f12b9e2815c5b131a73441ea7faa10842bc8b06d5e9018478e7c"; //$NON-NLS-1$
+
+    /* Frozen at version 8. Future preset growth belongs in a later migration, never this fixture. */
+    private static final Set<String> VERSION_8_ANALYSIS_ONLY_DISABLED_FIXTURE = Set.of(
+        "adopt_metadata_object", //$NON-NLS-1$
+        "apply_quick_fix", //$NON-NLS-1$
+        "ask_workmate", //$NON-NLS-1$
+        "build_external_objects", //$NON-NLS-1$
         "cancel_job", //$NON-NLS-1$
         "create_infobase", //$NON-NLS-1$
         "create_launch_config", //$NON-NLS-1$
         "create_metadata", //$NON-NLS-1$
         "dcs", //$NON-NLS-1$
+        "debug_status", //$NON-NLS-1$
+        "debug_yaxunit_tests", //$NON-NLS-1$
         "delete_infobase", //$NON-NLS-1$
         "delete_launch_config", //$NON-NLS-1$
         "delete_metadata", //$NON-NLS-1$
+        "delete_project", //$NON-NLS-1$
+        "evaluate_expression", //$NON-NLS-1$
         "export_configuration_to_xml", //$NON-NLS-1$
         "generate_translation_strings", //$NON-NLS-1$
+        "get_applications", //$NON-NLS-1$
         "get_form_layout_snapshot", //$NON-NLS-1$
+        "get_form_screenshot", //$NON-NLS-1$
         "get_job_status", //$NON-NLS-1$
+        "get_method_call_hierarchy", //$NON-NLS-1$
+        "get_module_structure", //$NON-NLS-1$
+        "get_outgoing_structures", //$NON-NLS-1$
+        "get_profiling_results", //$NON-NLS-1$
+        "get_symbol_info", //$NON-NLS-1$
         "get_template_screenshot", //$NON-NLS-1$
         "get_translation_project_info", //$NON-NLS-1$
+        "get_variables", //$NON-NLS-1$
+        "git", //$NON-NLS-1$
+        "go_to_definition", //$NON-NLS-1$
         "import_configuration_from_xml", //$NON-NLS-1$
+        "infobase_sessions", //$NON-NLS-1$
+        "launch", //$NON-NLS-1$
+        "list_breakpoints", //$NON-NLS-1$
         "list_configurations", //$NON-NLS-1$
+        "list_modules", //$NON-NLS-1$
+        "merge_rules", //$NON-NLS-1$
         "modify_metadata", //$NON-NLS-1$
+        "read_method_source", //$NON-NLS-1$
+        "read_module_source", //$NON-NLS-1$
+        "remove_breakpoint", //$NON-NLS-1$
+        "rename_metadata_object", //$NON-NLS-1$
+        "resume", //$NON-NLS-1$
+        "run_yaxunit_tests", //$NON-NLS-1$
+        "search_in_code", //$NON-NLS-1$
+        "set_breakpoint", //$NON-NLS-1$
+        "set_error_breakpoint", //$NON-NLS-1$
+        "set_infobase_credentials", //$NON-NLS-1$
         "set_variable", //$NON-NLS-1$
+        "start_profiling", //$NON-NLS-1$
+        "step", //$NON-NLS-1$
+        "stop_profiling", //$NON-NLS-1$
         "terminate_launch", //$NON-NLS-1$
         "translate_configuration", //$NON-NLS-1$
-        "validate_form_model"); //$NON-NLS-1$
+        "update_database", //$NON-NLS-1$
+        "validate_form_model", //$NON-NLS-1$
+        "validate_query", //$NON-NLS-1$
+        "wait_for_break", //$NON-NLS-1$
+        "write_module_source"); //$NON-NLS-1$
 
-    private static final Set<String> CODE_REVIEW_PRE_V8_UNMIGRATED_BASELINE = Set.of(
+    private static final Set<String> VERSION_8_CODE_REVIEW_DISABLED_FIXTURE = Set.of(
+        "adopt_metadata_object", //$NON-NLS-1$
+        "apply_quick_fix", //$NON-NLS-1$
+        "ask_workmate", //$NON-NLS-1$
+        "build_external_objects", //$NON-NLS-1$
         "cancel_job", //$NON-NLS-1$
         "create_infobase", //$NON-NLS-1$
         "create_launch_config", //$NON-NLS-1$
         "create_metadata", //$NON-NLS-1$
         "dcs", //$NON-NLS-1$
+        "debug_status", //$NON-NLS-1$
+        "debug_yaxunit_tests", //$NON-NLS-1$
         "delete_infobase", //$NON-NLS-1$
         "delete_launch_config", //$NON-NLS-1$
         "delete_metadata", //$NON-NLS-1$
+        "delete_project", //$NON-NLS-1$
+        "evaluate_expression", //$NON-NLS-1$
         "export_configuration_to_xml", //$NON-NLS-1$
         "generate_translation_strings", //$NON-NLS-1$
+        "get_applications", //$NON-NLS-1$
         "get_job_status", //$NON-NLS-1$
+        "get_profiling_results", //$NON-NLS-1$
         "get_translation_project_info", //$NON-NLS-1$
+        "get_variables", //$NON-NLS-1$
+        "git", //$NON-NLS-1$
         "import_configuration_from_xml", //$NON-NLS-1$
+        "infobase_sessions", //$NON-NLS-1$
+        "launch", //$NON-NLS-1$
+        "list_breakpoints", //$NON-NLS-1$
         "list_configurations", //$NON-NLS-1$
+        "merge_rules", //$NON-NLS-1$
         "modify_metadata", //$NON-NLS-1$
+        "remove_breakpoint", //$NON-NLS-1$
+        "rename_metadata_object", //$NON-NLS-1$
+        "resume", //$NON-NLS-1$
+        "run_yaxunit_tests", //$NON-NLS-1$
+        "set_breakpoint", //$NON-NLS-1$
+        "set_error_breakpoint", //$NON-NLS-1$
+        "set_infobase_credentials", //$NON-NLS-1$
         "set_variable", //$NON-NLS-1$
+        "start_profiling", //$NON-NLS-1$
+        "step", //$NON-NLS-1$
+        "stop_profiling", //$NON-NLS-1$
         "terminate_launch", //$NON-NLS-1$
-        "translate_configuration"); //$NON-NLS-1$
+        "translate_configuration", //$NON-NLS-1$
+        "update_database", //$NON-NLS-1$
+        "wait_for_break", //$NON-NLS-1$
+        "write_module_source"); //$NON-NLS-1$
 
     /* Independent first-release fixtures: never derive these from the production constants. */
     private static final Set<String> FIRST_RELEASE_ANALYSIS_ONLY_SHAPE = Set.of(
@@ -630,16 +713,20 @@ public class ToolSettingsServiceTest
     }
 
     @Test
-    public void testReadOnlyPresetGrowthHasMigrationOrFrozenLegacyRegistration()
+    public void testReadOnlyPresetGrowthAfterVersion8HasRegisteredMigration()
     {
         assertReadOnlyPresetGrowthAccountedFor(ToolPreset.ANALYSIS_ONLY,
-            ToolSettingsService.ANALYSIS_ONLY_RECOGNITION_SHAPE,
+            VERSION_8_ANALYSIS_ONLY_DISABLED_FIXTURE,
+            VERSION_8_ANALYSIS_ONLY_DISABLED_COUNT,
+            VERSION_8_ANALYSIS_ONLY_DISABLED_SHA_256,
             ToolSettingsService.ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION,
-            ANALYSIS_ONLY_PRE_V8_UNMIGRATED_BASELINE);
+            8);
         assertReadOnlyPresetGrowthAccountedFor(ToolPreset.CODE_REVIEW,
-            ToolSettingsService.CODE_REVIEW_RECOGNITION_SHAPE,
+            VERSION_8_CODE_REVIEW_DISABLED_FIXTURE,
+            VERSION_8_CODE_REVIEW_DISABLED_COUNT,
+            VERSION_8_CODE_REVIEW_DISABLED_SHA_256,
             ToolSettingsService.CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION,
-            CODE_REVIEW_PRE_V8_UNMIGRATED_BASELINE);
+            8);
     }
 
     private static void assertVersion4RestoresCurrentPreset(ToolPreset preset,
@@ -676,21 +763,35 @@ public class ToolSettingsServiceTest
     }
 
     private static void assertReadOnlyPresetGrowthAccountedFor(ToolPreset preset,
-        Set<String> recognitionShape, Map<Integer, Set<String>> migrations,
-        Set<String> frozenLegacyDebt)
+        Set<String> frozenDisabledTools, int pinnedFixtureSize,
+        String pinnedFixtureDigest, Map<Integer, Set<String>> migrations,
+        int frozenAtVersion)
     {
-        Set<String> actualAdditions = new TreeSet<>(preset.getDisabledTools());
-        actualAdditions.removeAll(recognitionShape);
-        Set<String> migratedAdditions = new TreeSet<>();
-        migrations.values().forEach(migratedAdditions::addAll);
-        Set<String> mislabeledLegacyDebt = new TreeSet<>(frozenLegacyDebt);
-        mislabeledLegacyDebt.retainAll(migratedAdditions);
-        assertTrue("legacy debt must not duplicate registered migrations for " + preset, //$NON-NLS-1$
-            mislabeledLegacyDebt.isEmpty());
-        Set<String> registeredAdditions = new TreeSet<>(frozenLegacyDebt);
-        registeredAdditions.addAll(migratedAdditions);
-        assertEquals("read-only preset growth must be registered for " + preset, //$NON-NLS-1$
-            registeredAdditions, actualAdditions);
+        assertEquals("the version-8 fixture must remain frozen for " + preset, //$NON-NLS-1$
+            pinnedFixtureSize, frozenDisabledTools.size());
+        assertEquals("the version-8 fixture membership must remain frozen for " + preset, //$NON-NLS-1$
+            pinnedFixtureDigest, fixtureDigest(frozenDisabledTools));
+        Set<String> expectedDisabledTools = new TreeSet<>(frozenDisabledTools);
+        migrations.entrySet().stream()
+            .filter(entry -> entry.getKey() > frozenAtVersion)
+            .map(Map.Entry::getValue)
+            .forEach(expectedDisabledTools::addAll);
+        assertEquals("read-only preset growth needs a later migration for " + preset, //$NON-NLS-1$
+            expectedDisabledTools, preset.getDisabledTools());
+    }
+
+    private static String fixtureDigest(Set<String> disabledTools)
+    {
+        try
+        {
+            byte[] value = String.join("\n", new TreeSet<>(disabledTools)) //$NON-NLS-1$
+                .getBytes(StandardCharsets.UTF_8);
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value)); //$NON-NLS-1$
+        }
+        catch (NoSuchAlgorithmException e)
+        {
+            throw new AssertionError(e);
+        }
     }
 
     /*
@@ -917,7 +1018,22 @@ public class ToolSettingsServiceTest
     }
 
     @Test
-    public void testVersion8DoesNotRerunVersion7ForAStoredReadOnlyProfile()
+    public void testVersion8RecognizesAStoredProfileThatReenabledApplyQuickFix()
+    {
+        Set<String> customized = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        customized.removeAll(READ_ONLY_V8_ADDITIONS);
+        customized.remove("apply_quick_fix"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(customized, 7);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue(disabled.contains("infobase_sessions")); //$NON-NLS-1$
+        assertFalse(disabled.contains("apply_quick_fix")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testVersion8LeavesAProfileThatReenabledAVersion7ToolAlone()
     {
         Set<String> alreadyAtSeven = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
         alreadyAtSeven.removeAll(READ_ONLY_V8_ADDITIONS);
@@ -927,8 +1043,24 @@ public class ToolSettingsServiceTest
         ToolSettingsService.ensureMigratedForTest(store);
 
         Set<String> disabled = disabledTools(store);
-        assertTrue(disabled.contains("infobase_sessions")); //$NON-NLS-1$
+        assertEquals(alreadyAtSeven, disabled);
+        assertFalse(disabled.contains("infobase_sessions")); //$NON-NLS-1$
         assertFalse(disabled.contains("merge_rules")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testVersion8RunsAfterVersion7ForAnOlderReadOnlyProfile()
+    {
+        Set<String> beforeVersion7 = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        beforeVersion7.removeAll(READ_ONLY_V7_ADDITIONS);
+        beforeVersion7.removeAll(READ_ONLY_V8_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(beforeVersion7, 6);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue(disabled.containsAll(READ_ONLY_V7_ADDITIONS));
+        assertTrue(disabled.containsAll(READ_ONLY_V8_ADDITIONS));
     }
 
     @Test

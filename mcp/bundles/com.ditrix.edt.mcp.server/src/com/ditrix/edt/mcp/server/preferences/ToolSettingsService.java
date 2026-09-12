@@ -448,8 +448,9 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     /** Adds the v8 session tool only to stored profiles recognized as read-only. */
     private static boolean migrateInfobaseSessionsIntoReadOnlyPresets(Set<String> disabled)
     {
-        if (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE)
-            || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE))
+        if (disabled.containsAll(READ_ONLY_V7_ADDITIONS)
+            && (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE)
+                || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE)))
         {
             return disabled.addAll(READ_ONLY_V8_ADDITIONS);
         }
