@@ -9,12 +9,19 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.IJobChangeEvent;
 import org.eclipse.core.runtime.jobs.IJobChangeListener;
 import org.eclipse.core.runtime.jobs.Job;
@@ -235,5 +242,126 @@ public class BoundedJobTest
 
         assertEquals(Outcome.COMPLETED, result.getOutcome());
         assertTrue("work that ran and returned is a success", result.isSuccess()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCompletionListenerIsDetachedAfterNormalCompletion() throws Exception
+    {
+        CountDownLatch completionRan = new CountDownLatch(1);
+        Job job = quickJob("test: listener detachment"); //$NON-NLS-1$
+        CountingCompletionListener listener =
+            new CountingCompletionListener(job.getName(), completionRan::countDown);
+        listener.attach(job);
+
+        scheduleAndAwaitCompletion(job);
+        assertTrue("the normal terminal notification must invoke the completion", //$NON-NLS-1$
+            completionRan.await(SANE_RETURN_MS, TimeUnit.MILLISECONDS));
+        scheduleAndAwaitCompletion(job);
+        assertEquals("the listener must be absent from the job's second terminal notification", //$NON-NLS-1$
+            1, listener.getDoneCalls());
+    }
+
+    @Test
+    public void testCompletionRunsExactlyOnceWhenSchedulingThrows() throws Exception
+    {
+        AtomicInteger completionCalls = new AtomicInteger();
+        AtomicReference<Job> rejectedJob = new AtomicReference<>();
+        IllegalStateException schedulingFailure = new IllegalStateException("cannot schedule"); //$NON-NLS-1$
+
+        try
+        {
+            BoundedJob.run("test: scheduling failure", GENEROUS_TIMEOUT_MS, monitor -> { //$NON-NLS-1$
+                // The scheduler fails before work can run.
+            }, completionCalls::incrementAndGet, job -> {
+                rejectedJob.set(job);
+                throw schedulingFailure;
+            });
+            fail("the scheduling failure must be propagated"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertSame("the original scheduling failure must be propagated", schedulingFailure, e); //$NON-NLS-1$
+        }
+
+        assertEquals("a scheduling failure definitively completes the operation once", //$NON-NLS-1$
+            1, completionCalls.get());
+        scheduleAndAwaitCompletion(rejectedJob.get());
+        assertEquals("a later terminal notification must not invoke the completion again", //$NON-NLS-1$
+            1, completionCalls.get());
+    }
+
+    @Test
+    public void testThrowingCompletionDoesNotEscapeOrPreventDetachment() throws Exception
+    {
+        Job job = quickJob("test: throwing completion"); //$NON-NLS-1$
+        CountingCompletionListener listener = new CountingCompletionListener(job.getName(),
+            () -> {
+                throw new AssertionError("callback boom"); //$NON-NLS-1$
+            });
+        listener.attach(job);
+
+        listener.done(null);
+        scheduleAndAwaitCompletion(job);
+
+        assertEquals("a throwing callback must not leave the listener on the job", //$NON-NLS-1$
+            1, listener.getDoneCalls());
+    }
+
+    private static Job quickJob(String name)
+    {
+        return new Job(name)
+        {
+            @Override
+            protected IStatus run(IProgressMonitor monitor)
+            {
+                return Status.OK_STATUS;
+            }
+        };
+    }
+
+    private static void scheduleAndAwaitCompletion(Job job) throws Exception
+    {
+        CountDownLatch done = new CountDownLatch(1);
+        IJobChangeListener observer = new JobChangeAdapter()
+        {
+            @Override
+            public void done(IJobChangeEvent event)
+            {
+                done.countDown();
+            }
+        };
+        job.addJobChangeListener(observer);
+        try
+        {
+            McpJobs.schedule(job);
+            assertTrue("the test job must reach its terminal notification", //$NON-NLS-1$
+                done.await(SANE_RETURN_MS, TimeUnit.MILLISECONDS));
+        }
+        finally
+        {
+            job.removeJobChangeListener(observer);
+        }
+    }
+
+    private static final class CountingCompletionListener extends BoundedJob.CompletionListener
+    {
+        private final AtomicInteger doneCalls = new AtomicInteger();
+
+        CountingCompletionListener(String jobName, Runnable completion)
+        {
+            super(jobName, completion);
+        }
+
+        @Override
+        public void done(IJobChangeEvent event)
+        {
+            doneCalls.incrementAndGet();
+            super.done(event);
+        }
+
+        int getDoneCalls()
+        {
+            return doneCalls.get();
+        }
     }
 }

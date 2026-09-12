@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
@@ -85,6 +86,81 @@ public final class BoundedJob
          *     propagated out of the job thread
          */
         void run(IProgressMonitor monitor) throws Exception; // NOSONAR the work is arbitrary platform code
+    }
+
+    @FunctionalInterface
+    interface IJobScheduler
+    {
+        void schedule(Job job);
+    }
+
+    static class CompletionListener extends JobChangeAdapter
+    {
+        private final String jobName;
+        private final Runnable completion;
+        private final AtomicBoolean completionCalled = new AtomicBoolean();
+        private final AtomicReference<Job> attachedJob = new AtomicReference<>();
+
+        CompletionListener(String jobName, Runnable completion)
+        {
+            this.jobName = jobName;
+            this.completion = completion;
+        }
+
+        void attach(Job job)
+        {
+            if (!attachedJob.compareAndSet(null, job))
+            {
+                throw new IllegalStateException("Completion listener is already attached"); //$NON-NLS-1$
+            }
+            try
+            {
+                job.addJobChangeListener(this);
+            }
+            catch (RuntimeException | Error e)
+            {
+                attachedJob.compareAndSet(job, null);
+                throw e;
+            }
+        }
+
+        @Override
+        public void done(IJobChangeEvent event)
+        {
+            complete();
+        }
+
+        synchronized void complete()
+        {
+            if (!completionCalled.compareAndSet(false, true))
+            {
+                return;
+            }
+            Job job = attachedJob.getAndSet(null);
+            try
+            {
+                if (job != null)
+                {
+                    job.removeJobChangeListener(this);
+                }
+            }
+            finally
+            {
+                runCompletion();
+            }
+        }
+
+        private void runCompletion()
+        {
+            try
+            {
+                completion.run();
+            }
+            catch (Throwable t) // NOSONAR lifecycle notification must not damage the Job manager
+            {
+                Activator.logError("Bounded job completion callback failed: " + jobName, t); //$NON-NLS-1$
+            }
+        }
     }
 
     /**
@@ -177,17 +253,24 @@ public final class BoundedJob
      *
      * <p>The completion belongs to the Job lifecycle, not the caller's bounded wait: after
      * {@link Outcome#TIMED_OUT} or {@link Outcome#INTERRUPTED}, this method still returns on time and
-     * the callback runs later when the Job manager reports the Job done. The callback is invoked at
-     * most once, including when the job is cancelled before entering {@code work}.
+     * the callback runs later when the Job manager reports the Job done. A non-null callback is
+     * invoked exactly once, including when the job is cancelled before entering {@code work}. If
+     * scheduling itself raises, the callback runs before that failure is propagated.
      *
      * @param jobName the job name shown in EDT's progress UI
      * @param timeoutMs the caller's deadline in milliseconds
      * @param work the work to run
-     * @param completion optional callback invoked after the job terminates, whether work succeeded,
-     *     raised, or never started
+     * @param completion optional callback invoked after the operation ends, whether work succeeded,
+     *     raised, never started, or could not be scheduled
      * @return the bounded outcome
      */
     public static Result run(String jobName, long timeoutMs, IBoundedWork work, Runnable completion)
+    {
+        return run(jobName, timeoutMs, work, completion, McpJobs::schedule);
+    }
+
+    static Result run(String jobName, long timeoutMs, IBoundedWork work, Runnable completion,
+        IJobScheduler scheduler)
     {
         long startMs = System.currentTimeMillis();
         // Written by the job thread, read by the calling thread only after join() reports the job
@@ -232,31 +315,25 @@ public final class BoundedJob
                 return Status.OK_STATUS;
             }
         };
+        CompletionListener completionListener = null;
         if (completion != null)
         {
-            AtomicBoolean completionCalled = new AtomicBoolean();
-            job.addJobChangeListener(new JobChangeAdapter()
-            {
-                @Override
-                public void done(IJobChangeEvent event)
-                {
-                    if (!completionCalled.compareAndSet(false, true))
-                    {
-                        return;
-                    }
-                    try
-                    {
-                        completion.run();
-                    }
-                    catch (Throwable t) // NOSONAR lifecycle notification must not damage the Job manager
-                    {
-                        Activator.logError("Bounded job completion callback failed: " + jobName, t); //$NON-NLS-1$
-                    }
-                }
-            });
+            completionListener = new CompletionListener(jobName, completion);
+            completionListener.attach(job);
         }
         job.setUser(false);
-        McpJobs.schedule(job);
+        try
+        {
+            scheduler.schedule(job);
+        }
+        catch (RuntimeException | Error e)
+        {
+            if (completionListener != null)
+            {
+                completionListener.complete();
+            }
+            throw e;
+        }
 
         boolean finished;
         try
