@@ -390,28 +390,78 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
-    public void failedUpdateDesignerNoteContainsNoPersonalData()
+    public void exclusiveLockFailureNamesObservedDesignerWithoutPersonalData()
     {
-        JsonObject result = JsonParser.parseString(UpdateDatabaseTool.buildUnexpectedErrorResult(
-            new IllegalStateException("update failed"), false, false, null, //$NON-NLS-1$
+        JsonObject result = JsonParser.parseString(UpdateDatabaseTool.buildApplicationErrorResult(
+            new ApplicationException("exclusive lock"), "Demo", //$NON-NLS-1$ //$NON-NLS-2$
+            "ServerApplication.Demo", //$NON-NLS-1$
+            false, false, null,
             List.of(DESIGNER_SESSION))).getAsJsonObject();
-        JsonObject expected = JsonParser.parseString("{" //$NON-NLS-1$
-            + "\"success\":false," //$NON-NLS-1$
-            + "\"error\":\"Unexpected error: update failed Pre-update session inspection saw " //$NON-NLS-1$
-            + "app-id: Designer session(s): " //$NON-NLS-1$
-            + "sessionId=11111111-1111-1111-1111-111111111111, sessionNumber=1, " //$NON-NLS-1$
-            + "applicationKind=Designer, startedAt=2026-01-01T10:00:00, " //$NON-NLS-1$
-            + "lastActiveAt=2026-01-01T10:01:00. EDT cannot tell whether each is its update agent " //$NON-NLS-1$
-            + "or a human Configurator; after this update failure, they are the most likely " //$NON-NLS-1$
-            + "holders of the exclusive lock. Run infobase_sessions(action='list', ...) to see " //$NON-NLS-1$
-            + "who holds them. The update may have applied partially, so do not retry blindly: " //$NON-NLS-1$
-            + "check the actual state with get_applications (updateState) and the EDT Error Log " //$NON-NLS-1$
-            + "first.\"}") //$NON-NLS-1$
-            .getAsJsonObject();
+        String error = result.get("error").getAsString(); //$NON-NLS-1$
 
-        assertEquals(expected, result);
+        assertTrue(error.contains("Database update failed: exclusive lock")); //$NON-NLS-1$
+        assertTrue(error.contains("Pre-update session inspection saw app-id: Designer")); //$NON-NLS-1$
+        assertTrue(error.contains("most likely holders of the exclusive lock")); //$NON-NLS-1$
         assertFalse(result.toString().contains("agent@example.com")); //$NON-NLS-1$
         assertFalse(result.toString().contains("private-host")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void diagnosedAuthenticationFailureDoesNotBlameObservedDesignerSession()
+    {
+        ApplicationException failure = new ApplicationException(
+            "Infobase authentication error", //$NON-NLS-1$
+            new InfobaseSynchronizationException("connection refused")); //$NON-NLS-1$
+        String error = JsonParser.parseString(UpdateDatabaseTool.buildApplicationErrorResult(
+            failure, "Demo", "ServerApplication.Demo", false, false, null, //$NON-NLS-1$ //$NON-NLS-2$
+            List.of(DESIGNER_SESSION))).getAsJsonObject().get("error").getAsString(); //$NON-NLS-1$
+
+        assertTrue(error.contains("set_infobase_credentials")); //$NON-NLS-1$
+        assertFalse(error.contains("Pre-update session inspection saw app-id: Designer")); //$NON-NLS-1$
+        assertFalse(error.contains("most likely holders of the exclusive lock")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void diagnosedInternalInfoFailureDoesNotBlameObservedDesignerSession()
+    {
+        ApplicationException failure = new ApplicationException("Failed to load configuration", //$NON-NLS-1$
+            new RuntimeException("InternalInfo node is missing")); //$NON-NLS-1$
+        String error = JsonParser.parseString(UpdateDatabaseTool.buildApplicationErrorResult(
+            failure, "Demo", "ServerApplication.Demo", false, false, null, //$NON-NLS-1$ //$NON-NLS-2$
+            List.of(DESIGNER_SESSION))).getAsJsonObject().get("error").getAsString(); //$NON-NLS-1$
+
+        assertTrue(error.contains("LoadConfigFromFiles")); //$NON-NLS-1$
+        assertFalse(error.contains("Pre-update session inspection saw app-id: Designer")); //$NON-NLS-1$
+        assertFalse(error.contains("most likely holders of the exclusive lock")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void unclassifiedUnexpectedFailureDoesNotGuessAtADesignerLockHolder()
+    {
+        String error = JsonParser.parseString(UpdateDatabaseTool.buildUnexpectedErrorResult(
+            new IllegalStateException("update failed"), false, false, null, //$NON-NLS-1$
+            List.of(DESIGNER_SESSION))).getAsJsonObject().get("error").getAsString(); //$NON-NLS-1$
+
+        assertTrue(error.contains("Unexpected error: update failed")); //$NON-NLS-1$
+        assertFalse(error.contains("Pre-update session inspection saw app-id: Designer")); //$NON-NLS-1$
+        assertFalse(error.contains("most likely holders of the exclusive lock")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void explicitUnexpectedLockFailureNamesTheObservedDesignerSession()
+    {
+        MultiStatus status = new MultiStatus(STATUS_PLUGIN_ID, 0, "Update failed", null); //$NON-NLS-1$
+        status.add(new Status(IStatus.ERROR, STATUS_PLUGIN_ID,
+            "Infobase is locked by another session")); //$NON-NLS-1$
+        String error = JsonParser.parseString(UpdateDatabaseTool.buildUnexpectedErrorResult(
+            new CoreException(status), false, false, null, List.of(DESIGNER_SESSION)))
+            .getAsJsonObject().get("error").getAsString(); //$NON-NLS-1$
+
+        assertTrue(error.contains("Infobase is locked by another session")); //$NON-NLS-1$
+        assertTrue(error.contains("Pre-update session inspection saw app-id: Designer")); //$NON-NLS-1$
+        assertTrue(error.contains("most likely holders of the exclusive lock")); //$NON-NLS-1$
+        assertFalse(error.contains("agent@example.com")); //$NON-NLS-1$
+        assertFalse(error.contains("private-host")); //$NON-NLS-1$
     }
 
     @Test

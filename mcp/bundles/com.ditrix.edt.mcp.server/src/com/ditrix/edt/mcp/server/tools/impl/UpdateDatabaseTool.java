@@ -1047,12 +1047,6 @@ public class UpdateDatabaseTool implements IMcpTool
         return result.toJson();
     }
 
-    /** Qualifies later failures with unreadable checks or ambiguous Designer sessions. */
-    private static String sessionCheckFailureNote(String reason, List<SessionInfo> designerSessions)
-    {
-        return sessionCheckFailureNote(reason, designerSessions, true);
-    }
-
     /** Qualifies a failure with only the session findings that could explain it. */
     private static String sessionCheckFailureNote(String reason, List<SessionInfo> designerSessions,
         boolean exclusiveLockPossible)
@@ -1309,13 +1303,16 @@ public class UpdateDatabaseTool implements IMcpTool
             portsReassigned, sessionCheckUnreachableReason, List.of());
     }
 
-    /** Same application failure payload, including Designer sessions seen by the pre-flight. */
+    /** Same application failure payload, with Designer findings only for a diagnosed lock failure. */
     static String buildApplicationErrorResult(ApplicationException e, String projectName,
             String applicationId, boolean terminatedClient, boolean portsReassigned,
             String sessionCheckUnreachableReason, List<SessionInfo> designerSessionsSeen)
     {
         String internalInfoHint = describeInternalInfoHint(e);
-        String hint = internalInfoHint.isEmpty() ? describeAuthHint(e) : internalInfoHint;
+        String authHint = internalInfoHint.isEmpty() ? describeAuthHint(e) : ""; //$NON-NLS-1$
+        String hint = internalInfoHint.isEmpty() ? authHint : internalInfoHint;
+        boolean exclusiveLockFailure = internalInfoHint.isEmpty() && authHint.isEmpty()
+            && isExclusiveLockFailure(e);
         String described = PlatformFailures.describe(e);
         String rootCause = PlatformFailures.rootCause(e);
         // PlatformFailures, not getMessage(): EDT reports failures as IStatus and only wraps them,
@@ -1331,7 +1328,8 @@ public class UpdateDatabaseTool implements IMcpTool
                     + "ports and rewritten its configuration " //$NON-NLS-1$
                     + "(standaloneServerPortConflict=reassign) — that change stands." //$NON-NLS-1$
                 : "") //$NON-NLS-1$
-            + sessionCheckFailureNote(sessionCheckUnreachableReason, designerSessionsSeen));
+            + sessionCheckFailureNote(sessionCheckUnreachableReason, designerSessionsSeen,
+                exclusiveLockFailure));
         errorResult.put(McpKeys.APPLICATION_ID, applicationId);
         errorResult.put(McpKeys.PROJECT, projectName);
         if (terminatedClient)
@@ -1395,7 +1393,7 @@ public class UpdateDatabaseTool implements IMcpTool
             sessionCheckUnreachableReason, List.of());
     }
 
-    /** Same unexpected failure payload, including Designer sessions seen by the pre-flight. */
+    /** Same unexpected failure payload, with Designer findings only for a diagnosed lock failure. */
     static String buildUnexpectedErrorResult(Exception e, boolean terminatedClient,
             boolean portsReassigned, String sessionCheckUnreachableReason,
             List<SessionInfo> designerSessionsSeen)
@@ -1407,7 +1405,8 @@ public class UpdateDatabaseTool implements IMcpTool
                     + "free ports and rewritten its configuration " //$NON-NLS-1$
                     + "(standaloneServerPortConflict=reassign) — that change stands." //$NON-NLS-1$
                 : "") //$NON-NLS-1$
-            + sessionCheckFailureNote(sessionCheckUnreachableReason, designerSessionsSeen)
+            + sessionCheckFailureNote(sessionCheckUnreachableReason, designerSessionsSeen,
+                isExclusiveLockFailure(e))
             + " The update may have applied partially, so do not retry blindly: check the actual " //$NON-NLS-1$
             + "state with get_applications (updateState) and the EDT Error Log first."); //$NON-NLS-1$
         if (terminatedClient)
@@ -1419,6 +1418,19 @@ public class UpdateDatabaseTool implements IMcpTool
             errorResult.put(KEY_PORTS_REASSIGNED, true);
         }
         return errorResult.toJson();
+    }
+
+    /** Whether the failure itself positively identifies an infobase exclusive-lock problem. */
+    private static boolean isExclusiveLockFailure(Throwable failure)
+    {
+        return PlatformFailures.firstMessageMatching(failure, message ->
+        {
+            String normalized = message.toLowerCase(Locale.ROOT);
+            return normalized.contains("exclusive lock") //$NON-NLS-1$
+                || normalized.contains("exclusive access") //$NON-NLS-1$
+                || ((normalized.contains("infobase") || normalized.contains("database")) //$NON-NLS-1$ //$NON-NLS-2$
+                    && normalized.contains("locked")); //$NON-NLS-1$
+        }) != null;
     }
 
     /**

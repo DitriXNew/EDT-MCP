@@ -79,6 +79,11 @@ public class InfobaseSessionsToolTest
         }
         assertTrue(schema.contains("applicationKindIsDesigner")); //$NON-NLS-1$
         assertFalse(schema.contains("isEdtAgent")); //$NON-NLS-1$
+        String actionDescription = JsonParser.parseString(schema).getAsJsonObject()
+            .getAsJsonObject("properties").getAsJsonObject("action") //$NON-NLS-1$ //$NON-NLS-2$
+            .get("description").getAsString(); //$NON-NLS-1$
+        assertTrue(actionDescription.contains("requested action that this result refers to")); //$NON-NLS-1$
+        assertFalse(actionDescription.contains("completed action")); //$NON-NLS-1$
     }
 
     @Test
@@ -229,6 +234,21 @@ public class InfobaseSessionsToolTest
         assertNull(selection.error);
         assertEquals(List.of(CLIENT), selection.sessions);
         assertFalse(selection.sessions.get(0).applicationKindIsDesigner());
+    }
+
+    @Test
+    public void emptyBulkSelectionDoesNotInventADesignerAgent()
+    {
+        String noSessions = InfobaseSessionsTool.emptySelectionMessage(List.of());
+        assertEquals("There were no sessions to terminate.", noSessions); //$NON-NLS-1$
+        assertFalse(noSessions.contains("Designer")); //$NON-NLS-1$
+        assertFalse(noSessions.contains("agent")); //$NON-NLS-1$
+
+        String designerSkipped = InfobaseSessionsTool.emptySelectionMessage(List.of(DESIGNER));
+        assertEquals("A session reporting app-id: Designer was skipped because bulk termination " //$NON-NLS-1$
+            + "never selects that kind.", designerSkipped); //$NON-NLS-1$
+        assertFalse(designerSkipped.contains("EDT Designer agent")); //$NON-NLS-1$
+        assertFalse(designerSkipped.contains("remains protected")); //$NON-NLS-1$
     }
 
     @Test

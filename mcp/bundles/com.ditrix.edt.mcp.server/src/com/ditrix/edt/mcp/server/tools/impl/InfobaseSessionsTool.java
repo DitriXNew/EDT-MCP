@@ -95,7 +95,8 @@ public class InfobaseSessionsTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the tool call succeeded.", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty(McpKeys.ACTION, "The completed action: list or terminate.") //$NON-NLS-1$
+            .stringProperty(McpKeys.ACTION,
+                "The requested action that this result refers to: list or terminate.") //$NON-NLS-1$
             .stringProperty(McpKeys.PROJECT, "Target EDT project name.") //$NON-NLS-1$
             .stringProperty(McpKeys.APPLICATION_ID, "Resolved standalone-server application ID.") //$NON-NLS-1$
             .booleanProperty(KEY_REACHABLE,
@@ -289,8 +290,7 @@ public class InfobaseSessionsTool implements IMcpTool
                 .put(KEY_REACHABLE, true)
                 .put(KEY_SESSIONS, List.of())
                 .put("terminatedCount", 0) //$NON-NLS-1$
-                .put(McpKeys.MESSAGE, "No non-agent sessions were selected; the EDT Designer " //$NON-NLS-1$
-                    + "agent remains protected.").toJson(); //$NON-NLS-1$
+                .put(McpKeys.MESSAGE, emptySelectionMessage(current.sessions())).toJson();
         }
 
         List<String> targets = new ArrayList<>();
@@ -524,6 +524,17 @@ public class InfobaseSessionsTool implements IMcpTool
         return Selection.error("Session '" + requestedSessionId //$NON-NLS-1$
             + "' was not found in the readable session list. Available session identifiers: " //$NON-NLS-1$
             + (available.isEmpty() ? "none" : String.join(", ", available)) + "."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /** Describes an empty bulk selection from what the readable list actually contained. */
+    static String emptySelectionMessage(List<SessionInfo> sessions)
+    {
+        if (sessions.stream().anyMatch(InfobaseSessionsTool::isDesignerSession))
+        {
+            return "A session reporting app-id: Designer was skipped because bulk termination " //$NON-NLS-1$
+                + "never selects that kind."; //$NON-NLS-1$
+        }
+        return "There were no sessions to terminate."; //$NON-NLS-1$
     }
 
     /** Converts records to the stable JSON field names exposed by the tool. */
