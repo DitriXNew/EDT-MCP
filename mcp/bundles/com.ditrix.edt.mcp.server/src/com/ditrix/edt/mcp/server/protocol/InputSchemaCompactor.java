@@ -210,7 +210,12 @@ public final class InputSchemaCompactor
         keep.put("debug_yaxunit_tests", //$NON-NLS-1$
             asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES, KEY_PORT_CONFLICT)); //$NON-NLS-1$
         keep.put("update_database", //$NON-NLS-1$
-            asSet("terminateRunningClients", KEY_EXTERNAL_CHANGES, KEY_PORT_CONFLICT)); //$NON-NLS-1$
+            asSet("terminateRunningClients", "checkInfobaseSessions", KEY_EXTERNAL_CHANGES, //$NON-NLS-1$ //$NON-NLS-2$
+                KEY_PORT_CONFLICT));
+        // Defaults and conditional selectors cannot be expressed by this schema builder. Keeping
+        // them prevents a compacted terminate call from losing its target and confirmation rules.
+        keep.put("infobase_sessions", //$NON-NLS-1$
+            asSet(McpKeys.APPLICATION_ID, McpKeys.ACTION, "sessionId", "all", "confirm")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         // includeBodies=true returns the recorded request/response JSON VERBATIM, and that
         // path is deliberately not redacted (the redactor only sees the outer tool). The
         // warning that those bodies can carry infobase and personal data is the only thing

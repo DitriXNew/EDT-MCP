@@ -214,6 +214,14 @@ public class ToolGroupTest
     }
 
     @Test
+    public void testApplicationsGroupIncludesInfobaseSessions()
+    {
+        assertTrue(ToolGroup.APPLICATIONS.getToolNames().contains("infobase_sessions")); //$NON-NLS-1$
+        assertEquals(ToolGroup.APPLICATIONS,
+            ToolGroup.getGroupForTool("infobase_sessions")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testRefactoringGroupContents()
     {
         List<String> tools = ToolGroup.REFACTORING.getToolNames();

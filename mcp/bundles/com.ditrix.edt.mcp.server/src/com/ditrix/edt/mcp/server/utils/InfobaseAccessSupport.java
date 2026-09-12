@@ -269,6 +269,20 @@ public final class InfobaseAccessSupport
         return new BoundedStoreResult<>(bounded, published.get(), writeCommitted.get());
     }
 
+    /** Credentials that may be supplied to an interactive platform command. */
+    public record Credentials(String userName, String password)
+    {
+        /** Normalizes absent values so callers never need to handle a null secret. */
+        public Credentials
+        {
+            userName = userName == null ? "" : userName; //$NON-NLS-1$
+            password = password == null ? "" : password; //$NON-NLS-1$
+        }
+    }
+
+    /** No stored credentials, or credentials that could not be read. */
+    private static final Credentials NO_CREDENTIALS = new Credentials("", ""); //$NON-NLS-1$ //$NON-NLS-2$
+
     /**
      * Parses the {@code access} argument into an {@link InfobaseAccess} literal.
      * {@code "OS"} (any case) selects OS authentication; everything else (incl.
@@ -428,6 +442,43 @@ public final class InfobaseAccessSupport
             }
         }
         return adapted;
+    }
+
+    /**
+     * Reads the credentials EDT stores for the infobase reference resolved from an application.
+     * The password is returned only to the caller and is never logged. An absent reference,
+     * manager, or settings record means there is nothing to send and returns empty credentials.
+     *
+     * @param application the application whose infobase credentials are needed
+     * @return stored user/password, or empty values when none can be read
+     */
+    public static Credentials readCredentials(IApplication application)
+    {
+        InfobaseReference ref = resolveInfobaseReference(application);
+        if (ref == null)
+        {
+            return NO_CREDENTIALS;
+        }
+        IInfobaseAccessManager manager = resolveAccessManager();
+        if (manager == null)
+        {
+            return NO_CREDENTIALS;
+        }
+        try
+        {
+            IInfobaseAccessSettings settings = manager.resolveSettings(ref);
+            if (settings == null || settings == IInfobaseAccessSettings.NOT_DEFINED)
+            {
+                return NO_CREDENTIALS;
+            }
+            return new Credentials(settings.userName(), settings.password());
+        }
+        catch (Exception e) // NOSONAR credential lookup is optional; the command may not require auth
+        {
+            Activator.logWarning("infobase access: stored credentials could not be read for " //$NON-NLS-1$
+                + application.getId() + ": " + PlatformFailures.describe(e)); //$NON-NLS-1$
+            return NO_CREDENTIALS;
+        }
     }
 
     /**
