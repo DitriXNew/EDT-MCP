@@ -1118,7 +1118,8 @@ public final class LaunchUpdateDialogAutoConfirmer
      *         requested nothing, no workbench display was available, or the UI thread did not
      *         reconcile in time - in which case nothing is left armed
      */
-    public static boolean arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog, // NOSONAR mirrors the existing arm-flag list; a parameter object would move the arity, not remove it
+    public static ArmResult armWithResult(boolean updateDialog, boolean sessionDialog, // NOSONAR mirrors the existing arm-flag list; a parameter object would move the arity, not remove it
+        boolean restructureDialog,
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName,
         StandaloneServerPortConflictPolicy portPolicy, String serverName)
     {
@@ -1130,12 +1131,12 @@ public final class LaunchUpdateDialogAutoConfirmer
         if (!updateDialog && !sessionDialog && !restructureDialog && conflictPolicy == null
             && portPolicy == null)
         {
-            return false;
+            return ArmResult.NOTHING_ARMED;
         }
         Display display = safeDisplay();
         if (display == null)
         {
-            return false;
+            return ArmResult.NOTHING_ARMED;
         }
         synchronized (LOCK)
         {
@@ -1167,13 +1168,49 @@ public final class LaunchUpdateDialogAutoConfirmer
         }
         if (!reconcileOnUiThread(display))
         {
-            // The UI thread did not answer in time. Leave nothing armed: a matcher nobody disarms
-            // would keep answering other operations' dialogs until the workbench exits.
-            disarm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName,
-                portPolicy, serverName);
-            return false;
+            // The matchers stay registered so the caller's disarm still balances them; only the
+            // Display filter is missing, and starting work that can raise a modal nothing can
+            // answer is the caller's decision to refuse.
+            return ArmResult.ARMED_WITHOUT_FILTER;
         }
-        return true;
+        return ArmResult.ARMED;
+    }
+
+    /**
+     * Same arming, reported as a plain "must I disarm?" answer.
+     *
+     * @param updateDialog arm the "Update database configuration" TITLE matcher
+     * @param sessionDialog arm the code-1003 "Debug session already exists" BODY matcher
+     * @param restructureDialog arm the DB-restructure TITLE matcher (press "Accept")
+     * @param conflictPolicy the button to press on the external-changes conflict modal, or
+     *            {@code null} to leave that modal alone
+     * @param infobaseName the infobase this call targets, as EDT names it (may be {@code null})
+     * @param portPolicy how to answer the port-conflict modal; {@code null} leaves it alone
+     * @param serverName the WST server's own name, resolved from the application
+     * @return {@code true} when matchers were armed and the caller must disarm them
+     */
+    public static boolean arm(boolean updateDialog, boolean sessionDialog, // NOSONAR mirrors the existing arm-flag list
+        boolean restructureDialog, ExternalInfobaseChangesPolicy conflictPolicy,
+        String infobaseName, StandaloneServerPortConflictPolicy portPolicy, String serverName)
+    {
+        return armWithResult(updateDialog, sessionDialog, restructureDialog, conflictPolicy,
+            infobaseName, portPolicy, serverName) != ArmResult.NOTHING_ARMED;
+    }
+
+    /** What one {@link #armWithResult} call achieved. */
+    public enum ArmResult
+    {
+        /** Nothing was requested, or no workbench display exists. The caller must NOT disarm. */
+        NOTHING_ARMED,
+
+        /** Matchers armed and the Display filter installed. The caller must disarm. */
+        ARMED,
+
+        /**
+         * Matchers armed, but the UI thread did not install the filter within its bound. The
+         * caller must still disarm, and must not start work that can raise a modal.
+         */
+        ARMED_WITHOUT_FILTER
     }
 
     /**
