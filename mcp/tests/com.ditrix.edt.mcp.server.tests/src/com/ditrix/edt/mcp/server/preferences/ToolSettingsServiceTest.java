@@ -10,6 +10,7 @@ import static org.junit.Assert.*;
 
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -42,6 +43,53 @@ public class ToolSettingsServiceTest
     private static final Set<String> READ_ONLY_V7_ADDITIONS = Set.of(
         "merge_rules", //$NON-NLS-1$
         "delete_project"); //$NON-NLS-1$
+
+    private static final Set<String> READ_ONLY_V8_ADDITIONS = Set.of(
+        "infobase_sessions"); //$NON-NLS-1$
+
+    /* Existing preset growth with no stored-profile migration; frozen so new debt fails loudly. */
+    private static final Set<String> ANALYSIS_ONLY_PRE_V8_UNMIGRATED_BASELINE = Set.of(
+        "cancel_job", //$NON-NLS-1$
+        "create_infobase", //$NON-NLS-1$
+        "create_launch_config", //$NON-NLS-1$
+        "create_metadata", //$NON-NLS-1$
+        "dcs", //$NON-NLS-1$
+        "delete_infobase", //$NON-NLS-1$
+        "delete_launch_config", //$NON-NLS-1$
+        "delete_metadata", //$NON-NLS-1$
+        "export_configuration_to_xml", //$NON-NLS-1$
+        "generate_translation_strings", //$NON-NLS-1$
+        "get_form_layout_snapshot", //$NON-NLS-1$
+        "get_job_status", //$NON-NLS-1$
+        "get_template_screenshot", //$NON-NLS-1$
+        "get_translation_project_info", //$NON-NLS-1$
+        "import_configuration_from_xml", //$NON-NLS-1$
+        "list_configurations", //$NON-NLS-1$
+        "modify_metadata", //$NON-NLS-1$
+        "set_variable", //$NON-NLS-1$
+        "terminate_launch", //$NON-NLS-1$
+        "translate_configuration", //$NON-NLS-1$
+        "validate_form_model"); //$NON-NLS-1$
+
+    private static final Set<String> CODE_REVIEW_PRE_V8_UNMIGRATED_BASELINE = Set.of(
+        "cancel_job", //$NON-NLS-1$
+        "create_infobase", //$NON-NLS-1$
+        "create_launch_config", //$NON-NLS-1$
+        "create_metadata", //$NON-NLS-1$
+        "dcs", //$NON-NLS-1$
+        "delete_infobase", //$NON-NLS-1$
+        "delete_launch_config", //$NON-NLS-1$
+        "delete_metadata", //$NON-NLS-1$
+        "export_configuration_to_xml", //$NON-NLS-1$
+        "generate_translation_strings", //$NON-NLS-1$
+        "get_job_status", //$NON-NLS-1$
+        "get_translation_project_info", //$NON-NLS-1$
+        "import_configuration_from_xml", //$NON-NLS-1$
+        "list_configurations", //$NON-NLS-1$
+        "modify_metadata", //$NON-NLS-1$
+        "set_variable", //$NON-NLS-1$
+        "terminate_launch", //$NON-NLS-1$
+        "translate_configuration"); //$NON-NLS-1$
 
     /* Independent first-release fixtures: never derive these from the production constants. */
     private static final Set<String> FIRST_RELEASE_ANALYSIS_ONLY_SHAPE = Set.of(
@@ -432,6 +480,8 @@ public class ToolSettingsServiceTest
             disabled.containsAll(CODE_REVIEW_V4_ADDITIONS));
         assertTrue("version 6 must add the destructive tools it missed: " + disabled,
             disabled.containsAll(READ_ONLY_V7_ADDITIONS));
+        assertTrue("version 8 must add infobase_sessions: " + disabled, //$NON-NLS-1$
+            disabled.containsAll(READ_ONLY_V8_ADDITIONS));
         // matchPreset is deliberately not asserted: migration is minimal and the live preset has
         // grown, so this safely migrated first-release store is legitimately CUSTOM.
     }
@@ -455,6 +505,8 @@ public class ToolSettingsServiceTest
             disabled.containsAll(ANALYSIS_ONLY_V4_ADDITIONS));
         assertTrue("version 6 must add the destructive tools it missed: " + disabled,
             disabled.containsAll(READ_ONLY_V7_ADDITIONS));
+        assertTrue("version 8 must add infobase_sessions: " + disabled, //$NON-NLS-1$
+            disabled.containsAll(READ_ONLY_V8_ADDITIONS));
         // matchPreset is deliberately not asserted: migration is minimal and the live preset has
         // grown, so this safely migrated first-release store is legitimately CUSTOM.
     }
@@ -577,6 +629,19 @@ public class ToolSettingsServiceTest
             ToolSettingsService.DEVELOPMENT_RECOGNITION_SHAPE);
     }
 
+    @Test
+    public void testReadOnlyPresetGrowthHasMigrationOrFrozenLegacyRegistration()
+    {
+        assertReadOnlyPresetGrowthAccountedFor(ToolPreset.ANALYSIS_ONLY,
+            ToolSettingsService.ANALYSIS_ONLY_RECOGNITION_SHAPE,
+            ToolSettingsService.ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION,
+            ANALYSIS_ONLY_PRE_V8_UNMIGRATED_BASELINE);
+        assertReadOnlyPresetGrowthAccountedFor(ToolPreset.CODE_REVIEW,
+            ToolSettingsService.CODE_REVIEW_RECOGNITION_SHAPE,
+            ToolSettingsService.CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION,
+            CODE_REVIEW_PRE_V8_UNMIGRATED_BASELINE);
+    }
+
     private static void assertVersion4RestoresCurrentPreset(ToolPreset preset,
         Set<String> version4Additions)
     {
@@ -608,6 +673,24 @@ public class ToolSettingsServiceTest
         assertTrue("frozen recognition shape for " + preset
             + " contains tools the current preset no longer disables: " + offending,
             offending.isEmpty());
+    }
+
+    private static void assertReadOnlyPresetGrowthAccountedFor(ToolPreset preset,
+        Set<String> recognitionShape, Map<Integer, Set<String>> migrations,
+        Set<String> frozenLegacyDebt)
+    {
+        Set<String> actualAdditions = new TreeSet<>(preset.getDisabledTools());
+        actualAdditions.removeAll(recognitionShape);
+        Set<String> migratedAdditions = new TreeSet<>();
+        migrations.values().forEach(migratedAdditions::addAll);
+        Set<String> mislabeledLegacyDebt = new TreeSet<>(frozenLegacyDebt);
+        mislabeledLegacyDebt.retainAll(migratedAdditions);
+        assertTrue("legacy debt must not duplicate registered migrations for " + preset, //$NON-NLS-1$
+            mislabeledLegacyDebt.isEmpty());
+        Set<String> registeredAdditions = new TreeSet<>(frozenLegacyDebt);
+        registeredAdditions.addAll(migratedAdditions);
+        assertEquals("read-only preset growth must be registered for " + preset, //$NON-NLS-1$
+            registeredAdditions, actualAdditions);
     }
 
     /*
@@ -804,6 +887,88 @@ public class ToolSettingsServiceTest
         Set<String> disabled = disabledTools(store);
         assertTrue("a store at the previous version must still gain the destructive names: "
             + disabled, disabled.containsAll(READ_ONLY_V7_ADDITIONS));
+    }
+
+    @Test
+    public void testVersion8AddsInfobaseSessionsToAStoredAnalysisOnlyPreset()
+    {
+        assertVersion8RestoresCurrentPreset(ToolPreset.ANALYSIS_ONLY);
+    }
+
+    @Test
+    public void testVersion8AddsInfobaseSessionsToAStoredCodeReviewPreset()
+    {
+        assertVersion8RestoresCurrentPreset(ToolPreset.CODE_REVIEW);
+    }
+
+    @Test
+    public void testVersion8RecognizesAStoredReadOnlyProfileTightenedFurther()
+    {
+        Set<String> tightened = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        tightened.removeAll(READ_ONLY_V8_ADDITIONS);
+        tightened.add("get_project_errors"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(tightened, 7);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue(disabled.contains("infobase_sessions")); //$NON-NLS-1$
+        assertTrue(disabled.contains("get_project_errors")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testVersion8DoesNotRerunVersion7ForAStoredReadOnlyProfile()
+    {
+        Set<String> alreadyAtSeven = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        alreadyAtSeven.removeAll(READ_ONLY_V8_ADDITIONS);
+        alreadyAtSeven.remove("merge_rules"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(alreadyAtSeven, 7);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue(disabled.contains("infobase_sessions")); //$NON-NLS-1$
+        assertFalse(disabled.contains("merge_rules")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testVersion8LeavesAStoredAllToolsProfileAlone()
+    {
+        PreferenceStore store = storedDisabledTools(Set.of(), 7);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(Set.of(), disabledTools(store));
+    }
+
+    @Test
+    public void testVersion8LeavesAStoredCustomProfileAlone()
+    {
+        Set<String> custom = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        custom.removeAll(READ_ONLY_V8_ADDITIONS);
+        custom.remove("get_applications"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(custom, 7);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(custom, disabledTools(store));
+        assertFalse(disabledTools(store).contains("infobase_sessions")); //$NON-NLS-1$
+    }
+
+    private static void assertVersion8RestoresCurrentPreset(ToolPreset preset)
+    {
+        Set<String> beforeVersion8 = new HashSet<>(preset.getDisabledTools());
+        beforeVersion8.removeAll(READ_ONLY_V8_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(beforeVersion8, 7);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertEquals("version 8 must restore the current disabled set for " + preset, //$NON-NLS-1$
+            preset.getDisabledTools(), disabled);
+        assertEquals("the restored set must match " + preset, //$NON-NLS-1$
+            preset, ToolPreset.matchPreset(disabled));
+        assertEquals(8, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
     }
 
     private static void assertVersion7RestoresCurrentPreset(ToolPreset preset)

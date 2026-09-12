@@ -10,6 +10,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -24,6 +25,15 @@ import com.ditrix.edt.mcp.server.Activator;
  */
 public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {
+    private static final Set<String> STORED_PROFILE_V1_ADDITIONS = Set.of(
+        "git"); //$NON-NLS-1$
+
+    private static final Set<String> READ_ONLY_V2_ADDITIONS = Set.of(
+        "apply_quick_fix"); //$NON-NLS-1$
+
+    private static final Set<String> STORED_PROFILE_V3_ADDITIONS = Set.of(
+        "ask_workmate"); //$NON-NLS-1$
+
     private static final Set<String> ANALYSIS_ONLY_V4_ADDITIONS = Set.of(
         "adopt_metadata_object", //$NON-NLS-1$
         "build_external_objects", //$NON-NLS-1$
@@ -40,6 +50,9 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     private static final Set<String> DEVELOPMENT_V4_ADDITIONS = Set.of(
         "stop_profiling"); //$NON-NLS-1$
 
+    private static final Set<String> NO_DEBUG_V6_ADDITIONS = Set.of(
+        "set_error_breakpoint"); //$NON-NLS-1$
+
     /*
      * Version 6: the two destructive tools a stored read-only profile could not have excluded.
      * merge_rules is new (its write half creates and REPLACES files); delete_project is not new at
@@ -50,6 +63,29 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     private static final Set<String> READ_ONLY_V7_ADDITIONS = Set.of(
         "merge_rules", //$NON-NLS-1$
         "delete_project"); //$NON-NLS-1$
+
+    private static final Set<String> READ_ONLY_V8_ADDITIONS = Set.of(
+        "infobase_sessions"); //$NON-NLS-1$
+
+    /** Actual disabled-name additions registered for each Analysis Only migration. */
+    static final Map<Integer, Set<String>> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION = Map.of(
+        1, STORED_PROFILE_V1_ADDITIONS,
+        2, READ_ONLY_V2_ADDITIONS,
+        3, STORED_PROFILE_V3_ADDITIONS,
+        4, ANALYSIS_ONLY_V4_ADDITIONS,
+        6, NO_DEBUG_V6_ADDITIONS,
+        7, READ_ONLY_V7_ADDITIONS,
+        8, READ_ONLY_V8_ADDITIONS);
+
+    /** Actual disabled-name additions registered for each Code Review migration. */
+    static final Map<Integer, Set<String>> CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION = Map.of(
+        1, STORED_PROFILE_V1_ADDITIONS,
+        2, READ_ONLY_V2_ADDITIONS,
+        3, STORED_PROFILE_V3_ADDITIONS,
+        4, CODE_REVIEW_V4_ADDITIONS,
+        6, NO_DEBUG_V6_ADDITIONS,
+        7, READ_ONLY_V7_ADDITIONS,
+        8, READ_ONLY_V8_ADDITIONS);
 
     /*
      * Frozen recognition shapes: what any historical stored profile of this preset must contain.
@@ -243,7 +279,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             }
             if (storedVersion < 1)
             {
-                changed |= disabled.add("git"); //$NON-NLS-1$
+                changed |= disabled.addAll(STORED_PROFILE_V1_ADDITIONS);
             }
             if (storedVersion < 2)
             {
@@ -254,7 +290,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
                 // ask_workmate ships OFF: it hands the question to an external plugin that
                 // reaches a cloud service and may then change the configuration with its
                 // own tools. That is a decision to opt into, not to inherit on upgrade.
-                changed |= disabled.add("ask_workmate"); //$NON-NLS-1$
+                changed |= disabled.addAll(STORED_PROFILE_V3_ADDITIONS);
             }
             if (storedVersion < 4)
             {
@@ -277,6 +313,12 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
                 // list, and the recognition below is a containment test, which more disabled
                 // entries can never break.
                 changed |= migrateDestructiveToolsIntoReadOnlyPresets(disabled);
+            }
+            if (storedVersion < 8)
+            {
+                // infobase_sessions is new and destructive, so a stored read-only profile must
+                // not gain it merely because the Applications group now contains it.
+                changed |= migrateInfobaseSessionsIntoReadOnlyPresets(disabled);
             }
             if (changed)
             {
@@ -315,17 +357,13 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      */
     private static boolean migrateApplyQuickFixIntoReadOnlyPreset(Set<String> disabled)
     {
-        if (disabled.contains("apply_quick_fix")) //$NON-NLS-1$
-        {
-            return false;
-        }
         if (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE))
         {
-            return disabled.add("apply_quick_fix"); //$NON-NLS-1$
+            return disabled.addAll(READ_ONLY_V2_ADDITIONS);
         }
         if (disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE))
         {
-            return disabled.add("apply_quick_fix"); //$NON-NLS-1$
+            return disabled.addAll(READ_ONLY_V2_ADDITIONS);
         }
         return false;
     }
@@ -344,15 +382,11 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      */
     private static boolean migrateErrorBreakpointIntoNoDebugPresets(Set<String> disabled)
     {
-        if (disabled.contains("set_error_breakpoint")) //$NON-NLS-1$
-        {
-            return false;
-        }
         if (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE)
             || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE)
             || disabled.containsAll(DEVELOPMENT_RECOGNITION_SHAPE))
         {
-            return disabled.add("set_error_breakpoint"); //$NON-NLS-1$
+            return disabled.addAll(NO_DEBUG_V6_ADDITIONS);
         }
         return false;
     }
@@ -407,6 +441,17 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE))
         {
             return disabled.addAll(READ_ONLY_V7_ADDITIONS);
+        }
+        return false;
+    }
+
+    /** Adds the v8 session tool only to stored profiles recognized as read-only. */
+    private static boolean migrateInfobaseSessionsIntoReadOnlyPresets(Set<String> disabled)
+    {
+        if (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE)
+            || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE))
+        {
+            return disabled.addAll(READ_ONLY_V8_ADDITIONS);
         }
         return false;
     }
