@@ -778,6 +778,35 @@ public class ToolSettingsServiceTest
             .forEach(expectedDisabledTools::addAll);
         assertEquals("read-only preset growth needs a later migration for " + preset, //$NON-NLS-1$
             expectedDisabledTools, preset.getDisabledTools());
+        migrations.entrySet().stream()
+            .filter(entry -> entry.getKey() > frozenAtVersion)
+            .sorted(Map.Entry.comparingByKey())
+            .forEach(entry -> assertRegisteredMigrationExecutes(preset, frozenDisabledTools,
+                migrations, frozenAtVersion, entry));
+    }
+
+    private static void assertRegisteredMigrationExecutes(ToolPreset preset,
+        Set<String> frozenDisabledTools, Map<Integer, Set<String>> migrations,
+        int frozenAtVersion, Map.Entry<Integer, Set<String>> migration)
+    {
+        int version = migration.getKey();
+        Set<String> beforeMigration = new HashSet<>(frozenDisabledTools);
+        migrations.entrySet().stream()
+            .filter(entry -> entry.getKey() > frozenAtVersion && entry.getKey() < version)
+            .map(Map.Entry::getValue)
+            .forEach(beforeMigration::addAll);
+        beforeMigration.removeAll(migration.getValue());
+        PreferenceStore store = storedDisabledTools(beforeMigration, version - 1);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        int migratedVersion = store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION);
+        assertTrue("registered migration " + version + " must advance the stored version for " //$NON-NLS-1$ //$NON-NLS-2$
+            + preset, migratedVersion >= version);
+        Set<String> missing = new TreeSet<>(migration.getValue());
+        missing.removeAll(disabledTools(store));
+        assertTrue("registered migration " + version + " did not execute for " + preset //$NON-NLS-1$ //$NON-NLS-2$
+            + ": " + missing, missing.isEmpty()); //$NON-NLS-1$
     }
 
     private static String fixtureDigest(Set<String> disabledTools)
