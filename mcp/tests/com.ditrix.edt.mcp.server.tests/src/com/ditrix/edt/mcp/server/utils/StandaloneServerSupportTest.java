@@ -300,7 +300,7 @@ public class StandaloneServerSupportTest
         BoundedJob.Result interrupted = new BoundedJob.Result(BoundedJob.Outcome.INTERRUPTED,
             5L, new InterruptedException("join interrupted")); //$NON-NLS-1$
 
-        String reason = StandaloneServerSupport.startFailureReason(interrupted);
+        String reason = StandaloneServerSupport.startFailureReason(interrupted, 5L);
 
         assertTrue(reason, reason.contains("may still be running")); //$NON-NLS-1$
         assertFalse(reason, reason.contains("join interrupted")); //$NON-NLS-1$

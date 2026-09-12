@@ -662,6 +662,10 @@ public class CreateInfobaseTool implements IMcpTool
                 InfobaseAccessSupport.runBoundedCredentialStore(
                     register ? "registered infobase" : "new infobase", timeoutMs, store); //$NON-NLS-1$ //$NON-NLS-2$
             BoundedJob.Result bounded = storeRun.boundedResult();
+            if (storeRun.publishedResult() != null)
+            {
+                return credentialStoreReport(storeRun.publishedResult(), credentials, register);
+            }
             if (BoundedJob.isInconclusive(bounded.getOutcome())
                 || bounded.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
             {
@@ -673,10 +677,6 @@ public class CreateInfobaseTool implements IMcpTool
                     + ", but credential storage" + interruption //$NON-NLS-1$
                     + "; credential state is UNDETERMINED. Run set_infobase_credentials to " //$NON-NLS-1$
                     + "settle it.", null); //$NON-NLS-1$
-            }
-            if (storeRun.publishedResult() != null)
-            {
-                return credentialStoreReport(storeRun.publishedResult(), credentials, register);
             }
             if (bounded.getFailure() != null)
             {

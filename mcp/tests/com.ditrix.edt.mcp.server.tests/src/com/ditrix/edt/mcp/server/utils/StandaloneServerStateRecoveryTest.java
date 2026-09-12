@@ -420,7 +420,7 @@ public class StandaloneServerStateRecoveryTest
             Mockito.any(IProgressMonitor.class));
 
         StandaloneServerStateRecovery.restoreIfStillUnowned(project, application, server,
-            "ServerApplication.Test", manager, 5_000L, () -> { //$NON-NLS-1$
+            "ServerApplication.Test", manager, 10_000L, () -> { //$NON-NLS-1$
                 assertTrue("restoration must run only after stale-state normalization", //$NON-NLS-1$
                     order.compareAndSet(1, 2));
                 restores.incrementAndGet();
@@ -434,51 +434,55 @@ public class StandaloneServerStateRecoveryTest
     }
 
     @Test
-    public void testNormalizationUsingTheWholeWindowStillDispatchesRestoration()
+    public void testRestorationDispatchRequiresAnObservableRemainingWait()
     {
         IProject project = Mockito.mock(IProject.class);
         Mockito.when(project.getName()).thenReturn("SharedDeadlineProject"); //$NON-NLS-1$
-        FakeServer server = new FakeServer(2, null);
-        long timeoutMs = 1_200L;
-        AtomicInteger restores = new AtomicInteger();
+        FakeServer normalizedServer = new FakeServer(2, null);
+        long[] normalizationAllowance = new long[1];
+        AtomicInteger shortWindowDispatches = new AtomicInteger();
 
         StandaloneServerStateRecovery.beginOperation();
         try
         {
             StandaloneServerStateRecovery.recordStoppedServer("ServerApplication.Test"); //$NON-NLS-1$
             StandaloneServerStateRecovery.RestorationStartOutcome outcome =
-                StandaloneServerStateRecovery.restoreIfStillUnowned(project, server,
-                    "ServerApplication.Test", timeoutMs, ignoredTimeoutMs -> { //$NON-NLS-1$
-                        try
-                        {
-                            Thread.sleep(timeoutMs);
-                        }
-                        catch (InterruptedException e)
-                        {
-                            Thread.currentThread().interrupt();
-                            throw new AssertionError("normalization wait was interrupted", e); //$NON-NLS-1$
-                        }
-                        server.setState(4);
+                StandaloneServerStateRecovery.restoreIfStillUnowned(project, normalizedServer,
+                    "ServerApplication.Test", 4_000L, normalizationTimeoutMs -> { //$NON-NLS-1$
+                        normalizationAllowance[0] = normalizationTimeoutMs;
+                        normalizedServer.setState(4);
                         return StandaloneServerStateRecovery.Recovery.stopped();
                     }, restorationTimeoutMs -> {
-                        restores.incrementAndGet();
-                        return new StandaloneServerStateRecovery.RestorationStartOutcome(
-                            "starting it did not finish within its allowance and may still be " //$NON-NLS-1$
-                                + "running", false); //$NON-NLS-1$
+                        shortWindowDispatches.incrementAndGet();
+                        return new StandaloneServerStateRecovery.RestorationStartOutcome(null, true);
                     });
             String message = StandaloneServerStateRecovery.appendRestorationOutcome(
                 "operation failed.", "Standalone", applicationId -> outcome); //$NON-NLS-1$ //$NON-NLS-2$
 
-            assertEquals("a confirmed STOPPED state must dispatch restoration even when " //$NON-NLS-1$
-                + "normalization consumes the window", 1, restores.get()); //$NON-NLS-1$
-            assertTrue("the dispatched start's inconclusive outcome must not become a skip", //$NON-NLS-1$
-                message.contains("restoration start did not finish conclusively")); //$NON-NLS-1$
-            assertFalse(message.contains("was not restored because")); //$NON-NLS-1$
+            assertTrue("normalization must still receive the full remaining window", //$NON-NLS-1$
+                normalizationAllowance[0] >= 3_000L);
+            assertEquals("a start with less than the observable minimum must not be dispatched", //$NON-NLS-1$
+                0, shortWindowDispatches.get());
+            assertTrue(message.contains("was stopped for this operation")); //$NON-NLS-1$
+            assertTrue("the skip must name the actionable tool", //$NON-NLS-1$
+                message.contains("launch")); //$NON-NLS-1$
         }
         finally
         {
             StandaloneServerStateRecovery.endOperation();
         }
+
+        AtomicInteger observableWindowDispatches = new AtomicInteger();
+        StandaloneServerStateRecovery.restoreIfStillUnowned(project,
+            new FakeServer(4, null), "ServerApplication.Test", 10_000L, //$NON-NLS-1$
+            normalizationTimeoutMs -> {
+                throw new AssertionError("a confirmed STOPPED server must not be normalized"); //$NON-NLS-1$
+            }, restorationTimeoutMs -> {
+                observableWindowDispatches.incrementAndGet();
+                return new StandaloneServerStateRecovery.RestorationStartOutcome(null, true);
+            });
+        assertEquals("a start with an observable remaining wait must dispatch exactly once", //$NON-NLS-1$
+            1, observableWindowDispatches.get());
     }
 
     @Test
@@ -838,7 +842,9 @@ public class StandaloneServerStateRecoveryTest
             assertFalse("the bounded restoration caller must have returned", caller.isAlive()); //$NON-NLS-1$
             assertNull(callerFailure.get());
             assertNotNull(answer.get());
-            assertTrue(answer.get().contains("may still be running")); //$NON-NLS-1$
+            assertTrue(answer.get(), answer.get().contains(
+                "starting it did not finish within 100ms and may still be running")); //$NON-NLS-1$
+            assertFalse(answer.get(), answer.get().contains("within 60s")); //$NON-NLS-1$
             assertEquals("the missing nested auth guard must be present while restoration is in flight", //$NON-NLS-1$
                 originalAuth + 1, inFlight.get());
             assertEquals(

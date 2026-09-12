@@ -1495,7 +1495,8 @@ public class CreateInfobaseToolTest
 
             assertTrue("the bounded operation must reach the read-back before timing out", //$NON-NLS-1$
                 readBackStarted.await(5, TimeUnit.SECONDS));
-            assertNull("a deadline cannot publish a verification conclusion", report.storeResult); //$NON-NLS-1$
+            assertNull("a deadline with no published result has no verification conclusion", //$NON-NLS-1$
+                report.storeResult);
             assertTrue(report.note.contains("infobase WAS created")); //$NON-NLS-1$
             assertTrue(report.note.contains("credential state is UNDETERMINED")); //$NON-NLS-1$
             assertTrue(report.note.contains("set_infobase_credentials")); //$NON-NLS-1$
@@ -1530,6 +1531,50 @@ public class CreateInfobaseToolTest
             releaseReadBack.countDown();
             assertTrue("the timed-out credential Job must not leak into later tests", //$NON-NLS-1$
                 readBackFinished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testCredentialStoreDeadlinePrefersAPublishedResult() throws Exception
+    {
+        CountDownLatch published = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        InfobaseReference verifiedReference = infobaseRef();
+        CreateInfobaseTool.Credentials credentials =
+            new CreateInfobaseTool.Credentials("Admin", "deadline-secret", null); //$NON-NLS-1$ //$NON-NLS-2$
+
+        try
+        {
+            CreateInfobaseTool.CredentialStoreReport report = CreateInfobaseTool.storeSafely(
+                (publish, writeCommitted, writeAllowed) -> {
+                    writeCommitted.run();
+                    publish.accept(StoreResult.verified(verifiedReference));
+                    published.countDown();
+                    try
+                    {
+                        release.await(30, TimeUnit.SECONDS);
+                    }
+                    finally
+                    {
+                        finished.countDown();
+                    }
+                }, credentials, true, 100L);
+
+            assertTrue("the worker must publish before its bounded wait expires", //$NON-NLS-1$
+                published.await(5, TimeUnit.SECONDS));
+            assertNotNull("the deadline must retain the worker's definitive result", //$NON-NLS-1$
+                report.storeResult);
+            assertEquals(StoreResult.Verification.VERIFIED,
+                report.storeResult.verification());
+            assertTrue(report.note.contains("Stored connection credentials")); //$NON-NLS-1$
+            assertFalse(report.note.contains("credential state is UNDETERMINED")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue("the timed-out credential Job must not leak into later tests", //$NON-NLS-1$
+                finished.await(5, TimeUnit.SECONDS));
         }
     }
 

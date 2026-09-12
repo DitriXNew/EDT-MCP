@@ -125,6 +125,12 @@ public final class StandaloneServerStateRecovery
     private static final long SETTLE_POLL_MS = 250L;
 
     /**
+     * A start we cannot observe arms global dialog guards until the cleanup cap, so it is worth
+     * dispatching only when it has a real chance to conclude inside our remaining wait.
+     */
+    private static final long MIN_RESTORATION_START_WAIT_MS = 5_000L;
+
+    /**
      * Guards that serialize stale-server recovery actions, one per project+application.
      *
      * <p>Deliberately NOT {@link LaunchLifecycleUtils#lockFor}: that monitor is held across a
@@ -1336,8 +1342,15 @@ public final class StandaloneServerStateRecovery
                     "was not restored because its owning launch could not be confirmed."); //$NON-NLS-1$
             }
             long remainingMs = remainingRecoveryTimeMs(deadline);
-            // A confirmed STOPPED server is always handed to the guarded start. Its bounded wait
-            // gets only this remainder; an inconclusive start retains the claim through cleanup.
+            if (remainingMs < MIN_RESTORATION_START_WAIT_MS)
+            {
+                return RestorationStartOutcome.skipped(
+                    "was stopped for this operation and was left stopped because too little " //$NON-NLS-1$
+                        + "time remained to observe a restoration start. Start it again with " //$NON-NLS-1$
+                        + "the launch tool."); //$NON-NLS-1$
+            }
+            // The guarded start gets only this remainder; an inconclusive start retains the
+            // claim through cleanup.
             StartClaim claim = new StartClaim(guard);
             guard.startClaim.set(claim);
             try

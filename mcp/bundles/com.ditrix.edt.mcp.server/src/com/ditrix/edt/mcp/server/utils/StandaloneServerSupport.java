@@ -129,11 +129,12 @@ public final class StandaloneServerSupport
         private final boolean portReassignmentOutcomeUnknown;
         private final long accessDialogsBefore;
         private final long accessDialogsAfter;
+        private final long timeoutMs;
 
         private GuardedStartResult(BoundedJob.Result bounded, IStatus status,
             String conflictFailure, boolean portsReassigned,
             boolean portReassignmentOutcomeUnknown, long accessDialogsBefore,
-            long accessDialogsAfter)
+            long accessDialogsAfter, long timeoutMs)
         {
             this.bounded = bounded;
             this.status = status;
@@ -142,6 +143,7 @@ public final class StandaloneServerSupport
             this.portReassignmentOutcomeUnknown = portReassignmentOutcomeUnknown;
             this.accessDialogsBefore = accessDialogsBefore;
             this.accessDialogsAfter = accessDialogsAfter;
+            this.timeoutMs = timeoutMs;
         }
 
         /** Whether the underlying Job has definitely ended. */
@@ -179,7 +181,7 @@ public final class StandaloneServerSupport
                 }
                 else
                 {
-                    failure = startFailureReason(bounded);
+                    failure = startFailureReason(bounded, timeoutMs);
                 }
             }
             if (failure == null)
@@ -518,7 +520,7 @@ public final class StandaloneServerSupport
                 && portPolicy == StandaloneServerPortConflictPolicy.REASSIGN;
             return new GuardedStartResult(bounded, status[0], conflictFailure, portsReassigned,
                 portReassignmentOutcomeUnknown, accessDialogsBefore,
-                InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
+                InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount(), timeoutMs);
         }
         finally
         {
@@ -530,14 +532,17 @@ public final class StandaloneServerSupport
     }
 
     /** Describes an unsuccessful bounded start without hiding an operation still in flight. */
-    public static String startFailureReason(BoundedJob.Result result)
+    public static String startFailureReason(BoundedJob.Result result, long timeoutMs)
     {
         BoundedJob.Outcome outcome = result.getOutcome();
         switch (outcome)
         {
         case TIMED_OUT:
+            long actualTimeoutMs = Math.max(1L, timeoutMs);
+            String deadline = actualTimeoutMs % 1000L == 0L
+                ? (actualTimeoutMs / 1000L) + "s" : actualTimeoutMs + "ms"; //$NON-NLS-1$ //$NON-NLS-2$
             return "starting it did not finish within " //$NON-NLS-1$
-                + (SERVER_OPERATION_TIMEOUT_MS / 1000) + "s and may still be running"; //$NON-NLS-1$
+                + deadline + " and may still be running"; //$NON-NLS-1$
         case TIMED_OUT_BEFORE_START:
             return "the bounded start timed out before it began"; //$NON-NLS-1$
         case INTERRUPTED:
