@@ -729,6 +729,22 @@ public class ToolSettingsServiceTest
             8);
     }
 
+    @Test
+    public void testBehavioralRatchetChecksOnlyNamesUniqueToOneMigration()
+    {
+        Map<Integer, Set<String>> migrations = Map.of(
+            8, Set.of("earlier_marker"), //$NON-NLS-1$
+            9, Set.of(
+                "earlier_marker", //$NON-NLS-1$
+                "shared_later", //$NON-NLS-1$
+                "unique_to_nine", //$NON-NLS-1$
+                "already_frozen"), //$NON-NLS-1$
+            10, Set.of("shared_later")); //$NON-NLS-1$
+
+        assertEquals(Set.of("unique_to_nine"), //$NON-NLS-1$
+            additionsUniqueToVersion(Set.of("already_frozen"), migrations, 9)); //$NON-NLS-1$
+    }
+
     private static void assertVersion4RestoresCurrentPreset(ToolPreset preset,
         Set<String> version4Additions)
     {
@@ -790,12 +806,16 @@ public class ToolSettingsServiceTest
         int frozenAtVersion, Map.Entry<Integer, Set<String>> migration)
     {
         int version = migration.getKey();
+        Set<String> uniqueAdditions =
+            additionsUniqueToVersion(frozenDisabledTools, migrations, version);
         Set<String> beforeMigration = new HashSet<>(frozenDisabledTools);
         migrations.entrySet().stream()
             .filter(entry -> entry.getKey() > frozenAtVersion && entry.getKey() < version)
             .map(Map.Entry::getValue)
             .forEach(beforeMigration::addAll);
-        beforeMigration.removeAll(migration.getValue());
+        // The real seam runs through current, so later steps cannot be isolated here.
+        // Only version-unique additions are checked; shared names need direct migration tests.
+        beforeMigration.removeAll(uniqueAdditions);
         PreferenceStore store = storedDisabledTools(beforeMigration, version - 1);
 
         ToolSettingsService.ensureMigratedForTest(store);
@@ -803,10 +823,22 @@ public class ToolSettingsServiceTest
         int migratedVersion = store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION);
         assertTrue("registered migration " + version + " must advance the stored version for " //$NON-NLS-1$ //$NON-NLS-2$
             + preset, migratedVersion >= version);
-        Set<String> missing = new TreeSet<>(migration.getValue());
+        Set<String> missing = new TreeSet<>(uniqueAdditions);
         missing.removeAll(disabledTools(store));
         assertTrue("registered migration " + version + " did not execute for " + preset //$NON-NLS-1$ //$NON-NLS-2$
             + ": " + missing, missing.isEmpty()); //$NON-NLS-1$
+    }
+
+    private static Set<String> additionsUniqueToVersion(Set<String> frozenDisabledTools,
+        Map<Integer, Set<String>> migrations, int version)
+    {
+        Set<String> uniqueAdditions = new TreeSet<>(migrations.get(version));
+        migrations.entrySet().stream()
+            .filter(entry -> entry.getKey() != version)
+            .map(Map.Entry::getValue)
+            .forEach(uniqueAdditions::removeAll);
+        uniqueAdditions.removeAll(frozenDisabledTools);
+        return uniqueAdditions;
     }
 
     private static String fixtureDigest(Set<String> disabledTools)
