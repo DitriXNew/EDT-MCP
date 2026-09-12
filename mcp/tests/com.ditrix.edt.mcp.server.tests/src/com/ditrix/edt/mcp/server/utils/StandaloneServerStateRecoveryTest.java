@@ -19,6 +19,7 @@ import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
@@ -431,6 +432,84 @@ public class StandaloneServerStateRecoveryTest
             1, normalizingStops.get());
         assertEquals("the normalized server must be restored exactly once", 1, restores.get()); //$NON-NLS-1$
         assertEquals(2, order.get());
+    }
+
+    @Test
+    public void testNormalizationUsingItsWholeHalfStillLeavesRestorationABudget()
+    {
+        IProject project = Mockito.mock(IProject.class);
+        Mockito.when(project.getName()).thenReturn("SharedDeadlineProject"); //$NON-NLS-1$
+        FakeServer server = new FakeServer(2, null);
+        long timeoutMs = 1_200L;
+        AtomicLong normalizationBudgetMs = new AtomicLong(-1L);
+        AtomicLong restorationBudgetMs = new AtomicLong(-1L);
+
+        StandaloneServerStateRecovery.restoreIfStillUnowned(project, server,
+            "ServerApplication.Test", timeoutMs, normalizationTimeoutMs -> { //$NON-NLS-1$
+                normalizationBudgetMs.set(normalizationTimeoutMs);
+                try
+                {
+                    Thread.sleep(normalizationTimeoutMs);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError("normalization wait was interrupted", e); //$NON-NLS-1$
+                }
+                server.setState(4);
+                return StandaloneServerStateRecovery.Recovery.stopped();
+            }, restorationTimeoutMs -> {
+                restorationBudgetMs.set(restorationTimeoutMs);
+                return new StandaloneServerStateRecovery.RestorationStartOutcome(null, true);
+            });
+
+        assertTrue("normalization must receive at most half of the shared deadline", //$NON-NLS-1$
+            normalizationBudgetMs.get() <= timeoutMs / 2L);
+        assertTrue("restoration must receive a positive, non-trivial share of the deadline", //$NON-NLS-1$
+            restorationBudgetMs.get() >= timeoutMs / 3L);
+    }
+
+    @Test
+    public void testRestorationSkipsWhenNormalizationExceedsItsHalf()
+    {
+        IProject project = Mockito.mock(IProject.class);
+        Mockito.when(project.getName()).thenReturn("NormalizationTimeoutProject"); //$NON-NLS-1$
+        FakeServer server = new FakeServer(2, null);
+        long timeoutMs = 2_400L;
+        long normalizationWorkMs = 1_800L;
+        AtomicInteger restores = new AtomicInteger();
+
+        StandaloneServerStateRecovery.beginOperation();
+        try
+        {
+            StandaloneServerStateRecovery.recordStoppedServer("ServerApplication.Test"); //$NON-NLS-1$
+            StandaloneServerStateRecovery.RestorationStartOutcome outcome =
+                StandaloneServerStateRecovery.restoreIfStillUnowned(project, server,
+                    "ServerApplication.Test", timeoutMs, normalizationTimeoutMs -> { //$NON-NLS-1$
+                        if (normalizationTimeoutMs < normalizationWorkMs)
+                        {
+                            return StandaloneServerStateRecovery.Recovery.failedInFlight(
+                                "stopping it did not finish within its allowance"); //$NON-NLS-1$
+                        }
+                        server.setState(4);
+                        return StandaloneServerStateRecovery.Recovery.stopped();
+                    }, restorationTimeoutMs -> {
+                        restores.incrementAndGet();
+                        return new StandaloneServerStateRecovery.RestorationStartOutcome(null, true);
+                    });
+            String message = StandaloneServerStateRecovery.appendRestorationOutcome(
+                "operation failed.", "Standalone", applicationId -> outcome); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertEquals("normalization exceeding its half must prevent restoration", //$NON-NLS-1$
+                0, restores.get());
+            assertEquals("a normalization that exceeded its half must leave the stale tuple", //$NON-NLS-1$
+                2, server.getServerState());
+            assertTrue(message.contains("could not be normalized to STOPPED")); //$NON-NLS-1$
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.endOperation();
+        }
     }
 
     @Test

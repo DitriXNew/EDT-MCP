@@ -1243,6 +1243,15 @@ public final class StandaloneServerStateRecovery
             (claim, remainingMs) -> restarter.get());
     }
 
+    /** Test seam exposing the actual allowances handed to normalization and restoration. */
+    static RestorationStartOutcome restoreIfStillUnowned(IProject project, Object server,
+        String applicationId, long timeoutMs, StaleStateNormalizer normalizer,
+        TimedRestarter restarter)
+    {
+        return restoreIfStillUnownedClaimed(project, server, applicationId, timeoutMs, normalizer,
+            (claim, remainingMs) -> restarter.restore(remainingMs));
+    }
+
     /** Normalizes stale state, then claims restoration while its bounded start can still run. */
     private static RestorationStartOutcome restoreIfStillUnownedClaimed(IProject project,
         Object server, String applicationId, long timeoutMs, StaleStateNormalizer normalizer,
@@ -1279,15 +1288,17 @@ public final class StandaloneServerStateRecovery
             if (state.intValue() == STATE_STARTED && Boolean.FALSE.equals(liveLaunch))
             {
                 long remainingMs = remainingRecoveryTimeMs(deadline);
-                if (remainingMs <= 0L)
+                long normalizationTimeoutMs = remainingMs / 2L;
+                if (normalizationTimeoutMs <= 0L)
                 {
                     return RestorationStartOutcome.skipped(
                         "was not restored because its stale state could not be normalized before " //$NON-NLS-1$
                             + "the operation deadline."); //$NON-NLS-1$
                 }
                 // Re-entry stays on this thread. The reused stop's bounded Job executes only EDT
-                // cleanup; it never waits on the recovery lock held here.
-                Recovery normalization = normalizer.normalize(remainingMs);
+                // cleanup; it never waits on the recovery lock held here. It receives at most
+                // half of what remains so a successful normalization cannot starve restoration.
+                Recovery normalization = normalizer.normalize(normalizationTimeoutMs);
                 if (!normalization.recovered())
                 {
                     return RestorationStartOutcome.skipped(
@@ -1574,9 +1585,16 @@ public final class StandaloneServerStateRecovery
 
     /** Normalizes one stale STARTED/no-live-launch tuple inside the remaining deadline. */
     @FunctionalInterface
-    private interface StaleStateNormalizer
+    interface StaleStateNormalizer
     {
         Recovery normalize(long timeoutMs);
+    }
+
+    /** Starts restoration with the portion of the shared deadline still available. */
+    @FunctionalInterface
+    interface TimedRestarter
+    {
+        RestorationStartOutcome restore(long timeoutMs);
     }
 
     /** Starts restoration while owning its persistent claim and remaining deadline. */
