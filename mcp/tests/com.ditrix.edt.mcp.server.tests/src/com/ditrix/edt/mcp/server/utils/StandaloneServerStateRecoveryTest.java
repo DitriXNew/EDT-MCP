@@ -354,20 +354,37 @@ public class StandaloneServerStateRecoveryTest
     {
         IProject project = Mockito.mock(IProject.class);
         Mockito.when(project.getName()).thenReturn("TestProject"); //$NON-NLS-1$
+        FakeServer server = new FakeServer(2, launch(false));
+        IApplication application = Mockito.mock(IApplication.class,
+            Mockito.withSettings().extraInterfaces(ServerBackedApplication.class));
+        IApplicationType type = Mockito.mock(IApplicationType.class);
+        IApplicationManager manager = Mockito.mock(IApplicationManager.class);
+        Mockito.when(type.getId()).thenReturn(StandaloneServerSupport.WST_SERVER_APP_TYPE);
+        Mockito.when(application.getType()).thenReturn(type);
+        Mockito.when(((ServerBackedApplication)application).getServer()).thenReturn(server);
+        AtomicInteger normalizingStops = new AtomicInteger();
         AtomicInteger restores = new AtomicInteger();
+        Mockito.doAnswer(invocation -> {
+            normalizingStops.incrementAndGet();
+            server.setState(4);
+            return null;
+        }).when(manager).cleanup(Mockito.same(application), Mockito.any(ExecutionContext.class),
+            Mockito.any(IProgressMonitor.class));
         StandaloneServerStateRecovery.beginOperation();
         try
         {
             StandaloneServerStateRecovery.recordStoppedServer("ServerApplication.Test"); //$NON-NLS-1$
             StandaloneServerStateRecovery.RestorationStartOutcome outcome =
-                StandaloneServerStateRecovery.restoreIfStillUnowned(project,
-                    new FakeServer(2, launch(false)), "ServerApplication.Test", () -> { //$NON-NLS-1$
+                StandaloneServerStateRecovery.restoreIfStillUnowned(project, application, server,
+                    "ServerApplication.Test", manager, 5_000L, () -> { //$NON-NLS-1$
                         restores.incrementAndGet();
                         return new StandaloneServerStateRecovery.RestorationStartOutcome(null, true);
                     });
             String message = StandaloneServerStateRecovery.appendRestorationOutcome(
                 "operation failed.", "Standalone", applicationId -> outcome); //$NON-NLS-1$ //$NON-NLS-2$
 
+            assertEquals("a live launch must prevent stale-state normalization", //$NON-NLS-1$
+                0, normalizingStops.get());
             assertEquals("another launch's server must not be started again", 0, restores.get()); //$NON-NLS-1$
             assertTrue(message.contains("is already running under another launch")); //$NON-NLS-1$
         }
@@ -375,6 +392,45 @@ public class StandaloneServerStateRecoveryTest
         {
             StandaloneServerStateRecovery.endOperation();
         }
+    }
+
+    @Test
+    public void testRestorationNormalizesAStaleStartedServerBeforeRestartingIt()
+    {
+        IProject project = Mockito.mock(IProject.class);
+        Mockito.when(project.getName()).thenReturn("StaleRestorationProject"); //$NON-NLS-1$
+        FakeServer server = new FakeServer(2, null);
+        IApplication application = Mockito.mock(IApplication.class,
+            Mockito.withSettings().extraInterfaces(ServerBackedApplication.class));
+        IApplicationType type = Mockito.mock(IApplicationType.class);
+        IApplicationManager manager = Mockito.mock(IApplicationManager.class);
+        Mockito.when(type.getId()).thenReturn(StandaloneServerSupport.WST_SERVER_APP_TYPE);
+        Mockito.when(application.getType()).thenReturn(type);
+        Mockito.when(((ServerBackedApplication)application).getServer()).thenReturn(server);
+        AtomicInteger order = new AtomicInteger();
+        AtomicInteger normalizingStops = new AtomicInteger();
+        AtomicInteger restores = new AtomicInteger();
+        Mockito.doAnswer(invocation -> {
+            assertTrue("normalization must be the first lifecycle action", //$NON-NLS-1$
+                order.compareAndSet(0, 1));
+            normalizingStops.incrementAndGet();
+            server.setState(4);
+            return null;
+        }).when(manager).cleanup(Mockito.same(application), Mockito.any(ExecutionContext.class),
+            Mockito.any(IProgressMonitor.class));
+
+        StandaloneServerStateRecovery.restoreIfStillUnowned(project, application, server,
+            "ServerApplication.Test", manager, 5_000L, () -> { //$NON-NLS-1$
+                assertTrue("restoration must run only after stale-state normalization", //$NON-NLS-1$
+                    order.compareAndSet(1, 2));
+                restores.incrementAndGet();
+                return new StandaloneServerStateRecovery.RestorationStartOutcome(null, true);
+            });
+
+        assertEquals("the stale tuple must be normalized exactly once", //$NON-NLS-1$
+            1, normalizingStops.get());
+        assertEquals("the normalized server must be restored exactly once", 1, restores.get()); //$NON-NLS-1$
+        assertEquals(2, order.get());
     }
 
     @Test
@@ -833,7 +889,7 @@ public class StandaloneServerStateRecoveryTest
     /** A WST server as the pre-flight addresses it: by the two public accessors it reads. */
     public static final class FakeServer
     {
-        private final int state;
+        private volatile int state;
         private final Object launch;
 
         FakeServer(int state, Object launch)
@@ -845,6 +901,11 @@ public class StandaloneServerStateRecoveryTest
         public int getServerState()
         {
             return state;
+        }
+
+        void setState(int state)
+        {
+            this.state = state;
         }
 
         public Object getLaunch()

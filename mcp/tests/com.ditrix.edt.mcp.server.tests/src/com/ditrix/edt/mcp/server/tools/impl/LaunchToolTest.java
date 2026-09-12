@@ -53,6 +53,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.AlreadyRunningContext;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.StartOutcome;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.StandalonePreparation;
+import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.StandalonePreparationStage;
 import com.ditrix.edt.mcp.server.utils.AttributableCancel;
 import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
@@ -903,6 +904,57 @@ public class LaunchToolTest
         {
             release.countDown();
             caller.join(5_000L);
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testClaimTimeoutRetainsAStaleStopCompletedDuringPreparation() throws Exception
+    {
+        IProject project = mock(IProject.class);
+        AtomicInteger retainedStops = new AtomicInteger();
+        AtomicInteger starts = new AtomicInteger();
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        BoundedJob.Result bounded = LaunchTool.runStandalonePreparationBounded(
+            "Standalone", 250L, monitor -> { //$NON-NLS-1$
+                entered.countDown();
+                try
+                {
+                    release.await(30, TimeUnit.SECONDS);
+                }
+                finally
+                {
+                    finished.countDown();
+                }
+            });
+
+        try
+        {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            assertEquals(BoundedJob.Outcome.TIMED_OUT, bounded.getOutcome());
+            StandalonePreparation preparation =
+                LaunchTool.finishIncompleteStandalonePreparation(project,
+                    "ServerApplication.Test", true, StandalonePreparationStage.START_CLAIM, //$NON-NLS-1$
+                    "Standalone", "TestProject", 250L, bounded); //$NON-NLS-1$ //$NON-NLS-2$
+
+            LaunchTool.startStandaloneServerGuarded("Standalone", project, //$NON-NLS-1$
+                () -> preparation.applyPreflight(
+                    applicationId -> retainedStops.incrementAndGet()),
+                () -> {
+                    starts.incrementAndGet();
+                    return new StartOutcome(null, true, false);
+                });
+
+            assertEquals("the completed stop must enter the retain/restoration path exactly once", //$NON-NLS-1$
+                1, retainedStops.get());
+            assertEquals("a claim timeout must fail before a new start is dispatched", //$NON-NLS-1$
+                0, starts.get());
+        }
+        finally
+        {
+            release.countDown();
             assertTrue(finished.await(5, TimeUnit.SECONDS));
         }
     }

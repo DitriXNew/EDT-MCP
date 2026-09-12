@@ -640,17 +640,8 @@ public class LaunchTool implements IMcpTool
                 return standalonePreconditionError(configName, preparedLaunch.failure);
             }
             StartOutcome start = startStandaloneServerGuarded(configName, preparedLaunch.project,
-                () -> {
-                    if (preparedLaunch.staleServerStopped)
-                    {
-                        StandaloneServerStateRecovery.retainPreparedStop(
-                            preparedLaunch.applicationId);
-                    }
-                    if (preparedLaunch.preflightFailure != null)
-                    {
-                        throw new ApplicationException(preparedLaunch.preflightFailure);
-                    }
-                },
+                () -> preparedLaunch.applyPreflight(
+                    StandaloneServerStateRecovery::retainPreparedStop),
                 () -> startStandaloneServerWithPolicy(preparedLaunch.service,
                     preparedLaunch.lookup.server(), configName,
                     // EDT ignores this argument and always starts standalone servers in debug.
@@ -823,9 +814,11 @@ public class LaunchTool implements IMcpTool
         StandalonePreparation published = closeStandalonePreparationPublication(prepared,
             publicationLock, acceptingPreparation);
         StandalonePreparation accepted = acceptPublishedStandalonePreparation(published, bounded);
+        String resolvedId = applicationId.get();
         if (accepted != null)
         {
-            return accepted;
+            return preserveCompletedStaleStop(accepted, resolvedProject.get(), resolvedId,
+                staleServerStopped.get());
         }
         if (published != null)
         {
@@ -833,10 +826,10 @@ public class LaunchTool implements IMcpTool
         }
         if (bounded.isSuccess())
         {
-            return StandalonePreparation.failed(
+            return standalonePreparationFailure(resolvedProject.get(), resolvedId,
+                staleServerStopped.get(),
                 "the standalone-server precondition phase produced no result"); //$NON-NLS-1$
         }
-        String resolvedId = applicationId.get();
         if (bounded.getFailure() != null
             && bounded.getOutcome() == BoundedJob.Outcome.COMPLETED)
         {
@@ -856,23 +849,56 @@ public class LaunchTool implements IMcpTool
             }
             return StandalonePreparation.failed(PlatformFailures.describe(bounded.getFailure()));
         }
-        if (stage.get() == StandalonePreparationStage.APPLICATION && resolvedId != null)
+        return finishIncompleteStandalonePreparation(resolvedProject.get(), resolvedId,
+            staleServerStopped.get(), stage.get(), configName, projectName, timeoutMs, bounded);
+    }
+
+    /** Preserves a completed stop even when a previously published failure omitted that fact. */
+    private static StandalonePreparation preserveCompletedStaleStop(
+        StandalonePreparation preparation, IProject project, String applicationId,
+        boolean staleServerStopped)
+    {
+        if (!staleServerStopped || applicationId == null || !preparation.hasFailure())
         {
-            return StandalonePreparation.failed(StandaloneServerSupport.applicationLookupFailure(
-                resolvedId, timeoutMs, bounded));
+            return preparation;
         }
-        if (stage.get() == StandalonePreparationStage.STALE_STOP && resolvedId != null)
+        String failure = preparation.preflightFailure == null ? preparation.failure
+            : preparation.preflightFailure;
+        return StandalonePreparation.preflightFailed(project, applicationId, failure, true);
+    }
+
+    /** Classifies an inconclusive preparation while retaining any stop it actually completed. */
+    static StandalonePreparation finishIncompleteStandalonePreparation(IProject project,
+        String applicationId, boolean staleServerStopped, StandalonePreparationStage stage,
+        String configName, String projectName, long timeoutMs, BoundedJob.Result bounded)
+    {
+        if (stage == StandalonePreparationStage.APPLICATION && applicationId != null)
+        {
+            return standalonePreparationFailure(project, applicationId, staleServerStopped,
+                StandaloneServerSupport.applicationLookupFailure(applicationId, timeoutMs, bounded));
+        }
+        if (stage == StandalonePreparationStage.STALE_STOP && applicationId != null
+            && !staleServerStopped)
         {
             String detail = bounded.getOutcome() == BoundedJob.Outcome.INTERRUPTED
                 ? "the wait for it was interrupted" //$NON-NLS-1$
                 : "stopping it did not finish within " + (timeoutMs / 1000L) + "s"; //$NON-NLS-1$ //$NON-NLS-2$
-            return StandalonePreparation.preflightFailed(resolvedProject.get(), resolvedId,
-                StandaloneServerStateRecovery.preflightStopInFlightFailure(resolvedId, detail),
-                staleServerStopped.get());
+            return StandalonePreparation.preflightFailed(project, applicationId,
+                StandaloneServerStateRecovery.preflightStopInFlightFailure(applicationId, detail),
+                false);
         }
-        String target = standalonePreparationTarget(stage.get(), configName, projectName, resolvedId);
-        return StandalonePreparation.failed(
+        String target = standalonePreparationTarget(stage, configName, projectName, applicationId);
+        return standalonePreparationFailure(project, applicationId, staleServerStopped,
             StandaloneServerSupport.boundedPhaseFailure(target, timeoutMs, bounded));
+    }
+
+    /** Turns every failed exit after a completed stale stop into a restorable pre-flight failure. */
+    private static StandalonePreparation standalonePreparationFailure(IProject project,
+        String applicationId, boolean staleServerStopped, String failure)
+    {
+        return staleServerStopped && applicationId != null
+            ? StandalonePreparation.preflightFailed(project, applicationId, failure, true)
+            : StandalonePreparation.failed(failure);
     }
 
     /** Publishes a preparation result only while the bounded caller can still accept it. */
@@ -945,15 +971,17 @@ public class LaunchTool implements IMcpTool
         case START_CLAIM:
             return "the standalone-server start claim for application '" //$NON-NLS-1$
                 + applicationId + "'"; //$NON-NLS-1$
-        case APPLICATION:
         case STALE_STOP:
+            return "the stale-server post-stop pre-flight for application '" //$NON-NLS-1$
+                + applicationId + "'"; //$NON-NLS-1$
+        case APPLICATION:
         default:
             return "the standalone-server precondition phase"; //$NON-NLS-1$
         }
     }
 
     /** Step active when the shared standalone-preparation deadline elapses. */
-    private enum StandalonePreparationStage
+    enum StandalonePreparationStage
     {
         PROJECT,
         APPLICATION_MANAGER,
@@ -1028,6 +1056,19 @@ public class LaunchTool implements IMcpTool
         boolean hasFailure()
         {
             return failure != null || preflightFailure != null;
+        }
+
+        /** Transfers a completed stale stop before surfacing its pre-flight failure. */
+        void applyPreflight(Consumer<String> stopRetainer)
+        {
+            if (staleServerStopped)
+            {
+                stopRetainer.accept(applicationId);
+            }
+            if (preflightFailure != null)
+            {
+                throw new ApplicationException(preflightFailure);
+            }
         }
 
         void releaseUnstartedClaim()

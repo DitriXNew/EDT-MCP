@@ -522,6 +522,14 @@ public final class StandaloneServerStateRecovery
     private static Recovery stopStaleServerGuarded(IProject project, IApplication application,
         String applicationId, IApplicationManager manager)
     {
+        return stopStaleServerGuarded(project, application, applicationId, manager,
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
+    }
+
+    /** Same guarded stale stop constrained by the caller's remaining operation deadline. */
+    private static Recovery stopStaleServerGuarded(IProject project, IApplication application,
+        String applicationId, IApplicationManager manager, long timeoutMs)
+    {
         if (project == null || applicationId == null)
         {
             return Recovery.failed("the project or application id is unknown"); //$NON-NLS-1$
@@ -530,8 +538,9 @@ public final class StandaloneServerStateRecovery
         {
             return Recovery.failed("the EDT application manager is not available"); //$NON-NLS-1$
         }
+        long deadline = recoveryDeadline(timeoutMs);
         RecoveryGuard guard = stopLockFor(project, applicationId);
-        if (!tryRecoveryLock(guard, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, null))
+        if (!tryRecoveryLock(guard, timeoutMs, null))
         {
             return Recovery.failedInFlight(recoveryLockFailure());
         }
@@ -544,9 +553,15 @@ public final class StandaloneServerStateRecovery
             IApplication resolvedApplication = application;
             if (resolvedApplication == null)
             {
+                long remainingMs = remainingRecoveryTimeMs(deadline);
+                if (remainingMs <= 0L)
+                {
+                    return Recovery.failed(
+                        "the operation deadline elapsed before the application lookup began"); //$NON-NLS-1$
+                }
                 StandaloneServerSupport.ApplicationLookup lookup =
                     StandaloneServerSupport.lookupApplicationBounded(manager, project,
-                        applicationId, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
+                        applicationId, remainingMs);
                 if (lookup.failure() != null)
                 {
                     return Recovery.failed(lookup.failure());
@@ -573,7 +588,12 @@ public final class StandaloneServerStateRecovery
                     + "recovered it); leaving it alone: " + applicationId); //$NON-NLS-1$
                 return Recovery.stopped();
             }
-            return runStop(manager, resolvedApplication, applicationId);
+            long remainingMs = remainingRecoveryTimeMs(deadline);
+            if (remainingMs <= 0L)
+            {
+                return Recovery.failed("the operation deadline elapsed before the stop began"); //$NON-NLS-1$
+            }
+            return runStop(manager, resolvedApplication, applicationId, remainingMs);
         }
         finally
         {
@@ -683,6 +703,19 @@ public final class StandaloneServerStateRecovery
         }
         while (remainingNanos > 0L);
         return false;
+    }
+
+    /** Monotonic deadline shared by the guarded steps of one recovery operation. */
+    private static long recoveryDeadline(long timeoutMs)
+    {
+        return System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0L, timeoutMs));
+    }
+
+    /** Whole milliseconds still available to bounded work under a recovery deadline. */
+    private static long remainingRecoveryTimeMs(long deadline)
+    {
+        long remainingNanos = deadline - System.nanoTime();
+        return remainingNanos <= 0L ? 0L : TimeUnit.NANOSECONDS.toMillis(remainingNanos);
     }
 
     /** Shared diagnosis for a recovery guard that could not be acquired by its deadline. */
@@ -798,6 +831,14 @@ public final class StandaloneServerStateRecovery
     private static Recovery runStop(IApplicationManager manager, IApplication application,
         String applicationId)
     {
+        return runStop(manager, application, applicationId,
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
+    }
+
+    /** Same bounded cleanup constrained by a caller's remaining operation deadline. */
+    private static Recovery runStop(IApplicationManager manager, IApplication application,
+        String applicationId, long timeoutMs)
+    {
         ExecutionContext context = new ExecutionContext();
         Shell shell = LaunchLifecycleUtils.grabActiveShell();
         if (shell != null)
@@ -807,8 +848,7 @@ public final class StandaloneServerStateRecovery
         Activator.logInfo("Stale standalone server: stopping it so the operation can proceed: " //$NON-NLS-1$
             + applicationId);
         BoundedJob.Result result = BoundedJob.run("Stopping standalone server: " + applicationId, //$NON-NLS-1$
-            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
-            monitor -> manager.cleanup(application, context, monitor));
+            timeoutMs, monitor -> manager.cleanup(application, context, monitor));
         if (result.isSuccess())
         {
             recordStoppedServer(applicationId);
@@ -827,7 +867,7 @@ public final class StandaloneServerStateRecovery
             return Recovery.failedInFlight(outcome == BoundedJob.Outcome.INTERRUPTED
                 ? "the wait for it was interrupted" //$NON-NLS-1$
                 : "stopping it did not finish within " //$NON-NLS-1$
-                    + (StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS / 1000) + "s"); //$NON-NLS-1$
+                    + (timeoutMs / 1000) + "s"); //$NON-NLS-1$
         }
         if (result.getFailure() != null)
         {
@@ -1103,7 +1143,7 @@ public final class StandaloneServerStateRecovery
                     "the EDT standalone-server service is not available")); //$NON-NLS-1$
                 return;
             }
-            prepared.set(RestorationPreparation.ready(service, lookup));
+            prepared.set(RestorationPreparation.ready(manager, service, lookup));
         });
 
         RestorationPreparation preparation = prepared.get();
@@ -1165,9 +1205,12 @@ public final class StandaloneServerStateRecovery
         RestorationStartOutcome outcome = restoreIfStillUnownedClaimed(project,
             preparation.lookup.server(), applicationId,
             StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
-            claim -> startRestorationWithPortGuardOutcome(preparation.service,
+            remainingMs -> stopStaleServerGuarded(project, preparation.lookup.application(),
+                applicationId, preparation.manager, remainingMs),
+            (claim, remainingMs) -> startRestorationWithPortGuardOutcome(preparation.service,
                 preparation.lookup.server(), applicationId, preparation.lookup.infobaseName(),
-                preparation.lookup.serverName(), claim));
+                preparation.lookup.serverName(), remainingMs,
+                StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS, claim));
         return new RestorationAttempt(launchConfigurationName.get(), outcome);
     }
 
@@ -1181,18 +1224,33 @@ public final class StandaloneServerStateRecovery
 
     /** Testable deadline form of the guarded ownership revalidation. */
     static RestorationStartOutcome restoreIfStillUnowned(IProject project, Object server,
-        String applicationId, long lockTimeoutMs, Supplier<RestorationStartOutcome> restarter)
+        String applicationId, long timeoutMs, Supplier<RestorationStartOutcome> restarter)
     {
-        return restoreIfStillUnownedClaimed(project, server, applicationId, lockTimeoutMs,
-            claim -> restarter.get());
+        return restoreIfStillUnownedClaimed(project, server, applicationId, timeoutMs,
+            remainingMs -> stopStaleServerGuarded(project, null, applicationId,
+                applicationManager(), remainingMs),
+            (claim, remainingMs) -> restarter.get());
     }
 
-    /** Claims the restoration while its bounded start can still be in flight. */
-    private static RestorationStartOutcome restoreIfStillUnownedClaimed(IProject project,
-        Object server, String applicationId, long lockTimeoutMs, ClaimedRestarter restarter)
+    /** Test seam that exercises the real stale-stop machinery with already-resolved EDT objects. */
+    static RestorationStartOutcome restoreIfStillUnowned(IProject project, IApplication application,
+        Object server, String applicationId, IApplicationManager manager, long timeoutMs,
+        Supplier<RestorationStartOutcome> restarter)
     {
+        return restoreIfStillUnownedClaimed(project, server, applicationId, timeoutMs,
+            remainingMs -> stopStaleServerGuarded(project, application, applicationId, manager,
+                remainingMs),
+            (claim, remainingMs) -> restarter.get());
+    }
+
+    /** Normalizes stale state, then claims restoration while its bounded start can still run. */
+    private static RestorationStartOutcome restoreIfStillUnownedClaimed(IProject project,
+        Object server, String applicationId, long timeoutMs, StaleStateNormalizer normalizer,
+        ClaimedRestarter restarter)
+    {
+        long deadline = recoveryDeadline(timeoutMs);
         RecoveryGuard guard = stopLockFor(project, applicationId);
-        if (!tryRecoveryLock(guard, lockTimeoutMs, null))
+        if (!tryRecoveryLock(guard, timeoutMs, null))
         {
             return RestorationStartOutcome.skipped(
                 "was not restored because " + recoveryLockFailure() + "."); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1217,8 +1275,47 @@ public final class StandaloneServerStateRecovery
                 return RestorationStartOutcome.skipped(
                     "was not restored because its current state could not be confirmed."); //$NON-NLS-1$
             }
+            boolean normalizationAttempted = false;
+            if (state.intValue() == STATE_STARTED && Boolean.FALSE.equals(liveLaunch))
+            {
+                long remainingMs = remainingRecoveryTimeMs(deadline);
+                if (remainingMs <= 0L)
+                {
+                    return RestorationStartOutcome.skipped(
+                        "was not restored because its stale state could not be normalized before " //$NON-NLS-1$
+                            + "the operation deadline."); //$NON-NLS-1$
+                }
+                // Re-entry stays on this thread. The reused stop's bounded Job executes only EDT
+                // cleanup; it never waits on the recovery lock held here.
+                Recovery normalization = normalizer.normalize(remainingMs);
+                if (!normalization.recovered())
+                {
+                    return RestorationStartOutcome.skipped(
+                        "was not restored because its stale state could not be normalized to " //$NON-NLS-1$
+                            + "STOPPED: " + normalization.detail() + "."); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                normalizationAttempted = true;
+                state = serverState(server);
+                liveLaunch = hasLiveLaunch(server);
+                if (Boolean.TRUE.equals(liveLaunch))
+                {
+                    return RestorationStartOutcome.skipped(
+                        "is already running under another launch, so restoration was skipped."); //$NON-NLS-1$
+                }
+                if (state == null)
+                {
+                    return RestorationStartOutcome.skipped(
+                        "was not restored because its current state could not be confirmed."); //$NON-NLS-1$
+                }
+            }
             if (state.intValue() != STATE_STOPPED)
             {
+                if (normalizationAttempted)
+                {
+                    return RestorationStartOutcome.skipped(
+                        "was not restored because its stale state could not be normalized to " //$NON-NLS-1$
+                            + "STOPPED; its current state is " + stateName(state.intValue()) + "."); //$NON-NLS-1$ //$NON-NLS-2$
+                }
                 return RestorationStartOutcome.skipped(
                     "was not restored because its current state is " + stateName(state.intValue()) //$NON-NLS-1$
                         + ", not STOPPED."); //$NON-NLS-1$
@@ -1228,11 +1325,18 @@ public final class StandaloneServerStateRecovery
                 return RestorationStartOutcome.skipped(
                     "was not restored because its owning launch could not be confirmed."); //$NON-NLS-1$
             }
+            long remainingMs = remainingRecoveryTimeMs(deadline);
+            if (remainingMs <= 0L)
+            {
+                return RestorationStartOutcome.skipped(
+                    "was not restored because the operation deadline elapsed before its " //$NON-NLS-1$
+                        + "restoration start began."); //$NON-NLS-1$
+            }
             StartClaim claim = new StartClaim(guard);
             guard.startClaim.set(claim);
             try
             {
-                return restarter.restore(claim);
+                return restarter.restore(claim, remainingMs);
             }
             finally
             {
@@ -1391,27 +1495,29 @@ public final class StandaloneServerStateRecovery
     /** Values resolved together before the separately bounded restoration start. */
     private static final class RestorationPreparation
     {
+        private final IApplicationManager manager;
         private final Object service;
         private final StandaloneServerSupport.ApplicationLookup lookup;
         private final String failure;
 
-        private RestorationPreparation(Object service,
+        private RestorationPreparation(IApplicationManager manager, Object service,
             StandaloneServerSupport.ApplicationLookup lookup, String failure)
         {
+            this.manager = manager;
             this.service = service;
             this.lookup = lookup;
             this.failure = failure;
         }
 
-        static RestorationPreparation ready(Object service,
+        static RestorationPreparation ready(IApplicationManager manager, Object service,
             StandaloneServerSupport.ApplicationLookup lookup)
         {
-            return new RestorationPreparation(service, lookup, null);
+            return new RestorationPreparation(manager, service, lookup, null);
         }
 
         static RestorationPreparation failed(String failure)
         {
-            return new RestorationPreparation(null, null, failure);
+            return new RestorationPreparation(null, null, null, failure);
         }
     }
 
@@ -1466,11 +1572,18 @@ public final class StandaloneServerStateRecovery
         String applicationId;
     }
 
-    /** Starts restoration while owning its persistent server-start claim. */
+    /** Normalizes one stale STARTED/no-live-launch tuple inside the remaining deadline. */
+    @FunctionalInterface
+    private interface StaleStateNormalizer
+    {
+        Recovery normalize(long timeoutMs);
+    }
+
+    /** Starts restoration while owning its persistent claim and remaining deadline. */
     @FunctionalInterface
     private interface ClaimedRestarter
     {
-        RestorationStartOutcome restore(StartClaim claim);
+        RestorationStartOutcome restore(StartClaim claim, long timeoutMs);
     }
 
     /** Performs one conclusive restoration; {@code null} means it succeeded. */
