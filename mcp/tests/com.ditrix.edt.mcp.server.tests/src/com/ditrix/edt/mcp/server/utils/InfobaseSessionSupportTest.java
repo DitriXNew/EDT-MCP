@@ -24,7 +24,7 @@ import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo;
 public class InfobaseSessionSupportTest
 {
     @Test
-    public void parsesIbcmdBlocksAndMarksDesignerAgent()
+    public void parsesIbcmdBlocksAndMarksDesignerApplicationKind()
     {
         String output = "session: 11111111-1111-1111-1111-111111111111\n" //$NON-NLS-1$
             + "session-id: 7\n" //$NON-NLS-1$
@@ -44,9 +44,9 @@ public class InfobaseSessionSupportTest
         assertEquals(2, sessions.size());
         assertEquals(Long.valueOf(7), sessions.get(0).sessionNumber());
         assertEquals("Designer", sessions.get(0).applicationKind()); //$NON-NLS-1$
-        assertTrue(sessions.get(0).edtAgent());
+        assertTrue(sessions.get(0).applicationKindIsDesigner());
         assertEquals(Long.valueOf(42), sessions.get(1).sessionNumber());
-        assertFalse(sessions.get(1).edtAgent());
+        assertFalse(sessions.get(1).applicationKindIsDesigner());
         assertEquals("", sessions.get(1).lastActiveAt()); //$NON-NLS-1$
     }
 
@@ -73,8 +73,8 @@ public class InfobaseSessionSupportTest
         assertEquals("fe63b824-630f-4c3e-b5e9-08a9e5edae74", sessions.get(0).sessionId()); //$NON-NLS-1$
         assertEquals(Long.valueOf(5), sessions.get(0).sessionNumber());
         assertEquals("Designer", sessions.get(0).applicationKind()); //$NON-NLS-1$
-        assertTrue("the live agent session must be recognised as the EDT agent", //$NON-NLS-1$
-            sessions.get(0).edtAgent());
+        assertTrue("the raw Designer application kind must be recognised", //$NON-NLS-1$
+            sessions.get(0).applicationKindIsDesigner());
         assertEquals("a timestamp value must keep the time after its first colon", //$NON-NLS-1$
             "2026-09-11T19:30:35", sessions.get(0).startedAt()); //$NON-NLS-1$
     }

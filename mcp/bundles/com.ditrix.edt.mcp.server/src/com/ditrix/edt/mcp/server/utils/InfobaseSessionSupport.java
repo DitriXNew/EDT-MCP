@@ -76,15 +76,17 @@ public final class InfobaseSessionSupport
 
     /** One session record parsed from an {@code ibcmd session list} key/value block. */
     public record SessionInfo(String sessionId, Long sessionNumber, String applicationKind,
-        String userName, String host, String startedAt, String lastActiveAt, boolean edtAgent,
-        String sessionNumberText)
+        String userName, String host, String startedAt, String lastActiveAt,
+        boolean applicationKindIsDesigner, String sessionNumberText)
     {
         /** Creates a synthetic/test record whose numeric token has its canonical spelling. */
         public SessionInfo(String sessionId, Long sessionNumber, String applicationKind,
-            String userName, String host, String startedAt, String lastActiveAt, boolean edtAgent)
+            String userName, String host, String startedAt, String lastActiveAt,
+            boolean applicationKindIsDesigner)
         {
             this(sessionId, sessionNumber, applicationKind, userName, host, startedAt,
-                lastActiveAt, edtAgent, sessionNumber == null ? null : sessionNumber.toString());
+                lastActiveAt, applicationKindIsDesigner,
+                sessionNumber == null ? null : sessionNumber.toString());
         }
     }
 

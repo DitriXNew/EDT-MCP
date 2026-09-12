@@ -117,14 +117,16 @@ def test_real_application_list_preserves_reachability_shape():
             raise AssertionError("readable result must carry a count-consistent list: %r" % sc)
         required = {
             "sessionId", "sessionNumber", "applicationKind", "userName", "host",
-            "startedAt", "lastActiveAt", "isEdtAgent",
+            "startedAt", "lastActiveAt", "applicationKindIsDesigner",
         }
         for session in sessions:
             if not isinstance(session, dict) or not required.issubset(session):
                 raise AssertionError("session record has the wrong shape: %r" % session)
-            if session.get("applicationKind", "").lower() == "designer" \
-                    and session.get("isEdtAgent") is not True:
-                raise AssertionError("Designer session must be marked as EDT agent: %r" % session)
+            if "isEdtAgent" in session:
+                raise AssertionError("session record must not claim EDT ownership: %r" % session)
+            expected_designer_kind = session.get("applicationKind", "").lower() == "designer"
+            if session.get("applicationKindIsDesigner") is not expected_designer_kind:
+                raise AssertionError("Designer application-kind flag is inconsistent: %r" % session)
     else:
         if not sc.get("unreachableReason"):
             raise AssertionError("unreachable result must name its reason: %r" % sc)

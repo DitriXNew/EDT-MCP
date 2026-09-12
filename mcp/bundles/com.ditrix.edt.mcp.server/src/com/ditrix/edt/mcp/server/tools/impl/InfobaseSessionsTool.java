@@ -103,7 +103,9 @@ public class InfobaseSessionsTool implements IMcpTool
             .stringProperty(KEY_UNREACHABLE_REASON,
                 "Present with reachable=false and names why sessions could not be inspected.") //$NON-NLS-1$
             .objectArrayProperty(KEY_SESSIONS,
-                "For list, observed sessions; for terminate, only sessions actually terminated.") //$NON-NLS-1$
+                "For list, observed sessions; for terminate, only sessions observed gone. " //$NON-NLS-1$
+                    + "Successful records include applicationKindIsDesigner, which reports " //$NON-NLS-1$
+                    + "whether the raw app-id is Designer without claiming EDT ownership.") //$NON-NLS-1$
             .integerProperty("count", "Number of observed sessions on a readable list.") //$NON-NLS-1$ //$NON-NLS-2$
             .integerProperty("terminatedCount", //$NON-NLS-1$
                 "Number of sessions observed gone after the terminate command.") //$NON-NLS-1$
@@ -114,6 +116,8 @@ public class InfobaseSessionsTool implements IMcpTool
                 VERIFICATION_VERIFIED, VERIFICATION_MISMATCHED, VERIFICATION_NOT_VERIFIABLE)
             .stringProperty(KEY_VERIFICATION_REASON,
                 "Why the terminate read-back mismatched or could not be performed.") //$NON-NLS-1$
+            .booleanProperty("mutationOutcomeUnknown", //$NON-NLS-1$
+                "Present as true when a failed terminate may have changed session state.") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable status or protection note.") //$NON-NLS-1$
             .build();
     }
@@ -319,10 +323,8 @@ public class InfobaseSessionsTool implements IMcpTool
             {
                 if (attempted.isEmpty())
                 {
-                    return baseError("Session termination failed: " + result.unreachableReason(), //$NON-NLS-1$
-                        projectName, application).put(KEY_REACHABLE, false)
-                            .put(KEY_UNREACHABLE_REASON, result.unreachableReason())
-                            .put("terminatedCount", 0).toJson(); //$NON-NLS-1$
+                    return firstTerminationAttemptFailedResult(projectName, application.getId(),
+                        result.unreachableReason());
                 }
                 return terminationSequenceStoppedResult(projectName, application.getId(),
                     attempted.size(), result.unreachableReason());
@@ -335,6 +337,27 @@ public class InfobaseSessionsTool implements IMcpTool
         // list once reports what is actually gone.
         ReadResult after = InfobaseSessionSupport.listSessions(application);
         return terminationReadBackResult(projectName, application.getId(), attempted, after);
+    }
+
+    /** Builds an unverified error after the first terminate command fails. */
+    static String firstTerminationAttemptFailedResult(String projectName, String applicationId,
+        String reason)
+    {
+        return ToolResult.errorWithUnknownMutationOutcome(
+            "Session termination command failed: " + reason //$NON-NLS-1$
+            + " The session list was not re-read, so it is unknown whether the targeted session " //$NON-NLS-1$
+            + "was removed. Run infobase_sessions(action='list', projectName='" + projectName //$NON-NLS-1$
+            + "', applicationId='" + applicationId + "') to see who still holds sessions.") //$NON-NLS-1$ //$NON-NLS-2$
+                .put(McpKeys.ACTION, ACTION_TERMINATE)
+                .put(McpKeys.PROJECT, projectName)
+                .put(McpKeys.APPLICATION_ID, applicationId)
+                .put(KEY_REACHABLE, false)
+                .put(KEY_UNREACHABLE_REASON, reason)
+                .put(KEY_VERIFICATION, VERIFICATION_NOT_VERIFIABLE)
+                .put(KEY_VERIFICATION_REASON, "The session list was not re-read after the " //$NON-NLS-1$
+                    + "terminate command failed, so it is unknown whether the targeted session " //$NON-NLS-1$
+                    + "was removed.") //$NON-NLS-1$
+                .toJson();
     }
 
     /** Builds an unverified error after a later terminate command stops the sequence. */
@@ -518,7 +541,7 @@ public class InfobaseSessionsTool implements IMcpTool
             item.put("host", session.host()); //$NON-NLS-1$
             item.put("startedAt", session.startedAt()); //$NON-NLS-1$
             item.put("lastActiveAt", session.lastActiveAt()); //$NON-NLS-1$
-            item.put("isEdtAgent", isDesignerSession(session)); //$NON-NLS-1$
+            item.put("applicationKindIsDesigner", isDesignerSession(session)); //$NON-NLS-1$
             result.add(item);
         }
         return result;
@@ -536,10 +559,10 @@ public class InfobaseSessionsTool implements IMcpTool
             : session.sessionId() + " (session-id " + session.sessionNumber() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    /** Recognises the ambiguous Designer kind by both parsed flag and raw app-id. */
+    /** Recognises the ambiguous Designer kind by both parsed kind flag and raw app-id. */
     static boolean isDesignerSession(SessionInfo session)
     {
-        return session.edtAgent()
+        return session.applicationKindIsDesigner()
             || "Designer".equalsIgnoreCase(session.applicationKind()); //$NON-NLS-1$
     }
 

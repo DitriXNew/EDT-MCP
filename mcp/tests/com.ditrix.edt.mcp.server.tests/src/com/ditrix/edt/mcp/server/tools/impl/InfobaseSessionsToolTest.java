@@ -73,10 +73,12 @@ public class InfobaseSessionsToolTest
         assertNotNull(schema);
         for (String key : List.of("reachable", "unreachableReason", "sessions", "count", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "terminatedCount", "attemptedCount", "verification", "verificationReason", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            "verified", "mismatched", "not_verifiable")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "mutationOutcomeUnknown", "verified", "mismatched", "not_verifiable")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         {
             assertTrue(key, schema.contains("\"" + key + "\"")); //$NON-NLS-1$ //$NON-NLS-2$
         }
+        assertTrue(schema.contains("applicationKindIsDesigner")); //$NON-NLS-1$
+        assertFalse(schema.contains("isEdtAgent")); //$NON-NLS-1$
     }
 
     @Test
@@ -97,6 +99,10 @@ public class InfobaseSessionsToolTest
             guide.contains("OR a human Configurator")); //$NON-NLS-1$
         assertTrue("the guide must say the tool cannot distinguish Designer ownership", //$NON-NLS-1$
             guide.contains("cannot tell them apart")); //$NON-NLS-1$
+        assertTrue("the guide must name the truthful Designer-kind field", //$NON-NLS-1$
+            guide.contains("`applicationKindIsDesigner=true`")); //$NON-NLS-1$
+        assertFalse("the guide must not expose the misleading ownership field", //$NON-NLS-1$
+            guide.contains("`isEdtAgent")); //$NON-NLS-1$
         assertTrue("the guide must keep bulk Designer termination disabled", //$NON-NLS-1$
             guide.contains("all=true` always skips it")); //$NON-NLS-1$
         assertTrue("the guide must require an exact id for explicit Designer termination", //$NON-NLS-1$
@@ -222,7 +228,7 @@ public class InfobaseSessionsToolTest
             List.of(DESIGNER, CLIENT), null, true);
         assertNull(selection.error);
         assertEquals(List.of(CLIENT), selection.sessions);
-        assertFalse(selection.sessions.get(0).edtAgent());
+        assertFalse(selection.sessions.get(0).applicationKindIsDesigner());
     }
 
     @Test
@@ -275,6 +281,32 @@ public class InfobaseSessionsToolTest
         assertTrue(result.has("attemptedCount")); //$NON-NLS-1$
         assertTrue(result.has("verificationReason")); //$NON-NLS-1$
         assertTrue(result.has("mutationOutcomeUnknown")); //$NON-NLS-1$
+        assertFalse(result.has("mutationCommitted")); //$NON-NLS-1$
+        assertFalse(result.has("terminatedCount")); //$NON-NLS-1$
+        assertFalse(result.has("sessions")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void failedFirstTerminationReportsUnknownOutcomeWithoutClaimingACompletion()
+    {
+        JsonObject result = JsonParser.parseString(
+            InfobaseSessionsTool.firstTerminationAttemptFailedResult("Demo", //$NON-NLS-1$
+                "ServerApplication.Demo", "Command timed out.")) //$NON-NLS-1$ //$NON-NLS-2$
+            .getAsJsonObject();
+
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result.get("mutationOutcomeUnknown").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(result.get("reachable").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("Command timed out.", result.get("unreachableReason").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("not_verifiable", result.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(result.get("verificationReason").getAsString().contains( //$NON-NLS-1$
+            "unknown whether the targeted session was removed")); //$NON-NLS-1$
+        assertTrue(result.get("error").getAsString().contains( //$NON-NLS-1$
+            "unknown whether the targeted session was removed")); //$NON-NLS-1$
+        assertTrue(result.get("error").getAsString().contains( //$NON-NLS-1$
+            "infobase_sessions(action='list', projectName='Demo', " //$NON-NLS-1$
+                + "applicationId='ServerApplication.Demo')")); //$NON-NLS-1$
+        assertFalse(result.has("attemptedCount")); //$NON-NLS-1$
         assertFalse(result.has("mutationCommitted")); //$NON-NLS-1$
         assertFalse(result.has("terminatedCount")); //$NON-NLS-1$
         assertFalse(result.has("sessions")); //$NON-NLS-1$
@@ -375,6 +407,8 @@ public class InfobaseSessionsToolTest
 
         assertEquals("User", session.get("userName").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("desk", session.get("host").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(session.get("applicationKindIsDesigner").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(session.has("isEdtAgent")); //$NON-NLS-1$
     }
 
     @Test
@@ -396,6 +430,8 @@ public class InfobaseSessionsToolTest
         assertEquals("active whenever", session.get("lastActiveAt").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("User", session.get("userName").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("desk", session.get("host").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(session.has("applicationKindIsDesigner")); //$NON-NLS-1$
+        assertFalse(session.has("isEdtAgent")); //$NON-NLS-1$
     }
 
     @Test

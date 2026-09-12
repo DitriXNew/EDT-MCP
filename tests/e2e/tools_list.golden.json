@@ -3035,6 +3035,9 @@
         "message": {
           "type": "string"
         },
+        "mutationOutcomeUnknown": {
+          "type": "boolean"
+        },
         "project": {
           "type": "string"
         },
