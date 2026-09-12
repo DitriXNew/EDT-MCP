@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -227,6 +229,12 @@ public final class BoundedJob
         // Utility
     }
 
+    /** Whether the bounded caller returned while the underlying work may still be running. */
+    public static boolean isInconclusive(Outcome outcome)
+    {
+        return outcome == Outcome.TIMED_OUT || outcome == Outcome.INTERRUPTED;
+    }
+
     /**
      * Runs {@code work} in a background job and waits at most {@code timeoutMs} for it.
      *
@@ -245,6 +253,122 @@ public final class BoundedJob
     public static Result run(String jobName, long timeoutMs, IBoundedWork work)
     {
         return run(jobName, timeoutMs, work, null);
+    }
+
+    /**
+     * Releases an operation guard after a bounded wait without releasing it while inconclusive work
+     * may still be running.
+     *
+     * <p>Pass {@link #jobFinished()} to the completion-callback overload of {@link #run}, then call
+     * {@link #afterBoundedWait(boolean)} in the bounded caller's {@code finally}. A conclusive wait
+     * releases immediately. A timeout or interruption defers release until the Job's terminal
+     * notification, with a caller-supplied hard cap so a broken Job lifecycle cannot leak the guard
+     * forever. Completion and the cap converge on one exactly-once release.
+     */
+    public static final class DeferredCleanup
+    {
+        private final Runnable cleanup;
+        private final long capMs;
+        private final String timerName;
+        private final AtomicBoolean jobFinished = new AtomicBoolean();
+        private final AtomicBoolean deferred = new AtomicBoolean();
+        private final AtomicBoolean cleaned = new AtomicBoolean();
+        private final AtomicReference<Timer> deadline = new AtomicReference<>();
+
+        /**
+         * @param cleanup the guard release, invoked exactly once
+         * @param capMs maximum time to retain the guard after an inconclusive bounded wait
+         * @param timerName diagnostic name for the daemon timer enforcing the hard cap
+         */
+        public DeferredCleanup(Runnable cleanup, long capMs, String timerName)
+        {
+            this.cleanup = cleanup;
+            this.capMs = Math.max(1L, capMs);
+            this.timerName = timerName;
+        }
+
+        /** Records the underlying Job's terminal notification. */
+        public void jobFinished()
+        {
+            jobFinished.set(true);
+            if (deferred.get())
+            {
+                cleanOnce();
+            }
+        }
+
+        /**
+         * Records the bounded caller's outcome and either releases now or starts the deferred cap.
+         *
+         * @param conclusive {@code true} only when the underlying work has definitely ended
+         */
+        public void afterBoundedWait(boolean conclusive)
+        {
+            if (conclusive)
+            {
+                cleanOnce();
+                return;
+            }
+            deferred.set(true);
+            if (jobFinished.get())
+            {
+                cleanOnce();
+            }
+            if (!cleaned.get())
+            {
+                scheduleDeadline();
+            }
+        }
+
+        private void scheduleDeadline()
+        {
+            Timer timer = new Timer(timerName, true);
+            if (!deadline.compareAndSet(null, timer))
+            {
+                timer.cancel();
+                return;
+            }
+            try
+            {
+                timer.schedule(new TimerTask()
+                {
+                    @Override
+                    public void run()
+                    {
+                        cleanOnce();
+                    }
+                }, capMs);
+            }
+            catch (RuntimeException e)
+            {
+                // If the cap itself is unavailable, release now rather than leak a guard forever.
+                cancelDeadline();
+                cleanOnce();
+                return;
+            }
+            if (cleaned.get())
+            {
+                cancelDeadline();
+            }
+        }
+
+        private void cleanOnce()
+        {
+            if (cleaned.compareAndSet(false, true))
+            {
+                cancelDeadline();
+                cleanup.run();
+            }
+        }
+
+        private void cancelDeadline()
+        {
+            Timer timer = deadline.getAndSet(null);
+            if (timer != null)
+            {
+                timer.cancel();
+            }
+        }
     }
 
     /**

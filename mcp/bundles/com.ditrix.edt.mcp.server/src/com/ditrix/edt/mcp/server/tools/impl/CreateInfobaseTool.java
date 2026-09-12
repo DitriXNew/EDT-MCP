@@ -40,6 +40,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
@@ -623,8 +624,10 @@ public class CreateInfobaseTool implements IMcpTool
         {
             return null;
         }
-        return storeSafely(() -> InfobaseAccessSupport.storeCredentials(ibRef, credentials.user,
-            credentials.password, InfobaseAccessSupport.parseAccess(credentials.access)),
+        return storeSafely((publish, writeCommitted) -> publish.accept(
+            InfobaseAccessSupport.storeCredentials(ibRef, credentials.user,
+                credentials.password, InfobaseAccessSupport.parseAccess(credentials.access),
+                writeCommitted)),
             credentials, register);
     }
 
@@ -640,23 +643,72 @@ public class CreateInfobaseTool implements IMcpTool
      * @param store the store call, returning its write and read-back result
      * @return the non-fatal note and any verification conclusion
      */
-    private static CredentialStoreReport storeSafely(
-            java.util.function.Supplier<InfobaseAccessSupport.StoreResult> store,
+    static CredentialStoreReport storeSafely(
+            InfobaseAccessSupport.BoundedStoreWork<InfobaseAccessSupport.StoreResult> store,
             Credentials credentials, boolean register)
+    {
+        return storeSafely(store, credentials, register,
+            InfobaseAccessSupport.CREDENTIAL_STORE_TIMEOUT_MS);
+    }
+
+    /** Testable deadline form of the shared bounded credential store/read-back. */
+    static CredentialStoreReport storeSafely(
+            InfobaseAccessSupport.BoundedStoreWork<InfobaseAccessSupport.StoreResult> store,
+            Credentials credentials, boolean register, long timeoutMs)
     {
         try
         {
-            return credentialStoreReport(store.get(), credentials, register);
+            InfobaseAccessSupport.BoundedStoreResult<InfobaseAccessSupport.StoreResult> storeRun =
+                InfobaseAccessSupport.runBoundedCredentialStore(
+                    register ? "registered infobase" : "new infobase", timeoutMs, store); //$NON-NLS-1$ //$NON-NLS-2$
+            BoundedJob.Result bounded = storeRun.boundedResult();
+            if (BoundedJob.isInconclusive(bounded.getOutcome())
+                || bounded.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
+            {
+                String interruption = bounded.getOutcome() == BoundedJob.Outcome.INTERRUPTED
+                    ? " was interrupted before it finished" //$NON-NLS-1$
+                    : " did not finish within " + formatCredentialStoreDeadline(timeoutMs); //$NON-NLS-1$
+                return new CredentialStoreReport(" The infobase WAS " //$NON-NLS-1$
+                    + (register ? "registered" : "created") //$NON-NLS-1$ //$NON-NLS-2$
+                    + ", but credential storage" + interruption //$NON-NLS-1$
+                    + "; credential state is UNDETERMINED. Run set_infobase_credentials to " //$NON-NLS-1$
+                    + "settle it.", null); //$NON-NLS-1$
+            }
+            if (storeRun.publishedResult() != null)
+            {
+                return credentialStoreReport(storeRun.publishedResult(), credentials, register);
+            }
+            if (bounded.getFailure() != null)
+            {
+                return failedCredentialStoreReport(bounded.getFailure());
+            }
+            return new CredentialStoreReport(
+                " WARNING: connection credentials were NOT stored because the bounded store " //$NON-NLS-1$
+                    + "operation never ran (" + bounded.getOutcome() + ").", null); //$NON-NLS-1$ //$NON-NLS-2$
         }
         catch (Exception e)
         {
-            Activator.logError("create_infobase: storing the connection credentials failed", e); //$NON-NLS-1$
-            String reason = e.getMessage();
-            String error = (reason != null && !reason.trim().isEmpty())
-                ? reason : e.getClass().getSimpleName();
-            return new CredentialStoreReport(
-                " WARNING: connection credentials were NOT stored: " + error, null); //$NON-NLS-1$
+            return failedCredentialStoreReport(e);
         }
+    }
+
+    /** Reports a store failure by type only, so an exception can never echo credential text. */
+    private static CredentialStoreReport failedCredentialStoreReport(Throwable failure)
+    {
+        String failureType = failure == null ? "unknown failure" //$NON-NLS-1$
+            : failure.getClass().getSimpleName();
+        Activator.logError("create_infobase: storing the connection credentials failed (" //$NON-NLS-1$
+            + failureType + ")", null); //$NON-NLS-1$
+        return new CredentialStoreReport(
+            " WARNING: connection credentials were NOT stored because the store operation failed " //$NON-NLS-1$
+                + "(" + failureType + "). Run set_infobase_credentials to retry.", null); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Human-readable form used only in the non-secret timeout note. */
+    private static String formatCredentialStoreDeadline(long timeoutMs)
+    {
+        return timeoutMs % 1000L == 0L
+            ? (timeoutMs / 1000L) + " seconds" : timeoutMs + "ms"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** Message plus the structured conclusion of an optional credential store/read-back. */
@@ -2185,8 +2237,10 @@ public class CreateInfobaseTool implements IMcpTool
                     + "application was not available from the read-back - check get_applications and " //$NON-NLS-1$
                     + "store them with set_infobase_credentials.", null); //$NON-NLS-1$
         }
-        return storeSafely(() -> InfobaseAccessSupport.storeCredentials(application,
-            credentials.user, credentials.password, InfobaseAccessSupport.parseAccess(credentials.access)),
+        return storeSafely((publish, writeCommitted) -> publish.accept(
+            InfobaseAccessSupport.storeCredentials(application,
+                credentials.user, credentials.password,
+                InfobaseAccessSupport.parseAccess(credentials.access), writeCommitted)),
             credentials, true);
     }
 

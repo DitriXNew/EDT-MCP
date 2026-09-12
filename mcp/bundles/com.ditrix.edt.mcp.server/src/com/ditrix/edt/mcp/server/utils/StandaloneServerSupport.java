@@ -53,6 +53,9 @@ public final class StandaloneServerSupport
     /** Start and stop share this bound because both are self-contained EDT server operations. */
     public static final long SERVER_OPERATION_TIMEOUT_MS = 60_000L;
 
+    /** Hard cap for retaining a start's targeted dialog guard after an inconclusive wait. */
+    public static final long INCONCLUSIVE_START_GUARD_CAP_MS = 300_000L;
+
     /** Symbolic name of the bundle that owns the standalone-server WST service. */
     private static final String WST_CORE_BUNDLE_ID =
         "com.e1c.g5.v8.dt.platform.standaloneserver.wst.core"; //$NON-NLS-1$

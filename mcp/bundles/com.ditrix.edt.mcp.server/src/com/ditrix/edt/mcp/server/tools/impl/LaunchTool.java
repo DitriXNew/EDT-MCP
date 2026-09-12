@@ -10,11 +10,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Timer;
-import java.util.TimerTask;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -111,9 +106,6 @@ public class LaunchTool implements IMcpTool
     private static final String STANDALONE_THIN_CLIENT_FALLBACK =
         "Try launch with the project's thin-client configuration instead: launching that client " //$NON-NLS-1$
             + "has been observed to bring its standalone server up with it."; //$NON-NLS-1$
-
-    /** Maximum time a timed-out direct start keeps its targeted port-conflict answer armed. */
-    private static final long INCONCLUSIVE_START_CONFIRM_CAP_MS = TimeUnit.MINUTES.toMillis(5);
 
     /**
      * Input param AND response field: the {@code /C} startup option applied to this launch only.
@@ -660,16 +652,13 @@ public class LaunchTool implements IMcpTool
                 "the EDT application manager is not available"); //$NON-NLS-1$
         }
 
-        IApplication application;
-        try
+        StandaloneApplicationLookup lookup = lookupStandaloneApplicationBounded(manager,
+            context.project(), applicationId, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
+        if (lookup.failure() != null)
         {
-            application = manager.getApplication(context.project(), applicationId).orElse(null);
+            return standalonePreconditionError(configName, lookup.failure());
         }
-        catch (ApplicationException e)
-        {
-            return standalonePreconditionError(configName,
-                "the application could not be resolved: " + PlatformFailures.describe(e)); //$NON-NLS-1$
-        }
+        IApplication application = lookup.application();
         if (application == null)
         {
             return standalonePreconditionError(configName,
@@ -700,15 +689,67 @@ public class LaunchTool implements IMcpTool
                 launchServerName(config), launchPortPolicy));
         if (start.failure() != null)
         {
-            return standaloneStartFailure(start.failure(), start.portsReassigned());
+            return standaloneStartFailure(start.failure(), start.portsReassigned(),
+                start.portReassignmentOutcomeUnknown());
         }
         return standaloneStartSuccess(configName, typeId, projectName, applicationId,
             start.portsReassigned());
     }
 
-    /** Bounded standalone-start outcome plus any persistent port reassignment it performed. */
-    static record StartOutcome(String failure, boolean conclusive, boolean portsReassigned)
+    /** Bounded standalone-start outcome plus the known or possible port-configuration mutation. */
+    static record StartOutcome(String failure, boolean conclusive, boolean portsReassigned,
+        boolean portReassignmentOutcomeUnknown)
     {
+        StartOutcome(String failure, boolean conclusive, boolean portsReassigned)
+        {
+            this(failure, conclusive, portsReassigned, false);
+        }
+    }
+
+    /** Result of the bounded application precondition lookup for a standalone-server start. */
+    static record StandaloneApplicationLookup(IApplication application, String failure)
+    {
+    }
+
+    /** Bounds the one standalone-path application lookup that precedes the already-bounded start. */
+    static StandaloneApplicationLookup lookupStandaloneApplicationBounded(
+        IApplicationManager manager, IProject project, String applicationId, long timeoutMs)
+    {
+        IApplication[] application = new IApplication[1];
+        BoundedJob.Result result = BoundedJob.run(
+            "Resolve standalone-server application: " + applicationId, timeoutMs, //$NON-NLS-1$
+            monitor -> application[0] = manager.getApplication(project, applicationId).orElse(null));
+        if (result.isSuccess())
+        {
+            return new StandaloneApplicationLookup(application[0], null);
+        }
+        if (result.getFailure() != null && result.getOutcome() == BoundedJob.Outcome.COMPLETED)
+        {
+            return new StandaloneApplicationLookup(null,
+                "the application could not be resolved: " //$NON-NLS-1$
+                    + PlatformFailures.describe(result.getFailure()));
+        }
+
+        String target = "the EDT application lookup for application '" + applicationId + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+        String deadline = timeoutMs % 1000L == 0L
+            ? (timeoutMs / 1000L) + "s" : timeoutMs + "ms"; //$NON-NLS-1$ //$NON-NLS-2$
+        if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT)
+        {
+            return new StandaloneApplicationLookup(null, target + " did not finish within " //$NON-NLS-1$
+                + deadline + " and may still be running"); //$NON-NLS-1$
+        }
+        if (result.getOutcome() == BoundedJob.Outcome.INTERRUPTED)
+        {
+            return new StandaloneApplicationLookup(null, "the wait for " + target //$NON-NLS-1$
+                + " was interrupted and the lookup may still be running"); //$NON-NLS-1$
+        }
+        if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
+        {
+            return new StandaloneApplicationLookup(null, target + " did not start within " //$NON-NLS-1$
+                + deadline + "; retry when EDT's background Job queue is responsive"); //$NON-NLS-1$
+        }
+        return new StandaloneApplicationLookup(null, target + " never ran (" //$NON-NLS-1$
+            + result.getOutcome() + ")"); //$NON-NLS-1$
     }
 
     /** Restores a stale server stopped by this call only after a conclusive direct-start failure. */
@@ -741,13 +782,13 @@ public class LaunchTool implements IMcpTool
                     outcome.failure(), configName);
                 return new StartOutcome(standaloneAttemptError(configName,
                     notice == null ? outcome.failure() : notice), false,
-                    outcome.portsReassigned());
+                    outcome.portsReassigned(), outcome.portReassignmentOutcomeUnknown());
             }
             String restored = StandaloneServerStateRecovery.appendRestoration(outcome.failure(),
                 project, configName);
             return new StartOutcome(standaloneAttemptError(configName,
                 restored == null ? outcome.failure() : restored), true,
-                outcome.portsReassigned());
+                outcome.portsReassigned(), outcome.portReassignmentOutcomeUnknown());
         }
         finally
         {
@@ -785,6 +826,17 @@ public class LaunchTool implements IMcpTool
     /** Carries a persistent port reassignment on the failed direct-start path as well. */
     static String standaloneStartFailure(String failure, boolean portsReassigned)
     {
+        return standaloneStartFailure(failure, portsReassigned, false);
+    }
+
+    /** Carries either the observed port rewrite or an inconclusive mutation outcome. */
+    static String standaloneStartFailure(String failure, boolean portsReassigned,
+        boolean portReassignmentOutcomeUnknown)
+    {
+        if (portReassignmentOutcomeUnknown)
+        {
+            return ToolResult.markErrorWithUnknownMutationOutcome(failure);
+        }
         if (!portsReassigned)
         {
             return failure;
@@ -838,8 +890,7 @@ public class LaunchTool implements IMcpTool
     /** Whether a failed bounded start has definitely stopped running. */
     static boolean conclusiveStartFailure(BoundedJob.Outcome outcome)
     {
-        return outcome != BoundedJob.Outcome.TIMED_OUT
-            && outcome != BoundedJob.Outcome.INTERRUPTED;
+        return !BoundedJob.isInconclusive(outcome);
     }
 
     /** Arms the targeted port-conflict answer while the bounded service start is running. */
@@ -860,8 +911,9 @@ public class LaunchTool implements IMcpTool
             }
         };
         return awaitStandaloneServerStart(service, server, configName, launchMode, conflicts,
-            cleanup, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
-            INCONCLUSIVE_START_CONFIRM_CAP_MS);
+            portPolicy == StandaloneServerPortConflictPolicy.REASSIGN, cleanup,
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
+            StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS);
     }
 
     /**
@@ -873,16 +925,34 @@ public class LaunchTool implements IMcpTool
         String launchMode, LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts,
         Runnable cleanup, long timeoutMs, long cleanupCapMs)
     {
-        DeferredStartCleanup deferredCleanup = new DeferredStartCleanup(cleanup, cleanupCapMs);
+        return awaitStandaloneServerStart(service, server, configName, launchMode, conflicts, false,
+            cleanup, timeoutMs, cleanupCapMs);
+    }
+
+    /** Same orchestration with the armed policy made explicit for inconclusive mutation reporting. */
+    static StartOutcome awaitStandaloneServerStart(Object service, Object server, String configName, // NOSONAR testable orchestration seam keeps the lifecycle inputs explicit
+        String launchMode, LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts,
+        boolean reassigningPortPolicyArmed, Runnable cleanup, long timeoutMs, long cleanupCapMs)
+    {
+        BoundedJob.DeferredCleanup deferredCleanup = new BoundedJob.DeferredCleanup(cleanup,
+            cleanupCapMs, "Standalone-start confirmer safety cap"); //$NON-NLS-1$
         StartOutcome outcome = null;
         try
         {
             outcome = startStandaloneServerBounded(service, server, configName, launchMode,
                 timeoutMs, deferredCleanup::jobFinished);
             String conflict = declinedConflictMessage(null, conflicts);
-            boolean portsReassigned = conflicts != null && conflicts.portsReassigned();
-            return new StartOutcome(conflict == null ? outcome.failure() : conflict,
-                outcome.conclusive(), portsReassigned);
+            boolean portReassignmentOutcomeUnknown =
+                !outcome.conclusive() && reassigningPortPolicyArmed;
+            boolean portsReassigned = outcome.conclusive() && conflicts != null
+                && conflicts.portsReassigned();
+            String failure = conflict == null ? outcome.failure() : conflict;
+            if (portReassignmentOutcomeUnknown)
+            {
+                failure = appendPossiblePortReassignmentNotice(failure);
+            }
+            return new StartOutcome(failure, outcome.conclusive(), portsReassigned,
+                portReassignmentOutcomeUnknown);
         }
         finally
         {
@@ -891,99 +961,14 @@ public class LaunchTool implements IMcpTool
         }
     }
 
-    /** Exactly-once release shared by the Job-completion and hard-cap paths. */
-    static final class DeferredStartCleanup
+    /** Explains why a reassigning policy has an unknown mutation outcome after an in-flight start. */
+    private static String appendPossiblePortReassignmentNotice(String failure)
     {
-        private final Runnable cleanup;
-        private final long capMs;
-        private final AtomicBoolean jobFinished = new AtomicBoolean();
-        private final AtomicBoolean deferred = new AtomicBoolean();
-        private final AtomicBoolean cleaned = new AtomicBoolean();
-        private final AtomicReference<Timer> deadline = new AtomicReference<>();
-
-        DeferredStartCleanup(Runnable cleanup, long capMs)
-        {
-            this.cleanup = cleanup;
-            this.capMs = Math.max(1L, capMs);
-        }
-
-        void jobFinished()
-        {
-            jobFinished.set(true);
-            if (deferred.get())
-            {
-                cleanOnce();
-            }
-        }
-
-        void afterBoundedWait(boolean conclusive)
-        {
-            if (conclusive)
-            {
-                cleanOnce();
-                return;
-            }
-            deferred.set(true);
-            if (jobFinished.get())
-            {
-                cleanOnce();
-            }
-            if (!cleaned.get())
-            {
-                scheduleDeadline();
-            }
-        }
-
-        private void scheduleDeadline()
-        {
-            Timer timer = new Timer("Standalone-start confirmer safety cap", true); //$NON-NLS-1$
-            if (!deadline.compareAndSet(null, timer))
-            {
-                timer.cancel();
-                return;
-            }
-            try
-            {
-                timer.schedule(new TimerTask()
-                {
-                    @Override
-                    public void run()
-                    {
-                        cleanOnce();
-                    }
-                }, capMs);
-            }
-            catch (RuntimeException e)
-            {
-                // If the deadline mechanism itself is unavailable, fail closed: release now rather
-                // than leak a targeted arm forever.
-                cancelDeadline();
-                cleanOnce();
-                return;
-            }
-            if (cleaned.get())
-            {
-                cancelDeadline();
-            }
-        }
-
-        private void cleanOnce()
-        {
-            if (cleaned.compareAndSet(false, true))
-            {
-                cancelDeadline();
-                cleanup.run();
-            }
-        }
-
-        private void cancelDeadline()
-        {
-            Timer timer = deadline.getAndSet(null);
-            if (timer != null)
-            {
-                timer.cancel();
-            }
-        }
+        String separator = failure.endsWith(".") || failure.endsWith("!") || failure.endsWith("?") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            ? " " : ". "; //$NON-NLS-1$ //$NON-NLS-2$
+        return failure + separator + "The standalone server's ports may have been rewritten while " //$NON-NLS-1$
+            + "the start continued under standaloneServerPortConflict='reassign'; check the " //$NON-NLS-1$
+            + "standalone-server configuration before connecting or retrying."; //$NON-NLS-1$
     }
 
     /** Builds a precondition error without suggesting an inapplicable thin-client fallback. */

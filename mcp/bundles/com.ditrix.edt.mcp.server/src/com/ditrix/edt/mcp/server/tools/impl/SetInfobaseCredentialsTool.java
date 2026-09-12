@@ -9,17 +9,11 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
-import org.eclipse.core.runtime.IProgressMonitor;
-import org.eclipse.core.runtime.IStatus;
-import org.eclipse.core.runtime.Status;
-import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.debug.core.DebugPlugin;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchManager;
@@ -32,11 +26,12 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
+import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
+import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.BoundedStoreResult;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.StoreResult;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
-import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -86,7 +81,8 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     public static final String NAME = "set_infobase_credentials"; //$NON-NLS-1$
 
     /** Bounded-Job timeout for the credential store + read-back (model work off the worker thread). */
-    private static final int CREDENTIALS_TIMEOUT_SECONDS = 30;
+    private static final int CREDENTIALS_TIMEOUT_SECONDS =
+        (int)(InfobaseAccessSupport.CREDENTIAL_STORE_TIMEOUT_MS / 1000L);
 
     /** Output key: display name of the target application. */
     private static final String KEY_APPLICATION_NAME = "applicationName"; //$NON-NLS-1$
@@ -271,11 +267,11 @@ public class SetInfobaseCredentialsTool implements IMcpTool
      *
      * <p><strong>It also runs only while the caller is still waiting.</strong> The store Job is
      * joined with a bounded timeout; when that deadline elapses the caller is answered and
-     * {@link #awaitStoreJob} cancels the Job — but cancellation is COOPERATIVE and cannot stop a
-     * Job that is inside {@code getApplication}/{@code storeCredentials}. The Job therefore reaches
-     * this point regardless, which is why the check lives HERE, on the side that writes: an answered
-     * call must not go on to put a user and a password into a launch configuration behind the
-     * caller's back. In the case the answer was an ERROR (the deadline elapsed before the agent
+     * the shared bounded-store runner cancels the Job — but cancellation is COOPERATIVE and cannot
+     * stop a Job that is inside {@code getApplication}/{@code storeCredentials}. The Job therefore
+     * reaches this point regardless, which is why the check lives HERE, on the side that writes: an
+     * answered call must not go on to put a user and a password into a launch configuration behind
+     * the caller's back. In the case the answer was an ERROR (the deadline elapsed before the agent
      * credentials committed) the flag is set long before this method runs, so the write cannot
      * happen at all; in the case the answer was the persist-first success the two can still
      * interleave, and its message already says the client's outcome was unknown.
@@ -544,22 +540,15 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         // Job. Resolving an application can provoke EDT's background application-update-state recompute,
         // which can loop indefinitely on an unbounded worker thread (DesignerSessionPool retries); the
         // Job + short join keeps the call unattended-safe (the UI thread is never blocked).
-        final AtomicReference<String> jobResult = new AtomicReference<>();
-        // Raised at the exact persistent-write boundary, before storeCredentials starts its
-        // consumer-facing read-back. A timeout can therefore distinguish "not known to be written"
-        // from "written, verification still in flight" without exposing the secret.
-        final AtomicBoolean writeCommitted = new AtomicBoolean();
         // Raised the moment the join stops waiting, and read by the Job before it writes the launch
         // configuration. The Job outlives the call whenever the deadline elapses (cancellation is
         // cooperative), so this is what keeps an answered - possibly FAILED - call from mutating a
         // launch configuration afterwards.
         final AtomicBoolean callerAnswered = new AtomicBoolean();
 
-        Job storeJob = new Job("Store infobase credentials: " + finalApplicationId) //$NON-NLS-1$
-        {
-            @Override
-            protected IStatus run(IProgressMonitor monitor)
-            {
+        BoundedStoreResult<String> storeRun = InfobaseAccessSupport.runBoundedCredentialStore(
+            finalApplicationId, InfobaseAccessSupport.CREDENTIAL_STORE_TIMEOUT_MS,
+            (publish, writeCommitted) -> {
                 Optional<IApplication> appOpt;
                 try
                 {
@@ -567,38 +556,39 @@ public class SetInfobaseCredentialsTool implements IMcpTool
                 }
                 catch (Exception e) // NOSONAR EDT application lookup — surface as an actionable error
                 {
-                    jobResult.set(ToolResult.error("Error resolving application '" + finalApplicationId //$NON-NLS-1$
+                    publish.accept(ToolResult.error("Error resolving application '" + finalApplicationId //$NON-NLS-1$
                         + "': " + e.getMessage()).toJson()); //$NON-NLS-1$
-                    return Status.OK_STATUS;
+                    return;
                 }
                 if (!appOpt.isPresent())
                 {
-                    jobResult.set(ToolResult.error("Application not found: " + finalApplicationId //$NON-NLS-1$
+                    publish.accept(ToolResult.error("Application not found: " + finalApplicationId //$NON-NLS-1$
                         + ". Use get_applications to get valid application IDs.").toJson()); //$NON-NLS-1$
-                    return Status.OK_STATUS;
+                    return;
                 }
                 IApplication application = appOpt.get();
 
                 InfobaseAccess accessKind = InfobaseAccessSupport.parseAccess(finalAccess);
                 StoreResult storeResult =
                     InfobaseAccessSupport.storeCredentials(application, finalUser, finalPassword,
-                        accessKind, () -> writeCommitted.set(true));
+                        accessKind, writeCommitted);
                 if (storeResult.error() != null)
                 {
-                    jobResult.set(ToolResult.error(storeResult.error()).toJson());
-                    return Status.OK_STATUS;
+                    publish.accept(ToolResult.error(storeResult.error()).toJson());
+                    return;
                 }
                 if (StoreResult.Verification.MISMATCHED == storeResult.verification())
                 {
-                    jobResult.set(buildVerificationError(finalProjectName, finalApplicationId, storeResult));
-                    return Status.OK_STATUS;
+                    publish.accept(buildVerificationError(finalProjectName, finalApplicationId,
+                        storeResult));
+                    return;
                 }
 
                 // The credentials have committed and verification has concluded. Record the result
                 // before the cosmetic display-name read-back and before the client half starts.
                 boolean passwordSet = finalPassword != null && !finalPassword.isEmpty();
                 String storedUser = finalUser == null ? "" : finalUser; //$NON-NLS-1$
-                jobResult.set(buildSuccess(finalProjectName, finalApplicationId,
+                publish.accept(buildSuccess(finalProjectName, finalApplicationId,
                     finalDerivedApplicationId, finalApplicationId,
                     storedUser, passwordSet, accessKind, storeResult, finalClientConfigName,
                     CLIENT_WRITE_UNFINISHED));
@@ -609,7 +599,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
                 String clientError = configureClient(callerAnswered, finalClientConfigName,
                     finalClientConfig, finalUser, finalPassword,
                     InfobaseAccessSupport.isOsAccess(finalAccess));
-                jobResult.set(buildSuccess(finalProjectName, finalApplicationId,
+                publish.accept(buildSuccess(finalProjectName, finalApplicationId,
                     finalDerivedApplicationId, finalApplicationId,
                     storedUser, passwordSet, accessKind, storeResult, finalClientConfigName, clientError));
 
@@ -619,7 +609,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
                     String name = application.getName();
                     if (name != null && !name.isEmpty())
                     {
-                        jobResult.set(buildSuccess(finalProjectName, finalApplicationId,
+                        publish.accept(buildSuccess(finalProjectName, finalApplicationId,
                             finalDerivedApplicationId, name, storedUser, passwordSet, accessKind,
                             storeResult, finalClientConfigName, clientError));
                     }
@@ -628,15 +618,39 @@ public class SetInfobaseCredentialsTool implements IMcpTool
                 {
                     // The credentials are already stored; keep the success recorded above.
                 }
-                return Status.OK_STATUS;
-            }
-        };
-        storeJob.setUser(false);
-        storeJob.setSystem(true);
-        McpJobs.schedule(storeJob);
+            });
+        return finishBoundedStore(storeRun, callerAnswered, projectName, applicationId);
+    }
 
-        return awaitStoreJob(storeJob, jobResult, writeCommitted, callerAnswered, projectName,
-            applicationId);
+    /** Raises the late-write guard before mapping the shared bounded-store snapshot. */
+    static String finishBoundedStore(BoundedStoreResult<String> storeRun,
+        AtomicBoolean callerAnswered, String projectName, String applicationId)
+    {
+        callerAnswered.set(true);
+        return boundedStoreOutcome(storeRun, projectName, applicationId);
+    }
+
+    /** Maps the shared bounded credential-store outcome onto this tool's existing result contract. */
+    private static String boundedStoreOutcome(BoundedStoreResult<String> storeRun,
+        String projectName, String applicationId)
+    {
+        BoundedJob.Result bounded = storeRun.boundedResult();
+        if (bounded.getOutcome() == BoundedJob.Outcome.INTERRUPTED)
+        {
+            if (storeRun.publishedResult() != null)
+            {
+                return storeRun.publishedResult();
+            }
+            return storeRun.writeCommitted()
+                ? ToolResult.errorAfterMutation("Storing infobase credentials was interrupted " //$NON-NLS-1$
+                    + "after the credentials write committed; EDT may still be verifying the " //$NON-NLS-1$
+                    + "read-back.").toJson() //$NON-NLS-1$
+                : ToolResult.error("Storing infobase credentials was interrupted.").toJson(); //$NON-NLS-1$
+        }
+        boolean finished = bounded.getOutcome() == BoundedJob.Outcome.COMPLETED
+            || bounded.getOutcome() == BoundedJob.Outcome.NOT_RUN;
+        return storeOutcome(finished, storeRun.publishedResult(), storeRun.writeCommitted(),
+            projectName, applicationId);
     }
 
     /**
@@ -770,94 +784,6 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         }
         return " The access kind, user name, and password matched when read back; the password " //$NON-NLS-1$
             + "itself is not returned."; //$NON-NLS-1$
-    }
-
-    /**
-     * Joins the store Job with the bounded {@link #CREDENTIALS_TIMEOUT_SECONDS} timeout and maps the
-     * outcome through the pure {@link #storeOutcome} seam: on a clean finish returns the recorded JSON;
-     * on timeout cancels the Job and returns the recorded final JSON, a post-mutation error when the
-     * write committed but verification is still running, or the original pre-write timeout error;
-     * on interruption restores the interrupt flag and applies the same committed-write distinction.
-     *
-     * <p>Every exit raises {@code callerAnswered} FIRST, before the answer is even built. A Job that
-     * outran the deadline keeps running — {@link Job#cancel()} only asks it to stop, and this one has
-     * no monitor poll to honour it — so the flag is the one thing that stops it from writing a launch
-     * configuration for a call that has already reported a failure (see {@link #configureClient}).
-     *
-     * @param job the scheduled store Job
-     * @param jobResult the JSON the Job records; read only after the flag is raised
-     * @param callerAnswered raised here, read by the Job before the client write
-     * @param projectName the target project name (for the timeout message)
-     * @param applicationId the target application ID (for the timeout message)
-     * @return the tool-result JSON
-     */
-    static String awaitStoreJob(Job job, AtomicReference<String> jobResult, AtomicBoolean callerAnswered,
-            String projectName, String applicationId)
-    {
-        return awaitStoreJob(job, jobResult, new AtomicBoolean(jobResult.get() != null),
-            callerAnswered, projectName, applicationId,
-            TimeUnit.SECONDS.toMillis(CREDENTIALS_TIMEOUT_SECONDS));
-    }
-
-    /** Production form carrying the write boundary independently of the final verification JSON. */
-    static String awaitStoreJob(Job job, AtomicReference<String> jobResult,
-            AtomicBoolean writeCommitted, AtomicBoolean callerAnswered, String projectName,
-            String applicationId)
-    {
-        return awaitStoreJob(job, jobResult, writeCommitted, callerAnswered, projectName,
-            applicationId, TimeUnit.SECONDS.toMillis(CREDENTIALS_TIMEOUT_SECONDS));
-    }
-
-    /**
-     * {@link #awaitStoreJob(Job, AtomicReference, AtomicBoolean, String, String)} with the deadline
-     * spelled out, so the behaviour AT the deadline can be driven without waiting
-     * {@link #CREDENTIALS_TIMEOUT_SECONDS} seconds for it. The overload above is the production
-     * entry point and supplies that constant.
-     *
-     * @param job the scheduled store Job
-     * @param jobResult the JSON the Job records; read only after the flag is raised
-     * @param callerAnswered raised here, read by the Job before the client write
-     * @param projectName the target project name (for the timeout message)
-     * @param applicationId the target application ID (for the timeout message)
-     * @param timeoutMillis how long to wait for the Job before answering without it
-     * @return the tool-result JSON
-     */
-    static String awaitStoreJob(Job job, AtomicReference<String> jobResult, AtomicBoolean callerAnswered,
-            String projectName, String applicationId, long timeoutMillis)
-    {
-        return awaitStoreJob(job, jobResult, new AtomicBoolean(jobResult.get() != null),
-            callerAnswered, projectName, applicationId, timeoutMillis);
-    }
-
-    static String awaitStoreJob(Job job, AtomicReference<String> jobResult,
-            AtomicBoolean writeCommitted, AtomicBoolean callerAnswered, String projectName,
-            String applicationId, long timeoutMillis)
-    {
-        try
-        {
-            boolean finished = job.join(timeoutMillis, null);
-            callerAnswered.set(true);
-            if (!finished)
-            {
-                job.cancel();
-                return storeOutcome(false, jobResult.get(), writeCommitted.get(), projectName,
-                    applicationId);
-            }
-            return storeOutcome(true, jobResult.get(), writeCommitted.get(), projectName,
-                applicationId);
-        }
-        catch (InterruptedException e)
-        {
-            callerAnswered.set(true);
-            job.cancel();
-            Thread.currentThread().interrupt();
-            return jobResult.get() != null ? jobResult.get()
-                : writeCommitted.get()
-                    ? ToolResult.errorAfterMutation("Storing infobase credentials was interrupted " //$NON-NLS-1$
-                        + "after the credentials write committed; EDT may still be verifying the " //$NON-NLS-1$
-                        + "read-back.").toJson() //$NON-NLS-1$
-                    : ToolResult.error("Storing infobase credentials was interrupted.").toJson(); //$NON-NLS-1$
-        }
     }
 
     /**

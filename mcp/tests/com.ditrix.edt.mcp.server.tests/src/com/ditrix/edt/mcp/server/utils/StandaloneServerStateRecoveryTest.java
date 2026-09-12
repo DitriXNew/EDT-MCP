@@ -14,6 +14,10 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.lang.reflect.Proxy;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -385,6 +389,67 @@ public class StandaloneServerStateRecoveryTest
         assertEquals("start failed", result); //$NON-NLS-1$
         assertFalse("the confirmer must be disarmed after the start", armed[0]);
         assertEquals("ASCD", order.toString()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testInconclusiveRestorationKeepsThePortConfirmerArmedUntilJobCompletion()
+        throws Exception
+    {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch cleaned = new CountDownLatch(1);
+        AtomicInteger cleanups = new AtomicInteger();
+        AtomicReference<String> answer = new AtomicReference<>();
+        AtomicReference<Throwable> callerFailure = new AtomicReference<>();
+
+        Thread caller = new Thread(() -> {
+            try
+            {
+                answer.set(StandaloneServerStateRecovery.guardedRestorationStart(() -> {
+                    // Headless stand-in for arming the targeted confirmer.
+                }, completion -> {
+                    BoundedJob.Result bounded = BoundedJob.run("test: blocked restoration", 100L, //$NON-NLS-1$
+                        monitor -> {
+                            started.countDown();
+                            release.await(30, TimeUnit.SECONDS);
+                        }, completion);
+                    return new StandaloneServerStateRecovery.RestorationStartOutcome(
+                        StandaloneServerSupport.startFailureReason(bounded),
+                        !BoundedJob.isInconclusive(bounded.getOutcome()));
+                }, () -> null, () -> {
+                    cleanups.incrementAndGet();
+                    cleaned.countDown();
+                }, 5_000L));
+            }
+            catch (Throwable t)
+            {
+                callerFailure.set(t);
+            }
+        }, "test: bounded restoration caller"); //$NON-NLS-1$
+
+        caller.start();
+        try
+        {
+            assertTrue("the restoration start must be running before its bounded wait returns", //$NON-NLS-1$
+                started.await(5, TimeUnit.SECONDS));
+            caller.join(5_000L);
+            assertFalse("the bounded restoration caller must have returned", caller.isAlive()); //$NON-NLS-1$
+            assertNull(callerFailure.get());
+            assertNotNull(answer.get());
+            assertTrue(answer.get().contains("may still be running")); //$NON-NLS-1$
+            assertEquals("the old eager-disarm shape must be absent while the start is in flight", //$NON-NLS-1$
+                0, cleanups.get());
+
+            release.countDown();
+            assertTrue("actual Job completion must release the deferred confirmer", //$NON-NLS-1$
+                cleaned.await(5, TimeUnit.SECONDS));
+            assertEquals("completion must release the confirmer exactly once", 1, cleanups.get()); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            caller.join(5_000L);
+        }
     }
 
     @Test

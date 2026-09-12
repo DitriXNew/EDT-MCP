@@ -27,6 +27,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.eclipse.core.resources.IProject;
 import org.junit.Test;
@@ -1458,6 +1460,76 @@ public class CreateInfobaseToolTest
             json.get("success").getAsBoolean()); //$NON-NLS-1$
         assertTrue("and it must be reported, not swallowed", //$NON-NLS-1$
             json.get("message").getAsString().contains("credentials were NOT stored")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testCredentialReadBackDeadlineStillReportsTheCreatedInfobase() throws Exception
+    {
+        CountDownLatch readBackStarted = new CountDownLatch(1);
+        CountDownLatch releaseReadBack = new CountDownLatch(1);
+        CountDownLatch readBackFinished = new CountDownLatch(1);
+        String password = "deadline-secret-value"; //$NON-NLS-1$
+        InfobaseReference verifiedReference = infobaseRef();
+        CreateInfobaseTool.Credentials credentials =
+            new CreateInfobaseTool.Credentials("Admin", password, null); //$NON-NLS-1$
+
+        try
+        {
+            CreateInfobaseTool.CredentialStoreReport report = CreateInfobaseTool.storeSafely(
+                (publish, writeCommitted) -> {
+                    // Model the defect precisely: the persistent update returned, then the
+                    // consumer-facing resolveSettings read-back stalled.
+                    writeCommitted.run();
+                    readBackStarted.countDown();
+                    try
+                    {
+                        releaseReadBack.await(30, TimeUnit.SECONDS);
+                        publish.accept(StoreResult.verified(verifiedReference));
+                    }
+                    finally
+                    {
+                        readBackFinished.countDown();
+                    }
+                }, credentials, false, 250L);
+
+            assertTrue("the bounded operation must reach the read-back before timing out", //$NON-NLS-1$
+                readBackStarted.await(5, TimeUnit.SECONDS));
+            assertNull("a deadline cannot publish a verification conclusion", report.storeResult); //$NON-NLS-1$
+            assertTrue(report.note.contains("infobase WAS created")); //$NON-NLS-1$
+            assertTrue(report.note.contains("credential state is UNDETERMINED")); //$NON-NLS-1$
+            assertTrue(report.note.contains("set_infobase_credentials")); //$NON-NLS-1$
+            assertFalse("the timeout must not claim that credentials were stored", //$NON-NLS-1$
+                report.note.contains("Stored connection credentials")); //$NON-NLS-1$
+            assertFalse("the password must never appear in the timeout note", //$NON-NLS-1$
+                report.note.contains(password));
+
+            IProject project = mock(IProject.class);
+            IApplicationManager manager = mock(IApplicationManager.class);
+            // matchingInfobaseApp stubs its own mock; nesting it inside thenReturn(...) makes
+            // Mockito report this stubbing as unfinished. Build it first, as the other tests do.
+            List<IApplication> created =
+                Collections.singletonList(matchingInfobaseApp("created-app")); //$NON-NLS-1$
+            when(manager.getApplications(project)).thenReturn(created);
+            String raw = CreateInfobaseTool.buildSuccessResult(readBackContext(manager, project),
+                infobaseRef(), false, false, report);
+            JsonObject json = JsonParser.parseString(raw).getAsJsonObject();
+
+            assertTrue("credential uncertainty must never fail the committed creation", //$NON-NLS-1$
+                json.get("success").getAsBoolean()); //$NON-NLS-1$
+            assertEquals("created", json.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(json.get("message").getAsString().contains("credential state is UNDETERMINED")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse("no read-back means no fabricated verification field", //$NON-NLS-1$
+                json.has("verification")); //$NON-NLS-1$
+            assertFalse("a successful creation must not acquire an error shape", json.has("error")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse("the password must never appear anywhere in the create result", //$NON-NLS-1$
+                raw.contains(password));
+        }
+        finally
+        {
+            releaseReadBack.countDown();
+            assertTrue("the timed-out credential Job must not leak into later tests", //$NON-NLS-1$
+                readBackFinished.await(5, TimeUnit.SECONDS));
+        }
     }
 
     @Test

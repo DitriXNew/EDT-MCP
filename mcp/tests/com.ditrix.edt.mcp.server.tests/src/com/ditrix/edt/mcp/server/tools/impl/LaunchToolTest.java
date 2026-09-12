@@ -698,6 +698,59 @@ public class LaunchToolTest
     }
 
     @Test
+    public void testStandaloneApplicationLookupReturnsAPreconditionFailureOnItsDeadline()
+        throws Exception
+    {
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        when(manager.getApplication(project, "ServerApplication.Test")).thenAnswer(invocation -> { //$NON-NLS-1$
+            started.countDown();
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return Optional.empty();
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+
+        try
+        {
+            LaunchTool.StandaloneApplicationLookup lookup =
+                LaunchTool.lookupStandaloneApplicationBounded(manager, project,
+                    "ServerApplication.Test", 250L); //$NON-NLS-1$
+
+            assertTrue("the lookup must have entered EDT before this test calls it stalled", //$NON-NLS-1$
+                started.await(5, TimeUnit.SECONDS));
+            assertNull(lookup.application());
+            assertNotNull(lookup.failure());
+            assertTrue(lookup.failure().contains("EDT application lookup")); //$NON-NLS-1$
+            assertTrue(lookup.failure().contains("did not finish within 250ms")); //$NON-NLS-1$
+            assertTrue(lookup.failure().contains("may still be running")); //$NON-NLS-1$
+            assertFalse("a stalled lookup must not be misreported as a measured not-found", //$NON-NLS-1$
+                lookup.failure().contains("was not found")); //$NON-NLS-1$
+
+            JsonObject error = JsonParser.parseString(LaunchTool.standalonePreconditionError(
+                "Standalone", lookup.failure())).getAsJsonObject(); //$NON-NLS-1$
+            assertFalse(error.get("success").getAsBoolean()); //$NON-NLS-1$
+            assertTrue(error.get("error").getAsString().contains("application lookup")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse("a precondition timeout must not suggest that a start was attempted", //$NON-NLS-1$
+                error.get("error").getAsString().contains("thin-client configuration")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue("the timed-out lookup Job must not leak into later tests", //$NON-NLS-1$
+                finished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
     public void testStandaloneServerStartReportsItsCapturedPortConflict()
     {
         StartOutcome outcome = LaunchTool.startStandaloneServerWithPolicy(
@@ -759,7 +812,7 @@ public class LaunchToolTest
             try
             {
                 answer.set(LaunchTool.awaitStandaloneServerStart(service, new Object(),
-                    "Standalone", ILaunchManager.DEBUG_MODE, null, cleanup, 100L, 5_000L)); //$NON-NLS-1$
+                    "Standalone", ILaunchManager.DEBUG_MODE, null, true, cleanup, 100L, 5_000L)); //$NON-NLS-1$
             }
             catch (Throwable t)
             {
@@ -777,6 +830,20 @@ public class LaunchToolTest
             assertNull(callerFailure.get());
             assertNotNull(answer.get());
             assertFalse(answer.get().conclusive());
+            assertFalse("an inconclusive snapshot must not assert that no port rewrite occurred", //$NON-NLS-1$
+                answer.get().portsReassigned());
+            assertTrue(answer.get().portReassignmentOutcomeUnknown());
+            assertTrue(answer.get().failure().contains(
+                "ports may have been rewritten while the start continued")); //$NON-NLS-1$
+            JsonObject error = JsonParser.parseString(LaunchTool.standaloneStartFailure(
+                LaunchTool.standaloneAttemptError("Standalone", answer.get().failure()), //$NON-NLS-1$
+                answer.get().portsReassigned(), answer.get().portReassignmentOutcomeUnknown()))
+                .getAsJsonObject();
+            assertTrue(error.get("mutationOutcomeUnknown").getAsBoolean()); //$NON-NLS-1$
+            assertFalse("unknown must not be misreported as a committed reassignment", //$NON-NLS-1$
+                error.has("mutationCommitted")); //$NON-NLS-1$
+            assertFalse("unknown must not emit the exact-reassignment field", //$NON-NLS-1$
+                error.has("standaloneServerPortsReassigned")); //$NON-NLS-1$
             assertEquals("an in-flight start must keep its targeted confirmer armed", //$NON-NLS-1$
                 0, cleanups.get());
 
@@ -797,10 +864,10 @@ public class LaunchToolTest
     {
         CountDownLatch cleaned = new CountDownLatch(1);
         AtomicInteger cleanups = new AtomicInteger();
-        LaunchTool.DeferredStartCleanup cleanup = new LaunchTool.DeferredStartCleanup(() -> {
+        BoundedJob.DeferredCleanup cleanup = new BoundedJob.DeferredCleanup(() -> {
             cleanups.incrementAndGet();
             cleaned.countDown();
-        }, 100L);
+        }, 100L, "test: standalone cleanup cap"); //$NON-NLS-1$
 
         cleanup.afterBoundedWait(false);
         cleanup.jobFinished();
@@ -817,10 +884,10 @@ public class LaunchToolTest
     {
         CountDownLatch cleaned = new CountDownLatch(1);
         AtomicInteger cleanups = new AtomicInteger();
-        LaunchTool.DeferredStartCleanup cleanup = new LaunchTool.DeferredStartCleanup(() -> {
+        BoundedJob.DeferredCleanup cleanup = new BoundedJob.DeferredCleanup(() -> {
             cleanups.incrementAndGet();
             cleaned.countDown();
-        }, 25L);
+        }, 25L, "test: standalone cleanup cap"); //$NON-NLS-1$
 
         cleanup.afterBoundedWait(false);
         assertTrue("the cap must release a confirmer whose job never finishes", //$NON-NLS-1$

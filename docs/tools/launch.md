@@ -151,7 +151,10 @@ reason — with the busy ports named — appears in `debug_status` under `recent
 `reassign` lets EDT move the server to free ports, which **rewrites the server configuration** and
 changes the address its clients connect to. A successful direct start reports
 `standaloneServerPortsReassigned: true` and a message telling clients to use the new address. See
-the `update_database` guide for the full table.
+the `update_database` guide for the full table. If the bounded start times out or is interrupted
+while `reassign` remains armed, the error instead carries `mutationOutcomeUnknown: true`: the
+background start may still answer a later conflict and rewrite the ports, so inspect the
+standalone-server configuration before connecting or retrying.
 
 ## Standalone server: "can only start server that is stopped" (handled for you)
 

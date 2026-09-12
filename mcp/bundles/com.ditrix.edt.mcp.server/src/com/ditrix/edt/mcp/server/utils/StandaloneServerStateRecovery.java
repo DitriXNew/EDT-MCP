@@ -807,7 +807,7 @@ public final class StandaloneServerStateRecovery
         return guardedRestorationStart(
             () -> LaunchUpdateDialogAutoConfirmer.arm(false, false, false, null, infobaseName,
                 portPolicy, serverName),
-            () -> boundedRestorationStart(service, server, applicationId),
+            completion -> boundedRestorationStart(service, server, applicationId, completion),
             () -> conflicts.portConflicted()
                 ? LaunchUpdateDialogAutoConfirmer.portConflictError(conflicts.portConflictDetail(),
                     conflicts.portConflictReason()) : null,
@@ -815,44 +815,81 @@ public final class StandaloneServerStateRecovery
                 LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, null, infobaseName,
                     portPolicy, serverName);
                 conflicts.close();
-            });
+            }, StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS);
     }
 
-    /** Keeps the confirmer armed for the complete restoration start, including failure capture. */
+    /** Conclusive test seam preserving the simple arm/start/capture/disarm orchestration. */
     static String guardedRestorationStart(Runnable armer, Supplier<String> starter,
         Supplier<String> conflictFailure, Runnable disarmer)
     {
+        return guardedRestorationStart(armer,
+            completion -> new RestorationStartOutcome(starter.get(), true), conflictFailure,
+            disarmer, StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS);
+    }
+
+    /** Keeps the confirmer armed until an inconclusive restoration's underlying Job really ends. */
+    static String guardedRestorationStart(Runnable armer, RestorationStarter starter,
+        Supplier<String> conflictFailure, Runnable disarmer, long cleanupCapMs)
+    {
         armer.run();
+        BoundedJob.DeferredCleanup deferredCleanup = new BoundedJob.DeferredCleanup(disarmer,
+            cleanupCapMs, "Standalone-restoration confirmer safety cap"); //$NON-NLS-1$
+        RestorationStartOutcome outcome = null;
         try
         {
-            String failure = starter.get();
+            outcome = starter.start(deferredCleanup::jobFinished);
             String conflict = conflictFailure.get();
-            return conflict == null ? failure : conflict;
+            return conflict == null ? outcome.failure : conflict;
         }
         finally
         {
-            disarmer.run();
+            // If BoundedJob rethrows an Error, its Job has already completed and cleanup is safe now.
+            deferredCleanup.afterBoundedWait(outcome == null || outcome.conclusive);
         }
     }
 
     /** Runs EDT's restoration start through the existing bounded server-operation helper. */
-    private static String boundedRestorationStart(Object service, Object server, String applicationId)
+    private static RestorationStartOutcome boundedRestorationStart(Object service, Object server,
+        String applicationId, Runnable completion)
     {
         IStatus[] status = new IStatus[1];
         BoundedJob.Result result = BoundedJob.run(
             "Restoring standalone server: " + applicationId, //$NON-NLS-1$
             StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
             operationMonitor -> status[0] = StandaloneServerSupport.startServer(service,
-                server, ILaunchManager.DEBUG_MODE, operationMonitor));
+                server, ILaunchManager.DEBUG_MODE, operationMonitor), completion);
         if (result.isSuccess())
         {
             if (status[0] == null)
             {
-                return "EDT returned no status from the standalone-server start"; //$NON-NLS-1$
+                return new RestorationStartOutcome(
+                    "EDT returned no status from the standalone-server start", true); //$NON-NLS-1$
             }
-            return status[0].isOK() ? null : PlatformFailures.describeStatus(status[0]);
+            return new RestorationStartOutcome(
+                status[0].isOK() ? null : PlatformFailures.describeStatus(status[0]), true);
         }
-        return StandaloneServerSupport.startFailureReason(result);
+        return new RestorationStartOutcome(StandaloneServerSupport.startFailureReason(result),
+            !BoundedJob.isInconclusive(result.getOutcome()));
+    }
+
+    /** Completion-aware restoration start used by the shared deferred guard lifecycle. */
+    @FunctionalInterface
+    interface RestorationStarter
+    {
+        RestorationStartOutcome start(Runnable completion);
+    }
+
+    /** Failure plus whether the underlying restoration start has definitely ended. */
+    static final class RestorationStartOutcome
+    {
+        private final String failure;
+        private final boolean conclusive;
+
+        RestorationStartOutcome(String failure, boolean conclusive)
+        {
+            this.failure = failure;
+            this.conclusive = conclusive;
+        }
     }
 
     /** Finds the standalone configuration that addresses this project application. */

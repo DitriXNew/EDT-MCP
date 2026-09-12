@@ -35,10 +35,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 
 import org.eclipse.core.runtime.CoreException;
-import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
-import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
@@ -47,6 +45,8 @@ import org.junit.Test;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseAccess;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
+import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.BoundedStoreResult;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.StoreResult;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.google.gson.JsonObject;
@@ -584,65 +584,52 @@ public class SetInfobaseCredentialsToolTest
     }
 
     @Test
-    public void awaitStoreJobAnswersTheCallerAndSaysSoBeforeItReturns()
+    public void sharedBoundedStoreAnswersTheCallerAndSaysSoBeforeItReturns()
     {
         // The flag the check above reads is raised HERE, and it has to be raised on every way out -
         // a path that returns without raising it leaves the Job free to write.
         AtomicBoolean callerAnswered = new AtomicBoolean();
-        AtomicReference<String> jobResult = new AtomicReference<>(SUCCESS_JSON);
-        // Never scheduled, so join() returns immediately and the test does not wait out the 30s
-        // budget; what is under test is the bookkeeping around the join, not the join itself.
-        Job job = new Job("test: never scheduled") //$NON-NLS-1$
-        {
-            @Override
-            protected IStatus run(IProgressMonitor monitor)
-            {
-                return Status.OK_STATUS;
-            }
-        };
+        BoundedStoreResult<String> storeRun = InfobaseAccessSupport.runBoundedCredentialStore(
+            "test: quick store", 5_000L, //$NON-NLS-1$
+            (publish, writeCommitted) -> publish.accept(SUCCESS_JSON));
 
-        String result = SetInfobaseCredentialsTool.awaitStoreJob(job, jobResult, callerAnswered,
+        String result = SetInfobaseCredentialsTool.finishBoundedStore(storeRun, callerAnswered,
             "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertEquals(SUCCESS_JSON, result);
-        assertTrue("awaitStoreJob must raise callerAnswered before it returns: without it a job " //$NON-NLS-1$
+        assertTrue("the bounded store must raise callerAnswered before it returns: without it a job " //$NON-NLS-1$
             + "that outran the deadline goes on to write the launch configuration for a call that " //$NON-NLS-1$
             + "already reported a failure", callerAnswered.get()); //$NON-NLS-1$
     }
 
     @Test
-    public void awaitStoreJobReportsACommittedWriteWhenReadBackOutrunsTheDeadline() throws Exception
+    public void sharedBoundedStoreReportsACommittedWriteWhenReadBackOutrunsTheDeadline()
+        throws Exception
     {
         CountDownLatch readBackStarted = new CountDownLatch(1);
         CountDownLatch finishReadBack = new CountDownLatch(1);
-        AtomicReference<String> jobResult = new AtomicReference<>();
-        AtomicBoolean writeCommitted = new AtomicBoolean();
+        CountDownLatch readBackFinished = new CountDownLatch(1);
         AtomicBoolean callerAnswered = new AtomicBoolean();
-        Job job = new Job("test: committed write with slow read-back") //$NON-NLS-1$
-        {
-            @Override
-            protected IStatus run(IProgressMonitor monitor)
-            {
-                writeCommitted.set(true);
-                readBackStarted.countDown();
-                try
-                {
-                    finishReadBack.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-                }
-                catch (InterruptedException e)
-                {
-                    Thread.currentThread().interrupt();
-                }
-                return Status.OK_STATUS;
-            }
-        };
-        job.setSystem(true);
-        job.schedule();
+        BoundedStoreResult<String> storeRun =
+            InfobaseAccessSupport.runBoundedCredentialStore(
+                "test: committed write with slow read-back", 100L, //$NON-NLS-1$
+                (publish, writeCommitted) -> {
+                    writeCommitted.run();
+                    readBackStarted.countDown();
+                    try
+                    {
+                        finishReadBack.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                    }
+                    finally
+                    {
+                        readBackFinished.countDown();
+                    }
+                });
         try
         {
             assertTrue(readBackStarted.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
-            String result = SetInfobaseCredentialsTool.awaitStoreJob(job, jobResult,
-                writeCommitted, callerAnswered, "TestProject", "app1", 1L); //$NON-NLS-1$ //$NON-NLS-2$
+            String result = SetInfobaseCredentialsTool.finishBoundedStore(storeRun,
+                callerAnswered, "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
 
             JsonObject json = JsonParser.parseString(result).getAsJsonObject();
             assertFalse(json.get("success").getAsBoolean()); //$NON-NLS-1$
@@ -653,7 +640,7 @@ public class SetInfobaseCredentialsToolTest
         finally
         {
             finishReadBack.countDown();
-            job.join();
+            assertTrue(readBackFinished.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         }
     }
 
@@ -663,12 +650,12 @@ public class SetInfobaseCredentialsToolTest
      * <p>
      * Everything here is ordered by latches rather than by timing: the Job signals that it is RUNNING
      * (so the cancel on the timeout path cannot simply dequeue it before it starts), the caller's
-     * wait is given a 1 ms deadline it cannot meet, and only THEN is the Job let through to its
+     * wait is given a short deadline it cannot meet, and only THEN is the Job let through to its
      * client half. So the write it attempts is unambiguously a write after the answer - the exact
      * sequence that used to put a user and a password into a launch configuration behind the back of
      * a call that returned {@code success:false}.
      *
-     * @throws Exception when the latches or the job join are interrupted
+     * @throws Exception when the latch waits are interrupted
      */
     @Test
     public void aJobThatOutranTheDeadlineWritesNoLaunchConfigurationAfterwards() throws Exception
@@ -676,16 +663,14 @@ public class SetInfobaseCredentialsToolTest
         ILaunchConfigurationWorkingCopy copy = mock(ILaunchConfigurationWorkingCopy.class);
         ILaunchConfiguration config = localConfig(copy);
         AtomicBoolean callerAnswered = new AtomicBoolean();
-        AtomicBoolean writeCommitted = new AtomicBoolean();
-        AtomicReference<String> jobResult = new AtomicReference<>();
         AtomicReference<String> clientOutcome = new AtomicReference<>();
         CountDownLatch running = new CountDownLatch(1);
         CountDownLatch answered = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
 
-        Job job = new Job("test: slower than the deadline") //$NON-NLS-1$
-        {
-            @Override
-            protected IStatus run(IProgressMonitor monitor)
+        BoundedStoreResult<String> storeRun = InfobaseAccessSupport.runBoundedCredentialStore(
+            "test: slower than the deadline", 100L, (publish, writeCommitted) -> { //$NON-NLS-1$
+            try
             {
                 running.countDown();
                 try
@@ -699,19 +684,20 @@ public class SetInfobaseCredentialsToolTest
                 }
                 clientOutcome.set(SetInfobaseCredentialsTool.configureClient(callerAnswered,
                     CONFIG_NAME, config, "Admin", "pwd", false)); //$NON-NLS-1$ //$NON-NLS-2$
-                return Status.OK_STATUS;
             }
-        };
-        job.setSystem(true);
-        job.schedule();
+            finally
+            {
+                finished.countDown();
+            }
+        });
         try
         {
             assertTrue("the job must be RUNNING before the deadline elapses, or cancel() would " //$NON-NLS-1$
                 + "simply dequeue it and the write under test would never be attempted", //$NON-NLS-1$
                 running.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
 
-            String result = SetInfobaseCredentialsTool.awaitStoreJob(job, jobResult,
-                writeCommitted, callerAnswered, "TestProject", "app1", 1L); //$NON-NLS-1$ //$NON-NLS-2$
+            String result = SetInfobaseCredentialsTool.finishBoundedStore(storeRun,
+                callerAnswered, "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
 
             assertTrue("the caller must be told the call timed out: " + result, //$NON-NLS-1$
                 result.contains("timed out")); //$NON-NLS-1$
@@ -719,7 +705,7 @@ public class SetInfobaseCredentialsToolTest
             assertFalse(timeout.has("mutationCommitted")); //$NON-NLS-1$
             assertTrue(timeout.get("error").getAsString().contains("may not be stored")); //$NON-NLS-1$ //$NON-NLS-2$
             answered.countDown();
-            job.join();
+            assertTrue(finished.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
 
             assertNotNull("the job's client half must report that it stood down", //$NON-NLS-1$
                 clientOutcome.get());
@@ -729,7 +715,7 @@ public class SetInfobaseCredentialsToolTest
         finally
         {
             answered.countDown();
-            job.join();
+            assertTrue(finished.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         }
     }
 
@@ -901,7 +887,7 @@ public class SetInfobaseCredentialsToolTest
      * behind in a javadoc cannot satisfy it. The class files are read as resources, the way
      * {@code BareErrorStringRatchetTest} reads constant pools; JaCoCo instruments classes as they
      * are LOADED and never rewrites the file, so what is parsed here is javac's own output. The
-     * tool's anonymous inner classes are scanned too - the bounded store Job is one of them.
+     * tool's generated inner classes are scanned too for compiler-generated implementation bodies.
      * <p>
      * Both calls must sit in the SAME method body: bytecode offsets restart at zero per method, so
      * comparing across bodies would compare meaningless numbers, and a future overload could
@@ -1040,8 +1026,8 @@ public class SetInfobaseCredentialsToolTest
     private static final class ToolBytecode
     {
         /**
-         * How many anonymous inner classes to look for. The bounded store Job is one; the loop
-         * simply stops at the first missing resource, so the ceiling only bounds the search.
+         * How many generated inner classes to look for. The loop stops at the first missing
+         * resource, so the ceiling only bounds the search.
          */
         private static final int MAX_INNER_CLASSES = 20;
 
@@ -1095,7 +1081,7 @@ public class SetInfobaseCredentialsToolTest
                 fail("class resource not found for " + clazz.getName() + " - a wiring ratchet must " //$NON-NLS-1$ //$NON-NLS-2$
                     + "never pass because it read nothing"); //$NON-NLS-1$
             }
-            // The bounded store Job is an anonymous class, so its body lives in its own class file.
+            // Include implementation bodies the compiler placed in generated inner classes.
             for (int i = 1; i <= MAX_INNER_CLASSES; i++)
             {
                 String inner = simpleName + "$" + i; //$NON-NLS-1$

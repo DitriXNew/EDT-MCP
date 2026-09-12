@@ -7,6 +7,9 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.lang.reflect.Method;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import org.eclipse.core.runtime.Adapters;
 import org.eclipse.core.runtime.Platform;
@@ -45,6 +48,9 @@ import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
  */
 public final class InfobaseAccessSupport
 {
+    /** Shared deadline for the store plus its consumer-facing read-back. */
+    public static final long CREDENTIAL_STORE_TIMEOUT_MS = 30_000L;
+
     /** Symbolic name of the bundle that owns the internal PlatformServicesCore (and its Guice injector). */
     private static final String PLATFORM_SERVICES_CORE_BUNDLE_ID =
         "com._1c.g5.v8.dt.platform.services.core"; //$NON-NLS-1$
@@ -159,6 +165,66 @@ public final class InfobaseAccessSupport
         {
             return new StoreResult(null, Verification.NOT_VERIFIABLE, reason, null, ref);
         }
+    }
+
+    /** Work performed by the shared bounded credential-store Job. */
+    @FunctionalInterface
+    public interface BoundedStoreWork<T>
+    {
+        /**
+         * @param publish records the latest safe result snapshot for the bounded caller
+         * @param writeCommitted records the persistent-write boundary before read-back begins
+         * @throws Exception any operation failure captured by {@link BoundedJob}
+         */
+        void run(Consumer<T> publish, Runnable writeCommitted) throws Exception;
+    }
+
+    /** Bounded Job outcome plus the result and write-boundary snapshots visible at its deadline. */
+    public static final class BoundedStoreResult<T>
+    {
+        private final BoundedJob.Result boundedResult;
+        private final T publishedResult;
+        private final boolean writeCommitted;
+
+        private BoundedStoreResult(BoundedJob.Result boundedResult, T publishedResult,
+            boolean writeCommitted)
+        {
+            this.boundedResult = boundedResult;
+            this.publishedResult = publishedResult;
+            this.writeCommitted = writeCommitted;
+        }
+
+        public BoundedJob.Result boundedResult()
+        {
+            return boundedResult;
+        }
+
+        public T publishedResult()
+        {
+            return publishedResult;
+        }
+
+        public boolean writeCommitted()
+        {
+            return writeCommitted;
+        }
+    }
+
+    /**
+     * Runs credential storage and read-back in one bounded background Job.
+     *
+     * <p>The publisher supports {@code set_infobase_credentials}' persist-first result snapshots;
+     * simpler callers publish once after {@link #storeCredentials} returns. The write callback is
+     * independent so a timeout during read-back can be described without exposing any credential.
+     */
+    public static <T> BoundedStoreResult<T> runBoundedCredentialStore(String target,
+        long timeoutMs, BoundedStoreWork<T> work)
+    {
+        AtomicReference<T> published = new AtomicReference<>();
+        AtomicBoolean writeCommitted = new AtomicBoolean();
+        BoundedJob.Result bounded = BoundedJob.run("Store infobase credentials: " + target, //$NON-NLS-1$
+            timeoutMs, monitor -> work.run(published::set, () -> writeCommitted.set(true)));
+        return new BoundedStoreResult<>(bounded, published.get(), writeCommitted.get());
     }
 
     /**
@@ -371,7 +437,7 @@ public final class InfobaseAccessSupport
         return storeCredentials(ref, user, password, access, (Runnable)null);
     }
 
-    private static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
+    public static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
             InfobaseAccess access, Runnable writeCommitted)
     {
         if (ref == null)
