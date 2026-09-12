@@ -789,6 +789,11 @@ public class LaunchTool implements IMcpTool
         if (bounded.getFailure() != null
             && bounded.getOutcome() == BoundedJob.Outcome.COMPLETED)
         {
+            if (staleServerStopped.get() && resolvedId != null)
+            {
+                return StandalonePreparation.preflightFailed(resolvedProject.get(), resolvedId,
+                    PlatformFailures.describe(bounded.getFailure()), true);
+            }
             if (stage.get() == StandalonePreparationStage.APPLICATION)
             {
                 return StandalonePreparation.failed("the application could not be resolved: " //$NON-NLS-1$
@@ -942,6 +947,14 @@ public class LaunchTool implements IMcpTool
     static StartOutcome startStandaloneServerGuarded(String configName, IProject project,
         Runnable preflight, Supplier<StartOutcome> starter)
     {
+        return startStandaloneServerGuarded(configName, project, preflight, starter,
+            StandaloneServerStateRecovery::appendRestoration);
+    }
+
+    /** Same guarded start with an observable restoration seam. */
+    static StartOutcome startStandaloneServerGuarded(String configName, IProject project,
+        Runnable preflight, Supplier<StartOutcome> starter, RestorationAppender restorer)
+    {
         StandaloneServerStateRecovery.beginOperation();
         try
         {
@@ -949,15 +962,27 @@ public class LaunchTool implements IMcpTool
             {
                 preflight.run();
             }
-            catch (ApplicationException e)
+            catch (RuntimeException e)
             {
-                String failure = PlatformFailures.describe(e);
-                String restored = StandaloneServerStateRecovery.appendRestoration(failure, project,
-                    configName);
-                return new StartOutcome(standalonePreconditionError(configName,
-                    restored == null ? failure : restored), true, false);
+                return finishConclusiveStandaloneFailure(configName, project,
+                    PlatformFailures.describe(e), false, false, false, restorer);
             }
-            StartOutcome outcome = starter.get();
+            StartOutcome outcome;
+            try
+            {
+                outcome = starter.get();
+            }
+            catch (RuntimeException e)
+            {
+                return finishConclusiveStandaloneFailure(configName, project,
+                    PlatformFailures.describe(e), true, false, false, restorer);
+            }
+            if (outcome == null)
+            {
+                return finishConclusiveStandaloneFailure(configName, project,
+                    "the standalone-server start produced no result", true, false, false, //$NON-NLS-1$
+                    restorer);
+            }
             if (outcome.failure() == null)
             {
                 return outcome;
@@ -970,16 +995,32 @@ public class LaunchTool implements IMcpTool
                     notice == null ? outcome.failure() : notice), false,
                     outcome.portsReassigned(), outcome.portReassignmentOutcomeUnknown());
             }
-            String restored = StandaloneServerStateRecovery.appendRestoration(outcome.failure(),
-                project, configName);
-            return new StartOutcome(standaloneAttemptError(configName,
-                restored == null ? outcome.failure() : restored), true,
-                outcome.portsReassigned(), outcome.portReassignmentOutcomeUnknown());
+            return finishConclusiveStandaloneFailure(configName, project, outcome.failure(), true,
+                outcome.portsReassigned(), outcome.portReassignmentOutcomeUnknown(), restorer);
         }
         finally
         {
             StandaloneServerStateRecovery.endOperation();
         }
+    }
+
+    /** Attempts restoration before one conclusive failure leaves the stop-record scope. */
+    private static StartOutcome finishConclusiveStandaloneFailure(String configName,
+        IProject project, String failure, boolean startAttempted, boolean portsReassigned,
+        boolean portReassignmentOutcomeUnknown, RestorationAppender restorer)
+    {
+        String restored = restorer.append(failure, project, configName);
+        String reason = restored == null ? failure : restored;
+        String reported = startAttempted ? standaloneAttemptError(configName, reason)
+            : standalonePreconditionError(configName, reason);
+        return new StartOutcome(reported, true, portsReassigned,
+            portReassignmentOutcomeUnknown);
+    }
+
+    @FunctionalInterface
+    interface RestorationAppender
+    {
+        String append(String original, IProject project, String launchConfigurationName);
     }
 
     /** Builds the completed standalone-server result with EDT's effective DEBUG mode. */

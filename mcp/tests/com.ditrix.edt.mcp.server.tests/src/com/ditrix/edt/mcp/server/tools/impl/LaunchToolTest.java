@@ -1168,6 +1168,28 @@ public class LaunchToolTest
     }
 
     @Test
+    public void testStandaloneStartSchedulingFailureRestoresTheStoppedServer()
+    {
+        AtomicInteger restorationAttempts = new AtomicInteger();
+
+        StartOutcome result = LaunchTool.startStandaloneServerGuarded("Standalone", null, //$NON-NLS-1$
+            () -> recordOperationStop("ServerApplication.Test"), //$NON-NLS-1$
+            () -> {
+                throw new IllegalStateException("Eclipse Job manager rejected the start"); //$NON-NLS-1$
+            },
+            (original, project, launchName) -> {
+                restorationAttempts.incrementAndGet();
+                return original + ". Restoration was attempted"; //$NON-NLS-1$
+            });
+
+        assertEquals("start scheduling must attempt restoration before cleanup", //$NON-NLS-1$
+            1, restorationAttempts.get());
+        assertTrue(result.conclusive());
+        assertTrue(result.failure().contains("Eclipse Job manager rejected the start")); //$NON-NLS-1$
+        assertFalse(result.failure().contains("Unexpected error")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testStandaloneServerFailedStartDoesNotClaimRestorationWhenNothingWasStopped()
     {
         StartOutcome result = LaunchTool.startStandaloneServerGuarded("Standalone", null, () -> { }, //$NON-NLS-1$
