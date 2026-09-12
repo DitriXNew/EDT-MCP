@@ -10,6 +10,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -67,10 +68,18 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     private static final Set<String> READ_ONLY_V8_ADDITIONS = Set.of(
         "infobase_sessions"); //$NON-NLS-1$
 
-    private static final Set<String> READ_ONLY_V9_ADDITIONS = Set.of(
-        "cancel_job", //$NON-NLS-1$
+    /*
+     * Historical order in which these entered the read-only presets: delete_metadata (e5d2012a),
+     * delete_infobase (543a7d4a), cancel_job (bd9cb8e8). Frozen: future tools belong to a later
+     * migration, never this list.
+     */
+    static final List<String> READ_ONLY_V9_ADDITIONS_IN_JOIN_ORDER = List.of(
+        "delete_metadata", //$NON-NLS-1$
         "delete_infobase", //$NON-NLS-1$
-        "delete_metadata"); //$NON-NLS-1$
+        "cancel_job"); //$NON-NLS-1$
+
+    private static final Set<String> READ_ONLY_V9_ADDITIONS =
+        Set.copyOf(READ_ONLY_V9_ADDITIONS_IN_JOIN_ORDER);
 
     /** Actual disabled-name additions registered for each Analysis Only migration. */
     static final Map<Integer, Set<String>> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION = Map.of(
@@ -478,6 +487,18 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             && (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE)
                 || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE)))
         {
+            List<String> absentV9Names = READ_ONLY_V9_ADDITIONS_IN_JOIN_ORDER.stream()
+                .filter(toolName -> !disabled.contains(toolName))
+                .collect(Collectors.toList());
+            int suffixStart = READ_ONLY_V9_ADDITIONS_IN_JOIN_ORDER.size() - absentV9Names.size();
+            if (!READ_ONLY_V9_ADDITIONS_IN_JOIN_ORDER
+                .subList(suffixStart, READ_ONLY_V9_ADDITIONS_IN_JOIN_ORDER.size())
+                .equals(absentV9Names))
+            {
+                return false;
+            }
+            // A suffix absence stays ambiguous; resolved toward the preset safety promise, because
+            // losing an enable is visible, while a destructive tool left enabled here is not.
             return disabled.addAll(READ_ONLY_V9_ADDITIONS);
         }
         return false;

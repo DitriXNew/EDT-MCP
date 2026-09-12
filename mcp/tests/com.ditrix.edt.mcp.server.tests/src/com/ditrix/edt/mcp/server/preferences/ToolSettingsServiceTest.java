@@ -14,6 +14,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -1194,6 +1195,48 @@ public class ToolSettingsServiceTest
     }
 
     @Test
+    public void testVersion9LeavesProfileMissingDeleteMetadataButContainingLaterToolsAlone()
+    {
+        assertVersion9LeavesNonSuffixAbsenceAlone(Set.of("delete_metadata")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testVersion9LeavesProfileWithNonSuffixFirstAndLastAbsencesAlone()
+    {
+        assertVersion9LeavesNonSuffixAbsenceAlone(
+            Set.of("delete_metadata", "cancel_job")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testVersion9MigratesProfileMissingDeleteInfobaseAndCancelJob()
+    {
+        assertVersion9MigratesSuffixAbsence(
+            Set.of("delete_infobase", "cancel_job")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testVersion9MigratesProfileMissingOnlyCancelJob()
+    {
+        assertVersion9MigratesSuffixAbsence(Set.of("cancel_job")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testVersion9MigratesProfileMissingAllThreeHistoricalAdditions()
+    {
+        assertVersion9MigratesSuffixAbsence(READ_ONLY_V9_ADDITIONS);
+    }
+
+    @Test
+    public void testVersion9HistoricalJoinOrderIsFrozen()
+    {
+        assertEquals(List.of(
+            "delete_metadata", //$NON-NLS-1$
+            "delete_infobase", //$NON-NLS-1$
+            "cancel_job"), //$NON-NLS-1$
+            ToolSettingsService.READ_ONLY_V9_ADDITIONS_IN_JOIN_ORDER);
+    }
+
+    @Test
     public void testVersion9LeavesAProfileThatReenabledAVersion8ToolAlone()
     {
         assertVersion9LeavesCustomizedProfileAlone("infobase_sessions"); //$NON-NLS-1$
@@ -1258,6 +1301,34 @@ public class ToolSettingsServiceTest
         assertEquals("the restored set must match " + preset, //$NON-NLS-1$
             preset, ToolPreset.matchPreset(disabled));
         assertEquals(9, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+    }
+
+    private static void assertVersion9LeavesNonSuffixAbsenceAlone(Set<String> absentTools)
+    {
+        Set<String> customized = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        customized.removeAll(absentTools);
+        PreferenceStore store = storedDisabledTools(customized, 8);
+        String storedProfile = store.getString(PreferenceConstants.PREF_DISABLED_TOOLS);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals("a non-suffix absence must preserve the stored profile byte for byte", //$NON-NLS-1$
+            storedProfile, store.getString(PreferenceConstants.PREF_DISABLED_TOOLS));
+        assertEquals(customized, disabledTools(store));
+    }
+
+    private static void assertVersion9MigratesSuffixAbsence(Set<String> absentTools)
+    {
+        Set<String> legacy = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        legacy.removeAll(absentTools);
+        PreferenceStore store = storedDisabledTools(legacy, 8);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertTrue("version 9 must add every absent suffix name: " + disabled, //$NON-NLS-1$
+            disabled.containsAll(absentTools));
+        assertEquals(ToolPreset.CODE_REVIEW.getDisabledTools(), disabled);
     }
 
     private static void assertVersion9LeavesCustomizedProfileAlone(String enabledPriorTool)
