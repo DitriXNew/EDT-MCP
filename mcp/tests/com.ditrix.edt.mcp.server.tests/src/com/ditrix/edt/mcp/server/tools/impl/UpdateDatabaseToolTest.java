@@ -453,14 +453,19 @@ public class UpdateDatabaseToolTest
             new IllegalStateException("update failed"), false, false, //$NON-NLS-1$
             "The standalone server is not running."); //$NON-NLS-1$
 
+        // The advice tail is the one #545 corrected: updateState is a CACHED comparison, not a
+        // completion signal, so it may not be offered as the way to check a failed update.
         assertEquals("Unexpected error: update failed Pre-update infobase session inspection " //$NON-NLS-1$
             + "was unreachable: The standalone server is not running. This was not treated as " //$NON-NLS-1$
             + "proof that no foreign sessions existed. The update may have applied partially, " //$NON-NLS-1$
-            + "so do not retry blindly: check the actual state with get_applications " //$NON-NLS-1$
-            + "(updateState) and the EDT Error Log first.", //$NON-NLS-1$
+            + "so do not retry blindly. EDT returned no authoritative stateAfter for this " //$NON-NLS-1$
+            + "failed call; get_applications updateState is cached and may lag, so inspect " //$NON-NLS-1$
+            + "the EDT Error Log first.", //$NON-NLS-1$
             JsonParser.parseString(result).getAsJsonObject().get("error").getAsString()); //$NON-NLS-1$
         assertTrue(result.contains("session inspection was unreachable")); //$NON-NLS-1$
         assertTrue(result.contains("not treated as proof")); //$NON-NLS-1$
+        assertFalse("the session-reason path must not reintroduce the wording #545 removed", //$NON-NLS-1$
+            result.contains("check the actual state with get_applications (updateState)")); //$NON-NLS-1$
     }
 
     @Test
