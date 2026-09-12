@@ -62,6 +62,7 @@ import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSessio
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerPortConflictPolicy;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery;
+import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.ApplicationUpdateType;
@@ -686,9 +687,9 @@ public class LaunchToolTest
     {
         IStatus refusal = new Status(IStatus.ERROR, "test", "server start refused"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        StartOutcome outcome = LaunchTool.startStandaloneServerBounded(
+        StartOutcome outcome = LaunchTool.startStandaloneServerWithPolicy(
             new FakeStandaloneStartService(refusal), new Object(), "Standalone", //$NON-NLS-1$
-            ILaunchManager.RUN_MODE);
+            ILaunchManager.RUN_MODE, null, null, StandaloneServerPortConflictPolicy.CANCEL);
 
         assertEquals("server start refused", outcome.failure()); //$NON-NLS-1$
         assertTrue(outcome.conclusive());
@@ -723,8 +724,8 @@ public class LaunchToolTest
 
         try
         {
-            LaunchTool.StandaloneApplicationLookup lookup =
-                LaunchTool.lookupStandaloneApplicationBounded(manager, project,
+            StandaloneServerSupport.ApplicationLookup lookup =
+                StandaloneServerSupport.lookupApplicationBounded(manager, project,
                     "ServerApplication.Test", 250L); //$NON-NLS-1$
 
             assertTrue("the lookup must have entered EDT before this test calls it stalled", //$NON-NLS-1$
@@ -753,6 +754,32 @@ public class LaunchToolTest
     }
 
     @Test
+    public void testStandaloneBoundedLookupCarriesStartAttributionWithoutASecondEdtRead()
+        throws Exception
+    {
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        IApplication application = mock(IApplication.class,
+            Mockito.withSettings().extraInterfaces(ServerBackedApplication.class));
+        NamedStandaloneServer server = new NamedStandaloneServer("Standalone server for Base"); //$NON-NLS-1$
+        when(manager.getApplication(project, "ServerApplication.Test")) //$NON-NLS-1$
+            .thenReturn(Optional.of(application));
+        when(((ServerBackedApplication)application).getServer()).thenReturn(server);
+        when(application.getName()).thenReturn("Base"); //$NON-NLS-1$
+
+        StandaloneServerSupport.ApplicationLookup lookup =
+            StandaloneServerSupport.lookupApplicationBounded(manager, project,
+                "ServerApplication.Test", 5_000L); //$NON-NLS-1$
+
+        assertNull(lookup.failure());
+        assertSame(application, lookup.application());
+        assertSame(server, lookup.server());
+        assertEquals("Base", lookup.infobaseName()); //$NON-NLS-1$
+        assertEquals("Standalone server for Base", lookup.serverName()); //$NON-NLS-1$
+        verify(manager, times(1)).getApplication(project, "ServerApplication.Test"); //$NON-NLS-1$
+    }
+
+    @Test
     public void testStandaloneServerStartReportsItsCapturedPortConflict()
     {
         StartOutcome outcome = LaunchTool.startStandaloneServerWithPolicy(
@@ -768,31 +795,48 @@ public class LaunchToolTest
     @Test
     public void testStandaloneServerStartClassifiesOnlyFinishedFailuresAsConclusive()
     {
-        assertFalse(LaunchTool.conclusiveStartFailure(BoundedJob.Outcome.TIMED_OUT));
-        assertFalse(LaunchTool.conclusiveStartFailure(BoundedJob.Outcome.INTERRUPTED));
-        assertTrue(LaunchTool.conclusiveStartFailure(BoundedJob.Outcome.TIMED_OUT_BEFORE_START));
+        assertTrue(BoundedJob.isInconclusive(BoundedJob.Outcome.TIMED_OUT));
+        assertTrue(BoundedJob.isInconclusive(BoundedJob.Outcome.INTERRUPTED));
+        assertFalse(BoundedJob.isInconclusive(BoundedJob.Outcome.TIMED_OUT_BEFORE_START));
 
-        StartOutcome captured = LaunchTool.startStandaloneServerBounded(
+        StartOutcome captured = LaunchTool.startStandaloneServerWithPolicy(
             new ThrowingStandaloneStartService(), new Object(), "Standalone", //$NON-NLS-1$
-            ILaunchManager.DEBUG_MODE);
+            ILaunchManager.DEBUG_MODE, null, null, StandaloneServerPortConflictPolicy.CANCEL);
         assertEquals("captured start failure", captured.failure()); //$NON-NLS-1$
         assertTrue(captured.conclusive());
     }
 
     @Test
     public void testConclusiveStandaloneFailureDisarmsBeforeTheCallReturns()
+        throws Exception
     {
-        AtomicInteger cleanups = new AtomicInteger();
         IStatus refusal = new Status(IStatus.ERROR, "test", "server start refused"); //$NON-NLS-1$ //$NON-NLS-2$
+        AtomicInteger inFlight = authInFlightCounter();
+        int originalAuth = inFlight.get();
+        int originalPortArms = portConflictArmCount();
+        armPortConflictForTest(StandaloneServerPortConflictPolicy.CANCEL, null, null);
 
-        StartOutcome outcome = LaunchTool.awaitStandaloneServerStart(
-            new FakeStandaloneStartService(refusal), new Object(), "Standalone", //$NON-NLS-1$
-            ILaunchManager.DEBUG_MODE, null, cleanups::incrementAndGet, 5_000L, 5_000L);
+        try
+        {
+            StartOutcome outcome = LaunchTool.startStandaloneServerWithPolicy(
+                new FakeStandaloneStartService(refusal), new Object(), "Standalone", //$NON-NLS-1$
+                ILaunchManager.DEBUG_MODE, null, null, StandaloneServerPortConflictPolicy.CANCEL,
+                5_000L, 5_000L);
 
-        assertNotNull(outcome.failure());
-        assertTrue(outcome.conclusive());
-        assertEquals("the confirmer must be disarmed before a conclusive call returns", //$NON-NLS-1$
-            1, cleanups.get());
+            assertNotNull(outcome.failure());
+            assertTrue(outcome.conclusive());
+            assertEquals("the auth guard must be released before a conclusive call returns", //$NON-NLS-1$
+                originalAuth, inFlight.get());
+            assertEquals("the port guard must be released before a conclusive call returns", //$NON-NLS-1$
+                originalPortArms, portConflictArmCount());
+        }
+        finally
+        {
+            while (portConflictArmCount() > originalPortArms)
+            {
+                disarmPortConflictForTest(StandaloneServerPortConflictPolicy.CANCEL, null, null);
+            }
+        }
     }
 
     @Test
@@ -800,21 +844,24 @@ public class LaunchToolTest
     {
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        CountDownLatch cleaned = new CountDownLatch(1);
-        AtomicInteger cleanups = new AtomicInteger();
         AtomicReference<StartOutcome> answer = new AtomicReference<>();
         AtomicReference<Throwable> callerFailure = new AtomicReference<>();
+        AtomicInteger inFlight = authInFlightCounter();
+        int originalAuth = inFlight.get();
+        int originalPortArms = portConflictArmCount();
+        // The unit harness deliberately has no workbench Display, so the real confirmer's arm()
+        // is a no-op. Seed its existing bookkeeping seam: the production cleanup uses the same
+        // exact disarm and therefore consumes this marker. If cleanup runs at the bounded return,
+        // the count drops early; if it is correctly deferred, the marker survives until Job done.
+        armPortConflictForTest(StandaloneServerPortConflictPolicy.REASSIGN, null, null);
         BlockingStandaloneStartService service =
             new BlockingStandaloneStartService(started, release);
-        Runnable cleanup = () -> {
-            cleanups.incrementAndGet();
-            cleaned.countDown();
-        };
         Thread caller = new Thread(() -> {
             try
             {
-                answer.set(LaunchTool.awaitStandaloneServerStart(service, new Object(),
-                    "Standalone", ILaunchManager.DEBUG_MODE, null, true, cleanup, 100L, 5_000L)); //$NON-NLS-1$
+                answer.set(LaunchTool.startStandaloneServerWithPolicy(service, new Object(),
+                    "Standalone", ILaunchManager.DEBUG_MODE, null, null, //$NON-NLS-1$
+                    StandaloneServerPortConflictPolicy.REASSIGN, 100L, 5_000L));
             }
             catch (Throwable t)
             {
@@ -847,77 +894,54 @@ public class LaunchToolTest
                 error.has("mutationCommitted")); //$NON-NLS-1$
             assertFalse("unknown must not emit the exact-reassignment field", //$NON-NLS-1$
                 error.has("standaloneServerPortsReassigned")); //$NON-NLS-1$
-            assertEquals("an in-flight start must keep its targeted confirmer armed", //$NON-NLS-1$
-                0, cleanups.get());
-
-            release.countDown();
-            assertTrue("job completion must release the deferred confirmer", //$NON-NLS-1$
-                cleaned.await(5, TimeUnit.SECONDS));
-            assertEquals(1, cleanups.get());
-        }
-        finally
-        {
-            release.countDown();
-            caller.join(5_000L);
-        }
-    }
-
-    @Test
-    public void testInconclusiveStandaloneStartKeepsAuthSuppressionUntilJobCompletion()
-        throws Exception
-    {
-        CountDownLatch started = new CountDownLatch(1);
-        CountDownLatch release = new CountDownLatch(1);
-        AtomicReference<StartOutcome> answer = new AtomicReference<>();
-        AtomicReference<Throwable> callerFailure = new AtomicReference<>();
-        AtomicInteger inFlight = authInFlightCounter();
-        int original = inFlight.get();
-
-        Thread caller = new Thread(() -> {
-            try
-            {
-                answer.set(LaunchTool.startStandaloneServerWithPolicy(
-                    new BlockingStandaloneStartService(started, release), new Object(),
-                    "Standalone", ILaunchManager.DEBUG_MODE, null, null, //$NON-NLS-1$
-                    StandaloneServerPortConflictPolicy.CANCEL, 100L, 5_000L));
-            }
-            catch (Throwable t)
-            {
-                callerFailure.set(t);
-            }
-        }, "test: standalone auth-suppression caller"); //$NON-NLS-1$
-
-        caller.start();
-        try
-        {
-            assertTrue(started.await(5, TimeUnit.SECONDS));
-            caller.join(5_000L);
-            assertFalse("the bounded caller must have returned", caller.isAlive()); //$NON-NLS-1$
-            assertNull(callerFailure.get());
-            assertNotNull(answer.get());
-            assertFalse(answer.get().conclusive());
-            assertEquals("the start's auth suppression must remain paired with the deferred " //$NON-NLS-1$
-                + "port-conflict guard", original + 1, inFlight.get()); //$NON-NLS-1$
+            assertEquals("the old eager auth release must be absent while the start is in flight", //$NON-NLS-1$
+                originalAuth + 1, inFlight.get());
+            assertEquals("the old eager port disarm must be absent while the start is in flight", //$NON-NLS-1$
+                originalPortArms + 1, portConflictArmCount());
 
             release.countDown();
             long deadline = System.currentTimeMillis() + 5_000L;
-            while (inFlight.get() != original && System.currentTimeMillis() < deadline)
+            while ((inFlight.get() != originalAuth
+                || portConflictArmCount() != originalPortArms)
+                && System.currentTimeMillis() < deadline)
             {
                 Thread.sleep(10L);
             }
-            assertEquals("job completion must release both guards together exactly once", //$NON-NLS-1$
-                original, inFlight.get());
+            assertEquals("job completion must release the deferred auth guard", //$NON-NLS-1$
+                originalAuth, inFlight.get());
+            assertEquals("job completion must release the deferred port guard", //$NON-NLS-1$
+                originalPortArms, portConflictArmCount());
         }
         finally
         {
             release.countDown();
             caller.join(5_000L);
             long cleanupDeadline = System.currentTimeMillis() + 5_000L;
-            while (inFlight.get() != original && System.currentTimeMillis() < cleanupDeadline)
+            while ((inFlight.get() != originalAuth
+                || portConflictArmCount() != originalPortArms)
+                && System.currentTimeMillis() < cleanupDeadline)
             {
                 Thread.sleep(10L);
             }
+            while (portConflictArmCount() > originalPortArms)
+            {
+                disarmPortConflictForTest(StandaloneServerPortConflictPolicy.REASSIGN, null, null);
+            }
         }
+    }
+
+    @Test
+    public void testDirectStandaloneFailureSurfacesCancelledAccessSettingsDialog()
+    {
+        StartOutcome outcome = LaunchTool.startStandaloneServerWithPolicy(
+            new AuthCancellingStandaloneStartService(), new Object(), "Standalone", //$NON-NLS-1$
+            ILaunchManager.DEBUG_MODE, null, null, StandaloneServerPortConflictPolicy.CANCEL);
+
+        assertNotNull(outcome.failure());
+        assertTrue(outcome.failure().contains("infobase access-settings dialog")); //$NON-NLS-1$
+        assertTrue(outcome.failure().contains("set_infobase_credentials")); //$NON-NLS-1$
+        assertFalse("the old bare service-status failure must be absent", //$NON-NLS-1$
+            "server start refused".equals(outcome.failure())); //$NON-NLS-1$
     }
 
     @Test
@@ -1871,6 +1895,16 @@ public class LaunchToolTest
         }
     }
 
+    /** A direct start whose failed connect raised and auto-cancelled EDT's auth dialog. */
+    public static final class AuthCancellingStandaloneStartService
+    {
+        public IStatus startServer(Object server, String launchMode, Object monitor)
+        {
+            recordAuthDialogCancel();
+            return new Status(IStatus.ERROR, "test", "server start refused"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
     /** A start that ignores cancellation until the test explicitly releases it. */
     public static final class BlockingStandaloneStartService
     {
@@ -1898,6 +1932,28 @@ public class LaunchToolTest
         }
     }
 
+    /** Extra EDT server-application surface supplied to a Mockito application mock. */
+    public interface ServerBackedApplication
+    {
+        Object getServer();
+    }
+
+    /** Minimal already-resolved WST server used by the bounded attribution test. */
+    public static final class NamedStandaloneServer
+    {
+        private final String name;
+
+        NamedStandaloneServer(String name)
+        {
+            this.name = name;
+        }
+
+        public String getName()
+        {
+            return name;
+        }
+    }
+
     /** A standalone-server service whose start throws inside the bounded job. */
     public static final class ThrowingStandaloneStartService
     {
@@ -1921,6 +1977,49 @@ public class LaunchToolTest
         {
             throw new AssertionError(e);
         }
+    }
+
+    private static void recordAuthDialogCancel()
+    {
+        try
+        {
+            Method method = InfobaseAuthDialogSuppressor.class.getDeclaredMethod(
+                "recordAutoCancelledDialog", boolean.class); //$NON-NLS-1$
+            method.setAccessible(true);
+            method.invoke(null, false);
+        }
+        catch (ReflectiveOperationException e)
+        {
+            throw new AssertionError(e);
+        }
+    }
+
+    private static int portConflictArmCount() throws Exception
+    {
+        Method method = LaunchUpdateDialogAutoConfirmer.class.getDeclaredMethod(
+            "portConflictArmsForTest"); //$NON-NLS-1$
+        method.setAccessible(true);
+        return ((Integer)method.invoke(null)).intValue();
+    }
+
+    private static void armPortConflictForTest(StandaloneServerPortConflictPolicy policy,
+        String infobaseName, String serverName) throws Exception
+    {
+        Method method = LaunchUpdateDialogAutoConfirmer.class.getDeclaredMethod(
+            "armPortConflictForTest", StandaloneServerPortConflictPolicy.class, //$NON-NLS-1$
+            String.class, String.class);
+        method.setAccessible(true);
+        method.invoke(null, policy, infobaseName, serverName);
+    }
+
+    private static void disarmPortConflictForTest(StandaloneServerPortConflictPolicy policy,
+        String infobaseName, String serverName) throws Exception
+    {
+        Method method = LaunchUpdateDialogAutoConfirmer.class.getDeclaredMethod(
+            "disarmPortConflictForTest", StandaloneServerPortConflictPolicy.class, //$NON-NLS-1$
+            String.class, String.class);
+        method.setAccessible(true);
+        method.invoke(null, policy, infobaseName, serverName);
     }
 
     /** Reads the suppressor's package-private activity counter without widening production API. */

@@ -13,12 +13,15 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
@@ -32,6 +35,8 @@ import org.junit.Test;
 import org.mockito.Mockito;
 
 import com.e1c.g5.dt.applications.ApplicationException;
+import com.e1c.g5.dt.applications.IApplication;
+import com.e1c.g5.dt.applications.IApplicationManager;
 
 /**
  * Tests for {@link StandaloneServerStateRecovery}: recognising EDT's stale standalone-server
@@ -398,31 +403,34 @@ public class StandaloneServerStateRecoveryTest
 
     @Test
     public void testRestorationKeepsThePortConfirmerArmedAroundTheStart()
+        throws Exception
     {
-        boolean[] armed = new boolean[1];
-        StringBuilder order = new StringBuilder();
+        int originalPortArms = LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest();
+        AtomicInteger inFlight = authInFlightCounter();
+        int originalAuth = inFlight.get();
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.CANCEL, null, null);
 
-        String result = StandaloneServerStateRecovery.guardedRestorationStart(() -> {
-            assertFalse(armed[0]);
-            armed[0] = true;
-            order.append('A');
-        }, () -> {
-            assertTrue("the confirmer must be armed while EDT starts the server", armed[0]);
-            order.append('S');
-            return "start failed"; //$NON-NLS-1$
-        }, () -> {
-            assertTrue("failure capture remains inside the armed window", armed[0]);
-            order.append('C');
-            return null;
-        }, () -> {
-            assertTrue(armed[0]);
-            armed[0] = false;
-            order.append('D');
-        });
+        try
+        {
+            String result = StandaloneServerStateRecovery.startRestorationWithPortGuard(
+                new FailingRestorationService(), new Object(), "ServerApplication.Test", //$NON-NLS-1$
+                null, null);
 
-        assertEquals("start failed", result); //$NON-NLS-1$
-        assertFalse("the confirmer must be disarmed after the start", armed[0]);
-        assertEquals("ASCD", order.toString()); //$NON-NLS-1$
+            assertEquals("start failed", result); //$NON-NLS-1$
+            assertEquals("a conclusive restoration must release its port guard before returning", //$NON-NLS-1$
+                originalPortArms, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+            assertEquals("a conclusive restoration must release its auth guard before returning", //$NON-NLS-1$
+                originalAuth, inFlight.get());
+        }
+        finally
+        {
+            while (LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest() > originalPortArms)
+            {
+                LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+                    StandaloneServerPortConflictPolicy.CANCEL, null, null);
+            }
+        }
     }
 
     @Test
@@ -431,29 +439,23 @@ public class StandaloneServerStateRecoveryTest
     {
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        CountDownLatch cleaned = new CountDownLatch(1);
-        AtomicInteger cleanups = new AtomicInteger();
         AtomicReference<String> answer = new AtomicReference<>();
         AtomicReference<Throwable> callerFailure = new AtomicReference<>();
+        AtomicInteger inFlight = authInFlightCounter();
+        int originalAuth = inFlight.get();
+        int originalPortArms = LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest();
+        // No workbench Display exists in this unit harness, so production arm() intentionally does
+        // no bookkeeping. Seed the established port-arm test seam; the production disarm consumes
+        // it, making an eager cleanup observable without introducing a per-path guard variant.
+        LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
+            StandaloneServerPortConflictPolicy.CANCEL, null, null);
 
         Thread caller = new Thread(() -> {
             try
             {
-                answer.set(StandaloneServerStateRecovery.guardedRestorationStart(() -> {
-                    // Headless stand-in for arming the targeted confirmer.
-                }, completion -> {
-                    BoundedJob.Result bounded = BoundedJob.run("test: blocked restoration", 100L, //$NON-NLS-1$
-                        monitor -> {
-                            started.countDown();
-                            release.await(30, TimeUnit.SECONDS);
-                        }, completion);
-                    return new StandaloneServerStateRecovery.RestorationStartOutcome(
-                        StandaloneServerSupport.startFailureReason(bounded),
-                        !BoundedJob.isInconclusive(bounded.getOutcome()));
-                }, () -> null, () -> {
-                    cleanups.incrementAndGet();
-                    cleaned.countDown();
-                }, 5_000L));
+                answer.set(StandaloneServerStateRecovery.startRestorationWithPortGuard(
+                    new BlockingRestorationService(started, release), new Object(),
+                    "ServerApplication.Test", null, null, 100L, 5_000L)); //$NON-NLS-1$
             }
             catch (Throwable t)
             {
@@ -471,18 +473,84 @@ public class StandaloneServerStateRecoveryTest
             assertNull(callerFailure.get());
             assertNotNull(answer.get());
             assertTrue(answer.get().contains("may still be running")); //$NON-NLS-1$
-            assertEquals("the old eager-disarm shape must be absent while the start is in flight", //$NON-NLS-1$
-                0, cleanups.get());
+            assertEquals("the old eager port disarm must be absent while restoration is in flight", //$NON-NLS-1$
+                originalPortArms + 1,
+                LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+            assertEquals("the missing nested auth guard must be present while restoration is in flight", //$NON-NLS-1$
+                originalAuth + 1, inFlight.get());
 
             release.countDown();
-            assertTrue("actual Job completion must release the deferred confirmer", //$NON-NLS-1$
-                cleaned.await(5, TimeUnit.SECONDS));
-            assertEquals("completion must release the confirmer exactly once", 1, cleanups.get()); //$NON-NLS-1$
+            long deadline = System.currentTimeMillis() + 5_000L;
+            while ((inFlight.get() != originalAuth
+                || LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest() != originalPortArms)
+                && System.currentTimeMillis() < deadline)
+            {
+                Thread.sleep(10L);
+            }
+            assertEquals("Job completion must release the restoration port guard", //$NON-NLS-1$
+                originalPortArms, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+            assertEquals("Job completion must release the restoration auth guard", //$NON-NLS-1$
+                originalAuth, inFlight.get());
         }
         finally
         {
             release.countDown();
             caller.join(5_000L);
+            long cleanupDeadline = System.currentTimeMillis() + 5_000L;
+            while ((inFlight.get() != originalAuth
+                || LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest() != originalPortArms)
+                && System.currentTimeMillis() < cleanupDeadline)
+            {
+                Thread.sleep(10L);
+            }
+            while (LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest() > originalPortArms)
+            {
+                LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
+                    StandaloneServerPortConflictPolicy.CANCEL, null, null);
+            }
+        }
+    }
+
+    @Test
+    public void testRestorationApplicationLookupReturnsOnItsDeadline() throws Exception
+    {
+        IApplicationManager manager = Mockito.mock(IApplicationManager.class);
+        IProject project = Mockito.mock(IProject.class);
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        Mockito.when(manager.getApplication(project, "ServerApplication.Test")) //$NON-NLS-1$
+            .thenAnswer(invocation -> {
+                started.countDown();
+                try
+                {
+                    release.await(30, TimeUnit.SECONDS);
+                    return Optional.<IApplication>empty();
+                }
+                finally
+                {
+                    finished.countDown();
+                }
+            });
+
+        try
+        {
+            StandaloneServerSupport.ApplicationLookup lookup =
+                StandaloneServerSupport.lookupApplicationBounded(manager, project,
+                    "ServerApplication.Test", 250L); //$NON-NLS-1$
+
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            assertNull(lookup.application());
+            assertNotNull(lookup.failure());
+            assertTrue(lookup.failure().contains("did not finish within 250ms")); //$NON-NLS-1$
+            assertTrue(lookup.failure().contains("may still be running")); //$NON-NLS-1$
+            assertFalse("the old unbounded restoration lookup must not report measured absence", //$NON-NLS-1$
+                lookup.failure().contains("was not found")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
         }
     }
 
@@ -563,6 +631,49 @@ public class StandaloneServerStateRecoveryTest
             return new Status(IStatus.ERROR, PLUGIN,
                 "starting it did not finish within 60s"); //$NON-NLS-1$
         }
+    }
+
+    /** A conclusive restoration failure used to verify immediate composite-guard cleanup. */
+    public static final class FailingRestorationService
+    {
+        public IStatus startServer(Object server, String launchMode, Object monitor)
+        {
+            return new Status(IStatus.ERROR, PLUGIN, "start failed"); //$NON-NLS-1$
+        }
+    }
+
+    /** A restoration start that ignores cancellation until the test releases it. */
+    public static final class BlockingRestorationService
+    {
+        private final CountDownLatch started;
+        private final CountDownLatch release;
+
+        BlockingRestorationService(CountDownLatch started, CountDownLatch release)
+        {
+            this.started = started;
+            this.release = release;
+        }
+
+        public IStatus startServer(Object server, String launchMode, Object monitor)
+        {
+            started.countDown();
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            return Status.OK_STATUS;
+        }
+    }
+
+    private static AtomicInteger authInFlightCounter() throws Exception
+    {
+        Field field = InfobaseAuthDialogSuppressor.class.getDeclaredField("IN_FLIGHT"); //$NON-NLS-1$
+        field.setAccessible(true);
+        return (AtomicInteger)field.get(null);
     }
 
     /**

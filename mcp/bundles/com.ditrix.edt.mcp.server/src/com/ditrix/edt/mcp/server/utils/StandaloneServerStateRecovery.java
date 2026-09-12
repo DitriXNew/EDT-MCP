@@ -791,12 +791,19 @@ public final class StandaloneServerStateRecovery
                 return new RestorationStartOutcome(
                     "the EDT application manager is not available", true); //$NON-NLS-1$
             }
-            IApplication application = manager.getApplication(project, applicationId).orElse(null);
+            StandaloneServerSupport.ApplicationLookup lookup =
+                StandaloneServerSupport.lookupApplicationBounded(manager, project, applicationId,
+                    StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
+            if (lookup.failure() != null)
+            {
+                return new RestorationStartOutcome(lookup.failure(), true);
+            }
+            IApplication application = lookup.application();
             if (application == null)
             {
                 return new RestorationStartOutcome("the application could not be resolved", true); //$NON-NLS-1$
             }
-            Object server = StandaloneServerSupport.serverOfApplication(application);
+            Object server = lookup.server();
             if (server == null)
             {
                 return new RestorationStartOutcome(
@@ -809,12 +816,8 @@ public final class StandaloneServerStateRecovery
                     "the EDT standalone-server service is not available", true); //$NON-NLS-1$
             }
 
-            String infobaseName = LaunchLifecycleUtils.attributionInfobaseName(manager, project,
-                applicationId);
-            String serverName = LaunchLifecycleUtils.attributionServerName(manager, project,
-                applicationId);
             return startRestorationWithPortGuardOutcome(service, server, applicationId,
-                infobaseName, serverName);
+                lookup.infobaseName(), lookup.serverName());
         }
         catch (Exception failure) // NOSONAR restoration must not hide the operation's original failure
         {
@@ -830,96 +833,34 @@ public final class StandaloneServerStateRecovery
             serverName).failure;
     }
 
+    /** Testable deadline form of the real guarded restoration path. */
+    static String startRestorationWithPortGuard(Object service, Object server, String applicationId,
+        String infobaseName, String serverName, long timeoutMs, long cleanupCapMs)
+    {
+        return startRestorationWithPortGuardOutcome(service, server, applicationId, infobaseName,
+            serverName, timeoutMs, cleanupCapMs).failure;
+    }
+
     /** Same guarded restoration while preserving whether its start is still in flight. */
     private static RestorationStartOutcome startRestorationWithPortGuardOutcome(Object service,
         Object server, String applicationId, String infobaseName, String serverName)
     {
-        LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts =
-            LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName, serverName);
+        return startRestorationWithPortGuardOutcome(service, server, applicationId, infobaseName,
+            serverName, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
+            StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS);
+    }
+
+    /** Runs restoration through the same bounded, composite-guard helper as the direct start. */
+    private static RestorationStartOutcome startRestorationWithPortGuardOutcome(Object service,
+        Object server, String applicationId, String infobaseName, String serverName,
+        long timeoutMs, long cleanupCapMs)
+    {
         StandaloneServerPortConflictPolicy portPolicy = StandaloneServerPortConflictPolicy.CANCEL;
-        return guardedRestorationStartOutcome(
-            () -> LaunchUpdateDialogAutoConfirmer.arm(false, false, false, null, infobaseName,
-                portPolicy, serverName),
-            completion -> boundedRestorationStart(service, server, applicationId, completion),
-            () -> conflicts.portConflicted()
-                ? LaunchUpdateDialogAutoConfirmer.portConflictError(conflicts.portConflictDetail(),
-                    conflicts.portConflictReason()) : null,
-            () -> {
-                LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, null, infobaseName,
-                    portPolicy, serverName);
-                conflicts.close();
-            }, StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS);
-    }
-
-    /** Conclusive test seam preserving the simple arm/start/capture/disarm orchestration. */
-    static String guardedRestorationStart(Runnable armer, Supplier<String> starter,
-        Supplier<String> conflictFailure, Runnable disarmer)
-    {
-        return guardedRestorationStart(armer,
-            completion -> new RestorationStartOutcome(starter.get(), true), conflictFailure,
-            disarmer, StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS);
-    }
-
-    /** Keeps the confirmer armed until an inconclusive restoration's underlying Job really ends. */
-    static String guardedRestorationStart(Runnable armer, RestorationStarter starter,
-        Supplier<String> conflictFailure, Runnable disarmer, long cleanupCapMs)
-    {
-        return guardedRestorationStartOutcome(armer, starter, conflictFailure, disarmer,
-            cleanupCapMs).failure;
-    }
-
-    /** Guarded restoration that retains the bounded start's conclusiveness for later advice. */
-    private static RestorationStartOutcome guardedRestorationStartOutcome(Runnable armer,
-        RestorationStarter starter, Supplier<String> conflictFailure, Runnable disarmer,
-        long cleanupCapMs)
-    {
-        armer.run();
-        BoundedJob.DeferredCleanup deferredCleanup = new BoundedJob.DeferredCleanup(disarmer,
-            cleanupCapMs, "Standalone-restoration confirmer safety cap"); //$NON-NLS-1$
-        RestorationStartOutcome outcome = null;
-        try
-        {
-            outcome = starter.start(deferredCleanup::jobFinished);
-            String conflict = conflictFailure.get();
-            return new RestorationStartOutcome(
-                conflict == null ? outcome.failure : conflict, outcome.conclusive);
-        }
-        finally
-        {
-            // If BoundedJob rethrows an Error, its Job has already completed and cleanup is safe now.
-            deferredCleanup.afterBoundedWait(outcome == null || outcome.conclusive);
-        }
-    }
-
-    /** Runs EDT's restoration start through the existing bounded server-operation helper. */
-    private static RestorationStartOutcome boundedRestorationStart(Object service, Object server,
-        String applicationId, Runnable completion)
-    {
-        IStatus[] status = new IStatus[1];
-        BoundedJob.Result result = BoundedJob.run(
-            "Restoring standalone server: " + applicationId, //$NON-NLS-1$
-            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
-            operationMonitor -> status[0] = StandaloneServerSupport.startServer(service,
-                server, ILaunchManager.DEBUG_MODE, operationMonitor), completion);
-        if (result.isSuccess())
-        {
-            if (status[0] == null)
-            {
-                return new RestorationStartOutcome(
-                    "EDT returned no status from the standalone-server start", true); //$NON-NLS-1$
-            }
-            return new RestorationStartOutcome(
-                status[0].isOK() ? null : PlatformFailures.describeStatus(status[0]), true);
-        }
-        return new RestorationStartOutcome(StandaloneServerSupport.startFailureReason(result),
-            !BoundedJob.isInconclusive(result.getOutcome()));
-    }
-
-    /** Completion-aware restoration start used by the shared deferred guard lifecycle. */
-    @FunctionalInterface
-    interface RestorationStarter
-    {
-        RestorationStartOutcome start(Runnable completion);
+        StandaloneServerSupport.GuardedStartResult result =
+            StandaloneServerSupport.startServerGuarded(service, server,
+                "Restoring standalone server: " + applicationId, ILaunchManager.DEBUG_MODE, //$NON-NLS-1$
+                infobaseName, serverName, portPolicy, timeoutMs, cleanupCapMs);
+        return new RestorationStartOutcome(result.failure(), result.conclusive());
     }
 
     /** Failure plus whether the underlying restoration start has definitely ended. */

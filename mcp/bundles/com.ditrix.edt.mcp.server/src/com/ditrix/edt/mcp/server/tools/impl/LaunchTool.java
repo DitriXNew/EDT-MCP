@@ -32,7 +32,6 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
-import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
@@ -652,8 +651,10 @@ public class LaunchTool implements IMcpTool
                 "the EDT application manager is not available"); //$NON-NLS-1$
         }
 
-        StandaloneApplicationLookup lookup = lookupStandaloneApplicationBounded(manager,
-            context.project(), applicationId, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
+        StandaloneServerSupport.ApplicationLookup lookup =
+            StandaloneServerSupport.lookupApplicationBounded(manager,
+                context.project(), applicationId,
+                StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
         if (lookup.failure() != null)
         {
             return standalonePreconditionError(configName, lookup.failure());
@@ -671,7 +672,7 @@ public class LaunchTool implements IMcpTool
             return standalonePreconditionError(configName,
                 "the EDT standalone-server service is not available"); //$NON-NLS-1$
         }
-        Object server = StandaloneServerSupport.serverOfApplication(application);
+        Object server = lookup.server();
         if (server == null)
         {
             return standalonePreconditionError(configName,
@@ -685,8 +686,8 @@ public class LaunchTool implements IMcpTool
                 applicationId),
             () -> startStandaloneServerWithPolicy(service, server, configName,
                 // EDT ignores this argument and always starts standalone servers in debug.
-                ILaunchManager.DEBUG_MODE, launchInfobaseName(config),
-                launchServerName(config), launchPortPolicy));
+                ILaunchManager.DEBUG_MODE, lookup.infobaseName(),
+                lookup.serverName(), launchPortPolicy));
         if (start.failure() != null)
         {
             return standaloneStartFailure(start.failure(), start.portsReassigned(),
@@ -704,52 +705,6 @@ public class LaunchTool implements IMcpTool
         {
             this(failure, conclusive, portsReassigned, false);
         }
-    }
-
-    /** Result of the bounded application precondition lookup for a standalone-server start. */
-    static record StandaloneApplicationLookup(IApplication application, String failure)
-    {
-    }
-
-    /** Bounds the one standalone-path application lookup that precedes the already-bounded start. */
-    static StandaloneApplicationLookup lookupStandaloneApplicationBounded(
-        IApplicationManager manager, IProject project, String applicationId, long timeoutMs)
-    {
-        IApplication[] application = new IApplication[1];
-        BoundedJob.Result result = BoundedJob.run(
-            "Resolve standalone-server application: " + applicationId, timeoutMs, //$NON-NLS-1$
-            monitor -> application[0] = manager.getApplication(project, applicationId).orElse(null));
-        if (result.isSuccess())
-        {
-            return new StandaloneApplicationLookup(application[0], null);
-        }
-        if (result.getFailure() != null && result.getOutcome() == BoundedJob.Outcome.COMPLETED)
-        {
-            return new StandaloneApplicationLookup(null,
-                "the application could not be resolved: " //$NON-NLS-1$
-                    + PlatformFailures.describe(result.getFailure()));
-        }
-
-        String target = "the EDT application lookup for application '" + applicationId + "'"; //$NON-NLS-1$ //$NON-NLS-2$
-        String deadline = timeoutMs % 1000L == 0L
-            ? (timeoutMs / 1000L) + "s" : timeoutMs + "ms"; //$NON-NLS-1$ //$NON-NLS-2$
-        if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT)
-        {
-            return new StandaloneApplicationLookup(null, target + " did not finish within " //$NON-NLS-1$
-                + deadline + " and may still be running"); //$NON-NLS-1$
-        }
-        if (result.getOutcome() == BoundedJob.Outcome.INTERRUPTED)
-        {
-            return new StandaloneApplicationLookup(null, "the wait for " + target //$NON-NLS-1$
-                + " was interrupted and the lookup may still be running"); //$NON-NLS-1$
-        }
-        if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
-        {
-            return new StandaloneApplicationLookup(null, target + " did not start within " //$NON-NLS-1$
-                + deadline + "; retry when EDT's background Job queue is responsive"); //$NON-NLS-1$
-        }
-        return new StandaloneApplicationLookup(null, target + " never ran (" //$NON-NLS-1$
-            + result.getOutcome() + ")"); //$NON-NLS-1$
     }
 
     /** Restores a stale server stopped by this call only after a conclusive direct-start failure. */
@@ -856,43 +811,6 @@ public class LaunchTool implements IMcpTool
         }
     }
 
-    /** Runs the service start under a deadline and classifies any failure. */
-    static StartOutcome startStandaloneServerBounded(Object service, Object server, String configName,
-        String launchMode)
-    {
-        return startStandaloneServerBounded(service, server, configName, launchMode,
-            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, null);
-    }
-
-    /** Testable/deferred-cleanup form of the bounded standalone-server start. */
-    static StartOutcome startStandaloneServerBounded(Object service, Object server, String configName,
-        String launchMode, long timeoutMs, Runnable completion)
-    {
-        IStatus[] status = new IStatus[1];
-        BoundedJob.Result result = BoundedJob.run("Starting standalone server: " + configName, //$NON-NLS-1$
-            timeoutMs,
-            monitor -> status[0] = StandaloneServerSupport.startServer(service, server,
-                launchMode, monitor), completion);
-        if (result.isSuccess())
-        {
-            if (status[0] == null)
-            {
-                return new StartOutcome(
-                    "EDT returned no status from the standalone-server start", true, false); //$NON-NLS-1$
-            }
-            return new StartOutcome(status[0].isOK()
-                ? null : PlatformFailures.describeStatus(status[0]), true, false);
-        }
-        return new StartOutcome(StandaloneServerSupport.startFailureReason(result),
-            conclusiveStartFailure(result.getOutcome()), false);
-    }
-
-    /** Whether a failed bounded start has definitely stopped running. */
-    static boolean conclusiveStartFailure(BoundedJob.Outcome outcome)
-    {
-        return !BoundedJob.isInconclusive(outcome);
-    }
-
     /** Arms the targeted port-conflict answer while the bounded service start is running. */
     static StartOutcome startStandaloneServerWithPolicy(Object service, Object server, String configName,
         String launchMode, String infobaseName, String serverName,
@@ -908,78 +826,17 @@ public class LaunchTool implements IMcpTool
         String launchMode, String infobaseName, String serverName,
         StandaloneServerPortConflictPolicy portPolicy, long timeoutMs, long cleanupCapMs)
     {
-        LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = portPolicy == null
-            ? null : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName, serverName);
-        LaunchUpdateDialogAutoConfirmer.arm(false, false, false, null, infobaseName, portPolicy,
-            serverName);
-        // The protocol dispatcher already holds one activity count for this synchronous call. Take
-        // a second one for the underlying start itself: after an inconclusive bounded wait the
-        // dispatcher releases its count, while this one stays in the SAME deferred cleanup as the
-        // port-conflict arm until the Job finishes or the shared hard cap expires.
-        InfobaseAuthDialogSuppressor.markActivityStart();
-        Runnable cleanup = () -> {
-            try
-            {
-                LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, null, infobaseName,
-                    portPolicy, serverName);
-                if (conflicts != null)
-                {
-                    conflicts.close();
-                }
-            }
-            finally
-            {
-                InfobaseAuthDialogSuppressor.markActivityEnd();
-            }
-        };
-        return awaitStandaloneServerStart(service, server, configName, launchMode, conflicts,
-            portPolicy == StandaloneServerPortConflictPolicy.REASSIGN, cleanup, timeoutMs,
-            cleanupCapMs);
-    }
-
-    /**
-     * Waits for a direct start while keeping {@code cleanup} tied to the underlying Job lifetime.
-     * Package-visible so tests can use a counted cleanup in the headless runtime, where the real SWT
-     * confirmer arm is intentionally a no-op.
-     */
-    static StartOutcome awaitStandaloneServerStart(Object service, Object server, String configName, // NOSONAR testable orchestration seam keeps the lifecycle inputs explicit
-        String launchMode, LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts,
-        Runnable cleanup, long timeoutMs, long cleanupCapMs)
-    {
-        return awaitStandaloneServerStart(service, server, configName, launchMode, conflicts, false,
-            cleanup, timeoutMs, cleanupCapMs);
-    }
-
-    /** Same orchestration with the armed policy made explicit for inconclusive mutation reporting. */
-    static StartOutcome awaitStandaloneServerStart(Object service, Object server, String configName, // NOSONAR testable orchestration seam keeps the lifecycle inputs explicit
-        String launchMode, LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts,
-        boolean reassigningPortPolicyArmed, Runnable cleanup, long timeoutMs, long cleanupCapMs)
-    {
-        BoundedJob.DeferredCleanup deferredCleanup = new BoundedJob.DeferredCleanup(cleanup,
-            cleanupCapMs, "Standalone-start unattended-guard safety cap"); //$NON-NLS-1$
-        StartOutcome outcome = null;
-        try
+        StandaloneServerSupport.GuardedStartResult result =
+            StandaloneServerSupport.startServerGuarded(service, server,
+                "Starting standalone server: " + configName, launchMode, infobaseName, //$NON-NLS-1$
+                serverName, portPolicy, timeoutMs, cleanupCapMs);
+        String failure = result.failure();
+        if (result.portReassignmentOutcomeUnknown())
         {
-            outcome = startStandaloneServerBounded(service, server, configName, launchMode,
-                timeoutMs, deferredCleanup::jobFinished);
-            String conflict = declinedConflictMessage(null, conflicts);
-            boolean portReassignmentOutcomeUnknown =
-                !outcome.conclusive() && reassigningPortPolicyArmed;
-            boolean portsReassigned = outcome.conclusive() && conflicts != null
-                && conflicts.portsReassigned();
-            String failure = conflict == null ? outcome.failure() : conflict;
-            if (portReassignmentOutcomeUnknown)
-            {
-                failure = appendPossiblePortReassignmentNotice(failure);
-            }
-            return new StartOutcome(failure, outcome.conclusive(), portsReassigned,
-                portReassignmentOutcomeUnknown);
+            failure = appendPossiblePortReassignmentNotice(failure);
         }
-        finally
-        {
-            // If BoundedJob rethrows an Error, its Job has already completed and cleanup is safe now.
-            deferredCleanup.afterBoundedWait(outcome == null || outcome.conclusive());
-        }
+        return new StartOutcome(failure, result.conclusive(), result.portsReassigned(),
+            result.portReassignmentOutcomeUnknown());
     }
 
     /** Explains why a reassigning policy has an unknown mutation outcome after an in-flight start. */

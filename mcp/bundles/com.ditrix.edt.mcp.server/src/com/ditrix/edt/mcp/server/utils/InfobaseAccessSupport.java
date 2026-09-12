@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.lang.reflect.Method;
+import java.util.IdentityHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
@@ -59,6 +60,18 @@ public final class InfobaseAccessSupport
     /** Internal singleton holding the platform-services Guice injector (loaded via the owning bundle). */
     private static final String PLATFORM_SERVICES_CORE_CLASS =
         "com._1c.g5.v8.dt.internal.platform.services.core.PlatformServicesCore"; //$NON-NLS-1$
+
+    /** Fixed replacement for a credential found in platform-produced diagnostic text. */
+    private static final String CREDENTIAL_REDACTION_MARKER = "[REDACTED]"; //$NON-NLS-1$
+
+    /** A malformed throwable graph must not make credential-store failure reporting recurse forever. */
+    private static final int MAX_LOGGED_THROWABLE_DEPTH = 16;
+
+    /**
+     * Fixed stripes for serializing access-settings writes by infobase identity. Collisions only
+     * serialize unrelated infobases briefly; the fixed array cannot retain model references.
+     */
+    private static final Object[] ACCESS_SETTINGS_WRITE_LOCKS = createWriteLocks(64);
 
     private InfobaseAccessSupport()
     {
@@ -503,33 +516,49 @@ public final class InfobaseAccessSupport
         return storeCredentials(ref, user, password, access, manager, writeCommitted, null);
     }
 
-    /** Core write/read-back path; the permission check is adjacent to {@code updateSettings}. */
+    /**
+     * Core write/read-back path. The deadline permission check and {@code updateSettings} share the
+     * same infobase-keyed critical section as every other credentials write.
+     */
     static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
             InfobaseAccess access, IInfobaseAccessManager manager, Runnable writeCommitted,
             BooleanSupplier writeAllowed)
     {
         String requestedUser = user == null ? "" : user; //$NON-NLS-1$
         String requestedPassword = password == null ? "" : password; //$NON-NLS-1$
-        if (writeAllowed != null && !writeAllowed.getAsBoolean())
+        synchronized (writeLockFor(ref))
         {
-            return StoreResult.failed(
-                "Credential storage was cancelled before the settings write.", ref); //$NON-NLS-1$
-        }
-        try
-        {
-            manager.updateSettings(ref, new InfobaseAccessSettings(access,
-                requestedUser, requestedPassword, "")); //$NON-NLS-1$
-        }
-        catch (Exception e) // NOSONAR a StorageException (secure-storage) or CoreException must surface
-        {
-            String message = "Failed to store infobase access settings: " //$NON-NLS-1$
-                + PlatformFailures.describeWithRootCause(e);
-            Activator.logError("set credentials: updateSettings failed", e); //$NON-NLS-1$
-            return StoreResult.failed(message, ref);
-        }
-        if (writeCommitted != null)
-        {
-            writeCommitted.run();
+            // This check deliberately lives INSIDE the same serialization as the write. A bounded
+            // worker that waited for an earlier write must re-read its deadline state after it
+            // acquires the lock; a worker already writing when its caller times out keeps the lock,
+            // so a later intentional write necessarily runs after it and wins.
+            if (writeAllowed != null && !writeAllowed.getAsBoolean())
+            {
+                return StoreResult.failed(
+                    "Credential storage was cancelled before the settings write.", ref); //$NON-NLS-1$
+            }
+            try
+            {
+                manager.updateSettings(ref, new InfobaseAccessSettings(access,
+                    requestedUser, requestedPassword, "")); //$NON-NLS-1$
+            }
+            catch (Exception e) // NOSONAR a StorageException (secure-storage) or CoreException must surface
+            {
+                String diagnostic = scrubCredentialText(
+                    PlatformFailures.describeWithRootCause(e), requestedPassword);
+                String message = "Failed to store infobase access settings: " //$NON-NLS-1$
+                    + diagnostic;
+                // Keep the platform diagnosis, cause chain and original stack frames in the EDT
+                // log. A scrubbed copy is attached because logging the original throwable would
+                // render its unsanitized messages again after the log line itself was scrubbed.
+                Activator.logError("set credentials: updateSettings failed: " //$NON-NLS-1$
+                    + diagnostic, scrubCredentialFailureForLog(e, requestedPassword));
+                return StoreResult.failed(message, ref);
+            }
+            if (writeCommitted != null)
+            {
+                writeCommitted.run();
+            }
         }
 
         IInfobaseAccessSettings readBack;
@@ -587,6 +616,120 @@ public final class InfobaseAccessSupport
                 + "also EDT's default fallback, so the read-back cannot prove that a stored entry exists.", ref); //$NON-NLS-1$
         }
         return StoreResult.verified(ref);
+    }
+
+    /**
+     * Removes the concrete password from platform-produced text without treating it as a regular
+     * expression. Empty and one-character values are not replaced: the former matches every
+     * boundary, while the latter cannot be distinguished safely from ordinary prose and would
+     * destroy the diagnosis by replacing a common character throughout it.
+     */
+    static String scrubCredentialText(String message, String password)
+    {
+        if (message == null || password == null || password.length() <= 1)
+        {
+            return message;
+        }
+        return message.replace(password, CREDENTIAL_REDACTION_MARKER);
+    }
+
+    /**
+     * Builds the throwable attached to the EDT log. Its messages are scrubbed recursively while
+     * its exception type names, cause/suppressed structure and original stack frames remain
+     * available for triage.
+     */
+    static Throwable scrubCredentialFailureForLog(Throwable failure, String password)
+    {
+        return scrubCredentialFailureForLog(failure, password,
+            new IdentityHashMap<Throwable, Boolean>(), 0);
+    }
+
+    private static Throwable scrubCredentialFailureForLog(Throwable failure, String password,
+            IdentityHashMap<Throwable, Boolean> visited, int depth)
+    {
+        if (failure == null || visited.containsKey(failure) || depth >= MAX_LOGGED_THROWABLE_DEPTH)
+        {
+            return null;
+        }
+        visited.put(failure, Boolean.TRUE);
+
+        String originalMessage = scrubCredentialText(failure.getMessage(), password);
+        String diagnostic = failure.getClass().getName()
+            + (originalMessage == null || originalMessage.isEmpty()
+                ? "" : ": " + originalMessage); //$NON-NLS-1$ //$NON-NLS-2$
+        CredentialStoreLogException scrubbed = new CredentialStoreLogException(diagnostic);
+        scrubbed.setStackTrace(failure.getStackTrace());
+
+        Throwable cause = scrubCredentialFailureForLog(failure.getCause(), password, visited,
+            depth + 1);
+        if (cause != null)
+        {
+            scrubbed.initCause(cause);
+        }
+        for (Throwable suppressed : failure.getSuppressed())
+        {
+            Throwable scrubbedSuppressed = scrubCredentialFailureForLog(suppressed, password,
+                visited, depth + 1);
+            if (scrubbedSuppressed != null)
+            {
+                scrubbed.addSuppressed(scrubbedSuppressed);
+            }
+        }
+        return scrubbed;
+    }
+
+    /** A diagnostic-only throwable whose stack and causal structure mirror the platform failure. */
+    private static final class CredentialStoreLogException
+        extends Exception
+    {
+        private static final long serialVersionUID = 1L;
+
+        CredentialStoreLogException(String message)
+        {
+            super(message);
+        }
+    }
+
+    private static Object[] createWriteLocks(int count)
+    {
+        Object[] locks = new Object[count];
+        for (int i = 0; i < locks.length; i++)
+        {
+            locks[i] = new Object();
+        }
+        return locks;
+    }
+
+    /**
+     * Selects a stable write stripe from the infobase UUID, falling back to its non-secret name and
+     * finally object identity for incomplete test/provisional references.
+     */
+    private static Object writeLockFor(InfobaseReference ref)
+    {
+        int hash = System.identityHashCode(ref);
+        try
+        {
+            Object uuid = ref.getUuid();
+            if (uuid != null)
+            {
+                hash = uuid.hashCode();
+            }
+            else
+            {
+                String name = ref.getName();
+                if (name != null && !name.isEmpty())
+                {
+                    hash = name.hashCode();
+                }
+            }
+        }
+        catch (RuntimeException e)
+        {
+            // A partially disposed reference still gets an identity-based stripe; never log any
+            // access-settings data while choosing a lock.
+        }
+        return ACCESS_SETTINGS_WRITE_LOCKS[(hash & Integer.MAX_VALUE)
+            % ACCESS_SETTINGS_WRITE_LOCKS.length];
     }
 
     /**
