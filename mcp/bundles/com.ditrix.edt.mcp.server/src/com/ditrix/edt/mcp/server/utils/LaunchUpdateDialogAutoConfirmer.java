@@ -15,6 +15,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import org.eclipse.swt.SWT;
@@ -390,6 +393,13 @@ public final class LaunchUpdateDialogAutoConfirmer
      * pathological dialog must not turn one failure into a wall of text.
      */
     private static final int MAX_PORT_CONFLICT_DETAIL_CHARS = 400;
+
+    /**
+     * How long a reconciliation may wait for the SWT UI thread. This hop takes milliseconds when
+     * the UI thread is responsive; when it is not, an unattended call cannot wait it out - it
+     * would block outside every deadline while holding a start claim and the recovery lock.
+     */
+    private static final long UI_RECONCILE_TIMEOUT_MS = 2_000L;
 
     private static final Object LOCK = new Object();
 
@@ -1105,7 +1115,8 @@ public final class LaunchUpdateDialogAutoConfirmer
      *            {@code REASSIGN} answer is pressed only on a dialog quoting exactly this name;
      *            {@code null} means the write is refused rather than aimed by guesswork
      * @return {@code true} when this call installed its requested arms; {@code false} when it
-     *         requested nothing or no workbench display was available
+     *         requested nothing, no workbench display was available, or the UI thread did not
+     *         reconcile in time - in which case nothing is left armed
      */
     public static boolean arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog, // NOSONAR mirrors the existing arm-flag list; a parameter object would move the arity, not remove it
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName,
@@ -1154,7 +1165,14 @@ public final class LaunchUpdateDialogAutoConfirmer
                     attributableAnswer(infobaseName, conflictPolicy)));
             }
         }
-        reconcileOnUiThread(display);
+        if (!reconcileOnUiThread(display))
+        {
+            // The UI thread did not answer in time. Leave nothing armed: a matcher nobody disarms
+            // would keep answering other operations' dialogs until the workbench exits.
+            disarm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName,
+                portPolicy, serverName);
+            return false;
+        }
         return true;
     }
 
@@ -1320,25 +1338,71 @@ public final class LaunchUpdateDialogAutoConfirmer
     }
 
     /**
-     * Marshals {@link #reconcileFilter(Display)} to the UI thread. Called
-     * WITHOUT holding {@code LOCK} (the blocking {@code syncExec} under the
-     * monitor was a deadlock, R1). Never throws: a display disposed between
-     * the check and the {@code syncExec} (workbench shutdown race) is benign —
-     * the filter dies with the display and the counter stays consistent.
+     * Hands one runnable to another thread and waits a bounded time for it to finish.
+     *
+     * @param submit how the work reaches the other thread
+     * @param work the work to run there
+     * @param timeoutMs how long to wait for it
+     * @return {@code true} when the work finished within the bound
      */
-    private static void reconcileOnUiThread(Display display)
+    static boolean runBounded(Consumer<Runnable> submit, Runnable work, long timeoutMs)
+    {
+        CountDownLatch done = new CountDownLatch(1);
+        submit.accept(() -> {
+            try
+            {
+                work.run();
+            }
+            finally
+            {
+                done.countDown();
+            }
+        });
+        try
+        {
+            return done.await(timeoutMs, TimeUnit.MILLISECONDS);
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    /**
+     * Marshals {@link #reconcileFilter(Display)} to the UI thread, bounded. Called WITHOUT
+     * holding {@code LOCK} (blocking under the monitor was a deadlock, R1). Never throws: a
+     * display disposed during the hop (workbench shutdown race) is benign - the filter dies with
+     * the display and the counter stays consistent.
+     *
+     * @param display the display carrying the filter (never {@code null})
+     * @return {@code true} when the reconciliation ran; {@code false} when the UI thread did not
+     *         run it within {@link #UI_RECONCILE_TIMEOUT_MS}
+     */
+    private static boolean reconcileOnUiThread(Display display)
     {
         if (display.isDisposed())
         {
-            return;
+            return true;
+        }
+        if (display.getThread() == Thread.currentThread())
+        {
+            // Already on the UI thread: handing the work to asyncExec and then waiting for it
+            // would block the very thread that has to run it.
+            reconcileFilter(display);
+            return true;
         }
         try
         {
-            display.syncExec(() -> reconcileFilter(display));
+            // A late run after this timeout is harmless: reconcileFilter re-reads the arm state
+            // under LOCK, so it sees whatever the caller left behind rather than a stale decision.
+            return runBounded(display::asyncExec, () -> reconcileFilter(display),
+                UI_RECONCILE_TIMEOUT_MS);
         }
         catch (SWTException e)
         {
-            // ERROR_DEVICE_DISPOSED race on shutdown — nothing to (un)install.
+            // ERROR_DEVICE_DISPOSED race on shutdown - nothing to (un)install.
+            return true;
         }
     }
 

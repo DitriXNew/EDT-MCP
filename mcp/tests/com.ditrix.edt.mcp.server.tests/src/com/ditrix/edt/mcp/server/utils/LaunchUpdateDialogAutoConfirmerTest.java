@@ -12,6 +12,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.swt.widgets.Display;
@@ -1276,5 +1277,54 @@ public class LaunchUpdateDialogAutoConfirmerTest
         LaunchUpdateDialogAutoConfirmer.disarm(false, false);
         LaunchUpdateDialogAutoConfirmer.arm(false, false, false);
         LaunchUpdateDialogAutoConfirmer.disarm(false, false, false);
+    }
+    /**
+     * The UI reconciliation used to block in {@code Display.syncExec} with no bound, ahead of the
+     * cleanup lifecycle and while a restoration held its start claim and the recovery lock, so a
+     * blocked UI thread wedged every later recovery. The hand-off is now bounded.
+     */
+    @Test
+    public void testBoundedHandoffGivesUpWhenTheOtherThreadNeverRunsIt()
+    {
+        AtomicBoolean ran = new AtomicBoolean();
+
+        long startedAt = System.nanoTime();
+        boolean finished = LaunchUpdateDialogAutoConfirmer.runBounded(submitted -> {
+            // A blocked UI thread: the runnable is queued and never executed.
+        }, () -> ran.set(true), 50L);
+        long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L;
+
+        assertFalse("an unanswered hand-off must report failure, not block", finished);
+        assertFalse("the work must not have run", ran.get());
+        assertTrue("the wait must end near its bound: " + elapsedMs, elapsedMs < 30_000L);
+    }
+
+    @Test
+    public void testBoundedHandoffReportsWorkThatRan()
+    {
+        AtomicBoolean ran = new AtomicBoolean();
+
+        boolean finished = LaunchUpdateDialogAutoConfirmer.runBounded(Runnable::run,
+            () -> ran.set(true), 50L);
+
+        assertTrue("work that ran must be reported as finished", finished);
+        assertTrue(ran.get());
+    }
+
+    @Test
+    public void testBoundedHandoffWaitsForAnotherThreadWithinTheBound() throws Exception
+    {
+        AtomicBoolean ran = new AtomicBoolean();
+        AtomicReference<Thread> worker = new AtomicReference<>();
+
+        boolean finished = LaunchUpdateDialogAutoConfirmer.runBounded(submitted -> {
+            Thread thread = new Thread(submitted, "bounded-handoff-test");
+            worker.set(thread);
+            thread.start();
+        }, () -> ran.set(true), 10_000L);
+
+        assertTrue("work finishing inside the bound must be reported as finished", finished);
+        assertTrue(ran.get());
+        worker.get().join(5_000L);
     }
 }
