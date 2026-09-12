@@ -90,6 +90,11 @@ import com.google.gson.JsonParser;
  */
 public class UpdateDatabaseToolTest
 {
+    private static final SessionInfo DESIGNER_SESSION = new SessionInfo(
+        "11111111-1111-1111-1111-111111111111", 1L, "Designer", //$NON-NLS-1$ //$NON-NLS-2$
+        "agent@example.com", "private-host", //$NON-NLS-1$ //$NON-NLS-2$
+        "2026-01-01T10:00:00", "2026-01-01T10:01:00", true); //$NON-NLS-1$ //$NON-NLS-2$
+
     @Test
     public void testName()
     {
@@ -387,13 +392,9 @@ public class UpdateDatabaseToolTest
     @Test
     public void failedUpdateDesignerNoteContainsNoPersonalData()
     {
-        SessionInfo designer = new SessionInfo(
-            "11111111-1111-1111-1111-111111111111", 1L, "Designer", //$NON-NLS-1$ //$NON-NLS-2$
-            "agent@example.com", "private-host", //$NON-NLS-1$ //$NON-NLS-2$
-            "2026-01-01T10:00:00", "2026-01-01T10:01:00", true); //$NON-NLS-1$ //$NON-NLS-2$
         JsonObject result = JsonParser.parseString(UpdateDatabaseTool.buildUnexpectedErrorResult(
             new IllegalStateException("update failed"), false, false, null, //$NON-NLS-1$
-            List.of(designer))).getAsJsonObject();
+            List.of(DESIGNER_SESSION))).getAsJsonObject();
         JsonObject expected = JsonParser.parseString("{" //$NON-NLS-1$
             + "\"success\":false," //$NON-NLS-1$
             + "\"error\":\"Unexpected error: update failed Pre-update session inspection saw " //$NON-NLS-1$
@@ -421,6 +422,66 @@ public class UpdateDatabaseToolTest
             false, false, null, List.of());
 
         assertFalse(result.contains("Pre-update session inspection saw app-id: Designer")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void portConflictDoesNotBlameObservedDesignerSession() throws Exception
+    {
+        LaunchUpdateDialogAutoConfirmer.ConflictWatch watch =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch(null);
+        try
+        {
+            Method recordPortConflict = watch.getClass().getDeclaredMethod(
+                "recordPortConflict", String.class, String.class); //$NON-NLS-1$
+            recordPortConflict.setAccessible(true);
+            recordPortConflict.invoke(watch, "port 8429 is already in use", //$NON-NLS-1$
+                LaunchUpdateDialogAutoConfirmer.PORT_REASON_POLICY);
+            Method formatPortConflict = UpdateDatabaseTool.class.getDeclaredMethod(
+                "portConflictError", watch.getClass(), String.class, String.class, //$NON-NLS-1$
+                boolean.class, String.class, List.class);
+            formatPortConflict.setAccessible(true);
+            String error = JsonParser.parseString((String)formatPortConflict.invoke(null,
+                watch, "ProjectB", "app-b", false, null, List.of(DESIGNER_SESSION))) //$NON-NLS-1$ //$NON-NLS-2$
+                .getAsJsonObject().get("error").getAsString(); //$NON-NLS-1$
+
+            assertFalse("a diagnosed port conflict must not blame a Designer lock holder: " + error, //$NON-NLS-1$
+                error.contains("most likely holders of the exclusive lock")); //$NON-NLS-1$
+            assertFalse("a diagnosed port conflict must omit the unrelated Designer hint: " + error, //$NON-NLS-1$
+                error.contains("Pre-update session inspection saw app-id: Designer")); //$NON-NLS-1$
+        }
+        finally
+        {
+            watch.close();
+        }
+    }
+
+    @Test
+    public void declinedUpdateDoesNotBlameObservedDesignerSession() throws Exception
+    {
+        LaunchUpdateDialogAutoConfirmer.ConflictWatch watch =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch(null);
+        try
+        {
+            Method recordCancel = watch.getClass().getDeclaredMethod("record", String.class); //$NON-NLS-1$
+            recordCancel.setAccessible(true);
+            recordCancel.invoke(watch, LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_POLICY);
+            Method formatCancellation = UpdateDatabaseTool.class.getDeclaredMethod(
+                "declinedUpdateResult", watch.getClass(), //$NON-NLS-1$
+                ExternalInfobaseChangesPolicy.class, String.class, List.class);
+            formatCancellation.setAccessible(true);
+            String error = JsonParser.parseString((String)formatCancellation.invoke(null, watch,
+                ExternalInfobaseChangesPolicy.OVERRIDE, null, List.of(DESIGNER_SESSION)))
+                .getAsJsonObject().get("error").getAsString(); //$NON-NLS-1$
+
+            assertFalse("a declined external-changes update must not blame a Designer lock holder: " //$NON-NLS-1$
+                + error, error.contains("most likely holders of the exclusive lock")); //$NON-NLS-1$
+            assertFalse("a declined external-changes update must omit the Designer hint: " + error, //$NON-NLS-1$
+                error.contains("Pre-update session inspection saw app-id: Designer")); //$NON-NLS-1$
+        }
+        finally
+        {
+            watch.close();
+        }
     }
 
     @Test

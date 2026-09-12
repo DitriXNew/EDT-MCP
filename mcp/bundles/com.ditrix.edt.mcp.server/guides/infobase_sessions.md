@@ -55,7 +55,7 @@ infobase_sessions(action='terminate', projectName='MyProject', applicationId='Se
 Termination is verified, not assumed. `ibcmd` exits 0 even for a session UUID that no longer exists, so the tool re-reads the session list afterwards and reports only sessions observed gone. `verification` says which happened:
 
 - `verified` — every targeted session is absent from the re-read list;
-- `mismatched` — a session is still present after a terminate that reported success; this is an error, and those sessions still block an update;
+- `mismatched` — a session is still present after a terminate that reported success; this is an error. Surviving non-Designer sessions still block an update, while surviving Designer sessions are not treated as blockers by `update_database`;
 - `not_verifiable` — the list could not be re-read, with `attemptedCount` and `verificationReason` naming what was attempted and why it could not be checked. `sessions` and `terminatedCount` are omitted because none was observed gone; list again before treating the infobase as clear.
 
-If a multi-session termination stops partway, the error carries `mutationCommitted=true` because termination commands were accepted and state may have changed. It also carries `attemptedCount` and `verification: not_verifiable` with a `verificationReason`. `terminatedCount` and `sessions` are absent on this path because no read-back confirmed which attempts completed; list again to learn which sessions are actually gone.
+If a multi-session termination stops partway, the error carries `mutationOutcomeUnknown=true` because accepted termination commands may or may not have changed state. It also carries `attemptedCount` and `verification: not_verifiable` with a `verificationReason`. `mutationCommitted`, `terminatedCount`, and `sessions` are absent on this path because no read-back confirmed which attempts completed; list again to learn which sessions are actually gone.

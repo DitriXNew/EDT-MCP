@@ -1050,6 +1050,13 @@ public class UpdateDatabaseTool implements IMcpTool
     /** Qualifies later failures with unreadable checks or ambiguous Designer sessions. */
     private static String sessionCheckFailureNote(String reason, List<SessionInfo> designerSessions)
     {
+        return sessionCheckFailureNote(reason, designerSessions, true);
+    }
+
+    /** Qualifies a failure with only the session findings that could explain it. */
+    private static String sessionCheckFailureNote(String reason, List<SessionInfo> designerSessions,
+        boolean exclusiveLockPossible)
+    {
         StringBuilder note = new StringBuilder();
         if (reason != null && !reason.isBlank())
         {
@@ -1057,7 +1064,7 @@ public class UpdateDatabaseTool implements IMcpTool
                 .append(endsSentence(reason) ? "" : ".") //$NON-NLS-1$ //$NON-NLS-2$
                 .append(" This was not treated as proof that no foreign sessions existed."); //$NON-NLS-1$
         }
-        if (designerSessions != null && !designerSessions.isEmpty())
+        if (exclusiveLockPossible && designerSessions != null && !designerSessions.isEmpty())
         {
             List<String> details = designerSessions.stream()
                 .map(InfobaseSessionErrorProjection::details)
@@ -1081,7 +1088,7 @@ public class UpdateDatabaseTool implements IMcpTool
             sessionCheckUnreachableReason, List.of());
     }
 
-    /** Same port-conflict payload, including Designer sessions seen by the pre-flight. */
+    /** Same port-conflict payload, without blaming unrelated Designer sessions seen pre-flight. */
     private static String portConflictError(LaunchUpdateDialogAutoConfirmer.ConflictWatch watch,
         String projectName, String applicationId, boolean terminatedClient,
         String sessionCheckUnreachableReason, List<SessionInfo> designerSessionsSeen)
@@ -1091,12 +1098,14 @@ public class UpdateDatabaseTool implements IMcpTool
                 + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail(),
                     watch.portConflictReason())
                 + " The infobase was NOT changed, but the standalone-server configuration was." //$NON-NLS-1$
-                + sessionCheckFailureNote(sessionCheckUnreachableReason, designerSessionsSeen))
+                + sessionCheckFailureNote(sessionCheckUnreachableReason, designerSessionsSeen,
+                    false))
             : ToolResult.error("Database update failed: " //$NON-NLS-1$
                 + LaunchUpdateDialogAutoConfirmer.portConflictError(watch.portConflictDetail(),
                     watch.portConflictReason())
                 + " The infobase was NOT changed." //$NON-NLS-1$
-                + sessionCheckFailureNote(sessionCheckUnreachableReason, designerSessionsSeen));
+                + sessionCheckFailureNote(sessionCheckUnreachableReason, designerSessionsSeen,
+                    false));
         result.put(McpKeys.PROJECT, projectName)
             .put(McpKeys.APPLICATION_ID, applicationId);
         if (watch.portsReassigned())
@@ -1132,7 +1141,7 @@ public class UpdateDatabaseTool implements IMcpTool
             List.of());
     }
 
-    /** Same declined-update payload, including Designer sessions seen by the pre-flight. */
+    /** Same declined-update payload, without blaming unrelated Designer sessions seen pre-flight. */
     private static String declinedUpdateResult(LaunchUpdateDialogAutoConfirmer.ConflictWatch watch,
         ExternalInfobaseChangesPolicy externalChanges, String sessionCheckUnreachableReason,
         List<SessionInfo> designerSessionsSeen)
@@ -1144,7 +1153,8 @@ public class UpdateDatabaseTool implements IMcpTool
                         + "rewritten its configuration " //$NON-NLS-1$
                         + "(standaloneServerPortConflict=reassign) — that change stands." //$NON-NLS-1$
                     : "") //$NON-NLS-1$
-                + sessionCheckFailureNote(sessionCheckUnreachableReason, designerSessionsSeen);
+                + sessionCheckFailureNote(sessionCheckUnreachableReason, designerSessionsSeen,
+                    false);
         ToolResult result = reassigned ? ToolResult.errorAfterMutation(message) : ToolResult.error(message);
         if (reassigned)
         {

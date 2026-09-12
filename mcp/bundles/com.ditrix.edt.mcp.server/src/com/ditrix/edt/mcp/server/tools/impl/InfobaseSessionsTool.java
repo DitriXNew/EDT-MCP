@@ -341,7 +341,7 @@ public class InfobaseSessionsTool implements IMcpTool
     static String terminationSequenceStoppedResult(String projectName, String applicationId,
         int attemptedCount, String reason)
     {
-        return ToolResult.errorAfterMutation("Session termination stopped after " //$NON-NLS-1$
+        return ToolResult.errorWithUnknownMutationOutcome("Session termination stopped after " //$NON-NLS-1$
             + attemptedCount + " accepted attempt(s): " + reason //$NON-NLS-1$
             + " The session list was not re-read, so no attempted termination is reported as " //$NON-NLS-1$
             + "completed. Run infobase_sessions(action='list', projectName='" + projectName //$NON-NLS-1$
@@ -433,9 +433,12 @@ public class InfobaseSessionsTool implements IMcpTool
             .put(KEY_VERIFICATION, VERIFICATION_VERIFIED);
         if (gone.stream().anyMatch(InfobaseSessionsTool::isDesignerSession))
         {
-            return result.put(McpKeys.MESSAGE, "Terminated EDT's Designer/configurator session, " //$NON-NLS-1$
-                + "confirmed gone by re-reading the session list. EDT re-creates its agent on " //$NON-NLS-1$
-                + "its next connect, but an update running at the moment of termination can fail.") //$NON-NLS-1$
+            return result.put(McpKeys.MESSAGE, "Terminated a session that reported app-id: " //$NON-NLS-1$
+                + "Designer, confirmed gone by re-reading the session list. It may have been " //$NON-NLS-1$
+                + "EDT's own update agent or a human Configurator. If it was EDT's, EDT re-creates " //$NON-NLS-1$
+                + "its agent on its next connect and an update running at the moment of " //$NON-NLS-1$
+                + "termination can fail; a person's Configurator session will simply have been " //$NON-NLS-1$
+                + "closed.") //$NON-NLS-1$
                 .toJson();
         }
         return result.put(McpKeys.MESSAGE, "Terminated " + gone.size() //$NON-NLS-1$

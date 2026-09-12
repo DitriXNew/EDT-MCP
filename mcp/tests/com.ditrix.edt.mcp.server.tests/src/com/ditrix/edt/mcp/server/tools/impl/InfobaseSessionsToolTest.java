@@ -105,6 +105,14 @@ public class InfobaseSessionsToolTest
             guide.contains("Termination is verified, not assumed")); //$NON-NLS-1$
         assertTrue("the guide must warn that ibcmd exits 0 for a session that is already gone", //$NON-NLS-1$
             guide.contains("exits 0 even for a session UUID that no longer exists")); //$NON-NLS-1$
+        assertTrue("the guide must limit mismatched blockers to non-Designer survivors", //$NON-NLS-1$
+            guide.contains("Surviving non-Designer sessions still block an update")); //$NON-NLS-1$
+        assertFalse("the guide must not claim every mismatched survivor blocks an update", //$NON-NLS-1$
+            guide.contains("those sessions still block an update")); //$NON-NLS-1$
+        assertTrue("the guide must report an unverified stopped sequence as unknown", //$NON-NLS-1$
+            guide.contains("`mutationOutcomeUnknown=true`")); //$NON-NLS-1$
+        assertFalse("the guide must not claim an unverified stopped sequence committed", //$NON-NLS-1$
+            guide.contains("error carries `mutationCommitted=true`")); //$NON-NLS-1$
     }
 
     @Test
@@ -188,7 +196,7 @@ public class InfobaseSessionsToolTest
     }
 
     @Test
-    public void exactUuidSelectorAllowsDesignerAndVerifiedMessageNamesTheConsequence()
+    public void exactUuidSelectorAllowsDesignerAndVerifiedMessagePreservesOwnershipAmbiguity()
     {
         InfobaseSessionsTool.Selection selection = InfobaseSessionsTool.selectSessions(
             List.of(DESIGNER, CLIENT), DESIGNER.sessionId(), false);
@@ -199,9 +207,12 @@ public class InfobaseSessionsToolTest
             "Demo", "ServerApplication.Demo", selection.sessions, //$NON-NLS-1$ //$NON-NLS-2$
             ReadResult.readable(List.of()))).getAsJsonObject();
         String message = result.get("message").getAsString(); //$NON-NLS-1$
-        assertTrue(message.contains("EDT's Designer/configurator session")); //$NON-NLS-1$
-        assertTrue(message.contains("re-creates its agent on its next connect")); //$NON-NLS-1$
+        assertTrue(message.contains("session that reported app-id: Designer")); //$NON-NLS-1$
+        assertTrue(message.contains("may have been EDT's own update agent or a human Configurator")); //$NON-NLS-1$
+        assertTrue(message.contains("If it was EDT's, EDT re-creates its agent on its next connect")); //$NON-NLS-1$
+        assertTrue(message.contains("a person's Configurator session will simply have been closed")); //$NON-NLS-1$
         assertTrue(message.contains("update running at the moment of termination can fail")); //$NON-NLS-1$
+        assertFalse(message.contains("Terminated EDT's")); //$NON-NLS-1$
     }
 
     @Test
@@ -251,7 +262,7 @@ public class InfobaseSessionsToolTest
             + "command failed. The session list was not re-read, so no attempted termination is " //$NON-NLS-1$
             + "reported as completed. Run infobase_sessions(action='list', projectName='Demo', " //$NON-NLS-1$
             + "applicationId='ServerApplication.Demo') to see who still holds sessions.\"," //$NON-NLS-1$
-            + "\"mutationCommitted\":true," //$NON-NLS-1$
+            + "\"mutationOutcomeUnknown\":true," //$NON-NLS-1$
             + "\"action\":\"terminate\",\"project\":\"Demo\"," //$NON-NLS-1$
             + "\"applicationId\":\"ServerApplication.Demo\",\"reachable\":false," //$NON-NLS-1$
             + "\"unreachableReason\":\"second command failed.\",\"attemptedCount\":1," //$NON-NLS-1$
@@ -263,6 +274,8 @@ public class InfobaseSessionsToolTest
         assertEquals(expected, result);
         assertTrue(result.has("attemptedCount")); //$NON-NLS-1$
         assertTrue(result.has("verificationReason")); //$NON-NLS-1$
+        assertTrue(result.has("mutationOutcomeUnknown")); //$NON-NLS-1$
+        assertFalse(result.has("mutationCommitted")); //$NON-NLS-1$
         assertFalse(result.has("terminatedCount")); //$NON-NLS-1$
         assertFalse(result.has("sessions")); //$NON-NLS-1$
     }
