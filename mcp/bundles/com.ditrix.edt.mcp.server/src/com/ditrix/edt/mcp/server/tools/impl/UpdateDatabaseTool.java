@@ -641,7 +641,8 @@ public class UpdateDatabaseTool implements IMcpTool
         boolean portsReassigned = false;
         boolean updateApiEntered = false;
         boolean updateApiReturned = false;
-        long accessDialogsBefore = -1;
+        // Application resolution and state reads can both open the access-settings dialog.
+        long accessDialogsBefore = InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount();
         try
         {
             ApplicationSupport.ManagerResult mr = ApplicationSupport.resolveManager(projectName);
@@ -718,9 +719,6 @@ public class UpdateDatabaseTool implements IMcpTool
                     ", type=" + updateType); //$NON-NLS-1$
 
             IProgressMonitor monitor = new NullProgressMonitor();
-
-            // The counter is global, so movement proves only that a dialog appeared while this call ran.
-            accessDialogsBefore = InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount();
 
             // Free the infobase and apply the update under the SAME per-IB lock the launch path
             // uses (LaunchLifecycleUtils.lockFor), so a concurrent run_yaxunit_tests / launch

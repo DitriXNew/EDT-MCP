@@ -3227,26 +3227,33 @@ public final class LaunchLifecycleUtils
      */
     public static String resolveDelegateApplicationId(ILaunchConfiguration config, String projectName)
     {
+        ProjectContext ctx = ProjectContext.of(projectName);
+        if (!ctx.isOpen())
+        {
+            return resolveDelegateApplicationId(config, null, null);
+        }
+        IApplicationManager appManager = Activator.getDefault().getApplicationManager();
+        return resolveDelegateApplicationId(config, ctx.project(), appManager);
+    }
+
+    /** Same delegate-id rule with the project and manager already resolved by the caller. */
+    public static String resolveDelegateApplicationId(ILaunchConfiguration config, IProject project,
+        IApplicationManager appManager)
+    {
         String realId = LaunchConfigUtils.readAttribute(config,
             LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
         if (realId != null && !realId.isEmpty())
         {
             return realId;
         }
-        ProjectContext ctx = ProjectContext.of(projectName);
-        if (!ctx.isOpen())
-        {
-            return null;
-        }
-        IApplicationManager appManager = Activator.getDefault().getApplicationManager();
-        if (appManager == null)
+        if (project == null || appManager == null)
         {
             return null;
         }
         // resolveDefaultApplicationId returns the original (empty) value when there is
         // no default — normalize that to null so findRuntimeClientDebugTarget's
         // empty-id guard short-circuits instead of matching on "".
-        String resolved = resolveDefaultApplicationId(ctx.project(), null, appManager);
+        String resolved = resolveDefaultApplicationId(project, null, appManager);
         return resolved != null && !resolved.isEmpty() ? resolved : null;
     }
 

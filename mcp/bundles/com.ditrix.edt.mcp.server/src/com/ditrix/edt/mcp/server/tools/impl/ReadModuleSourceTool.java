@@ -271,7 +271,8 @@ public class ReadModuleSourceTool implements IMcpTool
         AtomicReference<String> ref = new AtomicReference<>();
         AtomicReference<RuntimeException> failure = new AtomicReference<>();
         CountDownLatch finished = new CountDownLatch(1);
-        Runnable task = () -> {
+        AtomicBoolean expired = new AtomicBoolean();
+        Runnable task = () -> runFooterTaskUnlessExpired(expired, finished, () -> {
             try
             {
                 ref.set(InterceptionUtils.moduleFooter(BslModuleUtils.loadModule(project, modulePath)));
@@ -280,11 +281,7 @@ public class ReadModuleSourceTool implements IMcpTool
             {
                 failure.set(e);
             }
-            finally
-            {
-                finished.countDown();
-            }
-        };
+        });
         try
         {
             Display display = PlatformUI.getWorkbench().getDisplay();
@@ -295,10 +292,9 @@ public class ReadModuleSourceTool implements IMcpTool
             else
             {
                 display.asyncExec(task);
-                AtomicBoolean deadlineElapsed = new AtomicBoolean();
                 String result = awaitComputedValue(ref, finished,
-                    INTERCEPTION_FOOTER_TIMEOUT_SECONDS, TimeUnit.SECONDS, deadlineElapsed);
-                if (deadlineElapsed.get() || Thread.currentThread().isInterrupted())
+                    INTERCEPTION_FOOTER_TIMEOUT_SECONDS, TimeUnit.SECONDS, expired);
+                if (expired.get() || Thread.currentThread().isInterrupted())
                 {
                     String reason = Thread.currentThread().isInterrupted()
                         ? "waiting was interrupted" //$NON-NLS-1$
@@ -330,6 +326,23 @@ public class ReadModuleSourceTool implements IMcpTool
         return ref.get();
     }
 
+    /** Drops queued UI work whose caller has already stopped waiting. */
+    static void runFooterTaskUnlessExpired(AtomicBoolean expired, CountDownLatch finished,
+        Runnable work)
+    {
+        try
+        {
+            if (!expired.get())
+            {
+                work.run();
+            }
+        }
+        finally
+        {
+            finished.countDown();
+        }
+    }
+
     static <T> T awaitComputedValue(AtomicReference<T> value, CountDownLatch finished,
             long timeout, TimeUnit unit, AtomicBoolean deadlineElapsed)
     {
@@ -344,6 +357,7 @@ public class ReadModuleSourceTool implements IMcpTool
         }
         catch (InterruptedException e)
         {
+            deadlineElapsed.set(true);
             Thread.currentThread().interrupt();
             return null;
         }

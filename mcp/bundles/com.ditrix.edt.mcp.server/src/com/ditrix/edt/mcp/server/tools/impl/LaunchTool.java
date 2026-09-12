@@ -10,12 +10,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.MultiStatus;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.debug.core.DebugPlugin;
@@ -32,6 +35,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
+import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
 import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
@@ -400,7 +404,8 @@ public class LaunchTool implements IMcpTool
                 {
                     return refusal;
                 }
-                return launchStandaloneServer(config, typeId, configProject, portPolicy);
+                return launchStandaloneServer(config, config.getName(), typeId, configProject,
+                    portPolicy);
             }
 
             if (isAttach && MODE_RUN.equals(mode))
@@ -620,81 +625,285 @@ public class LaunchTool implements IMcpTool
     }
 
     /** Starts a standalone server through its self-contained EDT service operation. */
-    private String launchStandaloneServer(ILaunchConfiguration config, String typeId,
-        String projectName, StandaloneServerPortConflictPolicy portPolicy)
+    private String launchStandaloneServer(ILaunchConfiguration config, String configName,
+        String typeId, String projectName, StandaloneServerPortConflictPolicy portPolicy)
     {
-        String configName = config.getName();
-        ProjectContext context = ProjectContext.of(projectName);
-        if (!context.exists())
+        StandalonePreparation preparation = prepareStandaloneLaunch(config, configName,
+            projectName, portPolicy, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
+        if (preparation.failure != null)
         {
-            return standalonePreconditionError(configName,
-                ProjectContext.notFoundMessage(projectName));
+            return standalonePreconditionError(configName, preparation.failure);
         }
-        if (!context.isOpen())
-        {
-            return standalonePreconditionError(configName,
-                "Project is closed: " + projectName); //$NON-NLS-1$
-        }
-
-        String applicationId =
-            LaunchLifecycleUtils.resolveDelegateApplicationId(config, projectName);
-        if (applicationId == null || applicationId.isEmpty())
-        {
-            return standalonePreconditionError(configName,
-                "the configuration's application could not be resolved"); //$NON-NLS-1$
-        }
-        Activator activator = Activator.getDefault();
-        IApplicationManager manager = activator == null ? null : activator.getApplicationManager();
-        if (manager == null)
-        {
-            return standalonePreconditionError(configName,
-                "the EDT application manager is not available"); //$NON-NLS-1$
-        }
-
-        StandaloneServerSupport.ApplicationLookup lookup =
-            StandaloneServerSupport.lookupApplicationBounded(manager,
-                context.project(), applicationId,
-                StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
-        if (lookup.failure() != null)
-        {
-            return standalonePreconditionError(configName, lookup.failure());
-        }
-        IApplication application = lookup.application();
-        if (application == null)
-        {
-            return standalonePreconditionError(configName,
-                "application '" + applicationId + "' was not found in project " + projectName); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-
-        Object service = StandaloneServerSupport.acquireService();
-        if (service == null)
-        {
-            return standalonePreconditionError(configName,
-                "the EDT standalone-server service is not available"); //$NON-NLS-1$
-        }
-        Object server = lookup.server();
-        if (server == null)
-        {
-            return standalonePreconditionError(configName,
-                "the application's standalone server could not be resolved"); //$NON-NLS-1$
-        }
-
-        StandaloneServerPortConflictPolicy launchPortPolicy =
-            standaloneServerPortPolicy(config, portPolicy);
-        StartOutcome start = startStandaloneServerGuarded(configName, context.project(),
-            () -> StandaloneServerStateRecovery.ensureStartable(context.project(), application,
-                applicationId, manager),
-            () -> startStandaloneServerWithPolicy(service, server, configName,
+        StartOutcome start = startStandaloneServerGuarded(configName, preparation.project,
+            () -> {
+                if (preparation.staleServerStopped)
+                {
+                    StandaloneServerStateRecovery.retainPreparedStop(preparation.applicationId);
+                }
+                if (preparation.preflightFailure != null)
+                {
+                    throw new ApplicationException(preparation.preflightFailure);
+                }
+            },
+            () -> startStandaloneServerWithPolicy(preparation.service,
+                preparation.lookup.server(), configName,
                 // EDT ignores this argument and always starts standalone servers in debug.
-                ILaunchManager.DEBUG_MODE, lookup.infobaseName(),
-                lookup.serverName(), launchPortPolicy));
+                ILaunchManager.DEBUG_MODE, preparation.lookup.infobaseName(),
+                preparation.lookup.serverName(), preparation.portPolicy));
         if (start.failure() != null)
         {
             return standaloneStartFailure(start.failure(), start.portsReassigned(),
                 start.portReassignmentOutcomeUnknown());
         }
-        return standaloneStartSuccess(configName, typeId, projectName, applicationId,
+        return standaloneStartSuccess(configName, typeId, projectName, preparation.applicationId,
             start.portsReassigned());
+    }
+
+    /** Resolves every standalone start prerequisite under one caller deadline. */
+    private static StandalonePreparation prepareStandaloneLaunch(ILaunchConfiguration config,
+        String configName, String projectName, StandaloneServerPortConflictPolicy requestedPortPolicy,
+        long timeoutMs)
+    {
+        AtomicReference<StandalonePreparation> prepared = new AtomicReference<>();
+        AtomicReference<StandalonePreparationStage> stage =
+            new AtomicReference<>(StandalonePreparationStage.PROJECT);
+        AtomicReference<IProject> resolvedProject = new AtomicReference<>();
+        AtomicReference<String> applicationId = new AtomicReference<>();
+        AtomicBoolean staleServerStopped = new AtomicBoolean();
+        BoundedJob.Result bounded = runStandalonePreparationBounded(configName, timeoutMs,
+            monitor -> {
+                ProjectContext context = ProjectContext.of(projectName);
+                if (!context.exists())
+                {
+                    prepared.set(StandalonePreparation.failed(
+                        ProjectContext.notFoundMessage(projectName)));
+                    return;
+                }
+                if (!context.isOpen())
+                {
+                    prepared.set(StandalonePreparation.failed(
+                        "Project is closed: " + projectName)); //$NON-NLS-1$
+                    return;
+                }
+                resolvedProject.set(context.project());
+                if (monitor.isCanceled())
+                {
+                    return;
+                }
+
+                stage.set(StandalonePreparationStage.APPLICATION_MANAGER);
+                Activator activator = Activator.getDefault();
+                IApplicationManager manager =
+                    activator == null ? null : activator.getApplicationManager();
+                if (monitor.isCanceled())
+                {
+                    return;
+                }
+                stage.set(StandalonePreparationStage.DELEGATE_APPLICATION);
+                String resolvedId = LaunchLifecycleUtils.resolveDelegateApplicationId(config,
+                    context.project(), manager);
+                applicationId.set(resolvedId);
+                if (monitor.isCanceled())
+                {
+                    return;
+                }
+                if (resolvedId == null || resolvedId.isEmpty())
+                {
+                    prepared.set(StandalonePreparation.failed(
+                        "the configuration's application could not be resolved")); //$NON-NLS-1$
+                    return;
+                }
+                if (manager == null)
+                {
+                    prepared.set(StandalonePreparation.failed(
+                        "the EDT application manager is not available")); //$NON-NLS-1$
+                    return;
+                }
+
+                stage.set(StandalonePreparationStage.APPLICATION);
+                StandaloneServerSupport.ApplicationLookup lookup =
+                    StandaloneServerSupport.lookupApplication(manager, context.project(), resolvedId);
+                if (monitor.isCanceled())
+                {
+                    return;
+                }
+                if (lookup.application() == null)
+                {
+                    prepared.set(StandalonePreparation.failed("application '" + resolvedId //$NON-NLS-1$
+                        + "' was not found in project " + projectName)); //$NON-NLS-1$
+                    return;
+                }
+
+                stage.set(StandalonePreparationStage.SERVICE);
+                Object service = StandaloneServerSupport.acquireService();
+                if (monitor.isCanceled())
+                {
+                    return;
+                }
+                if (service == null)
+                {
+                    prepared.set(StandalonePreparation.failed(
+                        "the EDT standalone-server service is not available")); //$NON-NLS-1$
+                    return;
+                }
+                if (lookup.server() == null)
+                {
+                    prepared.set(StandalonePreparation.failed(
+                        "the application's standalone server could not be resolved")); //$NON-NLS-1$
+                    return;
+                }
+
+                stage.set(StandalonePreparationStage.STALE_PREFLIGHT);
+                try
+                {
+                    StandaloneServerStateRecovery.ensureStartableWithinBound(context.project(),
+                        lookup.application(), lookup.server(), resolvedId, manager, monitor,
+                        () -> stage.set(StandalonePreparationStage.STALE_STOP),
+                        () -> staleServerStopped.set(true));
+                }
+                catch (ApplicationException failure)
+                {
+                    prepared.set(StandalonePreparation.preflightFailed(context.project(), resolvedId,
+                        failure.getMessage(), staleServerStopped.get()));
+                    return;
+                }
+                StandaloneServerPortConflictPolicy effectivePortPolicy =
+                    DebugServerTargetSupport.isServerApplicationId(resolvedId)
+                        ? requestedPortPolicy : null;
+                prepared.set(StandalonePreparation.ready(context.project(), resolvedId, lookup,
+                    service, effectivePortPolicy, staleServerStopped.get()));
+            });
+
+        if (bounded.isSuccess())
+        {
+            StandalonePreparation result = prepared.get();
+            return result != null ? result : StandalonePreparation.failed(
+                "the standalone-server precondition phase produced no result"); //$NON-NLS-1$
+        }
+        String resolvedId = applicationId.get();
+        if (bounded.getFailure() != null
+            && bounded.getOutcome() == BoundedJob.Outcome.COMPLETED)
+        {
+            if (stage.get() == StandalonePreparationStage.APPLICATION)
+            {
+                return StandalonePreparation.failed("the application could not be resolved: " //$NON-NLS-1$
+                    + PlatformFailures.describe(bounded.getFailure()));
+            }
+            if (bounded.getFailure() instanceof RuntimeException)
+            {
+                throw (RuntimeException)bounded.getFailure();
+            }
+            return StandalonePreparation.failed(PlatformFailures.describe(bounded.getFailure()));
+        }
+        if (stage.get() == StandalonePreparationStage.APPLICATION && resolvedId != null)
+        {
+            return StandalonePreparation.failed(StandaloneServerSupport.applicationLookupFailure(
+                resolvedId, timeoutMs, bounded));
+        }
+        if (stage.get() == StandalonePreparationStage.STALE_STOP && resolvedId != null)
+        {
+            String detail = bounded.getOutcome() == BoundedJob.Outcome.INTERRUPTED
+                ? "the wait for it was interrupted" //$NON-NLS-1$
+                : "stopping it did not finish within " + (timeoutMs / 1000L) + "s"; //$NON-NLS-1$ //$NON-NLS-2$
+            return StandalonePreparation.preflightFailed(resolvedProject.get(), resolvedId,
+                StandaloneServerStateRecovery.preflightStopInFlightFailure(resolvedId, detail),
+                staleServerStopped.get());
+        }
+        String target = standalonePreparationTarget(stage.get(), configName, projectName, resolvedId);
+        return StandalonePreparation.failed(
+            StandaloneServerSupport.boundedPhaseFailure(target, timeoutMs, bounded));
+    }
+
+    /** One scheduling boundary for the complete standalone precondition phase. */
+    static BoundedJob.Result runStandalonePreparationBounded(String configName, long timeoutMs,
+        BoundedJob.IBoundedWork work)
+    {
+        return BoundedJob.run("Preparing standalone server: " + configName, timeoutMs, work); //$NON-NLS-1$
+    }
+
+    /** Names the precondition call that owned the shared deadline when it elapsed. */
+    private static String standalonePreparationTarget(StandalonePreparationStage stage,
+        String configName, String projectName, String applicationId)
+    {
+        switch (stage)
+        {
+        case PROJECT:
+            return "the standalone-server project precondition for project '" //$NON-NLS-1$
+                + projectName + "'"; //$NON-NLS-1$
+        case APPLICATION_MANAGER:
+            return "the EDT application-manager lookup"; //$NON-NLS-1$
+        case DELEGATE_APPLICATION:
+            return "the EDT delegate-application resolution for launch configuration '" //$NON-NLS-1$
+                + configName + "'"; //$NON-NLS-1$
+        case SERVICE:
+            return "the EDT standalone-server service lookup"; //$NON-NLS-1$
+        case STALE_PREFLIGHT:
+            return "the stale-server pre-flight for application '" + applicationId + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+        case APPLICATION:
+        case STALE_STOP:
+        default:
+            return "the standalone-server precondition phase"; //$NON-NLS-1$
+        }
+    }
+
+    /** Step active when the shared standalone-preparation deadline elapses. */
+    private enum StandalonePreparationStage
+    {
+        PROJECT,
+        APPLICATION_MANAGER,
+        DELEGATE_APPLICATION,
+        APPLICATION,
+        SERVICE,
+        STALE_PREFLIGHT,
+        STALE_STOP
+    }
+
+    /** Complete prerequisite snapshot handed to the separately bounded start. */
+    private static final class StandalonePreparation
+    {
+        private final IProject project;
+        private final String applicationId;
+        private final StandaloneServerSupport.ApplicationLookup lookup;
+        private final Object service;
+        private final StandaloneServerPortConflictPolicy portPolicy;
+        private final String failure;
+        private final String preflightFailure;
+        private final boolean staleServerStopped;
+
+        private StandalonePreparation(IProject project, String applicationId,
+            StandaloneServerSupport.ApplicationLookup lookup, Object service,
+            StandaloneServerPortConflictPolicy portPolicy, String failure,
+            String preflightFailure, boolean staleServerStopped)
+        {
+            this.project = project;
+            this.applicationId = applicationId;
+            this.lookup = lookup;
+            this.service = service;
+            this.portPolicy = portPolicy;
+            this.failure = failure;
+            this.preflightFailure = preflightFailure;
+            this.staleServerStopped = staleServerStopped;
+        }
+
+        static StandalonePreparation ready(IProject project, String applicationId,
+            StandaloneServerSupport.ApplicationLookup lookup, Object service,
+            StandaloneServerPortConflictPolicy portPolicy, boolean staleServerStopped)
+        {
+            return new StandalonePreparation(project, applicationId, lookup, service, portPolicy,
+                null, null, staleServerStopped);
+        }
+
+        static StandalonePreparation failed(String failure)
+        {
+            return new StandalonePreparation(null, null, null, null, null, failure, null, false);
+        }
+
+        static StandalonePreparation preflightFailed(IProject project, String applicationId,
+            String failure, boolean staleServerStopped)
+        {
+            return new StandalonePreparation(project, applicationId, null, null, null, null,
+                failure, staleServerStopped);
+        }
     }
 
     /** Bounded standalone-start outcome plus the known or possible port-configuration mutation. */
@@ -2088,6 +2297,11 @@ public class LaunchTool implements IMcpTool
         }
         String original = status.getMessage();
         String message = original == null || original.isEmpty() ? note : original + " " + note; //$NON-NLS-1$
+        if (status.isMultiStatus())
+        {
+            return new MultiStatus(status.getPlugin(), status.getCode(), status.getChildren(),
+                message, status.getException());
+        }
         return new Status(status.getSeverity(), status.getPlugin(), status.getCode(), message,
             status.getException());
     }

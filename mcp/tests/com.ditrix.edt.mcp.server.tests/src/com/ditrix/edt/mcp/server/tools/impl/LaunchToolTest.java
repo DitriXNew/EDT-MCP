@@ -37,6 +37,7 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.MultiStatus;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.debug.core.ILaunch;
@@ -159,8 +160,41 @@ public class LaunchToolTest
         assertSame(failure, LaunchTool.appendAccessSettingsDialogFailure(failure, 7, 7));
         IStatus observed = LaunchTool.appendAccessSettingsDialogFailure(failure, 7, 8);
 
+        String note = InfobaseAuthDialogSuppressor.accessSettingsDialogFailureNote(7, 8);
+        assertEquals("launch failed " + note, observed.getMessage()); //$NON-NLS-1$
         assertTrue(observed.getMessage().contains("while this call ran")); //$NON-NLS-1$
         assertFalse(observed.getMessage().contains("by this call")); //$NON-NLS-1$
+        assertFalse(observed.isMultiStatus());
+        assertEquals(failure.getSeverity(), observed.getSeverity());
+        assertEquals(failure.getPlugin(), observed.getPlugin());
+        assertEquals(failure.getCode(), observed.getCode());
+        assertSame(failure.getException(), observed.getException());
+    }
+
+    @Test
+    public void failedMultiStatusKeepsItsChildrenWhenAccessDialogDiagnosticIsAdded()
+    {
+        IStatus first = new Status(IStatus.WARNING, "first-plugin", 11, "first detail", null); //$NON-NLS-1$ //$NON-NLS-2$
+        IStatus second = new Status(IStatus.ERROR, "second-plugin", 12, "second detail", null); //$NON-NLS-1$ //$NON-NLS-2$
+        RuntimeException failureCause = new RuntimeException("launch cause"); //$NON-NLS-1$
+        MultiStatus failure = new MultiStatus("parent-plugin", 27, //$NON-NLS-1$
+            new IStatus[] { first, second }, "launch failed", failureCause); //$NON-NLS-1$
+
+        IStatus observed = LaunchTool.appendAccessSettingsDialogFailure(failure, 7, 8);
+
+        assertTrue(observed instanceof MultiStatus);
+        assertTrue(observed.isMultiStatus());
+        assertEquals(failure.getSeverity(), observed.getSeverity());
+        assertEquals("parent-plugin", observed.getPlugin()); //$NON-NLS-1$
+        assertEquals(27, observed.getCode());
+        assertSame(failureCause, observed.getException());
+        String note = InfobaseAuthDialogSuppressor.accessSettingsDialogFailureNote(7, 8);
+        assertEquals("launch failed " + note, observed.getMessage()); //$NON-NLS-1$
+        assertTrue(observed.getMessage().contains("while this call ran")); //$NON-NLS-1$
+        IStatus[] children = observed.getChildren();
+        assertEquals("every original child must remain", 2, children.length); //$NON-NLS-1$
+        assertSame("the first diagnostic child must keep its position", first, children[0]); //$NON-NLS-1$
+        assertSame("the second diagnostic child must keep its position", second, children[1]); //$NON-NLS-1$
     }
 
     @Test
@@ -777,6 +811,39 @@ public class LaunchToolTest
         assertEquals("Base", lookup.infobaseName()); //$NON-NLS-1$
         assertEquals("Standalone server for Base", lookup.serverName()); //$NON-NLS-1$
         verify(manager, times(1)).getApplication(project, "ServerApplication.Test"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testWholeStandalonePreparationStopsAtOneDeadline() throws Exception
+    {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+
+        BoundedJob.Result result = LaunchTool.runStandalonePreparationBounded(
+            "Standalone", 250L, monitor -> { //$NON-NLS-1$
+                started.countDown();
+                try
+                {
+                    release.await(30, TimeUnit.SECONDS);
+                }
+                finally
+                {
+                    finished.countDown();
+                }
+            });
+
+        try
+        {
+            assertTrue("the complete preparation must enter its one bounded job", //$NON-NLS-1$
+                started.await(5, TimeUnit.SECONDS));
+            assertEquals(BoundedJob.Outcome.TIMED_OUT, result.getOutcome());
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
     }
 
     @Test

@@ -213,6 +213,20 @@ public class ReadModuleSourceToolTest
         assertTrue(deadlineElapsed.get());
     }
 
+    @Test
+    public void expiredFooterTaskSkipsQueuedModelWork()
+    {
+        AtomicBoolean expired = new AtomicBoolean(true);
+        AtomicBoolean modelLoaded = new AtomicBoolean();
+        CountDownLatch finished = new CountDownLatch(1);
+
+        ReadModuleSourceTool.runFooterTaskUnlessExpired(expired, finished,
+            () -> modelLoaded.set(true));
+
+        assertFalse("expired UI work must not load the model", modelLoaded.get()); //$NON-NLS-1$
+        assertEquals(0L, finished.getCount());
+    }
+
     // ==================== Required parameter validation ====================
 
     @Test

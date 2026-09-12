@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -560,6 +561,44 @@ public final class StandaloneServerStateRecovery
         }
     }
 
+    /** Same locked recheck, with cleanup executed by the caller's enclosing bounded Job. */
+    private static Recovery stopStaleServerGuardedWithinBound(IProject project,
+        IApplication application, String applicationId, IApplicationManager manager,
+        IProgressMonitor monitor, Runnable stopStarting, Runnable stopCompleted)
+    {
+        if (project == null || application == null || applicationId == null || manager == null)
+        {
+            return Recovery.failed("the stale-server target is incomplete"); //$NON-NLS-1$
+        }
+        synchronized (stopLockFor(project, applicationId))
+        {
+            Object server = resolveServer(application);
+            if (server == null)
+            {
+                Activator.logError("Standalone server: its state could not be re-read, so it was " //$NON-NLS-1$
+                    + "NOT stopped: " + applicationId, null); //$NON-NLS-1$
+                return Recovery.failed("its server could not be resolved, so stopping it would " //$NON-NLS-1$
+                    + "have acted on a state nothing could confirm"); //$NON-NLS-1$
+            }
+            if (decide(serverState(server), hasLiveLaunch(server)) != Preflight.STOP_STALE)
+            {
+                Activator.logInfo("Standalone server: it is no longer stale (somebody else " //$NON-NLS-1$
+                    + "recovered it); leaving it alone: " + applicationId); //$NON-NLS-1$
+                return Recovery.stopped();
+            }
+            if (monitor != null && monitor.isCanceled())
+            {
+                return Recovery.failed(
+                    "the bounded pre-flight was cancelled before the stop began"); //$NON-NLS-1$
+            }
+            if (stopStarting != null)
+            {
+                stopStarting.run();
+            }
+            return runStopWithinBound(manager, application, applicationId, monitor, stopCompleted);
+        }
+    }
+
     /** Returns EDT's application manager when its plugin is available. */
     private static IApplicationManager applicationManager()
     {
@@ -676,6 +715,37 @@ public final class StandaloneServerStateRecovery
         return Recovery.failed("it never ran (" + outcome + ")"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    /** Executes cleanup directly when an enclosing bounded Job already owns the deadline. */
+    private static Recovery runStopWithinBound(IApplicationManager manager,
+        IApplication application, String applicationId, IProgressMonitor monitor,
+        Runnable stopCompleted)
+    {
+        ExecutionContext context = new ExecutionContext();
+        Shell shell = LaunchLifecycleUtils.grabActiveShell();
+        if (shell != null)
+        {
+            context.setProperty(ExecutionContext.ACTIVE_SHELL_NAME, shell);
+        }
+        Activator.logInfo("Stale standalone server: stopping it so the operation can proceed: " //$NON-NLS-1$
+            + applicationId);
+        try
+        {
+            manager.cleanup(application, context, monitor);
+            if (stopCompleted != null)
+            {
+                stopCompleted.run();
+            }
+            Activator.logInfo("Stale standalone server: stopped: " + applicationId); //$NON-NLS-1$
+            return Recovery.stopped();
+        }
+        catch (Exception failure) // NOSONAR the enclosing bounded Job owns timeout classification
+        {
+            Activator.logError("Stale standalone server: stopping it failed: " + applicationId, //$NON-NLS-1$
+                failure);
+            return Recovery.failed("stopping it failed: " + PlatformFailures.describe(failure)); //$NON-NLS-1$
+        }
+    }
+
     /** Starts a fresh operation-local stop record. */
     public static void beginOperation()
     {
@@ -698,6 +768,12 @@ public final class StandaloneServerStateRecovery
         }
     }
 
+    /** Transfers a successful stop from bounded preparation to the caller's operation record. */
+    public static void retainPreparedStop(String applicationId)
+    {
+        recordStoppedServer(applicationId);
+    }
+
     /** Appends one restore outcome when the current operation stopped a server. */
     private static String appendRestoration(String original, IProject project)
     {
@@ -706,19 +782,9 @@ public final class StandaloneServerStateRecovery
         {
             return null;
         }
-        String name;
-        try
-        {
-            name = standaloneLaunchConfigurationName(project, stopped.applicationId);
-        }
-        catch (Exception failure) // NOSONAR configuration discovery must not prevent restoration
-        {
-            Activator.logError("Standalone server: cannot resolve its launch configuration", //$NON-NLS-1$
-                failure);
-            name = stopped.applicationId;
-        }
-        return appendRestorationOutcome(original, name,
-            applicationId -> restoreStoppedServer(project, applicationId));
+        RestorationAttempt attempt = restoreStoppedServer(project, stopped.applicationId, true);
+        return appendRestorationOutcome(original, attempt.launchConfigurationName,
+            applicationId -> attempt.outcome);
     }
 
     /** Restores an operation-local stop, using the caller's known launch configuration name. */
@@ -802,51 +868,142 @@ public final class StandaloneServerStateRecovery
     /** Starts the stopped server once and retains whether a failed start may still be running. */
     private static RestorationStartOutcome restoreStoppedServer(IProject project, String applicationId)
     {
-        try
-        {
+        return restoreStoppedServer(project, applicationId, false).outcome;
+    }
+
+    /** Resolves every restoration prerequisite, optionally including its launch name, together. */
+    private static RestorationAttempt restoreStoppedServer(IProject project, String applicationId,
+        boolean resolveLaunchConfigurationName)
+    {
+        AtomicReference<RestorationPreparation> prepared = new AtomicReference<>();
+        AtomicReference<RestorationPreparationStage> stage =
+            new AtomicReference<>(RestorationPreparationStage.PHASE);
+        AtomicReference<String> launchConfigurationName = new AtomicReference<>(applicationId);
+        BoundedJob.Result bounded = BoundedJob.run(
+            "Preparing standalone-server restoration: " + applicationId, //$NON-NLS-1$
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, monitor -> {
             if (project == null)
             {
-                return new RestorationStartOutcome("the project is unknown", true); //$NON-NLS-1$
+                prepared.set(RestorationPreparation.failed("the project is unknown")); //$NON-NLS-1$
+                return;
             }
+            if (resolveLaunchConfigurationName)
+            {
+                stage.set(RestorationPreparationStage.LAUNCH_CONFIGURATION);
+                try
+                {
+                    launchConfigurationName.set(
+                        standaloneLaunchConfigurationName(project, applicationId));
+                }
+                catch (Exception failure) // NOSONAR discovery must not prevent restoration
+                {
+                    Activator.logError(
+                        "Standalone server: cannot resolve its launch configuration", failure); //$NON-NLS-1$
+                }
+                if (monitor.isCanceled())
+                {
+                    return;
+                }
+            }
+            stage.set(RestorationPreparationStage.PHASE);
             Activator activator = Activator.getDefault();
             IApplicationManager manager = activator == null ? null : activator.getApplicationManager();
+            if (monitor.isCanceled())
+            {
+                return;
+            }
             if (manager == null)
             {
-                return new RestorationStartOutcome(
-                    "the EDT application manager is not available", true); //$NON-NLS-1$
+                prepared.set(RestorationPreparation.failed(
+                    "the EDT application manager is not available")); //$NON-NLS-1$
+                return;
             }
+            stage.set(RestorationPreparationStage.APPLICATION);
             StandaloneServerSupport.ApplicationLookup lookup =
-                StandaloneServerSupport.lookupApplicationBounded(manager, project, applicationId,
-                    StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
-            if (lookup.failure() != null)
+                StandaloneServerSupport.lookupApplication(manager, project, applicationId);
+            if (monitor.isCanceled())
             {
-                return new RestorationStartOutcome(lookup.failure(), true);
+                return;
             }
             IApplication application = lookup.application();
             if (application == null)
             {
-                return new RestorationStartOutcome("the application could not be resolved", true); //$NON-NLS-1$
+                prepared.set(RestorationPreparation.failed(
+                    "the application could not be resolved")); //$NON-NLS-1$
+                return;
             }
             Object server = lookup.server();
             if (server == null)
             {
-                return new RestorationStartOutcome(
-                    "the application's standalone server could not be resolved", true); //$NON-NLS-1$
+                prepared.set(RestorationPreparation.failed(
+                    "the application's standalone server could not be resolved")); //$NON-NLS-1$
+                return;
             }
+            stage.set(RestorationPreparationStage.SERVICE);
             Object service = StandaloneServerSupport.acquireService();
             if (service == null)
             {
-                return new RestorationStartOutcome(
-                    "the EDT standalone-server service is not available", true); //$NON-NLS-1$
+                prepared.set(RestorationPreparation.failed(
+                    "the EDT standalone-server service is not available")); //$NON-NLS-1$
+                return;
             }
+            prepared.set(RestorationPreparation.ready(service, lookup));
+        });
 
-            return startRestorationWithPortGuardOutcome(service, server, applicationId,
-                lookup.infobaseName(), lookup.serverName());
-        }
-        catch (Exception failure) // NOSONAR restoration must not hide the operation's original failure
+        if (!bounded.isSuccess())
         {
-            return new RestorationStartOutcome(PlatformFailures.describe(failure), true);
+            String failure;
+            if (bounded.getFailure() != null
+                && bounded.getOutcome() == BoundedJob.Outcome.COMPLETED)
+            {
+                failure = stage.get() == RestorationPreparationStage.APPLICATION
+                    ? "the application could not be resolved: " //$NON-NLS-1$
+                        + PlatformFailures.describe(bounded.getFailure())
+                    : PlatformFailures.describe(bounded.getFailure());
+            }
+            else if (stage.get() == RestorationPreparationStage.APPLICATION)
+            {
+                failure = StandaloneServerSupport.applicationLookupFailure(applicationId,
+                    StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, bounded);
+            }
+            else
+            {
+                String target;
+                if (stage.get() == RestorationPreparationStage.SERVICE)
+                {
+                    target = "the EDT standalone-server service lookup"; //$NON-NLS-1$
+                }
+                else if (stage.get() == RestorationPreparationStage.LAUNCH_CONFIGURATION)
+                {
+                    target = "the standalone-server launch-configuration lookup"; //$NON-NLS-1$
+                }
+                else
+                {
+                    target = "the standalone-server restoration precondition phase"; //$NON-NLS-1$
+                }
+                failure = StandaloneServerSupport.boundedPhaseFailure(target,
+                    StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, bounded);
+            }
+            return new RestorationAttempt(launchConfigurationName.get(),
+                new RestorationStartOutcome(failure, true));
         }
+        RestorationPreparation preparation = prepared.get();
+        if (preparation == null)
+        {
+            return new RestorationAttempt(launchConfigurationName.get(),
+                new RestorationStartOutcome(
+                    "the standalone-server restoration precondition phase produced no result", //$NON-NLS-1$
+                    true));
+        }
+        if (preparation.failure != null)
+        {
+            return new RestorationAttempt(launchConfigurationName.get(),
+                new RestorationStartOutcome(preparation.failure, true));
+        }
+        RestorationStartOutcome outcome = startRestorationWithPortGuardOutcome(preparation.service,
+            preparation.lookup.server(), applicationId, preparation.lookup.infobaseName(),
+            preparation.lookup.serverName());
+        return new RestorationAttempt(launchConfigurationName.get(), outcome);
     }
 
     /** Starts a restoration while refusing any port rewrite and retaining its specific failure. */
@@ -897,6 +1054,55 @@ public final class StandaloneServerStateRecovery
         {
             this.failure = failure;
             this.conclusive = conclusive;
+        }
+    }
+
+    /** Step active when a bounded restoration preparation stops answering. */
+    private enum RestorationPreparationStage
+    {
+        PHASE,
+        LAUNCH_CONFIGURATION,
+        APPLICATION,
+        SERVICE
+    }
+
+    /** Name resolved under the preparation deadline plus the separately bounded start outcome. */
+    private static final class RestorationAttempt
+    {
+        private final String launchConfigurationName;
+        private final RestorationStartOutcome outcome;
+
+        RestorationAttempt(String launchConfigurationName, RestorationStartOutcome outcome)
+        {
+            this.launchConfigurationName = launchConfigurationName;
+            this.outcome = outcome;
+        }
+    }
+
+    /** Values resolved together before the separately bounded restoration start. */
+    private static final class RestorationPreparation
+    {
+        private final Object service;
+        private final StandaloneServerSupport.ApplicationLookup lookup;
+        private final String failure;
+
+        private RestorationPreparation(Object service,
+            StandaloneServerSupport.ApplicationLookup lookup, String failure)
+        {
+            this.service = service;
+            this.lookup = lookup;
+            this.failure = failure;
+        }
+
+        static RestorationPreparation ready(Object service,
+            StandaloneServerSupport.ApplicationLookup lookup)
+        {
+            return new RestorationPreparation(service, lookup, null);
+        }
+
+        static RestorationPreparation failed(String failure)
+        {
+            return new RestorationPreparation(null, null, failure);
         }
     }
 
@@ -1111,6 +1317,51 @@ public final class StandaloneServerStateRecovery
         }
     }
 
+    /** Runs the same pre-flight directly inside a deadline already owned by the caller. */
+    public static void ensureStartableWithinBound(IProject project, IApplication application,
+        Object server, String applicationId, IApplicationManager manager, IProgressMonitor monitor,
+        Runnable stopStarting, Runnable stopCompleted)
+    {
+        if (project == null || application == null || manager == null
+            || !DebugServerTargetSupport.isServerApplicationId(applicationId)
+            || (monitor != null && monitor.isCanceled()))
+        {
+            return;
+        }
+        try
+        {
+            if (server == null)
+            {
+                return;
+            }
+            if (monitor != null && monitor.isCanceled())
+            {
+                return;
+            }
+            Preflight decision = decide(serverState(server), hasLiveLaunch(server));
+            if (decision == Preflight.WAIT_SETTLE)
+            {
+                decision = decide(awaitSettled(server, applicationId, monitor),
+                    hasLiveLaunch(server));
+            }
+            if (decision == Preflight.STOP_STALE)
+            {
+                stopStaleServerBeforeStartWithinBound(project, application, applicationId,
+                    manager, monitor, stopStarting, stopCompleted);
+            }
+        }
+        catch (ApplicationException abort)
+        {
+            throw abort;
+        }
+        catch (Exception e) // NOSONAR every other pre-flight failure remains best-effort
+        {
+            Activator.logError("Standalone server: the pre-flight state check failed for " //$NON-NLS-1$
+                + applicationId, e);
+            return;
+        }
+    }
+
     /**
      * The pre-flight for a caller that names no application: EDT prepares the project's DEFAULT
      * application (that is what the external-object dump does), so that is the server whose state
@@ -1188,9 +1439,17 @@ public final class StandaloneServerStateRecovery
      */
     private static Integer awaitSettled(Object server, String applicationId)
     {
+        return awaitSettled(server, applicationId, null);
+    }
+
+    /** Same settling wait, also respecting an enclosing bounded phase's cancellation. */
+    private static Integer awaitSettled(Object server, String applicationId,
+        IProgressMonitor monitor)
+    {
         long deadline = System.currentTimeMillis() + SETTLE_TIMEOUT_MS;
         Integer state = serverState(server);
-        while (isTransitional(state) && System.currentTimeMillis() < deadline)
+        while (isTransitional(state) && System.currentTimeMillis() < deadline
+            && (monitor == null || !monitor.isCanceled()))
         {
             try
             {
@@ -1203,7 +1462,7 @@ public final class StandaloneServerStateRecovery
             }
             state = serverState(server);
         }
-        if (isTransitional(state))
+        if (isTransitional(state) && (monitor == null || !monitor.isCanceled()))
         {
             Activator.logInfo("Standalone server: it is still " + stateName(state.intValue()) //$NON-NLS-1$
                 + " after " + (SETTLE_TIMEOUT_MS / 1000) //$NON-NLS-1$
@@ -1235,9 +1494,27 @@ public final class StandaloneServerStateRecovery
         Activator.logInfo("Standalone server: EDT still has it STARTED while the launch that " //$NON-NLS-1$
             + "owned it is gone; stopping it so the operation is not refused: " + applicationId); //$NON-NLS-1$
         Recovery recovery = stopStaleServerGuarded(project, application, applicationId, manager);
+        finishPreflightStop(applicationId, recovery);
+    }
+
+    /** Performs the stale stop on the enclosing bounded Job and reports whether it completed. */
+    private static boolean stopStaleServerBeforeStartWithinBound(IProject project,
+        IApplication application, String applicationId, IApplicationManager manager,
+        IProgressMonitor monitor, Runnable stopStarting, Runnable stopCompleted)
+    {
+        Activator.logInfo("Standalone server: EDT still has it STARTED while the launch that " //$NON-NLS-1$
+            + "owned it is gone; stopping it so the operation is not refused: " + applicationId); //$NON-NLS-1$
+        Recovery recovery = stopStaleServerGuardedWithinBound(project, application, applicationId,
+            manager, monitor, stopStarting, stopCompleted);
+        return finishPreflightStop(applicationId, recovery);
+    }
+
+    /** Applies the existing pre-flight outcome contract and returns whether this call stopped it. */
+    private static boolean finishPreflightStop(String applicationId, Recovery recovery)
+    {
         if (recovery.recovered())
         {
-            return;
+            return true;
         }
         if (recovery.stopStillInFlight())
         {
@@ -1245,11 +1522,8 @@ public final class StandaloneServerStateRecovery
             // preempt it, so it may finish later - and stop whatever server is running by then,
             // including the one this operation is about to start. Refusing here costs the caller a
             // retry; proceeding would cost them a server that dies under them.
-            throw new ApplicationException("The standalone server of application '" //$NON-NLS-1$
-                + applicationId + "' is in a state EDT cannot start from, and stopping it " //$NON-NLS-1$
-                + "did not finish (" + recovery.detail() + "). That stop may still be " //$NON-NLS-1$ //$NON-NLS-2$
-                + "running, so starting the server now could be undone by it. Wait for it to " //$NON-NLS-1$
-                + "finish (Servers view in EDT), or restart EDT, then retry."); //$NON-NLS-1$
+            throw new ApplicationException(preflightStopInFlightFailure(applicationId,
+                recovery.detail()));
         }
         // The stop never ran (it was refused outright): nothing is in flight, so the operation
         // still runs, meets EDT's refusal, and the reactive recovery answers it with the same
@@ -1257,6 +1531,18 @@ public final class StandaloneServerStateRecovery
         Activator.logError("Standalone server: the pre-flight stop did not happen (" //$NON-NLS-1$
             + recovery.detail() + "); the operation proceeds and may be refused: " //$NON-NLS-1$
             + applicationId, null);
+        return false;
+    }
+
+    /** Existing refusal text for a pre-flight stop whose cleanup may still be running. */
+    public static String preflightStopInFlightFailure(String applicationId, String detail)
+    {
+        return "The standalone server of application '" //$NON-NLS-1$
+            + applicationId + "' is in a state EDT cannot start from, and stopping it " //$NON-NLS-1$
+            + "did not finish (" + detail + "). That stop may still be running, so " //$NON-NLS-1$ //$NON-NLS-2$
+            + "starting " //$NON-NLS-1$
+            + "the server now could be undone by it. Wait for it to finish (Servers view in " //$NON-NLS-1$
+            + "EDT), or restart EDT, then retry."; //$NON-NLS-1$
     }
 
     /**

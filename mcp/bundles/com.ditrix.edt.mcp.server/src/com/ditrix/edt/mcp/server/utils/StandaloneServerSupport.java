@@ -26,6 +26,7 @@ import org.osgi.framework.BundleContext;
 import org.osgi.framework.ServiceReference;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
 
@@ -102,6 +103,20 @@ public final class StandaloneServerSupport
     public static record ApplicationLookup(IApplication application, Object server,
         String infobaseName, String serverName, String failure)
     {
+    }
+
+    /** Resolves one complete application snapshot; the caller supplies any required deadline. */
+    public static ApplicationLookup lookupApplication(IApplicationManager manager, IProject project,
+        String applicationId) throws ApplicationException
+    {
+        IApplication application = manager.getApplication(project, applicationId).orElse(null);
+        if (application == null)
+        {
+            return new ApplicationLookup(null, null, null, null, null);
+        }
+        Object server = serverOfApplication(application);
+        return new ApplicationLookup(application, server,
+            LaunchLifecycleUtils.conflictAttributionName(application), nameOfServer(server), null);
     }
 
     /** Complete snapshot of one guarded, bounded standalone-server start. */
@@ -315,32 +330,18 @@ public final class StandaloneServerSupport
      * Resolves an EDT application without letting its synchronous UI-thread hop hold the caller
      * beyond {@code timeoutMs}.
      *
-     * <p>This is shared by every new standalone-server start path. In particular, restoration must
-     * not perform an unbounded lookup immediately before handing the server to an otherwise bounded
-     * start operation.
+     * <p>Use this when the caller does not already own a larger bounded preparation phase.
      */
     public static ApplicationLookup lookupApplicationBounded(IApplicationManager manager,
         IProject project, String applicationId, long timeoutMs)
     {
-        IApplication[] application = new IApplication[1];
-        Object[] server = new Object[1];
-        String[] infobaseName = new String[1];
-        String[] serverName = new String[1];
+        ApplicationLookup[] lookup = new ApplicationLookup[1];
         BoundedJob.Result result = BoundedJob.run(
             "Resolve standalone-server application: " + applicationId, timeoutMs, //$NON-NLS-1$
-            monitor -> {
-                application[0] = manager.getApplication(project, applicationId).orElse(null);
-                if (application[0] != null)
-                {
-                    server[0] = serverOfApplication(application[0]);
-                    infobaseName[0] = LaunchLifecycleUtils.conflictAttributionName(application[0]);
-                    serverName[0] = nameOfServer(server[0]);
-                }
-            });
+            monitor -> lookup[0] = lookupApplication(manager, project, applicationId));
         if (result.isSuccess())
         {
-            return new ApplicationLookup(application[0], server[0], infobaseName[0],
-                serverName[0], null);
+            return lookup[0];
         }
         if (result.getFailure() != null && result.getOutcome() == BoundedJob.Outcome.COMPLETED)
         {
@@ -348,26 +349,57 @@ public final class StandaloneServerSupport
                 + PlatformFailures.describe(result.getFailure()));
         }
 
-        String target = "the EDT application lookup for application '" + applicationId + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+        return failedApplicationLookup(applicationLookupFailure(applicationId, timeoutMs, result));
+    }
+
+    /** Retains the established lookup-timeout wording for callers with a larger bounded phase. */
+    public static String applicationLookupFailure(String applicationId, long timeoutMs,
+        BoundedJob.Result result)
+    {
+        String target = "the EDT application lookup for application '" //$NON-NLS-1$
+            + applicationId + "'"; //$NON-NLS-1$
         String deadline = timeoutMs % 1000L == 0L
             ? (timeoutMs / 1000L) + "s" : timeoutMs + "ms"; //$NON-NLS-1$ //$NON-NLS-2$
         if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT)
         {
-            return failedApplicationLookup(target + " did not finish within " //$NON-NLS-1$
-                + deadline + " and may still be running"); //$NON-NLS-1$
+            return target + " did not finish within " //$NON-NLS-1$
+                + deadline + " and may still be running"; //$NON-NLS-1$
         }
         if (result.getOutcome() == BoundedJob.Outcome.INTERRUPTED)
         {
-            return failedApplicationLookup("the wait for " + target //$NON-NLS-1$
-                + " was interrupted and the lookup may still be running"); //$NON-NLS-1$
+            return "the wait for " + target //$NON-NLS-1$
+                + " was interrupted and the lookup may still be running"; //$NON-NLS-1$
         }
         if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
         {
-            return failedApplicationLookup(target + " did not start within " //$NON-NLS-1$
-                + deadline + "; retry when EDT's background Job queue is responsive"); //$NON-NLS-1$
+            return target + " did not start within " //$NON-NLS-1$
+                + deadline + "; retry when EDT's background Job queue is responsive"; //$NON-NLS-1$
         }
-        return failedApplicationLookup(target + " never ran (" //$NON-NLS-1$
-            + result.getOutcome() + ")"); //$NON-NLS-1$
+        return target + " never ran (" //$NON-NLS-1$
+            + result.getOutcome() + ")"; //$NON-NLS-1$
+    }
+
+    /** Describes a larger bounded precondition phase that did not complete. */
+    public static String boundedPhaseFailure(String target, long timeoutMs,
+        BoundedJob.Result result)
+    {
+        String deadline = timeoutMs % 1000L == 0L
+            ? (timeoutMs / 1000L) + "s" : timeoutMs + "ms"; //$NON-NLS-1$ //$NON-NLS-2$
+        if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT)
+        {
+            return target + " did not finish within " + deadline //$NON-NLS-1$
+                + " and may still be running"; //$NON-NLS-1$
+        }
+        if (result.getOutcome() == BoundedJob.Outcome.INTERRUPTED)
+        {
+            return "the wait for " + target + " was interrupted; it may still be running"; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
+        {
+            return target + " did not start within " + deadline //$NON-NLS-1$
+                + "; retry when EDT's background Job queue is responsive"; //$NON-NLS-1$
+        }
+        return target + " never ran (" + result.getOutcome() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static ApplicationLookup failedApplicationLookup(String failure)
