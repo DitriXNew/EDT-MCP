@@ -64,6 +64,11 @@ public final class InfobaseAccessSupport
     /** Fixed replacement for a credential found in platform-produced diagnostic text. */
     private static final String CREDENTIAL_REDACTION_MARKER = "[REDACTED]"; //$NON-NLS-1$
 
+    /** Safe diagnosis when redacting a one-character credential would reveal or destroy it. */
+    private static final String CREDENTIAL_MESSAGE_WITHHELD =
+        "The platform message was withheld because it contained the supplied credential. " //$NON-NLS-1$
+            + "Retry with a longer password to get a readable diagnosis."; //$NON-NLS-1$
+
     /** A malformed throwable graph must not make credential-store failure reporting recurse forever. */
     private static final int MAX_LOGGED_THROWABLE_DEPTH = 16;
 
@@ -620,15 +625,19 @@ public final class InfobaseAccessSupport
 
     /**
      * Removes the concrete password from platform-produced text without treating it as a regular
-     * expression. Empty and one-character values are not replaced: the former matches every
-     * boundary, while the latter cannot be distinguished safely from ordinary prose and would
-     * destroy the diagnosis by replacing a common character throughout it.
+     * expression. Empty values are not secret and remain a no-op. A message containing a
+     * one-character credential is withheld because replacing that character throughout the text
+     * would both destroy the diagnosis and signal the supplied character.
      */
     static String scrubCredentialText(String message, String password)
     {
-        if (message == null || password == null || password.length() <= 1)
+        if (message == null || password == null || password.isEmpty())
         {
             return message;
+        }
+        if (password.length() == 1)
+        {
+            return message.contains(password) ? CREDENTIAL_MESSAGE_WITHHELD : message;
         }
         return message.replace(password, CREDENTIAL_REDACTION_MARKER);
     }

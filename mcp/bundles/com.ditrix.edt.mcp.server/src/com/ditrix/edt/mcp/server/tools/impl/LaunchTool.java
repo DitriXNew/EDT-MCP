@@ -683,7 +683,7 @@ public class LaunchTool implements IMcpTool
             standaloneServerPortPolicy(config, portPolicy);
         StartOutcome start = startStandaloneServerGuarded(configName, context.project(),
             () -> StandaloneServerStateRecovery.ensureStartable(context.project(), application,
-                applicationId),
+                applicationId, manager),
             () -> startStandaloneServerWithPolicy(service, server, configName,
                 // EDT ignores this argument and always starts standalone servers in debug.
                 ILaunchManager.DEBUG_MODE, lookup.infobaseName(),

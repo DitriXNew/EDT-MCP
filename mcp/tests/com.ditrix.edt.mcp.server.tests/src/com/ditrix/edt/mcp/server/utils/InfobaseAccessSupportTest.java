@@ -548,6 +548,7 @@ public class InfobaseAccessSupportTest
         CoreException failure = thrownFailure.get();
         assertNotNull(failure);
         Throwable logged = InfobaseAccessSupport.scrubCredentialFailureForLog(failure, password);
+        assertNotNull(logged);
         StringWriter rendered = new StringWriter();
         logged.printStackTrace(new PrintWriter(rendered));
         String logText = rendered.toString();
@@ -586,6 +587,68 @@ public class InfobaseAccessSupportTest
     }
 
     @Test
+    public void updateFailureWithOneCharacterPasswordWithholdsLeakingMessages() throws Exception
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        IInfobaseAccessManager manager = mock(IInfobaseAccessManager.class);
+        String password = "~"; //$NON-NLS-1$
+        String withheld =
+            "The platform message was withheld because it contained the supplied credential. " //$NON-NLS-1$
+                + "Retry with a longer password to get a readable diagnosis."; //$NON-NLS-1$
+        AtomicReference<CoreException> thrownFailure = new AtomicReference<>();
+        doAnswer(invocation -> {
+            IllegalStateException cause = new IllegalStateException(
+                "secure storage rejected credential " + password); //$NON-NLS-1$
+            CoreException failure = new CoreException(new Status(IStatus.ERROR, "test", //$NON-NLS-1$
+                "keyring rejected '" + password + "' while storing credentials", cause)); //$NON-NLS-1$ //$NON-NLS-2$
+            thrownFailure.set(failure);
+            throw failure;
+        }).when(manager).updateSettings(
+            org.mockito.ArgumentMatchers.eq(ref), any(InfobaseAccessSettings.class));
+
+        StoreResult result = InfobaseAccessSupport.storeCredentials(ref, "Admin", //$NON-NLS-1$
+            password, InfobaseAccess.INFOBASE, manager);
+
+        assertNotNull(result.error());
+        assertFalse("the supplied credential must not be returned", //$NON-NLS-1$
+            result.error().contains(password));
+        assertTrue("the returned error must explain why the platform message is absent", //$NON-NLS-1$
+            result.error().contains(withheld));
+
+        CoreException failure = thrownFailure.get();
+        assertNotNull(failure);
+        Throwable logged = InfobaseAccessSupport.scrubCredentialFailureForLog(failure, password);
+        assertNotNull(logged);
+        StringWriter rendered = new StringWriter();
+        logged.printStackTrace(new PrintWriter(rendered));
+        String logText = rendered.toString();
+        assertFalse("the logged throwable must also omit the supplied credential", //$NON-NLS-1$
+            logText.contains(password));
+        assertTrue("the logged throwable must explain why the platform message is absent", //$NON-NLS-1$
+            logText.contains(withheld));
+        assertTrue("the logged throwable must retain the platform exception type", //$NON-NLS-1$
+            logText.contains(CoreException.class.getName()));
+        assertTrue("the logged throwable must retain its cause chain", //$NON-NLS-1$
+            logText.contains(IllegalStateException.class.getName()));
+    }
+
+    @Test
+    public void updateFailureWithAbsentOneCharacterPasswordKeepsPlatformMessage() throws Exception
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        IInfobaseAccessManager manager = mock(IInfobaseAccessManager.class);
+        String diagnostic = "keyring is locked; retry after unlocking secure storage"; //$NON-NLS-1$
+        String password = "~"; //$NON-NLS-1$
+        doThrow(new RuntimeException(diagnostic)).when(manager).updateSettings(
+            org.mockito.ArgumentMatchers.eq(ref), any(InfobaseAccessSettings.class));
+
+        StoreResult result = InfobaseAccessSupport.storeCredentials(ref, "Admin", //$NON-NLS-1$
+            password, InfobaseAccess.INFOBASE, manager);
+
+        assertEquals("Failed to store infobase access settings: " + diagnostic, result.error()); //$NON-NLS-1$
+    }
+
+    @Test
     public void updateFailureWithEmptyPasswordDoesNotCorruptPlatformMessage() throws Exception
     {
         InfobaseReference ref = mock(InfobaseReference.class);
@@ -604,8 +667,6 @@ public class InfobaseAccessSupportTest
             result.error().contains("[REDACTED]")); //$NON-NLS-1$
         assertEquals("ordinary message", //$NON-NLS-1$
             InfobaseAccessSupport.scrubCredentialText("ordinary message", "")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("ordinary message", //$NON-NLS-1$
-            InfobaseAccessSupport.scrubCredentialText("ordinary message", "a")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

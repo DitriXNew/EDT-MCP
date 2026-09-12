@@ -35,8 +35,10 @@ import org.junit.Test;
 import org.mockito.Mockito;
 
 import com.e1c.g5.dt.applications.ApplicationException;
+import com.e1c.g5.dt.applications.ExecutionContext;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
+import com.e1c.g5.dt.applications.IApplicationType;
 
 /**
  * Tests for {@link StandaloneServerStateRecovery}: recognising EDT's stale standalone-server
@@ -262,6 +264,30 @@ public class StandaloneServerStateRecoveryTest
         StandaloneServerStateRecovery.ensureStartable(null, null, "InfobaseApplication.Test");
         StandaloneServerStateRecovery.ensureStartable(null, null, "ServerApplication.Test");
         StandaloneServerStateRecovery.ensureStartable(null, null, null);
+    }
+
+    @Test
+    public void testStalePreflightReusesResolvedApplicationForStateRecheckAndStop()
+        throws Exception
+    {
+        IProject project = Mockito.mock(IProject.class);
+        Mockito.when(project.getName()).thenReturn("TestProject"); //$NON-NLS-1$
+        IApplicationManager manager = Mockito.mock(IApplicationManager.class);
+        IApplicationType type = Mockito.mock(IApplicationType.class);
+        Mockito.when(type.getId()).thenReturn(StandaloneServerSupport.WST_SERVER_APP_TYPE);
+        IApplication application = Mockito.mock(IApplication.class,
+            Mockito.withSettings().extraInterfaces(ServerBackedApplication.class));
+        Mockito.when(application.getType()).thenReturn(type);
+        Mockito.when(((ServerBackedApplication)application).getServer())
+            .thenReturn(new FakeServer(2, null));
+
+        StandaloneServerStateRecovery.ensureStartable(project, application,
+            "ServerApplication.Test", manager); //$NON-NLS-1$
+
+        Mockito.verify(manager, Mockito.never()).getApplication(project,
+            "ServerApplication.Test"); //$NON-NLS-1$
+        Mockito.verify(manager).cleanup(Mockito.same(application),
+            Mockito.any(ExecutionContext.class), Mockito.any(IProgressMonitor.class));
     }
 
     @Test
@@ -634,6 +660,12 @@ public class StandaloneServerStateRecoveryTest
         {
             return launch;
         }
+    }
+
+    /** The reflective server accessor exposed by EDT's standalone-server application. */
+    public interface ServerBackedApplication
+    {
+        Object getServer();
     }
 
     /** A restoration service that exposes the port conflict captured by its guarded window. */

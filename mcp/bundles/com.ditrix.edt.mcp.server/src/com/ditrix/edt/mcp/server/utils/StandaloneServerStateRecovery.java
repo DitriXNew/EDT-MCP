@@ -358,7 +358,8 @@ public final class StandaloneServerStateRecovery
     {
         String applicationId = target.applicationId;
         IProject project = target.project;
-        Recovery recovery = stopServerForRefusal(project, applicationId, refusal);
+        Recovery recovery = stopServerForRefusal(project, null, applicationId,
+            applicationManager(), refusal);
         if (!recovery.recovered())
         {
             throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID,
@@ -415,7 +416,7 @@ public final class StandaloneServerStateRecovery
         beginOperation();
         try
         {
-            ensureStartable(project, application, applicationId);
+            ensureStartable(project, application, applicationId, manager);
             try
             {
                 return manager.update(application, updateType, context, monitor);
@@ -427,7 +428,8 @@ public final class StandaloneServerStateRecovery
                 {
                     throw e;
                 }
-                Recovery recovery = stopServerForRefusal(project, applicationId, refusal);
+                Recovery recovery = stopServerForRefusal(project, application, applicationId,
+                    manager, refusal);
                 if (!recovery.recovered())
                 {
                     throw new ApplicationException(
@@ -465,12 +467,14 @@ public final class StandaloneServerStateRecovery
      * interfered with.
      *
      * @param project the project owning the application (may be {@code null})
+     * @param application the application when already resolved (may be {@code null})
      * @param applicationId the application id (may be {@code null})
+     * @param manager the application manager (may be {@code null})
      * @param refusal EDT's refusal message
      * @return the outcome, never {@code null}
      */
-    private static Recovery stopServerForRefusal(IProject project, String applicationId,
-        String refusal)
+    private static Recovery stopServerForRefusal(IProject project, IApplication application,
+        String applicationId, IApplicationManager manager, String refusal)
     {
         String state = refusedStateName(refusal);
         if (!RECOVERABLE_STATE.equals(state))
@@ -483,7 +487,7 @@ public final class StandaloneServerStateRecovery
         // EDT answered, not that it still is: two operations refused at the same moment would
         // otherwise both stop it, and the second would stop the server the first had already
         // recovered and started.
-        return stopStaleServerGuarded(project, applicationId);
+        return stopStaleServerGuarded(project, application, applicationId, manager);
     }
 
     /**
@@ -496,7 +500,9 @@ public final class StandaloneServerStateRecovery
      * state inside the lock closes it - the second sees a live launch and does nothing.
      *
      * @param project the project owning the application (may be {@code null})
+     * @param application the application when already resolved (may be {@code null})
      * @param applicationId the application id (may be {@code null})
+     * @param manager the application manager (may be {@code null})
      * <p>Nothing is stopped on state that cannot be re-read: a server that will not resolve gives
      * no evidence that stopping it is right NOW, and the refusal (or the earlier read) that sent
      * us here describes a moment that has passed.
@@ -505,16 +511,32 @@ public final class StandaloneServerStateRecovery
      *     server stopped being stale on its own, because the caller's next step - proceed, or
      *     retry what EDT refused - is then exactly the same
      */
-    private static Recovery stopStaleServerGuarded(IProject project, String applicationId)
+    private static Recovery stopStaleServerGuarded(IProject project, IApplication application,
+        String applicationId, IApplicationManager manager)
     {
         if (project == null || applicationId == null)
         {
-            // Nothing to lock on and nothing to re-read; stopStaleServer reports the miss.
-            return stopStaleServer(project, applicationId);
+            return Recovery.failed("the project or application id is unknown"); //$NON-NLS-1$
+        }
+        if (manager == null)
+        {
+            return Recovery.failed("the EDT application manager is not available"); //$NON-NLS-1$
         }
         synchronized (stopLockFor(project, applicationId))
         {
-            Object server = resolveServer(project, null, applicationId);
+            IApplication resolvedApplication = application;
+            if (resolvedApplication == null)
+            {
+                StandaloneServerSupport.ApplicationLookup lookup =
+                    StandaloneServerSupport.lookupApplicationBounded(manager, project,
+                        applicationId, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
+                if (lookup.failure() != null)
+                {
+                    return Recovery.failed(lookup.failure());
+                }
+                resolvedApplication = lookup.application();
+            }
+            Object server = resolveServer(resolvedApplication);
             if (server == null)
             {
                 // No server to read means no evidence that stopping is the right thing to do NOW.
@@ -534,8 +556,15 @@ public final class StandaloneServerStateRecovery
                     + "recovered it); leaving it alone: " + applicationId); //$NON-NLS-1$
                 return Recovery.stopped();
             }
-            return stopStaleServer(project, applicationId);
+            return runStop(manager, resolvedApplication, applicationId);
         }
+    }
+
+    /** Returns EDT's application manager when its plugin is available. */
+    private static IApplicationManager applicationManager()
+    {
+        Activator activator = Activator.getDefault();
+        return activator == null ? null : activator.getApplicationManager();
     }
 
     /**
@@ -572,24 +601,19 @@ public final class StandaloneServerStateRecovery
         {
             return Recovery.failed("the project or application id is unknown"); //$NON-NLS-1$
         }
-        Activator activator = Activator.getDefault();
-        IApplicationManager manager = activator == null ? null : activator.getApplicationManager();
+        IApplicationManager manager = applicationManager();
         if (manager == null)
         {
             return Recovery.failed("the EDT application manager is not available"); //$NON-NLS-1$
         }
-        IApplication application;
-        try
+        StandaloneServerSupport.ApplicationLookup lookup =
+            StandaloneServerSupport.lookupApplicationBounded(manager, project, applicationId,
+                StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
+        if (lookup.failure() != null)
         {
-            application = manager.getApplication(project, applicationId).orElse(null);
+            return Recovery.failed(lookup.failure());
         }
-        catch (Exception e) // NOSONAR the recovery reports every failure, it never adds one
-        {
-            Activator.logError("Stale standalone server: cannot resolve application " //$NON-NLS-1$
-                + applicationId, e);
-            return Recovery.failed("the application could not be resolved: " //$NON-NLS-1$
-                + PlatformFailures.describe(e));
-        }
+        IApplication application = lookup.application();
         if (application == null)
         {
             return Recovery.failed("application '" + applicationId //$NON-NLS-1$
@@ -1027,13 +1051,38 @@ public final class StandaloneServerStateRecovery
     public static void ensureStartable(IProject project, IApplication application,
         String applicationId)
     {
+        ensureStartable(project, application, applicationId, applicationManager());
+    }
+
+    /** Same pre-flight with the manager already held by the caller. */
+    public static void ensureStartable(IProject project, IApplication application,
+        String applicationId, IApplicationManager manager)
+    {
         if (project == null || !DebugServerTargetSupport.isServerApplicationId(applicationId))
         {
             return;
         }
         try
         {
-            Object server = resolveServer(project, application, applicationId);
+            IApplication resolvedApplication = application;
+            if (resolvedApplication == null)
+            {
+                if (manager == null)
+                {
+                    return;
+                }
+                StandaloneServerSupport.ApplicationLookup lookup =
+                    StandaloneServerSupport.lookupApplicationBounded(manager, project,
+                        applicationId, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
+                if (lookup.failure() != null)
+                {
+                    Activator.logError("Standalone server: the pre-flight application lookup " //$NON-NLS-1$
+                        + "did not complete: " + applicationId + ": " + lookup.failure(), null); //$NON-NLS-1$ //$NON-NLS-2$
+                    return;
+                }
+                resolvedApplication = lookup.application();
+            }
+            Object server = resolveServer(resolvedApplication);
             if (server == null)
             {
                 return;
@@ -1045,7 +1094,7 @@ public final class StandaloneServerStateRecovery
             }
             if (decision == Preflight.STOP_STALE)
             {
-                stopStaleServerBeforeStart(project, applicationId);
+                stopStaleServerBeforeStart(project, resolvedApplication, applicationId, manager);
             }
         }
         catch (ApplicationException abort)
@@ -1083,7 +1132,7 @@ public final class StandaloneServerStateRecovery
             return;
         }
         ensureStartable(project, null,
-            LaunchLifecycleUtils.resolveDefaultApplicationId(project, null, manager));
+            LaunchLifecycleUtils.resolveDefaultApplicationId(project, null, manager), manager);
     }
 
     /** What the pre-flight decided to do about the server's current state. */
@@ -1174,15 +1223,18 @@ public final class StandaloneServerStateRecovery
      * instead of after it.
      *
      * @param project the project owning the application
+     * @param application the already-resolved application
      * @param applicationId the application id
+     * @param manager the application manager that resolved the application
      * @throws ApplicationException when the stop did not finish and MAY STILL BE RUNNING - the
      *     caller must not start a server that a lingering stop can take down again
      */
-    private static void stopStaleServerBeforeStart(IProject project, String applicationId)
+    private static void stopStaleServerBeforeStart(IProject project, IApplication application,
+        String applicationId, IApplicationManager manager)
     {
         Activator.logInfo("Standalone server: EDT still has it STARTED while the launch that " //$NON-NLS-1$
             + "owned it is gone; stopping it so the operation is not refused: " + applicationId); //$NON-NLS-1$
-        Recovery recovery = stopStaleServerGuarded(project, applicationId);
+        Recovery recovery = stopStaleServerGuarded(project, application, applicationId, manager);
         if (recovery.recovered())
         {
             return;
@@ -1215,40 +1267,16 @@ public final class StandaloneServerStateRecovery
      * the comment in the body for why the by-module-name scan {@code delete_infobase} falls back
      * to must not be used for a decision that can stop a server.
      *
-     * @param project the project owning the application
-     * @param application the application when the caller holds it, else {@code null}
-     * @param applicationId the application id
+     * @param application the already-resolved application
      * @return the WST server object (address it reflectively), or {@code null}
      */
-    private static Object resolveServer(IProject project, IApplication application,
-        String applicationId)
+    private static Object resolveServer(IApplication application)
     {
-        IApplication app = application;
-        if (app == null)
-        {
-            Activator activator = Activator.getDefault();
-            IApplicationManager manager =
-                activator == null ? null : activator.getApplicationManager();
-            if (manager == null)
-            {
-                return null;
-            }
-            try
-            {
-                app = manager.getApplication(project, applicationId).orElse(null);
-            }
-            catch (Exception e) // NOSONAR an unresolvable application only skips the pre-flight
-            {
-                Activator.logError("Standalone server: cannot resolve application " //$NON-NLS-1$
-                    + applicationId, e);
-                return null;
-            }
-        }
-        if (app == null)
+        if (application == null)
         {
             return null;
         }
-        String typeId = app.getType() != null ? app.getType().getId() : null;
+        String typeId = application.getType() != null ? application.getType().getId() : null;
         if (!StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId))
         {
             // The id looked like a standalone server's but the application is something else —
@@ -1261,7 +1289,7 @@ public final class StandaloneServerStateRecovery
         // the state of the wrong server would then decide the fate of this one. A decision that
         // can stop a server must be made from the server that provably belongs to it, so when the
         // accessor gives nothing the pre-flight simply does not run.
-        return StandaloneServerSupport.serverOfApplication(app);
+        return StandaloneServerSupport.serverOfApplication(application);
     }
 
     /**

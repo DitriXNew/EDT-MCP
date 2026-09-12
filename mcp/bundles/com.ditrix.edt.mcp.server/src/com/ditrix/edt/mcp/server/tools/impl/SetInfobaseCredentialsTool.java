@@ -9,8 +9,8 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
@@ -99,10 +99,10 @@ public class SetInfobaseCredentialsTool implements IMcpTool
      * Stand-in "client write failed" reason for the persist-first record taken BEFORE the client
      * half runs. It only ever reaches the caller when the call ends between the agent commit and
      * the moment the client's outcome is recorded (the bounded Job's deadline), so the agent
-     * credentials really are stored. The launch-configuration save is skipped once the caller has
-     * been answered (see {@link #configureClient}), but the two events can interleave, so this
-     * deliberately UNDER-claims: reporting a client that turns out to be configured is harmless,
-     * the reverse is the bug issue #359 is about.
+     * credentials really are stored. The launch-configuration save is skipped once the bounded
+     * runner closes write permission (see {@link #configureClient}), but the two events can
+     * interleave, so this deliberately UNDER-claims: reporting a client that turns out to be
+     * configured is harmless, the reverse is the bug issue #359 is about.
      */
     private static final String CLIENT_WRITE_UNFINISHED =
         "the call ended before the launch configuration's outcome was known"; //$NON-NLS-1$
@@ -271,13 +271,10 @@ public class SetInfobaseCredentialsTool implements IMcpTool
      * stop a Job that is inside {@code getApplication}/{@code storeCredentials}. The Job therefore
      * reaches this point regardless, which is why the check lives HERE, on the side that writes: an
      * answered call must not go on to put a user and a password into a launch configuration behind
-     * the caller's back. In the case the answer was an ERROR (the deadline elapsed before the agent
-     * credentials committed) the flag is set long before this method runs, so the write cannot
-     * happen at all; in the case the answer was the persist-first success the two can still
-     * interleave, and its message already says the client's outcome was unknown.
+     * the caller's back. The same permission also gates result publication and closes before the
+     * bounded runner returns, so there is no second flag or hand-off window before result mapping.
      *
-     * @param callerAnswered raised the moment the bounded join stops waiting; {@code null} is
-     *     treated as "still waiting"
+     * @param writeAllowed the bounded runner's deadline state; {@code null} is treated as allowed
      * @param configName the launch configuration named as the target, or {@code null}/empty when the
      *     target was given as projectName + applicationId
      * @param config the resolved launch configuration to write to; only read when {@code configName}
@@ -288,7 +285,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
      * @return {@code null} when nothing failed — including the case where no launch configuration
      *     was named and nothing was written; otherwise the reason the write failed
      */
-    static String configureClient(AtomicBoolean callerAnswered, String configName,
+    static String configureClient(BooleanSupplier writeAllowed, String configName,
             ILaunchConfiguration config, String user, String password, boolean osAuth)
     {
         if (configName == null || configName.isEmpty())
@@ -298,7 +295,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             // caller read "credentials stored" as "a launch will now work".
             return null;
         }
-        if (callerAnswered != null && callerAnswered.get())
+        if (writeAllowed != null && !writeAllowed.getAsBoolean())
         {
             return CLIENT_WRITE_ABANDONED;
         }
@@ -540,12 +537,6 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         // Job. Resolving an application can provoke EDT's background application-update-state recompute,
         // which can loop indefinitely on an unbounded worker thread (DesignerSessionPool retries); the
         // Job + short join keeps the call unattended-safe (the UI thread is never blocked).
-        // Raised the moment the join stops waiting, and read by the Job before it writes the launch
-        // configuration. The Job outlives the call whenever the deadline elapses (cancellation is
-        // cooperative), so this is what keeps an answered - possibly FAILED - call from mutating a
-        // launch configuration afterwards.
-        final AtomicBoolean callerAnswered = new AtomicBoolean();
-
         BoundedStoreResult<String> storeRun = InfobaseAccessSupport.runBoundedCredentialStore(
             finalApplicationId, InfobaseAccessSupport.CREDENTIAL_STORE_TIMEOUT_MS,
             (publish, writeCommitted, writeAllowed) -> {
@@ -596,7 +587,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
                 // The agent half has committed, so now — and only now — the CLIENT half. Writing it
                 // after the commit means a failure of the agent half leaves the launch configuration
                 // untouched instead of silently rewritten by a call that answered success:false.
-                String clientError = configureClient(callerAnswered, finalClientConfigName,
+                String clientError = configureClient(writeAllowed, finalClientConfigName,
                     finalClientConfig, finalUser, finalPassword,
                     InfobaseAccessSupport.isOsAccess(finalAccess));
                 publish.accept(buildSuccess(finalProjectName, finalApplicationId,
@@ -619,14 +610,13 @@ public class SetInfobaseCredentialsTool implements IMcpTool
                     // The credentials are already stored; keep the success recorded above.
                 }
             });
-        return finishBoundedStore(storeRun, callerAnswered, projectName, applicationId);
+        return finishBoundedStore(storeRun, projectName, applicationId);
     }
 
-    /** Raises the late-write guard before mapping the shared bounded-store snapshot. */
-    static String finishBoundedStore(BoundedStoreResult<String> storeRun,
-        AtomicBoolean callerAnswered, String projectName, String applicationId)
+    /** Maps the shared bounded-store snapshot after its write permission has closed. */
+    static String finishBoundedStore(BoundedStoreResult<String> storeRun, String projectName,
+        String applicationId)
     {
-        callerAnswered.set(true);
         return boundedStoreOutcome(storeRun, projectName, applicationId);
     }
 
