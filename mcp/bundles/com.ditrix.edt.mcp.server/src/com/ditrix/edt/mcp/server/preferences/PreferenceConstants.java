@@ -101,9 +101,10 @@ public final class PreferenceConstants
      * preset gains {@code set_error_breakpoint}, a tool that did not exist when it was saved;
      * 7 = a stored Analysis Only / Code Review profile gains the destructive tools it missed -
      * {@code merge_rules} (new in the release after 2.15.1) and {@code delete_project}; 8 = those
-     * stored read-only profiles gain the new destructive {@code infobase_sessions} tool.
+     * stored read-only profiles gain the new destructive {@code infobase_sessions} tool; 9 = they
+     * gain three older tools whose own descriptions declare them destructive.
      */
-    public static final int TOOL_PREFS_MIGRATION_VERSION = 8;
+    public static final int TOOL_PREFS_MIGRATION_VERSION = 9;
 
     /** The raw {@code git} command tool is powerful, so it ships DISABLED by default (opt-in). */
     public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate"; //$NON-NLS-1$
