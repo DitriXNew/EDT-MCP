@@ -814,7 +814,9 @@ public class LaunchToolTest
         AtomicInteger inFlight = authInFlightCounter();
         int originalAuth = inFlight.get();
         int originalPortArms = portConflictArmCount();
-        armPortConflictForTest(StandaloneServerPortConflictPolicy.CANCEL, null, null);
+        int originalConflictWatches = conflictWatchCount();
+        armPortConflictForTest(StandaloneServerPortConflictPolicy.REASSIGN,
+            "Foreign infobase", "Foreign server"); //$NON-NLS-1$ //$NON-NLS-2$
 
         try
         {
@@ -827,14 +829,17 @@ public class LaunchToolTest
             assertTrue(outcome.conclusive());
             assertEquals("the auth guard must be released before a conclusive call returns", //$NON-NLS-1$
                 originalAuth, inFlight.get());
-            assertEquals("the port guard must be released before a conclusive call returns", //$NON-NLS-1$
-                originalPortArms, portConflictArmCount());
+            assertEquals("the conflict watch must close before a conclusive call returns", //$NON-NLS-1$
+                originalConflictWatches, conflictWatchCount());
+            assertEquals("headless cleanup must not release another invocation's port guard", //$NON-NLS-1$
+                originalPortArms + 1, portConflictArmCount());
         }
         finally
         {
             while (portConflictArmCount() > originalPortArms)
             {
-                disarmPortConflictForTest(StandaloneServerPortConflictPolicy.CANCEL, null, null);
+                disarmPortConflictForTest(StandaloneServerPortConflictPolicy.REASSIGN,
+                    "Foreign infobase", "Foreign server"); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
     }
@@ -849,11 +854,11 @@ public class LaunchToolTest
         AtomicInteger inFlight = authInFlightCounter();
         int originalAuth = inFlight.get();
         int originalPortArms = portConflictArmCount();
-        // The unit harness deliberately has no workbench Display, so the real confirmer's arm()
-        // is a no-op. Seed its existing bookkeeping seam: the production cleanup uses the same
-        // exact disarm and therefore consumes this marker. If cleanup runs at the bounded return,
-        // the count drops early; if it is correctly deferred, the marker survives until Job done.
-        armPortConflictForTest(StandaloneServerPortConflictPolicy.REASSIGN, null, null);
+        int originalConflictWatches = conflictWatchCount();
+        // Seed another invocation's port arm; the headless acquisition reports false, so neither
+        // eager nor deferred cleanup may consume this marker.
+        armPortConflictForTest(StandaloneServerPortConflictPolicy.CANCEL,
+            "Foreign infobase", "Foreign server"); //$NON-NLS-1$ //$NON-NLS-2$
         BlockingStandaloneStartService service =
             new BlockingStandaloneStartService(started, release);
         Thread caller = new Thread(() -> {
@@ -896,21 +901,26 @@ public class LaunchToolTest
                 error.has("standaloneServerPortsReassigned")); //$NON-NLS-1$
             assertEquals("the old eager auth release must be absent while the start is in flight", //$NON-NLS-1$
                 originalAuth + 1, inFlight.get());
-            assertEquals("the old eager port disarm must be absent while the start is in flight", //$NON-NLS-1$
+            assertEquals(
+                "the old eager conflict-watch close must be absent while the start is in flight", //$NON-NLS-1$
+                originalConflictWatches + 1, conflictWatchCount());
+            assertEquals("headless cleanup must not release another invocation's port guard", //$NON-NLS-1$
                 originalPortArms + 1, portConflictArmCount());
 
             release.countDown();
             long deadline = System.currentTimeMillis() + 5_000L;
             while ((inFlight.get() != originalAuth
-                || portConflictArmCount() != originalPortArms)
+                || conflictWatchCount() != originalConflictWatches)
                 && System.currentTimeMillis() < deadline)
             {
                 Thread.sleep(10L);
             }
             assertEquals("job completion must release the deferred auth guard", //$NON-NLS-1$
                 originalAuth, inFlight.get());
-            assertEquals("job completion must release the deferred port guard", //$NON-NLS-1$
-                originalPortArms, portConflictArmCount());
+            assertEquals("job completion must close the deferred conflict watch", //$NON-NLS-1$
+                originalConflictWatches, conflictWatchCount());
+            assertEquals("job completion must leave another invocation's port guard armed", //$NON-NLS-1$
+                originalPortArms + 1, portConflictArmCount());
         }
         finally
         {
@@ -918,14 +928,15 @@ public class LaunchToolTest
             caller.join(5_000L);
             long cleanupDeadline = System.currentTimeMillis() + 5_000L;
             while ((inFlight.get() != originalAuth
-                || portConflictArmCount() != originalPortArms)
+                || conflictWatchCount() != originalConflictWatches)
                 && System.currentTimeMillis() < cleanupDeadline)
             {
                 Thread.sleep(10L);
             }
             while (portConflictArmCount() > originalPortArms)
             {
-                disarmPortConflictForTest(StandaloneServerPortConflictPolicy.REASSIGN, null, null);
+                disarmPortConflictForTest(StandaloneServerPortConflictPolicy.CANCEL,
+                    "Foreign infobase", "Foreign server"); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
     }
@@ -2000,6 +2011,20 @@ public class LaunchToolTest
             "portConflictArmsForTest"); //$NON-NLS-1$
         method.setAccessible(true);
         return ((Integer)method.invoke(null)).intValue();
+    }
+
+    private static int conflictWatchCount() throws Exception
+    {
+        Field lockField = LaunchUpdateDialogAutoConfirmer.class.getDeclaredField("LOCK"); //$NON-NLS-1$
+        lockField.setAccessible(true);
+        Object lock = lockField.get(null);
+        Field watchesField = LaunchUpdateDialogAutoConfirmer.class.getDeclaredField(
+            "CONFLICT_WATCHES"); //$NON-NLS-1$
+        watchesField.setAccessible(true);
+        synchronized (lock)
+        {
+            return ((java.util.List<?>)watchesField.get(null)).size();
+        }
     }
 
     private static void armPortConflictForTest(StandaloneServerPortConflictPolicy policy,

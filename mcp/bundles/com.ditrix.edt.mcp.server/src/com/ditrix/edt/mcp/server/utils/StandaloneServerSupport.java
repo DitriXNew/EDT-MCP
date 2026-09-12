@@ -415,14 +415,17 @@ public final class StandaloneServerSupport
         long accessDialogsBefore = InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount();
         LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = portPolicy == null
             ? null : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName, serverName);
-        LaunchUpdateDialogAutoConfirmer.arm(false, false, false, null, infobaseName, portPolicy,
-            serverName);
+        boolean autoConfirmerArmed = LaunchUpdateDialogAutoConfirmer.arm(false, false, false, null,
+            infobaseName, portPolicy, serverName);
         InfobaseAuthDialogSuppressor.markActivityStart();
         Runnable cleanup = () -> {
             try
             {
-                LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, null, infobaseName,
-                    portPolicy, serverName);
+                if (autoConfirmerArmed)
+                {
+                    LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, null, infobaseName,
+                        portPolicy, serverName);
+                }
             }
             finally
             {

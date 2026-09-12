@@ -1864,8 +1864,9 @@ public class LaunchTool implements IMcpTool
         // never be released by the value it was taken with.
         String launchServer = launchServerName(config);
         boolean debugMode = ILaunchManager.DEBUG_MODE.equals(launchMode);
-        LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, debugMode,
-            autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy, launchServer);
+        boolean autoConfirmerArmed = LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog,
+            debugMode, autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy,
+            launchServer);
         InfobaseAuthDialogSuppressor.markActivityStart();
         try
         {
@@ -1880,9 +1881,12 @@ public class LaunchTool implements IMcpTool
         finally
         {
             InfobaseAuthDialogSuppressor.markActivityEnd();
-            LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, debugMode,
-                autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy,
-                launchServer);
+            if (autoConfirmerArmed)
+            {
+                LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, debugMode,
+                    autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy,
+                    launchServer);
+            }
         }
     }
 
@@ -1892,7 +1896,7 @@ public class LaunchTool implements IMcpTool
      * directly. Arms the {@link LaunchUpdateDialogAutoConfirmer} (update matcher
      * gated on {@code autoConfirmUpdateDialog}, code-1003 matcher debug-only —
      * the same flags the asyncExec dispatch used), runs the launch, and ALWAYS
-     * disarms in {@code finally} — both calls are thread-safe from a Job thread.
+     * releases any acquired arm in {@code finally} — both calls are thread-safe from a Job thread.
      *
      * <p>Never throws: a Job that dies on an uncaught exception fails silently for
      * the MCP caller, so EVERY failure — {@link CoreException} or any other
@@ -1974,8 +1978,9 @@ public class LaunchTool implements IMcpTool
             ? null
             : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase, launchServer);
         LaunchAbortReason abortReason = LaunchAbortReason.open(launchInfobase);
-        LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog, debugMode,
-            autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy, launchServer);
+        boolean autoConfirmerArmed = LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog,
+            debugMode, autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy,
+            launchServer);
         // Keep the infobase auth-dialog suppression active for the WHOLE async launch
         // (#230). This launch is fire-and-forget: tool.execute() has already returned and
         // stamped lastActivityEndMillis, and with updateBeforeLaunch=false there is no
@@ -2056,9 +2061,12 @@ public class LaunchTool implements IMcpTool
         finally
         {
             InfobaseAuthDialogSuppressor.markActivityEnd();
-            LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, debugMode,
-                autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy,
-                launchServer);
+            if (autoConfirmerArmed)
+            {
+                LaunchUpdateDialogAutoConfirmer.disarm(autoConfirmUpdateDialog, debugMode,
+                    autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy,
+                    launchServer);
+            }
             if (conflicts != null)
             {
                 conflicts.close();

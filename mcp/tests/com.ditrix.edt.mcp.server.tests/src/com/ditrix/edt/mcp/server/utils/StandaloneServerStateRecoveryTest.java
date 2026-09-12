@@ -406,10 +406,12 @@ public class StandaloneServerStateRecoveryTest
         throws Exception
     {
         int originalPortArms = LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest();
+        int originalConflictWatches = conflictWatchCount();
         AtomicInteger inFlight = authInFlightCounter();
         int originalAuth = inFlight.get();
         LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
-            StandaloneServerPortConflictPolicy.CANCEL, null, null);
+            StandaloneServerPortConflictPolicy.REASSIGN,
+            "Foreign infobase", "Foreign server"); //$NON-NLS-1$ //$NON-NLS-2$
 
         try
         {
@@ -418,17 +420,22 @@ public class StandaloneServerStateRecoveryTest
                 null, null);
 
             assertEquals("start failed", result); //$NON-NLS-1$
-            assertEquals("a conclusive restoration must release its port guard before returning", //$NON-NLS-1$
-                originalPortArms, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
+            assertEquals(
+                "a conclusive restoration must close its conflict watch before returning", //$NON-NLS-1$
+                originalConflictWatches, conflictWatchCount());
             assertEquals("a conclusive restoration must release its auth guard before returning", //$NON-NLS-1$
                 originalAuth, inFlight.get());
+            assertEquals("headless cleanup must not release another invocation's port guard", //$NON-NLS-1$
+                originalPortArms + 1,
+                LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
         }
         finally
         {
             while (LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest() > originalPortArms)
             {
                 LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
-                    StandaloneServerPortConflictPolicy.CANCEL, null, null);
+                    StandaloneServerPortConflictPolicy.REASSIGN,
+                    "Foreign infobase", "Foreign server"); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
     }
@@ -444,11 +451,12 @@ public class StandaloneServerStateRecoveryTest
         AtomicInteger inFlight = authInFlightCounter();
         int originalAuth = inFlight.get();
         int originalPortArms = LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest();
-        // No workbench Display exists in this unit harness, so production arm() intentionally does
-        // no bookkeeping. Seed the established port-arm test seam; the production disarm consumes
-        // it, making an eager cleanup observable without introducing a per-path guard variant.
+        int originalConflictWatches = conflictWatchCount();
+        // Seed another invocation's port arm; the headless acquisition reports false, so neither
+        // eager nor deferred cleanup may consume this marker.
         LaunchUpdateDialogAutoConfirmer.armPortConflictForTest(
-            StandaloneServerPortConflictPolicy.CANCEL, null, null);
+            StandaloneServerPortConflictPolicy.REASSIGN,
+            "Foreign infobase", "Foreign server"); //$NON-NLS-1$ //$NON-NLS-2$
 
         Thread caller = new Thread(() -> {
             try
@@ -473,24 +481,30 @@ public class StandaloneServerStateRecoveryTest
             assertNull(callerFailure.get());
             assertNotNull(answer.get());
             assertTrue(answer.get().contains("may still be running")); //$NON-NLS-1$
-            assertEquals("the old eager port disarm must be absent while restoration is in flight", //$NON-NLS-1$
-                originalPortArms + 1,
-                LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
             assertEquals("the missing nested auth guard must be present while restoration is in flight", //$NON-NLS-1$
                 originalAuth + 1, inFlight.get());
+            assertEquals(
+                "the old eager conflict-watch close must be absent while restoration is in flight", //$NON-NLS-1$
+                originalConflictWatches + 1, conflictWatchCount());
+            assertEquals("headless cleanup must not release another invocation's port guard", //$NON-NLS-1$
+                originalPortArms + 1,
+                LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
 
             release.countDown();
             long deadline = System.currentTimeMillis() + 5_000L;
             while ((inFlight.get() != originalAuth
-                || LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest() != originalPortArms)
+                || conflictWatchCount() != originalConflictWatches)
                 && System.currentTimeMillis() < deadline)
             {
                 Thread.sleep(10L);
             }
-            assertEquals("Job completion must release the restoration port guard", //$NON-NLS-1$
-                originalPortArms, LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
             assertEquals("Job completion must release the restoration auth guard", //$NON-NLS-1$
                 originalAuth, inFlight.get());
+            assertEquals("Job completion must close the restoration conflict watch", //$NON-NLS-1$
+                originalConflictWatches, conflictWatchCount());
+            assertEquals("Job completion must leave another invocation's port guard armed", //$NON-NLS-1$
+                originalPortArms + 1,
+                LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest());
         }
         finally
         {
@@ -498,7 +512,7 @@ public class StandaloneServerStateRecoveryTest
             caller.join(5_000L);
             long cleanupDeadline = System.currentTimeMillis() + 5_000L;
             while ((inFlight.get() != originalAuth
-                || LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest() != originalPortArms)
+                || conflictWatchCount() != originalConflictWatches)
                 && System.currentTimeMillis() < cleanupDeadline)
             {
                 Thread.sleep(10L);
@@ -506,7 +520,8 @@ public class StandaloneServerStateRecoveryTest
             while (LaunchUpdateDialogAutoConfirmer.portConflictArmsForTest() > originalPortArms)
             {
                 LaunchUpdateDialogAutoConfirmer.disarmPortConflictForTest(
-                    StandaloneServerPortConflictPolicy.CANCEL, null, null);
+                    StandaloneServerPortConflictPolicy.REASSIGN,
+                    "Foreign infobase", "Foreign server"); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
     }
@@ -674,6 +689,20 @@ public class StandaloneServerStateRecoveryTest
         Field field = InfobaseAuthDialogSuppressor.class.getDeclaredField("IN_FLIGHT"); //$NON-NLS-1$
         field.setAccessible(true);
         return (AtomicInteger)field.get(null);
+    }
+
+    private static int conflictWatchCount() throws Exception
+    {
+        Field lockField = LaunchUpdateDialogAutoConfirmer.class.getDeclaredField("LOCK"); //$NON-NLS-1$
+        lockField.setAccessible(true);
+        Object lock = lockField.get(null);
+        Field watchesField = LaunchUpdateDialogAutoConfirmer.class.getDeclaredField(
+            "CONFLICT_WATCHES"); //$NON-NLS-1$
+        watchesField.setAccessible(true);
+        synchronized (lock)
+        {
+            return ((java.util.List<?>)watchesField.get(null)).size();
+        }
     }
 
     /**

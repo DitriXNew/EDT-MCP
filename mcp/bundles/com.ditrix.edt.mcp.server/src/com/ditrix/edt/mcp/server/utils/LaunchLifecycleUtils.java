@@ -1630,7 +1630,8 @@ public final class LaunchLifecycleUtils
         try (LaunchUpdateDialogAutoConfirmer.ConflictWatch watch =
             LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName))
         {
-            LaunchUpdateDialogAutoConfirmer.arm(true, false, true, policy, infobaseName);
+            boolean autoConfirmerArmed = LaunchUpdateDialogAutoConfirmer.arm(true, false, true,
+                policy, infobaseName);
             try
             {
                 after = StandaloneServerStateRecovery.updateWithRecovery(appManager,
@@ -1660,7 +1661,10 @@ public final class LaunchLifecycleUtils
             }
             finally
             {
-                LaunchUpdateDialogAutoConfirmer.disarm(true, false, true, policy, infobaseName);
+                if (autoConfirmerArmed)
+                {
+                    LaunchUpdateDialogAutoConfirmer.disarm(true, false, true, policy, infobaseName);
+                }
             }
             // Same as the catch above, for the path where the cancelled server start lets update()
             // return a (cached, therefore meaningless) state rather than throwing.

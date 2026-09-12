@@ -771,8 +771,8 @@ public class UpdateDatabaseTool implements IMcpTool
                     StandaloneServerPortConflictPolicy armedPortPolicy =
                         DebugServerTargetSupport.isServerApplicationId(applicationId)
                             ? portPolicy : null;
-                    LaunchUpdateDialogAutoConfirmer.arm(false, false, true, externalChanges,
-                        infobaseName, armedPortPolicy, armedServerName);
+                    boolean autoConfirmerArmed = LaunchUpdateDialogAutoConfirmer.arm(false, false,
+                        true, externalChanges, infobaseName, armedPortPolicy, armedServerName);
                     try
                     {
                         updateApiEntered = true;
@@ -811,8 +811,11 @@ public class UpdateDatabaseTool implements IMcpTool
                         // exception: once "Find free port" is pressed the server configuration is
                         // rewritten, and a RuntimeException on the way out must not swallow that.
                         portsReassigned = watch.portsReassigned();
-                        LaunchUpdateDialogAutoConfirmer.disarm(false, false, true, externalChanges,
-                            infobaseName, armedPortPolicy, armedServerName);
+                        if (autoConfirmerArmed)
+                        {
+                            LaunchUpdateDialogAutoConfirmer.disarm(false, false, true, externalChanges,
+                                infobaseName, armedPortPolicy, armedServerName);
+                        }
                     }
                     // Same reasoning as the catch above, for the path where the cancelled server
                     // start lets update() return a (cached, therefore meaningless) state instead

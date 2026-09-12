@@ -1049,8 +1049,9 @@ public final class LaunchUpdateDialogAutoConfirmer
      *            resolved ({@code null}/blank), the arm is degraded to
      *            {@link ExternalInfobaseChangesPolicy#CANCEL}: the modal is still answered, so the
      *            call cannot hang, but nothing is written on a dialog whose ownership is unproven
+     * @return {@code true} when this call installed its requested arms; {@code false} otherwise
      */
-    public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
+    public static boolean arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName)
     {
         // The port-conflict matcher stays UNARMED for the legacy overloads: they are also used by
@@ -1058,7 +1059,7 @@ public final class LaunchUpdateDialogAutoConfirmer
         // arm held for the whole of one of those would answer a port dialog raised by an unrelated
         // launch or by a human. Only a caller that can actually meet the modal opts in, by passing a
         // policy to the six-argument overload.
-        arm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName, null);
+        return arm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName, null);
     }
 
     /**
@@ -1077,19 +1078,21 @@ public final class LaunchUpdateDialogAutoConfirmer
      *            REWRITE the server configuration. {@code null} is read as the default. The
      *            reassign answer requires UNANIMITY across the outstanding arms — see
      *            {@link #PORT_CONFLICT_ARMS}
+     * @return {@code true} when this call installed its requested arms; {@code false} otherwise
      */
-    public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
+    public static boolean arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName,
         StandaloneServerPortConflictPolicy portPolicy)
     {
         // No server name: a reassign armed this way can answer nothing, by design. Callers that
         // can start a standalone server resolve the name and use the overload below.
-        arm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName,
+        return arm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName,
             portPolicy, null);
     }
 
     /**
      * Arms the matchers, naming the standalone server this call may start.
+     * Call the matching {@code disarm} only when this method returns {@code true}.
      *
      * @param updateDialog arm the "Update database configuration" TITLE matcher
      * @param sessionDialog arm the code-1003 "Debug session already exists" BODY matcher
@@ -1101,8 +1104,10 @@ public final class LaunchUpdateDialogAutoConfirmer
      * @param serverName the WST server's own name, resolved from the application. The
      *            {@code REASSIGN} answer is pressed only on a dialog quoting exactly this name;
      *            {@code null} means the write is refused rather than aimed by guesswork
+     * @return {@code true} when this call installed its requested arms; {@code false} when it
+     *         requested nothing or no workbench display was available
      */
-    public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog, // NOSONAR mirrors the existing arm-flag list; a parameter object would move the arity, not remove it
+    public static boolean arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog, // NOSONAR mirrors the existing arm-flag list; a parameter object would move the arity, not remove it
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName,
         StandaloneServerPortConflictPolicy portPolicy, String serverName)
     {
@@ -1114,12 +1119,12 @@ public final class LaunchUpdateDialogAutoConfirmer
         if (!updateDialog && !sessionDialog && !restructureDialog && conflictPolicy == null
             && portPolicy == null)
         {
-            return;
+            return false;
         }
         Display display = safeDisplay();
         if (display == null)
         {
-            return;
+            return false;
         }
         synchronized (LOCK)
         {
@@ -1150,6 +1155,7 @@ public final class LaunchUpdateDialogAutoConfirmer
             }
         }
         reconcileOnUiThread(display);
+        return true;
     }
 
     /**
