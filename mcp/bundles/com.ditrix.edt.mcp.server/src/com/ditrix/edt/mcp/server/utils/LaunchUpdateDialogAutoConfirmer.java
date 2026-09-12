@@ -1115,11 +1115,9 @@ public final class LaunchUpdateDialogAutoConfirmer
      *            {@code REASSIGN} answer is pressed only on a dialog quoting exactly this name;
      *            {@code null} means the write is refused rather than aimed by guesswork
      * @return {@code true} when this call installed its requested arms; {@code false} when it
-     *         requested nothing, no workbench display was available, or the UI thread did not
-     *         reconcile in time - in which case nothing is left armed
+     *         requested nothing or no workbench display was available
      */
-    public static ArmResult armWithResult(boolean updateDialog, boolean sessionDialog, // NOSONAR mirrors the existing arm-flag list; a parameter object would move the arity, not remove it
-        boolean restructureDialog,
+    public static boolean arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog, // NOSONAR mirrors the existing arm-flag list; a parameter object would move the arity, not remove it
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName,
         StandaloneServerPortConflictPolicy portPolicy, String serverName)
     {
@@ -1131,12 +1129,12 @@ public final class LaunchUpdateDialogAutoConfirmer
         if (!updateDialog && !sessionDialog && !restructureDialog && conflictPolicy == null
             && portPolicy == null)
         {
-            return ArmResult.NOTHING_ARMED;
+            return false;
         }
         Display display = safeDisplay();
         if (display == null)
         {
-            return ArmResult.NOTHING_ARMED;
+            return false;
         }
         synchronized (LOCK)
         {
@@ -1166,51 +1164,27 @@ public final class LaunchUpdateDialogAutoConfirmer
                     attributableAnswer(infobaseName, conflictPolicy)));
             }
         }
-        if (!reconcileOnUiThread(display))
+        // A filter another operation already installed protects this arm immediately: the
+        // listener reads the live counters under LOCK. Only installing or removing it needs
+        // the UI thread, so an arm that finds one present never waits for that thread at all.
+        if (!filterInstalledOn(display))
         {
-            // The matchers stay registered so the caller's disarm still balances them; only the
-            // Display filter is missing, and starting work that can raise a modal nothing can
-            // answer is the caller's decision to refuse.
-            return ArmResult.ARMED_WITHOUT_FILTER;
+            // A bounded wait that expires leaves the install QUEUED, which is enough: a blocked
+            // UI thread cannot show a modal either, SWT runs queued runnables in order so this
+            // one precedes anything the not-yet-dispatched work can raise, and reconcileFilter
+            // sweeps shells that are already open.
+            reconcileOnUiThread(display);
         }
-        return ArmResult.ARMED;
+        return true;
     }
 
-    /**
-     * Same arming, reported as a plain "must I disarm?" answer.
-     *
-     * @param updateDialog arm the "Update database configuration" TITLE matcher
-     * @param sessionDialog arm the code-1003 "Debug session already exists" BODY matcher
-     * @param restructureDialog arm the DB-restructure TITLE matcher (press "Accept")
-     * @param conflictPolicy the button to press on the external-changes conflict modal, or
-     *            {@code null} to leave that modal alone
-     * @param infobaseName the infobase this call targets, as EDT names it (may be {@code null})
-     * @param portPolicy how to answer the port-conflict modal; {@code null} leaves it alone
-     * @param serverName the WST server's own name, resolved from the application
-     * @return {@code true} when matchers were armed and the caller must disarm them
-     */
-    public static boolean arm(boolean updateDialog, boolean sessionDialog, // NOSONAR mirrors the existing arm-flag list
-        boolean restructureDialog, ExternalInfobaseChangesPolicy conflictPolicy,
-        String infobaseName, StandaloneServerPortConflictPolicy portPolicy, String serverName)
+    /** Whether the shared filter is already installed on this display. */
+    private static boolean filterInstalledOn(Display display)
     {
-        return armWithResult(updateDialog, sessionDialog, restructureDialog, conflictPolicy,
-            infobaseName, portPolicy, serverName) != ArmResult.NOTHING_ARMED;
-    }
-
-    /** What one {@link #armWithResult} call achieved. */
-    public enum ArmResult
-    {
-        /** Nothing was requested, or no workbench display exists. The caller must NOT disarm. */
-        NOTHING_ARMED,
-
-        /** Matchers armed and the Display filter installed. The caller must disarm. */
-        ARMED,
-
-        /**
-         * Matchers armed, but the UI thread did not install the filter within its bound. The
-         * caller must still disarm, and must not start work that can raise a modal.
-         */
-        ARMED_WITHOUT_FILTER
+        synchronized (LOCK)
+        {
+            return filter != null && filterDisplay == display && !display.isDisposed();
+        }
     }
 
     /**

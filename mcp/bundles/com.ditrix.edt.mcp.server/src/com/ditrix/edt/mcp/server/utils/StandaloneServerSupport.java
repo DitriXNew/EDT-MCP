@@ -459,16 +459,8 @@ public final class StandaloneServerSupport
         long accessDialogsBefore = InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount();
         LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = portPolicy == null
             ? null : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName, serverName);
-        LaunchUpdateDialogAutoConfirmer.ArmResult armResult =
-            LaunchUpdateDialogAutoConfirmer.armWithResult(false, false, false, null,
-                infobaseName, portPolicy, serverName);
-        boolean autoConfirmerArmed =
-            armResult != LaunchUpdateDialogAutoConfirmer.ArmResult.NOTHING_ARMED;
-        // Starting a server whose modals nothing can answer is worse than not starting it: the
-        // dialog outlives this bounded call and blocks the workbench. The Job is still run, so
-        // the cleanup lifecycle and the caller's claim hand-off behave as on every other path.
-        boolean guardsInstalled =
-            armResult != LaunchUpdateDialogAutoConfirmer.ArmResult.ARMED_WITHOUT_FILTER;
+        boolean autoConfirmerArmed = LaunchUpdateDialogAutoConfirmer.arm(false, false, false, null,
+            infobaseName, portPolicy, serverName);
         InfobaseAuthDialogSuppressor.markActivityStart();
         Runnable cleanup = () -> {
             try
@@ -515,24 +507,13 @@ public final class StandaloneServerSupport
                 cleanupInstalled.run();
             }
             bounded = BoundedJob.run(operationName, timeoutMs,
-                monitor -> {
-                    if (guardsInstalled)
-                    {
-                        status[0] = startServer(service, server, launchMode, monitor);
-                    }
-                },
+                monitor -> status[0] = startServer(service, server, launchMode, monitor),
                 deferredCleanup::jobFinished);
             boolean conclusive = !BoundedJob.isInconclusive(bounded.getOutcome());
             String conflictFailure = conflicts != null && conflicts.portConflicted()
                 ? LaunchUpdateDialogAutoConfirmer.portConflictError(
                     conflicts.portConflictDetail(), conflicts.portConflictReason())
                 : null;
-            if (!guardsInstalled)
-            {
-                conflictFailure = "the workbench UI thread did not respond, so the dialogs this " //$NON-NLS-1$
-                    + "start can raise could not be auto-answered; the server was NOT started. " //$NON-NLS-1$
-                    + "Close any modal dialog open in EDT and call launch again."; //$NON-NLS-1$
-            }
             boolean portsReassigned = conclusive && conflicts != null
                 && conflicts.portsReassigned();
             boolean portReassignmentOutcomeUnknown = !conclusive
