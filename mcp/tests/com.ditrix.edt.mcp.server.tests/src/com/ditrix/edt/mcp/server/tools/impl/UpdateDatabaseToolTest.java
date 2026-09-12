@@ -38,12 +38,15 @@ import org.junit.Test;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.UpdateDatabaseTool.ApplicationFallback; // same package: explicit for the nested seam type
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
+import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
+import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
+import com.e1c.g5.dt.applications.IApplicationType;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -271,6 +274,8 @@ public class UpdateDatabaseToolTest
     @Test
     public void testBlockingSessionsErrorOmitsPersonalDataAndNamesExactFollowUpCalls()
     {
+        assertTrue(InfobaseSessionSupport.appliesTo(
+            applicationWithType(StandaloneServerSupport.WST_SERVER_APP_TYPE)));
         SessionInfo blocker = new SessionInfo(
             "22222222-2222-2222-2222-222222222222", 42L, "1CV8C", "User", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "desk", "2026-01-01T10:00:00", "2026-01-01T10:01:00", false); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -419,12 +424,35 @@ public class UpdateDatabaseToolTest
     @Test
     public void testUnreachableSessionReasonQualifiesLaterUpdateFailure()
     {
+        assertTrue(InfobaseSessionSupport.appliesTo(
+            applicationWithType(StandaloneServerSupport.WST_SERVER_APP_TYPE)));
         String result = UpdateDatabaseTool.buildUnexpectedErrorResult(
             new IllegalStateException("update failed"), false, false, //$NON-NLS-1$
             "The standalone server is not running."); //$NON-NLS-1$
 
+        assertEquals("Unexpected error: update failed Pre-update infobase session inspection " //$NON-NLS-1$
+            + "was unreachable: The standalone server is not running. This was not treated as " //$NON-NLS-1$
+            + "proof that no foreign sessions existed. The update may have applied partially, " //$NON-NLS-1$
+            + "so do not retry blindly: check the actual state with get_applications " //$NON-NLS-1$
+            + "(updateState) and the EDT Error Log first.", //$NON-NLS-1$
+            JsonParser.parseString(result).getAsJsonObject().get("error").getAsString()); //$NON-NLS-1$
         assertTrue(result.contains("session inspection was unreachable")); //$NON-NLS-1$
         assertTrue(result.contains("not treated as proof")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void nonStandaloneApplicationLeavesLaterUpdateFailureUnqualified()
+    {
+        IApplication application = applicationWithType(
+            "com.e1c.g5.dt.applications.type.infobase"); //$NON-NLS-1$
+        boolean checkInfobaseSessions = true;
+
+        assertFalse(checkInfobaseSessions && InfobaseSessionSupport.appliesTo(application));
+        String result = UpdateDatabaseTool.buildUnexpectedErrorResult(
+            new IllegalStateException("update failed"), false, false, null); //$NON-NLS-1$
+
+        assertFalse(result.contains("session inspection")); //$NON-NLS-1$
+        assertFalse(result.contains("infobase_sessions")); //$NON-NLS-1$
     }
 
     @Test
@@ -1351,6 +1379,15 @@ public class UpdateDatabaseToolTest
         IApplication application = mock(IApplication.class);
         when(application.getId()).thenReturn(id);
         when(application.getName()).thenReturn(name);
+        return application;
+    }
+
+    private static IApplication applicationWithType(String typeId)
+    {
+        IApplicationType type = mock(IApplicationType.class);
+        when(type.getId()).thenReturn(typeId);
+        IApplication application = mock(IApplication.class);
+        when(application.getType()).thenReturn(type);
         return application;
     }
 

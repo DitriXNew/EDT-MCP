@@ -37,6 +37,7 @@ import org.eclipse.debug.core.model.IProcess;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.e1c.g5.dt.applications.IApplication;
+import com.e1c.g5.dt.applications.IApplicationType;
 import com.e1c.g5.v8.dt.platform.standaloneserver.core.Ibcmd;
 import com.e1c.g5.v8.dt.platform.standaloneserver.core.SessionCommandBuilder;
 
@@ -65,6 +66,22 @@ public final class InfobaseSessionSupport
 
     private InfobaseSessionSupport()
     {
+    }
+
+    /**
+     * Whether session inspection applies to the given application.
+     *
+     * @param application the application to classify
+     * @return {@code true} only for a standalone-server (WST server) application
+     */
+    public static boolean appliesTo(IApplication application)
+    {
+        if (application == null)
+        {
+            return false;
+        }
+        IApplicationType type = application.getType();
+        return type != null && StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(type.getId());
     }
 
     /** Whether the session list was actually read. */
@@ -351,8 +368,7 @@ public final class InfobaseSessionSupport
         {
             return PreparedTarget.error("No application was resolved."); //$NON-NLS-1$
         }
-        String typeId = application.getType() == null ? null : application.getType().getId();
-        if (!StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId))
+        if (!appliesTo(application))
         {
             return PreparedTarget.error("Application '" + application.getId() //$NON-NLS-1$
                 + "' is not a standalone-server (wst-server) application; ibcmd sessions " //$NON-NLS-1$

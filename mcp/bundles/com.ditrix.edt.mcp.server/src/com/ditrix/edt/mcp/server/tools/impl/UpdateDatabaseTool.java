@@ -768,7 +768,7 @@ public class UpdateDatabaseTool implements IMcpTool
                             + "infobase: project=" + projectName + ", application=" + applicationId); //$NON-NLS-1$ //$NON-NLS-2$
                     }
                 }
-                if (checkInfobaseSessions)
+                if (checkInfobaseSessions && InfobaseSessionSupport.appliesTo(application))
                 {
                     ReadResult sessions = InfobaseSessionSupport.listSessions(application);
                     if (sessions.isReadable())
