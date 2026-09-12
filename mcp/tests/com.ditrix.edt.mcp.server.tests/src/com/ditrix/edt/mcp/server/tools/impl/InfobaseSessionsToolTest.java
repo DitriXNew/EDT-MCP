@@ -154,6 +154,40 @@ public class InfobaseSessionsToolTest
     }
 
     @Test
+    public void missingSessionErrorKeepsNormalValidatedIdentifiersUnchanged()
+    {
+        InfobaseSessionsTool.Selection selection = InfobaseSessionsTool.selectSessions(
+            List.of(DESIGNER, CLIENT), "99", false); //$NON-NLS-1$
+
+        assertEquals("Session '99' was not found in the readable session list. Available session " //$NON-NLS-1$
+            + "identifiers: 11111111-1111-1111-1111-111111111111 (session-id 1), " //$NON-NLS-1$
+            + "22222222-2222-2222-2222-222222222222 (session-id 42).", selection.error); //$NON-NLS-1$
+    }
+
+    @Test
+    public void missingSessionErrorOmitsInvalidParsedIdentifiers()
+    {
+        SessionInfo partlyInvalid = new SessionInfo(
+            "Ivanov", 42L, "Ivanov Ivanovich <ivanov@corp>", "User", "desk", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "started yesterday", "active whenever", false); //$NON-NLS-1$ //$NON-NLS-2$
+        SessionInfo entirelyInvalid = new SessionInfo(
+            "Petrov", -7L, "Petrov Petr <petrov@corp>", "User", "desk", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "unknown", "unknown", false); //$NON-NLS-1$ //$NON-NLS-2$
+        InfobaseSessionsTool.Selection selection = InfobaseSessionsTool.selectSessions(
+            List.of(partlyInvalid, entirelyInvalid), "99", false); //$NON-NLS-1$
+
+        assertEquals("Session '99' was not found in the readable session list. Available session " //$NON-NLS-1$
+            + "identifiers: session-id 42.", selection.error); //$NON-NLS-1$
+        assertFalse(selection.error.contains("Ivanov")); //$NON-NLS-1$
+        assertFalse(selection.error.contains("Petrov")); //$NON-NLS-1$
+        assertFalse(selection.error.contains("-7")); //$NON-NLS-1$
+
+        InfobaseSessionsTool.Selection noValidatedIdentifiers =
+            InfobaseSessionsTool.selectSessions(List.of(entirelyInvalid), "99", false); //$NON-NLS-1$
+        assertTrue(noValidatedIdentifiers.error.endsWith("Available session identifiers: none.")); //$NON-NLS-1$
+    }
+
+    @Test
     public void exactUuidSelectorAllowsDesignerAndVerifiedMessageNamesTheConsequence()
     {
         InfobaseSessionsTool.Selection selection = InfobaseSessionsTool.selectSessions(
@@ -326,6 +360,27 @@ public class InfobaseSessionsToolTest
                 InfobaseSessionsTool.sessionMaps(List.of(CLIENT))))
             .getAsJsonArray().get(0).getAsJsonObject();
 
+        assertEquals("User", session.get("userName").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("desk", session.get("host").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void successfulSessionPayloadDoesNotApplyErrorFieldValidation()
+    {
+        SessionInfo observed = new SessionInfo(
+            "Ivanov", 42L, "Ivanov Ivanovich <ivanov@corp>", "User", "desk", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "started yesterday", "active whenever", false, "+42"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        JsonObject session = JsonParser.parseString(
+            com.ditrix.edt.mcp.server.protocol.ToolResult.toJsonStatic(
+                InfobaseSessionsTool.sessionMaps(List.of(observed))))
+            .getAsJsonArray().get(0).getAsJsonObject();
+
+        assertEquals("Ivanov", session.get("sessionId").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(42, session.get("sessionNumber").getAsInt()); //$NON-NLS-1$
+        assertEquals("Ivanov Ivanovich <ivanov@corp>", //$NON-NLS-1$
+            session.get("applicationKind").getAsString()); //$NON-NLS-1$
+        assertEquals("started yesterday", session.get("startedAt").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("active whenever", session.get("lastActiveAt").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("User", session.get("userName").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("desk", session.get("host").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
     }

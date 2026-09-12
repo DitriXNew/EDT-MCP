@@ -263,6 +263,69 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
+    public void blockingSessionsErrorOmitsFieldsThatFailTheirClosedGrammars()
+    {
+        SessionInfo blocker = new SessionInfo(
+            "Ivanov", 42L, "Ivanov Ivanovich <ivanov@corp>", "User", "desk", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "started yesterday", "active whenever", false); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject result = JsonParser.parseString(UpdateDatabaseTool.blockingSessionsError(
+            "Demo", "ServerApplication.Demo", List.of(blocker), false)).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject session = result.getAsJsonArray("sessions").get(0).getAsJsonObject(); //$NON-NLS-1$
+        String error = result.get("error").getAsString(); //$NON-NLS-1$
+
+        assertEquals(1, session.size());
+        assertEquals(42, session.get("sessionNumber").getAsInt()); //$NON-NLS-1$
+        assertFalse(session.has("sessionId")); //$NON-NLS-1$
+        assertFalse(session.has("applicationKind")); //$NON-NLS-1$
+        assertFalse(session.has("startedAt")); //$NON-NLS-1$
+        assertFalse(session.has("lastActiveAt")); //$NON-NLS-1$
+        assertFalse(error.contains("Ivanov")); //$NON-NLS-1$
+        assertFalse(error.contains("started yesterday")); //$NON-NLS-1$
+        assertFalse(error.contains("active whenever")); //$NON-NLS-1$
+        assertTrue(error.contains("sessionNumber=42")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void blockingSessionsErrorKeepsCountAndRemedyWhenEveryFieldIsInvalid()
+    {
+        SessionInfo blocker = new SessionInfo(
+            "Ivanov", -42L, "Ivanov Ivanovich <ivanov@corp>", "User", "desk", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "started yesterday", "active whenever", false); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject result = JsonParser.parseString(UpdateDatabaseTool.blockingSessionsError(
+            "Demo", "ServerApplication.Demo", List.of(blocker), false)).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject session = result.getAsJsonArray("sessions").get(0).getAsJsonObject(); //$NON-NLS-1$
+        String error = result.get("error").getAsString(); //$NON-NLS-1$
+
+        assertEquals(0, session.size());
+        assertFalse(error.contains("sessionId=")); //$NON-NLS-1$
+        assertFalse(error.contains("sessionNumber=")); //$NON-NLS-1$
+        assertFalse(error.contains("applicationKind=")); //$NON-NLS-1$
+        assertFalse(error.contains("startedAt=")); //$NON-NLS-1$
+        assertFalse(error.contains("lastActiveAt=")); //$NON-NLS-1$
+        assertTrue(error.contains("1 non-agent infobase session(s) remain.")); //$NON-NLS-1$
+        assertTrue(error.contains("Run infobase_sessions(action='list', projectName='Demo', " //$NON-NLS-1$
+            + "applicationId='ServerApplication.Demo')")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void blockingSessionsErrorValidatesTheOriginalSessionNumberToken()
+    {
+        SessionInfo blocker = new SessionInfo(
+            "22222222-2222-2222-2222-222222222222", 42L, "1CV8C", "User", "desk", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "2026-09-12T01:19:07", "2026-09-12T01:20:07", false, "+42"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        JsonObject result = JsonParser.parseString(UpdateDatabaseTool.blockingSessionsError(
+            "Demo", "ServerApplication.Demo", List.of(blocker), false)).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject session = result.getAsJsonArray("sessions").get(0).getAsJsonObject(); //$NON-NLS-1$
+
+        assertFalse(session.has("sessionNumber")); //$NON-NLS-1$
+        assertFalse(result.get("error").getAsString().contains("sessionNumber=")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(session.has("sessionId")); //$NON-NLS-1$
+        assertTrue(session.has("applicationKind")); //$NON-NLS-1$
+        assertTrue(session.has("startedAt")); //$NON-NLS-1$
+        assertTrue(session.has("lastActiveAt")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testUnreachableSessionReasonQualifiesLaterUpdateFailure()
     {
         String result = UpdateDatabaseTool.buildUnexpectedErrorResult(

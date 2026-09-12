@@ -31,6 +31,7 @@ import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
+import com.ditrix.edt.mcp.server.utils.InfobaseSessionErrorProjection;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.ReadResult;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo;
@@ -1016,21 +1017,13 @@ public class UpdateDatabaseTool implements IMcpTool
     static String blockingSessionsError(String projectName, String applicationId,
         List<SessionInfo> blockers, boolean terminatedClient)
     {
-        StringBuilder details = new StringBuilder();
-        for (SessionInfo session : blockers)
-        {
-            if (details.length() > 0)
-            {
-                details.append("; "); //$NON-NLS-1$
-            }
-            details.append("sessionId=").append(session.sessionId()) //$NON-NLS-1$
-                .append(", sessionNumber=").append(session.sessionNumber()) //$NON-NLS-1$
-                .append(", applicationKind=").append(session.applicationKind()) //$NON-NLS-1$
-                .append(", startedAt=").append(session.startedAt()) //$NON-NLS-1$
-                .append(", lastActiveAt=").append(session.lastActiveAt()); //$NON-NLS-1$
-        }
+        List<String> details = blockers.stream()
+            .map(InfobaseSessionErrorProjection::details)
+            .flatMap(Optional::stream)
+            .toList();
         String message = "Database update refused because " + blockers.size() //$NON-NLS-1$
-            + " non-agent infobase session(s) remain: " + details //$NON-NLS-1$
+            + " non-agent infobase session(s) remain" //$NON-NLS-1$
+            + (details.isEmpty() ? "" : ": " + String.join("; ", details)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + ". Run infobase_sessions(action='list', projectName='" + projectName //$NON-NLS-1$
             + "', applicationId='" + applicationId + "') to see who holds them. " //$NON-NLS-1$ //$NON-NLS-2$
             + "Clear them first with infobase_sessions(action='terminate', projectName='" //$NON-NLS-1$
@@ -1067,14 +1060,11 @@ public class UpdateDatabaseTool implements IMcpTool
         if (designerSessions != null && !designerSessions.isEmpty())
         {
             List<String> details = designerSessions.stream()
-                .map(session -> "sessionId=" + session.sessionId() //$NON-NLS-1$
-                    + ", sessionNumber=" + session.sessionNumber() //$NON-NLS-1$
-                    + ", applicationKind=" + session.applicationKind() //$NON-NLS-1$
-                    + ", startedAt=" + session.startedAt() //$NON-NLS-1$
-                    + ", lastActiveAt=" + session.lastActiveAt()) //$NON-NLS-1$
+                .map(InfobaseSessionErrorProjection::details)
+                .flatMap(Optional::stream)
                 .toList();
-            note.append(" Pre-update session inspection saw app-id: Designer session(s): ") //$NON-NLS-1$
-                .append(String.join("; ", details)) //$NON-NLS-1$
+            note.append(" Pre-update session inspection saw app-id: Designer session(s)") //$NON-NLS-1$
+                .append(details.isEmpty() ? "" : ": " + String.join("; ", details)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 .append(". EDT cannot tell whether each is its update agent or a human " //$NON-NLS-1$
                     + "Configurator; after this update failure, they are the most likely holders " //$NON-NLS-1$
                     + "of the exclusive lock. Run infobase_sessions(action='list', ...) to see " //$NON-NLS-1$

@@ -76,8 +76,16 @@ public final class InfobaseSessionSupport
 
     /** One session record parsed from an {@code ibcmd session list} key/value block. */
     public record SessionInfo(String sessionId, Long sessionNumber, String applicationKind,
-        String userName, String host, String startedAt, String lastActiveAt, boolean edtAgent)
+        String userName, String host, String startedAt, String lastActiveAt, boolean edtAgent,
+        String sessionNumberText)
     {
+        /** Creates a synthetic/test record whose numeric token has its canonical spelling. */
+        public SessionInfo(String sessionId, Long sessionNumber, String applicationKind,
+            String userName, String host, String startedAt, String lastActiveAt, boolean edtAgent)
+        {
+            this(sessionId, sessionNumber, applicationKind, userName, host, startedAt,
+                lastActiveAt, edtAgent, sessionNumber == null ? null : sessionNumber.toString());
+        }
     }
 
     /**
@@ -634,10 +642,11 @@ public final class InfobaseSessionSupport
             return 1;
         }
         String applicationKind = value(values, "app-id"); //$NON-NLS-1$
-        sessions.add(new SessionInfo(id, parseSessionNumber(values.get("session-id")), //$NON-NLS-1$
+        String sessionNumberText = values.get("session-id"); //$NON-NLS-1$
+        sessions.add(new SessionInfo(id, parseSessionNumber(sessionNumberText),
             applicationKind, value(values, "user-name"), value(values, "host"), //$NON-NLS-1$ //$NON-NLS-2$
             value(values, "started-at"), value(values, "last-active-at"), //$NON-NLS-1$ //$NON-NLS-2$
-            "Designer".equalsIgnoreCase(applicationKind))); //$NON-NLS-1$
+            "Designer".equalsIgnoreCase(applicationKind), sessionNumberText)); //$NON-NLS-1$
         return 0;
     }
 

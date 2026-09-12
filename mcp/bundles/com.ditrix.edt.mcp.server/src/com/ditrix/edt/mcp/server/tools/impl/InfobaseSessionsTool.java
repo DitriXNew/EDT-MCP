@@ -12,7 +12,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IProject;
 
@@ -25,6 +24,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.utils.InfobaseSessionErrorProjection;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.ReadResult;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo;
@@ -52,10 +52,6 @@ public class InfobaseSessionsTool implements IMcpTool
     private static final String VERIFICATION_VERIFIED = "verified"; //$NON-NLS-1$
     private static final String VERIFICATION_MISMATCHED = "mismatched"; //$NON-NLS-1$
     private static final String VERIFICATION_NOT_VERIFIABLE = "not_verifiable"; //$NON-NLS-1$
-    private static final Pattern SESSION_SELECTOR = Pattern.compile(
-        "(?:[0-9]+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-" //$NON-NLS-1$
-            + "[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"); //$NON-NLS-1$
-
     @Override
     public String getName()
     {
@@ -212,7 +208,7 @@ public class InfobaseSessionsTool implements IMcpTool
         {
             return "For action='terminate', specify exactly one of sessionId or all=true."; //$NON-NLS-1$
         }
-        if (hasSession && !SESSION_SELECTOR.matcher(sessionId).matches())
+        if (hasSession && !InfobaseSessionErrorProjection.isSessionSelector(sessionId))
         {
             return "sessionId must be a full UUID or the numeric session-id returned by list."; //$NON-NLS-1$
         }
@@ -397,15 +393,17 @@ public class InfobaseSessionsTool implements IMcpTool
         if (!stillPresent.isEmpty())
         {
             List<String> stillPresentIds = stillPresent.stream()
-                .map(InfobaseSessionsTool::displayId)
+                .map(InfobaseSessionErrorProjection::identifier)
+                .flatMap(Optional::stream)
                 .toList();
             boolean onlyDesignerSessions = stillPresent.stream()
                 .allMatch(InfobaseSessionsTool::isDesignerSession);
             String message = "ibcmd accepted every termination, but " + stillPresent.size() //$NON-NLS-1$
                 + " of " + attempted.size() //$NON-NLS-1$
                 + (onlyDesignerSessions ? " Designer session(s)" : " session(s)") //$NON-NLS-1$ //$NON-NLS-2$
-                + " are still present after a terminate command that reported success: " //$NON-NLS-1$
-                + String.join(", ", stillPresentIds) + ". " //$NON-NLS-1$ //$NON-NLS-2$
+                + " are still present after a terminate command that reported success" //$NON-NLS-1$
+                + (stillPresentIds.isEmpty() ? "" : ": " + String.join(", ", stillPresentIds)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + ". " //$NON-NLS-1$
                 + (onlyDesignerSessions
                     ? "Designer sessions are not treated as blockers by update_database. " //$NON-NLS-1$
                     : "Non-Designer sessions in that list still block a database update. ") //$NON-NLS-1$
@@ -495,7 +493,7 @@ public class InfobaseSessionsTool implements IMcpTool
         List<String> available = new ArrayList<>();
         for (SessionInfo session : sessions)
         {
-            available.add(displayId(session));
+            InfobaseSessionErrorProjection.identifier(session).ifPresent(available::add);
         }
         return Selection.error("Session '" + requestedSessionId //$NON-NLS-1$
             + "' was not found in the readable session list. Available session identifiers: " //$NON-NLS-1$
@@ -526,19 +524,7 @@ public class InfobaseSessionsTool implements IMcpTool
     /** Converts session records to the non-personal fields permitted in error payloads. */
     static List<Map<String, Object>> errorSessionMaps(List<SessionInfo> sessions)
     {
-        List<Map<String, Object>> result = new ArrayList<>();
-        for (SessionInfo session : sessions)
-        {
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("sessionId", session.sessionId()); //$NON-NLS-1$
-            item.put("sessionNumber", session.sessionNumber() == null //$NON-NLS-1$
-                ? JsonNull.INSTANCE : session.sessionNumber());
-            item.put("applicationKind", session.applicationKind()); //$NON-NLS-1$
-            item.put("startedAt", session.startedAt()); //$NON-NLS-1$
-            item.put("lastActiveAt", session.lastActiveAt()); //$NON-NLS-1$
-            result.add(item);
-        }
-        return result;
+        return InfobaseSessionErrorProjection.fields(sessions);
     }
 
     private static String displayId(SessionInfo session)

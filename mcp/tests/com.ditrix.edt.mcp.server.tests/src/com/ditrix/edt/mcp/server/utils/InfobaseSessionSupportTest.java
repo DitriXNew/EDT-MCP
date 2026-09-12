@@ -80,6 +80,18 @@ public class InfobaseSessionSupportTest
     }
 
     @Test
+    public void preservesTheOriginalSessionNumberTokenForErrorValidation()
+    {
+        String output = "session: 22222222-2222-2222-2222-222222222222\n" //$NON-NLS-1$
+            + "session-id: +42\n"; //$NON-NLS-1$
+
+        SessionInfo session = InfobaseSessionSupport.parseSessions(output).sessions().get(0);
+
+        assertEquals(Long.valueOf(42), session.sessionNumber());
+        assertEquals("+42", session.sessionNumberText()); //$NON-NLS-1$
+    }
+
+    @Test
     public void readableEmptyIsNotUnreachable()
     {
         ReadResult readable = ReadResult.readable(List.of());
