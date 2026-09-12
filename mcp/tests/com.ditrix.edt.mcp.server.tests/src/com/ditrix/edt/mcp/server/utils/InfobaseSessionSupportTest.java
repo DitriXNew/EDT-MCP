@@ -11,12 +11,16 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -280,39 +284,91 @@ public class InfobaseSessionSupportTest
     }
 
     @Test
-    public void runCommandDecidesAndStartsWhileHoldingTheCallerAnswerMonitor() throws Exception
+    public void markCallerAnsweredIsNotBlockedByAStalledProcessStart() throws Exception
     {
         AtomicBoolean callerAnswered = new AtomicBoolean();
-        NullProgressMonitor monitor = new NullProgressMonitor()
+        CountDownLatch startEntered = new CountDownLatch(1);
+        CountDownLatch releaseStart = new CountDownLatch(1);
+        CountDownLatch callerMarked = new CountDownLatch(1);
+        AtomicBoolean workerFinished = new AtomicBoolean();
+        AtomicReference<Throwable> workerFailure = new AtomicReference<>();
+        Process process = mock(Process.class);
+        Thread worker = new Thread(() ->
         {
-            @Override
-            public boolean isCanceled()
+            try
             {
-                assertTrue("the cancellation decision must hold the caller-answer monitor", //$NON-NLS-1$
-                    Thread.holdsLock(callerAnswered));
-                return false;
+                InfobaseSessionSupport.runCommand(null, new NullProgressMonitor(), callerAnswered,
+                    () ->
+                    {
+                        startEntered.countDown();
+                        try
+                        {
+                            releaseStart.await();
+                        }
+                        catch (InterruptedException e)
+                        {
+                            Thread.currentThread().interrupt();
+                            throw new IOException("test process start interrupted", e); //$NON-NLS-1$
+                        }
+                        return process;
+                    });
             }
-        };
-        AtomicBoolean starterRan = new AtomicBoolean();
-        IOException expected = new IOException("stop after checking the launch boundary"); //$NON-NLS-1$
+            catch (Throwable t) // NOSONAR transferred to the test thread for assertion
+            {
+                workerFailure.set(t);
+            }
+            finally
+            {
+                workerFinished.set(true);
+            }
+        }, "stalled ibcmd starter"); //$NON-NLS-1$
+        Thread marker = new Thread(() ->
+        {
+            InfobaseSessionSupport.markCallerAnswered(callerAnswered);
+            callerMarked.countDown();
+        }, "caller answer marker"); //$NON-NLS-1$
 
+        worker.start();
         try
         {
-            InfobaseSessionSupport.runCommand(null, monitor, callerAnswered, () ->
-            {
-                starterRan.set(true);
-                assertTrue("process creation must hold the monitor used by markCallerAnswered", //$NON-NLS-1$
-                    Thread.holdsLock(callerAnswered));
-                throw expected;
-            });
-            fail("the test starter must stop before process stream handling"); //$NON-NLS-1$
+            assertTrue("positive control: process start must reach its stall", //$NON-NLS-1$
+                startEntered.await(1, TimeUnit.SECONDS));
+            marker.start();
+            assertTrue("markCallerAnswered must finish while process start is still stalled", //$NON-NLS-1$
+                callerMarked.await(1, TimeUnit.SECONDS));
+            assertFalse("the process starter must remain stalled until the test releases it", //$NON-NLS-1$
+                workerFinished.get());
         }
-        catch (IOException actual)
+        finally
         {
-            assertSame(expected, actual);
+            releaseStart.countDown();
+            worker.join(1_000L);
+            marker.join(1_000L);
         }
 
-        assertTrue("positive control: the process starter must run", starterRan.get()); //$NON-NLS-1$
+        assertFalse("the worker must finish after the stalled starter is released", //$NON-NLS-1$
+            worker.isAlive());
+        assertNull(workerFailure.get());
+    }
+
+    @Test
+    public void processReturnedAfterCallerAnsweredIsKilledBeforeStreamsAreRead() throws Exception
+    {
+        AtomicBoolean callerAnswered = new AtomicBoolean();
+        Process process = mock(Process.class);
+
+        InfobaseSessionSupport.CommandExecution result = InfobaseSessionSupport.runCommand(null,
+            new NullProgressMonitor(), callerAnswered, () ->
+            {
+                InfobaseSessionSupport.markCallerAnswered(callerAnswered);
+                return process;
+            });
+
+        assertNull(result);
+        verify(process).destroyForcibly();
+        verify(process, never()).getInputStream();
+        verify(process, never()).getErrorStream();
+        verify(process, never()).getOutputStream();
     }
 
     @Test(expected = IllegalArgumentException.class)

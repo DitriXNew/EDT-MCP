@@ -461,7 +461,7 @@ public final class InfobaseSessionSupport
     }
 
     /** Closes result publication before the bounded caller inspects the outcome and returns. */
-    private static void markCallerAnswered(AtomicBoolean callerAnswered)
+    static void markCallerAnswered(AtomicBoolean callerAnswered)
     {
         synchronized (callerAnswered)
         {
@@ -511,9 +511,16 @@ public final class InfobaseSessionSupport
         IProgressMonitor monitor, AtomicBoolean callerAnswered, ProcessStarter starter)
         throws Exception
     {
-        Process process = startProcessIfActive(monitor, callerAnswered, starter);
-        if (process == null)
+        if (callEnded(monitor, callerAnswered))
         {
+            return null;
+        }
+        Process process = starter.start();
+        // A process may start after the caller gives up. The tool reports an unknown outcome,
+        // and this best-effort check kills the process as soon as the race is observed.
+        if (callEnded(monitor, callerAnswered))
+        {
+            process.destroyForcibly();
             return null;
         }
         try
@@ -549,20 +556,6 @@ public final class InfobaseSessionSupport
                 waitAfterDestroy(process);
             }
             throw e;
-        }
-    }
-
-    /** Makes the final cancellation decision atomic with creation of the external process. */
-    private static Process startProcessIfActive(IProgressMonitor monitor,
-        AtomicBoolean callerAnswered, ProcessStarter starter) throws IOException
-    {
-        synchronized (callerAnswered)
-        {
-            if (callEnded(monitor, callerAnswered))
-            {
-                return null;
-            }
-            return starter.start();
         }
     }
 
