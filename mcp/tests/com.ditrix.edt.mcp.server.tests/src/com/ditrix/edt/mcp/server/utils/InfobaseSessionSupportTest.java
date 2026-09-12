@@ -9,12 +9,16 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
+import org.eclipse.core.runtime.NullProgressMonitor;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.ReadResult;
@@ -208,6 +212,69 @@ public class InfobaseSessionSupportTest
         assertTrue(result.isReadable());
         assertEquals(2, result.sessions().size());
         assertNull(result.unreachableReason());
+    }
+
+    @Test
+    public void cleanupCallbackDeliveredAfterCancellationRunsNoCommandAndPublishesNothing()
+    {
+        NullProgressMonitor monitor = new NullProgressMonitor();
+        monitor.setCanceled(true);
+        AtomicBoolean commandRan = new AtomicBoolean();
+        AtomicReference<InfobaseSessionSupport.CommandExecution> execution = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+
+        InfobaseSessionSupport.executeAtPidIfActive(42L, monitor, new AtomicBoolean(), execution,
+            failure, pid ->
+            {
+                commandRan.set(true);
+                return new InfobaseSessionSupport.CommandExecution(0, "done", "", false); //$NON-NLS-1$ //$NON-NLS-2$
+            });
+
+        assertFalse("a proceedSessionCleanup callback delivered after the deadline must not issue " //$NON-NLS-1$
+            + "ibcmd", commandRan.get()); //$NON-NLS-1$
+        assertNull("a cancelled callback must not publish a command result", execution.get()); //$NON-NLS-1$
+        assertNull("skipping cancelled work is not a callback failure", failure.get()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void resultFinishingAfterTheCallerAnsweredIsNotPublished()
+    {
+        NullProgressMonitor monitor = new NullProgressMonitor();
+        AtomicBoolean callerAnswered = new AtomicBoolean();
+        AtomicBoolean commandRan = new AtomicBoolean();
+        AtomicReference<InfobaseSessionSupport.CommandExecution> execution = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+
+        InfobaseSessionSupport.executeAtPidIfActive(42L, monitor, callerAnswered, execution,
+            failure, pid ->
+            {
+                commandRan.set(true);
+                callerAnswered.set(true);
+                return new InfobaseSessionSupport.CommandExecution(0, "late", "", false); //$NON-NLS-1$ //$NON-NLS-2$
+            });
+
+        assertTrue("positive control: the command began while the caller was still waiting", //$NON-NLS-1$
+            commandRan.get());
+        assertNull("a result completed after the caller gave up must not be published", //$NON-NLS-1$
+            execution.get());
+        assertNull(failure.get());
+    }
+
+    @Test
+    public void activeCleanupCallbackRunsTheCommandAndPublishesItsResult()
+    {
+        NullProgressMonitor monitor = new NullProgressMonitor();
+        AtomicReference<InfobaseSessionSupport.CommandExecution> execution = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        InfobaseSessionSupport.CommandExecution expected =
+            new InfobaseSessionSupport.CommandExecution(0, "done", "", false); //$NON-NLS-1$ //$NON-NLS-2$
+
+        InfobaseSessionSupport.executeAtPidIfActive(42L, monitor, new AtomicBoolean(), execution,
+            failure, pid -> expected);
+
+        assertSame("an active callback must still publish the command result", expected, //$NON-NLS-1$
+            execution.get());
+        assertNull(failure.get());
     }
 
     @Test(expected = IllegalArgumentException.class)

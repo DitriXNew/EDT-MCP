@@ -209,6 +209,44 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
+    public void outputSchemaDeclaresSessionRefusalAndFailureFieldsWithMatchingShapes()
+    {
+        JsonObject updateProperties = JsonParser.parseString(
+            new UpdateDatabaseTool().getOutputSchema()).getAsJsonObject()
+            .getAsJsonObject("properties"); //$NON-NLS-1$
+        JsonObject sessionProperties = JsonParser.parseString(
+            new InfobaseSessionsTool().getOutputSchema()).getAsJsonObject()
+            .getAsJsonObject("properties"); //$NON-NLS-1$
+        SessionInfo blocker = new SessionInfo(
+            "22222222-2222-2222-2222-222222222222", 42L, "1CV8C", "User", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "desk", "2026-01-01T10:00:00", "2026-01-01T10:01:00", false); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        JsonObject blocking = JsonParser.parseString(UpdateDatabaseTool.blockingSessionsError(
+            "Demo", "ServerApplication.Demo", List.of(blocker), true)).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject caused = JsonParser.parseString(UpdateDatabaseTool.buildApplicationErrorResult(
+            new ApplicationException("Infobase is locked", new IllegalStateException("busy")), //$NON-NLS-1$ //$NON-NLS-2$
+            "Demo", "ServerApplication.Demo", false, false)).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+
+        for (String emitted : blocking.keySet())
+        {
+            assertTrue("outputSchema omits blocking-session field: " + emitted, //$NON-NLS-1$
+                updateProperties.has(emitted));
+        }
+        for (String emitted : caused.keySet())
+        {
+            assertTrue("outputSchema omits ApplicationException field: " + emitted, //$NON-NLS-1$
+                updateProperties.has(emitted));
+        }
+        assertTrue("the opaque update failure marker must be visible to schema-driven clients", //$NON-NLS-1$
+            updateProperties.has("mutationOutcomeUnknown")); //$NON-NLS-1$
+        assertEquals(sessionProperties.getAsJsonObject("reachable").get("type"), //$NON-NLS-1$ //$NON-NLS-2$
+            updateProperties.getAsJsonObject("reachable").get("type")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(sessionProperties.getAsJsonObject("sessions").get("type"), //$NON-NLS-1$ //$NON-NLS-2$
+            updateProperties.getAsJsonObject("sessions").get("type")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(sessionProperties.getAsJsonObject("sessions").getAsJsonObject("items"), //$NON-NLS-1$ //$NON-NLS-2$
+            updateProperties.getAsJsonObject("sessions").getAsJsonObject("items")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
     public void testDescriptionMentionsConfirmPreview()
     {
         // The always-loaded description must advertise the two-phase guard so an agent does not
@@ -393,17 +431,38 @@ public class UpdateDatabaseToolTest
     public void exclusiveLockFailureNamesObservedDesignerWithoutPersonalData()
     {
         JsonObject result = JsonParser.parseString(UpdateDatabaseTool.buildApplicationErrorResult(
-            new ApplicationException("exclusive lock"), "Demo", //$NON-NLS-1$ //$NON-NLS-2$
+            new ApplicationException("Infobase requires exclusive access"), "Demo", //$NON-NLS-1$ //$NON-NLS-2$
             "ServerApplication.Demo", //$NON-NLS-1$
             false, false, null,
             List.of(DESIGNER_SESSION))).getAsJsonObject();
         String error = result.get("error").getAsString(); //$NON-NLS-1$
 
-        assertTrue(error.contains("Database update failed: exclusive lock")); //$NON-NLS-1$
+        assertTrue(error.contains("Database update failed: Infobase requires exclusive access")); //$NON-NLS-1$
         assertTrue(error.contains("Pre-update session inspection saw app-id: Designer")); //$NON-NLS-1$
         assertTrue(error.contains("most likely holders of the exclusive lock")); //$NON-NLS-1$
         assertFalse(result.toString().contains("agent@example.com")); //$NON-NLS-1$
         assertFalse(result.toString().contains("private-host")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void exclusiveAccessToUnrelatedFilesDoesNotBlameObservedDesignerSession()
+    {
+        for (String message : List.of(
+            "Could not obtain exclusive access to workspace file", //$NON-NLS-1$
+            "Configuration file has an exclusive lock")) //$NON-NLS-1$
+        {
+            String error = JsonParser.parseString(UpdateDatabaseTool.buildApplicationErrorResult(
+                new ApplicationException(message), "Demo", "ServerApplication.Demo", //$NON-NLS-1$ //$NON-NLS-2$
+                false, false, null, List.of(DESIGNER_SESSION))).getAsJsonObject()
+                .get("error").getAsString(); //$NON-NLS-1$
+
+            assertTrue("the original unrelated failure must still be reported: " + error, //$NON-NLS-1$
+                error.contains(message));
+            assertFalse("a lock phrase without infobase context must not blame Designer: " + error, //$NON-NLS-1$
+                error.contains("Pre-update session inspection saw app-id: Designer")); //$NON-NLS-1$
+            assertFalse("an unrelated file lock must not get the infobase-holder remedy: " + error, //$NON-NLS-1$
+                error.contains("most likely holders of the exclusive lock")); //$NON-NLS-1$
+        }
     }
 
     @Test

@@ -26,10 +26,12 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongConsumer;
 
 import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.model.IProcess;
 
@@ -201,10 +203,13 @@ public final class InfobaseSessionSupport
             }
 
             AtomicReference<CommandExecution> execution = new AtomicReference<>();
+            AtomicBoolean callerAnswered = new AtomicBoolean();
             BoundedJob.Result bounded = BoundedJob.run("Read standalone-server infobase sessions", //$NON-NLS-1$
-                JOB_TIMEOUT_MS, monitor -> execution.set(runAtLivePid(target.server,
-                    pid -> runCommand(target.ibcmd.session().forStandaloneServerProcessWithPid(pid)
-                        .list().build(), target.credentials))));
+                JOB_TIMEOUT_MS, monitor -> runAtLivePid(target.server, monitor, callerAnswered,
+                    execution, pid -> runCommand(
+                        target.ibcmd.session().forStandaloneServerProcessWithPid(pid).list().build(),
+                        target.credentials, monitor, callerAnswered)));
+            markCallerAnswered(callerAnswered);
             String boundedFailure = boundedFailure("list", bounded); //$NON-NLS-1$
             if (boundedFailure != null)
             {
@@ -251,9 +256,11 @@ public final class InfobaseSessionSupport
             }
 
             AtomicReference<CommandExecution> execution = new AtomicReference<>();
+            AtomicBoolean callerAnswered = new AtomicBoolean();
             BoundedJob.Result bounded = BoundedJob.run(
                 "Terminate standalone-server infobase session", //$NON-NLS-1$
-                JOB_TIMEOUT_MS, monitor -> execution.set(runAtLivePid(target.server, pid ->
+                JOB_TIMEOUT_MS, monitor -> runAtLivePid(target.server, monitor, callerAnswered,
+                    execution, pid ->
                 {
                     SessionCommandBuilder.TerminateBuilder builder = target.ibcmd.session()
                         .forStandaloneServerProcessWithPid(pid).terminate();
@@ -261,8 +268,10 @@ public final class InfobaseSessionSupport
                     {
                         builder = builder.withErrorMessage(message);
                     }
-                    return runCommand(builder.sessionId(sessionId).build(), target.credentials);
-                })));
+                    return runCommand(builder.sessionId(sessionId).build(), target.credentials,
+                        monitor, callerAnswered);
+                }));
+            markCallerAnswered(callerAnswered);
             String boundedFailure = boundedFailure("terminate", bounded); //$NON-NLS-1$
             if (boundedFailure != null)
             {
@@ -371,17 +380,19 @@ public final class InfobaseSessionSupport
      * Locates the internal standalone-server process by interface name and executes the callback
      * from {@code proceedSessionCleanup}. The callback runs while EDT still owns a live process.
      */
-    private static CommandExecution runAtLivePid(Object server, PidCommand command) throws Exception
+    private static void runAtLivePid(Object server, IProgressMonitor monitor,
+        AtomicBoolean callerAnswered, AtomicReference<CommandExecution> execution,
+        PidCommand command) throws Exception
     {
         Object launchObject = invokeNoArg(server, "getLaunch"); //$NON-NLS-1$
         if (!(launchObject instanceof ILaunch))
         {
-            return null;
+            return;
         }
         IProcess[] processes = ((ILaunch)launchObject).getProcesses();
         if (processes == null)
         {
-            return null;
+            return;
         }
         for (IProcess process : processes)
         {
@@ -391,19 +402,9 @@ public final class InfobaseSessionSupport
             {
                 continue;
             }
-            AtomicReference<CommandExecution> execution = new AtomicReference<>();
             AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
-            LongConsumer consumer = pid ->
-            {
-                try
-                {
-                    execution.set(command.run(pid));
-                }
-                catch (Throwable t) // NOSONAR transferred to the bounded job thread below
-                {
-                    callbackFailure.set(t);
-                }
-            };
+            LongConsumer consumer = pid -> executeAtPidIfActive(pid, monitor, callerAnswered,
+                execution, callbackFailure, command);
             try
             {
                 Method proceed = processInterface.getMethod("proceedSessionCleanup", //$NON-NLS-1$
@@ -418,9 +419,60 @@ public final class InfobaseSessionSupport
             {
                 throwAsException(callbackFailure.get());
             }
-            return execution.get();
+            return;
         }
-        return null;
+    }
+
+    /**
+     * Runs the callback only while the bounded caller is still waiting, and publishes its result
+     * only under that same condition. EDT may invoke the {@code proceedSessionCleanup} consumer
+     * after the outer deadline, so the cancellation check belongs here, immediately beside the
+     * command invocation rather than before the potentially-stalling platform call.
+     */
+    static void executeAtPidIfActive(long pid, IProgressMonitor monitor,
+        AtomicBoolean callerAnswered, AtomicReference<CommandExecution> execution,
+        AtomicReference<Throwable> callbackFailure, PidCommand command)
+    {
+        if (callEnded(monitor, callerAnswered))
+        {
+            return;
+        }
+        try
+        {
+            CommandExecution completed = command.run(pid);
+            synchronized (callerAnswered)
+            {
+                if (completed != null && !callEnded(monitor, callerAnswered))
+                {
+                    execution.compareAndSet(null, completed);
+                }
+            }
+        }
+        catch (Throwable t) // NOSONAR transferred to the bounded job thread while it is still active
+        {
+            synchronized (callerAnswered)
+            {
+                if (!callEnded(monitor, callerAnswered))
+                {
+                    callbackFailure.compareAndSet(null, t);
+                }
+            }
+        }
+    }
+
+    /** Closes result publication before the bounded caller inspects the outcome and returns. */
+    private static void markCallerAnswered(AtomicBoolean callerAnswered)
+    {
+        synchronized (callerAnswered)
+        {
+            callerAnswered.set(true);
+        }
+    }
+
+    /** Whether the bounded wait has ended or its monitor has been cancelled. */
+    private static boolean callEnded(IProgressMonitor monitor, AtomicBoolean callerAnswered)
+    {
+        return monitor.isCanceled() || callerAnswered.get();
     }
 
     /** Finds an implemented interface recursively by its fully qualified name. */
@@ -447,8 +499,16 @@ public final class InfobaseSessionSupport
 
     /** Runs one ibcmd process, drains both streams concurrently, and force-kills it on timeout. */
     private static CommandExecution runCommand(List<String> command,
-        InfobaseAccessSupport.Credentials credentials) throws Exception
+        InfobaseAccessSupport.Credentials credentials, IProgressMonitor monitor,
+        AtomicBoolean callerAnswered) throws Exception
     {
+        // This is the last cancellation point before the external terminate/list command exists.
+        // A callback delivered after BoundedJob's deadline must not start ibcmd behind the caller's
+        // back even if cancellation happened after executeAtPidIfActive's first check.
+        if (callEnded(monitor, callerAnswered))
+        {
+            return null;
+        }
         Process process = new ProcessBuilder(command).start();
         try
         {
@@ -766,7 +826,7 @@ public final class InfobaseSessionSupport
 
     /** Checked callback invoked only while EDT confirms the standalone-server process exists. */
     @FunctionalInterface
-    private interface PidCommand
+    interface PidCommand
     {
         CommandExecution run(long pid) throws Exception;
     }
@@ -801,7 +861,7 @@ public final class InfobaseSessionSupport
     }
 
     /** Exit state and captured streams of one bounded ibcmd process. */
-    private static final class CommandExecution
+    static final class CommandExecution
     {
         final int exitCode;
         final String stdout;

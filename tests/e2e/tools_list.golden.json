@@ -4800,14 +4800,38 @@
         "applicationName": {
           "type": "string"
         },
+        "causeMessage": {
+          "type": "string"
+        },
+        "causeType": {
+          "type": "string"
+        },
         "confirmationRequired": {
           "type": "boolean"
+        },
+        "error": {
+          "type": "string"
         },
         "message": {
           "type": "string"
         },
+        "mutationCommitted": {
+          "type": "boolean"
+        },
+        "mutationOutcomeUnknown": {
+          "type": "boolean"
+        },
         "project": {
           "type": "string"
+        },
+        "reachable": {
+          "type": "boolean"
+        },
+        "sessions": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
         },
         "standaloneServerPortsReassigned": {
           "type": "boolean"

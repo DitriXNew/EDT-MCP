@@ -130,6 +130,7 @@ public class UpdateDatabaseTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("error", "Human-readable failure message when success=false.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.ACTION, "Either 'preview' (nothing changed) or 'updated' (applied).") //$NON-NLS-1$
             .booleanProperty("confirmationRequired", //$NON-NLS-1$
                 "true on a preview (no infobase change made); absent/false once updated.") //$NON-NLS-1$
@@ -149,6 +150,21 @@ public class UpdateDatabaseTool implements IMcpTool
                 + "(reflects terminateRunningClients).") //$NON-NLS-1$
             .booleanProperty("willCheckInfobaseSessions", //$NON-NLS-1$
                 "On a preview: whether confirm=true checks standalone-server sessions before updating.") //$NON-NLS-1$
+            .booleanProperty("reachable", //$NON-NLS-1$
+                "On a session-blocking refusal, true because the returned sessions were observed.") //$NON-NLS-1$
+            .objectArrayProperty("sessions", //$NON-NLS-1$
+                "On a session-blocking refusal, the observed non-agent sessions; sensitive user " //$NON-NLS-1$
+                    + "and host fields are omitted.") //$NON-NLS-1$
+            .booleanProperty("mutationCommitted", //$NON-NLS-1$
+                "Present as true when a failed call definitely changed client/session or " //$NON-NLS-1$
+                    + "standalone-server configuration state.") //$NON-NLS-1$
+            .booleanProperty("mutationOutcomeUnknown", //$NON-NLS-1$
+                "Present as true when the update API was entered but the infobase mutation " //$NON-NLS-1$
+                    + "outcome could not be determined.") //$NON-NLS-1$
+            .stringProperty("causeMessage", //$NON-NLS-1$
+                "Message from an ApplicationException cause, when EDT supplies one.") //$NON-NLS-1$
+            .stringProperty("causeType", //$NON-NLS-1$
+                "Simple type name of an ApplicationException cause, when EDT supplies one.") //$NON-NLS-1$
             .booleanProperty(KEY_PORTS_REASSIGNED,
                 "Present and true ONLY when standaloneServerPortConflict=reassign was applied: " //$NON-NLS-1$
                 + "EDT moved the standalone server to free ports and REWROTE its configuration, " //$NON-NLS-1$
@@ -1426,10 +1442,12 @@ public class UpdateDatabaseTool implements IMcpTool
         return PlatformFailures.firstMessageMatching(failure, message ->
         {
             String normalized = message.toLowerCase(Locale.ROOT);
-            return normalized.contains("exclusive lock") //$NON-NLS-1$
+            boolean infobaseContext = normalized.contains("infobase") //$NON-NLS-1$
+                || normalized.contains("database"); //$NON-NLS-1$
+            boolean lockEvidence = normalized.contains("exclusive lock") //$NON-NLS-1$
                 || normalized.contains("exclusive access") //$NON-NLS-1$
-                || ((normalized.contains("infobase") || normalized.contains("database")) //$NON-NLS-1$ //$NON-NLS-2$
-                    && normalized.contains("locked")); //$NON-NLS-1$
+                || normalized.contains("locked"); //$NON-NLS-1$
+            return infobaseContext && lockEvidence;
         }) != null;
     }
 
