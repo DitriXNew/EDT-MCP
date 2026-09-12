@@ -1177,13 +1177,34 @@ public class UpdateDatabaseTool implements IMcpTool
      * Builds the confirm-preview JSON (no infobase change): resolves and reports the exact
      * IRREVERSIBLE action that confirm=true would apply. Side-effect-free.
      */
-    private static String buildPreviewResult(String projectName, String applicationId, // NOSONAR every value is already resolved by the caller; a parameter object would only move the list
+    static String buildPreviewResult(String projectName, String applicationId, // NOSONAR every value is already resolved by the caller; a parameter object would only move the list
             IApplication application, ApplicationUpdateType updateType,
             ApplicationUpdateState stateBefore, boolean terminateRunningClients,
             boolean checkInfobaseSessions,
             ExternalInfobaseChangesPolicy externalChanges,
             StandaloneServerPortConflictPolicy portPolicy)
     {
+        // The confirmed path runs the session preflight only where it applies, so the preview
+        // must promise the same thing rather than echo the raw parameter.
+        boolean willCheckSessions = checkInfobaseSessions
+            && InfobaseSessionSupport.appliesTo(application);
+        String sessionNote;
+        if (willCheckSessions)
+        {
+            sessionNote = " It will then list standalone-server sessions and refuse while any " //$NON-NLS-1$
+                + "non-agent session remains; clear those with infobase_sessions " //$NON-NLS-1$
+                + "action='terminate' and confirm=true."; //$NON-NLS-1$
+        }
+        else if (checkInfobaseSessions)
+        {
+            sessionNote = " The standalone-server session check does not apply to this " //$NON-NLS-1$
+                + "application type, so it will be skipped; infobase_sessions cannot inspect " //$NON-NLS-1$
+                + "this application either."; //$NON-NLS-1$
+        }
+        else
+        {
+            sessionNote = " It will skip the standalone-server session safety check."; //$NON-NLS-1$
+        }
         return ToolResult.success()
             .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
             .put("confirmationRequired", true) //$NON-NLS-1$
@@ -1193,7 +1214,7 @@ public class UpdateDatabaseTool implements IMcpTool
             .put(KEY_UPDATE_TYPE, updateType.name())
             .put(KEY_STATE_BEFORE, stateBefore.name())
             .put("willTerminateRunningClients", terminateRunningClients) //$NON-NLS-1$
-            .put("willCheckInfobaseSessions", checkInfobaseSessions) //$NON-NLS-1$
+            .put("willCheckInfobaseSessions", willCheckSessions) //$NON-NLS-1$
             .put(McpKeys.MESSAGE, "PREVIEW: this would apply a " + updateType.name() //$NON-NLS-1$
                 + " configuration update to the database of application '" + application.getName() //$NON-NLS-1$
                 + "' (project " + projectName + "). This mutates the infobase and is " //$NON-NLS-1$ //$NON-NLS-2$
@@ -1201,11 +1222,7 @@ public class UpdateDatabaseTool implements IMcpTool
                 + (terminateRunningClients
                     ? " It will first terminate any 1C client this EDT launched on the infobase." //$NON-NLS-1$
                     : "") //$NON-NLS-1$
-                + (checkInfobaseSessions
-                    ? " It will then list standalone-server sessions and refuse while any " //$NON-NLS-1$
-                        + "non-agent session remains; clear those with infobase_sessions " //$NON-NLS-1$
-                        + "action='terminate' and confirm=true." //$NON-NLS-1$
-                    : " It will skip the standalone-server session safety check.") //$NON-NLS-1$
+                + sessionNote
                 + externalChangesConsentNote(externalChanges)
                 + portConflictConsentNote(portPolicy)
                 + " Re-call with confirm=true to apply it.") //$NON-NLS-1$

@@ -44,6 +44,8 @@ import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport;
 import com.e1c.g5.dt.applications.ApplicationException;
+import com.e1c.g5.dt.applications.ApplicationUpdateState;
+import com.e1c.g5.dt.applications.ApplicationUpdateType;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.dt.applications.IApplicationType;
@@ -1794,5 +1796,45 @@ public class UpdateDatabaseToolTest
             guide.contains("REFUSED")); //$NON-NLS-1$
         assertTrue("guide must warn that list_configurations can report a launch: identifier", //$NON-NLS-1$
             guide.contains("launch:<name>")); //$NON-NLS-1$
+    }
+    /**
+     * The confirmed path skips the session preflight where it does not apply, so the preview
+     * must not promise a check that will not happen and must not name a tool that cannot help.
+     */
+    @Test
+    public void previewDoesNotPromiseASessionCheckThatDoesNotApply()
+    {
+        IApplication application = applicationWithType(
+            "com.e1c.g5.dt.applications.type.infobase"); //$NON-NLS-1$
+        when(application.getName()).thenReturn("FileBase"); //$NON-NLS-1$
+
+        String preview = UpdateDatabaseTool.buildPreviewResult("Proj", "App", application, //$NON-NLS-1$
+            ApplicationUpdateType.FULL, ApplicationUpdateState.UNKNOWN, false, true, null, null);
+
+        JsonObject json = JsonParser.parseString(preview).getAsJsonObject();
+        assertFalse("a non-applicable type must not be promised a session check", //$NON-NLS-1$
+            json.get("willCheckInfobaseSessions").getAsBoolean()); //$NON-NLS-1$
+        String message = json.get("message").getAsString(); //$NON-NLS-1$
+        assertTrue("the preview must say the check does not apply: " + message, //$NON-NLS-1$
+            message.contains("does not apply to this application type")); //$NON-NLS-1$
+        assertFalse("the preview must not direct the caller to infobase_sessions: " + message, //$NON-NLS-1$
+            message.contains("clear those with infobase_sessions")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void previewStillPromisesTheSessionCheckForAStandaloneServer()
+    {
+        IApplication application = applicationWithType(
+            StandaloneServerSupport.WST_SERVER_APP_TYPE);
+        when(application.getName()).thenReturn("Server"); //$NON-NLS-1$
+
+        String preview = UpdateDatabaseTool.buildPreviewResult("Proj", "App", application, //$NON-NLS-1$
+            ApplicationUpdateType.FULL, ApplicationUpdateState.UNKNOWN, false, true, null, null);
+
+        JsonObject json = JsonParser.parseString(preview).getAsJsonObject();
+        assertTrue("an applicable type must still be promised the check", //$NON-NLS-1$
+            json.get("willCheckInfobaseSessions").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(json.get("message").getAsString() //$NON-NLS-1$
+            .contains("clear those with infobase_sessions")); //$NON-NLS-1$
     }
 }
