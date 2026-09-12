@@ -20,6 +20,7 @@ import org.junit.Test;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.ReadResult;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo;
+import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.TerminationResult;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -103,13 +104,19 @@ public class InfobaseSessionsToolTest
             InfobaseSessionsTool.terminationSequenceStoppedResult("Demo", //$NON-NLS-1$
                 "ServerApplication.Demo", 1, "second command failed.")) //$NON-NLS-1$ //$NON-NLS-2$
             .getAsJsonObject();
+        JsonObject beforeLaunchFailure = JsonParser.parseString(
+            InfobaseSessionsTool.firstTerminationFailureResult("Demo", //$NON-NLS-1$
+                "ServerApplication.Demo", TerminationResult.notStarted( //$NON-NLS-1$
+                    "Preparation timed out."))) //$NON-NLS-1$
+            .getAsJsonObject();
         JsonObject partialReadBack = JsonParser.parseString(
             InfobaseSessionsTool.terminationReadBackResult("Demo", //$NON-NLS-1$
                 "ServerApplication.Demo", List.of(DESIGNER, CLIENT), //$NON-NLS-1$
                 ReadResult.readable(List.of(CLIENT))))
             .getAsJsonObject();
 
-        for (JsonObject payload : List.of(success, refusal, failure, partialReadBack))
+        for (JsonObject payload : List.of(success, refusal, failure, beforeLaunchFailure,
+            partialReadBack))
         {
             for (String emitted : payload.keySet())
             {
@@ -340,11 +347,36 @@ public class InfobaseSessionsToolTest
     }
 
     @Test
+    public void failureBeforeFirstTerminationLaunchIsAnOrdinaryError()
+    {
+        JsonObject result = JsonParser.parseString(
+            InfobaseSessionsTool.firstTerminationFailureResult("Demo", //$NON-NLS-1$
+                "ServerApplication.Demo", TerminationResult.notStarted( //$NON-NLS-1$
+                    "Preparation exceeded its bounded worker deadline."))) //$NON-NLS-1$
+            .getAsJsonObject();
+
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(result.has("mutationOutcomeUnknown")); //$NON-NLS-1$
+        assertFalse(result.has("mutationCommitted")); //$NON-NLS-1$
+        assertFalse(result.get("reachable").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("Preparation exceeded its bounded worker deadline.", //$NON-NLS-1$
+            result.get("unreachableReason").getAsString()); //$NON-NLS-1$
+        assertTrue(result.get("error").getAsString().contains( //$NON-NLS-1$
+            "No terminate command was launched")); //$NON-NLS-1$
+        assertTrue(result.get("error").getAsString().contains( //$NON-NLS-1$
+            "this call did not remove a session")); //$NON-NLS-1$
+        assertFalse(result.get("error").getAsString().contains("may have been removed")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(result.has("verification")); //$NON-NLS-1$
+        assertFalse(result.has("verificationReason")); //$NON-NLS-1$
+    }
+
+    @Test
     public void failedFirstTerminationReportsUnknownOutcomeWithoutClaimingACompletion()
     {
         JsonObject result = JsonParser.parseString(
-            InfobaseSessionsTool.firstTerminationAttemptFailedResult("Demo", //$NON-NLS-1$
-                "ServerApplication.Demo", "Command timed out.")) //$NON-NLS-1$ //$NON-NLS-2$
+            InfobaseSessionsTool.firstTerminationFailureResult("Demo", //$NON-NLS-1$
+                "ServerApplication.Demo", //$NON-NLS-1$
+                TerminationResult.outcomeUnknown("Command timed out."))) //$NON-NLS-1$
             .getAsJsonObject();
 
         assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$

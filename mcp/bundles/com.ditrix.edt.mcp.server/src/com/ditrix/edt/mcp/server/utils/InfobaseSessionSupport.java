@@ -146,14 +146,14 @@ public final class InfobaseSessionSupport
 
     /** Outcome of one requested termination. */
     public record TerminationResult(Reachability reachability, boolean terminated,
-        String unreachableReason)
+        String unreachableReason, boolean mutationOutcomeUnknown)
     {
         /** Enforces that only a completed command may claim a termination. */
         public TerminationResult
         {
             if (reachability == Reachability.READABLE)
             {
-                if (!terminated || unreachableReason != null)
+                if (!terminated || unreachableReason != null || mutationOutcomeUnknown)
                 {
                     throw new IllegalArgumentException(
                         "A completed termination requires no unreachable reason"); //$NON-NLS-1$
@@ -176,13 +176,19 @@ public final class InfobaseSessionSupport
         /** @return a completed termination */
         public static TerminationResult succeeded()
         {
-            return new TerminationResult(Reachability.READABLE, true, null);
+            return new TerminationResult(Reachability.READABLE, true, null, false);
         }
 
-        /** @return a termination command that could not be completed */
-        public static TerminationResult unreachable(String reason)
+        /** @return a failure before a terminate command reached its launch boundary */
+        public static TerminationResult notStarted(String reason)
         {
-            return new TerminationResult(Reachability.UNREACHABLE, false, reason);
+            return new TerminationResult(Reachability.UNREACHABLE, false, reason, false);
+        }
+
+        /** @return a failure after a terminate command reached its launch boundary */
+        public static TerminationResult outcomeUnknown(String reason)
+        {
+            return new TerminationResult(Reachability.UNREACHABLE, false, reason, true);
         }
     }
 
@@ -260,6 +266,7 @@ public final class InfobaseSessionSupport
     public static TerminationResult terminateSession(IApplication application, String sessionId,
         String message)
     {
+        AtomicBoolean commandMayHaveStarted = new AtomicBoolean();
         try
         {
             AtomicReference<CommandExecution> execution = new AtomicReference<>();
@@ -287,40 +294,58 @@ public final class InfobaseSessionSupport
                         {
                             builder = builder.withErrorMessage(message);
                         }
-                        return runCommand(builder.sessionId(sessionId).build(), target.credentials,
-                            monitor, callerAnswered);
+                        List<String> command = builder.sessionId(sessionId).build();
+                        // Once this flips, the caller must conservatively allow for a launch.
+                        // If cancellation won first, runCommand's pre-start check prevents one.
+                        commandMayHaveStarted.set(true);
+                        return runCommand(command, target.credentials, monitor, callerAnswered);
                     });
                 });
             markCallerAnswered(callerAnswered);
             String boundedFailure = boundedFailure("terminate", bounded); //$NON-NLS-1$
             if (boundedFailure != null)
             {
-                return TerminationResult.unreachable(boundedFailure);
+                return failedTermination(boundedFailure, commandMayHaveStarted);
             }
             String prepareFailure = preparationError.get();
             if (prepareFailure != null)
             {
-                return TerminationResult.unreachable(prepareFailure);
+                return TerminationResult.notStarted(prepareFailure);
             }
             CommandExecution command = execution.get();
             if (command == null)
             {
-                return TerminationResult.unreachable("The standalone server is not running."); //$NON-NLS-1$
+                return failedTermination("The standalone server is not running.", //$NON-NLS-1$
+                    commandMayHaveStarted);
             }
             String commandFailure = commandFailure("terminate", command); //$NON-NLS-1$
             return commandFailure == null ? TerminationResult.succeeded()
-                : TerminationResult.unreachable(commandFailure);
+                : TerminationResult.outcomeUnknown(commandFailure);
         }
         catch (RuntimeException e)
         {
             Activator.logError("infobase sessions: termination infrastructure failed", e); //$NON-NLS-1$
-            return TerminationResult.unreachable("Session termination infrastructure failed: " //$NON-NLS-1$
-                + PlatformFailures.describe(e));
+            return failedTermination("Session termination infrastructure failed: " //$NON-NLS-1$
+                + PlatformFailures.describe(e), commandMayHaveStarted);
         }
     }
 
     /** Resolves the WST server, runtime, ibcmd executable, and stored credentials. */
     private static PreparedTarget prepare(IApplication application)
+    {
+        try
+        {
+            return prepareWithStandaloneServerFeature(application);
+        }
+        catch (LinkageError e)
+        {
+            return PreparedTarget.error("Infobase session commands are not available because " //$NON-NLS-1$
+                + "the EDT standalone-server feature is not installed."); //$NON-NLS-1$
+        }
+    }
+
+    /** Uses the optional standalone-server API only inside the guarded preparation boundary. */
+    private static PreparedTarget prepareWithStandaloneServerFeature(IApplication application)
     {
         if (application == null)
         {
@@ -361,6 +386,14 @@ public final class InfobaseSessionSupport
         }
         return PreparedTarget.of(server, ibcmd,
             InfobaseAccessSupport.readCredentials(application));
+    }
+
+    /** Preserves uncertainty only after the terminate command reached its launch boundary. */
+    private static TerminationResult failedTermination(String reason,
+        AtomicBoolean commandMayHaveStarted)
+    {
+        return commandMayHaveStarted.get() ? TerminationResult.outcomeUnknown(reason)
+            : TerminationResult.notStarted(reason);
     }
 
     /** Reads {@code IServer.getRuntime().getLocation()} without importing the optional WST API. */

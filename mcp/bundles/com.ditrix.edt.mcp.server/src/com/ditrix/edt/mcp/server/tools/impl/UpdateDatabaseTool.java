@@ -1451,8 +1451,7 @@ public class UpdateDatabaseTool implements IMcpTool
             boolean lockEvidence = normalized.contains("exclusive lock") //$NON-NLS-1$
                 || normalized.contains("exclusive access") //$NON-NLS-1$
                 || normalized.contains("locked") //$NON-NLS-1$
-                || normalized.contains("\u043c\u043e\u043d\u043e\u043f\u043e\u043b\u044c\u043d") //$NON-NLS-1$
-                || normalized.contains("\u0437\u0430\u0431\u043b\u043e\u043a\u0438\u0440\u043e\u0432\u0430"); //$NON-NLS-1$
+                || normalized.contains("\u043c\u043e\u043d\u043e\u043f\u043e\u043b\u044c\u043d"); //$NON-NLS-1$
             return infobaseContext && lockEvidence;
         }) != null;
     }

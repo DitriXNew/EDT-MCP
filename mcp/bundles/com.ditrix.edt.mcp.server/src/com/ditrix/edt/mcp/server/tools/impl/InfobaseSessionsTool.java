@@ -326,8 +326,7 @@ public class InfobaseSessionsTool implements IMcpTool
             {
                 if (attempted.isEmpty())
                 {
-                    return firstTerminationAttemptFailedResult(projectName, application.getId(),
-                        result.unreachableReason());
+                    return firstTerminationFailureResult(projectName, application.getId(), result);
                 }
                 return terminationSequenceStoppedResult(projectName, application.getId(),
                     attempted.size(), result.unreachableReason());
@@ -340,6 +339,31 @@ public class InfobaseSessionsTool implements IMcpTool
         // list once reports what is actually gone.
         ReadResult after = InfobaseSessionSupport.listSessions(application);
         return terminationReadBackResult(projectName, application.getId(), attempted, after);
+    }
+
+    /** Selects the honest first-attempt error from whether a command may have started. */
+    static String firstTerminationFailureResult(String projectName, String applicationId,
+        TerminationResult result)
+    {
+        return result.mutationOutcomeUnknown()
+            ? firstTerminationAttemptFailedResult(projectName, applicationId,
+                result.unreachableReason())
+            : firstTerminationAttemptNotStartedResult(projectName, applicationId,
+                result.unreachableReason());
+    }
+
+    /** Builds an ordinary error when the first terminate command never reached launch. */
+    static String firstTerminationAttemptNotStartedResult(String projectName, String applicationId,
+        String reason)
+    {
+        return ToolResult.error("Session termination did not start: " + reason //$NON-NLS-1$
+            + " No terminate command was launched, so this call did not remove a session.") //$NON-NLS-1$
+                .put(McpKeys.ACTION, ACTION_TERMINATE)
+                .put(McpKeys.PROJECT, projectName)
+                .put(McpKeys.APPLICATION_ID, applicationId)
+                .put(KEY_REACHABLE, false)
+                .put(KEY_UNREACHABLE_REASON, reason)
+                .toJson();
     }
 
     /** Builds an unverified error after the first terminate command fails. */

@@ -30,6 +30,7 @@ import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.ReadResult;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo;
+import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.TerminationResult;
 import com.e1c.g5.dt.applications.IApplication;
 
 /** Tests parsing and the structural readable-empty versus unreachable invariant. */
@@ -145,6 +146,33 @@ public class InfobaseSessionSupportTest
             .terminated());
         assertTrue("terminate preparation must run on the bounded worker", //$NON-NLS-1$
             terminatePreparationThread.get() != null && terminatePreparationThread.get() != caller);
+    }
+
+    @Test
+    public void boundedPreparationFailureDoesNotReportUnknownMutationOutcome()
+    {
+        IApplication application = mock(IApplication.class);
+        when(application.getType()).thenThrow(new IllegalStateException("preparation failed")); //$NON-NLS-1$
+
+        TerminationResult result = InfobaseSessionSupport.terminateSession(application, null, null);
+
+        assertFalse(result.terminated());
+        assertFalse(result.mutationOutcomeUnknown());
+        assertTrue(result.unreachableReason().contains("preparation failed")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void missingStandaloneFeatureLinkageFailureBecomesPreparationError()
+    {
+        IApplication application = mock(IApplication.class);
+        when(application.getType()).thenThrow(
+            new NoClassDefFoundError("missing optional package")); //$NON-NLS-1$
+
+        ReadResult result = InfobaseSessionSupport.listSessions(application);
+
+        assertFalse(result.isReadable());
+        assertEquals("Infobase session commands are not available because the EDT " //$NON-NLS-1$
+            + "standalone-server feature is not installed.", result.unreachableReason()); //$NON-NLS-1$
     }
 
     @Test
