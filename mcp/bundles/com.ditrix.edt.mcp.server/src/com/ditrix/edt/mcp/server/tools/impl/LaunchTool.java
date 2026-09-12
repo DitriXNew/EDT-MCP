@@ -774,10 +774,15 @@ public class LaunchTool implements IMcpTool
                     service, effectivePortPolicy, staleServerStopped.get()));
             });
 
+        StandalonePreparation published = prepared.get();
+        StandalonePreparation accepted = acceptPublishedStandalonePreparation(published, bounded);
+        if (accepted != null)
+        {
+            return accepted;
+        }
         if (bounded.isSuccess())
         {
-            StandalonePreparation result = prepared.get();
-            return result != null ? result : StandalonePreparation.failed(
+            return StandalonePreparation.failed(
                 "the standalone-server precondition phase produced no result"); //$NON-NLS-1$
         }
         String resolvedId = applicationId.get();
@@ -821,6 +826,18 @@ public class LaunchTool implements IMcpTool
         return BoundedJob.run("Preparing standalone server: " + configName, timeoutMs, work); //$NON-NLS-1$
     }
 
+    /** Accepts a known failure, but never a success published after an inconclusive wait. */
+    static StandalonePreparation acceptPublishedStandalonePreparation(
+        StandalonePreparation published, BoundedJob.Result bounded)
+    {
+        if (bounded.isSuccess())
+        {
+            return published;
+        }
+        return BoundedJob.isInconclusive(bounded.getOutcome()) && published != null
+            && published.hasFailure() ? published : null;
+    }
+
     /** Names the precondition call that owned the shared deadline when it elapsed. */
     private static String standalonePreparationTarget(StandalonePreparationStage stage,
         String configName, String projectName, String applicationId)
@@ -859,7 +876,7 @@ public class LaunchTool implements IMcpTool
     }
 
     /** Complete prerequisite snapshot handed to the separately bounded start. */
-    private static final class StandalonePreparation
+    static final class StandalonePreparation
     {
         private final IProject project;
         private final String applicationId;
@@ -903,6 +920,11 @@ public class LaunchTool implements IMcpTool
         {
             return new StandalonePreparation(project, applicationId, null, null, null, null,
                 failure, staleServerStopped);
+        }
+
+        boolean hasFailure()
+        {
+            return failure != null || preflightFailure != null;
         }
     }
 

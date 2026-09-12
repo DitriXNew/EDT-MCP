@@ -52,6 +52,7 @@ import org.mockito.Mockito;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.AlreadyRunningContext;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.StartOutcome;
+import com.ditrix.edt.mcp.server.tools.impl.LaunchTool.StandalonePreparation;
 import com.ditrix.edt.mcp.server.utils.AttributableCancel;
 import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
@@ -842,6 +843,66 @@ public class LaunchToolTest
         finally
         {
             release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testTimedOutStandalonePreparationKeepsPublishedFailureButRefusesLateSuccess()
+        throws Exception
+    {
+        AtomicReference<StandalonePreparation> published = new AtomicReference<>();
+        AtomicReference<BoundedJob.Result> bounded = new AtomicReference<>();
+        AtomicReference<Throwable> callerFailure = new AtomicReference<>();
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        Thread caller = new Thread(() -> {
+            try
+            {
+                bounded.set(LaunchTool.runStandalonePreparationBounded("Standalone", 250L, //$NON-NLS-1$
+                    monitor -> {
+                        published.set(StandalonePreparation.failed("project is unavailable")); //$NON-NLS-1$
+                        started.countDown();
+                        try
+                        {
+                            release.await(30, TimeUnit.SECONDS);
+                        }
+                        finally
+                        {
+                            finished.countDown();
+                        }
+                    }));
+            }
+            catch (Throwable failure)
+            {
+                callerFailure.set(failure);
+            }
+        }, "test: published standalone-preparation failure"); //$NON-NLS-1$
+
+        caller.start();
+        try
+        {
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            caller.join(5_000L);
+            assertFalse("the bounded caller must return at its deadline", caller.isAlive()); //$NON-NLS-1$
+            assertNull(callerFailure.get());
+            assertEquals(BoundedJob.Outcome.TIMED_OUT, bounded.get().getOutcome());
+            StandalonePreparation knownFailure = published.get();
+            assertTrue(knownFailure.hasFailure());
+            assertSame("a failure published before the deadline is more exact than a timeout", //$NON-NLS-1$
+                knownFailure,
+                LaunchTool.acceptPublishedStandalonePreparation(knownFailure, bounded.get()));
+
+            StandalonePreparation lateReady = StandalonePreparation.ready(null,
+                "ServerApplication.Late", null, new Object(), null, false); //$NON-NLS-1$
+            assertNull("a ready result cannot succeed after the bounded caller gave up", //$NON-NLS-1$
+                LaunchTool.acceptPublishedStandalonePreparation(lateReady, bounded.get()));
+        }
+        finally
+        {
+            release.countDown();
+            caller.join(5_000L);
             assertTrue(finished.await(5, TimeUnit.SECONDS));
         }
     }

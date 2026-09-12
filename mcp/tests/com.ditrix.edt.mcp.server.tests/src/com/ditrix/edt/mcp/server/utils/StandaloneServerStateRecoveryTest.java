@@ -374,6 +374,36 @@ public class StandaloneServerStateRecoveryTest
     }
 
     @Test
+    public void testRestorationSchedulingFailureKeepsTheOriginalOperationFailure()
+    {
+        StandaloneServerStateRecovery.beginOperation();
+        try
+        {
+            StandaloneServerStateRecovery.recordStoppedServer("ServerApplication.Test"); //$NON-NLS-1$
+            AtomicReference<String> launchName =
+                new AtomicReference<>("Standalone for Test"); //$NON-NLS-1$
+            StandaloneServerStateRecovery.RestorationAttempt attempt =
+                StandaloneServerStateRecovery.runRestorationAttempt(launchName, () -> {
+                    throw new IllegalStateException("Eclipse Job manager is shutting down"); //$NON-NLS-1$
+                });
+
+            String message = StandaloneServerStateRecovery.appendRestorationOutcome(
+                "database update failed", attempt.launchConfigurationName, //$NON-NLS-1$
+                applicationId -> attempt.outcome);
+
+            assertTrue("the operation failure must remain the response headline", //$NON-NLS-1$
+                message.startsWith("database update failed. ")); //$NON-NLS-1$
+            assertTrue("the scheduling failure must be subordinate restoration detail", //$NON-NLS-1$
+                message.contains("could NOT be started again: " //$NON-NLS-1$
+                    + "Eclipse Job manager is shutting down")); //$NON-NLS-1$
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.endOperation();
+        }
+    }
+
+    @Test
     public void testInconclusiveRestoreChecksStateBeforeRecommendingAnyStart()
     {
         String[] reasons = {

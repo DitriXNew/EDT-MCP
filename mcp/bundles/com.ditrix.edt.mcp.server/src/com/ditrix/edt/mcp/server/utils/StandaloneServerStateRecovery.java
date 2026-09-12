@@ -875,10 +875,35 @@ public final class StandaloneServerStateRecovery
     private static RestorationAttempt restoreStoppedServer(IProject project, String applicationId,
         boolean resolveLaunchConfigurationName)
     {
+        AtomicReference<String> launchConfigurationName = new AtomicReference<>(applicationId);
+        return runRestorationAttempt(launchConfigurationName,
+            () -> restoreStoppedServerAttempt(project, applicationId,
+                resolveLaunchConfigurationName, launchConfigurationName));
+    }
+
+    /** Keeps restoration scheduling trouble subordinate to the operation's original failure. */
+    static RestorationAttempt runRestorationAttempt(
+        AtomicReference<String> launchConfigurationName, Supplier<RestorationAttempt> attempt)
+    {
+        try
+        {
+            return attempt.get();
+        }
+        catch (Exception failure) // NOSONAR restoration must not hide the original failure
+        {
+            return new RestorationAttempt(launchConfigurationName.get(),
+                new RestorationStartOutcome(PlatformFailures.describe(failure), true));
+        }
+    }
+
+    /** Complete bounded preparation and separately bounded start for one restoration. */
+    private static RestorationAttempt restoreStoppedServerAttempt(IProject project,
+        String applicationId, boolean resolveLaunchConfigurationName,
+        AtomicReference<String> launchConfigurationName)
+    {
         AtomicReference<RestorationPreparation> prepared = new AtomicReference<>();
         AtomicReference<RestorationPreparationStage> stage =
             new AtomicReference<>(RestorationPreparationStage.PHASE);
-        AtomicReference<String> launchConfigurationName = new AtomicReference<>(applicationId);
         BoundedJob.Result bounded = BoundedJob.run(
             "Preparing standalone-server restoration: " + applicationId, //$NON-NLS-1$
             StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, monitor -> {
@@ -950,6 +975,13 @@ public final class StandaloneServerStateRecovery
             prepared.set(RestorationPreparation.ready(service, lookup));
         });
 
+        RestorationPreparation preparation = prepared.get();
+        if (BoundedJob.isInconclusive(bounded.getOutcome()) && preparation != null
+            && preparation.failure != null)
+        {
+            return new RestorationAttempt(launchConfigurationName.get(),
+                new RestorationStartOutcome(preparation.failure, true));
+        }
         if (!bounded.isSuccess())
         {
             String failure;
@@ -987,7 +1019,6 @@ public final class StandaloneServerStateRecovery
             return new RestorationAttempt(launchConfigurationName.get(),
                 new RestorationStartOutcome(failure, true));
         }
-        RestorationPreparation preparation = prepared.get();
         if (preparation == null)
         {
             return new RestorationAttempt(launchConfigurationName.get(),
@@ -1067,10 +1098,10 @@ public final class StandaloneServerStateRecovery
     }
 
     /** Name resolved under the preparation deadline plus the separately bounded start outcome. */
-    private static final class RestorationAttempt
+    static final class RestorationAttempt
     {
-        private final String launchConfigurationName;
-        private final RestorationStartOutcome outcome;
+        final String launchConfigurationName;
+        final RestorationStartOutcome outcome;
 
         RestorationAttempt(String launchConfigurationName, RestorationStartOutcome outcome)
         {
