@@ -13,6 +13,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.List;
+import java.util.Map;
 
 import org.junit.Test;
 
@@ -84,6 +85,38 @@ public class InfobaseSessionsToolTest
             .get("description").getAsString(); //$NON-NLS-1$
         assertTrue(actionDescription.contains("requested action that this result refers to")); //$NON-NLS-1$
         assertFalse(actionDescription.contains("completed action")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void outputSchemaDeclaresEveryFieldEmittedByRealResultPaths()
+    {
+        JsonObject properties = JsonParser.parseString(
+            new InfobaseSessionsTool().getOutputSchema()).getAsJsonObject()
+            .getAsJsonObject("properties"); //$NON-NLS-1$
+        JsonObject success = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.readable(List.of()))).getAsJsonObject();
+        JsonObject refusal = JsonParser.parseString(new InfobaseSessionsTool().execute(Map.of(
+            "projectName", "Demo", "action", "terminate", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "sessionId", "42"))).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject failure = JsonParser.parseString(
+            InfobaseSessionsTool.terminationSequenceStoppedResult("Demo", //$NON-NLS-1$
+                "ServerApplication.Demo", 1, "second command failed.")) //$NON-NLS-1$ //$NON-NLS-2$
+            .getAsJsonObject();
+        JsonObject partialReadBack = JsonParser.parseString(
+            InfobaseSessionsTool.terminationReadBackResult("Demo", //$NON-NLS-1$
+                "ServerApplication.Demo", List.of(DESIGNER, CLIENT), //$NON-NLS-1$
+                ReadResult.readable(List.of(CLIENT))))
+            .getAsJsonObject();
+
+        for (JsonObject payload : List.of(success, refusal, failure, partialReadBack))
+        {
+            for (String emitted : payload.keySet())
+            {
+                assertTrue("outputSchema omits emitted field: " + emitted, //$NON-NLS-1$
+                    properties.has(emitted));
+            }
+        }
     }
 
     @Test

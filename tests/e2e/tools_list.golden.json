@@ -3032,8 +3032,14 @@
         "count": {
           "type": "integer"
         },
+        "error": {
+          "type": "string"
+        },
         "message": {
           "type": "string"
+        },
+        "mutationCommitted": {
+          "type": "boolean"
         },
         "mutationOutcomeUnknown": {
           "type": "boolean"

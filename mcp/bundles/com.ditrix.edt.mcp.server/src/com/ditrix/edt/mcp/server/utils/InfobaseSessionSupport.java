@@ -502,14 +502,20 @@ public final class InfobaseSessionSupport
         InfobaseAccessSupport.Credentials credentials, IProgressMonitor monitor,
         AtomicBoolean callerAnswered) throws Exception
     {
-        // This is the last cancellation point before the external terminate/list command exists.
-        // A callback delivered after BoundedJob's deadline must not start ibcmd behind the caller's
-        // back even if cancellation happened after executeAtPidIfActive's first check.
-        if (callEnded(monitor, callerAnswered))
+        ProcessBuilder builder = new ProcessBuilder(command);
+        return runCommand(credentials, monitor, callerAnswered, builder::start);
+    }
+
+    /** Runs one command with an injectable process boundary for cancellation-race tests. */
+    static CommandExecution runCommand(InfobaseAccessSupport.Credentials credentials,
+        IProgressMonitor monitor, AtomicBoolean callerAnswered, ProcessStarter starter)
+        throws Exception
+    {
+        Process process = startProcessIfActive(monitor, callerAnswered, starter);
+        if (process == null)
         {
             return null;
         }
-        Process process = new ProcessBuilder(command).start();
         try
         {
             Charset readCharset = isWindows()
@@ -543,6 +549,20 @@ public final class InfobaseSessionSupport
                 waitAfterDestroy(process);
             }
             throw e;
+        }
+    }
+
+    /** Makes the final cancellation decision atomic with creation of the external process. */
+    private static Process startProcessIfActive(IProgressMonitor monitor,
+        AtomicBoolean callerAnswered, ProcessStarter starter) throws IOException
+    {
+        synchronized (callerAnswered)
+        {
+            if (callEnded(monitor, callerAnswered))
+            {
+                return null;
+            }
+            return starter.start();
         }
     }
 
@@ -829,6 +849,13 @@ public final class InfobaseSessionSupport
     interface PidCommand
     {
         CommandExecution run(long pid) throws Exception;
+    }
+
+    /** Starts the external process at the cancellation boundary. */
+    @FunctionalInterface
+    interface ProcessStarter
+    {
+        Process start() throws IOException;
     }
 
     /** Resolved command prerequisites, or a named preparation error. */

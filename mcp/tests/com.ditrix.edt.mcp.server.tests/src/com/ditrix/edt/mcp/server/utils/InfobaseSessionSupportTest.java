@@ -11,7 +11,9 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
+import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.util.List;
@@ -275,6 +277,42 @@ public class InfobaseSessionSupportTest
         assertSame("an active callback must still publish the command result", expected, //$NON-NLS-1$
             execution.get());
         assertNull(failure.get());
+    }
+
+    @Test
+    public void runCommandDecidesAndStartsWhileHoldingTheCallerAnswerMonitor() throws Exception
+    {
+        AtomicBoolean callerAnswered = new AtomicBoolean();
+        NullProgressMonitor monitor = new NullProgressMonitor()
+        {
+            @Override
+            public boolean isCanceled()
+            {
+                assertTrue("the cancellation decision must hold the caller-answer monitor", //$NON-NLS-1$
+                    Thread.holdsLock(callerAnswered));
+                return false;
+            }
+        };
+        AtomicBoolean starterRan = new AtomicBoolean();
+        IOException expected = new IOException("stop after checking the launch boundary"); //$NON-NLS-1$
+
+        try
+        {
+            InfobaseSessionSupport.runCommand(null, monitor, callerAnswered, () ->
+            {
+                starterRan.set(true);
+                assertTrue("process creation must hold the monitor used by markCallerAnswered", //$NON-NLS-1$
+                    Thread.holdsLock(callerAnswered));
+                throw expected;
+            });
+            fail("the test starter must stop before process stream handling"); //$NON-NLS-1$
+        }
+        catch (IOException actual)
+        {
+            assertSame(expected, actual);
+        }
+
+        assertTrue("positive control: the process starter must run", starterRan.get()); //$NON-NLS-1$
     }
 
     @Test(expected = IllegalArgumentException.class)

@@ -95,6 +95,7 @@ public class InfobaseSessionsTool implements IMcpTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the tool call succeeded.", true) //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("error", "Human-readable failure message when success=false.") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.ACTION,
                 "The requested action that this result refers to: list or terminate.") //$NON-NLS-1$
             .stringProperty(McpKeys.PROJECT, "Target EDT project name.") //$NON-NLS-1$
@@ -117,6 +118,8 @@ public class InfobaseSessionsTool implements IMcpTool
                 VERIFICATION_VERIFIED, VERIFICATION_MISMATCHED, VERIFICATION_NOT_VERIFIABLE)
             .stringProperty(KEY_VERIFICATION_REASON,
                 "Why the terminate read-back mismatched or could not be performed.") //$NON-NLS-1$
+            .booleanProperty("mutationCommitted", //$NON-NLS-1$
+                "Present as true when read-back confirms at least one targeted session is gone.") //$NON-NLS-1$
             .booleanProperty("mutationOutcomeUnknown", //$NON-NLS-1$
                 "Present as true when a failed terminate may have changed session state.") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable status or protection note.") //$NON-NLS-1$
