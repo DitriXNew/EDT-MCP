@@ -1252,7 +1252,7 @@ public final class StandaloneServerStateRecovery
             (claim, remainingMs) -> restarter.restore(remainingMs));
     }
 
-    /** Normalizes stale state, then claims restoration while its bounded start can still run. */
+    /** Normalizes stale state, then claims and dispatches restoration under the remaining wait. */
     private static RestorationStartOutcome restoreIfStillUnownedClaimed(IProject project,
         Object server, String applicationId, long timeoutMs, StaleStateNormalizer normalizer,
         ClaimedRestarter restarter)
@@ -1288,17 +1288,16 @@ public final class StandaloneServerStateRecovery
             if (state.intValue() == STATE_STARTED && Boolean.FALSE.equals(liveLaunch))
             {
                 long remainingMs = remainingRecoveryTimeMs(deadline);
-                long normalizationTimeoutMs = remainingMs / 2L;
-                if (normalizationTimeoutMs <= 0L)
+                if (remainingMs <= 0L)
                 {
                     return RestorationStartOutcome.skipped(
                         "was not restored because its stale state could not be normalized before " //$NON-NLS-1$
                             + "the operation deadline."); //$NON-NLS-1$
                 }
                 // Re-entry stays on this thread. The reused stop's bounded Job executes only EDT
-                // cleanup; it never waits on the recovery lock held here. It receives at most
-                // half of what remains so a successful normalization cannot starve restoration.
-                Recovery normalization = normalizer.normalize(normalizationTimeoutMs);
+                // cleanup; it never waits on the recovery lock held here. Give it the full
+                // remainder so a stop that fits the caller's deadline can confirm STOPPED.
+                Recovery normalization = normalizer.normalize(remainingMs);
                 if (!normalization.recovered())
                 {
                     return RestorationStartOutcome.skipped(
@@ -1337,12 +1336,8 @@ public final class StandaloneServerStateRecovery
                     "was not restored because its owning launch could not be confirmed."); //$NON-NLS-1$
             }
             long remainingMs = remainingRecoveryTimeMs(deadline);
-            if (remainingMs <= 0L)
-            {
-                return RestorationStartOutcome.skipped(
-                    "was not restored because the operation deadline elapsed before its " //$NON-NLS-1$
-                        + "restoration start began."); //$NON-NLS-1$
-            }
+            // A confirmed STOPPED server is always handed to the guarded start. Its bounded wait
+            // gets only this remainder; an inconclusive start retains the claim through cleanup.
             StartClaim claim = new StartClaim(guard);
             guard.startClaim.set(claim);
             try
