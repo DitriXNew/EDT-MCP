@@ -11,6 +11,8 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.util.List;
 
 import org.junit.Test;
@@ -92,30 +94,52 @@ public class InfobaseSessionSupportTest
     }
 
     @Test
-    public void partialParseSanitizesDiagnosticAndNamesTheUnreadableBlockCount()
+    public void partialParseWithholdsRawOutputAndNamesTheUnreadableBlockCount()
     {
-        String output = "session: 11111111-1111-1111-1111-111111111111\n" //$NON-NLS-1$
-            + "app-id: 1CV8C\n" //$NON-NLS-1$
-            + "user-name: Ivanov\n" //$NON-NLS-1$
+        String output = "user-name: Ivanov\n" //$NON-NLS-1$
             + "host: WKS-01\n" //$NON-NLS-1$
-            + "future-owner: Petrov\n\n" //$NON-NLS-1$
-            + "session-id: 9\n" //$NON-NLS-1$
-            + "app-id: 1CV8C\n"; //$NON-NLS-1$
+            + "client-ip: 10.0.0.5\n"; //$NON-NLS-1$
 
         ReadResult result = InfobaseSessionSupport.readSessionsOutput(output);
         String reason = result.unreachableReason();
 
         assertFalse(result.isReadable());
         assertNull(result.sessions());
-        assertTrue(reason.contains("1 unreadable session block")); //$NON-NLS-1$
-        assertTrue(reason.contains("session: 11111111-1111-1111-1111-111111111111")); //$NON-NLS-1$
-        assertTrue(reason.contains("app-id: 1CV8C")); //$NON-NLS-1$
-        assertTrue(reason.contains("user-name: ***")); //$NON-NLS-1$
-        assertTrue(reason.contains("host: ***")); //$NON-NLS-1$
-        assertTrue(reason.contains("future-owner: ***")); //$NON-NLS-1$
+        assertEquals("ibcmd session list returned 1 unreadable session block. " //$NON-NLS-1$
+            + "The raw output was written to the EDT log.", reason); //$NON-NLS-1$
         assertFalse(reason.contains("Ivanov")); //$NON-NLS-1$
         assertFalse(reason.contains("WKS-01")); //$NON-NLS-1$
-        assertFalse(reason.contains("Petrov")); //$NON-NLS-1$
+        assertFalse(reason.contains("10.0.0.5")); //$NON-NLS-1$
+        assertFalse(reason.contains("user-name")); //$NON-NLS-1$
+        assertFalse(reason.contains("host")); //$NON-NLS-1$
+        assertFalse(reason.contains("client-ip")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void nonzeroExitWithholdsRawCommandOutput() throws Exception
+    {
+        Class<?> commandType = Class.forName(
+            InfobaseSessionSupport.class.getName() + "$CommandExecution"); //$NON-NLS-1$
+        Constructor<?> constructor = commandType.getDeclaredConstructor(int.class, String.class,
+            String.class, boolean.class);
+        constructor.setAccessible(true); // NOSONAR production command state remains private
+        Object command = constructor.newInstance(23, "stdout secret", //$NON-NLS-1$
+            "user-name: Ivanov\nhost: WKS-01\nclient-ip: 10.0.0.5", false); //$NON-NLS-1$
+        Method commandFailure = InfobaseSessionSupport.class.getDeclaredMethod("commandFailure", //$NON-NLS-1$
+            String.class, commandType);
+        commandFailure.setAccessible(true); // NOSONAR production failure handling remains private
+
+        String reason = (String)commandFailure.invoke(null, "list", command); //$NON-NLS-1$
+
+        assertEquals("ibcmd session list failed with exit code 23. " //$NON-NLS-1$
+            + "The raw output was written to the EDT log.", reason); //$NON-NLS-1$
+        assertFalse(reason.contains("stdout secret")); //$NON-NLS-1$
+        assertFalse(reason.contains("Ivanov")); //$NON-NLS-1$
+        assertFalse(reason.contains("WKS-01")); //$NON-NLS-1$
+        assertFalse(reason.contains("10.0.0.5")); //$NON-NLS-1$
+        assertFalse(reason.contains("user-name")); //$NON-NLS-1$
+        assertFalse(reason.contains("host")); //$NON-NLS-1$
+        assertFalse(reason.contains("client-ip")); //$NON-NLS-1$
     }
 
     @Test
@@ -131,25 +155,47 @@ public class InfobaseSessionSupportTest
     }
 
     @Test
-    public void trailingBlankLineDoesNotCreateAnUnreadableBlock()
+    public void validSessionPlusColonlessRecordIsUnreachable()
     {
-        ReadResult result = InfobaseSessionSupport.readSessionsOutput(
-            "session: 11111111-1111-1111-1111-111111111111\n"); //$NON-NLS-1$
+        String output = "session: 11111111-1111-1111-1111-111111111111\n" //$NON-NLS-1$
+            + "app-id: Designer\n\n" //$NON-NLS-1$
+            + "foreign client record\n"; //$NON-NLS-1$
 
-        assertTrue(result.isReadable());
-        assertEquals(1, result.sessions().size());
-    }
-
-    @Test
-    public void whollyUnrecognizedOutputRemainsUnreachable()
-    {
-        ReadResult result = InfobaseSessionSupport.readSessionsOutput(
-            "ibcmd emitted an unknown response"); //$NON-NLS-1$
+        ReadResult result = InfobaseSessionSupport.readSessionsOutput(output);
 
         assertFalse(result.isReadable());
         assertNull(result.sessions());
-        assertTrue(result.unreachableReason().contains("unrecognized output")); //$NON-NLS-1$
-        assertTrue(result.unreachableReason().contains("ibcmd emitted an unknown response")); //$NON-NLS-1$
+        assertEquals("ibcmd session list returned 1 unreadable session block. " //$NON-NLS-1$
+            + "The raw output was written to the EDT log.", result.unreachableReason()); //$NON-NLS-1$
+        assertFalse(result.unreachableReason().contains("foreign client record")); //$NON-NLS-1$
+    }
+
+    /** Output that parses to nothing at all must still be UNREACHABLE and leak none of itself. */
+    @Test
+    public void whollyUnrecognizedOutputIsUnreachableAndWithholdsItself()
+    {
+        String output = "ibcmd: could not reach the server for user Ivanov at WKS-01\n"; //$NON-NLS-1$
+
+        ReadResult result = InfobaseSessionSupport.readSessionsOutput(output);
+
+        assertFalse(result.isReadable());
+        assertNull(result.sessions());
+        assertFalse(result.unreachableReason().contains("Ivanov")); //$NON-NLS-1$
+        assertFalse(result.unreachableReason().contains("WKS-01")); //$NON-NLS-1$
+        assertFalse(result.unreachableReason().contains("could not reach the server")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void wellFormedOutputWithTrailingBlankLinesRemainsReadable()
+    {
+        String output = "session: 11111111-1111-1111-1111-111111111111\n\n" //$NON-NLS-1$
+            + "session: 22222222-2222-2222-2222-222222222222\n\n\n"; //$NON-NLS-1$
+
+        ReadResult result = InfobaseSessionSupport.readSessionsOutput(output);
+
+        assertTrue(result.isReadable());
+        assertEquals(2, result.sessions().size());
+        assertNull(result.unreachableReason());
     }
 
     @Test(expected = IllegalArgumentException.class)

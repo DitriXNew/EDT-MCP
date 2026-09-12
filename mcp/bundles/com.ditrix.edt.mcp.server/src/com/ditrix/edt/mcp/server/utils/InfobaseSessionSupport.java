@@ -22,7 +22,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
@@ -61,13 +60,6 @@ public final class InfobaseSessionSupport
 
     /** Grace for a force-killed process and its stream readers to close. */
     private static final long PROCESS_CLEANUP_TIMEOUT_MS = 2_000L;
-
-    /** Prevents a platform diagnostic from turning one tool result into an unbounded payload. */
-    private static final int MAX_DIAGNOSTIC_CHARS = 1_000;
-
-    /** ibcmd fields whose values are structural rather than personal. */
-    private static final Set<String> SAFE_SESSION_DIAGNOSTIC_KEYS = Set.of("session", //$NON-NLS-1$
-        "session-id", "app-id", "started-at", "last-active-at"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
     private InfobaseSessionSupport()
     {
@@ -557,7 +549,7 @@ public final class InfobaseSessionSupport
         }
     }
 
-    /** Parsed sessions plus contentful key/value blocks that had no usable session UUID. */
+    /** Parsed sessions plus contentful blocks that were malformed or had no usable session UUID. */
     static record ParsedSessions(List<SessionInfo> sessions, int unreadableBlocks)
     {
         ParsedSessions
@@ -572,15 +564,17 @@ public final class InfobaseSessionSupport
         ParsedSessions parsed = parseSessions(output);
         if (parsed.unreadableBlocks() > 0)
         {
+            logRawOutput("ibcmd session list returned unreadable session blocks", output); //$NON-NLS-1$
             return ReadResult.unreachable("ibcmd session list returned " //$NON-NLS-1$
                 + parsed.unreadableBlocks() + " unreadable session block" //$NON-NLS-1$
-                + (parsed.unreadableBlocks() == 1 ? "" : "s") + ": " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + conciseSessionOutput(output));
+                + (parsed.unreadableBlocks() == 1 ? "" : "s") //$NON-NLS-1$ //$NON-NLS-2$
+                + ". The raw output was written to the EDT log."); //$NON-NLS-1$
         }
         if (parsed.sessions().isEmpty() && output != null && !output.isBlank())
         {
-            return ReadResult.unreachable("ibcmd session list returned unrecognized output: " //$NON-NLS-1$
-                + conciseSessionOutput(output));
+            logRawOutput("ibcmd session list returned unrecognized output", output); //$NON-NLS-1$
+            return ReadResult.unreachable("ibcmd session list returned output that could not be " //$NON-NLS-1$
+                + "parsed as a session list. The raw output was written to the EDT log."); //$NON-NLS-1$
         }
         return ReadResult.readable(parsed.sessions());
     }
@@ -590,37 +584,46 @@ public final class InfobaseSessionSupport
     {
         List<SessionInfo> sessions = new ArrayList<>();
         Map<String, String> current = new LinkedHashMap<>();
+        boolean currentMalformed = false;
         int unreadableBlocks = 0;
         String normalized = output == null ? "" : output; //$NON-NLS-1$
         for (String line : normalized.split("\\R", -1)) //$NON-NLS-1$
         {
             if (line.isBlank())
             {
-                unreadableBlocks += addSession(current, sessions);
+                unreadableBlocks += addSession(current, currentMalformed, sessions);
                 current.clear();
+                currentMalformed = false;
                 continue;
             }
             int colon = line.indexOf(':');
             if (colon < 0)
             {
+                currentMalformed = true;
                 continue;
             }
             String key = line.substring(0, colon).trim();
             String value = line.substring(colon + 1).trim();
             if ("session".equals(key) && current.containsKey("session")) //$NON-NLS-1$ //$NON-NLS-2$
             {
-                unreadableBlocks += addSession(current, sessions);
+                unreadableBlocks += addSession(current, currentMalformed, sessions);
                 current.clear();
+                currentMalformed = false;
             }
             current.put(key, value);
         }
-        unreadableBlocks += addSession(current, sessions);
+        unreadableBlocks += addSession(current, currentMalformed, sessions);
         return new ParsedSessions(sessions, unreadableBlocks);
     }
 
-    /** Converts a parsed block, returning one only for content that lacks a usable session UUID. */
-    private static int addSession(Map<String, String> values, List<SessionInfo> sessions)
+    /** Converts a parsed block, returning one when any content cannot form a usable session. */
+    private static int addSession(Map<String, String> values, boolean malformed,
+        List<SessionInfo> sessions)
     {
+        if (malformed)
+        {
+            return 1;
+        }
         if (values.isEmpty())
         {
             return 0;
@@ -701,42 +704,17 @@ public final class InfobaseSessionSupport
             return null;
         }
         String diagnostic = command.stderr.isBlank() ? command.stdout : command.stderr;
-        diagnostic = concise(diagnostic);
+        logRawOutput("ibcmd session " + action + " failed with exit code " //$NON-NLS-1$ //$NON-NLS-2$
+            + command.exitCode, diagnostic);
         return "ibcmd session " + action + " failed with exit code " + command.exitCode //$NON-NLS-1$ //$NON-NLS-2$
-            + (diagnostic.isEmpty() ? "." : ": " + diagnostic); //$NON-NLS-1$ //$NON-NLS-2$
+            + ". The raw output was written to the EDT log."; //$NON-NLS-1$
     }
 
-    /** Flattens and caps command diagnostics while preserving their useful text. */
-    private static String concise(String diagnostic)
+    /** Writes withheld ibcmd output to the local EDT log without returning it to the tool caller. */
+    private static void logRawOutput(String context, String output)
     {
-        String value = diagnostic == null ? "" : diagnostic.trim().replaceAll("\\s+", " "); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        return value.length() <= MAX_DIAGNOSTIC_CHARS ? value
-            : value.substring(0, MAX_DIAGNOSTIC_CHARS) + "..."; //$NON-NLS-1$
-    }
-
-    /** Masks non-structural ibcmd fields before flattening and truncating the excerpt. */
-    private static String conciseSessionOutput(String output)
-    {
-        String normalized = output == null ? "" : output; //$NON-NLS-1$
-        StringBuilder sanitized = new StringBuilder();
-        for (String line : normalized.split("\\R", -1)) //$NON-NLS-1$
-        {
-            if (sanitized.length() > 0)
-            {
-                sanitized.append('\n');
-            }
-            int colon = line.indexOf(':');
-            if (colon < 0)
-            {
-                sanitized.append(line);
-                continue;
-            }
-            String key = line.substring(0, colon).trim();
-            sanitized.append(key).append(": "); //$NON-NLS-1$
-            sanitized.append(SAFE_SESSION_DIAGNOSTIC_KEYS.contains(key)
-                ? line.substring(colon + 1).trim() : "***"); //$NON-NLS-1$
-        }
-        return concise(sanitized.toString());
+        Activator.logWarning("infobase sessions: " + context //$NON-NLS-1$
+            + "; raw ibcmd output follows:\n" + (output == null ? "" : output)); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** Unwraps reflective wrappers before they reach the platform failure formatter. */
