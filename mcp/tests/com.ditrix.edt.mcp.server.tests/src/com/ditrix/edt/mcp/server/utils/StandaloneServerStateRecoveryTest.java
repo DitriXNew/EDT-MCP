@@ -350,6 +350,63 @@ public class StandaloneServerStateRecoveryTest
     }
 
     @Test
+    public void testRestorationSkipsAServerNowOwnedByAnotherLaunch()
+    {
+        IProject project = Mockito.mock(IProject.class);
+        Mockito.when(project.getName()).thenReturn("TestProject"); //$NON-NLS-1$
+        AtomicInteger restores = new AtomicInteger();
+        StandaloneServerStateRecovery.beginOperation();
+        try
+        {
+            StandaloneServerStateRecovery.recordStoppedServer("ServerApplication.Test"); //$NON-NLS-1$
+            StandaloneServerStateRecovery.RestorationStartOutcome outcome =
+                StandaloneServerStateRecovery.restoreIfStillUnowned(project,
+                    new FakeServer(2, launch(false)), "ServerApplication.Test", () -> { //$NON-NLS-1$
+                        restores.incrementAndGet();
+                        return new StandaloneServerStateRecovery.RestorationStartOutcome(null, true);
+                    });
+            String message = StandaloneServerStateRecovery.appendRestorationOutcome(
+                "operation failed.", "Standalone", applicationId -> outcome); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertEquals("another launch's server must not be started again", 0, restores.get()); //$NON-NLS-1$
+            assertTrue(message.contains("is already running under another launch")); //$NON-NLS-1$
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.endOperation();
+        }
+    }
+
+    @Test
+    public void testRestorationStillStartsAnUnownedServer()
+    {
+        IProject project = Mockito.mock(IProject.class);
+        Mockito.when(project.getName()).thenReturn("TestProject"); //$NON-NLS-1$
+        AtomicInteger restores = new AtomicInteger();
+        StandaloneServerStateRecovery.beginOperation();
+        try
+        {
+            StandaloneServerStateRecovery.recordStoppedServer("ServerApplication.Test"); //$NON-NLS-1$
+            StandaloneServerStateRecovery.RestorationStartOutcome outcome =
+                StandaloneServerStateRecovery.restoreIfStillUnowned(project,
+                    new FakeServer(4, null), "ServerApplication.Test", () -> { //$NON-NLS-1$
+                        restores.incrementAndGet();
+                        return new StandaloneServerStateRecovery.RestorationStartOutcome(null, true);
+                    });
+            String message = StandaloneServerStateRecovery.appendRestorationOutcome(
+                "operation failed.", "Standalone", applicationId -> outcome); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertEquals("an unowned server must still be restored exactly once", 1, restores.get()); //$NON-NLS-1$
+            assertEquals("operation failed. The standalone server 'ServerApplication.Test' was " //$NON-NLS-1$
+                + "stopped for this operation and has been started again.", message); //$NON-NLS-1$
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.endOperation();
+        }
+    }
+
+    @Test
     public void testFailedRestoreIsAppendedExactly()
     {
         int[] restores = new int[1];

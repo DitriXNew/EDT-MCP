@@ -119,13 +119,13 @@ public final class StandaloneServerStateRecovery
     private static final long SETTLE_POLL_MS = 250L;
 
     /**
-     * Monitors that serialize the stale-server STOP with itself, one per project+application.
+     * Monitors that serialize stale-server recovery actions, one per project+application.
      *
      * <p>Deliberately NOT {@link LaunchLifecycleUtils#lockFor}: that monitor is held across a
      * whole {@code update_database} publish, and waiting on it inside a bounded caller (the
      * {@code build_external_objects} job has a deadline, and a thread parked in
      * {@code synchronized} cannot be cancelled) would trade one hang for another. This lock is
-     * held only across "re-read the state, then stop", which is bounded by the stop itself.
+     * held only across "re-read the state, then stop or restore"; both actions are bounded.
      *
      * <p>What the long lock would have bought is bought by the RE-READ instead: an operation that
      * holds the application (an update publishing through the server, a launch that owns it)
@@ -842,6 +842,11 @@ public final class StandaloneServerStateRecovery
         String restoreFailure = restoration.failure;
         String separator = original.endsWith(".") || original.endsWith("!") //$NON-NLS-1$ //$NON-NLS-2$
             || original.endsWith("?") ? " " : ". "; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (restoration.skippedMessage != null)
+        {
+            return original + separator + "The standalone server '" + applicationId + "' " //$NON-NLS-1$ //$NON-NLS-2$
+                + restoration.skippedMessage;
+        }
         if (restoreFailure == null)
         {
             return original + separator + "The standalone server '" + applicationId //$NON-NLS-1$
@@ -1031,10 +1036,40 @@ public final class StandaloneServerStateRecovery
             return new RestorationAttempt(launchConfigurationName.get(),
                 new RestorationStartOutcome(preparation.failure, true));
         }
-        RestorationStartOutcome outcome = startRestorationWithPortGuardOutcome(preparation.service,
-            preparation.lookup.server(), applicationId, preparation.lookup.infobaseName(),
-            preparation.lookup.serverName());
+        RestorationStartOutcome outcome = restoreIfStillUnowned(project,
+            preparation.lookup.server(), applicationId,
+            () -> startRestorationWithPortGuardOutcome(preparation.service,
+                preparation.lookup.server(), applicationId, preparation.lookup.infobaseName(),
+                preparation.lookup.serverName()));
         return new RestorationAttempt(launchConfigurationName.get(), outcome);
+    }
+
+    /** Revalidates current ownership under the same guard used by the stale stop. */
+    static RestorationStartOutcome restoreIfStillUnowned(IProject project, Object server,
+        String applicationId, Supplier<RestorationStartOutcome> restarter)
+    {
+        synchronized (stopLockFor(project, applicationId))
+        {
+            Integer state = serverState(server);
+            Boolean liveLaunch = hasLiveLaunch(server);
+            if (Boolean.TRUE.equals(liveLaunch))
+            {
+                return RestorationStartOutcome.skipped(
+                    "is already running under another launch, so restoration was skipped."); //$NON-NLS-1$
+            }
+            if (isTransitional(state))
+            {
+                return RestorationStartOutcome.skipped(
+                    "is being started or stopped by another operation, so restoration was skipped."); //$NON-NLS-1$
+            }
+            if (state == null || liveLaunch == null)
+            {
+                return RestorationStartOutcome.skipped(
+                    "was not restored because its current state or owning launch could not be " //$NON-NLS-1$
+                        + "confirmed."); //$NON-NLS-1$
+            }
+            return restarter.get();
+        }
     }
 
     /** Starts a restoration while refusing any port rewrite and retaining its specific failure. */
@@ -1080,11 +1115,23 @@ public final class StandaloneServerStateRecovery
     {
         private final String failure;
         private final boolean conclusive;
+        private final String skippedMessage;
 
         RestorationStartOutcome(String failure, boolean conclusive)
         {
+            this(failure, conclusive, null);
+        }
+
+        private RestorationStartOutcome(String failure, boolean conclusive, String skippedMessage)
+        {
             this.failure = failure;
             this.conclusive = conclusive;
+            this.skippedMessage = skippedMessage;
+        }
+
+        static RestorationStartOutcome skipped(String message)
+        {
+            return new RestorationStartOutcome(null, true, message);
         }
     }
 
