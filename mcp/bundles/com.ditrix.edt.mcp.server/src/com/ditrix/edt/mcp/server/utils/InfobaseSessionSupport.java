@@ -196,24 +196,37 @@ public final class InfobaseSessionSupport
     {
         try
         {
-            PreparedTarget target = prepare(application);
-            if (target.error != null)
-            {
-                return ReadResult.unreachable(target.error);
-            }
-
             AtomicReference<CommandExecution> execution = new AtomicReference<>();
+            AtomicReference<String> preparationError = new AtomicReference<>();
             AtomicBoolean callerAnswered = new AtomicBoolean();
             BoundedJob.Result bounded = BoundedJob.run("Read standalone-server infobase sessions", //$NON-NLS-1$
-                JOB_TIMEOUT_MS, monitor -> runAtLivePid(target.server, monitor, callerAnswered,
-                    execution, pid -> runCommand(
-                        target.ibcmd.session().forStandaloneServerProcessWithPid(pid).list().build(),
-                        target.credentials, monitor, callerAnswered)));
+                JOB_TIMEOUT_MS, monitor ->
+                {
+                    PreparedTarget target = prepare(application);
+                    if (target.error != null)
+                    {
+                        preparationError.set(target.error);
+                        return;
+                    }
+                    if (callEnded(monitor, callerAnswered))
+                    {
+                        return;
+                    }
+                    runAtLivePid(target.server, monitor, callerAnswered, execution,
+                        pid -> runCommand(target.ibcmd.session()
+                            .forStandaloneServerProcessWithPid(pid).list().build(),
+                            target.credentials, monitor, callerAnswered));
+                });
             markCallerAnswered(callerAnswered);
             String boundedFailure = boundedFailure("list", bounded); //$NON-NLS-1$
             if (boundedFailure != null)
             {
                 return ReadResult.unreachable(boundedFailure);
+            }
+            String prepareFailure = preparationError.get();
+            if (prepareFailure != null)
+            {
+                return ReadResult.unreachable(prepareFailure);
             }
             CommandExecution command = execution.get();
             if (command == null)
@@ -249,33 +262,45 @@ public final class InfobaseSessionSupport
     {
         try
         {
-            PreparedTarget target = prepare(application);
-            if (target.error != null)
-            {
-                return TerminationResult.unreachable(target.error);
-            }
-
             AtomicReference<CommandExecution> execution = new AtomicReference<>();
+            AtomicReference<String> preparationError = new AtomicReference<>();
             AtomicBoolean callerAnswered = new AtomicBoolean();
             BoundedJob.Result bounded = BoundedJob.run(
                 "Terminate standalone-server infobase session", //$NON-NLS-1$
-                JOB_TIMEOUT_MS, monitor -> runAtLivePid(target.server, monitor, callerAnswered,
-                    execution, pid ->
+                JOB_TIMEOUT_MS, monitor ->
                 {
-                    SessionCommandBuilder.TerminateBuilder builder = target.ibcmd.session()
-                        .forStandaloneServerProcessWithPid(pid).terminate();
-                    if (message != null && !message.isBlank())
+                    PreparedTarget target = prepare(application);
+                    if (target.error != null)
                     {
-                        builder = builder.withErrorMessage(message);
+                        preparationError.set(target.error);
+                        return;
                     }
-                    return runCommand(builder.sessionId(sessionId).build(), target.credentials,
-                        monitor, callerAnswered);
-                }));
+                    if (callEnded(monitor, callerAnswered))
+                    {
+                        return;
+                    }
+                    runAtLivePid(target.server, monitor, callerAnswered, execution, pid ->
+                    {
+                        SessionCommandBuilder.TerminateBuilder builder = target.ibcmd.session()
+                            .forStandaloneServerProcessWithPid(pid).terminate();
+                        if (message != null && !message.isBlank())
+                        {
+                            builder = builder.withErrorMessage(message);
+                        }
+                        return runCommand(builder.sessionId(sessionId).build(), target.credentials,
+                            monitor, callerAnswered);
+                    });
+                });
             markCallerAnswered(callerAnswered);
             String boundedFailure = boundedFailure("terminate", bounded); //$NON-NLS-1$
             if (boundedFailure != null)
             {
                 return TerminationResult.unreachable(boundedFailure);
+            }
+            String prepareFailure = preparationError.get();
+            if (prepareFailure != null)
+            {
+                return TerminationResult.unreachable(prepareFailure);
             }
             CommandExecution command = execution.get();
             if (command == null)

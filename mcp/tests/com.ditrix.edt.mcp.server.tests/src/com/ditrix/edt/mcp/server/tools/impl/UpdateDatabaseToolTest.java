@@ -445,6 +445,24 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
+    public void russianInfobaseLockFailureNamesObservedDesignerSession()
+    {
+        String message = "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c " //$NON-NLS-1$
+            + "\u043c\u043e\u043d\u043e\u043f\u043e\u043b\u044c\u043d\u043e " //$NON-NLS-1$
+            + "\u0437\u0430\u0431\u043b\u043e\u043a\u0438\u0440\u043e\u0432\u0430\u0442\u044c " //$NON-NLS-1$
+            + "\u0438\u043d\u0444\u043e\u0440\u043c\u0430\u0446\u0438\u043e\u043d\u043d\u0443\u044e " //$NON-NLS-1$
+            + "\u0431\u0430\u0437\u0443"; //$NON-NLS-1$
+        String error = JsonParser.parseString(UpdateDatabaseTool.buildApplicationErrorResult(
+            new ApplicationException(message), "Demo", "ServerApplication.Demo", //$NON-NLS-1$ //$NON-NLS-2$
+            false, false, null, List.of(DESIGNER_SESSION))).getAsJsonObject()
+            .get("error").getAsString(); //$NON-NLS-1$
+
+        assertTrue(error.contains(message));
+        assertTrue(error.contains("Pre-update session inspection saw app-id: Designer")); //$NON-NLS-1$
+        assertTrue(error.contains("most likely holders of the exclusive lock")); //$NON-NLS-1$
+    }
+
+    @Test
     public void exclusiveAccessToUnrelatedFilesDoesNotBlameObservedDesignerSession()
     {
         for (String message : List.of(
@@ -463,6 +481,24 @@ public class UpdateDatabaseToolTest
             assertFalse("an unrelated file lock must not get the infobase-holder remedy: " + error, //$NON-NLS-1$
                 error.contains("most likely holders of the exclusive lock")); //$NON-NLS-1$
         }
+    }
+
+    @Test
+    public void russianNonInfobaseLockDoesNotBlameObservedDesignerSession()
+    {
+        String message = "\u041e\u0448\u0438\u0431\u043a\u0430 " //$NON-NLS-1$
+            + "\u043c\u043e\u043d\u043e\u043f\u043e\u043b\u044c\u043d\u043e\u0439 " //$NON-NLS-1$
+            + "\u0431\u043b\u043e\u043a\u0438\u0440\u043e\u0432\u043a\u0438 " //$NON-NLS-1$
+            + "\u043e\u0431\u043b\u0430\u0441\u0442\u0438 " //$NON-NLS-1$
+            + "\u0434\u0430\u043d\u043d\u044b\u0445"; //$NON-NLS-1$
+        String error = JsonParser.parseString(UpdateDatabaseTool.buildApplicationErrorResult(
+            new ApplicationException(message), "Demo", "ServerApplication.Demo", //$NON-NLS-1$ //$NON-NLS-2$
+            false, false, null, List.of(DESIGNER_SESSION))).getAsJsonObject()
+            .get("error").getAsString(); //$NON-NLS-1$
+
+        assertTrue(error.contains(message));
+        assertFalse(error.contains("Pre-update session inspection saw app-id: Designer")); //$NON-NLS-1$
+        assertFalse(error.contains("most likely holders of the exclusive lock")); //$NON-NLS-1$
     }
 
     @Test

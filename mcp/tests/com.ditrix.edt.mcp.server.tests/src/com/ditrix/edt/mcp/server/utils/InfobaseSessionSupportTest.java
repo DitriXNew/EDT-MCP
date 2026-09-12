@@ -14,6 +14,7 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.lang.reflect.Constructor;
@@ -29,6 +30,7 @@ import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.ReadResult;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo;
+import com.e1c.g5.dt.applications.IApplication;
 
 /** Tests parsing and the structural readable-empty versus unreachable invariant. */
 public class InfobaseSessionSupportTest
@@ -113,6 +115,36 @@ public class InfobaseSessionSupportTest
         assertFalse(unreachable.isReadable());
         assertNull(unreachable.sessions());
         assertEquals("The standalone server is not running.", unreachable.unreachableReason()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void preparationRunsInsideTheBoundedWorkerForBothEntryPoints()
+    {
+        Thread caller = Thread.currentThread();
+        AtomicReference<Thread> listPreparationThread = new AtomicReference<>();
+        IApplication listApplication = mock(IApplication.class);
+        when(listApplication.getType()).thenAnswer(ignored ->
+        {
+            listPreparationThread.set(Thread.currentThread());
+            return null;
+        });
+
+        assertFalse(InfobaseSessionSupport.listSessions(listApplication).isReadable());
+        assertTrue("list preparation must run on the bounded worker", //$NON-NLS-1$
+            listPreparationThread.get() != null && listPreparationThread.get() != caller);
+
+        AtomicReference<Thread> terminatePreparationThread = new AtomicReference<>();
+        IApplication terminateApplication = mock(IApplication.class);
+        when(terminateApplication.getType()).thenAnswer(ignored ->
+        {
+            terminatePreparationThread.set(Thread.currentThread());
+            return null;
+        });
+
+        assertFalse(InfobaseSessionSupport.terminateSession(terminateApplication, null, null)
+            .terminated());
+        assertTrue("terminate preparation must run on the bounded worker", //$NON-NLS-1$
+            terminatePreparationThread.get() != null && terminatePreparationThread.get() != caller);
     }
 
     @Test
