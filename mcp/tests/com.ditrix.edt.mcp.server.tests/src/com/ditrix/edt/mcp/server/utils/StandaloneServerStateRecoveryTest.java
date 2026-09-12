@@ -378,6 +378,110 @@ public class StandaloneServerStateRecoveryTest
     }
 
     @Test
+    public void testRestorationSkipsAnUnknownServerState()
+    {
+        IProject project = Mockito.mock(IProject.class);
+        Mockito.when(project.getName()).thenReturn("UnknownStateProject"); //$NON-NLS-1$
+        AtomicInteger restores = new AtomicInteger();
+        StandaloneServerStateRecovery.beginOperation();
+        try
+        {
+            StandaloneServerStateRecovery.recordStoppedServer("ServerApplication.Test"); //$NON-NLS-1$
+            StandaloneServerStateRecovery.RestorationStartOutcome outcome =
+                StandaloneServerStateRecovery.restoreIfStillUnowned(project,
+                    new FakeServer(0, null), "ServerApplication.Test", () -> { //$NON-NLS-1$
+                        restores.incrementAndGet();
+                        return new StandaloneServerStateRecovery.RestorationStartOutcome(null, true);
+                    });
+            String message = StandaloneServerStateRecovery.appendRestorationOutcome(
+                "operation failed.", "Standalone", applicationId -> outcome); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertEquals("UNKNOWN is not a confirmed stopped state", 0, restores.get()); //$NON-NLS-1$
+            assertTrue(message.contains("current state is UNKNOWN, not STOPPED")); //$NON-NLS-1$
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.endOperation();
+        }
+    }
+
+    @Test
+    public void testRestorationSkipsWhenTheRecoveryLockTimesOut() throws Exception
+    {
+        IProject project = Mockito.mock(IProject.class);
+        Mockito.when(project.getName()).thenReturn("LockTimeoutProject"); //$NON-NLS-1$
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger restores = new AtomicInteger();
+        Thread holder = new Thread(() -> StandaloneServerStateRecovery.holdRecoveryLockForTest(
+            project, "ServerApplication.Test", () -> { //$NON-NLS-1$
+                locked.countDown();
+                try
+                {
+                    release.await(5, TimeUnit.SECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+            }), "test: held standalone recovery lock"); //$NON-NLS-1$
+        holder.start();
+        assertTrue(locked.await(5, TimeUnit.SECONDS));
+        StandaloneServerStateRecovery.beginOperation();
+        try
+        {
+            StandaloneServerStateRecovery.recordStoppedServer("ServerApplication.Test"); //$NON-NLS-1$
+            StandaloneServerStateRecovery.RestorationStartOutcome outcome =
+                StandaloneServerStateRecovery.restoreIfStillUnowned(project,
+                    new FakeServer(4, null), "ServerApplication.Test", 25L, () -> { //$NON-NLS-1$
+                        restores.incrementAndGet();
+                        return new StandaloneServerStateRecovery.RestorationStartOutcome(null, true);
+                    });
+            String message = StandaloneServerStateRecovery.appendRestorationOutcome(
+                "operation failed.", "Standalone", applicationId -> outcome); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertEquals("an unavailable recovery lock must prevent restoration", //$NON-NLS-1$
+                0, restores.get());
+            assertTrue("the caller must be told why ownership was unconfirmed", //$NON-NLS-1$
+                message.contains("recovery guard did not become available")); //$NON-NLS-1$
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.endOperation();
+            release.countDown();
+            holder.join(5_000L);
+            assertFalse(holder.isAlive());
+        }
+    }
+
+    @Test
+    public void testRestorationSkipsAClaimedButNotYetStartedServer()
+    {
+        IProject project = Mockito.mock(IProject.class);
+        Mockito.when(project.getName()).thenReturn("ClaimedStartProject"); //$NON-NLS-1$
+        AtomicInteger restores = new AtomicInteger();
+        StandaloneServerStateRecovery.StartClaim claim =
+            StandaloneServerStateRecovery.claimStartWithinBound(project,
+                "ServerApplication.Test", 1_000L, null); //$NON-NLS-1$
+        assertNotNull(claim);
+        try
+        {
+            StandaloneServerStateRecovery.restoreIfStillUnowned(project,
+                new FakeServer(4, null), "ServerApplication.Test", () -> { //$NON-NLS-1$
+                    restores.incrementAndGet();
+                    return new StandaloneServerStateRecovery.RestorationStartOutcome(null, true);
+                });
+
+            assertEquals("a claimed start must be visible before WST changes state", //$NON-NLS-1$
+                0, restores.get());
+        }
+        finally
+        {
+            claim.close();
+        }
+    }
+
+    @Test
     public void testRestorationStillStartsAnUnownedServer()
     {
         IProject project = Mockito.mock(IProject.class);

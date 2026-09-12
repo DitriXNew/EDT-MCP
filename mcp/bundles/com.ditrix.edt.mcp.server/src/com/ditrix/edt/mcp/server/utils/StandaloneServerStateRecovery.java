@@ -8,7 +8,10 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -108,6 +111,9 @@ public final class StandaloneServerStateRecovery
     /** @see #STATE_STARTING */
     private static final int STATE_STOPPING = 3;
 
+    /** @see #STATE_STARTING */
+    private static final int STATE_STOPPED = 4;
+
     /**
      * How long the pre-flight waits for a server another operation is starting or stopping right
      * now. Comfortably above a normal {@code ibsrv} start, and bounded because an unattended MCP
@@ -119,13 +125,14 @@ public final class StandaloneServerStateRecovery
     private static final long SETTLE_POLL_MS = 250L;
 
     /**
-     * Monitors that serialize stale-server recovery actions, one per project+application.
+     * Guards that serialize stale-server recovery actions, one per project+application.
      *
      * <p>Deliberately NOT {@link LaunchLifecycleUtils#lockFor}: that monitor is held across a
      * whole {@code update_database} publish, and waiting on it inside a bounded caller (the
      * {@code build_external_objects} job has a deadline, and a thread parked in
      * {@code synchronized} cannot be cancelled) would trade one hang for another. This lock is
-     * held only across "re-read the state, then stop or restore"; both actions are bounded.
+     * acquired with a deadline and held only across "re-read the state, then stop or restore";
+     * both actions are bounded.
      *
      * <p>What the long lock would have bought is bought by the RE-READ instead: an operation that
      * holds the application (an update publishing through the server, a launch that owns it)
@@ -133,7 +140,7 @@ public final class StandaloneServerStateRecovery
      * state this stop acts on. The only state it does act on - STARTED with the launch gone - is
      * by construction one that nobody owns.
      */
-    private static final Map<String, Object> STOP_LOCKS = new ConcurrentHashMap<>();
+    private static final Map<String, RecoveryGuard> STOP_LOCKS = new ConcurrentHashMap<>();
 
     /** The server a successful recovery stop changes during the current operation. */
     private static final ThreadLocal<OperationStop> OPERATION_STOP = new ThreadLocal<>();
@@ -523,8 +530,17 @@ public final class StandaloneServerStateRecovery
         {
             return Recovery.failed("the EDT application manager is not available"); //$NON-NLS-1$
         }
-        synchronized (stopLockFor(project, applicationId))
+        RecoveryGuard guard = stopLockFor(project, applicationId);
+        if (!tryRecoveryLock(guard, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, null))
         {
+            return Recovery.failedInFlight(recoveryLockFailure());
+        }
+        try
+        {
+            if (guard.startClaim.get() != null)
+            {
+                return Recovery.failed("another standalone start currently claims the server"); //$NON-NLS-1$
+            }
             IApplication resolvedApplication = application;
             if (resolvedApplication == null)
             {
@@ -559,6 +575,10 @@ public final class StandaloneServerStateRecovery
             }
             return runStop(manager, resolvedApplication, applicationId);
         }
+        finally
+        {
+            guard.lock.unlock();
+        }
     }
 
     /** Same locked recheck, with cleanup executed by the caller's enclosing bounded Job. */
@@ -570,8 +590,17 @@ public final class StandaloneServerStateRecovery
         {
             return Recovery.failed("the stale-server target is incomplete"); //$NON-NLS-1$
         }
-        synchronized (stopLockFor(project, applicationId))
+        RecoveryGuard guard = stopLockFor(project, applicationId);
+        if (!tryRecoveryLock(guard, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, monitor))
         {
+            return Recovery.failedInFlight(recoveryLockFailure());
+        }
+        try
+        {
+            if (guard.startClaim.get() != null)
+            {
+                return Recovery.failed("another standalone start currently claims the server"); //$NON-NLS-1$
+            }
             Object server = resolveServer(application);
             if (server == null)
             {
@@ -597,6 +626,10 @@ public final class StandaloneServerStateRecovery
             }
             return runStopWithinBound(manager, application, applicationId, monitor, stopCompleted);
         }
+        finally
+        {
+            guard.lock.unlock();
+        }
     }
 
     /** Returns EDT's application manager when its plugin is available. */
@@ -607,18 +640,111 @@ public final class StandaloneServerStateRecovery
     }
 
     /**
-     * The monitor serializing the stale-server stop for one application.
+     * The lock and start claim serializing recovery for one application.
      *
      * @param project the project owning the application (never {@code null})
      * @param applicationId the application id (never {@code null})
-     * @return the monitor, never {@code null}
+     * @return the guard, never {@code null}
      */
-    private static Object stopLockFor(IProject project, String applicationId)
+    private static RecoveryGuard stopLockFor(IProject project, String applicationId)
     {
         // NUL separator for the same reason LaunchLifecycleUtils.lockFor uses one: project names
         // and application ids both contain spaces, so any printable separator can collide.
         return STOP_LOCKS.computeIfAbsent(project.getName() + "\u0000" + applicationId, //$NON-NLS-1$
-            k -> new Object());
+            k -> new RecoveryGuard());
+    }
+
+    /** Acquires one recovery lock without allowing platform work to block the caller forever. */
+    private static boolean tryRecoveryLock(RecoveryGuard guard, long timeoutMs,
+        IProgressMonitor monitor)
+    {
+        long remainingNanos = TimeUnit.MILLISECONDS.toNanos(Math.max(0L, timeoutMs));
+        long deadline = System.nanoTime() + remainingNanos;
+        do
+        {
+            if (monitor != null && monitor.isCanceled())
+            {
+                return false;
+            }
+            long waitNanos = Math.min(remainingNanos, TimeUnit.MILLISECONDS.toNanos(100L));
+            try
+            {
+                if (guard.lock.tryLock(waitNanos, TimeUnit.NANOSECONDS))
+                {
+                    return true;
+                }
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            remainingNanos = deadline - System.nanoTime();
+        }
+        while (remainingNanos > 0L);
+        return false;
+    }
+
+    /** Shared diagnosis for a recovery guard that could not be acquired by its deadline. */
+    private static String recoveryLockFailure()
+    {
+        return "its recovery guard did not become available before the deadline, so the server's " //$NON-NLS-1$
+            + "ownership could not be confirmed"; //$NON-NLS-1$
+    }
+
+    /** Claims an ordinary start before it leaves the caller's bounded preparation phase. */
+    public static StartClaim claimStartWithinBound(IProject project, String applicationId,
+        IProgressMonitor monitor)
+    {
+        return claimStartWithinBound(project, applicationId,
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, monitor);
+    }
+
+    /** Testable deadline form of the start claim. */
+    static StartClaim claimStartWithinBound(IProject project, String applicationId,
+        long lockTimeoutMs, IProgressMonitor monitor)
+    {
+        if (project == null || applicationId == null)
+        {
+            return null;
+        }
+        RecoveryGuard guard = stopLockFor(project, applicationId);
+        if (!tryRecoveryLock(guard, lockTimeoutMs, monitor))
+        {
+            return null;
+        }
+        try
+        {
+            if (guard.startClaim.get() != null)
+            {
+                return null;
+            }
+            StartClaim claim = new StartClaim(guard);
+            guard.startClaim.set(claim);
+            return claim;
+        }
+        finally
+        {
+            guard.lock.unlock();
+        }
+    }
+
+    /** Runs test coordination while holding the production recovery lock. */
+    static void holdRecoveryLockForTest(IProject project, String applicationId, Runnable action)
+    {
+        RecoveryGuard guard = stopLockFor(project, applicationId);
+        if (!tryRecoveryLock(guard, 1_000L, null))
+        {
+            throw new IllegalStateException("The test recovery lock could not be acquired"); //$NON-NLS-1$
+        }
+        try
+        {
+            action.run();
+        }
+        finally
+        {
+            guard.lock.unlock();
+        }
     }
 
     /**
@@ -1036,11 +1162,12 @@ public final class StandaloneServerStateRecovery
             return new RestorationAttempt(launchConfigurationName.get(),
                 new RestorationStartOutcome(preparation.failure, true));
         }
-        RestorationStartOutcome outcome = restoreIfStillUnowned(project,
+        RestorationStartOutcome outcome = restoreIfStillUnownedClaimed(project,
             preparation.lookup.server(), applicationId,
-            () -> startRestorationWithPortGuardOutcome(preparation.service,
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
+            claim -> startRestorationWithPortGuardOutcome(preparation.service,
                 preparation.lookup.server(), applicationId, preparation.lookup.infobaseName(),
-                preparation.lookup.serverName()));
+                preparation.lookup.serverName(), claim));
         return new RestorationAttempt(launchConfigurationName.get(), outcome);
     }
 
@@ -1048,8 +1175,36 @@ public final class StandaloneServerStateRecovery
     static RestorationStartOutcome restoreIfStillUnowned(IProject project, Object server,
         String applicationId, Supplier<RestorationStartOutcome> restarter)
     {
-        synchronized (stopLockFor(project, applicationId))
+        return restoreIfStillUnowned(project, server, applicationId,
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, restarter);
+    }
+
+    /** Testable deadline form of the guarded ownership revalidation. */
+    static RestorationStartOutcome restoreIfStillUnowned(IProject project, Object server,
+        String applicationId, long lockTimeoutMs, Supplier<RestorationStartOutcome> restarter)
+    {
+        return restoreIfStillUnownedClaimed(project, server, applicationId, lockTimeoutMs,
+            claim -> restarter.get());
+    }
+
+    /** Claims the restoration while its bounded start can still be in flight. */
+    private static RestorationStartOutcome restoreIfStillUnownedClaimed(IProject project,
+        Object server, String applicationId, long lockTimeoutMs, ClaimedRestarter restarter)
+    {
+        RecoveryGuard guard = stopLockFor(project, applicationId);
+        if (!tryRecoveryLock(guard, lockTimeoutMs, null))
         {
+            return RestorationStartOutcome.skipped(
+                "was not restored because " + recoveryLockFailure() + "."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        try
+        {
+            if (guard.startClaim.get() != null)
+            {
+                return RestorationStartOutcome.skipped(
+                    "is claimed by another launch that has not started it yet, so restoration " //$NON-NLS-1$
+                        + "was skipped."); //$NON-NLS-1$
+            }
             Integer state = serverState(server);
             Boolean liveLaunch = hasLiveLaunch(server);
             if (Boolean.TRUE.equals(liveLaunch))
@@ -1057,18 +1212,36 @@ public final class StandaloneServerStateRecovery
                 return RestorationStartOutcome.skipped(
                     "is already running under another launch, so restoration was skipped."); //$NON-NLS-1$
             }
-            if (isTransitional(state))
+            if (state == null)
             {
                 return RestorationStartOutcome.skipped(
-                    "is being started or stopped by another operation, so restoration was skipped."); //$NON-NLS-1$
+                    "was not restored because its current state could not be confirmed."); //$NON-NLS-1$
             }
-            if (state == null || liveLaunch == null)
+            if (state.intValue() != STATE_STOPPED)
             {
                 return RestorationStartOutcome.skipped(
-                    "was not restored because its current state or owning launch could not be " //$NON-NLS-1$
-                        + "confirmed."); //$NON-NLS-1$
+                    "was not restored because its current state is " + stateName(state.intValue()) //$NON-NLS-1$
+                        + ", not STOPPED."); //$NON-NLS-1$
             }
-            return restarter.get();
+            if (liveLaunch == null)
+            {
+                return RestorationStartOutcome.skipped(
+                    "was not restored because its owning launch could not be confirmed."); //$NON-NLS-1$
+            }
+            StartClaim claim = new StartClaim(guard);
+            guard.startClaim.set(claim);
+            try
+            {
+                return restarter.restore(claim);
+            }
+            finally
+            {
+                claim.closeIfNotHandedOff();
+            }
+        }
+        finally
+        {
+            guard.lock.unlock();
         }
     }
 
@@ -1085,7 +1258,7 @@ public final class StandaloneServerStateRecovery
         String infobaseName, String serverName, long timeoutMs, long cleanupCapMs)
     {
         return startRestorationWithPortGuardOutcome(service, server, applicationId, infobaseName,
-            serverName, timeoutMs, cleanupCapMs).failure;
+            serverName, timeoutMs, cleanupCapMs, null).failure;
     }
 
     /** Same guarded restoration while preserving whether its start is still in flight. */
@@ -1094,19 +1267,32 @@ public final class StandaloneServerStateRecovery
     {
         return startRestorationWithPortGuardOutcome(service, server, applicationId, infobaseName,
             serverName, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
-            StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS);
+            StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS, null);
+    }
+
+    /** Same production restoration with its exclusive start claim. */
+    private static RestorationStartOutcome startRestorationWithPortGuardOutcome(Object service,
+        Object server, String applicationId, String infobaseName, String serverName,
+        StartClaim startClaim)
+    {
+        return startRestorationWithPortGuardOutcome(service, server, applicationId, infobaseName,
+            serverName, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
+            StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS, startClaim);
     }
 
     /** Runs restoration through the same bounded, composite-guard helper as the direct start. */
     private static RestorationStartOutcome startRestorationWithPortGuardOutcome(Object service,
         Object server, String applicationId, String infobaseName, String serverName,
-        long timeoutMs, long cleanupCapMs)
+        long timeoutMs, long cleanupCapMs, StartClaim startClaim)
     {
         StandaloneServerPortConflictPolicy portPolicy = StandaloneServerPortConflictPolicy.CANCEL;
+        Runnable claimCleanup = startClaim == null ? null : startClaim::close;
+        Runnable claimHandoff = startClaim == null ? null : startClaim::handoff;
         StandaloneServerSupport.GuardedStartResult result =
             StandaloneServerSupport.startServerGuarded(service, server,
                 "Restoring standalone server: " + applicationId, ILaunchManager.DEBUG_MODE, //$NON-NLS-1$
-                infobaseName, serverName, portPolicy, timeoutMs, cleanupCapMs);
+                infobaseName, serverName, portPolicy, timeoutMs, cleanupCapMs, claimCleanup,
+                claimHandoff);
         return new RestorationStartOutcome(result.failure(), result.conclusive());
     }
 
@@ -1132,6 +1318,51 @@ public final class StandaloneServerStateRecovery
         static RestorationStartOutcome skipped(String message)
         {
             return new RestorationStartOutcome(null, true, message);
+        }
+    }
+
+    /** One application's bounded recovery lock and its current ordinary-start claim. */
+    private static final class RecoveryGuard
+    {
+        private final ReentrantLock lock = new ReentrantLock();
+        private final AtomicReference<StartClaim> startClaim = new AtomicReference<>();
+    }
+
+    /** Exclusive intention to start a server whose WST state may still read as STOPPED. */
+    public static final class StartClaim implements AutoCloseable
+    {
+        private final RecoveryGuard guard;
+        private final AtomicBoolean handedOff = new AtomicBoolean();
+        private final AtomicBoolean released = new AtomicBoolean();
+
+        private StartClaim(RecoveryGuard guard)
+        {
+            this.guard = guard;
+        }
+
+        /** Records that cleanup is now protected by the bounded start lifecycle. */
+        public void handoff()
+        {
+            handedOff.set(true);
+        }
+
+        /** Releases a preparation claim that never reached the bounded start. */
+        public void closeIfNotHandedOff()
+        {
+            if (!handedOff.get())
+            {
+                close();
+            }
+        }
+
+        /** Releases this exact claim without consuming a newer operation's claim. */
+        @Override
+        public void close()
+        {
+            if (released.compareAndSet(false, true))
+            {
+                guard.startClaim.compareAndSet(this, null);
+            }
         }
     }
 
@@ -1233,6 +1464,13 @@ public final class StandaloneServerStateRecovery
     private static final class OperationStop
     {
         String applicationId;
+    }
+
+    /** Starts restoration while owning its persistent server-start claim. */
+    @FunctionalInterface
+    private interface ClaimedRestarter
+    {
+        RestorationStartOutcome restore(StartClaim claim);
     }
 
     /** Performs one conclusive restoration; {@code null} means it succeeded. */

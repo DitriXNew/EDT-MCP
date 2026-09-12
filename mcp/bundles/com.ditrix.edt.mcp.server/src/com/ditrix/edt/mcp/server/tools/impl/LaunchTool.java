@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -628,35 +629,49 @@ public class LaunchTool implements IMcpTool
     private String launchStandaloneServer(ILaunchConfiguration config, String configName,
         String typeId, String projectName, StandaloneServerPortConflictPolicy portPolicy)
     {
-        StandalonePreparation preparation = prepareStandaloneLaunch(config, configName,
-            projectName, portPolicy, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
-        if (preparation.failure != null)
+        StandalonePreparation preparation = null;
+        try
         {
-            return standalonePreconditionError(configName, preparation.failure);
+            preparation = prepareStandaloneLaunch(config, configName, projectName, portPolicy,
+                StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
+            StandalonePreparation preparedLaunch = preparation;
+            if (preparedLaunch.failure != null)
+            {
+                return standalonePreconditionError(configName, preparedLaunch.failure);
+            }
+            StartOutcome start = startStandaloneServerGuarded(configName, preparedLaunch.project,
+                () -> {
+                    if (preparedLaunch.staleServerStopped)
+                    {
+                        StandaloneServerStateRecovery.retainPreparedStop(
+                            preparedLaunch.applicationId);
+                    }
+                    if (preparedLaunch.preflightFailure != null)
+                    {
+                        throw new ApplicationException(preparedLaunch.preflightFailure);
+                    }
+                },
+                () -> startStandaloneServerWithPolicy(preparedLaunch.service,
+                    preparedLaunch.lookup.server(), configName,
+                    // EDT ignores this argument and always starts standalone servers in debug.
+                    ILaunchManager.DEBUG_MODE, preparedLaunch.lookup.infobaseName(),
+                    preparedLaunch.lookup.serverName(), preparedLaunch.portPolicy,
+                    preparedLaunch.startClaim));
+            if (start.failure() != null)
+            {
+                return standaloneStartFailure(start.failure(), start.portsReassigned(),
+                    start.portReassignmentOutcomeUnknown());
+            }
+            return standaloneStartSuccess(configName, typeId, projectName,
+                preparedLaunch.applicationId, start.portsReassigned());
         }
-        StartOutcome start = startStandaloneServerGuarded(configName, preparation.project,
-            () -> {
-                if (preparation.staleServerStopped)
-                {
-                    StandaloneServerStateRecovery.retainPreparedStop(preparation.applicationId);
-                }
-                if (preparation.preflightFailure != null)
-                {
-                    throw new ApplicationException(preparation.preflightFailure);
-                }
-            },
-            () -> startStandaloneServerWithPolicy(preparation.service,
-                preparation.lookup.server(), configName,
-                // EDT ignores this argument and always starts standalone servers in debug.
-                ILaunchManager.DEBUG_MODE, preparation.lookup.infobaseName(),
-                preparation.lookup.serverName(), preparation.portPolicy));
-        if (start.failure() != null)
+        finally
         {
-            return standaloneStartFailure(start.failure(), start.portsReassigned(),
-                start.portReassignmentOutcomeUnknown());
+            if (preparation != null && preparation.startClaim != null)
+            {
+                preparation.startClaim.closeIfNotHandedOff();
+            }
         }
-        return standaloneStartSuccess(configName, typeId, projectName, preparation.applicationId,
-            start.portsReassigned());
     }
 
     /** Resolves every standalone start prerequisite under one caller deadline. */
@@ -670,18 +685,24 @@ public class LaunchTool implements IMcpTool
         AtomicReference<IProject> resolvedProject = new AtomicReference<>();
         AtomicReference<String> applicationId = new AtomicReference<>();
         AtomicBoolean staleServerStopped = new AtomicBoolean();
-        BoundedJob.Result bounded = runStandalonePreparationBounded(configName, timeoutMs,
-            monitor -> {
+        Object publicationLock = new Object();
+        AtomicBoolean acceptingPreparation = new AtomicBoolean(true);
+        Consumer<StandalonePreparation> publish = candidate -> publishStandalonePreparation(
+            prepared, publicationLock, acceptingPreparation, candidate);
+        BoundedJob.Result bounded;
+        try
+        {
+            bounded = runStandalonePreparationBounded(configName, timeoutMs, monitor -> {
                 ProjectContext context = ProjectContext.of(projectName);
                 if (!context.exists())
                 {
-                    prepared.set(StandalonePreparation.failed(
+                    publish.accept(StandalonePreparation.failed(
                         ProjectContext.notFoundMessage(projectName)));
                     return;
                 }
                 if (!context.isOpen())
                 {
-                    prepared.set(StandalonePreparation.failed(
+                    publish.accept(StandalonePreparation.failed(
                         "Project is closed: " + projectName)); //$NON-NLS-1$
                     return;
                 }
@@ -709,13 +730,13 @@ public class LaunchTool implements IMcpTool
                 }
                 if (resolvedId == null || resolvedId.isEmpty())
                 {
-                    prepared.set(StandalonePreparation.failed(
+                    publish.accept(StandalonePreparation.failed(
                         "the configuration's application could not be resolved")); //$NON-NLS-1$
                     return;
                 }
                 if (manager == null)
                 {
-                    prepared.set(StandalonePreparation.failed(
+                    publish.accept(StandalonePreparation.failed(
                         "the EDT application manager is not available")); //$NON-NLS-1$
                     return;
                 }
@@ -729,7 +750,7 @@ public class LaunchTool implements IMcpTool
                 }
                 if (lookup.application() == null)
                 {
-                    prepared.set(StandalonePreparation.failed("application '" + resolvedId //$NON-NLS-1$
+                    publish.accept(StandalonePreparation.failed("application '" + resolvedId //$NON-NLS-1$
                         + "' was not found in project " + projectName)); //$NON-NLS-1$
                     return;
                 }
@@ -742,13 +763,13 @@ public class LaunchTool implements IMcpTool
                 }
                 if (service == null)
                 {
-                    prepared.set(StandalonePreparation.failed(
+                    publish.accept(StandalonePreparation.failed(
                         "the EDT standalone-server service is not available")); //$NON-NLS-1$
                     return;
                 }
                 if (lookup.server() == null)
                 {
-                    prepared.set(StandalonePreparation.failed(
+                    publish.accept(StandalonePreparation.failed(
                         "the application's standalone server could not be resolved")); //$NON-NLS-1$
                     return;
                 }
@@ -763,22 +784,52 @@ public class LaunchTool implements IMcpTool
                 }
                 catch (ApplicationException failure)
                 {
-                    prepared.set(StandalonePreparation.preflightFailed(context.project(), resolvedId,
+                    publish.accept(StandalonePreparation.preflightFailed(context.project(), resolvedId,
                         failure.getMessage(), staleServerStopped.get()));
+                    return;
+                }
+                stage.set(StandalonePreparationStage.START_CLAIM);
+                StandaloneServerStateRecovery.StartClaim startClaim =
+                    StandaloneServerStateRecovery.claimStartWithinBound(context.project(),
+                        resolvedId, monitor);
+                if (startClaim == null)
+                {
+                    String failure = "the standalone server could not be claimed before starting; " //$NON-NLS-1$
+                        + "another start may already own it or its ownership could not be confirmed"; //$NON-NLS-1$
+                    publish.accept(staleServerStopped.get()
+                        ? StandalonePreparation.preflightFailed(context.project(), resolvedId,
+                            failure, true)
+                        : StandalonePreparation.failed(failure));
                     return;
                 }
                 StandaloneServerPortConflictPolicy effectivePortPolicy =
                     DebugServerTargetSupport.isServerApplicationId(resolvedId)
                         ? requestedPortPolicy : null;
-                prepared.set(StandalonePreparation.ready(context.project(), resolvedId, lookup,
-                    service, effectivePortPolicy, staleServerStopped.get()));
+                publish.accept(StandalonePreparation.ready(context.project(), resolvedId, lookup,
+                    service, effectivePortPolicy, staleServerStopped.get(), startClaim));
             });
+        }
+        catch (RuntimeException | Error failure)
+        {
+            StandalonePreparation abandoned = closeStandalonePreparationPublication(prepared,
+                publicationLock, acceptingPreparation);
+            if (abandoned != null)
+            {
+                abandoned.releaseUnstartedClaim();
+            }
+            throw failure;
+        }
 
-        StandalonePreparation published = prepared.get();
+        StandalonePreparation published = closeStandalonePreparationPublication(prepared,
+            publicationLock, acceptingPreparation);
         StandalonePreparation accepted = acceptPublishedStandalonePreparation(published, bounded);
         if (accepted != null)
         {
             return accepted;
+        }
+        if (published != null)
+        {
+            published.releaseUnstartedClaim();
         }
         if (bounded.isSuccess())
         {
@@ -824,6 +875,36 @@ public class LaunchTool implements IMcpTool
             StandaloneServerSupport.boundedPhaseFailure(target, timeoutMs, bounded));
     }
 
+    /** Publishes a preparation result only while the bounded caller can still accept it. */
+    private static void publishStandalonePreparation(
+        AtomicReference<StandalonePreparation> prepared, Object publicationLock,
+        AtomicBoolean acceptingPreparation, StandalonePreparation candidate)
+    {
+        synchronized (publicationLock)
+        {
+            if (acceptingPreparation.get())
+            {
+                prepared.set(candidate);
+            }
+            else
+            {
+                candidate.releaseUnstartedClaim();
+            }
+        }
+    }
+
+    /** Atomically refuses later publication and returns any result already handed to the caller. */
+    private static StandalonePreparation closeStandalonePreparationPublication(
+        AtomicReference<StandalonePreparation> prepared, Object publicationLock,
+        AtomicBoolean acceptingPreparation)
+    {
+        synchronized (publicationLock)
+        {
+            acceptingPreparation.set(false);
+            return prepared.get();
+        }
+    }
+
     /** One scheduling boundary for the complete standalone precondition phase. */
     static BoundedJob.Result runStandalonePreparationBounded(String configName, long timeoutMs,
         BoundedJob.IBoundedWork work)
@@ -861,6 +942,9 @@ public class LaunchTool implements IMcpTool
             return "the EDT standalone-server service lookup"; //$NON-NLS-1$
         case STALE_PREFLIGHT:
             return "the stale-server pre-flight for application '" + applicationId + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+        case START_CLAIM:
+            return "the standalone-server start claim for application '" //$NON-NLS-1$
+                + applicationId + "'"; //$NON-NLS-1$
         case APPLICATION:
         case STALE_STOP:
         default:
@@ -877,7 +961,8 @@ public class LaunchTool implements IMcpTool
         APPLICATION,
         SERVICE,
         STALE_PREFLIGHT,
-        STALE_STOP
+        STALE_STOP,
+        START_CLAIM
     }
 
     /** Complete prerequisite snapshot handed to the separately bounded start. */
@@ -891,11 +976,13 @@ public class LaunchTool implements IMcpTool
         private final String failure;
         private final String preflightFailure;
         private final boolean staleServerStopped;
+        private final StandaloneServerStateRecovery.StartClaim startClaim;
 
         private StandalonePreparation(IProject project, String applicationId,
             StandaloneServerSupport.ApplicationLookup lookup, Object service,
             StandaloneServerPortConflictPolicy portPolicy, String failure,
-            String preflightFailure, boolean staleServerStopped)
+            String preflightFailure, boolean staleServerStopped,
+            StandaloneServerStateRecovery.StartClaim startClaim)
         {
             this.project = project;
             this.applicationId = applicationId;
@@ -905,31 +992,50 @@ public class LaunchTool implements IMcpTool
             this.failure = failure;
             this.preflightFailure = preflightFailure;
             this.staleServerStopped = staleServerStopped;
+            this.startClaim = startClaim;
         }
 
         static StandalonePreparation ready(IProject project, String applicationId,
             StandaloneServerSupport.ApplicationLookup lookup, Object service,
             StandaloneServerPortConflictPolicy portPolicy, boolean staleServerStopped)
         {
+            return ready(project, applicationId, lookup, service, portPolicy, staleServerStopped,
+                null);
+        }
+
+        static StandalonePreparation ready(IProject project, String applicationId,
+            StandaloneServerSupport.ApplicationLookup lookup, Object service,
+            StandaloneServerPortConflictPolicy portPolicy, boolean staleServerStopped,
+            StandaloneServerStateRecovery.StartClaim startClaim)
+        {
             return new StandalonePreparation(project, applicationId, lookup, service, portPolicy,
-                null, null, staleServerStopped);
+                null, null, staleServerStopped, startClaim);
         }
 
         static StandalonePreparation failed(String failure)
         {
-            return new StandalonePreparation(null, null, null, null, null, failure, null, false);
+            return new StandalonePreparation(null, null, null, null, null, failure, null, false,
+                null);
         }
 
         static StandalonePreparation preflightFailed(IProject project, String applicationId,
             String failure, boolean staleServerStopped)
         {
             return new StandalonePreparation(project, applicationId, null, null, null, null,
-                failure, staleServerStopped);
+                failure, staleServerStopped, null);
         }
 
         boolean hasFailure()
         {
             return failure != null || preflightFailure != null;
+        }
+
+        void releaseUnstartedClaim()
+        {
+            if (startClaim != null)
+            {
+                startClaim.closeIfNotHandedOff();
+            }
         }
     }
 
@@ -1093,15 +1199,49 @@ public class LaunchTool implements IMcpTool
             StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS);
     }
 
+    /** Production start that hands its preparation claim to the underlying Job lifecycle. */
+    private static StartOutcome startStandaloneServerWithPolicy(Object service, Object server,
+        String configName, String launchMode, String infobaseName, String serverName,
+        StandaloneServerPortConflictPolicy portPolicy,
+        StandaloneServerStateRecovery.StartClaim startClaim)
+    {
+        return startStandaloneServerWithPolicy(service, server, configName, launchMode, infobaseName,
+            serverName, portPolicy, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
+            StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS, startClaim);
+    }
+
     /** Testable deadline form retaining both unattended-start guards under the same cleanup. */
     static StartOutcome startStandaloneServerWithPolicy(Object service, Object server, String configName,
         String launchMode, String infobaseName, String serverName,
         StandaloneServerPortConflictPolicy portPolicy, long timeoutMs, long cleanupCapMs)
     {
-        StandaloneServerSupport.GuardedStartResult result =
-            StandaloneServerSupport.startServerGuarded(service, server,
+        return startStandaloneServerWithPolicy(service, server, configName, launchMode, infobaseName,
+            serverName, portPolicy, timeoutMs, cleanupCapMs, null);
+    }
+
+    /** Same deadline form with an optional start claim sharing the deferred cleanup. */
+    private static StartOutcome startStandaloneServerWithPolicy(Object service, Object server,
+        String configName, String launchMode, String infobaseName, String serverName,
+        StandaloneServerPortConflictPolicy portPolicy, long timeoutMs, long cleanupCapMs,
+        StandaloneServerStateRecovery.StartClaim startClaim)
+    {
+        Runnable claimCleanup = startClaim == null ? null : startClaim::close;
+        Runnable claimHandoff = startClaim == null ? null : startClaim::handoff;
+        StandaloneServerSupport.GuardedStartResult result;
+        try
+        {
+            result = StandaloneServerSupport.startServerGuarded(service, server,
                 "Starting standalone server: " + configName, launchMode, infobaseName, //$NON-NLS-1$
-                serverName, portPolicy, timeoutMs, cleanupCapMs);
+                serverName, portPolicy, timeoutMs, cleanupCapMs, claimCleanup, claimHandoff);
+        }
+        catch (RuntimeException | Error failure)
+        {
+            if (startClaim != null)
+            {
+                startClaim.close();
+            }
+            throw failure;
+        }
         String failure = result.failure();
         if (result.portReassignmentOutcomeUnknown())
         {

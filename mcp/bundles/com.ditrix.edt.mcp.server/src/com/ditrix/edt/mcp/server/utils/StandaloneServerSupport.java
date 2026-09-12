@@ -444,6 +444,16 @@ public final class StandaloneServerSupport
         String operationName, String launchMode, String infobaseName, String serverName,
         StandaloneServerPortConflictPolicy portPolicy, long timeoutMs, long cleanupCapMs)
     {
+        return startServerGuarded(service, server, operationName, launchMode, infobaseName,
+            serverName, portPolicy, timeoutMs, cleanupCapMs, null, null);
+    }
+
+    /** Same guarded start with another operation claim tied to the Job's exact lifecycle. */
+    public static GuardedStartResult startServerGuarded(Object service, Object server,
+        String operationName, String launchMode, String infobaseName, String serverName,
+        StandaloneServerPortConflictPolicy portPolicy, long timeoutMs, long cleanupCapMs,
+        Runnable operationCleanup, Runnable cleanupInstalled)
+    {
         long accessDialogsBefore = InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount();
         LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = portPolicy == null
             ? null : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName, serverName);
@@ -453,24 +463,34 @@ public final class StandaloneServerSupport
         Runnable cleanup = () -> {
             try
             {
-                if (autoConfirmerArmed)
-                {
-                    LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, null, infobaseName,
-                        portPolicy, serverName);
-                }
-            }
-            finally
-            {
                 try
                 {
-                    if (conflicts != null)
+                    if (autoConfirmerArmed)
                     {
-                        conflicts.close();
+                        LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, null, infobaseName,
+                            portPolicy, serverName);
                     }
                 }
                 finally
                 {
-                    InfobaseAuthDialogSuppressor.markActivityEnd();
+                    try
+                    {
+                        if (conflicts != null)
+                        {
+                            conflicts.close();
+                        }
+                    }
+                    finally
+                    {
+                        InfobaseAuthDialogSuppressor.markActivityEnd();
+                    }
+                }
+            }
+            finally
+            {
+                if (operationCleanup != null)
+                {
+                    operationCleanup.run();
                 }
             }
         };
@@ -480,6 +500,10 @@ public final class StandaloneServerSupport
         BoundedJob.Result bounded = null;
         try
         {
+            if (cleanupInstalled != null)
+            {
+                cleanupInstalled.run();
+            }
             bounded = BoundedJob.run(operationName, timeoutMs,
                 monitor -> status[0] = startServer(service, server, launchMode, monitor),
                 deferredCleanup::jobFinished);
