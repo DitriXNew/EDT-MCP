@@ -780,7 +780,7 @@ public class LaunchTool implements IMcpTool
             {
                 String notice = StandaloneServerStateRecovery.appendInconclusiveStartNotice(
                     outcome.failure(), configName);
-                return new StartOutcome(standaloneAttemptError(configName,
+                return new StartOutcome(standaloneInconclusiveAttemptError(configName,
                     notice == null ? outcome.failure() : notice), false,
                     outcome.portsReassigned(), outcome.portReassignmentOutcomeUnknown());
             }
@@ -898,22 +898,43 @@ public class LaunchTool implements IMcpTool
         String launchMode, String infobaseName, String serverName,
         StandaloneServerPortConflictPolicy portPolicy)
     {
+        return startStandaloneServerWithPolicy(service, server, configName, launchMode, infobaseName,
+            serverName, portPolicy, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
+            StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS);
+    }
+
+    /** Testable deadline form retaining both unattended-start guards under the same cleanup. */
+    static StartOutcome startStandaloneServerWithPolicy(Object service, Object server, String configName,
+        String launchMode, String infobaseName, String serverName,
+        StandaloneServerPortConflictPolicy portPolicy, long timeoutMs, long cleanupCapMs)
+    {
         LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = portPolicy == null
             ? null : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName, serverName);
         LaunchUpdateDialogAutoConfirmer.arm(false, false, false, null, infobaseName, portPolicy,
             serverName);
+        // The protocol dispatcher already holds one activity count for this synchronous call. Take
+        // a second one for the underlying start itself: after an inconclusive bounded wait the
+        // dispatcher releases its count, while this one stays in the SAME deferred cleanup as the
+        // port-conflict arm until the Job finishes or the shared hard cap expires.
+        InfobaseAuthDialogSuppressor.markActivityStart();
         Runnable cleanup = () -> {
-            LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, null, infobaseName,
-                portPolicy, serverName);
-            if (conflicts != null)
+            try
             {
-                conflicts.close();
+                LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, null, infobaseName,
+                    portPolicy, serverName);
+                if (conflicts != null)
+                {
+                    conflicts.close();
+                }
+            }
+            finally
+            {
+                InfobaseAuthDialogSuppressor.markActivityEnd();
             }
         };
         return awaitStandaloneServerStart(service, server, configName, launchMode, conflicts,
-            portPolicy == StandaloneServerPortConflictPolicy.REASSIGN, cleanup,
-            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
-            StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS);
+            portPolicy == StandaloneServerPortConflictPolicy.REASSIGN, cleanup, timeoutMs,
+            cleanupCapMs);
     }
 
     /**
@@ -935,7 +956,7 @@ public class LaunchTool implements IMcpTool
         boolean reassigningPortPolicyArmed, Runnable cleanup, long timeoutMs, long cleanupCapMs)
     {
         BoundedJob.DeferredCleanup deferredCleanup = new BoundedJob.DeferredCleanup(cleanup,
-            cleanupCapMs, "Standalone-start confirmer safety cap"); //$NON-NLS-1$
+            cleanupCapMs, "Standalone-start unattended-guard safety cap"); //$NON-NLS-1$
         StartOutcome outcome = null;
         try
         {
@@ -985,6 +1006,16 @@ public class LaunchTool implements IMcpTool
             ? " " : ". "; //$NON-NLS-1$ //$NON-NLS-2$
         return ToolResult.error("Failed to start standalone server '" + configName + "': " //$NON-NLS-1$ //$NON-NLS-2$
             + reason + separator + STANDALONE_THIN_CLIENT_FALLBACK).toJson();
+    }
+
+    /** Builds an inconclusive attempted-start error without recommending a duplicate start. */
+    static String standaloneInconclusiveAttemptError(String configName, String reason)
+    {
+        String separator = reason.endsWith(".") || reason.endsWith("!") || reason.endsWith("?") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            ? " " : ". "; //$NON-NLS-1$ //$NON-NLS-2$
+        return ToolResult.error("Failed to start standalone server '" + configName + "': " //$NON-NLS-1$ //$NON-NLS-2$
+            + reason + separator
+            + StandaloneServerStateRecovery.inconclusiveStartGuidance(configName)).toJson();
     }
 
     /** Result of the supported-plus-diagnostic by-name lookup. */

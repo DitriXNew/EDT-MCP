@@ -114,6 +114,64 @@ public class LaunchAbortReasonTest
     }
 
     @Test
+    public void testBaseDoesNotClaimAnErrorForBaseCopy()
+    {
+        String message = "Error synchronizing application Base Copy"; //$NON-NLS-1$
+        try (LaunchAbortReason base = LaunchAbortReason.open("Base"); //$NON-NLS-1$
+            LaunchAbortReason baseCopy = LaunchAbortReason.open("Base Copy")) //$NON-NLS-1$
+        {
+            log(new Status(IStatus.ERROR, ALLOWED_PLUGIN, message));
+
+            assertNull("a shorter launch name must not match a longer name's prefix", //$NON-NLS-1$
+                base.reason());
+            assertEquals(message, baseCopy.reason());
+        }
+    }
+
+    @Test
+    public void testBaseCopyDoesNotClaimAnErrorForBase()
+    {
+        String message = "Error synchronizing application Base"; //$NON-NLS-1$
+        try (LaunchAbortReason base = LaunchAbortReason.open("Base"); //$NON-NLS-1$
+            LaunchAbortReason baseCopy = LaunchAbortReason.open("Base Copy")) //$NON-NLS-1$
+        {
+            log(new Status(IStatus.ERROR, ALLOWED_PLUGIN, message));
+
+            assertEquals(message, base.reason());
+            assertNull("a longer launch name must not match a message naming only its prefix", //$NON-NLS-1$
+                baseCopy.reason());
+        }
+    }
+
+    @Test
+    public void testWholeLaunchNameStillMatchesInsideNormalProseAndPunctuation()
+    {
+        String message = "EDT could not start application 'Base': ports are busy."; //$NON-NLS-1$
+        try (LaunchAbortReason base = LaunchAbortReason.open("Base"); //$NON-NLS-1$
+            LaunchAbortReason other = LaunchAbortReason.open("Other")) //$NON-NLS-1$
+        {
+            log(new Status(IStatus.ERROR, ALLOWED_PLUGIN, message));
+
+            assertEquals(message, base.reason());
+            assertNull(other.reason());
+        }
+    }
+
+    @Test
+    public void testIdentifierSubstringIsNotAWholeLaunchName()
+    {
+        try (LaunchAbortReason base = LaunchAbortReason.open("Base"); //$NON-NLS-1$
+            LaunchAbortReason other = LaunchAbortReason.open("Other")) //$NON-NLS-1$
+        {
+            log(new Status(IStatus.ERROR, ALLOWED_PLUGIN,
+                "Could not start Database application")); //$NON-NLS-1$
+
+            assertNull(base.reason());
+            assertNull(other.reason());
+        }
+    }
+
+    @Test
     public void testForeignStatusIsOwnedWhenThisIsTheOnlyWindow()
     {
         try (LaunchAbortReason mine = LaunchAbortReason.open("Accounting")) //$NON-NLS-1$

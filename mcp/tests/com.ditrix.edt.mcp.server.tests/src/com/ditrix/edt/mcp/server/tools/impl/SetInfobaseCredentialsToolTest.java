@@ -591,7 +591,7 @@ public class SetInfobaseCredentialsToolTest
         AtomicBoolean callerAnswered = new AtomicBoolean();
         BoundedStoreResult<String> storeRun = InfobaseAccessSupport.runBoundedCredentialStore(
             "test: quick store", 5_000L, //$NON-NLS-1$
-            (publish, writeCommitted) -> publish.accept(SUCCESS_JSON));
+            (publish, writeCommitted, writeAllowed) -> publish.accept(SUCCESS_JSON));
 
         String result = SetInfobaseCredentialsTool.finishBoundedStore(storeRun, callerAnswered,
             "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -613,7 +613,7 @@ public class SetInfobaseCredentialsToolTest
         BoundedStoreResult<String> storeRun =
             InfobaseAccessSupport.runBoundedCredentialStore(
                 "test: committed write with slow read-back", 100L, //$NON-NLS-1$
-                (publish, writeCommitted) -> {
+                (publish, writeCommitted, writeAllowed) -> {
                     writeCommitted.run();
                     readBackStarted.countDown();
                     try
@@ -669,7 +669,8 @@ public class SetInfobaseCredentialsToolTest
         CountDownLatch finished = new CountDownLatch(1);
 
         BoundedStoreResult<String> storeRun = InfobaseAccessSupport.runBoundedCredentialStore(
-            "test: slower than the deadline", 100L, (publish, writeCommitted) -> { //$NON-NLS-1$
+            "test: slower than the deadline", 100L, //$NON-NLS-1$
+            (publish, writeCommitted, writeAllowed) -> {
             try
             {
                 running.countDown();

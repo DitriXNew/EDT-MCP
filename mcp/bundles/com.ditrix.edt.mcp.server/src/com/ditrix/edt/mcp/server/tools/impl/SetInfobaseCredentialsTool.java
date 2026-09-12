@@ -548,7 +548,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
 
         BoundedStoreResult<String> storeRun = InfobaseAccessSupport.runBoundedCredentialStore(
             finalApplicationId, InfobaseAccessSupport.CREDENTIAL_STORE_TIMEOUT_MS,
-            (publish, writeCommitted) -> {
+            (publish, writeCommitted, writeAllowed) -> {
                 Optional<IApplication> appOpt;
                 try
                 {
@@ -571,7 +571,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
                 InfobaseAccess accessKind = InfobaseAccessSupport.parseAccess(finalAccess);
                 StoreResult storeResult =
                     InfobaseAccessSupport.storeCredentials(application, finalUser, finalPassword,
-                        accessKind, writeCommitted);
+                        accessKind, writeCommitted, writeAllowed);
                 if (storeResult.error() != null)
                 {
                     publish.accept(ToolResult.error(storeResult.error()).toJson());

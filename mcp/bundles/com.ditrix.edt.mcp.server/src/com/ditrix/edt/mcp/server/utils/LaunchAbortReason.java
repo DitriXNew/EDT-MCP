@@ -132,8 +132,59 @@ public final class LaunchAbortReason implements AutoCloseable
     private boolean namesExpectedLaunch(IStatus status)
     {
         String message = status == null ? null : status.getMessage();
-        return expectedName != null && message != null
-            && message.toLowerCase(Locale.ROOT).contains(expectedName.toLowerCase(Locale.ROOT));
+        if (expectedName == null || message == null || !containsWholeName(message, expectedName))
+        {
+            return false;
+        }
+        synchronized (WINDOW_LOCK)
+        {
+            // A short name such as "Base" has ordinary character boundaries inside "Base Copy".
+            // When both launches have open windows, give the message to the longer complete name
+            // instead of letting the prefix window claim the same failure.
+            for (LaunchAbortReason window : OPEN_WINDOWS)
+            {
+                String candidate = window.expectedName;
+                if (candidate != null && candidate.length() > expectedName.length()
+                    && containsWholeName(candidate, expectedName)
+                    && containsWholeName(message, candidate))
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /** Case-insensitive name match with identifier boundaries on both sides. */
+    private static boolean containsWholeName(String text, String name)
+    {
+        String haystack = text.toLowerCase(Locale.ROOT);
+        String needle = name.toLowerCase(Locale.ROOT);
+        int from = 0;
+        while (from <= haystack.length() - needle.length())
+        {
+            int match = haystack.indexOf(needle, from);
+            if (match < 0)
+            {
+                return false;
+            }
+            int after = match + needle.length();
+            boolean leftBoundary = match == 0 || !isNameCharacter(haystack.charAt(match - 1));
+            boolean rightBoundary = after == haystack.length()
+                || !isNameCharacter(haystack.charAt(after));
+            if (leftBoundary && rightBoundary)
+            {
+                return true;
+            }
+            from = match + 1;
+        }
+        return false;
+    }
+
+    /** Characters that cannot delimit an application/configuration name token. */
+    private static boolean isNameCharacter(char value)
+    {
+        return Character.isLetterOrDigit(value) || value == '_';
     }
 
     /** Normalizes an optional ownership name. */

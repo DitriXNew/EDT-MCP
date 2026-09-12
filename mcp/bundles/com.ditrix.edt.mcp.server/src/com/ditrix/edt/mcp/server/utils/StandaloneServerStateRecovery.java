@@ -693,7 +693,7 @@ public final class StandaloneServerStateRecovery
                 failure);
             name = stopped.applicationId;
         }
-        return appendRestoration(original, name,
+        return appendRestorationOutcome(original, name,
             applicationId -> restoreStoppedServer(project, applicationId));
     }
 
@@ -701,7 +701,7 @@ public final class StandaloneServerStateRecovery
     public static String appendRestoration(String original, IProject project,
         String launchConfigurationName)
     {
-        return appendRestoration(original, launchConfigurationName,
+        return appendRestorationOutcome(original, launchConfigurationName,
             applicationId -> restoreStoppedServer(project, applicationId));
     }
 
@@ -715,17 +715,32 @@ public final class StandaloneServerStateRecovery
         }
         String separator = original.endsWith(".") || original.endsWith("!") //$NON-NLS-1$ //$NON-NLS-2$
             || original.endsWith("?") ? " " : ". "; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        String name = launchConfigurationName == null || launchConfigurationName.isEmpty()
-            ? stopped.applicationId : launchConfigurationName;
         return original + separator + "The standalone server '" + stopped.applicationId //$NON-NLS-1$
             + "' was stopped for this operation and was left stopped instead of scheduling a " //$NON-NLS-1$
-            + "second start because the original start may still be running. If it remains " //$NON-NLS-1$
-            + "stopped, call launch(launchConfigurationName='" + name + "')."; //$NON-NLS-1$ //$NON-NLS-2$
+            + "second start because the original start may still be running."; //$NON-NLS-1$
+    }
+
+    /** Shared next step for a start whose bounded caller returned before the start finished. */
+    public static String inconclusiveStartGuidance(String launchConfigurationName)
+    {
+        String name = launchConfigurationName == null || launchConfigurationName.isEmpty()
+            ? "<standalone launch configuration>" : launchConfigurationName; //$NON-NLS-1$
+        return "Wait for the in-flight start to settle, then check debug_status and EDT's Servers " //$NON-NLS-1$
+            + "view before starting anything. Only if the server is stopped, call " //$NON-NLS-1$
+            + "launch(launchConfigurationName='" + name + "')."; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** Testable composition of the operation record, restore attempt, and exact message. */
     static String appendRestoration(String original, String launchConfigurationName,
         Restarter restarter)
+    {
+        return appendRestorationOutcome(original, launchConfigurationName,
+            applicationId -> new RestorationStartOutcome(restarter.restore(applicationId), true));
+    }
+
+    /** Same composition while retaining whether the restoration start is still in flight. */
+    static String appendRestorationOutcome(String original, String launchConfigurationName,
+        RestorationRestarter restarter)
     {
         OperationStop stopped = OPERATION_STOP.get();
         if (stopped == null || stopped.applicationId == null)
@@ -733,7 +748,8 @@ public final class StandaloneServerStateRecovery
             return null;
         }
         String applicationId = stopped.applicationId;
-        String restoreFailure = restarter.restore(applicationId);
+        RestorationStartOutcome restoration = restarter.restore(applicationId);
+        String restoreFailure = restoration.failure;
         String separator = original.endsWith(".") || original.endsWith("!") //$NON-NLS-1$ //$NON-NLS-2$
             || original.endsWith("?") ? " " : ". "; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         if (restoreFailure == null)
@@ -748,52 +764,61 @@ public final class StandaloneServerStateRecovery
         }
         String name = launchConfigurationName == null || launchConfigurationName.isEmpty()
             ? applicationId : launchConfigurationName;
+        if (!restoration.conclusive)
+        {
+            return original + separator + "The standalone server '" + applicationId //$NON-NLS-1$
+                + "' was stopped for this operation, but its restoration start did not finish " //$NON-NLS-1$
+                + "conclusively: " + reason + ". " + inconclusiveStartGuidance(name); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         return original + separator + "The standalone server '" + applicationId //$NON-NLS-1$
             + "' was stopped for this operation and could NOT be started again: " //$NON-NLS-1$
             + reason + ". Start it with launch(launchConfigurationName='" + name + "')."; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
-    /** Starts the stopped server once and returns a failure reason, or {@code null}. */
-    private static String restoreStoppedServer(IProject project, String applicationId)
+    /** Starts the stopped server once and retains whether a failed start may still be running. */
+    private static RestorationStartOutcome restoreStoppedServer(IProject project, String applicationId)
     {
         try
         {
             if (project == null)
             {
-                return "the project is unknown"; //$NON-NLS-1$
+                return new RestorationStartOutcome("the project is unknown", true); //$NON-NLS-1$
             }
             Activator activator = Activator.getDefault();
             IApplicationManager manager = activator == null ? null : activator.getApplicationManager();
             if (manager == null)
             {
-                return "the EDT application manager is not available"; //$NON-NLS-1$
+                return new RestorationStartOutcome(
+                    "the EDT application manager is not available", true); //$NON-NLS-1$
             }
             IApplication application = manager.getApplication(project, applicationId).orElse(null);
             if (application == null)
             {
-                return "the application could not be resolved"; //$NON-NLS-1$
+                return new RestorationStartOutcome("the application could not be resolved", true); //$NON-NLS-1$
             }
             Object server = StandaloneServerSupport.serverOfApplication(application);
             if (server == null)
             {
-                return "the application's standalone server could not be resolved"; //$NON-NLS-1$
+                return new RestorationStartOutcome(
+                    "the application's standalone server could not be resolved", true); //$NON-NLS-1$
             }
             Object service = StandaloneServerSupport.acquireService();
             if (service == null)
             {
-                return "the EDT standalone-server service is not available"; //$NON-NLS-1$
+                return new RestorationStartOutcome(
+                    "the EDT standalone-server service is not available", true); //$NON-NLS-1$
             }
 
             String infobaseName = LaunchLifecycleUtils.attributionInfobaseName(manager, project,
                 applicationId);
             String serverName = LaunchLifecycleUtils.attributionServerName(manager, project,
                 applicationId);
-            return startRestorationWithPortGuard(service, server, applicationId, infobaseName,
-                serverName);
+            return startRestorationWithPortGuardOutcome(service, server, applicationId,
+                infobaseName, serverName);
         }
         catch (Exception failure) // NOSONAR restoration must not hide the operation's original failure
         {
-            return PlatformFailures.describe(failure);
+            return new RestorationStartOutcome(PlatformFailures.describe(failure), true);
         }
     }
 
@@ -801,10 +826,18 @@ public final class StandaloneServerStateRecovery
     static String startRestorationWithPortGuard(Object service, Object server, String applicationId,
         String infobaseName, String serverName)
     {
+        return startRestorationWithPortGuardOutcome(service, server, applicationId, infobaseName,
+            serverName).failure;
+    }
+
+    /** Same guarded restoration while preserving whether its start is still in flight. */
+    private static RestorationStartOutcome startRestorationWithPortGuardOutcome(Object service,
+        Object server, String applicationId, String infobaseName, String serverName)
+    {
         LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts =
             LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName, serverName);
         StandaloneServerPortConflictPolicy portPolicy = StandaloneServerPortConflictPolicy.CANCEL;
-        return guardedRestorationStart(
+        return guardedRestorationStartOutcome(
             () -> LaunchUpdateDialogAutoConfirmer.arm(false, false, false, null, infobaseName,
                 portPolicy, serverName),
             completion -> boundedRestorationStart(service, server, applicationId, completion),
@@ -831,6 +864,15 @@ public final class StandaloneServerStateRecovery
     static String guardedRestorationStart(Runnable armer, RestorationStarter starter,
         Supplier<String> conflictFailure, Runnable disarmer, long cleanupCapMs)
     {
+        return guardedRestorationStartOutcome(armer, starter, conflictFailure, disarmer,
+            cleanupCapMs).failure;
+    }
+
+    /** Guarded restoration that retains the bounded start's conclusiveness for later advice. */
+    private static RestorationStartOutcome guardedRestorationStartOutcome(Runnable armer,
+        RestorationStarter starter, Supplier<String> conflictFailure, Runnable disarmer,
+        long cleanupCapMs)
+    {
         armer.run();
         BoundedJob.DeferredCleanup deferredCleanup = new BoundedJob.DeferredCleanup(disarmer,
             cleanupCapMs, "Standalone-restoration confirmer safety cap"); //$NON-NLS-1$
@@ -839,7 +881,8 @@ public final class StandaloneServerStateRecovery
         {
             outcome = starter.start(deferredCleanup::jobFinished);
             String conflict = conflictFailure.get();
-            return conflict == null ? outcome.failure : conflict;
+            return new RestorationStartOutcome(
+                conflict == null ? outcome.failure : conflict, outcome.conclusive);
         }
         finally
         {
@@ -943,11 +986,18 @@ public final class StandaloneServerStateRecovery
         String applicationId;
     }
 
-    /** Performs one restoration; {@code null} means it succeeded. */
+    /** Performs one conclusive restoration; {@code null} means it succeeded. */
     @FunctionalInterface
     interface Restarter
     {
         String restore(String applicationId);
+    }
+
+    /** Performs one restoration while preserving whether a failed start is still in flight. */
+    @FunctionalInterface
+    interface RestorationRestarter
+    {
+        RestorationStartOutcome restore(String applicationId);
     }
 
     /**

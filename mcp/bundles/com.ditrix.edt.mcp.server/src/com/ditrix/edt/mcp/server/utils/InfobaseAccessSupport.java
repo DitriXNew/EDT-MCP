@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 import org.eclipse.core.runtime.Adapters;
@@ -174,9 +175,12 @@ public final class InfobaseAccessSupport
         /**
          * @param publish records the latest safe result snapshot for the bounded caller
          * @param writeCommitted records the persistent-write boundary before read-back begins
+         * @param writeAllowed must be checked immediately before the persistent settings write;
+         *     false means the bounded caller has stopped waiting or cancelled the Job
          * @throws Exception any operation failure captured by {@link BoundedJob}
          */
-        void run(Consumer<T> publish, Runnable writeCommitted) throws Exception;
+        void run(Consumer<T> publish, Runnable writeCommitted, BooleanSupplier writeAllowed)
+            throws Exception;
     }
 
     /** Bounded Job outcome plus the result and write-boundary snapshots visible at its deadline. */
@@ -222,8 +226,28 @@ public final class InfobaseAccessSupport
     {
         AtomicReference<T> published = new AtomicReference<>();
         AtomicBoolean writeCommitted = new AtomicBoolean();
-        BoundedJob.Result bounded = BoundedJob.run("Store infobase credentials: " + target, //$NON-NLS-1$
-            timeoutMs, monitor -> work.run(published::set, () -> writeCommitted.set(true)));
+        AtomicBoolean callerFinished = new AtomicBoolean();
+        BoundedJob.Result bounded;
+        try
+        {
+            bounded = BoundedJob.run("Store infobase credentials: " + target, //$NON-NLS-1$
+                timeoutMs, monitor -> {
+                    BooleanSupplier writeAllowed =
+                        () -> !callerFinished.get() && !monitor.isCanceled();
+                    work.run(value -> {
+                        if (writeAllowed.getAsBoolean())
+                        {
+                            published.set(value);
+                        }
+                    }, () -> writeCommitted.set(true), writeAllowed);
+                });
+        }
+        finally
+        {
+            // Cancellation is cooperative. A worker that outlives the wait observes either its
+            // cancelled monitor or this flag before it can enter the persistent write.
+            callerFinished.set(true);
+        }
         return new BoundedStoreResult<>(bounded, published.get(), writeCommitted.get());
     }
 
@@ -320,10 +344,17 @@ public final class InfobaseAccessSupport
     public static StoreResult storeCredentials(IApplication application, String user, String password,
             InfobaseAccess access, Runnable writeCommitted)
     {
+        return storeCredentials(application, user, password, access, writeCommitted, null);
+    }
+
+    /** Same store with the bounded caller's last-moment write permission. */
+    public static StoreResult storeCredentials(IApplication application, String user, String password,
+            InfobaseAccess access, Runnable writeCommitted, BooleanSupplier writeAllowed)
+    {
         InfobaseReference ref = resolveInfobaseReference(application);
         if (ref != null)
         {
-            return storeCredentials(ref, user, password, access, writeCommitted);
+            return storeCredentials(ref, user, password, access, writeCommitted, writeAllowed);
         }
         return StoreResult.failed("Application '" + application.getId() //$NON-NLS-1$
             + "' exposes no infobase reference — credentials apply to infobases and to standalone " //$NON-NLS-1$
@@ -440,6 +471,13 @@ public final class InfobaseAccessSupport
     public static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
             InfobaseAccess access, Runnable writeCommitted)
     {
+        return storeCredentials(ref, user, password, access, writeCommitted, null);
+    }
+
+    /** Same store with the bounded caller's last-moment write permission. */
+    public static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
+            InfobaseAccess access, Runnable writeCommitted, BooleanSupplier writeAllowed)
+    {
         if (ref == null)
         {
             return StoreResult.failed("No infobase reference to store credentials for.", null); //$NON-NLS-1$
@@ -450,7 +488,7 @@ public final class InfobaseAccessSupport
             return StoreResult.failed("EDT infobase access manager is not available " //$NON-NLS-1$
                 + "(the platform-services plugin may not be ready).", ref); //$NON-NLS-1$
         }
-        return storeCredentials(ref, user, password, access, manager, writeCommitted);
+        return storeCredentials(ref, user, password, access, manager, writeCommitted, writeAllowed);
     }
 
     static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
@@ -462,8 +500,21 @@ public final class InfobaseAccessSupport
     static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
             InfobaseAccess access, IInfobaseAccessManager manager, Runnable writeCommitted)
     {
+        return storeCredentials(ref, user, password, access, manager, writeCommitted, null);
+    }
+
+    /** Core write/read-back path; the permission check is adjacent to {@code updateSettings}. */
+    static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
+            InfobaseAccess access, IInfobaseAccessManager manager, Runnable writeCommitted,
+            BooleanSupplier writeAllowed)
+    {
         String requestedUser = user == null ? "" : user; //$NON-NLS-1$
         String requestedPassword = password == null ? "" : password; //$NON-NLS-1$
+        if (writeAllowed != null && !writeAllowed.getAsBoolean())
+        {
+            return StoreResult.failed(
+                "Credential storage was cancelled before the settings write.", ref); //$NON-NLS-1$
+        }
         try
         {
             manager.updateSettings(ref, new InfobaseAccessSettings(access,

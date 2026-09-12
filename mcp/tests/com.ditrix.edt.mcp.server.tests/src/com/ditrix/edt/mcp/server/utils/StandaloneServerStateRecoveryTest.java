@@ -343,6 +343,40 @@ public class StandaloneServerStateRecoveryTest
     }
 
     @Test
+    public void testInconclusiveRestoreChecksStateBeforeRecommendingAnyStart()
+    {
+        String[] reasons = {
+            "starting it did not finish within 60s and may still be running", //$NON-NLS-1$
+            "the wait for the standalone-server start was interrupted; " //$NON-NLS-1$
+                + "the start may still be running" //$NON-NLS-1$
+        };
+        for (String reason : reasons)
+        {
+            StandaloneServerStateRecovery.beginOperation();
+            try
+            {
+                StandaloneServerStateRecovery.recordStoppedServer("ServerApplication.Test"); //$NON-NLS-1$
+                String message = StandaloneServerStateRecovery.appendRestorationOutcome(
+                    "operation failed.", "Standalone", //$NON-NLS-1$ //$NON-NLS-2$
+                    applicationId -> new StandaloneServerStateRecovery.RestorationStartOutcome(
+                        reason, false));
+
+                assertTrue(message.contains("may still be running")); //$NON-NLS-1$
+                assertTrue(message.contains("check debug_status")); //$NON-NLS-1$
+                assertTrue(message.contains("before starting anything")); //$NON-NLS-1$
+                assertFalse("an in-flight restoration must not be reported as a definite failure", //$NON-NLS-1$
+                    message.contains("could NOT be started again")); //$NON-NLS-1$
+                assertFalse("an in-flight restoration must not recommend an immediate restart", //$NON-NLS-1$
+                    message.contains("Start it with launch")); //$NON-NLS-1$
+            }
+            finally
+            {
+                StandaloneServerStateRecovery.endOperation();
+            }
+        }
+    }
+
+    @Test
     public void testStoppedServerRecordDoesNotLeakIntoTheNextOperation()
     {
         StandaloneServerStateRecovery.beginOperation();

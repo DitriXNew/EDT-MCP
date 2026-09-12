@@ -16,10 +16,15 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.Test;
 
@@ -237,6 +242,88 @@ public class InfobaseAccessSupportTest
 
         assertTrue(writeCommitted.get());
         assertEquals(StoreResult.Verification.VERIFIED, result.verification());
+    }
+
+    @Test
+    public void cancelledBoundedStoreSkipsUpdateSettingsAtTheWriteBoundary() throws Exception
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        IInfobaseAccessManager manager = mock(IInfobaseAccessManager.class);
+        AtomicBoolean writeCommitted = new AtomicBoolean();
+        String password = "must-not-be-written"; //$NON-NLS-1$
+
+        StoreResult result = InfobaseAccessSupport.storeCredentials(ref, "Admin", password, //$NON-NLS-1$
+            InfobaseAccess.INFOBASE, manager, () -> writeCommitted.set(true), () -> false);
+
+        verify(manager, never()).updateSettings(any(InfobaseReference.class),
+            any(InfobaseAccessSettings.class));
+        assertFalse(writeCommitted.get());
+        assertNotNull(result.error());
+        assertTrue(result.error().contains("cancelled before the settings write")); //$NON-NLS-1$
+        assertFalse("the cancellation result must not expose the password", //$NON-NLS-1$
+            result.error().contains(password));
+    }
+
+    @Test
+    public void interruptedBoundedStoreAlsoPreventsALateSettingsWrite() throws Exception
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        IInfobaseAccessManager manager = mock(IInfobaseAccessManager.class);
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicReference<InfobaseAccessSupport.BoundedStoreResult<StoreResult>> answer =
+            new AtomicReference<>();
+        String password = "interrupted-secret"; //$NON-NLS-1$
+
+        Thread caller = new Thread(() -> answer.set(
+            InfobaseAccessSupport.runBoundedCredentialStore("test: interrupted store", //$NON-NLS-1$
+                30_000L, (publish, writeCommitted, writeAllowed) -> {
+                    started.countDown();
+                    try
+                    {
+                        release.await(30, TimeUnit.SECONDS);
+                    }
+                    catch (InterruptedException e)
+                    {
+                        Thread.currentThread().interrupt();
+                    }
+                    try
+                    {
+                        publish.accept(InfobaseAccessSupport.storeCredentials(ref, "Admin", //$NON-NLS-1$
+                            password, InfobaseAccess.INFOBASE, manager, writeCommitted,
+                            writeAllowed));
+                    }
+                    finally
+                    {
+                        finished.countDown();
+                    }
+                })), "test: interrupt bounded credential caller"); //$NON-NLS-1$
+
+        caller.start();
+        try
+        {
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            caller.interrupt();
+            caller.join(5_000L);
+            assertFalse(caller.isAlive());
+            assertNotNull(answer.get());
+            assertEquals(BoundedJob.Outcome.INTERRUPTED,
+                answer.get().boundedResult().getOutcome());
+
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+            verify(manager, never()).updateSettings(any(InfobaseReference.class),
+                any(InfobaseAccessSettings.class));
+            assertNull("a cancelled worker result must not be published after the caller returns", //$NON-NLS-1$
+                answer.get().publishedResult());
+        }
+        finally
+        {
+            release.countDown();
+            caller.join(5_000L);
+            finished.await(5, TimeUnit.SECONDS);
+        }
     }
 
     @Test

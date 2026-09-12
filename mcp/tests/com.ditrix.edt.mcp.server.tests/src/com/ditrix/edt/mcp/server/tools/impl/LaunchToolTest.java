@@ -23,6 +23,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
@@ -54,6 +55,7 @@ import com.ditrix.edt.mcp.server.utils.AttributableCancel;
 import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.ExternalInfobaseChangesPolicy;
+import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchOverrides;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.ExistingClientSession;
@@ -836,7 +838,8 @@ public class LaunchToolTest
             assertTrue(answer.get().failure().contains(
                 "ports may have been rewritten while the start continued")); //$NON-NLS-1$
             JsonObject error = JsonParser.parseString(LaunchTool.standaloneStartFailure(
-                LaunchTool.standaloneAttemptError("Standalone", answer.get().failure()), //$NON-NLS-1$
+                LaunchTool.standaloneInconclusiveAttemptError(
+                    "Standalone", answer.get().failure()), //$NON-NLS-1$
                 answer.get().portsReassigned(), answer.get().portReassignmentOutcomeUnknown()))
                 .getAsJsonObject();
             assertTrue(error.get("mutationOutcomeUnknown").getAsBoolean()); //$NON-NLS-1$
@@ -856,6 +859,64 @@ public class LaunchToolTest
         {
             release.countDown();
             caller.join(5_000L);
+        }
+    }
+
+    @Test
+    public void testInconclusiveStandaloneStartKeepsAuthSuppressionUntilJobCompletion()
+        throws Exception
+    {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicReference<StartOutcome> answer = new AtomicReference<>();
+        AtomicReference<Throwable> callerFailure = new AtomicReference<>();
+        AtomicInteger inFlight = authInFlightCounter();
+        int original = inFlight.get();
+
+        Thread caller = new Thread(() -> {
+            try
+            {
+                answer.set(LaunchTool.startStandaloneServerWithPolicy(
+                    new BlockingStandaloneStartService(started, release), new Object(),
+                    "Standalone", ILaunchManager.DEBUG_MODE, null, null, //$NON-NLS-1$
+                    StandaloneServerPortConflictPolicy.CANCEL, 100L, 5_000L));
+            }
+            catch (Throwable t)
+            {
+                callerFailure.set(t);
+            }
+        }, "test: standalone auth-suppression caller"); //$NON-NLS-1$
+
+        caller.start();
+        try
+        {
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            caller.join(5_000L);
+            assertFalse("the bounded caller must have returned", caller.isAlive()); //$NON-NLS-1$
+            assertNull(callerFailure.get());
+            assertNotNull(answer.get());
+            assertFalse(answer.get().conclusive());
+            assertEquals("the start's auth suppression must remain paired with the deferred " //$NON-NLS-1$
+                + "port-conflict guard", original + 1, inFlight.get()); //$NON-NLS-1$
+
+            release.countDown();
+            long deadline = System.currentTimeMillis() + 5_000L;
+            while (inFlight.get() != original && System.currentTimeMillis() < deadline)
+            {
+                Thread.sleep(10L);
+            }
+            assertEquals("job completion must release both guards together exactly once", //$NON-NLS-1$
+                original, inFlight.get());
+        }
+        finally
+        {
+            release.countDown();
+            caller.join(5_000L);
+            long cleanupDeadline = System.currentTimeMillis() + 5_000L;
+            while (inFlight.get() != original && System.currentTimeMillis() < cleanupDeadline)
+            {
+                Thread.sleep(10L);
+            }
         }
     }
 
@@ -967,12 +1028,15 @@ public class LaunchToolTest
             + "standalone-server start was interrupted; the start may still be running. The " //$NON-NLS-1$
             + "standalone server 'ServerApplication.Test' was stopped for this operation and was " //$NON-NLS-1$
             + "left stopped instead of scheduling a second start because the original start may " //$NON-NLS-1$
-            + "still be running. If it remains stopped, call " //$NON-NLS-1$
-            + "launch(launchConfigurationName='Standalone'). Try launch with the project's " //$NON-NLS-1$
-            + "thin-client configuration instead: launching that client has been observed to " //$NON-NLS-1$
-            + "bring its standalone server up with it.", error.get("error").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+            + "still be running. Wait for the in-flight start to settle, then check debug_status " //$NON-NLS-1$
+            + "and EDT's Servers view before starting anything. Only if the server is stopped, " //$NON-NLS-1$
+            + "call launch(launchConfigurationName='Standalone').", //$NON-NLS-1$
+            error.get("error").getAsString()); //$NON-NLS-1$
         assertFalse(error.get("error").getAsString().contains("has been started again")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse(error.get("error").getAsString().contains("could NOT be started again")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("an inconclusive start must not recommend a second start through a client", //$NON-NLS-1$
+            error.get("error").getAsString().contains("thin-client configuration")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(error.get("error").getAsString().contains("check debug_status")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -1857,6 +1921,14 @@ public class LaunchToolTest
         {
             throw new AssertionError(e);
         }
+    }
+
+    /** Reads the suppressor's package-private activity counter without widening production API. */
+    private static AtomicInteger authInFlightCounter() throws Exception
+    {
+        Field field = InfobaseAuthDialogSuppressor.class.getDeclaredField("IN_FLIGHT"); //$NON-NLS-1$
+        field.setAccessible(true);
+        return (AtomicInteger)field.get(null);
     }
 
     /** Records the stop that {@code ensureStartable} normally records inside the guarded scope. */

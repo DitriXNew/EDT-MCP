@@ -624,10 +624,10 @@ public class CreateInfobaseTool implements IMcpTool
         {
             return null;
         }
-        return storeSafely((publish, writeCommitted) -> publish.accept(
+        return storeSafely((publish, writeCommitted, writeAllowed) -> publish.accept(
             InfobaseAccessSupport.storeCredentials(ibRef, credentials.user,
                 credentials.password, InfobaseAccessSupport.parseAccess(credentials.access),
-                writeCommitted)),
+                writeCommitted, writeAllowed)),
             credentials, register);
     }
 
@@ -2237,10 +2237,11 @@ public class CreateInfobaseTool implements IMcpTool
                     + "application was not available from the read-back - check get_applications and " //$NON-NLS-1$
                     + "store them with set_infobase_credentials.", null); //$NON-NLS-1$
         }
-        return storeSafely((publish, writeCommitted) -> publish.accept(
+        return storeSafely((publish, writeCommitted, writeAllowed) -> publish.accept(
             InfobaseAccessSupport.storeCredentials(application,
                 credentials.user, credentials.password,
-                InfobaseAccessSupport.parseAccess(credentials.access), writeCommitted)),
+                InfobaseAccessSupport.parseAccess(credentials.access), writeCommitted,
+                writeAllowed)),
             credentials, true);
     }
 

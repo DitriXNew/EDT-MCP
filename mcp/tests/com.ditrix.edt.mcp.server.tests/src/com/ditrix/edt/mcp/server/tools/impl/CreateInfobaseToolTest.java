@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.core.resources.IProject;
 import org.junit.Test;
@@ -1476,7 +1477,7 @@ public class CreateInfobaseToolTest
         try
         {
             CreateInfobaseTool.CredentialStoreReport report = CreateInfobaseTool.storeSafely(
-                (publish, writeCommitted) -> {
+                (publish, writeCommitted, writeAllowed) -> {
                     // Model the defect precisely: the persistent update returned, then the
                     // consumer-facing resolveSettings read-back stalled.
                     writeCommitted.run();
@@ -1529,6 +1530,65 @@ public class CreateInfobaseToolTest
             releaseReadBack.countDown();
             assertTrue("the timed-out credential Job must not leak into later tests", //$NON-NLS-1$
                 readBackFinished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testCredentialStoreDeadlinePreventsALateSettingsWrite() throws Exception
+    {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicInteger writes = new AtomicInteger();
+        String password = "late-write-secret"; //$NON-NLS-1$
+        CreateInfobaseTool.Credentials credentials =
+            new CreateInfobaseTool.Credentials("Admin", password, null); //$NON-NLS-1$
+
+        try
+        {
+            CreateInfobaseTool.CredentialStoreReport report = CreateInfobaseTool.storeSafely(
+                (publish, writeCommitted, writeAllowed) -> {
+                    started.countDown();
+                    try
+                    {
+                        release.await(30, TimeUnit.SECONDS);
+                    }
+                    catch (InterruptedException e)
+                    {
+                        Thread.currentThread().interrupt();
+                    }
+                    try
+                    {
+                        if (writeAllowed.getAsBoolean())
+                        {
+                            writes.incrementAndGet();
+                            writeCommitted.run();
+                            publish.accept(StoreResult.verified(infobaseRef()));
+                        }
+                    }
+                    finally
+                    {
+                        finished.countDown();
+                    }
+                }, credentials, true, 100L);
+
+            assertTrue("the credential worker must have started before the timeout", //$NON-NLS-1$
+                started.await(5, TimeUnit.SECONDS));
+            assertTrue(report.note.contains("credential state is UNDETERMINED")); //$NON-NLS-1$
+            assertFalse("timeout reporting must not expose the password", //$NON-NLS-1$
+                report.note.contains(password));
+            assertFalse("a timeout must not claim that the late write succeeded", //$NON-NLS-1$
+                report.note.contains("Stored connection credentials")); //$NON-NLS-1$
+
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+            assertEquals("a worker released after its caller gave up must skip the write", //$NON-NLS-1$
+                0, writes.get());
+        }
+        finally
+        {
+            release.countDown();
+            finished.await(5, TimeUnit.SECONDS);
         }
     }
 
