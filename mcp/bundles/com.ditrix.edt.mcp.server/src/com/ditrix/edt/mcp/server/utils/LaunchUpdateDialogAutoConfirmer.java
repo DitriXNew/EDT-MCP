@@ -401,6 +401,9 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     private static final long UI_RECONCILE_TIMEOUT_MS = 2_000L;
 
+    /** Hand the reconcile to the UI thread and do not wait for it at all. */
+    private static final long QUEUE_ONLY_MS = 0L;
+
     private static final Object LOCK = new Object();
 
     /**
@@ -1165,16 +1168,14 @@ public final class LaunchUpdateDialogAutoConfirmer
             }
         }
         // A filter another operation already installed protects this arm immediately: the
-        // listener reads the live counters under LOCK. Only installing or removing it needs
-        // the UI thread, so an arm that finds one present never waits for that thread at all.
-        if (!filterInstalledOn(display))
-        {
-            // A bounded wait that expires leaves the install QUEUED, which is enough: a blocked
-            // UI thread cannot show a modal either, SWT runs queued runnables in order so this
-            // one precedes anything the not-yet-dispatched work can raise, and reconcileFilter
-            // sweeps shells that are already open.
-            reconcileOnUiThread(display);
-        }
+        // listener reads the live counters under LOCK. What still needs the UI thread is the
+        // sweep of shells ALREADY on screen, and nothing in this call depends on when that
+        // runs - so an arm that finds a filter present queues the work instead of waiting.
+        // A bounded wait that expires is equally safe: it leaves the install QUEUED, SWT runs
+        // queued runnables in order so it precedes anything the not-yet-dispatched work can
+        // raise, and a UI thread too busy to run it cannot show a modal either.
+        reconcileOnUiThread(display,
+            filterInstalledOn(display) ? QUEUE_ONLY_MS : UI_RECONCILE_TIMEOUT_MS);
         return true;
     }
 
@@ -1392,6 +1393,20 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     private static boolean reconcileOnUiThread(Display display)
     {
+        return reconcileOnUiThread(display, UI_RECONCILE_TIMEOUT_MS);
+    }
+
+    /**
+     * Marshals {@link #reconcileFilter(Display)} to the UI thread within the given bound.
+     * {@link #QUEUE_ONLY_MS} hands the work over and returns at once - the reconcile still
+     * runs, the caller just does not wait for it.
+     *
+     * @param display the display carrying the filter (never {@code null})
+     * @param timeoutMs how long to wait for the UI thread to run it
+     * @return {@code true} when the reconciliation ran within the bound
+     */
+    private static boolean reconcileOnUiThread(Display display, long timeoutMs)
+    {
         if (display.isDisposed())
         {
             return true;
@@ -1407,8 +1422,7 @@ public final class LaunchUpdateDialogAutoConfirmer
         {
             // A late run after this timeout is harmless: reconcileFilter re-reads the arm state
             // under LOCK, so it sees whatever the caller left behind rather than a stale decision.
-            return runBounded(display::asyncExec, () -> reconcileFilter(display),
-                UI_RECONCILE_TIMEOUT_MS);
+            return runBounded(display::asyncExec, () -> reconcileFilter(display), timeoutMs);
         }
         catch (SWTException e)
         {

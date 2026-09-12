@@ -1327,4 +1327,26 @@ public class LaunchUpdateDialogAutoConfirmerTest
         assertTrue(ran.get());
         worker.get().join(5_000L);
     }
+
+    /**
+     * An arm that finds the filter already installed hands the reconcile over with a zero
+     * bound. That must still SUBMIT the work: the reconcile ends with the sweep of shells
+     * already on screen, which is the only thing that presses a modal raised before the arm.
+     * Turning the zero bound into a skip would reopen that hang.
+     */
+    @Test
+    public void testBoundedHandoffWithoutWaitingStillSubmitsTheWork()
+    {
+        AtomicReference<Runnable> queued = new AtomicReference<>();
+        AtomicBoolean ran = new AtomicBoolean();
+
+        boolean finished = LaunchUpdateDialogAutoConfirmer.runBounded(queued::set,
+            () -> ran.set(true), 0L);
+
+        assertFalse("a zero bound must not claim the work already ran", finished);
+        assertNotNull("a zero bound must still hand the work to the other thread", queued.get());
+        assertFalse("the work must not have run yet", ran.get());
+        queued.get().run();
+        assertTrue("the work the caller chose not to wait for still runs", ran.get());
+    }
 }
