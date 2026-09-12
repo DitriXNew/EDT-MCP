@@ -382,7 +382,7 @@ public class SetInfobaseCredentialsToolTest
 
     // ==================== Pure storeOutcome seam (no live EDT, no jobs framework) ====================
 
-    /** A representative SUCCESS JSON the bounded Job records the instant updateSettings commits. */
+    /** A representative SUCCESS JSON the bounded Job records once verification concludes. */
     private static final String SUCCESS_JSON =
         "{\"success\":true,\"project\":\"TestProject\",\"applicationId\":\"app1\"," //$NON-NLS-1$
             + "\"applicationName\":\"My Infobase\",\"user\":\"Admin\",\"access\":\"INFOBASE\"," //$NON-NLS-1$
@@ -399,7 +399,7 @@ public class SetInfobaseCredentialsToolTest
     @Test
     public void testStoreOutcomeTimeoutWithRecordedSuccessReturnsSuccess()
     {
-        // Persist-first guarantee: a timeout AFTER updateSettings committed still reports success.
+        // Once verification has produced a final result, a timeout race returns it verbatim.
         String result = SetInfobaseCredentialsTool.storeOutcome(false, SUCCESS_JSON, "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("a persisted success must survive a post-commit timeout", SUCCESS_JSON, result); //$NON-NLS-1$
     }
@@ -414,6 +414,28 @@ public class SetInfobaseCredentialsToolTest
         assertTrue("error must say it timed out", result.contains("timed out")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("error must name the application", result.contains("app1")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("error must name the project", result.contains("TestProject")); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+        assertFalse("a pre-write timeout must not claim a committed mutation", //$NON-NLS-1$
+            json.has("mutationCommitted")); //$NON-NLS-1$
+        assertFalse(json.has("mutationOutcomeUnknown")); //$NON-NLS-1$
+        assertTrue(json.get("error").getAsString().contains("may not be stored")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testStoreOutcomeTimeoutAfterWriteCommitIsAPostMutationError()
+    {
+        String result = SetInfobaseCredentialsTool.storeOutcome(false, null, true,
+            "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+        assertFalse(json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(json.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(json.has("mutationOutcomeUnknown")); //$NON-NLS-1$
+        String error = json.get("error").getAsString(); //$NON-NLS-1$
+        assertTrue(error.contains("write did commit")); //$NON-NLS-1$
+        assertTrue(error.contains("did not finish read-back verification")); //$NON-NLS-1$
+        assertFalse(error.contains("may not be stored")); //$NON-NLS-1$
+        assertFalse(result.contains("secret-value")); //$NON-NLS-1$
     }
 
     @Test
@@ -588,6 +610,53 @@ public class SetInfobaseCredentialsToolTest
             + "already reported a failure", callerAnswered.get()); //$NON-NLS-1$
     }
 
+    @Test
+    public void awaitStoreJobReportsACommittedWriteWhenReadBackOutrunsTheDeadline() throws Exception
+    {
+        CountDownLatch readBackStarted = new CountDownLatch(1);
+        CountDownLatch finishReadBack = new CountDownLatch(1);
+        AtomicReference<String> jobResult = new AtomicReference<>();
+        AtomicBoolean writeCommitted = new AtomicBoolean();
+        AtomicBoolean callerAnswered = new AtomicBoolean();
+        Job job = new Job("test: committed write with slow read-back") //$NON-NLS-1$
+        {
+            @Override
+            protected IStatus run(IProgressMonitor monitor)
+            {
+                writeCommitted.set(true);
+                readBackStarted.countDown();
+                try
+                {
+                    finishReadBack.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+                return Status.OK_STATUS;
+            }
+        };
+        job.setSystem(true);
+        job.schedule();
+        try
+        {
+            assertTrue(readBackStarted.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            String result = SetInfobaseCredentialsTool.awaitStoreJob(job, jobResult,
+                writeCommitted, callerAnswered, "TestProject", "app1", 1L); //$NON-NLS-1$ //$NON-NLS-2$
+
+            JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+            assertFalse(json.get("success").getAsBoolean()); //$NON-NLS-1$
+            assertTrue(json.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+            assertTrue(json.get("error").getAsString().contains("write did commit")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(callerAnswered.get());
+        }
+        finally
+        {
+            finishReadBack.countDown();
+            job.join();
+        }
+    }
+
     /**
      * The defect itself, end to end: a store Job that outruns the deadline must not write the launch
      * configuration once the caller has been told the call failed.
@@ -607,6 +676,7 @@ public class SetInfobaseCredentialsToolTest
         ILaunchConfigurationWorkingCopy copy = mock(ILaunchConfigurationWorkingCopy.class);
         ILaunchConfiguration config = localConfig(copy);
         AtomicBoolean callerAnswered = new AtomicBoolean();
+        AtomicBoolean writeCommitted = new AtomicBoolean();
         AtomicReference<String> jobResult = new AtomicReference<>();
         AtomicReference<String> clientOutcome = new AtomicReference<>();
         CountDownLatch running = new CountDownLatch(1);
@@ -640,11 +710,14 @@ public class SetInfobaseCredentialsToolTest
                 + "simply dequeue it and the write under test would never be attempted", //$NON-NLS-1$
                 running.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
 
-            String result = SetInfobaseCredentialsTool.awaitStoreJob(job, jobResult, callerAnswered,
-                "TestProject", "app1", 1L); //$NON-NLS-1$ //$NON-NLS-2$
+            String result = SetInfobaseCredentialsTool.awaitStoreJob(job, jobResult,
+                writeCommitted, callerAnswered, "TestProject", "app1", 1L); //$NON-NLS-1$ //$NON-NLS-2$
 
             assertTrue("the caller must be told the call timed out: " + result, //$NON-NLS-1$
                 result.contains("timed out")); //$NON-NLS-1$
+            JsonObject timeout = JsonParser.parseString(result).getAsJsonObject();
+            assertFalse(timeout.has("mutationCommitted")); //$NON-NLS-1$
+            assertTrue(timeout.get("error").getAsString().contains("may not be stored")); //$NON-NLS-1$ //$NON-NLS-2$
             answered.countDown();
             job.join();
 

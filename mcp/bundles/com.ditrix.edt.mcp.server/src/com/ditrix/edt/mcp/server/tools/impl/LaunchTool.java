@@ -10,6 +10,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Timer;
+import java.util.TimerTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -55,6 +60,7 @@ import com.e1c.g5.dt.applications.IApplicationManager;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Tool to launch an EDT session in debug or run mode.
@@ -105,6 +111,9 @@ public class LaunchTool implements IMcpTool
     private static final String STANDALONE_THIN_CLIENT_FALLBACK =
         "Try launch with the project's thin-client configuration instead: launching that client " //$NON-NLS-1$
             + "has been observed to bring its standalone server up with it."; //$NON-NLS-1$
+
+    /** Maximum time a timed-out direct start keeps its targeted port-conflict answer armed. */
+    private static final long INCONCLUSIVE_START_CONFIRM_CAP_MS = TimeUnit.MINUTES.toMillis(5);
 
     /**
      * Input param AND response field: the {@code /C} startup option applied to this launch only.
@@ -691,7 +700,7 @@ public class LaunchTool implements IMcpTool
                 launchServerName(config), launchPortPolicy));
         if (start.failure() != null)
         {
-            return start.failure();
+            return standaloneStartFailure(start.failure(), start.portsReassigned());
         }
         return standaloneStartSuccess(configName, typeId, projectName, applicationId,
             start.portsReassigned());
@@ -773,15 +782,45 @@ public class LaunchTool implements IMcpTool
             .toJson();
     }
 
+    /** Carries a persistent port reassignment on the failed direct-start path as well. */
+    static String standaloneStartFailure(String failure, boolean portsReassigned)
+    {
+        if (!portsReassigned)
+        {
+            return failure;
+        }
+        String marked = ToolResult.markErrorAfterMutation(failure);
+        try
+        {
+            JsonObject result = JsonParser.parseString(marked).getAsJsonObject();
+            result.addProperty(KEY_STANDALONE_SERVER_PORTS_REASSIGNED, true);
+            return ToolResult.toJsonStatic(result);
+        }
+        catch (RuntimeException e)
+        {
+            // All callers supply ToolResult JSON. Preserve an unexpected legacy payload rather than
+            // replacing its error text with a parser failure.
+            return marked;
+        }
+    }
+
     /** Runs the service start under a deadline and classifies any failure. */
     static StartOutcome startStandaloneServerBounded(Object service, Object server, String configName,
         String launchMode)
     {
+        return startStandaloneServerBounded(service, server, configName, launchMode,
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, null);
+    }
+
+    /** Testable/deferred-cleanup form of the bounded standalone-server start. */
+    static StartOutcome startStandaloneServerBounded(Object service, Object server, String configName,
+        String launchMode, long timeoutMs, Runnable completion)
+    {
         IStatus[] status = new IStatus[1];
         BoundedJob.Result result = BoundedJob.run("Starting standalone server: " + configName, //$NON-NLS-1$
-            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
+            timeoutMs,
             monitor -> status[0] = StandaloneServerSupport.startServer(service, server,
-                launchMode, monitor));
+                launchMode, monitor), completion);
         if (result.isSuccess())
         {
             if (status[0] == null)
@@ -812,9 +851,34 @@ public class LaunchTool implements IMcpTool
             ? null : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName, serverName);
         LaunchUpdateDialogAutoConfirmer.arm(false, false, false, null, infobaseName, portPolicy,
             serverName);
+        Runnable cleanup = () -> {
+            LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, null, infobaseName,
+                portPolicy, serverName);
+            if (conflicts != null)
+            {
+                conflicts.close();
+            }
+        };
+        return awaitStandaloneServerStart(service, server, configName, launchMode, conflicts,
+            cleanup, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
+            INCONCLUSIVE_START_CONFIRM_CAP_MS);
+    }
+
+    /**
+     * Waits for a direct start while keeping {@code cleanup} tied to the underlying Job lifetime.
+     * Package-visible so tests can use a counted cleanup in the headless runtime, where the real SWT
+     * confirmer arm is intentionally a no-op.
+     */
+    static StartOutcome awaitStandaloneServerStart(Object service, Object server, String configName, // NOSONAR testable orchestration seam keeps the lifecycle inputs explicit
+        String launchMode, LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts,
+        Runnable cleanup, long timeoutMs, long cleanupCapMs)
+    {
+        DeferredStartCleanup deferredCleanup = new DeferredStartCleanup(cleanup, cleanupCapMs);
+        StartOutcome outcome = null;
         try
         {
-            StartOutcome outcome = startStandaloneServerBounded(service, server, configName, launchMode);
+            outcome = startStandaloneServerBounded(service, server, configName, launchMode,
+                timeoutMs, deferredCleanup::jobFinished);
             String conflict = declinedConflictMessage(null, conflicts);
             boolean portsReassigned = conflicts != null && conflicts.portsReassigned();
             return new StartOutcome(conflict == null ? outcome.failure() : conflict,
@@ -822,11 +886,102 @@ public class LaunchTool implements IMcpTool
         }
         finally
         {
-            LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, null, infobaseName,
-                portPolicy, serverName);
-            if (conflicts != null)
+            // If BoundedJob rethrows an Error, its Job has already completed and cleanup is safe now.
+            deferredCleanup.afterBoundedWait(outcome == null || outcome.conclusive());
+        }
+    }
+
+    /** Exactly-once release shared by the Job-completion and hard-cap paths. */
+    static final class DeferredStartCleanup
+    {
+        private final Runnable cleanup;
+        private final long capMs;
+        private final AtomicBoolean jobFinished = new AtomicBoolean();
+        private final AtomicBoolean deferred = new AtomicBoolean();
+        private final AtomicBoolean cleaned = new AtomicBoolean();
+        private final AtomicReference<Timer> deadline = new AtomicReference<>();
+
+        DeferredStartCleanup(Runnable cleanup, long capMs)
+        {
+            this.cleanup = cleanup;
+            this.capMs = Math.max(1L, capMs);
+        }
+
+        void jobFinished()
+        {
+            jobFinished.set(true);
+            if (deferred.get())
             {
-                conflicts.close();
+                cleanOnce();
+            }
+        }
+
+        void afterBoundedWait(boolean conclusive)
+        {
+            if (conclusive)
+            {
+                cleanOnce();
+                return;
+            }
+            deferred.set(true);
+            if (jobFinished.get())
+            {
+                cleanOnce();
+            }
+            if (!cleaned.get())
+            {
+                scheduleDeadline();
+            }
+        }
+
+        private void scheduleDeadline()
+        {
+            Timer timer = new Timer("Standalone-start confirmer safety cap", true); //$NON-NLS-1$
+            if (!deadline.compareAndSet(null, timer))
+            {
+                timer.cancel();
+                return;
+            }
+            try
+            {
+                timer.schedule(new TimerTask()
+                {
+                    @Override
+                    public void run()
+                    {
+                        cleanOnce();
+                    }
+                }, capMs);
+            }
+            catch (RuntimeException e)
+            {
+                // If the deadline mechanism itself is unavailable, fail closed: release now rather
+                // than leak a targeted arm forever.
+                cancelDeadline();
+                cleanOnce();
+                return;
+            }
+            if (cleaned.get())
+            {
+                cancelDeadline();
+            }
+        }
+
+        private void cleanOnce()
+        {
+            if (cleaned.compareAndSet(false, true))
+            {
+                cancelDeadline();
+                cleanup.run();
+            }
+        }
+
+        private void cancelDeadline()
+        {
+            Timer timer = deadline.getAndSet(null);
+            if (timer != null)
+            {
+                timer.cancel();
             }
         }
     }

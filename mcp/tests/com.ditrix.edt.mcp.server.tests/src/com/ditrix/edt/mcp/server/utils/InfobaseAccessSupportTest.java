@@ -13,10 +13,13 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
+
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.Test;
 
@@ -213,6 +216,27 @@ public class InfobaseAccessSupportTest
         assertNull(result.error());
         assertEquals(StoreResult.Verification.VERIFIED, result.verification());
         assertTrue(result.passwordMatched());
+    }
+
+    @Test
+    public void committedWriteIsRecordedBeforeCredentialReadBackStarts() throws Exception
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        IInfobaseAccessManager manager = mock(IInfobaseAccessManager.class);
+        AtomicBoolean writeCommitted = new AtomicBoolean();
+        doAnswer(invocation -> {
+            assertTrue("the write boundary must be visible before resolveSettings begins", //$NON-NLS-1$
+                writeCommitted.get());
+            return new InfobaseAccessSettings(
+                InfobaseAccess.INFOBASE, "Admin", "secret-value", ""); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }).when(manager).resolveSettings(ref);
+
+        StoreResult result = InfobaseAccessSupport.storeCredentials(ref, "Admin", //$NON-NLS-1$
+            "secret-value", InfobaseAccess.INFOBASE, manager, //$NON-NLS-1$
+            () -> writeCommitted.set(true));
+
+        assertTrue(writeCommitted.get());
+        assertEquals(StoreResult.Verification.VERIFIED, result.verification());
     }
 
     @Test

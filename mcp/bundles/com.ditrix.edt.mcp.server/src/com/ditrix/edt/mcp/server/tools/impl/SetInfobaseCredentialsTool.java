@@ -72,8 +72,9 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  * bounded background Eclipse Job joined with a short {@link #CREDENTIALS_TIMEOUT_SECONDS}-second
  * timeout — never on the UI thread. Resolving an application can provoke EDT's background
  * application-update-state recompute, which can loop for a long time on an unbounded worker
- * thread; the bounded Job guarantees the call returns. A conclusive or honestly inconclusive
- * verification is recorded before the cosmetic name read-back, so a later timeout keeps that result.
+ * thread; the bounded Job guarantees the call returns. The persistent write is recorded before
+ * read-back begins, and a conclusive or honestly inconclusive verification refines it before the
+ * cosmetic name read-back.
  *
  * <p>A Job that outran the deadline is cancelled, but cancellation is cooperative and this one has
  * no monitor poll to honour it, so it keeps running. It therefore checks — on the writing side —
@@ -544,6 +545,10 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         // which can loop indefinitely on an unbounded worker thread (DesignerSessionPool retries); the
         // Job + short join keeps the call unattended-safe (the UI thread is never blocked).
         final AtomicReference<String> jobResult = new AtomicReference<>();
+        // Raised at the exact persistent-write boundary, before storeCredentials starts its
+        // consumer-facing read-back. A timeout can therefore distinguish "not known to be written"
+        // from "written, verification still in flight" without exposing the secret.
+        final AtomicBoolean writeCommitted = new AtomicBoolean();
         // Raised the moment the join stops waiting, and read by the Job before it writes the launch
         // configuration. The Job outlives the call whenever the deadline elapses (cancellation is
         // cooperative), so this is what keeps an answered - possibly FAILED - call from mutating a
@@ -576,7 +581,8 @@ public class SetInfobaseCredentialsTool implements IMcpTool
 
                 InfobaseAccess accessKind = InfobaseAccessSupport.parseAccess(finalAccess);
                 StoreResult storeResult =
-                    InfobaseAccessSupport.storeCredentials(application, finalUser, finalPassword, accessKind);
+                    InfobaseAccessSupport.storeCredentials(application, finalUser, finalPassword,
+                        accessKind, () -> writeCommitted.set(true));
                 if (storeResult.error() != null)
                 {
                     jobResult.set(ToolResult.error(storeResult.error()).toJson());
@@ -629,7 +635,8 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         storeJob.setSystem(true);
         McpJobs.schedule(storeJob);
 
-        return awaitStoreJob(storeJob, jobResult, callerAnswered, projectName, applicationId);
+        return awaitStoreJob(storeJob, jobResult, writeCommitted, callerAnswered, projectName,
+            applicationId);
     }
 
     /**
@@ -751,7 +758,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
 
     private static String verificationName(StoreResult storeResult)
     {
-        return storeResult.verification().name().toLowerCase(java.util.Locale.ROOT);
+        return storeResult.verificationName();
     }
 
     private static String verificationNote(StoreResult storeResult)
@@ -768,9 +775,9 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     /**
      * Joins the store Job with the bounded {@link #CREDENTIALS_TIMEOUT_SECONDS} timeout and maps the
      * outcome through the pure {@link #storeOutcome} seam: on a clean finish returns the recorded JSON;
-     * on timeout cancels the Job and returns the recorded success (persist-first) or a graceful timeout
-     * error; on interruption restores the interrupt flag and returns the recorded JSON (if any) or a
-     * graceful interrupted error.
+     * on timeout cancels the Job and returns the recorded final JSON, a post-mutation error when the
+     * write committed but verification is still running, or the original pre-write timeout error;
+     * on interruption restores the interrupt flag and applies the same committed-write distinction.
      *
      * <p>Every exit raises {@code callerAnswered} FIRST, before the answer is even built. A Job that
      * outran the deadline keeps running — {@link Job#cancel()} only asks it to stop, and this one has
@@ -787,8 +794,18 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     static String awaitStoreJob(Job job, AtomicReference<String> jobResult, AtomicBoolean callerAnswered,
             String projectName, String applicationId)
     {
-        return awaitStoreJob(job, jobResult, callerAnswered, projectName, applicationId,
+        return awaitStoreJob(job, jobResult, new AtomicBoolean(jobResult.get() != null),
+            callerAnswered, projectName, applicationId,
             TimeUnit.SECONDS.toMillis(CREDENTIALS_TIMEOUT_SECONDS));
+    }
+
+    /** Production form carrying the write boundary independently of the final verification JSON. */
+    static String awaitStoreJob(Job job, AtomicReference<String> jobResult,
+            AtomicBoolean writeCommitted, AtomicBoolean callerAnswered, String projectName,
+            String applicationId)
+    {
+        return awaitStoreJob(job, jobResult, writeCommitted, callerAnswered, projectName,
+            applicationId, TimeUnit.SECONDS.toMillis(CREDENTIALS_TIMEOUT_SECONDS));
     }
 
     /**
@@ -808,6 +825,14 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     static String awaitStoreJob(Job job, AtomicReference<String> jobResult, AtomicBoolean callerAnswered,
             String projectName, String applicationId, long timeoutMillis)
     {
+        return awaitStoreJob(job, jobResult, new AtomicBoolean(jobResult.get() != null),
+            callerAnswered, projectName, applicationId, timeoutMillis);
+    }
+
+    static String awaitStoreJob(Job job, AtomicReference<String> jobResult,
+            AtomicBoolean writeCommitted, AtomicBoolean callerAnswered, String projectName,
+            String applicationId, long timeoutMillis)
+    {
         try
         {
             boolean finished = job.join(timeoutMillis, null);
@@ -815,9 +840,11 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             if (!finished)
             {
                 job.cancel();
-                return storeOutcome(false, jobResult.get(), projectName, applicationId);
+                return storeOutcome(false, jobResult.get(), writeCommitted.get(), projectName,
+                    applicationId);
             }
-            return storeOutcome(true, jobResult.get(), projectName, applicationId);
+            return storeOutcome(true, jobResult.get(), writeCommitted.get(), projectName,
+                applicationId);
         }
         catch (InterruptedException e)
         {
@@ -825,16 +852,20 @@ public class SetInfobaseCredentialsTool implements IMcpTool
             job.cancel();
             Thread.currentThread().interrupt();
             return jobResult.get() != null ? jobResult.get()
-                : ToolResult.error("Storing infobase credentials was interrupted.").toJson(); //$NON-NLS-1$
+                : writeCommitted.get()
+                    ? ToolResult.errorAfterMutation("Storing infobase credentials was interrupted " //$NON-NLS-1$
+                        + "after the credentials write committed; EDT may still be verifying the " //$NON-NLS-1$
+                        + "read-back.").toJson() //$NON-NLS-1$
+                    : ToolResult.error("Storing infobase credentials was interrupted.").toJson(); //$NON-NLS-1$
         }
     }
 
     /**
      * Pure, headless-testable seam mapping the bounded-Job outcome to the tool-result JSON. When the
-     * Job recorded a result it is returned verbatim — this covers both a clean finish AND the
-     * persist-first timeout case where the credentials already committed before the deadline. Otherwise
-     * a graceful error is produced: a timeout message when the Job did not finish, or a "no result"
-     * message when it finished without recording anything.
+     * Job recorded a result it is returned verbatim. Otherwise a graceful error is produced: a
+     * post-mutation timeout when the write committed but read-back did not finish, the original
+     * uncertainty wording when the write had not committed, or a "no result" message when the Job
+     * finished without recording anything.
      *
      * @param finished whether the Job completed within the timeout budget
      * @param recordedJson the JSON the Job recorded (success or error), or {@code null} if none
@@ -845,12 +876,28 @@ public class SetInfobaseCredentialsTool implements IMcpTool
     static String storeOutcome(boolean finished, String recordedJson, String projectName,
             String applicationId)
     {
+        return storeOutcome(finished, recordedJson, recordedJson != null, projectName, applicationId);
+    }
+
+    /** Same mapper with the persistent-write boundary represented independently of final JSON. */
+    static String storeOutcome(boolean finished, String recordedJson, boolean writeCommitted,
+            String projectName, String applicationId)
+    {
         if (recordedJson != null)
         {
             return recordedJson;
         }
         if (!finished)
         {
+            if (writeCommitted)
+            {
+                return ToolResult.errorAfterMutation("Storing infobase credentials timed out after " //$NON-NLS-1$
+                    + CREDENTIALS_TIMEOUT_SECONDS + " seconds for application " + applicationId //$NON-NLS-1$
+                    + " in project " + projectName //$NON-NLS-1$
+                    + ". The credentials write did commit, but EDT did not finish read-back " //$NON-NLS-1$
+                    + "verification before the deadline; do not retry based on this timeout.") //$NON-NLS-1$
+                    .toJson();
+            }
             return ToolResult.error("Storing infobase credentials timed out after " //$NON-NLS-1$
                 + CREDENTIALS_TIMEOUT_SECONDS + " seconds for application " + applicationId //$NON-NLS-1$
                 + " in project " + projectName //$NON-NLS-1$

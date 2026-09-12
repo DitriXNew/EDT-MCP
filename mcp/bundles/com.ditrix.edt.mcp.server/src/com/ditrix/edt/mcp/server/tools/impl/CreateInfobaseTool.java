@@ -133,6 +133,12 @@ public class CreateInfobaseTool implements IMcpTool
     /** Input key: authentication kind (INFOBASE / OS) for the stored credentials (#194). */
     private static final String KEY_ACCESS = "access"; //$NON-NLS-1$
 
+    /** Output key: consumer-facing credential read-back conclusion. */
+    private static final String KEY_VERIFICATION = "verification"; //$NON-NLS-1$
+
+    /** Output key: why credential read-back mismatched or could not prove persistence. */
+    private static final String KEY_VERIFICATION_REASON = "verificationReason"; //$NON-NLS-1$
+
     /** Common prefix of a standalone-server create/register failure message. */
     private static final String STANDALONE_SERVER_MSG_PREFIX = "Standalone-server "; //$NON-NLS-1$
 
@@ -300,6 +306,12 @@ public class CreateInfobaseTool implements IMcpTool
                 + "is unverified: call get_applications to confirm it.") //$NON-NLS-1$
             .stringProperty(McpKeys.APPLICATION_ID,
                 "ID of the newly created application (for chaining into update_database).") //$NON-NLS-1$
+            .enumProperty(KEY_VERIFICATION,
+                "Credential read-back outcome when credentials were requested: verified, " //$NON-NLS-1$
+                    + "mismatched, or not_verifiable.", //$NON-NLS-1$
+                "verified", "mismatched", "not_verifiable") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            .stringProperty(KEY_VERIFICATION_REASON,
+                "Why credential read-back mismatched or could not prove a stored entry exists.") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable status message.") //$NON-NLS-1$
             .build();
     }
@@ -578,21 +590,22 @@ public class CreateInfobaseTool implements IMcpTool
         }
 
         // --- 8. Optionally store infobase connection credentials (#194) ---
-        String credNote = storeCredentialsIfRequested(ibRef, credentials, register);
+        CredentialStoreReport credentialStore =
+            storeCredentialsIfRequested(ibRef, credentials, register);
 
         // --- 9. Read back, apply setDefault to what the read-back FOUND, and return ---
         // setDefault is applied AFTER the read-back on purpose (issue #412): it used to run its own
         // one-shot lookup BEFORE the bounded re-poll, so it could report "could not be set as default"
         // for an application the re-poll then found. One observation feeds one report.
         ResultContext rc = new ResultContext(projectName, infobaseDir, infobaseName, appManager, project);
-        return buildSuccessResult(rc, ibRef, setDefault, register, credNote);
+        return buildSuccessResult(rc, ibRef, setDefault, register, credentialStore);
     }
 
     /**
      * Stores infobase connection credentials on the freshly-built {@code ibRef} when the caller
-     * supplied any of {@code user}/{@code password}/{@code access} (#194), returning a note to append
-     * to the result message — a success note, a non-fatal WARNING when the store failed, or
-     * {@code null} when no credentials were requested. Credential storage never fails the
+     * supplied any of {@code user}/{@code password}/{@code access} (#194), returning the note and
+     * three-state verification to add to the create result — or {@code null} when no credentials
+     * were requested. Credential storage never fails the
      * infobase creation itself (the base is already created; whether it is BOUND is established
      * later, by the read-back).
      *
@@ -600,31 +613,19 @@ public class CreateInfobaseTool implements IMcpTool
      * @param credentials the requested connection credentials (any field may be {@code null}/empty)
      * @param register {@code true} for mode='register' (an existing base that already has users),
      *            {@code false} for mode='create' (a brand-new empty base with no users yet)
-     * @return a message note, or {@code null} when no credentials were requested
+     * @return the note and verification, or {@code null} when no credentials were requested
      */
-    private static String storeCredentialsIfRequested(InfobaseReference ibRef, Credentials credentials,
+    private static CredentialStoreReport storeCredentialsIfRequested(InfobaseReference ibRef,
+            Credentials credentials,
             boolean register)
     {
         if (!credentials.any())
         {
             return null;
         }
-        String error = storeSafely(() -> InfobaseAccessSupport.storeCredentials(ibRef, credentials.user,
-            credentials.password, InfobaseAccessSupport.parseAccess(credentials.access)));
-        if (error != null)
-        {
-            return " WARNING: connection credentials were NOT stored: " + error; //$NON-NLS-1$
-        }
-        // mode='create' makes a brand-new EMPTY infobase with NO users, so credentials for a named
-        // user authenticate only once a MATCHING user is added (via the configurator / БСЛ
-        // ПользователиИнформационнойБазы). Surface that so the caller is not surprised when a later
-        // update prompts for credentials (which the MCP server now auto-cancels).
-        String userNote = register
-            ? "" //$NON-NLS-1$
-            : " NOTE: a newly created infobase has no users yet — these credentials authenticate " //$NON-NLS-1$
-                + "only after a matching infobase user is added."; //$NON-NLS-1$
-        return " Stored connection credentials for user '" + (credentials.user == null ? "" : credentials.user) //$NON-NLS-1$ //$NON-NLS-2$
-            + "' (change them later with set_infobase_credentials)." + userNote; //$NON-NLS-1$
+        return storeSafely(() -> InfobaseAccessSupport.storeCredentials(ibRef, credentials.user,
+            credentials.password, InfobaseAccessSupport.parseAccess(credentials.access)),
+            credentials, register);
     }
 
     /**
@@ -637,27 +638,95 @@ public class CreateInfobaseTool implements IMcpTool
      * Here it is structural (and logged, so a real failure stays visible).
      *
      * @param store the store call, returning its write and read-back result
-     * @return the error text to report, or {@code null} when the credentials were stored
+     * @return the non-fatal note and any verification conclusion
      */
-    private static String storeSafely(
-            java.util.function.Supplier<InfobaseAccessSupport.StoreResult> store)
+    private static CredentialStoreReport storeSafely(
+            java.util.function.Supplier<InfobaseAccessSupport.StoreResult> store,
+            Credentials credentials, boolean register)
     {
         try
         {
-            InfobaseAccessSupport.StoreResult result = store.get();
-            if (result.error() != null)
-            {
-                return result.error();
-            }
-            return InfobaseAccessSupport.StoreResult.Verification.MISMATCHED == result.verification()
-                ? result.verificationReason() : null;
+            return credentialStoreReport(store.get(), credentials, register);
         }
         catch (Exception e)
         {
             Activator.logError("create_infobase: storing the connection credentials failed", e); //$NON-NLS-1$
             String reason = e.getMessage();
-            return (reason != null && !reason.trim().isEmpty()) ? reason : e.getClass().getSimpleName();
+            String error = (reason != null && !reason.trim().isEmpty())
+                ? reason : e.getClass().getSimpleName();
+            return new CredentialStoreReport(
+                " WARNING: connection credentials were NOT stored: " + error, null); //$NON-NLS-1$
         }
+    }
+
+    /** Message plus the structured conclusion of an optional credential store/read-back. */
+    static final class CredentialStoreReport
+    {
+        final String note;
+        final InfobaseAccessSupport.StoreResult storeResult;
+
+        CredentialStoreReport(String note, InfobaseAccessSupport.StoreResult storeResult)
+        {
+            this.note = note;
+            this.storeResult = storeResult;
+        }
+    }
+
+    /**
+     * Converts the shared three-state store result into create_infobase's non-fatal note and
+     * structured verification fields. Package-visible so all three states are unit-testable without
+     * secure storage.
+     */
+    static CredentialStoreReport credentialStoreReport(InfobaseAccessSupport.StoreResult result,
+            Credentials credentials, boolean register)
+    {
+        if (result.error() != null)
+        {
+            return new CredentialStoreReport(
+                " WARNING: connection credentials were NOT stored: " + result.error(), result); //$NON-NLS-1$
+        }
+        if (InfobaseAccessSupport.StoreResult.Verification.MISMATCHED == result.verification())
+        {
+            // Preserve the existing create contract: a mismatch is a warning and does not undo the
+            // database creation/registration that already committed.
+            return new CredentialStoreReport(
+                " WARNING: connection credentials were NOT stored: " //$NON-NLS-1$
+                    + result.verificationReason(), result);
+        }
+
+        String user = credentials.user == null ? "" : credentials.user; //$NON-NLS-1$
+        // mode='create' makes a brand-new EMPTY infobase with NO users, so credentials for a named
+        // user authenticate only once a MATCHING user is added (via the configurator / БСЛ
+        // ПользователиИнформационнойБазы). Surface that so the caller is not surprised when a later
+        // update prompts for credentials (which the MCP server now auto-cancels).
+        String userNote = register
+            ? "" //$NON-NLS-1$
+            : " NOTE: a newly created infobase has no users yet — these credentials authenticate " //$NON-NLS-1$
+                + "only after a matching infobase user is added."; //$NON-NLS-1$
+        if (InfobaseAccessSupport.StoreResult.Verification.NOT_VERIFIABLE == result.verification())
+        {
+            return new CredentialStoreReport(
+                " EDT accepted the connection-credentials update for user '" + user //$NON-NLS-1$
+                    + "', but read-back could not verify a stored entry: " //$NON-NLS-1$
+                    + result.verificationReason()
+                    + " Change the settings later with set_infobase_credentials." + userNote, //$NON-NLS-1$
+                result);
+        }
+        return new CredentialStoreReport(" Stored connection credentials for user '" + user //$NON-NLS-1$
+            + "' (change them later with set_infobase_credentials)." + userNote, result); //$NON-NLS-1$
+    }
+
+    /** Adds credential verification only when a credential store reached read-back. */
+    private static void putCredentialVerification(ToolResult result,
+            CredentialStoreReport credentialStore)
+    {
+        if (credentialStore == null || credentialStore.storeResult == null
+            || credentialStore.storeResult.verification() == null)
+        {
+            return;
+        }
+        result.put(KEY_VERIFICATION, credentialStore.storeResult.verificationName())
+            .put(KEY_VERIFICATION_REASON, credentialStore.storeResult.verificationReason());
     }
 
     /**
@@ -1992,9 +2061,11 @@ public class CreateInfobaseTool implements IMcpTool
         // the READ-BACK wst-server IApplication (not the FILE ibRef built earlier for the create
         // call) — InfobaseAccessSupport.storeCredentials(IApplication, ...) adapts IT to the
         // InfobaseReference that EDT's own launch path (ServerApplicationBehaviourDelegate) resolves.
-        String credNote = register ? storeStandaloneCredentialsIfRequested(readBack.app, credentials) : null;
+        CredentialStoreReport credentialStore = register
+            ? storeStandaloneCredentialsIfRequested(readBack.app, credentials) : null;
 
-        String note = concatNotes(setDefaultNote, credNote);
+        String note = concatNotes(setDefaultNote,
+            credentialStore == null ? null : credentialStore.note);
         String verb = register ? ACTION_REGISTERED : ACTION_CREATED;
         String subject = standaloneServerSubject(rc.infobaseName, rc.infobaseDir, register);
 
@@ -2006,6 +2077,7 @@ public class CreateInfobaseTool implements IMcpTool
                 notBoundMessage(subject, rc.projectName, register) + note)
                     .put(KEY_APPLICATION_KIND, KIND_STANDALONE_SERVER);
             putStandaloneEndpoint(error, actualPort, webUrl);
+            putCredentialVerification(error, credentialStore);
             return error.toJson();
         }
 
@@ -2016,6 +2088,7 @@ public class CreateInfobaseTool implements IMcpTool
             .put(KEY_INFOBASE_FILE, rc.infobaseDir.toAbsolutePath().toString())
             .put(KEY_INFOBASE_NAME, rc.infobaseName);
         putApplications(result, readBack);
+        putCredentialVerification(result, credentialStore);
 
         putStandaloneEndpoint(result, actualPort, webUrl);
         String newAppId = readBack.appId();
@@ -2084,7 +2157,7 @@ public class CreateInfobaseTool implements IMcpTool
     /**
      * Stores infobase connection credentials against the READ-BACK wst-server application (issue
      * #275) when the caller supplied any of {@code user}/{@code password}/{@code access}, returning
-     * a note to append to the result message — a success note, a non-fatal WARNING when the store
+     * a report to append to the result — a success note, a non-fatal WARNING when the store
      * failed (or the read-back produced no application to store them against), or
      * {@code null} when no credentials were requested. Credential storage never fails the
      * standalone-server registration itself (the server itself is already registered). Mirrors
@@ -2094,9 +2167,9 @@ public class CreateInfobaseTool implements IMcpTool
      * @param application the read-back wst-server application ({@code null} when the read-back
      *            produced none — measured absent, unreadable or interrupted)
      * @param credentials the requested connection credentials (any field may be {@code null}/empty)
-     * @return a message note, or {@code null} when no credentials were requested
+     * @return the note and verification, or {@code null} when no credentials were requested
      */
-    private static String storeStandaloneCredentialsIfRequested(IApplication application,
+    private static CredentialStoreReport storeStandaloneCredentialsIfRequested(IApplication application,
             Credentials credentials)
     {
         if (!credentials.any())
@@ -2107,18 +2180,14 @@ public class CreateInfobaseTool implements IMcpTool
         {
             // Why it was not available (measured absent, unreadable, interrupted) is the read-back's
             // story, told by the message this note is appended to — do not restate it as a fact here.
-            return " WARNING: connection credentials were NOT stored: the new standalone-server " //$NON-NLS-1$
-                + "application was not available from the read-back - check get_applications and " //$NON-NLS-1$
-                + "store them with set_infobase_credentials."; //$NON-NLS-1$
+            return new CredentialStoreReport(
+                " WARNING: connection credentials were NOT stored: the new standalone-server " //$NON-NLS-1$
+                    + "application was not available from the read-back - check get_applications and " //$NON-NLS-1$
+                    + "store them with set_infobase_credentials.", null); //$NON-NLS-1$
         }
-        String error = storeSafely(() -> InfobaseAccessSupport.storeCredentials(application,
-            credentials.user, credentials.password, InfobaseAccessSupport.parseAccess(credentials.access)));
-        if (error != null)
-        {
-            return " WARNING: connection credentials were NOT stored: " + error; //$NON-NLS-1$
-        }
-        return " Stored connection credentials for user '" + (credentials.user == null ? "" : credentials.user) //$NON-NLS-1$ //$NON-NLS-2$
-            + "' (change them later with set_infobase_credentials)."; //$NON-NLS-1$
+        return storeSafely(() -> InfobaseAccessSupport.storeCredentials(application,
+            credentials.user, credentials.password, InfobaseAccessSupport.parseAccess(credentials.access)),
+            credentials, true);
     }
 
     /**
@@ -2451,19 +2520,29 @@ public class CreateInfobaseTool implements IMcpTool
     static String buildSuccessResult(ResultContext rc, InfobaseReference ibRef, boolean setDefault,
             boolean register, String credNote)
     {
+        return buildSuccessResult(rc, ibRef, setDefault, register,
+            credNote == null ? null : new CredentialStoreReport(credNote, null));
+    }
+
+    static String buildSuccessResult(ResultContext rc, InfobaseReference ibRef, boolean setDefault,
+            boolean register, CredentialStoreReport credentialStore)
+    {
         ApplicationReadBack readBack = pollForNewApplication(rc.appManager, rc.project,
             app -> isMatchingNewInfobaseApp(app, ibRef));
 
         String setDefaultNote = setDefault ? applySetDefault(rc.appManager, rc.project, readBack) : null;
-        String note = concatNotes(setDefaultNote, credNote);
+        String note = concatNotes(setDefaultNote,
+            credentialStore == null ? null : credentialStore.note);
         String verb = register ? ACTION_REGISTERED : ACTION_CREATED;
         String subject = "Infobase '" + rc.infobaseName + "' " + verb + " at '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + rc.infobaseDir.toAbsolutePath() + "'"; //$NON-NLS-1$
 
         if (readBack.outcome == BindingOutcome.NOT_BOUND)
         {
-            return notBoundResult(rc, verb, readBack, subject,
-                notBoundMessage(subject, rc.projectName, register) + note).toJson();
+            ToolResult error = notBoundResult(rc, verb, readBack, subject,
+                notBoundMessage(subject, rc.projectName, register) + note);
+            putCredentialVerification(error, credentialStore);
+            return error.toJson();
         }
 
         ToolResult result = ToolResult.success()
@@ -2472,6 +2551,7 @@ public class CreateInfobaseTool implements IMcpTool
             .put(KEY_INFOBASE_FILE, rc.infobaseDir.toAbsolutePath().toString())
             .put(KEY_INFOBASE_NAME, rc.infobaseName);
         putApplications(result, readBack);
+        putCredentialVerification(result, credentialStore);
 
         String newAppId = readBack.appId();
         if (newAppId != null)

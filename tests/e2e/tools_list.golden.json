@@ -472,6 +472,17 @@
         "success": {
           "type": "boolean"
         },
+        "verification": {
+          "enum": [
+            "verified",
+            "mismatched",
+            "not_verifiable"
+          ],
+          "type": "string"
+        },
+        "verificationReason": {
+          "type": "string"
+        },
         "webUrl": {
           "type": "string"
         }

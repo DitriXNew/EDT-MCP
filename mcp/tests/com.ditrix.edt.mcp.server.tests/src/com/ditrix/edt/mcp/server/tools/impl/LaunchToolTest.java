@@ -27,7 +27,10 @@ import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
@@ -722,6 +725,113 @@ public class LaunchToolTest
     }
 
     @Test
+    public void testConclusiveStandaloneFailureDisarmsBeforeTheCallReturns()
+    {
+        AtomicInteger cleanups = new AtomicInteger();
+        IStatus refusal = new Status(IStatus.ERROR, "test", "server start refused"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        StartOutcome outcome = LaunchTool.awaitStandaloneServerStart(
+            new FakeStandaloneStartService(refusal), new Object(), "Standalone", //$NON-NLS-1$
+            ILaunchManager.DEBUG_MODE, null, cleanups::incrementAndGet, 5_000L, 5_000L);
+
+        assertNotNull(outcome.failure());
+        assertTrue(outcome.conclusive());
+        assertEquals("the confirmer must be disarmed before a conclusive call returns", //$NON-NLS-1$
+            1, cleanups.get());
+    }
+
+    @Test
+    public void testInconclusiveStandaloneStartStaysArmedUntilItsJobCompletes() throws Exception
+    {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch cleaned = new CountDownLatch(1);
+        AtomicInteger cleanups = new AtomicInteger();
+        AtomicReference<StartOutcome> answer = new AtomicReference<>();
+        AtomicReference<Throwable> callerFailure = new AtomicReference<>();
+        BlockingStandaloneStartService service =
+            new BlockingStandaloneStartService(started, release);
+        Runnable cleanup = () -> {
+            cleanups.incrementAndGet();
+            cleaned.countDown();
+        };
+        Thread caller = new Thread(() -> {
+            try
+            {
+                answer.set(LaunchTool.awaitStandaloneServerStart(service, new Object(),
+                    "Standalone", ILaunchManager.DEBUG_MODE, null, cleanup, 100L, 5_000L)); //$NON-NLS-1$
+            }
+            catch (Throwable t)
+            {
+                callerFailure.set(t);
+            }
+        }, "test: bounded standalone caller"); //$NON-NLS-1$
+
+        caller.start();
+        try
+        {
+            assertTrue("the underlying start must be running before the bounded wait returns", //$NON-NLS-1$
+                started.await(5, TimeUnit.SECONDS));
+            caller.join(5_000L);
+            assertFalse("the bounded caller must have returned", caller.isAlive()); //$NON-NLS-1$
+            assertNull(callerFailure.get());
+            assertNotNull(answer.get());
+            assertFalse(answer.get().conclusive());
+            assertEquals("an in-flight start must keep its targeted confirmer armed", //$NON-NLS-1$
+                0, cleanups.get());
+
+            release.countDown();
+            assertTrue("job completion must release the deferred confirmer", //$NON-NLS-1$
+                cleaned.await(5, TimeUnit.SECONDS));
+            assertEquals(1, cleanups.get());
+        }
+        finally
+        {
+            release.countDown();
+            caller.join(5_000L);
+        }
+    }
+
+    @Test
+    public void testDeferredStandaloneDisarmRunsAtMostOnceForCompletionAndCap() throws Exception
+    {
+        CountDownLatch cleaned = new CountDownLatch(1);
+        AtomicInteger cleanups = new AtomicInteger();
+        LaunchTool.DeferredStartCleanup cleanup = new LaunchTool.DeferredStartCleanup(() -> {
+            cleanups.incrementAndGet();
+            cleaned.countDown();
+        }, 100L);
+
+        cleanup.afterBoundedWait(false);
+        cleanup.jobFinished();
+        assertTrue(cleaned.await(5, TimeUnit.SECONDS));
+        Thread.sleep(250L); // let the independently scheduled hard-cap path arrive too
+        cleanup.jobFinished();
+
+        assertEquals("job completion and the cap must share one exactly-once release", //$NON-NLS-1$
+            1, cleanups.get());
+    }
+
+    @Test
+    public void testDeferredStandaloneDisarmCapAlsoWinsAtMostOnce() throws Exception
+    {
+        CountDownLatch cleaned = new CountDownLatch(1);
+        AtomicInteger cleanups = new AtomicInteger();
+        LaunchTool.DeferredStartCleanup cleanup = new LaunchTool.DeferredStartCleanup(() -> {
+            cleanups.incrementAndGet();
+            cleaned.countDown();
+        }, 25L);
+
+        cleanup.afterBoundedWait(false);
+        assertTrue("the cap must release a confirmer whose job never finishes", //$NON-NLS-1$
+            cleaned.await(5, TimeUnit.SECONDS));
+        cleanup.jobFinished();
+
+        assertEquals("a late job completion must not release the arm twice", //$NON-NLS-1$
+            1, cleanups.get());
+    }
+
+    @Test
     public void testStandaloneServerRecoversStaleStateBeforeDispatchingStart()
     {
         AtomicInteger order = new AtomicInteger();
@@ -961,6 +1071,30 @@ public class LaunchToolTest
             .getAsJsonObject().getAsJsonObject("properties"); //$NON-NLS-1$
         assertTrue(outputProperties.has("standaloneServerPortsReassigned")); //$NON-NLS-1$
         assertFalse(outputProperties.has("portsReassigned")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testStandaloneServerFailureReportsReassignedPortsAsPostMutation()
+    {
+        StartOutcome outcome = LaunchTool.startStandaloneServerWithPolicy(
+            new PortReassigningFailingStandaloneStartService(), new Object(), "Standalone", //$NON-NLS-1$
+            ILaunchManager.DEBUG_MODE, null, null, StandaloneServerPortConflictPolicy.REASSIGN);
+        assertNotNull(outcome.failure());
+        assertTrue(outcome.portsReassigned());
+
+        JsonObject result = JsonParser.parseString(LaunchTool.standaloneStartFailure(
+            LaunchTool.standaloneAttemptError("Standalone", outcome.failure()), //$NON-NLS-1$
+            outcome.portsReassigned())).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result.get("standaloneServerPortsReassigned").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(result.has("mutationOutcomeUnknown")); //$NON-NLS-1$
+
+        JsonObject unchanged = JsonParser.parseString(LaunchTool.standaloneStartFailure(
+            LaunchTool.standaloneAttemptError("Standalone", "server start refused"), false)) //$NON-NLS-1$ //$NON-NLS-2$
+            .getAsJsonObject();
+        assertFalse(unchanged.has("standaloneServerPortsReassigned")); //$NON-NLS-1$
+        assertFalse(unchanged.has("mutationCommitted")); //$NON-NLS-1$
     }
 
     @Test
@@ -1592,6 +1726,43 @@ public class LaunchToolTest
         public IStatus startServer(Object server, String launchMode, Object monitor)
         {
             recordPortReassign();
+            return Status.OK_STATUS;
+        }
+    }
+
+    /** A service that persistently reassigns its ports and then reports a failed start. */
+    public static final class PortReassigningFailingStandaloneStartService
+    {
+        public IStatus startServer(Object server, String launchMode, Object monitor)
+        {
+            recordPortReassign();
+            return new Status(IStatus.ERROR, "test", "server start refused after reassign"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /** A start that ignores cancellation until the test explicitly releases it. */
+    public static final class BlockingStandaloneStartService
+    {
+        private final CountDownLatch started;
+        private final CountDownLatch release;
+
+        BlockingStandaloneStartService(CountDownLatch started, CountDownLatch release)
+        {
+            this.started = started;
+            this.release = release;
+        }
+
+        public IStatus startServer(Object server, String launchMode, Object monitor)
+        {
+            started.countDown();
+            try
+            {
+                release.await(60, TimeUnit.SECONDS);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
             return Status.OK_STATUS;
         }
     }

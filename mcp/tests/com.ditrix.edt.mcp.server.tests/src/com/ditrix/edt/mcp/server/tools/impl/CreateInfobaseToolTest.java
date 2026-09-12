@@ -34,6 +34,7 @@ import org.junit.Test;
 import com._1c.g5.v8.dt.platform.services.model.FileConnectionString;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.StoreResult;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -220,6 +221,10 @@ public class CreateInfobaseToolTest
             schema.contains("\"applicationKind\"")); //$NON-NLS-1$
         assertTrue("outputSchema must declare webUrl", schema.contains("\"webUrl\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must declare port", schema.contains("\"port\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("outputSchema must declare credential verification", //$NON-NLS-1$
+            schema.contains("\"verification\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare the verification reason", //$NON-NLS-1$
+            schema.contains("\"verificationReason\"")); //$NON-NLS-1$
     }
 
     @Test
@@ -1456,6 +1461,45 @@ public class CreateInfobaseToolTest
     }
 
     @Test
+    public void verifiedCredentialStoreIsReportedAsVerifiedAndStored()
+    {
+        JsonObject json = credentialVerificationResult(StoreResult.verified(infobaseRef()));
+
+        assertEquals("verified", json.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(json.has("verificationReason")); //$NON-NLS-1$
+        assertTrue(json.get("message").getAsString() //$NON-NLS-1$
+            .contains("Stored connection credentials")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void mismatchedCredentialStoreKeepsItsWarningAndReportsTheReason()
+    {
+        String reason = "Requested values did not match the read-back."; //$NON-NLS-1$
+        JsonObject json = credentialVerificationResult(
+            StoreResult.mismatched(reason, false, infobaseRef()));
+
+        assertEquals("mismatched", json.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(reason, json.get("verificationReason").getAsString()); //$NON-NLS-1$
+        assertTrue("mismatched behaviour stays the existing non-fatal warning", //$NON-NLS-1$
+            json.get("message").getAsString().contains("credentials were NOT stored")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void notVerifiableCredentialStoreIsAcceptedWithoutClaimingAConfirmedStore()
+    {
+        String reason = "OS access with empty credentials matches EDT's fallback."; //$NON-NLS-1$
+        JsonObject json = credentialVerificationResult(
+            StoreResult.notVerifiable(reason, infobaseRef()));
+
+        assertEquals("not_verifiable", json.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(reason, json.get("verificationReason").getAsString()); //$NON-NLS-1$
+        String message = json.get("message").getAsString(); //$NON-NLS-1$
+        assertTrue(message.contains("EDT accepted")); //$NON-NLS-1$
+        assertTrue(message.contains("could not verify a stored entry")); //$NON-NLS-1$
+        assertFalse(message.contains("Stored connection credentials")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testComparisonItselfThrowingIsUnverified() throws Exception
     {
         // The echo renders fine and the COMPARISON is what throws - the path the previous test could
@@ -1564,6 +1608,27 @@ public class CreateInfobaseToolTest
     {
         String raw = CreateInfobaseTool.buildSuccessResult(readBackContext(mgr, project),
             infobaseRef(), setDefault, register, credNote);
+        return JsonParser.parseString(raw).getAsJsonObject();
+    }
+
+    /** Builds a bound file-infobase create result carrying a chosen credential verification state. */
+    private static JsonObject credentialVerificationResult(StoreResult storeResult)
+    {
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        // matchingInfobaseApp stubs its own mock, so building it inside thenReturn(...) makes
+        // Mockito report this stubbing as unfinished. Build it first, as the other tests do.
+        List<IApplication> found =
+            Collections.singletonList(matchingInfobaseApp("app-credentials")); //$NON-NLS-1$
+        when(mgr.getApplications(project)).thenReturn(found);
+        CreateInfobaseTool.Credentials credentials =
+            new CreateInfobaseTool.Credentials("Admin", "secret-value", null); //$NON-NLS-1$ //$NON-NLS-2$
+        CreateInfobaseTool.CredentialStoreReport report =
+            CreateInfobaseTool.credentialStoreReport(storeResult, credentials, true);
+
+        String raw = CreateInfobaseTool.buildSuccessResult(readBackContext(mgr, project),
+            infobaseRef(), false, true, report);
+        assertFalse("create_infobase must never return the password", raw.contains("secret-value")); //$NON-NLS-1$ //$NON-NLS-2$
         return JsonParser.parseString(raw).getAsJsonObject();
     }
 

@@ -1,6 +1,6 @@
 # set_infobase_credentials
 
-Store infobase connection credentials (user/password) so update_database and launch can authenticate the update agent on an infobase that has a user list (issue #194) — also for a standalone-server application wrapping an already-registered infobase (issue #275). Selects an EXISTING infobase user (does not create users); an empty password is valid (demo bases). Target by launchConfigurationName (preferred) or projectName + applicationId (from get_applications). With launchConfigurationName the launched 1C CLIENT is configured too so it stops asking for a password (issue #359); with projectName + applicationId only the agent is - check clientConfigured in the result. Full parameters and examples: call get_tool_guide('set_infobase_credentials').
+STORE infobase credentials (user/password) in EDT settings so update_database and launch can authenticate. The secret PERSISTS beyond this call, and addressing a launch configuration also rewrites that configuration's client authentication. Parameters and examples: get_tool_guide('set_infobase_credentials').
 
 ## Parameters
 | Parameter | Required | Type | Description |

@@ -12,7 +12,11 @@ import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.IJobChangeEvent;
 import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.core.runtime.jobs.JobChangeAdapter;
+
+import com.ditrix.edt.mcp.server.Activator;
 
 /**
  * Runs a unit of platform work in a background {@link Job} and waits for it with a hard
@@ -35,9 +39,9 @@ import org.eclipse.core.runtime.jobs.Job;
  * starting, and reporting THAT as "it may still be running" is the opposite of the truth — hence
  * the separate {@link Outcome#TIMED_OUT_BEFORE_START}.
  *
- * <p>The job is joined synchronously by the calling thread, so an unattended-safety
- * suppressor armed around the call (auth dialogs, launch auto-confirm) still sees the
- * request in flight and keeps covering modals raised from the job thread.
+ * <p>The job is joined synchronously only until the caller's deadline. A caller whose unattended-
+ * safety guard must outlive that bounded wait can use the completion-callback overload to release
+ * the guard when the Job manager reports eventual completion.
  */
 public final class BoundedJob
 {
@@ -164,6 +168,27 @@ public final class BoundedJob
      */
     public static Result run(String jobName, long timeoutMs, IBoundedWork work)
     {
+        return run(jobName, timeoutMs, work, null);
+    }
+
+    /**
+     * Runs {@code work} in a background job, waits at most {@code timeoutMs} for it, and invokes
+     * {@code completion} when the Job manager eventually reports the job done.
+     *
+     * <p>The completion belongs to the Job lifecycle, not the caller's bounded wait: after
+     * {@link Outcome#TIMED_OUT} or {@link Outcome#INTERRUPTED}, this method still returns on time and
+     * the callback runs later when the Job manager reports the Job done. The callback is invoked at
+     * most once, including when the job is cancelled before entering {@code work}.
+     *
+     * @param jobName the job name shown in EDT's progress UI
+     * @param timeoutMs the caller's deadline in milliseconds
+     * @param work the work to run
+     * @param completion optional callback invoked after the job terminates, whether work succeeded,
+     *     raised, or never started
+     * @return the bounded outcome
+     */
+    public static Result run(String jobName, long timeoutMs, IBoundedWork work, Runnable completion)
+    {
         long startMs = System.currentTimeMillis();
         // Written by the job thread, read by the calling thread only after join() reports the job
         // finished — that report is the happens-before edge. On the TIMED_OUT path they are not
@@ -207,6 +232,29 @@ public final class BoundedJob
                 return Status.OK_STATUS;
             }
         };
+        if (completion != null)
+        {
+            AtomicBoolean completionCalled = new AtomicBoolean();
+            job.addJobChangeListener(new JobChangeAdapter()
+            {
+                @Override
+                public void done(IJobChangeEvent event)
+                {
+                    if (!completionCalled.compareAndSet(false, true))
+                    {
+                        return;
+                    }
+                    try
+                    {
+                        completion.run();
+                    }
+                    catch (Throwable t) // NOSONAR lifecycle notification must not damage the Job manager
+                    {
+                        Activator.logError("Bounded job completion callback failed: " + jobName, t); //$NON-NLS-1$
+                    }
+                }
+            });
+        }
         job.setUser(false);
         McpJobs.schedule(job);
 

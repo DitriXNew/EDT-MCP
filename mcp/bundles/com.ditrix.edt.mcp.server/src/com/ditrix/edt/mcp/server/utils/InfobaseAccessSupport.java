@@ -111,6 +111,13 @@ public final class InfobaseAccessSupport
             return verification;
         }
 
+        /** Lower-case wire value shared by credential-setting and infobase-creation results. */
+        public String verificationName()
+        {
+            return verification == null ? null
+                : verification.name().toLowerCase(java.util.Locale.ROOT);
+        }
+
         public String verificationReason()
         {
             return verificationReason;
@@ -235,10 +242,22 @@ public final class InfobaseAccessSupport
     public static StoreResult storeCredentials(IApplication application, String user, String password,
             InfobaseAccess access)
     {
+        return storeCredentials(application, user, password, access, null);
+    }
+
+    /**
+     * Stores credentials and reports the write boundary before consumer-facing read-back begins.
+     *
+     * @param writeCommitted optional callback invoked immediately after {@code updateSettings}
+     *     returns successfully
+     */
+    public static StoreResult storeCredentials(IApplication application, String user, String password,
+            InfobaseAccess access, Runnable writeCommitted)
+    {
         InfobaseReference ref = resolveInfobaseReference(application);
         if (ref != null)
         {
-            return storeCredentials(ref, user, password, access);
+            return storeCredentials(ref, user, password, access, writeCommitted);
         }
         return StoreResult.failed("Application '" + application.getId() //$NON-NLS-1$
             + "' exposes no infobase reference — credentials apply to infobases and to standalone " //$NON-NLS-1$
@@ -349,6 +368,12 @@ public final class InfobaseAccessSupport
     public static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
             InfobaseAccess access)
     {
+        return storeCredentials(ref, user, password, access, (Runnable)null);
+    }
+
+    private static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
+            InfobaseAccess access, Runnable writeCommitted)
+    {
         if (ref == null)
         {
             return StoreResult.failed("No infobase reference to store credentials for.", null); //$NON-NLS-1$
@@ -359,11 +384,17 @@ public final class InfobaseAccessSupport
             return StoreResult.failed("EDT infobase access manager is not available " //$NON-NLS-1$
                 + "(the platform-services plugin may not be ready).", ref); //$NON-NLS-1$
         }
-        return storeCredentials(ref, user, password, access, manager);
+        return storeCredentials(ref, user, password, access, manager, writeCommitted);
     }
 
     static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
             InfobaseAccess access, IInfobaseAccessManager manager)
+    {
+        return storeCredentials(ref, user, password, access, manager, null);
+    }
+
+    static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
+            InfobaseAccess access, IInfobaseAccessManager manager, Runnable writeCommitted)
     {
         String requestedUser = user == null ? "" : user; //$NON-NLS-1$
         String requestedPassword = password == null ? "" : password; //$NON-NLS-1$
@@ -378,6 +409,10 @@ public final class InfobaseAccessSupport
                 + PlatformFailures.describeWithRootCause(e);
             Activator.logError("set credentials: updateSettings failed", e); //$NON-NLS-1$
             return StoreResult.failed(message, ref);
+        }
+        if (writeCommitted != null)
+        {
+            writeCommitted.run();
         }
 
         IInfobaseAccessSettings readBack;
