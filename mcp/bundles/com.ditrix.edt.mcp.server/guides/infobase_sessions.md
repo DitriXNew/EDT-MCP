@@ -30,7 +30,7 @@ Treating every Designer session as a blocker would refuse every normal EDT updat
 - `sessionId` — for `terminate`, either the full UUID or numeric session number returned by `list`. A Designer session requires its exact full UUID.
 - `all` — for `terminate`, `true` selects every non-agent session. Use exactly one of `sessionId` or `all=true`.
 - `confirm` — must be `true` for `terminate`.
-- `message` — optional text passed to `ibcmd --error-message` and shown to the terminated user.
+- `message` — optional text passed to `ibcmd --error-message` and shown to the terminated user. It must not contain a NUL character (U+0000): the platform refuses such an argument, so the call is rejected up front rather than failing with an unknown outcome.
 
 ## Examples
 

@@ -158,7 +158,7 @@ public class InfobaseSessionsTool implements IMcpTool
         boolean confirm = JsonUtils.extractBooleanArgument(params, "confirm", false); //$NON-NLS-1$
         String message = JsonUtils.extractStringArgument(params, McpKeys.MESSAGE);
 
-        String validation = validate(action, sessionId, all, confirm);
+        String validation = validate(action, sessionId, all, confirm, message);
         if (validation != null)
         {
             return ToolResult.error(validation).toJson();
@@ -193,7 +193,8 @@ public class InfobaseSessionsTool implements IMcpTool
     }
 
     /** Validates action-specific safety and selector rules before platform access. */
-    static String validate(String action, String sessionId, boolean all, boolean confirm)
+    static String validate(String action, String sessionId, boolean all, boolean confirm,
+        String message)
     {
         if (!ACTION_LIST.equals(action) && !ACTION_TERMINATE.equals(action))
         {
@@ -219,6 +220,14 @@ public class InfobaseSessionsTool implements IMcpTool
         if (hasSession && !InfobaseSessionErrorProjection.isSessionSelector(sessionId))
         {
             return "sessionId must be a full UUID or the numeric session-id returned by list."; //$NON-NLS-1$
+        }
+        // ProcessBuilder.start() refuses a NUL-bearing argument BEFORE it creates anything, so a
+        // message carrying one could only ever fail - and would do it late, as an unknown
+        // mutation outcome. Refusing it here keeps the answer definitive and actionable.
+        if (message != null && message.indexOf(0) >= 0)
+        {
+            return "message must not contain a NUL character (U+0000): the platform refuses " //$NON-NLS-1$
+                + "such an argument, so nothing would be terminated. Remove it and retry."; //$NON-NLS-1$
         }
         return null;
     }

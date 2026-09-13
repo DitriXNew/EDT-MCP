@@ -186,16 +186,16 @@ public class InfobaseSessionsToolTest
     @Test
     public void terminateRequiresConfirmationAndExactlyOneSelector()
     {
-        assertTrue(InfobaseSessionsTool.validate("terminate", "42", false, false) //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(InfobaseSessionsTool.validate("terminate", "42", false, false, null) //$NON-NLS-1$ //$NON-NLS-2$
             .contains("confirm=true")); //$NON-NLS-1$
-        assertTrue(InfobaseSessionsTool.validate("terminate", null, false, true) //$NON-NLS-1$
+        assertTrue(InfobaseSessionsTool.validate("terminate", null, false, true, null) //$NON-NLS-1$
             .contains("exactly one")); //$NON-NLS-1$
-        assertTrue(InfobaseSessionsTool.validate("terminate", "42", true, true) //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(InfobaseSessionsTool.validate("terminate", "42", true, true, null) //$NON-NLS-1$ //$NON-NLS-2$
             .contains("exactly one")); //$NON-NLS-1$
-        assertTrue(InfobaseSessionsTool.validate("terminate", "not-an-id", false, true) //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(InfobaseSessionsTool.validate("terminate", "not-an-id", false, true, null) //$NON-NLS-1$ //$NON-NLS-2$
             .contains("full UUID")); //$NON-NLS-1$
-        assertNull(InfobaseSessionsTool.validate("terminate", "42", false, true)); //$NON-NLS-1$ //$NON-NLS-2$
-        assertNull(InfobaseSessionsTool.validate("terminate", null, true, true)); //$NON-NLS-1$
+        assertNull(InfobaseSessionsTool.validate("terminate", "42", false, true, null)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(InfobaseSessionsTool.validate("terminate", null, true, true, null)); //$NON-NLS-1$
     }
 
     @Test
@@ -530,5 +530,29 @@ public class InfobaseSessionsToolTest
         assertEquals(1, result.get("terminatedCount").getAsInt()); //$NON-NLS-1$
         assertEquals(1, result.getAsJsonArray("sessions").size()); //$NON-NLS-1$
         assertFalse(result.has("attemptedCount")); //$NON-NLS-1$
+    }
+
+    /**
+     * ProcessBuilder.start() refuses a NUL-bearing argument before it creates a process, so a
+     * message carrying one can only fail - and it would fail late, as an unknown mutation
+     * outcome. The refusal belongs on the way in, where the answer is still definitive.
+     */
+    @Test
+    public void aMessageWithANulCharacterIsRefusedBeforeAnythingIsAttempted()
+    {
+        String refusal = InfobaseSessionsTool.validate("terminate", //$NON-NLS-1$
+            "11111111-1111-1111-1111-111111111111", false, true, "bye\u0000there"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull("a NUL-bearing message must be refused, not attempted", refusal); //$NON-NLS-1$
+        assertTrue("the refusal must name the character and the fix: " + refusal, //$NON-NLS-1$
+            refusal.contains("U+0000") && refusal.contains("Remove it")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void anOrdinaryMessageIsStillAccepted()
+    {
+        assertNull(InfobaseSessionsTool.validate("terminate", //$NON-NLS-1$
+            "11111111-1111-1111-1111-111111111111", false, true, //$NON-NLS-1$
+            "Maintenance window, please reconnect in 5 minutes")); //$NON-NLS-1$
     }
 }
