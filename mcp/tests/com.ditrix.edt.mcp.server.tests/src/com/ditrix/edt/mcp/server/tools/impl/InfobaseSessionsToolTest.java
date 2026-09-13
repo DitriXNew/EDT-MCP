@@ -697,4 +697,71 @@ public class InfobaseSessionsToolTest
             result.has("terminatedCount")); //$NON-NLS-1$
         assertEquals("not_verifiable", result.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
     }
+    /**
+     * The returned ids must be exactly the set the loop skipped: a caller that terminates them
+     * one by one has to be able to finish, so the count and the list can never disagree.
+     */
+    @Test
+    public void theReturnedIdsAreExactlyTheSessionsTheLoopSkipped()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.bulkBudgetStoppedResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.readable(List.of()), List.of(DESIGNER, SECOND_CLIENT)))
+            .getAsJsonObject();
+
+        JsonArray ids = result.getAsJsonArray("notAttemptedSessionIds"); //$NON-NLS-1$
+        assertEquals(result.get("notAttemptedCount").getAsInt(), ids.size()); //$NON-NLS-1$
+        assertEquals(DESIGNER.sessionId(), ids.get(0).getAsString());
+        assertEquals(SECOND_CLIENT.sessionId(), ids.get(1).getAsString());
+    }
+    /**
+     * A session the loop never reached can disconnect on its own before the re-read. It no
+     * longer blocks an update, so it must not appear in the continuation - and when the whole
+     * unreached tail went that way, the call was not partial and must not report an error.
+     */
+    @Test
+    public void aTailThatDisconnectedOnItsOwnIsNotPartOfTheContinuation()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.readable(List.of()), List.of(SECOND_CLIENT))).getAsJsonObject();
+
+        assertTrue("the infobase is clear, so this is not a budget failure", //$NON-NLS-1$
+            result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(1, result.get("terminatedCount").getAsInt()); //$NON-NLS-1$
+        assertFalse("a session that vanished on its own is not outstanding work", //$NON-NLS-1$
+            result.has("notAttemptedSessionIds")); //$NON-NLS-1$
+    }
+
+    /** Only part of the tail vanished, so the continuation names exactly what is left. */
+    @Test
+    public void aPartiallyVanishedTailNarrowsTheContinuationToWhatRemains()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.readable(List.of(DESIGNER)), List.of(DESIGNER, SECOND_CLIENT)))
+            .getAsJsonObject();
+
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(1, result.get("notAttemptedCount").getAsInt()); //$NON-NLS-1$
+        JsonArray ids = result.getAsJsonArray("notAttemptedSessionIds"); //$NON-NLS-1$
+        assertEquals(1, ids.size());
+        assertEquals(DESIGNER.sessionId(), ids.get(0).getAsString());
+    }
+
+    /**
+     * An unreadable list is not evidence that the tail went away, so nothing is dropped from
+     * the continuation on the strength of a read that did not happen.
+     */
+    @Test
+    public void anUnreadableListKeepsTheWholeTailInTheContinuation()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.unreachable("server stopped before verification"), //$NON-NLS-1$
+            List.of(DESIGNER, SECOND_CLIENT))).getAsJsonObject();
+
+        assertEquals(2, result.get("notAttemptedCount").getAsInt()); //$NON-NLS-1$
+        assertEquals(2, result.getAsJsonArray("notAttemptedSessionIds").size()); //$NON-NLS-1$
+    }
 }

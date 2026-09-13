@@ -481,10 +481,16 @@ public class InfobaseSessionsTool implements IMcpTool
     static String terminationReadBackResult(String projectName, String applicationId,
         List<SessionInfo> attempted, ReadResult after, List<SessionInfo> notAttempted)
     {
-        if (!notAttempted.isEmpty())
+        // A session in the unreached tail can disconnect on its own while the loop runs. The
+        // re-read proves it no longer blocks anything, so it belongs in neither the
+        // continuation nor the count - and if the whole tail went that way, this was not a
+        // partial run at all. An unreadable list proves nothing, so it drops nothing.
+        List<SessionInfo> outstanding =
+            after.isReadable() ? stillPresentAmong(notAttempted, after) : notAttempted;
+        if (!outstanding.isEmpty())
         {
             return bulkBudgetStoppedResult(projectName, applicationId, attempted, after,
-                notAttempted);
+                outstanding);
         }
         if (!after.isReadable())
         {
@@ -613,16 +619,23 @@ public class InfobaseSessionsTool implements IMcpTool
         return result.put(KEY_VERIFICATION, VERIFICATION_VERIFIED).toJson();
     }
 
-    /** The raw UUIDs of the given sessions, for a continuation that ignores list order. */
+    /**
+     * The raw UUIDs of the given sessions, for a continuation that ignores list order.
+     *
+     * <p>Every id is emitted. The parser never builds a session without one - a record whose
+     * id is missing or blank is dropped before a {@code SessionInfo} exists - so filtering here
+     * would protect against nothing while letting the returned ids silently disagree with
+     * {@code notAttemptedCount}, which is exactly the set the caller needs to be complete.
+     *
+     * @param sessions the sessions to name
+     * @return one id per session, in selection order
+     */
     static List<String> sessionIds(List<SessionInfo> sessions)
     {
         List<String> ids = new ArrayList<>();
         for (SessionInfo session : sessions)
         {
-            if (session.sessionId() != null)
-            {
-                ids.add(session.sessionId());
-            }
+            ids.add(session.sessionId());
         }
         return ids;
     }
