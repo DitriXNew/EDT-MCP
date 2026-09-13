@@ -472,6 +472,17 @@
         "success": {
           "type": "boolean"
         },
+        "verification": {
+          "enum": [
+            "verified",
+            "mismatched",
+            "not_verifiable"
+          ],
+          "type": "string"
+        },
+        "verificationReason": {
+          "type": "string"
+        },
         "webUrl": {
           "type": "string"
         }
@@ -2974,6 +2985,126 @@
   },
   {
     "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "List or terminate sessions on a running standalone-server infobase. DESTRUCTIVE for terminate: pass confirm=true; bulk termination skips Designer, while its exact full UUID can target it. Full parameters and examples: call get_tool_guide('infobase_sessions').",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "description": "list (default) reads sessions; terminate ends the selected session(s).",
+          "enum": [
+            "list",
+            "terminate"
+          ],
+          "type": "string"
+        },
+        "all": {
+          "description": "For terminate, true selects every non-agent session; Designer is always excluded.",
+          "type": "boolean"
+        },
+        "applicationId": {
+          "description": "Application ID from get_applications; defaults to the project's default application.",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "Required true for terminate; list never changes sessions.",
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "sessionId": {
+          "description": "For terminate, the full session UUID or numeric session-id returned by list; a Designer session requires its exact full UUID.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectName"
+      ],
+      "type": "object"
+    },
+    "name": "infobase_sessions",
+    "outputSchema": {
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "applicationId": {
+          "type": "string"
+        },
+        "attemptedCount": {
+          "type": "integer"
+        },
+        "count": {
+          "type": "integer"
+        },
+        "error": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "mutationCommitted": {
+          "type": "boolean"
+        },
+        "mutationOutcomeUnknown": {
+          "type": "boolean"
+        },
+        "notAttemptedCount": {
+          "type": "integer"
+        },
+        "notAttemptedSessionIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "project": {
+          "type": "string"
+        },
+        "reachable": {
+          "type": "boolean"
+        },
+        "sessions": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "terminatedCount": {
+          "type": "integer"
+        },
+        "unreachableReason": {
+          "type": "string"
+        },
+        "verification": {
+          "enum": [
+            "verified",
+            "mismatched",
+            "not_verifiable"
+          ],
+          "type": "string"
+        },
+        "verificationReason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
       "destructiveHint": false,
       "openWorldHint": false,
       "readOnlyHint": false
@@ -2998,7 +3129,7 @@
           "type": "string"
         },
         "mode": {
-          "description": "Launch mode: debug (default) or run. Attach configurations support debug only.",
+          "description": "Launch mode: debug (default) or run. Attach configurations support debug only; standalone servers always start in debug mode.",
           "enum": [
             "debug",
             "run"
@@ -3020,7 +3151,7 @@
           "type": "string"
         },
         "updateBeforeLaunch": {
-          "description": "Default true: silently apply the configuration->DB update before launching so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog is auto-confirmed); false skips the update and the platform may then show that modal. Ignored for Attach.",
+          "description": "Default true: silently apply the configuration->DB update before launching so no 'Update database?' modal blocks the call (even on a Russian-locale EDT the dialog is auto-confirmed); false skips the update and the platform may then show that modal. Ignored for Attach. A standalone-server configuration performs no database update on this route even when omitted, and an explicit true is refused - run update_database separately.",
           "type": "boolean"
         }
       },
@@ -3059,6 +3190,9 @@
         },
         "project": {
           "type": "string"
+        },
+        "standaloneServerPortsReassigned": {
+          "type": "boolean"
         },
         "startupOption": {
           "type": "string"
@@ -4290,16 +4424,33 @@
         "message": {
           "type": "string"
         },
+        "passwordMatched": {
+          "type": "boolean"
+        },
         "passwordSet": {
           "type": "boolean"
         },
         "project": {
           "type": "string"
         },
+        "storedFor": {
+          "type": "object"
+        },
         "success": {
           "type": "boolean"
         },
         "user": {
+          "type": "string"
+        },
+        "verification": {
+          "enum": [
+            "verified",
+            "mismatched",
+            "not_verifiable"
+          ],
+          "type": "string"
+        },
+        "verificationReason": {
           "type": "string"
         }
       },
@@ -4645,11 +4796,15 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Apply the current EDT configuration to an infobase. DESTRUCTIVE - restructures data and can evict live sessions. Two-phase: call once WITHOUT confirm to preview, then again with confirm=true to apply. Parameters and examples: get_tool_guide('update_database').",
+    "description": "Apply the current EDT configuration to an infobase. Before applying, call infobase_sessions(action='list'); any non-agent session blocks the update, so clear it with action='terminate' and confirm=true. DESTRUCTIVE: call once WITHOUT confirm to preview, then again with confirm=true to apply. Full parameters and examples: call get_tool_guide('update_database').",
     "inputSchema": {
       "properties": {
         "applicationId": {
           "type": "string"
+        },
+        "checkInfobaseSessions": {
+          "description": "Before applying, refuse when infobase_sessions finds a non-agent standalone-server session (default true). false skips this safety pre-flight.",
+          "type": "boolean"
         },
         "confirm": {
           "type": "boolean"
@@ -4691,14 +4846,38 @@
         "applicationName": {
           "type": "string"
         },
+        "causeMessage": {
+          "type": "string"
+        },
+        "causeType": {
+          "type": "string"
+        },
         "confirmationRequired": {
           "type": "boolean"
+        },
+        "error": {
+          "type": "string"
         },
         "message": {
           "type": "string"
         },
+        "mutationCommitted": {
+          "type": "boolean"
+        },
+        "mutationOutcomeUnknown": {
+          "type": "boolean"
+        },
         "project": {
           "type": "string"
+        },
+        "reachable": {
+          "type": "boolean"
+        },
+        "sessions": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
         },
         "standaloneServerPortsReassigned": {
           "type": "boolean"
@@ -4717,6 +4896,9 @@
         },
         "updateType": {
           "type": "string"
+        },
+        "willCheckInfobaseSessions": {
+          "type": "boolean"
         },
         "willTerminateRunningClients": {
           "type": "boolean"

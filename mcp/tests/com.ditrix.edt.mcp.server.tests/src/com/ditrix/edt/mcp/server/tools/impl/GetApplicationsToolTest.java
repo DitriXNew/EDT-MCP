@@ -124,6 +124,11 @@ public class GetApplicationsToolTest
         // declare it so the wire contract advertises the field for every consumer.
         assertTrue("outputSchema must declare inheritedFromProject", //$NON-NLS-1$
             schema.contains("\"inheritedFromProject\"")); //$NON-NLS-1$
+        assertTrue("updateState must be described as asynchronously refreshed cached state", //$NON-NLS-1$
+            schema.contains("cached infobase-equality comparison") //$NON-NLS-1$
+                && schema.contains("refreshed asynchronously")); //$NON-NLS-1$
+        assertTrue("schema must warn that updateState can lag and point to stateAfter", //$NON-NLS-1$
+            schema.contains("pre-update value") && schema.contains("stateAfter")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ==================== Argument validation (no live workbench needed) ====================

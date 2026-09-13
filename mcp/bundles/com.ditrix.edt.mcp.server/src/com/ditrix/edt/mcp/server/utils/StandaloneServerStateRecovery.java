@@ -8,6 +8,11 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
@@ -16,6 +21,8 @@ import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
+import org.eclipse.debug.core.ILaunchConfigurationType;
+import org.eclipse.debug.core.ILaunchManager;
 import org.eclipse.swt.widgets.Shell;
 
 import com.ditrix.edt.mcp.server.Activator;
@@ -72,6 +79,8 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  */
 public final class StandaloneServerStateRecovery
 {
+    private static final int ABANDONED_LAUNCH_STATUS_CODE = 0x4C4143;
+
     /**
      * EDT's refusal, verbatim and NOT localized (it is a hardcoded {@code IllegalStateException}
      * message in the standalone-server behaviour delegate, not a message bundle entry), so
@@ -79,14 +88,6 @@ public final class StandaloneServerStateRecovery
      */
     private static final String REFUSAL_MARKER =
         "Can only start server that is stopped but current server state is"; //$NON-NLS-1$
-
-    /**
-     * How long the recovery stop may take before the caller stops waiting. EDT's stop terminates
-     * whatever the launch still owns and waits for the process to disappear (its own wait is ~6
-     * seconds), so a normal stop is far below this; the bound exists so a wedged platform call
-     * cannot hold an unattended MCP request open.
-     */
-    private static final long STOP_TIMEOUT_MS = 60_000L;
 
     /**
      * The state whose refusal this class recovers from. Only a server EDT believes is RUNNING can
@@ -110,6 +111,9 @@ public final class StandaloneServerStateRecovery
     /** @see #STATE_STARTING */
     private static final int STATE_STOPPING = 3;
 
+    /** @see #STATE_STARTING */
+    private static final int STATE_STOPPED = 4;
+
     /**
      * How long the pre-flight waits for a server another operation is starting or stopping right
      * now. Comfortably above a normal {@code ibsrv} start, and bounded because an unattended MCP
@@ -121,13 +125,20 @@ public final class StandaloneServerStateRecovery
     private static final long SETTLE_POLL_MS = 250L;
 
     /**
-     * Monitors that serialize the stale-server STOP with itself, one per project+application.
+     * A start we cannot observe arms global dialog guards until the cleanup cap, so it is worth
+     * dispatching only when it has a real chance to conclude inside our remaining wait.
+     */
+    private static final long MIN_RESTORATION_START_WAIT_MS = 5_000L;
+
+    /**
+     * Guards that serialize stale-server recovery actions, one per project+application.
      *
      * <p>Deliberately NOT {@link LaunchLifecycleUtils#lockFor}: that monitor is held across a
      * whole {@code update_database} publish, and waiting on it inside a bounded caller (the
      * {@code build_external_objects} job has a deadline, and a thread parked in
      * {@code synchronized} cannot be cancelled) would trade one hang for another. This lock is
-     * held only across "re-read the state, then stop", which is bounded by the stop itself.
+     * acquired with a deadline and held only across "re-read the state, then stop or restore";
+     * both actions are bounded.
      *
      * <p>What the long lock would have bought is bought by the RE-READ instead: an operation that
      * holds the application (an update publishing through the server, a launch that owns it)
@@ -135,7 +146,10 @@ public final class StandaloneServerStateRecovery
      * state this stop acts on. The only state it does act on - STARTED with the launch gone - is
      * by construction one that nobody owns.
      */
-    private static final Map<String, Object> STOP_LOCKS = new ConcurrentHashMap<>();
+    private static final Map<String, RecoveryGuard> STOP_LOCKS = new ConcurrentHashMap<>();
+
+    /** The server a successful recovery stop changes during the current operation. */
+    private static final ThreadLocal<OperationStop> OPERATION_STOP = new ThreadLocal<>();
 
     private StandaloneServerStateRecovery()
     {
@@ -251,32 +265,91 @@ public final class StandaloneServerStateRecovery
     public static ILaunch launchWithRecovery(ILaunchConfiguration config, String mode,
         IProgressMonitor monitor) throws CoreException
     {
+        return launchWithRecovery(config, mode, monitor,
+            () -> "Launch of '" + config.getName() + "' was abandoned by EDT " //$NON-NLS-1$ //$NON-NLS-2$
+                + "(the launch delegate cancelled it); no reason was logged. " //$NON-NLS-1$
+                + "Check the EDT error log."); //$NON-NLS-1$
+    }
+
+    /** Starts a launch and classifies abandonment while its stopped server can still be restored. */
+    public static ILaunch launchWithRecovery(ILaunchConfiguration config, String mode,
+        IProgressMonitor monitor, Supplier<String> abandonedMessage) throws CoreException
+    {
         Target target = resolveTarget(config);
+        beginOperation();
         try
         {
-            ensureStartable(target.project, null, target.applicationId);
-        }
-        catch (ApplicationException abort)
-        {
-            // The pre-flight refused to start on top of a stop that may still be running. This
-            // path reports every failure as a CoreException, so hand the caller the same reason
-            // in the shape it already handles.
-            throw new CoreException(
-                new Status(IStatus.ERROR, Activator.PLUGIN_ID, abort.getMessage(), abort));
-        }
-        try
-        {
-            return config.launch(mode, monitor);
-        }
-        catch (CoreException | RuntimeException e)
-        {
-            String refusal = refusalMessage(e);
-            if (refusal == null)
+            try
             {
-                throw e;
+                ensureStartable(target.project, null, target.applicationId);
             }
-            return relaunchAfterStop(config, mode, monitor, e, refusal, target);
+            catch (ApplicationException abort)
+            {
+                // The launch path reports the pre-flight refusal in the same CoreException shape.
+                throw new CoreException(
+                    new Status(IStatus.ERROR, Activator.PLUGIN_ID, abort.getMessage(), abort));
+            }
+            try
+            {
+                return launchOnce(config, mode, monitor, abandonedMessage);
+            }
+            catch (CoreException | RuntimeException e)
+            {
+                if (e instanceof CoreException && isAbandonedLaunch((CoreException)e))
+                {
+                    throw e;
+                }
+                String refusal = refusalMessage(e);
+                if (refusal == null)
+                {
+                    throw e;
+                }
+                return relaunchAfterStop(config, mode, monitor, abandonedMessage, e, refusal,
+                    target);
+            }
         }
+        catch (CoreException failure)
+        {
+            String restored = appendRestoration(PlatformFailures.describe(failure), target.project);
+            if (restored == null)
+            {
+                throw failure;
+            }
+            throw new CoreException(failureStatus(restored, failure));
+        }
+        catch (RuntimeException failure)
+        {
+            String restored = appendRestoration(PlatformFailures.describe(failure), target.project);
+            if (restored == null)
+            {
+                throw failure;
+            }
+            throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID, restored,
+                failure));
+        }
+        finally
+        {
+            endOperation();
+        }
+    }
+
+    /** Runs one synchronous delegate call and rejects only a cancellation attributable to it. */
+    private static ILaunch launchOnce(ILaunchConfiguration config, String mode,
+        IProgressMonitor monitor, Supplier<String> abandonedMessage) throws CoreException
+    {
+        AttributableCancel attributable = new AttributableCancel(monitor);
+        ILaunch launch = config.launch(mode, attributable);
+        if (attributable.wasCanceledByLaunchingThread())
+        {
+            String message = abandonedMessage == null ? null : abandonedMessage.get();
+            if (message == null || message.isEmpty())
+            {
+                message = "The launch delegate cancelled the launch."; //$NON-NLS-1$
+            }
+            throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID,
+                ABANDONED_LAUNCH_STATUS_CODE, message, null));
+        }
+        return launch;
     }
 
     /**
@@ -293,12 +366,14 @@ public final class StandaloneServerStateRecovery
      * @throws CoreException when the server could not be stopped or the retry failed too
      */
     private static ILaunch relaunchAfterStop(ILaunchConfiguration config, String mode,
-        IProgressMonitor monitor, Exception failure, String refusal, Target target)
+        IProgressMonitor monitor, Supplier<String> abandonedMessage, Exception failure,
+        String refusal, Target target)
         throws CoreException
     {
         String applicationId = target.applicationId;
         IProject project = target.project;
-        Recovery recovery = stopServerForRefusal(project, applicationId, refusal);
+        Recovery recovery = stopServerForRefusal(project, null, applicationId,
+            applicationManager(), refusal);
         if (!recovery.recovered())
         {
             throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID,
@@ -306,14 +381,30 @@ public final class StandaloneServerStateRecovery
         }
         try
         {
-            return config.launch(mode, monitor);
+            return launchOnce(config, mode, monitor, abandonedMessage);
         }
         catch (CoreException | RuntimeException retry)
         {
-            throw new CoreException(new Status(IStatus.ERROR, Activator.PLUGIN_ID,
-                staleStateError(applicationId, refusal, recovery, PlatformFailures.describe(retry)),
-                retry));
+            String message = staleStateError(applicationId, refusal, recovery,
+                PlatformFailures.describe(retry));
+            throw new CoreException(failureStatus(message, retry));
         }
+    }
+
+    /** Whether a failure represents a normal delegate return after its own cancellation. */
+    public static boolean isAbandonedLaunch(CoreException failure)
+    {
+        return failure != null && failure.getStatus() != null
+            && Activator.PLUGIN_ID.equals(failure.getStatus().getPlugin())
+            && failure.getStatus().getCode() == ABANDONED_LAUNCH_STATUS_CODE;
+    }
+
+    /** Preserves the abandonment classification while adding recovery detail. */
+    private static IStatus failureStatus(String message, Throwable failure)
+    {
+        int code = failure instanceof CoreException && isAbandonedLaunch((CoreException)failure)
+            ? ABANDONED_LAUNCH_STATUS_CODE : 0;
+        return new Status(IStatus.ERROR, Activator.PLUGIN_ID, code, message, failure);
     }
 
     /**
@@ -336,33 +427,51 @@ public final class StandaloneServerStateRecovery
         IProject project, IApplication application, String applicationId,
         ApplicationUpdateType updateType, ExecutionContext context, IProgressMonitor monitor)
     {
-        ensureStartable(project, application, applicationId);
+        beginOperation();
         try
         {
-            return manager.update(application, updateType, context, monitor);
-        }
-        catch (RuntimeException e)
-        {
-            String refusal = refusalMessage(e);
-            if (refusal == null)
-            {
-                throw e;
-            }
-            Recovery recovery = stopServerForRefusal(project, applicationId, refusal);
-            if (!recovery.recovered())
-            {
-                throw new ApplicationException(
-                    staleStateError(applicationId, refusal, recovery, null), e);
-            }
+            ensureStartable(project, application, applicationId, manager);
             try
             {
                 return manager.update(application, updateType, context, monitor);
             }
-            catch (RuntimeException retry)
+            catch (RuntimeException e)
             {
-                throw new ApplicationException(staleStateError(applicationId, refusal, recovery,
-                    PlatformFailures.describe(retry)), retry);
+                String refusal = refusalMessage(e);
+                if (refusal == null)
+                {
+                    throw e;
+                }
+                Recovery recovery = stopServerForRefusal(project, application, applicationId,
+                    manager, refusal);
+                if (!recovery.recovered())
+                {
+                    throw new ApplicationException(
+                        staleStateError(applicationId, refusal, recovery, null), e);
+                }
+                try
+                {
+                    return manager.update(application, updateType, context, monitor);
+                }
+                catch (RuntimeException retry)
+                {
+                    throw new ApplicationException(staleStateError(applicationId, refusal, recovery,
+                        PlatformFailures.describe(retry)), retry);
+                }
             }
+        }
+        catch (RuntimeException failure)
+        {
+            String restored = appendRestoration(PlatformFailures.describe(failure), project);
+            if (restored == null)
+            {
+                throw failure;
+            }
+            throw new ApplicationException(restored, failure);
+        }
+        finally
+        {
+            endOperation();
         }
     }
 
@@ -372,12 +481,14 @@ public final class StandaloneServerStateRecovery
      * interfered with.
      *
      * @param project the project owning the application (may be {@code null})
+     * @param application the application when already resolved (may be {@code null})
      * @param applicationId the application id (may be {@code null})
+     * @param manager the application manager (may be {@code null})
      * @param refusal EDT's refusal message
      * @return the outcome, never {@code null}
      */
-    private static Recovery stopServerForRefusal(IProject project, String applicationId,
-        String refusal)
+    private static Recovery stopServerForRefusal(IProject project, IApplication application,
+        String applicationId, IApplicationManager manager, String refusal)
     {
         String state = refusedStateName(refusal);
         if (!RECOVERABLE_STATE.equals(state))
@@ -390,7 +501,7 @@ public final class StandaloneServerStateRecovery
         // EDT answered, not that it still is: two operations refused at the same moment would
         // otherwise both stop it, and the second would stop the server the first had already
         // recovered and started.
-        return stopStaleServerGuarded(project, applicationId);
+        return stopStaleServerGuarded(project, application, applicationId, manager);
     }
 
     /**
@@ -403,7 +514,9 @@ public final class StandaloneServerStateRecovery
      * state inside the lock closes it - the second sees a live launch and does nothing.
      *
      * @param project the project owning the application (may be {@code null})
+     * @param application the application when already resolved (may be {@code null})
      * @param applicationId the application id (may be {@code null})
+     * @param manager the application manager (may be {@code null})
      * <p>Nothing is stopped on state that cannot be re-read: a server that will not resolve gives
      * no evidence that stopping it is right NOW, and the refusal (or the earlier read) that sent
      * us here describes a moment that has passed.
@@ -412,16 +525,56 @@ public final class StandaloneServerStateRecovery
      *     server stopped being stale on its own, because the caller's next step - proceed, or
      *     retry what EDT refused - is then exactly the same
      */
-    private static Recovery stopStaleServerGuarded(IProject project, String applicationId)
+    private static Recovery stopStaleServerGuarded(IProject project, IApplication application,
+        String applicationId, IApplicationManager manager)
+    {
+        return stopStaleServerGuarded(project, application, applicationId, manager,
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
+    }
+
+    /** Same guarded stale stop constrained by the caller's remaining operation deadline. */
+    private static Recovery stopStaleServerGuarded(IProject project, IApplication application,
+        String applicationId, IApplicationManager manager, long timeoutMs)
     {
         if (project == null || applicationId == null)
         {
-            // Nothing to lock on and nothing to re-read; stopStaleServer reports the miss.
-            return stopStaleServer(project, applicationId);
+            return Recovery.failed("the project or application id is unknown"); //$NON-NLS-1$
         }
-        synchronized (stopLockFor(project, applicationId))
+        if (manager == null)
         {
-            Object server = resolveServer(project, null, applicationId);
+            return Recovery.failed("the EDT application manager is not available"); //$NON-NLS-1$
+        }
+        long deadline = recoveryDeadline(timeoutMs);
+        RecoveryGuard guard = stopLockFor(project, applicationId);
+        if (!tryRecoveryLock(guard, timeoutMs, null))
+        {
+            return Recovery.failedInFlight(recoveryLockFailure());
+        }
+        try
+        {
+            if (guard.startClaim.get() != null)
+            {
+                return Recovery.failed("another standalone start currently claims the server"); //$NON-NLS-1$
+            }
+            IApplication resolvedApplication = application;
+            if (resolvedApplication == null)
+            {
+                long remainingMs = remainingRecoveryTimeMs(deadline);
+                if (remainingMs <= 0L)
+                {
+                    return Recovery.failed(
+                        "the operation deadline elapsed before the application lookup began"); //$NON-NLS-1$
+                }
+                StandaloneServerSupport.ApplicationLookup lookup =
+                    StandaloneServerSupport.lookupApplicationBounded(manager, project,
+                        applicationId, remainingMs);
+                if (lookup.failure() != null)
+                {
+                    return Recovery.failed(lookup.failure());
+                }
+                resolvedApplication = lookup.application();
+            }
+            Object server = resolveServer(resolvedApplication);
             if (server == null)
             {
                 // No server to read means no evidence that stopping is the right thing to do NOW.
@@ -441,23 +594,196 @@ public final class StandaloneServerStateRecovery
                     + "recovered it); leaving it alone: " + applicationId); //$NON-NLS-1$
                 return Recovery.stopped();
             }
-            return stopStaleServer(project, applicationId);
+            long remainingMs = remainingRecoveryTimeMs(deadline);
+            if (remainingMs <= 0L)
+            {
+                return Recovery.failed("the operation deadline elapsed before the stop began"); //$NON-NLS-1$
+            }
+            return runStop(manager, resolvedApplication, applicationId, remainingMs);
+        }
+        finally
+        {
+            guard.lock.unlock();
         }
     }
 
+    /** Same locked recheck, with cleanup executed by the caller's enclosing bounded Job. */
+    private static Recovery stopStaleServerGuardedWithinBound(IProject project,
+        IApplication application, String applicationId, IApplicationManager manager,
+        IProgressMonitor monitor, Runnable stopStarting, Runnable stopCompleted)
+    {
+        if (project == null || application == null || applicationId == null || manager == null)
+        {
+            return Recovery.failed("the stale-server target is incomplete"); //$NON-NLS-1$
+        }
+        RecoveryGuard guard = stopLockFor(project, applicationId);
+        if (!tryRecoveryLock(guard, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, monitor))
+        {
+            return Recovery.failedInFlight(recoveryLockFailure());
+        }
+        try
+        {
+            if (guard.startClaim.get() != null)
+            {
+                return Recovery.failed("another standalone start currently claims the server"); //$NON-NLS-1$
+            }
+            Object server = resolveServer(application);
+            if (server == null)
+            {
+                Activator.logError("Standalone server: its state could not be re-read, so it was " //$NON-NLS-1$
+                    + "NOT stopped: " + applicationId, null); //$NON-NLS-1$
+                return Recovery.failed("its server could not be resolved, so stopping it would " //$NON-NLS-1$
+                    + "have acted on a state nothing could confirm"); //$NON-NLS-1$
+            }
+            if (decide(serverState(server), hasLiveLaunch(server)) != Preflight.STOP_STALE)
+            {
+                Activator.logInfo("Standalone server: it is no longer stale (somebody else " //$NON-NLS-1$
+                    + "recovered it); leaving it alone: " + applicationId); //$NON-NLS-1$
+                return Recovery.stopped();
+            }
+            if (monitor != null && monitor.isCanceled())
+            {
+                return Recovery.failed(
+                    "the bounded pre-flight was cancelled before the stop began"); //$NON-NLS-1$
+            }
+            if (stopStarting != null)
+            {
+                stopStarting.run();
+            }
+            return runStopWithinBound(manager, application, applicationId, monitor, stopCompleted);
+        }
+        finally
+        {
+            guard.lock.unlock();
+        }
+    }
+
+    /** Returns EDT's application manager when its plugin is available. */
+    private static IApplicationManager applicationManager()
+    {
+        Activator activator = Activator.getDefault();
+        return activator == null ? null : activator.getApplicationManager();
+    }
+
     /**
-     * The monitor serializing the stale-server stop for one application.
+     * The lock and start claim serializing recovery for one application.
      *
      * @param project the project owning the application (never {@code null})
      * @param applicationId the application id (never {@code null})
-     * @return the monitor, never {@code null}
+     * @return the guard, never {@code null}
      */
-    private static Object stopLockFor(IProject project, String applicationId)
+    private static RecoveryGuard stopLockFor(IProject project, String applicationId)
     {
         // NUL separator for the same reason LaunchLifecycleUtils.lockFor uses one: project names
         // and application ids both contain spaces, so any printable separator can collide.
         return STOP_LOCKS.computeIfAbsent(project.getName() + "\u0000" + applicationId, //$NON-NLS-1$
-            k -> new Object());
+            k -> new RecoveryGuard());
+    }
+
+    /** Acquires one recovery lock without allowing platform work to block the caller forever. */
+    private static boolean tryRecoveryLock(RecoveryGuard guard, long timeoutMs,
+        IProgressMonitor monitor)
+    {
+        long remainingNanos = TimeUnit.MILLISECONDS.toNanos(Math.max(0L, timeoutMs));
+        long deadline = System.nanoTime() + remainingNanos;
+        do
+        {
+            if (monitor != null && monitor.isCanceled())
+            {
+                return false;
+            }
+            long waitNanos = Math.min(remainingNanos, TimeUnit.MILLISECONDS.toNanos(100L));
+            try
+            {
+                if (guard.lock.tryLock(waitNanos, TimeUnit.NANOSECONDS))
+                {
+                    return true;
+                }
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            remainingNanos = deadline - System.nanoTime();
+        }
+        while (remainingNanos > 0L);
+        return false;
+    }
+
+    /** Monotonic deadline shared by the guarded steps of one recovery operation. */
+    private static long recoveryDeadline(long timeoutMs)
+    {
+        return System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0L, timeoutMs));
+    }
+
+    /** Whole milliseconds still available to bounded work under a recovery deadline. */
+    private static long remainingRecoveryTimeMs(long deadline)
+    {
+        long remainingNanos = deadline - System.nanoTime();
+        return remainingNanos <= 0L ? 0L : TimeUnit.NANOSECONDS.toMillis(remainingNanos);
+    }
+
+    /** Shared diagnosis for a recovery guard that could not be acquired by its deadline. */
+    private static String recoveryLockFailure()
+    {
+        return "its recovery guard did not become available before the deadline, so the server's " //$NON-NLS-1$
+            + "ownership could not be confirmed"; //$NON-NLS-1$
+    }
+
+    /** Claims an ordinary start before it leaves the caller's bounded preparation phase. */
+    public static StartClaim claimStartWithinBound(IProject project, String applicationId,
+        IProgressMonitor monitor)
+    {
+        return claimStartWithinBound(project, applicationId,
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, monitor);
+    }
+
+    /** Testable deadline form of the start claim. */
+    static StartClaim claimStartWithinBound(IProject project, String applicationId,
+        long lockTimeoutMs, IProgressMonitor monitor)
+    {
+        if (project == null || applicationId == null)
+        {
+            return null;
+        }
+        RecoveryGuard guard = stopLockFor(project, applicationId);
+        if (!tryRecoveryLock(guard, lockTimeoutMs, monitor))
+        {
+            return null;
+        }
+        try
+        {
+            if (guard.startClaim.get() != null)
+            {
+                return null;
+            }
+            StartClaim claim = new StartClaim(guard);
+            guard.startClaim.set(claim);
+            return claim;
+        }
+        finally
+        {
+            guard.lock.unlock();
+        }
+    }
+
+    /** Runs test coordination while holding the production recovery lock. */
+    static void holdRecoveryLockForTest(IProject project, String applicationId, Runnable action)
+    {
+        RecoveryGuard guard = stopLockFor(project, applicationId);
+        if (!tryRecoveryLock(guard, 1_000L, null))
+        {
+            throw new IllegalStateException("The test recovery lock could not be acquired"); //$NON-NLS-1$
+        }
+        try
+        {
+            action.run();
+        }
+        finally
+        {
+            guard.lock.unlock();
+        }
     }
 
     /**
@@ -479,24 +805,19 @@ public final class StandaloneServerStateRecovery
         {
             return Recovery.failed("the project or application id is unknown"); //$NON-NLS-1$
         }
-        Activator activator = Activator.getDefault();
-        IApplicationManager manager = activator == null ? null : activator.getApplicationManager();
+        IApplicationManager manager = applicationManager();
         if (manager == null)
         {
             return Recovery.failed("the EDT application manager is not available"); //$NON-NLS-1$
         }
-        IApplication application;
-        try
+        StandaloneServerSupport.ApplicationLookup lookup =
+            StandaloneServerSupport.lookupApplicationBounded(manager, project, applicationId,
+                StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
+        if (lookup.failure() != null)
         {
-            application = manager.getApplication(project, applicationId).orElse(null);
+            return Recovery.failed(lookup.failure());
         }
-        catch (Exception e) // NOSONAR the recovery reports every failure, it never adds one
-        {
-            Activator.logError("Stale standalone server: cannot resolve application " //$NON-NLS-1$
-                + applicationId, e);
-            return Recovery.failed("the application could not be resolved: " //$NON-NLS-1$
-                + PlatformFailures.describe(e));
-        }
+        IApplication application = lookup.application();
         if (application == null)
         {
             return Recovery.failed("application '" + applicationId //$NON-NLS-1$
@@ -516,6 +837,14 @@ public final class StandaloneServerStateRecovery
     private static Recovery runStop(IApplicationManager manager, IApplication application,
         String applicationId)
     {
+        return runStop(manager, application, applicationId,
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
+    }
+
+    /** Same bounded cleanup constrained by a caller's remaining operation deadline. */
+    private static Recovery runStop(IApplicationManager manager, IApplication application,
+        String applicationId, long timeoutMs)
+    {
         ExecutionContext context = new ExecutionContext();
         Shell shell = LaunchLifecycleUtils.grabActiveShell();
         if (shell != null)
@@ -525,9 +854,10 @@ public final class StandaloneServerStateRecovery
         Activator.logInfo("Stale standalone server: stopping it so the operation can proceed: " //$NON-NLS-1$
             + applicationId);
         BoundedJob.Result result = BoundedJob.run("Stopping standalone server: " + applicationId, //$NON-NLS-1$
-            STOP_TIMEOUT_MS, monitor -> manager.cleanup(application, context, monitor));
+            timeoutMs, monitor -> manager.cleanup(application, context, monitor));
         if (result.isSuccess())
         {
+            recordStoppedServer(applicationId);
             Activator.logInfo("Stale standalone server: stopped: " + applicationId); //$NON-NLS-1$
             return Recovery.stopped();
         }
@@ -542,7 +872,8 @@ public final class StandaloneServerStateRecovery
                 + outcome + "): " + applicationId, result.getFailure()); //$NON-NLS-1$
             return Recovery.failedInFlight(outcome == BoundedJob.Outcome.INTERRUPTED
                 ? "the wait for it was interrupted" //$NON-NLS-1$
-                : "stopping it did not finish within " + (STOP_TIMEOUT_MS / 1000) + "s"); //$NON-NLS-1$
+                : "stopping it did not finish within " //$NON-NLS-1$
+                    + (timeoutMs / 1000) + "s"); //$NON-NLS-1$
         }
         if (result.getFailure() != null)
         {
@@ -554,6 +885,745 @@ public final class StandaloneServerStateRecovery
         Activator.logError("Stale standalone server: stopping it did not run (" //$NON-NLS-1$
             + outcome + "): " + applicationId, null); //$NON-NLS-1$
         return Recovery.failed("it never ran (" + outcome + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Executes cleanup directly when an enclosing bounded Job already owns the deadline. */
+    private static Recovery runStopWithinBound(IApplicationManager manager,
+        IApplication application, String applicationId, IProgressMonitor monitor,
+        Runnable stopCompleted)
+    {
+        ExecutionContext context = new ExecutionContext();
+        Shell shell = LaunchLifecycleUtils.grabActiveShell();
+        if (shell != null)
+        {
+            context.setProperty(ExecutionContext.ACTIVE_SHELL_NAME, shell);
+        }
+        Activator.logInfo("Stale standalone server: stopping it so the operation can proceed: " //$NON-NLS-1$
+            + applicationId);
+        try
+        {
+            manager.cleanup(application, context, monitor);
+            if (stopCompleted != null)
+            {
+                stopCompleted.run();
+            }
+            Activator.logInfo("Stale standalone server: stopped: " + applicationId); //$NON-NLS-1$
+            return Recovery.stopped();
+        }
+        catch (Exception failure) // NOSONAR the enclosing bounded Job owns timeout classification
+        {
+            Activator.logError("Stale standalone server: stopping it failed: " + applicationId, //$NON-NLS-1$
+                failure);
+            return Recovery.failed("stopping it failed: " + PlatformFailures.describe(failure)); //$NON-NLS-1$
+        }
+    }
+
+    /** Starts a fresh operation-local stop record. */
+    public static void beginOperation()
+    {
+        OPERATION_STOP.set(new OperationStop());
+    }
+
+    /** Clears the current operation-local stop record. */
+    public static void endOperation()
+    {
+        OPERATION_STOP.remove();
+    }
+
+    /** Marks that this operation completed the stop of the named server. */
+    static void recordStoppedServer(String applicationId)
+    {
+        OperationStop operation = OPERATION_STOP.get();
+        if (operation != null)
+        {
+            operation.applicationId = applicationId;
+        }
+    }
+
+    /** Transfers a successful stop from bounded preparation to the caller's operation record. */
+    public static void retainPreparedStop(String applicationId)
+    {
+        recordStoppedServer(applicationId);
+    }
+
+    /** Appends one restore outcome when the current operation stopped a server. */
+    private static String appendRestoration(String original, IProject project)
+    {
+        OperationStop stopped = OPERATION_STOP.get();
+        if (stopped == null || stopped.applicationId == null)
+        {
+            return null;
+        }
+        RestorationAttempt attempt = restoreStoppedServer(project, stopped.applicationId, true);
+        return appendRestorationOutcome(original, attempt.launchConfigurationName,
+            applicationId -> attempt.outcome);
+    }
+
+    /** Restores an operation-local stop, using the caller's known launch configuration name. */
+    public static String appendRestoration(String original, IProject project,
+        String launchConfigurationName)
+    {
+        return appendRestorationOutcome(original, launchConfigurationName,
+            applicationId -> restoreStoppedServer(project, applicationId));
+    }
+
+    /** Explains why an operation-local stop is not restored while the original start is in flight. */
+    public static String appendInconclusiveStartNotice(String original, String launchConfigurationName)
+    {
+        OperationStop stopped = OPERATION_STOP.get();
+        if (stopped == null || stopped.applicationId == null)
+        {
+            return null;
+        }
+        String separator = original.endsWith(".") || original.endsWith("!") //$NON-NLS-1$ //$NON-NLS-2$
+            || original.endsWith("?") ? " " : ". "; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return original + separator + "The standalone server '" + stopped.applicationId //$NON-NLS-1$
+            + "' was stopped for this operation and was left stopped instead of scheduling a " //$NON-NLS-1$
+            + "second start because the original start may still be running."; //$NON-NLS-1$
+    }
+
+    /** Shared next step for a start whose bounded caller returned before the start finished. */
+    public static String inconclusiveStartGuidance(String launchConfigurationName)
+    {
+        String name = launchConfigurationName == null || launchConfigurationName.isEmpty()
+            ? "<standalone launch configuration>" : launchConfigurationName; //$NON-NLS-1$
+        return "Wait for the in-flight start to settle, then check debug_status and EDT's Servers " //$NON-NLS-1$
+            + "view before starting anything. Only if the server is stopped, call " //$NON-NLS-1$
+            + "launch(launchConfigurationName='" + name + "')."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Testable composition of the operation record, restore attempt, and exact message. */
+    static String appendRestoration(String original, String launchConfigurationName,
+        Restarter restarter)
+    {
+        return appendRestorationOutcome(original, launchConfigurationName,
+            applicationId -> new RestorationStartOutcome(restarter.restore(applicationId), true));
+    }
+
+    /** Same composition while retaining whether the restoration start is still in flight. */
+    static String appendRestorationOutcome(String original, String launchConfigurationName,
+        RestorationRestarter restarter)
+    {
+        OperationStop stopped = OPERATION_STOP.get();
+        if (stopped == null || stopped.applicationId == null)
+        {
+            return null;
+        }
+        String applicationId = stopped.applicationId;
+        RestorationStartOutcome restoration = restarter.restore(applicationId);
+        String restoreFailure = restoration.failure;
+        String separator = original.endsWith(".") || original.endsWith("!") //$NON-NLS-1$ //$NON-NLS-2$
+            || original.endsWith("?") ? " " : ". "; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        if (restoration.skippedMessage != null)
+        {
+            return original + separator + "The standalone server '" + applicationId + "' " //$NON-NLS-1$ //$NON-NLS-2$
+                + restoration.skippedMessage;
+        }
+        if (restoreFailure == null)
+        {
+            return original + separator + "The standalone server '" + applicationId //$NON-NLS-1$
+                + "' was stopped for this operation and has been started again."; //$NON-NLS-1$
+        }
+        String reason = restoreFailure.trim();
+        if (reason.endsWith(".")) //$NON-NLS-1$
+        {
+            reason = reason.substring(0, reason.length() - 1);
+        }
+        String name = launchConfigurationName == null || launchConfigurationName.isEmpty()
+            ? applicationId : launchConfigurationName;
+        if (!restoration.conclusive)
+        {
+            return original + separator + "The standalone server '" + applicationId //$NON-NLS-1$
+                + "' was stopped for this operation, but its restoration start did not finish " //$NON-NLS-1$
+                + "conclusively: " + reason + ". " + inconclusiveStartGuidance(name); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return original + separator + "The standalone server '" + applicationId //$NON-NLS-1$
+            + "' was stopped for this operation and could NOT be started again: " //$NON-NLS-1$
+            + reason + ". Start it with launch(launchConfigurationName='" + name + "')."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Starts the stopped server once and retains whether a failed start may still be running. */
+    private static RestorationStartOutcome restoreStoppedServer(IProject project, String applicationId)
+    {
+        return restoreStoppedServer(project, applicationId, false).outcome;
+    }
+
+    /** Resolves every restoration prerequisite, optionally including its launch name, together. */
+    private static RestorationAttempt restoreStoppedServer(IProject project, String applicationId,
+        boolean resolveLaunchConfigurationName)
+    {
+        AtomicReference<String> launchConfigurationName = new AtomicReference<>(applicationId);
+        return runRestorationAttempt(launchConfigurationName,
+            () -> restoreStoppedServerAttempt(project, applicationId,
+                resolveLaunchConfigurationName, launchConfigurationName));
+    }
+
+    /** Keeps restoration scheduling trouble subordinate to the operation's original failure. */
+    static RestorationAttempt runRestorationAttempt(
+        AtomicReference<String> launchConfigurationName, Supplier<RestorationAttempt> attempt)
+    {
+        try
+        {
+            return attempt.get();
+        }
+        catch (Exception failure) // NOSONAR restoration must not hide the original failure
+        {
+            return new RestorationAttempt(launchConfigurationName.get(),
+                new RestorationStartOutcome(PlatformFailures.describe(failure), true));
+        }
+    }
+
+    /** Complete bounded preparation and separately bounded start for one restoration. */
+    private static RestorationAttempt restoreStoppedServerAttempt(IProject project,
+        String applicationId, boolean resolveLaunchConfigurationName,
+        AtomicReference<String> launchConfigurationName)
+    {
+        AtomicReference<RestorationPreparation> prepared = new AtomicReference<>();
+        AtomicReference<RestorationPreparationStage> stage =
+            new AtomicReference<>(RestorationPreparationStage.PHASE);
+        BoundedJob.Result bounded = BoundedJob.run(
+            "Preparing standalone-server restoration: " + applicationId, //$NON-NLS-1$
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, monitor -> {
+            if (project == null)
+            {
+                prepared.set(RestorationPreparation.failed("the project is unknown")); //$NON-NLS-1$
+                return;
+            }
+            if (resolveLaunchConfigurationName)
+            {
+                stage.set(RestorationPreparationStage.LAUNCH_CONFIGURATION);
+                try
+                {
+                    launchConfigurationName.set(
+                        standaloneLaunchConfigurationName(project, applicationId));
+                }
+                catch (Exception failure) // NOSONAR discovery must not prevent restoration
+                {
+                    Activator.logError(
+                        "Standalone server: cannot resolve its launch configuration", failure); //$NON-NLS-1$
+                }
+                if (monitor.isCanceled())
+                {
+                    return;
+                }
+            }
+            stage.set(RestorationPreparationStage.PHASE);
+            Activator activator = Activator.getDefault();
+            IApplicationManager manager = activator == null ? null : activator.getApplicationManager();
+            if (monitor.isCanceled())
+            {
+                return;
+            }
+            if (manager == null)
+            {
+                prepared.set(RestorationPreparation.failed(
+                    "the EDT application manager is not available")); //$NON-NLS-1$
+                return;
+            }
+            stage.set(RestorationPreparationStage.APPLICATION);
+            StandaloneServerSupport.ApplicationLookup lookup =
+                StandaloneServerSupport.lookupApplication(manager, project, applicationId);
+            if (monitor.isCanceled())
+            {
+                return;
+            }
+            IApplication application = lookup.application();
+            if (application == null)
+            {
+                prepared.set(RestorationPreparation.failed(
+                    "the application could not be resolved")); //$NON-NLS-1$
+                return;
+            }
+            Object server = lookup.server();
+            if (server == null)
+            {
+                prepared.set(RestorationPreparation.failed(
+                    "the application's standalone server could not be resolved")); //$NON-NLS-1$
+                return;
+            }
+            stage.set(RestorationPreparationStage.SERVICE);
+            Object service = StandaloneServerSupport.acquireService();
+            if (service == null)
+            {
+                prepared.set(RestorationPreparation.failed(
+                    "the EDT standalone-server service is not available")); //$NON-NLS-1$
+                return;
+            }
+            prepared.set(RestorationPreparation.ready(manager, service, lookup));
+        });
+
+        RestorationPreparation preparation = prepared.get();
+        if (BoundedJob.isInconclusive(bounded.getOutcome()) && preparation != null
+            && preparation.failure != null)
+        {
+            return new RestorationAttempt(launchConfigurationName.get(),
+                new RestorationStartOutcome(preparation.failure, true));
+        }
+        if (!bounded.isSuccess())
+        {
+            String failure;
+            if (bounded.getFailure() != null
+                && bounded.getOutcome() == BoundedJob.Outcome.COMPLETED)
+            {
+                failure = stage.get() == RestorationPreparationStage.APPLICATION
+                    ? "the application could not be resolved: " //$NON-NLS-1$
+                        + PlatformFailures.describe(bounded.getFailure())
+                    : PlatformFailures.describe(bounded.getFailure());
+            }
+            else if (stage.get() == RestorationPreparationStage.APPLICATION)
+            {
+                failure = StandaloneServerSupport.applicationLookupFailure(applicationId,
+                    StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, bounded);
+            }
+            else
+            {
+                String target;
+                if (stage.get() == RestorationPreparationStage.SERVICE)
+                {
+                    target = "the EDT standalone-server service lookup"; //$NON-NLS-1$
+                }
+                else if (stage.get() == RestorationPreparationStage.LAUNCH_CONFIGURATION)
+                {
+                    target = "the standalone-server launch-configuration lookup"; //$NON-NLS-1$
+                }
+                else
+                {
+                    target = "the standalone-server restoration precondition phase"; //$NON-NLS-1$
+                }
+                failure = StandaloneServerSupport.boundedPhaseFailure(target,
+                    StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, bounded);
+            }
+            return new RestorationAttempt(launchConfigurationName.get(),
+                new RestorationStartOutcome(failure, true));
+        }
+        if (preparation == null)
+        {
+            return new RestorationAttempt(launchConfigurationName.get(),
+                new RestorationStartOutcome(
+                    "the standalone-server restoration precondition phase produced no result", //$NON-NLS-1$
+                    true));
+        }
+        if (preparation.failure != null)
+        {
+            return new RestorationAttempt(launchConfigurationName.get(),
+                new RestorationStartOutcome(preparation.failure, true));
+        }
+        RestorationStartOutcome outcome = restoreIfStillUnownedClaimed(project,
+            preparation.lookup.server(), applicationId,
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
+            remainingMs -> stopStaleServerGuarded(project, preparation.lookup.application(),
+                applicationId, preparation.manager, remainingMs),
+            (claim, remainingMs) -> startRestorationWithPortGuardOutcome(preparation.service,
+                preparation.lookup.server(), applicationId, preparation.lookup.infobaseName(),
+                preparation.lookup.serverName(), remainingMs,
+                StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS, claim));
+        return new RestorationAttempt(launchConfigurationName.get(), outcome);
+    }
+
+    /** Revalidates current ownership under the same guard used by the stale stop. */
+    static RestorationStartOutcome restoreIfStillUnowned(IProject project, Object server,
+        String applicationId, Supplier<RestorationStartOutcome> restarter)
+    {
+        return restoreIfStillUnowned(project, server, applicationId,
+            StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS, restarter);
+    }
+
+    /** Testable deadline form of the guarded ownership revalidation. */
+    static RestorationStartOutcome restoreIfStillUnowned(IProject project, Object server,
+        String applicationId, long timeoutMs, Supplier<RestorationStartOutcome> restarter)
+    {
+        return restoreIfStillUnownedClaimed(project, server, applicationId, timeoutMs,
+            remainingMs -> stopStaleServerGuarded(project, null, applicationId,
+                applicationManager(), remainingMs),
+            (claim, remainingMs) -> restarter.get());
+    }
+
+    /** Test seam that exercises the real stale-stop machinery with already-resolved EDT objects. */
+    static RestorationStartOutcome restoreIfStillUnowned(IProject project, IApplication application,
+        Object server, String applicationId, IApplicationManager manager, long timeoutMs,
+        Supplier<RestorationStartOutcome> restarter)
+    {
+        return restoreIfStillUnownedClaimed(project, server, applicationId, timeoutMs,
+            remainingMs -> stopStaleServerGuarded(project, application, applicationId, manager,
+                remainingMs),
+            (claim, remainingMs) -> restarter.get());
+    }
+
+    /** Test seam exposing the actual allowances handed to normalization and restoration. */
+    static RestorationStartOutcome restoreIfStillUnowned(IProject project, Object server,
+        String applicationId, long timeoutMs, StaleStateNormalizer normalizer,
+        TimedRestarter restarter)
+    {
+        return restoreIfStillUnownedClaimed(project, server, applicationId, timeoutMs, normalizer,
+            (claim, remainingMs) -> restarter.restore(remainingMs));
+    }
+
+    /** Normalizes stale state, then claims and dispatches restoration under the remaining wait. */
+    private static RestorationStartOutcome restoreIfStillUnownedClaimed(IProject project,
+        Object server, String applicationId, long timeoutMs, StaleStateNormalizer normalizer,
+        ClaimedRestarter restarter)
+    {
+        long deadline = recoveryDeadline(timeoutMs);
+        RecoveryGuard guard = stopLockFor(project, applicationId);
+        if (!tryRecoveryLock(guard, timeoutMs, null))
+        {
+            return RestorationStartOutcome.skipped(
+                "was not restored because " + recoveryLockFailure() + "."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        try
+        {
+            if (guard.startClaim.get() != null)
+            {
+                return RestorationStartOutcome.skipped(
+                    "is claimed by another launch that has not started it yet, so restoration " //$NON-NLS-1$
+                        + "was skipped."); //$NON-NLS-1$
+            }
+            Integer state = serverState(server);
+            Boolean liveLaunch = hasLiveLaunch(server);
+            if (Boolean.TRUE.equals(liveLaunch))
+            {
+                return RestorationStartOutcome.skipped(
+                    "is already running under another launch, so restoration was skipped."); //$NON-NLS-1$
+            }
+            if (state == null)
+            {
+                return RestorationStartOutcome.skipped(
+                    "was not restored because its current state could not be confirmed."); //$NON-NLS-1$
+            }
+            boolean normalizationAttempted = false;
+            if (state.intValue() == STATE_STARTED && Boolean.FALSE.equals(liveLaunch))
+            {
+                long remainingMs = remainingRecoveryTimeMs(deadline);
+                if (remainingMs <= 0L)
+                {
+                    return RestorationStartOutcome.skipped(
+                        "was not restored because its stale state could not be normalized before " //$NON-NLS-1$
+                            + "the operation deadline."); //$NON-NLS-1$
+                }
+                // Re-entry stays on this thread. The reused stop's bounded Job executes only EDT
+                // cleanup; it never waits on the recovery lock held here. Give it the full
+                // remainder so a stop that fits the caller's deadline can confirm STOPPED.
+                Recovery normalization = normalizer.normalize(remainingMs);
+                if (!normalization.recovered())
+                {
+                    return RestorationStartOutcome.skipped(
+                        "was not restored because its stale state could not be normalized to " //$NON-NLS-1$
+                            + "STOPPED: " + normalization.detail() + "."); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                normalizationAttempted = true;
+                state = serverState(server);
+                liveLaunch = hasLiveLaunch(server);
+                if (Boolean.TRUE.equals(liveLaunch))
+                {
+                    return RestorationStartOutcome.skipped(
+                        "is already running under another launch, so restoration was skipped."); //$NON-NLS-1$
+                }
+                if (state == null)
+                {
+                    return RestorationStartOutcome.skipped(
+                        "was not restored because its current state could not be confirmed."); //$NON-NLS-1$
+                }
+            }
+            if (state.intValue() != STATE_STOPPED)
+            {
+                if (normalizationAttempted)
+                {
+                    return RestorationStartOutcome.skipped(
+                        "was not restored because its stale state could not be normalized to " //$NON-NLS-1$
+                            + "STOPPED; its current state is " + stateName(state.intValue()) + "."); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                return RestorationStartOutcome.skipped(
+                    "was not restored because its current state is " + stateName(state.intValue()) //$NON-NLS-1$
+                        + ", not STOPPED."); //$NON-NLS-1$
+            }
+            if (liveLaunch == null)
+            {
+                return RestorationStartOutcome.skipped(
+                    "was not restored because its owning launch could not be confirmed."); //$NON-NLS-1$
+            }
+            long remainingMs = remainingRecoveryTimeMs(deadline);
+            if (remainingMs < MIN_RESTORATION_START_WAIT_MS)
+            {
+                return RestorationStartOutcome.skipped(
+                    "was stopped for this operation and was left stopped because too little " //$NON-NLS-1$
+                        + "time remained to observe a restoration start. Start it again with " //$NON-NLS-1$
+                        + "the launch tool."); //$NON-NLS-1$
+            }
+            // The guarded start gets only this remainder; an inconclusive start retains the
+            // claim through cleanup.
+            StartClaim claim = new StartClaim(guard);
+            guard.startClaim.set(claim);
+            try
+            {
+                return restarter.restore(claim, remainingMs);
+            }
+            finally
+            {
+                claim.closeIfNotHandedOff();
+            }
+        }
+        finally
+        {
+            guard.lock.unlock();
+        }
+    }
+
+    /** Starts a restoration while refusing any port rewrite and retaining its specific failure. */
+    static String startRestorationWithPortGuard(Object service, Object server, String applicationId,
+        String infobaseName, String serverName)
+    {
+        return startRestorationWithPortGuardOutcome(service, server, applicationId, infobaseName,
+            serverName).failure;
+    }
+
+    /** Testable deadline form of the real guarded restoration path. */
+    static String startRestorationWithPortGuard(Object service, Object server, String applicationId,
+        String infobaseName, String serverName, long timeoutMs, long cleanupCapMs)
+    {
+        return startRestorationWithPortGuardOutcome(service, server, applicationId, infobaseName,
+            serverName, timeoutMs, cleanupCapMs, null).failure;
+    }
+
+    /** Same guarded restoration while preserving whether its start is still in flight. */
+    private static RestorationStartOutcome startRestorationWithPortGuardOutcome(Object service,
+        Object server, String applicationId, String infobaseName, String serverName)
+    {
+        return startRestorationWithPortGuardOutcome(service, server, applicationId, infobaseName,
+            serverName, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
+            StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS, null);
+    }
+
+    /** Same production restoration with its exclusive start claim. */
+    private static RestorationStartOutcome startRestorationWithPortGuardOutcome(Object service,
+        Object server, String applicationId, String infobaseName, String serverName,
+        StartClaim startClaim)
+    {
+        return startRestorationWithPortGuardOutcome(service, server, applicationId, infobaseName,
+            serverName, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS,
+            StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS, startClaim);
+    }
+
+    /** Runs restoration through the same bounded, composite-guard helper as the direct start. */
+    private static RestorationStartOutcome startRestorationWithPortGuardOutcome(Object service,
+        Object server, String applicationId, String infobaseName, String serverName,
+        long timeoutMs, long cleanupCapMs, StartClaim startClaim)
+    {
+        StandaloneServerPortConflictPolicy portPolicy = StandaloneServerPortConflictPolicy.CANCEL;
+        Runnable claimCleanup = startClaim == null ? null : startClaim::close;
+        Runnable claimHandoff = startClaim == null ? null : startClaim::handoff;
+        StandaloneServerSupport.GuardedStartResult result =
+            StandaloneServerSupport.startServerGuarded(service, server,
+                "Restoring standalone server: " + applicationId, ILaunchManager.DEBUG_MODE, //$NON-NLS-1$
+                infobaseName, serverName, portPolicy, timeoutMs, cleanupCapMs, claimCleanup,
+                claimHandoff);
+        return new RestorationStartOutcome(result.failure(), result.conclusive());
+    }
+
+    /** Failure plus whether the underlying restoration start has definitely ended. */
+    static final class RestorationStartOutcome
+    {
+        private final String failure;
+        private final boolean conclusive;
+        private final String skippedMessage;
+
+        RestorationStartOutcome(String failure, boolean conclusive)
+        {
+            this(failure, conclusive, null);
+        }
+
+        private RestorationStartOutcome(String failure, boolean conclusive, String skippedMessage)
+        {
+            this.failure = failure;
+            this.conclusive = conclusive;
+            this.skippedMessage = skippedMessage;
+        }
+
+        static RestorationStartOutcome skipped(String message)
+        {
+            return new RestorationStartOutcome(null, true, message);
+        }
+    }
+
+    /** One application's bounded recovery lock and its current ordinary-start claim. */
+    private static final class RecoveryGuard
+    {
+        private final ReentrantLock lock = new ReentrantLock();
+        private final AtomicReference<StartClaim> startClaim = new AtomicReference<>();
+    }
+
+    /** Exclusive intention to start a server whose WST state may still read as STOPPED. */
+    public static final class StartClaim implements AutoCloseable
+    {
+        private final RecoveryGuard guard;
+        private final AtomicBoolean handedOff = new AtomicBoolean();
+        private final AtomicBoolean released = new AtomicBoolean();
+
+        private StartClaim(RecoveryGuard guard)
+        {
+            this.guard = guard;
+        }
+
+        /** Records that cleanup is now protected by the bounded start lifecycle. */
+        public void handoff()
+        {
+            handedOff.set(true);
+        }
+
+        /** Releases a preparation claim that never reached the bounded start. */
+        public void closeIfNotHandedOff()
+        {
+            if (!handedOff.get())
+            {
+                close();
+            }
+        }
+
+        /** Releases this exact claim without consuming a newer operation's claim. */
+        @Override
+        public void close()
+        {
+            if (released.compareAndSet(false, true))
+            {
+                guard.startClaim.compareAndSet(this, null);
+            }
+        }
+    }
+
+    /** Step active when a bounded restoration preparation stops answering. */
+    private enum RestorationPreparationStage
+    {
+        PHASE,
+        LAUNCH_CONFIGURATION,
+        APPLICATION,
+        SERVICE
+    }
+
+    /** Name resolved under the preparation deadline plus the separately bounded start outcome. */
+    static final class RestorationAttempt
+    {
+        final String launchConfigurationName;
+        final RestorationStartOutcome outcome;
+
+        RestorationAttempt(String launchConfigurationName, RestorationStartOutcome outcome)
+        {
+            this.launchConfigurationName = launchConfigurationName;
+            this.outcome = outcome;
+        }
+    }
+
+    /** Values resolved together before the separately bounded restoration start. */
+    private static final class RestorationPreparation
+    {
+        private final IApplicationManager manager;
+        private final Object service;
+        private final StandaloneServerSupport.ApplicationLookup lookup;
+        private final String failure;
+
+        private RestorationPreparation(IApplicationManager manager, Object service,
+            StandaloneServerSupport.ApplicationLookup lookup, String failure)
+        {
+            this.manager = manager;
+            this.service = service;
+            this.lookup = lookup;
+            this.failure = failure;
+        }
+
+        static RestorationPreparation ready(IApplicationManager manager, Object service,
+            StandaloneServerSupport.ApplicationLookup lookup)
+        {
+            return new RestorationPreparation(manager, service, lookup, null);
+        }
+
+        static RestorationPreparation failed(String failure)
+        {
+            return new RestorationPreparation(null, null, null, failure);
+        }
+    }
+
+    /** Finds the standalone configuration that addresses this project application. */
+    private static String standaloneLaunchConfigurationName(IProject project, String applicationId)
+    {
+        if (project == null || applicationId == null)
+        {
+            return applicationId;
+        }
+        ILaunchManager launchManager = LaunchConfigUtils.getLaunchManager();
+        if (launchManager == null)
+        {
+            return applicationId;
+        }
+        ILaunchConfigurationType type = launchManager.getLaunchConfigurationType(
+            LaunchConfigUtils.STANDALONE_SERVER_LAUNCH_CONFIG_TYPE_ID);
+        if (type == null)
+        {
+            return applicationId;
+        }
+        ILaunchConfiguration exact = LaunchConfigUtils.findLaunchConfig(launchManager, type,
+            project.getName(), applicationId);
+        if (exact != null)
+        {
+            return exact.getName();
+        }
+        try
+        {
+            for (ILaunchConfiguration config : launchManager.getLaunchConfigurations(type))
+            {
+                String projectName = LaunchConfigUtils.readAttribute(config,
+                    LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
+                if (project.getName().equals(projectName)
+                    && applicationId.equals(
+                        LaunchLifecycleUtils.resolveDelegateApplicationId(config, projectName)))
+                {
+                    return config.getName();
+                }
+            }
+        }
+        catch (CoreException e)
+        {
+            Activator.logError("Standalone server: cannot find its launch configuration", e); //$NON-NLS-1$
+        }
+        return applicationId;
+    }
+
+    /** One operation's successfully stopped application. */
+    private static final class OperationStop
+    {
+        String applicationId;
+    }
+
+    /** Normalizes one stale STARTED/no-live-launch tuple inside the remaining deadline. */
+    @FunctionalInterface
+    interface StaleStateNormalizer
+    {
+        Recovery normalize(long timeoutMs);
+    }
+
+    /** Starts restoration with the portion of the shared deadline still available. */
+    @FunctionalInterface
+    interface TimedRestarter
+    {
+        RestorationStartOutcome restore(long timeoutMs);
+    }
+
+    /** Starts restoration while owning its persistent claim and remaining deadline. */
+    @FunctionalInterface
+    private interface ClaimedRestarter
+    {
+        RestorationStartOutcome restore(StartClaim claim, long timeoutMs);
+    }
+
+    /** Performs one conclusive restoration; {@code null} means it succeeded. */
+    @FunctionalInterface
+    interface Restarter
+    {
+        String restore(String applicationId);
+    }
+
+    /** Performs one restoration while preserving whether a failed start is still in flight. */
+    @FunctionalInterface
+    interface RestorationRestarter
+    {
+        RestorationStartOutcome restore(String applicationId);
     }
 
     /**
@@ -642,13 +1712,38 @@ public final class StandaloneServerStateRecovery
     public static void ensureStartable(IProject project, IApplication application,
         String applicationId)
     {
+        ensureStartable(project, application, applicationId, applicationManager());
+    }
+
+    /** Same pre-flight with the manager already held by the caller. */
+    public static void ensureStartable(IProject project, IApplication application,
+        String applicationId, IApplicationManager manager)
+    {
         if (project == null || !DebugServerTargetSupport.isServerApplicationId(applicationId))
         {
             return;
         }
         try
         {
-            Object server = resolveServer(project, application, applicationId);
+            IApplication resolvedApplication = application;
+            if (resolvedApplication == null)
+            {
+                if (manager == null)
+                {
+                    return;
+                }
+                StandaloneServerSupport.ApplicationLookup lookup =
+                    StandaloneServerSupport.lookupApplicationBounded(manager, project,
+                        applicationId, StandaloneServerSupport.SERVER_OPERATION_TIMEOUT_MS);
+                if (lookup.failure() != null)
+                {
+                    Activator.logError("Standalone server: the pre-flight application lookup " //$NON-NLS-1$
+                        + "did not complete: " + applicationId + ": " + lookup.failure(), null); //$NON-NLS-1$ //$NON-NLS-2$
+                    return;
+                }
+                resolvedApplication = lookup.application();
+            }
+            Object server = resolveServer(resolvedApplication);
             if (server == null)
             {
                 return;
@@ -660,7 +1755,7 @@ public final class StandaloneServerStateRecovery
             }
             if (decision == Preflight.STOP_STALE)
             {
-                stopStaleServerBeforeStart(project, applicationId);
+                stopStaleServerBeforeStart(project, resolvedApplication, applicationId, manager);
             }
         }
         catch (ApplicationException abort)
@@ -674,6 +1769,51 @@ public final class StandaloneServerStateRecovery
         {
             Activator.logError("Standalone server: the pre-flight state check failed for " //$NON-NLS-1$
                 + applicationId, e);
+        }
+    }
+
+    /** Runs the same pre-flight directly inside a deadline already owned by the caller. */
+    public static void ensureStartableWithinBound(IProject project, IApplication application,
+        Object server, String applicationId, IApplicationManager manager, IProgressMonitor monitor,
+        Runnable stopStarting, Runnable stopCompleted)
+    {
+        if (project == null || application == null || manager == null
+            || !DebugServerTargetSupport.isServerApplicationId(applicationId)
+            || (monitor != null && monitor.isCanceled()))
+        {
+            return;
+        }
+        try
+        {
+            if (server == null)
+            {
+                return;
+            }
+            if (monitor != null && monitor.isCanceled())
+            {
+                return;
+            }
+            Preflight decision = decide(serverState(server), hasLiveLaunch(server));
+            if (decision == Preflight.WAIT_SETTLE)
+            {
+                decision = decide(awaitSettled(server, applicationId, monitor),
+                    hasLiveLaunch(server));
+            }
+            if (decision == Preflight.STOP_STALE)
+            {
+                stopStaleServerBeforeStartWithinBound(project, application, applicationId,
+                    manager, monitor, stopStarting, stopCompleted);
+            }
+        }
+        catch (ApplicationException abort)
+        {
+            throw abort;
+        }
+        catch (Exception e) // NOSONAR every other pre-flight failure remains best-effort
+        {
+            Activator.logError("Standalone server: the pre-flight state check failed for " //$NON-NLS-1$
+                + applicationId, e);
+            return;
         }
     }
 
@@ -698,7 +1838,7 @@ public final class StandaloneServerStateRecovery
             return;
         }
         ensureStartable(project, null,
-            LaunchLifecycleUtils.resolveDefaultApplicationId(project, null, manager));
+            LaunchLifecycleUtils.resolveDefaultApplicationId(project, null, manager), manager);
     }
 
     /** What the pre-flight decided to do about the server's current state. */
@@ -754,9 +1894,17 @@ public final class StandaloneServerStateRecovery
      */
     private static Integer awaitSettled(Object server, String applicationId)
     {
+        return awaitSettled(server, applicationId, null);
+    }
+
+    /** Same settling wait, also respecting an enclosing bounded phase's cancellation. */
+    private static Integer awaitSettled(Object server, String applicationId,
+        IProgressMonitor monitor)
+    {
         long deadline = System.currentTimeMillis() + SETTLE_TIMEOUT_MS;
         Integer state = serverState(server);
-        while (isTransitional(state) && System.currentTimeMillis() < deadline)
+        while (isTransitional(state) && System.currentTimeMillis() < deadline
+            && (monitor == null || !monitor.isCanceled()))
         {
             try
             {
@@ -769,7 +1917,7 @@ public final class StandaloneServerStateRecovery
             }
             state = serverState(server);
         }
-        if (isTransitional(state))
+        if (isTransitional(state) && (monitor == null || !monitor.isCanceled()))
         {
             Activator.logInfo("Standalone server: it is still " + stateName(state.intValue()) //$NON-NLS-1$
                 + " after " + (SETTLE_TIMEOUT_MS / 1000) //$NON-NLS-1$
@@ -789,18 +1937,39 @@ public final class StandaloneServerStateRecovery
      * instead of after it.
      *
      * @param project the project owning the application
+     * @param application the already-resolved application
      * @param applicationId the application id
+     * @param manager the application manager that resolved the application
      * @throws ApplicationException when the stop did not finish and MAY STILL BE RUNNING - the
      *     caller must not start a server that a lingering stop can take down again
      */
-    private static void stopStaleServerBeforeStart(IProject project, String applicationId)
+    private static void stopStaleServerBeforeStart(IProject project, IApplication application,
+        String applicationId, IApplicationManager manager)
     {
         Activator.logInfo("Standalone server: EDT still has it STARTED while the launch that " //$NON-NLS-1$
             + "owned it is gone; stopping it so the operation is not refused: " + applicationId); //$NON-NLS-1$
-        Recovery recovery = stopStaleServerGuarded(project, applicationId);
+        Recovery recovery = stopStaleServerGuarded(project, application, applicationId, manager);
+        finishPreflightStop(applicationId, recovery);
+    }
+
+    /** Performs the stale stop on the enclosing bounded Job and reports whether it completed. */
+    private static boolean stopStaleServerBeforeStartWithinBound(IProject project,
+        IApplication application, String applicationId, IApplicationManager manager,
+        IProgressMonitor monitor, Runnable stopStarting, Runnable stopCompleted)
+    {
+        Activator.logInfo("Standalone server: EDT still has it STARTED while the launch that " //$NON-NLS-1$
+            + "owned it is gone; stopping it so the operation is not refused: " + applicationId); //$NON-NLS-1$
+        Recovery recovery = stopStaleServerGuardedWithinBound(project, application, applicationId,
+            manager, monitor, stopStarting, stopCompleted);
+        return finishPreflightStop(applicationId, recovery);
+    }
+
+    /** Applies the existing pre-flight outcome contract and returns whether this call stopped it. */
+    private static boolean finishPreflightStop(String applicationId, Recovery recovery)
+    {
         if (recovery.recovered())
         {
-            return;
+            return true;
         }
         if (recovery.stopStillInFlight())
         {
@@ -808,11 +1977,8 @@ public final class StandaloneServerStateRecovery
             // preempt it, so it may finish later - and stop whatever server is running by then,
             // including the one this operation is about to start. Refusing here costs the caller a
             // retry; proceeding would cost them a server that dies under them.
-            throw new ApplicationException("The standalone server of application '" //$NON-NLS-1$
-                + applicationId + "' is in a state EDT cannot start from, and stopping it " //$NON-NLS-1$
-                + "did not finish (" + recovery.detail() + "). That stop may still be " //$NON-NLS-1$ //$NON-NLS-2$
-                + "running, so starting the server now could be undone by it. Wait for it to " //$NON-NLS-1$
-                + "finish (Servers view in EDT), or restart EDT, then retry."); //$NON-NLS-1$
+            throw new ApplicationException(preflightStopInFlightFailure(applicationId,
+                recovery.detail()));
         }
         // The stop never ran (it was refused outright): nothing is in flight, so the operation
         // still runs, meets EDT's refusal, and the reactive recovery answers it with the same
@@ -820,6 +1986,18 @@ public final class StandaloneServerStateRecovery
         Activator.logError("Standalone server: the pre-flight stop did not happen (" //$NON-NLS-1$
             + recovery.detail() + "); the operation proceeds and may be refused: " //$NON-NLS-1$
             + applicationId, null);
+        return false;
+    }
+
+    /** Existing refusal text for a pre-flight stop whose cleanup may still be running. */
+    public static String preflightStopInFlightFailure(String applicationId, String detail)
+    {
+        return "The standalone server of application '" //$NON-NLS-1$
+            + applicationId + "' is in a state EDT cannot start from, and stopping it " //$NON-NLS-1$
+            + "did not finish (" + detail + "). That stop may still be running, so " //$NON-NLS-1$ //$NON-NLS-2$
+            + "starting " //$NON-NLS-1$
+            + "the server now could be undone by it. Wait for it to finish (Servers view in " //$NON-NLS-1$
+            + "EDT), or restart EDT, then retry."; //$NON-NLS-1$
     }
 
     /**
@@ -830,40 +2008,16 @@ public final class StandaloneServerStateRecovery
      * the comment in the body for why the by-module-name scan {@code delete_infobase} falls back
      * to must not be used for a decision that can stop a server.
      *
-     * @param project the project owning the application
-     * @param application the application when the caller holds it, else {@code null}
-     * @param applicationId the application id
+     * @param application the already-resolved application
      * @return the WST server object (address it reflectively), or {@code null}
      */
-    private static Object resolveServer(IProject project, IApplication application,
-        String applicationId)
+    private static Object resolveServer(IApplication application)
     {
-        IApplication app = application;
-        if (app == null)
-        {
-            Activator activator = Activator.getDefault();
-            IApplicationManager manager =
-                activator == null ? null : activator.getApplicationManager();
-            if (manager == null)
-            {
-                return null;
-            }
-            try
-            {
-                app = manager.getApplication(project, applicationId).orElse(null);
-            }
-            catch (Exception e) // NOSONAR an unresolvable application only skips the pre-flight
-            {
-                Activator.logError("Standalone server: cannot resolve application " //$NON-NLS-1$
-                    + applicationId, e);
-                return null;
-            }
-        }
-        if (app == null)
+        if (application == null)
         {
             return null;
         }
-        String typeId = app.getType() != null ? app.getType().getId() : null;
+        String typeId = application.getType() != null ? application.getType().getId() : null;
         if (!StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId))
         {
             // The id looked like a standalone server's but the application is something else —
@@ -876,7 +2030,7 @@ public final class StandaloneServerStateRecovery
         // the state of the wrong server would then decide the fate of this one. A decision that
         // can stop a server must be made from the server that provably belongs to it, so when the
         // accessor gives nothing the pre-flight simply does not run.
-        return StandaloneServerSupport.serverOfApplication(app);
+        return StandaloneServerSupport.serverOfApplication(application);
     }
 
     /**

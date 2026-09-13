@@ -7,9 +7,9 @@ launch starts an EDT session in debug mode (default) or regular run mode. It has
 TWO target-selection forms, selected by which params are present (see LaunchTool.execute):
 
   Mode 1 — launchConfigurationName: start any existing EDT debug launch
-           configuration by its EXACT name (runtime client OR an
-           "Attach to 1C:Enterprise Debug Server" config). projectName /
-           applicationId are NOT required in this mode.
+           configuration by its EXACT name (runtime client, an
+           "Attach to 1C:Enterprise Debug Server" config, OR a standalone-server
+           config). projectName / applicationId are NOT required in this mode.
   Mode 2 — projectName + applicationId: legacy path that finds the matching
            runtime-client launch config for that project+application and starts it.
 
@@ -19,6 +19,11 @@ This is a RUNTIME tool. In THIS EDT there is NO running infobase for
 TestConfiguration, NO registered application, and NO pre-created EDT launch
 configuration. Actually starting a session is heavy, spawns a 1C client,
 and is not configured here — so we deliberately do NOT drive a real launch.
+
+The standalone-server start is covered the same way and for one extra reason: it
+needs a configured standalone server, which CI has none of, and starting one would
+leave a running server that the terminate_launch tests read as state. It is verified
+on the EDT stand instead, where the round trip is start -> terminate -> start.
 
 The realistic, CORRECT contract in this environment is that EVERY reachable call
 fails FAST with a CLEAR, ACTIONABLE sentinel that names the missing precondition

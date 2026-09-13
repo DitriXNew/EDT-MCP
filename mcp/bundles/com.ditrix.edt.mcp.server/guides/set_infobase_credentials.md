@@ -48,7 +48,9 @@ Targeting by `launchConfigurationName` sets the launch dialog's **"Client applic
 
 ## Result
 
-JSON with `success`, `clientConfigured`, `project`, `applicationId`, `applicationName`, the stored `user`, `access`, and `passwordSet` (whether a non-empty password was stored — the password itself is never returned). `applicationName` falls back to the `applicationId` when the friendly display name cannot be read back (e.g. the read-back is skipped after a timeout, or the application name is empty).
+JSON with `success`, `clientConfigured`, `project`, `applicationId`, `applicationName`, the stored `user`, `access`, `passwordSet`, `passwordMatched`, `storedFor`, and `verification`. The password itself, or any part of it, is never returned. `storedFor` names the infobase and UUID key used by EDT secure preferences, so it can be compared with the infobase an update connects to.
+
+`verification` has three outcomes: `verified` when access, user, and password all match through EDT's consumer-facing read path; `mismatched` when they differ (returned as `success: false` with the requested and read-back access/user plus password booleans); and `not_verifiable` when read-back cannot prove storage. In particular, OS access with an empty user and password is identical to EDT's default fallback when no entry exists, so that shape is never reported as verified. A matching read-back confirms what consumers can retrieve, but a wrong credential value is known only when EDT connects to the infobase.
 
 `clientConfigured` reports what **this call** did to the client half — not what a launch will do:
 
