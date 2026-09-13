@@ -54,6 +54,14 @@ import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
  */
 public class InfobaseAccessSupportTest
 {
+    /**
+     * Budget for a thread hand-off that normally completes in milliseconds. Deliberately far
+     * above the work it waits for: these tests assert ORDERING, and a loaded machine must not
+     * turn that into a failure. It stays below the 30s bound the interrupt test gives its own
+     * bounded store, so a genuinely unbroken interrupt still fails the join deterministically.
+     */
+    private static final long HANDOFF_WAIT_MS = 20_000L;
+
     @Test
     public void testOsAnyCaseSelectsOs()
     {
@@ -312,16 +320,17 @@ public class InfobaseAccessSupportTest
         caller.start();
         try
         {
-            assertTrue(started.await(5, TimeUnit.SECONDS));
+            assertTrue(started.await(HANDOFF_WAIT_MS, TimeUnit.MILLISECONDS));
             caller.interrupt();
-            caller.join(5_000L);
-            assertFalse(caller.isAlive());
+            caller.join(HANDOFF_WAIT_MS);
+            assertFalse("the interrupted caller must return, not outlive its bound", //$NON-NLS-1$
+                caller.isAlive());
             assertNotNull(answer.get());
             assertEquals(BoundedJob.Outcome.INTERRUPTED,
                 answer.get().boundedResult().getOutcome());
 
             release.countDown();
-            assertTrue(finished.await(5, TimeUnit.SECONDS));
+            assertTrue(finished.await(HANDOFF_WAIT_MS, TimeUnit.MILLISECONDS));
             verify(manager, never()).updateSettings(any(InfobaseReference.class),
                 any(InfobaseAccessSettings.class));
             assertNull("a cancelled worker result must not be published after the caller returns", //$NON-NLS-1$
@@ -330,8 +339,8 @@ public class InfobaseAccessSupportTest
         finally
         {
             release.countDown();
-            caller.join(5_000L);
-            finished.await(5, TimeUnit.SECONDS);
+            caller.join(HANDOFF_WAIT_MS);
+            finished.await(HANDOFF_WAIT_MS, TimeUnit.MILLISECONDS);
         }
     }
 
@@ -367,7 +376,7 @@ public class InfobaseAccessSupportTest
         blocker.start();
         try
         {
-            assertTrue(blockerEnteredWrite.await(5, TimeUnit.SECONDS));
+            assertTrue(blockerEnteredWrite.await(HANDOFF_WAIT_MS, TimeUnit.MILLISECONDS));
 
             InfobaseAccessSupport.BoundedStoreResult<StoreResult> late =
                 InfobaseAccessSupport.runBoundedCredentialStore("late writer", 250L, //$NON-NLS-1$
@@ -385,13 +394,13 @@ public class InfobaseAccessSupportTest
                         }
                     });
 
-            assertTrue(lateWorkStarted.await(5, TimeUnit.SECONDS));
+            assertTrue(lateWorkStarted.await(HANDOFF_WAIT_MS, TimeUnit.MILLISECONDS));
             assertEquals(BoundedJob.Outcome.TIMED_OUT, late.boundedResult().getOutcome());
             assertNull(late.publishedResult());
 
             releaseBlocker.countDown();
-            assertTrue(lateWorkFinished.await(5, TimeUnit.SECONDS));
-            blocker.join(5_000L);
+            assertTrue(lateWorkFinished.await(HANDOFF_WAIT_MS, TimeUnit.MILLISECONDS));
+            blocker.join(HANDOFF_WAIT_MS);
             assertFalse(blocker.isAlive());
             assertNotNull(blockerResult.get());
 
@@ -405,8 +414,8 @@ public class InfobaseAccessSupportTest
         finally
         {
             releaseBlocker.countDown();
-            blocker.join(5_000L);
-            lateWorkFinished.await(5, TimeUnit.SECONDS);
+            blocker.join(HANDOFF_WAIT_MS);
+            lateWorkFinished.await(HANDOFF_WAIT_MS, TimeUnit.MILLISECONDS);
         }
     }
 
@@ -459,7 +468,7 @@ public class InfobaseAccessSupportTest
                     }
                 });
 
-        assertTrue(earlierEnteredWrite.await(5, TimeUnit.SECONDS));
+        assertTrue(earlierEnteredWrite.await(HANDOFF_WAIT_MS, TimeUnit.MILLISECONDS));
         assertEquals(BoundedJob.Outcome.TIMED_OUT, earlier.boundedResult().getOutcome());
         AtomicReference<StoreResult> laterResult = new AtomicReference<>();
         Thread later = new Thread(() -> laterResult.set(
@@ -472,8 +481,8 @@ public class InfobaseAccessSupportTest
                 laterEnteredWrite.await(250, TimeUnit.MILLISECONDS));
 
             releaseEarlier.countDown();
-            assertTrue(earlierWorkFinished.await(5, TimeUnit.SECONDS));
-            later.join(5_000L);
+            assertTrue(earlierWorkFinished.await(HANDOFF_WAIT_MS, TimeUnit.MILLISECONDS));
+            later.join(HANDOFF_WAIT_MS);
             assertFalse(later.isAlive());
             assertNotNull(laterResult.get());
             assertNull(laterResult.get().error());
@@ -485,8 +494,8 @@ public class InfobaseAccessSupportTest
         finally
         {
             releaseEarlier.countDown();
-            later.join(5_000L);
-            earlierWorkFinished.await(5, TimeUnit.SECONDS);
+            later.join(HANDOFF_WAIT_MS);
+            earlierWorkFinished.await(HANDOFF_WAIT_MS, TimeUnit.MILLISECONDS);
         }
     }
 
