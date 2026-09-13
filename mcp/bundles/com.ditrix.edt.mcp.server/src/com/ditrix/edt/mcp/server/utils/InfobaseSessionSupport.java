@@ -945,77 +945,40 @@ public final class InfobaseSessionSupport
     }
 
     /**
-     * Wraps a starter so the caller is warned from the moment a process CAN exist, and only
-     * un-warned when it provably cannot.
+     * Wraps a starter so the caller is warned from the moment a process CAN exist.
      *
-     * <p>Three states have to survive a deadline that lands mid-call, so the flag is raised on
-     * ENTRY rather than on success:
+     * <p>The flag is raised on ENTRY and never lowered, because only two things here are
+     * provable, and both come from control flow rather than from what was thrown:
      * <ul>
-     * <li>never invoked - the pre-start check refused, so nothing was created. Definitive.</li>
-     * <li>invoked and still inside {@code start()} when the caller gives up - a process may yet
-     * appear and be destroyed by the post-start check. UNKNOWN, and raising the flag only on
-     * success would report this one as definitive.</li>
-     * <li>{@code start()} threw - no process was created. Definitive, so the warning is
-     * withdrawn.</li>
+     * <li>the starter was never invoked - the pre-start check refused, so nothing was created
+     * and the flag stays down;</li>
+     * <li>the starter was invoked - a process may exist from that moment on, including while
+     * {@code start()} is still running past the deadline, and including when it ends in a
+     * throw.</li>
      * </ul>
      *
-     * <p>Withdrawal is narrow, because a failure from {@link ProcessBuilder#start()} does NOT
-     * imply that no process exists - see {@link #provesNothingRan}.
+     * <p>A failure does NOT prove that nothing ran, and no exception type does either.
+     * {@code ProcessBuilder.start()} keeps working after {@code ProcessImpl} has handed it a live
+     * process - a JFR commit, then a {@link System.Logger} block whose own comment reads "Racy
+     * initialization for logging; errors in configuration may throw exceptions". A custom
+     * {@code LoggerFinder} can raise ANY unchecked type from there, and the enclosing
+     * {@code catch (IOException | IllegalArgumentException)} re-wraps its own as
+     * {@code IOException}. Classifying by type would be guesswork wearing a proof.
      *
-     * <p>A process that started and was then destroyed still counts as a possible mutation - by
-     * then it may have done its work. An {@link Error} is left raised as well: the flag is the
-     * least of that call's problems.
+     * <p>The case that motivated a withdrawal - ibcmd missing or unusable - is answered earlier
+     * and properly: {@code prepare(...)} refuses with a named reason before any process is
+     * attempted.
      *
      * @param delegate the real process start
-     * @param mutationBoundary raised while a process may exist, lowered only by a proven miss
+     * @param mutationBoundary raised once the starter is entered
      * @return a starter that records the possibility of a process
      */
     static ProcessStarter mutatingStarter(ProcessStarter delegate, AtomicBoolean mutationBoundary)
     {
         return () -> {
             mutationBoundary.set(true);
-            try
-            {
-                return delegate.start();
-            }
-            catch (RuntimeException | IOException e)
-            {
-                if (provesNothingRan(e))
-                {
-                    mutationBoundary.set(false);
-                }
-                throw e;
-            }
+            return delegate.start();
         };
-    }
-
-    /**
-     * Whether a failure from {@link ProcessBuilder#start()} proves that no command ran.
-     *
-     * <p>Most do not. {@code ProcessBuilder.start()} keeps working after {@code ProcessImpl}
-     * has handed it a LIVE process: it commits a JFR event and then runs a {@link System.Logger}
-     * block whose own comment reads "Racy initialization for logging; errors in configuration may
-     * throw exceptions". Worse, the enclosing {@code catch (IOException | IllegalArgumentException)}
-     * re-wraps a failure from that region as {@code IOException} - so an {@code IOException} is
-     * not proof either when it carries an {@code IllegalArgumentException} cause.
-     *
-     * <p>What IS proof: the failures {@code start()} raises before it reaches process creation -
-     * a rejected exec, an absent or malformed command - and an {@code IOException} whose cause is
-     * not the ambiguous one. Everything else keeps the caller warned.
-     *
-     * @param failure the throwable {@code start()} raised
-     * @return {@code true} only when no process can have been created
-     */
-    static boolean provesNothingRan(Throwable failure)
-    {
-        if (failure instanceof SecurityException || failure instanceof NullPointerException
-            || failure instanceof IndexOutOfBoundsException
-            || failure instanceof UnsupportedOperationException)
-        {
-            return true;
-        }
-        return failure instanceof IOException
-            && !(failure.getCause() instanceof IllegalArgumentException);
     }
 
     /** Starts the external process at the cancellation boundary. */

@@ -477,31 +477,6 @@ public class InfobaseSessionSupportTest
         assertTrue("a thrown failure proves nothing about the command and must stay reported", //$NON-NLS-1$
             InfobaseSessionSupport.boundedFailureOverridesPublished(threw, published));
     }
-    /**
-     * A terminate whose process was never created changed nothing. Reporting an unknown
-     * mutation there tells the caller a session may be gone when the evidence says it is not.
-     */
-    @Test
-    public void aStartThatThrowsNeverCrossesTheMutationBoundary() throws Exception
-    {
-        AtomicBoolean mutated = new AtomicBoolean();
-        InfobaseSessionSupport.ProcessStarter starter = InfobaseSessionSupport.mutatingStarter(
-            () -> {
-                throw new IOException("ibcmd is not executable"); //$NON-NLS-1$
-            }, mutated);
-
-        try
-        {
-            starter.start();
-            fail("the start failure must propagate"); //$NON-NLS-1$
-        }
-        catch (IOException expected)
-        {
-            // The propagation is the point; the flag is what this test pins.
-        }
-        assertFalse("a process that was never created cannot have mutated anything", //$NON-NLS-1$
-            mutated.get());
-    }
 
     @Test
     public void aCancelledCallNeverCrossesTheMutationBoundaryEither() throws Exception
@@ -568,101 +543,34 @@ public class InfobaseSessionSupportTest
         }
     }
 
+
+
+
+
     /**
-     * ProcessBuilder.start() returns a process or throws, never both, so a REFUSED start is as
-     * definitive as a failed one. SecurityException from checkExec is the real case: it is
-     * raised before native process creation, and warning about a session that may be gone would
-     * be a false alarm.
+     * The deliberate conservatism: a start that THREW still leaves the caller warned. No
+     * exception type proves nothing ran - ProcessBuilder.start() runs a JFR commit and a
+     * System.Logger block after the process is live, a custom LoggerFinder can raise any
+     * unchecked type from there, and the enclosing catch re-wraps its own as IOException.
      */
     @Test
-    public void aRefusedStartWithdrawsTheWarningJustLikeAFailedOne() throws Exception
+    public void aFailedStartStillWarnsBecauseNoExceptionTypeProvesOtherwise()
     {
         AtomicBoolean mutated = new AtomicBoolean();
         InfobaseSessionSupport.ProcessStarter starter = InfobaseSessionSupport.mutatingStarter(
             () -> {
-                throw new SecurityException("checkExec denied ibcmd"); //$NON-NLS-1$
+                throw new IOException("ibcmd is not executable"); //$NON-NLS-1$
             }, mutated);
 
         try
         {
             starter.start();
-            fail("the refusal must propagate"); //$NON-NLS-1$
+            fail("the start failure must propagate"); //$NON-NLS-1$
         }
-        catch (SecurityException expected)
+        catch (Exception expected)
         {
             // Propagation is not the subject; the flag is.
         }
-        assertFalse("a start refused before process creation cannot have mutated anything", //$NON-NLS-1$
-            mutated.get());
-    }
-
-    @Test
-    public void aPlatformWithoutProcessesAlsoWithdrawsTheWarning() throws Exception
-    {
-        AtomicBoolean mutated = new AtomicBoolean();
-        InfobaseSessionSupport.ProcessStarter starter = InfobaseSessionSupport.mutatingStarter(
-            () -> {
-                throw new UnsupportedOperationException("no process creation here"); //$NON-NLS-1$
-            }, mutated);
-
-        try
-        {
-            starter.start();
-            fail("the refusal must propagate"); //$NON-NLS-1$
-        }
-        catch (UnsupportedOperationException expected)
-        {
-            // Propagation is not the subject; the flag is.
-        }
-        assertFalse("a platform that cannot create processes created none", mutated.get()); //$NON-NLS-1$
-    }
-    /**
-     * ProcessBuilder.start() keeps working after ProcessImpl has handed it a LIVE process: a JFR
-     * commit and a System.Logger block, whose failures the enclosing catch re-wraps as
-     * IOException. So an IOException carrying an IllegalArgumentException cause may well come
-     * from a terminate that already reached ibcmd, and must NOT be reported as definitive.
-     */
-    @Test
-    public void aWrappedPostCreationFailureIsNotProofThatNothingRan()
-    {
-        IOException wrapped = new IOException("Cannot run program \"ibcmd\"", //$NON-NLS-1$
-            new IllegalArgumentException("broken logger configuration")); //$NON-NLS-1$
-
-        assertFalse("the logging block runs AFTER the process exists, so this proves nothing", //$NON-NLS-1$
-            InfobaseSessionSupport.provesNothingRan(wrapped));
-    }
-
-    @Test
-    public void anExecFailureIsStillProofThatNothingRan()
-    {
-        IOException execFailed = new IOException("Cannot run program \"ibcmd\"", //$NON-NLS-1$
-            new IOException("error=2, No such file or directory")); //$NON-NLS-1$
-
-        assertTrue("a failed exec never created a process", //$NON-NLS-1$
-            InfobaseSessionSupport.provesNothingRan(execFailed));
-        assertTrue("a bare IOException from the pre-creation checks is proof too", //$NON-NLS-1$
-            InfobaseSessionSupport.provesNothingRan(
-                new IOException("invalid null character in command"))); //$NON-NLS-1$
-    }
-
-    @Test
-    public void anUncheckedFailureFromTheLoggingBlockKeepsTheCallerWarned()
-    {
-        // Nothing in start() raises a bare RuntimeException before process creation, so one that
-        // escapes unwrapped came from the post-creation region.
-        assertFalse("an unwrapped runtime failure can only come from after creation", //$NON-NLS-1$
-            InfobaseSessionSupport.provesNothingRan(
-                new IllegalStateException("logger provider blew up"))); //$NON-NLS-1$
-    }
-
-    @Test
-    public void theDocumentedPreCreationFailuresAreProof()
-    {
-        assertTrue(InfobaseSessionSupport.provesNothingRan(new SecurityException("denied"))); //$NON-NLS-1$
-        assertTrue(InfobaseSessionSupport.provesNothingRan(
-            new UnsupportedOperationException("no processes here"))); //$NON-NLS-1$
-        assertTrue(InfobaseSessionSupport.provesNothingRan(new NullPointerException()));
-        assertTrue(InfobaseSessionSupport.provesNothingRan(
-            new IndexOutOfBoundsException("empty command"))); //$NON-NLS-1$
+        assertTrue("a failure cannot prove the process was never created", mutated.get()); //$NON-NLS-1$
     }
 }
