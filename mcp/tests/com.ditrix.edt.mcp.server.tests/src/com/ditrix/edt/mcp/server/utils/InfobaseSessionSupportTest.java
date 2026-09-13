@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.fail;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -475,5 +476,47 @@ public class InfobaseSessionSupportTest
         // boundedFailure writes for the throwable.
         assertTrue("a thrown failure proves nothing about the command and must stay reported", //$NON-NLS-1$
             InfobaseSessionSupport.boundedFailureOverridesPublished(threw, published));
+    }
+    /**
+     * A terminate whose process was never created changed nothing. Reporting an unknown
+     * mutation there tells the caller a session may be gone when the evidence says it is not.
+     */
+    @Test
+    public void aStartThatThrowsNeverCrossesTheMutationBoundary() throws Exception
+    {
+        AtomicBoolean mutated = new AtomicBoolean();
+        InfobaseSessionSupport.ProcessStarter starter = InfobaseSessionSupport.mutatingStarter(
+            () -> {
+                throw new IOException("ibcmd is not executable"); //$NON-NLS-1$
+            }, mutated);
+
+        try
+        {
+            starter.start();
+            fail("the start failure must propagate"); //$NON-NLS-1$
+        }
+        catch (IOException expected)
+        {
+            // The propagation is the point; the flag is what this test pins.
+        }
+        assertFalse("a process that was never created cannot have mutated anything", //$NON-NLS-1$
+            mutated.get());
+    }
+
+    @Test
+    public void aCancelledCallNeverCrossesTheMutationBoundaryEither() throws Exception
+    {
+        AtomicBoolean mutated = new AtomicBoolean();
+        AtomicBoolean callerAnswered = new AtomicBoolean(true);
+
+        InfobaseSessionSupport.CommandExecution result = InfobaseSessionSupport.runCommand(null,
+            new NullProgressMonitor(), callerAnswered,
+            InfobaseSessionSupport.mutatingStarter(() -> {
+                throw new IllegalStateException("the pre-start check must return first"); //$NON-NLS-1$
+            }, mutated));
+
+        assertNull("the pre-start check must refuse before starting anything", result); //$NON-NLS-1$
+        assertFalse("a call answered before the start cannot have mutated anything", //$NON-NLS-1$
+            mutated.get());
     }
 }

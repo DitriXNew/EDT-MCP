@@ -313,10 +313,12 @@ public final class InfobaseSessionSupport
                             builder = builder.withErrorMessage(message);
                         }
                         List<String> command = builder.sessionId(sessionId).build();
-                        // Once this flips, the caller must conservatively allow for a launch.
-                        // If cancellation won first, runCommand's pre-start check prevents one.
-                        commandMayHaveStarted.set(true);
-                        return runCommand(command, target.credentials, monitor, callerAnswered);
+                        // The boundary is process CREATION, not the intent to create one. A
+                        // start that throws, or a cancellation that wins the pre-start check,
+                        // proves the command never ran.
+                        ProcessBuilder started = new ProcessBuilder(command);
+                        return runCommand(target.credentials, monitor, callerAnswered,
+                            mutatingStarter(started::start, commandMayHaveStarted));
                     });
                 });
             markCallerAnswered(callerAnswered);
@@ -940,6 +942,28 @@ public final class InfobaseSessionSupport
     interface PidCommand
     {
         CommandExecution run(long pid) throws Exception;
+    }
+
+    /**
+     * Wraps a starter so the caller learns of a mutation only once a process EXISTS.
+     *
+     * <p>A terminate that never created a process changed nothing, and both ways that happens
+     * are definitive: {@code start()} throwing (ibcmd gone or no longer executable), and a
+     * cancellation winning the pre-start check. Flipping the flag before the attempt reports an
+     * unknown mutation for a command that provably never ran. A process that starts and is then
+     * destroyed still counts - by then it may have done its work.
+     *
+     * @param delegate the real process start
+     * @param mutationBoundary set once, immediately after a process exists
+     * @return a starter that records creation
+     */
+    static ProcessStarter mutatingStarter(ProcessStarter delegate, AtomicBoolean mutationBoundary)
+    {
+        return () -> {
+            Process process = delegate.start();
+            mutationBoundary.set(true);
+            return process;
+        };
     }
 
     /** Starts the external process at the cancellation boundary. */
