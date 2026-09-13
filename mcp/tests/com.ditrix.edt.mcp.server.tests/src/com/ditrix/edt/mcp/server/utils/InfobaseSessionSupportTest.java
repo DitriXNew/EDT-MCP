@@ -616,4 +616,53 @@ public class InfobaseSessionSupportTest
         }
         assertFalse("a platform that cannot create processes created none", mutated.get()); //$NON-NLS-1$
     }
+    /**
+     * ProcessBuilder.start() keeps working after ProcessImpl has handed it a LIVE process: a JFR
+     * commit and a System.Logger block, whose failures the enclosing catch re-wraps as
+     * IOException. So an IOException carrying an IllegalArgumentException cause may well come
+     * from a terminate that already reached ibcmd, and must NOT be reported as definitive.
+     */
+    @Test
+    public void aWrappedPostCreationFailureIsNotProofThatNothingRan()
+    {
+        IOException wrapped = new IOException("Cannot run program \"ibcmd\"", //$NON-NLS-1$
+            new IllegalArgumentException("broken logger configuration")); //$NON-NLS-1$
+
+        assertFalse("the logging block runs AFTER the process exists, so this proves nothing", //$NON-NLS-1$
+            InfobaseSessionSupport.provesNothingRan(wrapped));
+    }
+
+    @Test
+    public void anExecFailureIsStillProofThatNothingRan()
+    {
+        IOException execFailed = new IOException("Cannot run program \"ibcmd\"", //$NON-NLS-1$
+            new IOException("error=2, No such file or directory")); //$NON-NLS-1$
+
+        assertTrue("a failed exec never created a process", //$NON-NLS-1$
+            InfobaseSessionSupport.provesNothingRan(execFailed));
+        assertTrue("a bare IOException from the pre-creation checks is proof too", //$NON-NLS-1$
+            InfobaseSessionSupport.provesNothingRan(
+                new IOException("invalid null character in command"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void anUncheckedFailureFromTheLoggingBlockKeepsTheCallerWarned()
+    {
+        // Nothing in start() raises a bare RuntimeException before process creation, so one that
+        // escapes unwrapped came from the post-creation region.
+        assertFalse("an unwrapped runtime failure can only come from after creation", //$NON-NLS-1$
+            InfobaseSessionSupport.provesNothingRan(
+                new IllegalStateException("logger provider blew up"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void theDocumentedPreCreationFailuresAreProof()
+    {
+        assertTrue(InfobaseSessionSupport.provesNothingRan(new SecurityException("denied"))); //$NON-NLS-1$
+        assertTrue(InfobaseSessionSupport.provesNothingRan(
+            new UnsupportedOperationException("no processes here"))); //$NON-NLS-1$
+        assertTrue(InfobaseSessionSupport.provesNothingRan(new NullPointerException()));
+        assertTrue(InfobaseSessionSupport.provesNothingRan(
+            new IndexOutOfBoundsException("empty command"))); //$NON-NLS-1$
+    }
 }

@@ -959,18 +959,15 @@ public final class InfobaseSessionSupport
      * withdrawn.</li>
      * </ul>
      *
-     * <p>Any throw counts, not just {@link IOException}: {@link ProcessBuilder#start()} either
-     * returns a process or throws, never both, and every failure it documents happens before the
-     * command can run - an I/O error, a {@code SecurityException} from {@code checkExec}, an
-     * {@code UnsupportedOperationException} on a platform without processes, a malformed command.
-     * A delegate that can create a process AND then throw would break this and must not be
-     * wrapped. An {@link Error} is left raised: the flag is the least of that call's problems.
+     * <p>Withdrawal is narrow, because a failure from {@link ProcessBuilder#start()} does NOT
+     * imply that no process exists - see {@link #provesNothingRan}.
      *
      * <p>A process that started and was then destroyed still counts as a possible mutation - by
-     * then it may have done its work.
+     * then it may have done its work. An {@link Error} is left raised as well: the flag is the
+     * least of that call's problems.
      *
-     * @param delegate the real process start; must create nothing when it throws
-     * @param mutationBoundary raised while a process may exist, lowered only by a failed start
+     * @param delegate the real process start
+     * @param mutationBoundary raised while a process may exist, lowered only by a proven miss
      * @return a starter that records the possibility of a process
      */
     static ProcessStarter mutatingStarter(ProcessStarter delegate, AtomicBoolean mutationBoundary)
@@ -983,10 +980,42 @@ public final class InfobaseSessionSupport
             }
             catch (RuntimeException | IOException e)
             {
-                mutationBoundary.set(false);
+                if (provesNothingRan(e))
+                {
+                    mutationBoundary.set(false);
+                }
                 throw e;
             }
         };
+    }
+
+    /**
+     * Whether a failure from {@link ProcessBuilder#start()} proves that no command ran.
+     *
+     * <p>Most do not. {@code ProcessBuilder.start()} keeps working after {@code ProcessImpl}
+     * has handed it a LIVE process: it commits a JFR event and then runs a {@link System.Logger}
+     * block whose own comment reads "Racy initialization for logging; errors in configuration may
+     * throw exceptions". Worse, the enclosing {@code catch (IOException | IllegalArgumentException)}
+     * re-wraps a failure from that region as {@code IOException} - so an {@code IOException} is
+     * not proof either when it carries an {@code IllegalArgumentException} cause.
+     *
+     * <p>What IS proof: the failures {@code start()} raises before it reaches process creation -
+     * a rejected exec, an absent or malformed command - and an {@code IOException} whose cause is
+     * not the ambiguous one. Everything else keeps the caller warned.
+     *
+     * @param failure the throwable {@code start()} raised
+     * @return {@code true} only when no process can have been created
+     */
+    static boolean provesNothingRan(Throwable failure)
+    {
+        if (failure instanceof SecurityException || failure instanceof NullPointerException
+            || failure instanceof IndexOutOfBoundsException
+            || failure instanceof UnsupportedOperationException)
+        {
+            return true;
+        }
+        return failure instanceof IOException
+            && !(failure.getCause() instanceof IllegalArgumentException);
     }
 
     /** Starts the external process at the cancellation boundary. */
