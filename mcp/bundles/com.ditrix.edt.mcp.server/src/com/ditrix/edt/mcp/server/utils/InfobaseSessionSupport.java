@@ -955,15 +955,21 @@ public final class InfobaseSessionSupport
      * <li>invoked and still inside {@code start()} when the caller gives up - a process may yet
      * appear and be destroyed by the post-start check. UNKNOWN, and raising the flag only on
      * success would report this one as definitive.</li>
-     * <li>{@code start()} threw {@link IOException} - ibcmd is gone or no longer executable and
-     * no process was created. Definitive, so the warning is withdrawn.</li>
+     * <li>{@code start()} threw - no process was created. Definitive, so the warning is
+     * withdrawn.</li>
      * </ul>
      *
-     * <p>A RuntimeException is deliberately NOT withdrawn: it says nothing about whether a
-     * process exists. Neither is a process that started and was then destroyed - by then it may
-     * have done its work.
+     * <p>Any throw counts, not just {@link IOException}: {@link ProcessBuilder#start()} either
+     * returns a process or throws, never both, and every failure it documents happens before the
+     * command can run - an I/O error, a {@code SecurityException} from {@code checkExec}, an
+     * {@code UnsupportedOperationException} on a platform without processes, a malformed command.
+     * A delegate that can create a process AND then throw would break this and must not be
+     * wrapped. An {@link Error} is left raised: the flag is the least of that call's problems.
      *
-     * @param delegate the real process start
+     * <p>A process that started and was then destroyed still counts as a possible mutation - by
+     * then it may have done its work.
+     *
+     * @param delegate the real process start; must create nothing when it throws
      * @param mutationBoundary raised while a process may exist, lowered only by a failed start
      * @return a starter that records the possibility of a process
      */
@@ -975,7 +981,7 @@ public final class InfobaseSessionSupport
             {
                 return delegate.start();
             }
-            catch (IOException e)
+            catch (RuntimeException | IOException e)
             {
                 mutationBoundary.set(false);
                 throw e;

@@ -569,27 +569,51 @@ public class InfobaseSessionSupportTest
     }
 
     /**
-     * Withdrawing the warning is allowed only for the failure that PROVES no process exists.
-     * An unchecked failure proves nothing, so the caller stays warned.
+     * ProcessBuilder.start() returns a process or throws, never both, so a REFUSED start is as
+     * definitive as a failed one. SecurityException from checkExec is the real case: it is
+     * raised before native process creation, and warning about a session that may be gone would
+     * be a false alarm.
      */
     @Test
-    public void anUncheckedStartFailureDoesNotWithdrawTheWarning()
+    public void aRefusedStartWithdrawsTheWarningJustLikeAFailedOne() throws Exception
     {
         AtomicBoolean mutated = new AtomicBoolean();
         InfobaseSessionSupport.ProcessStarter starter = InfobaseSessionSupport.mutatingStarter(
             () -> {
-                throw new IllegalStateException("says nothing about the process"); //$NON-NLS-1$
+                throw new SecurityException("checkExec denied ibcmd"); //$NON-NLS-1$
             }, mutated);
 
         try
         {
             starter.start();
-            fail("the unchecked failure must propagate"); //$NON-NLS-1$
+            fail("the refusal must propagate"); //$NON-NLS-1$
         }
-        catch (Exception expected)
+        catch (SecurityException expected)
         {
             // Propagation is not the subject; the flag is.
         }
-        assertTrue("an unchecked failure proves nothing, so the warning stands", mutated.get()); //$NON-NLS-1$
+        assertFalse("a start refused before process creation cannot have mutated anything", //$NON-NLS-1$
+            mutated.get());
+    }
+
+    @Test
+    public void aPlatformWithoutProcessesAlsoWithdrawsTheWarning() throws Exception
+    {
+        AtomicBoolean mutated = new AtomicBoolean();
+        InfobaseSessionSupport.ProcessStarter starter = InfobaseSessionSupport.mutatingStarter(
+            () -> {
+                throw new UnsupportedOperationException("no process creation here"); //$NON-NLS-1$
+            }, mutated);
+
+        try
+        {
+            starter.start();
+            fail("the refusal must propagate"); //$NON-NLS-1$
+        }
+        catch (UnsupportedOperationException expected)
+        {
+            // Propagation is not the subject; the flag is.
+        }
+        assertFalse("a platform that cannot create processes created none", mutated.get()); //$NON-NLS-1$
     }
 }
