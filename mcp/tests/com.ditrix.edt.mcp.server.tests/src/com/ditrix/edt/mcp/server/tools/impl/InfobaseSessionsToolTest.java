@@ -650,7 +650,7 @@ public class InfobaseSessionsToolTest
      * state but never who ended it. The wording must not claim authorship the tool cannot have.
      */
     @Test
-    public void averifiedTerminationReportsTheStateWithoutClaimingAuthorship()
+    public void aVerifiedTerminationReportsTheStateWithoutClaimingAuthorship()
     {
         JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
             "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
