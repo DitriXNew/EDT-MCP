@@ -15,7 +15,8 @@ RESPONSE SHAPE
 JSON tool (getResponseType() == JSON); payload in r.structured:
   success path: {"success": true, "action": "created", "project", "infobaseFile",
                  "infobaseName", ["applications": [...]], ["applicationId": "..."],
-                 ["boundToProject": true], "message"}
+                 ["boundToProject": true], ["verification": "verified" |
+                 "mismatched" | "not_verifiable"], ["verificationReason"], "message"}
   error path:   {"success": false, "error": "..."} - and, for the not-bound refusal below,
                 the same action/infobaseFile/infobaseName/applications payload plus
                 "boundToProject": false
@@ -30,6 +31,11 @@ JSON tool (getResponseType() == JSON); payload in r.structured:
   or an application's identity was unreadable), so the call stays successful and the
   message says UNVERIFIED. The applications echo itself is omitted when no read produced
   a snapshot at all.
+
+  verification is present when a requested credential write reaches read-back.
+  verificationReason explains mismatched and not_verifiable outcomes and is absent for
+  verified. not_verifiable means EDT accepted the write but could not prove a persisted
+  entry; the message must not claim that credentials were stored.
 
 CI / HEADLESS STRATEGY (IMPORTANT)
 -----------------------------------
@@ -409,3 +415,65 @@ def test_live_standalone_register_over_existing_infobase():
         _ensure_standalone_register_absent()
 
     assert_no_diff("the round-trip must not touch the committed fixture (TestConfiguration)")
+
+
+@e2e_test(tool="create_infobase", kind="action")
+def test_live_standalone_register_os_empty_credentials_is_not_verifiable():
+    """A standalone-server registration with OS access and no user/password must carry the
+    three-state credential result. This exact shape matches EDT's default fallback, so it is
+    accepted but cannot be reported as a verified or failed credential store."""
+    requires_live_infobase("create_infobase OS credential-verification result")
+
+    _ensure_standalone_register_absent()
+    try:
+        # Reuse the standalone-register fixture: seed the existing file infobase first, then wrap it.
+        r_seed = call("create_infobase",
+                      {"projectName": PROJECT,
+                       "infobaseFile": _SRV_IB_DIR,
+                       "infobaseName": _SRV_IB_NAME})
+        assert_ok(r_seed, "seed plain infobase for OS credential verification")
+        assert os.path.isfile(os.path.join(_SRV_IB_DIR, "1Cv8.1CD")), \
+            "the OS-verification fixture must contain 1Cv8.1CD"
+
+        r_reg = call("create_infobase",
+                     {"projectName": PROJECT,
+                      "infobaseFile": _SRV_IB_DIR,
+                      "infobaseName": _SRV_IB_NAME,
+                      "applicationKind": "standaloneServer",
+                      "mode": "register",
+                      "access": "OS"})
+        assert_ok(r_reg, "standalone register with OS access and empty credentials")
+        sc = r_reg.structured
+        assert isinstance(sc, dict), "structured must be a dict: %r" % sc
+        assert sc.get("action") == "registered", \
+            "OS-access case must complete the standalone registration: %r" % sc
+        assert sc.get("applicationKind") == "standaloneServer", \
+            "OS-access case must report the standalone-server kind: %r" % sc
+
+        assert "verification" in sc, \
+            "a credential write that reached read-back must report verification: %r" % sc
+        assert sc["verification"] == "not_verifiable", \
+            "OS access with empty credentials must be not_verifiable: %r" % sc
+        assert "verificationReason" in sc, \
+            "not_verifiable must carry verificationReason: %r" % sc
+        expected_reason = (
+            "OS access with an empty user and empty password is also EDT's default fallback, "
+            "so the read-back cannot prove that a stored entry exists."
+        )
+        assert sc["verificationReason"] == expected_reason, \
+            "not_verifiable must carry the exact EDT-fallback reason: %r" % sc
+
+        message = sc.get("message") or ""
+        message_lower = message.lower()
+        assert "edt accepted the connection-credentials update" in message_lower, \
+            "not_verifiable must report the accepted write without claiming verification: %r" % sc
+        assert "read-back could not verify a stored entry" in message_lower, \
+            "not_verifiable must state what read-back could not establish: %r" % sc
+        assert "stored connection credentials" not in message_lower, \
+            "not_verifiable must not claim a confirmed credential store: %r" % sc
+        assert "connection credentials were not stored" not in message_lower, \
+            "not_verifiable is distinct from a failed credential write: %r" % sc
+    finally:
+        _ensure_standalone_register_absent()
+
+    assert_no_diff("the OS-verification round-trip must not touch the committed fixture")

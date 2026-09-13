@@ -111,6 +111,7 @@ The error case is not "nothing happened": the database is on disk and must not b
 - **`register` needs an existing infobase**: the path must contain a `1Cv8.1CD`; otherwise the tool errors and points you to `mode='create'`.
 - **FILE only**: passing a server/web connection string as `infobaseFile` is not supported — use the dedicated server creation tooling for that.
 - **Timeout**: the background Job waits up to 120 seconds. The tool reports an honest timeout, not a fake success.
+- **Credential read-back timeout**: optional credential storage/read-back has its own 30-second bound. If that bound expires, the result still reports the infobase as created/registered, marks the credential state as undetermined, and tells you to run `set_infobase_credentials`; it never claims that credentials were stored.
 - **Created is not bound**: if the application never appears, the call is an ERROR even though the database was written (see "The three binding outcomes"). Branch on `boundToProject`, not on the message.
 - **Cleanup**: use `delete_infobase` to remove an infobase from the project and the EDT infobases list.
 - **State after creation**: a newly created infobase is empty — `get_applications` reports `FULL_UPDATE_REQUIRED` or similar. Call `update_database` to push the configuration into it.

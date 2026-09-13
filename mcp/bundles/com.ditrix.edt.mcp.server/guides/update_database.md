@@ -42,6 +42,25 @@ If you pass `launchConfigurationName` **and** an explicit `applicationId`, the c
 - **confirm** (boolean, default false) — false previews the resolved update without touching the infobase; true applies it.
 - `externalInfobaseChanges` — how to answer EDT's blocking "Infobase configuration changes" modal when the infobase was changed OUTSIDE EDT (Designer, `ibcmd`, a CLI pipeline) since the last EDT interaction: `override` (default) keeps the project configuration and overwrites the infobase, `import` pulls the external changes into the PROJECT sources, `cancel` aborts the update with an error. See ## Infobase changed outside EDT.
 - **terminateRunningClients** (boolean, default true) — before applying, terminate any 1C client THIS EDT launched on the target infobase to free the exclusive lock and stop it running stale modules. Set false to leave a running client in place (the update then fails if that client holds the infobase exclusively). Only affects the apply phase (confirm=true); the preview reports `willTerminateRunningClients` but terminates nothing.
+- **checkInfobaseSessions** (boolean, default true) — after the EDT-launched-client sweep and before entering the update API, list standalone-server sessions and refuse while any non-agent session remains. Set false only when you intentionally accept that risk. The preview reports `willCheckInfobaseSessions`.
+
+## Check standalone-server sessions first
+
+Before applying an update, call:
+
+```text
+infobase_sessions(action='list', projectName='MyProject', applicationId='ServerApplication.MyServer')
+```
+
+With the default `checkInfobaseSessions=true`, `update_database(confirm=true)` performs the same check after its existing EDT-launched-client sweep. A readable list containing any non-agent session blocks the update and reports the session details. Clear those sessions with:
+
+```text
+infobase_sessions(action='terminate', projectName='MyProject', applicationId='ServerApplication.MyServer', all=true, confirm=true)
+```
+
+Then retry `update_database`. A session whose raw `app-id` is `Designer` may be EDT's update agent or a human Configurator; the tool cannot distinguish them. It is not treated as a blocker because EDT's agent is present during normal updates, and `all=true` always skips it. If an update fails after seeing Designer sessions, the error names their IDs as likely exclusive-lock holders; terminate one only by its exact full UUID when that risk is intentional.
+
+Reachability matters. `reachable=true` with `sessions=[]` proves the list is empty; `reachable=false` names why it could not be read and is **not** proof that no sessions exist. The update still proceeds on an unreachable pre-flight because EDT may remain able to update through a different path. If that update later fails, its error includes the earlier `unreachableReason`. Set `checkInfobaseSessions=false` only to opt out of this safety pre-flight entirely.
 
 ## Exclusive-lock handling (automatic)
 
@@ -163,7 +182,9 @@ Both are handled before the operation runs: the server state is read first, and
 
 A refusal that still arrives (the state can go stale between the check and the start) is repaired
 the same way and the operation is retried ONCE. If the retry fails too, the error says so and names
-the likely reason: an `ibsrv` left over from the previous run still holding the ports.
+the likely reason: an `ibsrv` left over from the previous run still holding the ports. Whenever
+this operation successfully stopped the server and then failed, it attempts one restore and appends
+the outcome to the error. It never restores a server this operation did not stop.
 
 EDT's own background jobs - notably its external-object dump - can still lose this race on their
 own, which is logged in the workbench log without failing the MCP call.

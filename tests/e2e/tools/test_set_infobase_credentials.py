@@ -35,7 +35,13 @@ RESPONSE SHAPE
 --------------
 JSON tool (getResponseType() == JSON); payload in r.structured:
   stored: {"success": true, "clientConfigured", "project", "applicationId",
-           "applicationName", "user", "access", "passwordSet", "message"}
+           "applicationName", "user", "access", "passwordSet", "storedFor",
+           "verification", "passwordMatched" (only when the read-back decided it),
+           "message"}
+  NOTE: "verification" is three-valued - verified / mismatched / not_verifiable -
+        because EDT's resolveSettings falls back to a default (OS, empty user,
+        empty password) when nothing is stored, so a read-back of exactly that
+        shape proves nothing. A mismatch is returned as an ERROR envelope.
   error:  {"success": false, "error": "..."}
 
 CI STRATEGY

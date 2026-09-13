@@ -7,12 +7,18 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.lang.reflect.Method;
+import java.util.IdentityHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 
 import org.eclipse.core.runtime.Adapters;
 import org.eclipse.core.runtime.Platform;
 import org.osgi.framework.Bundle;
 
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager;
+import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessSettings;
 import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAccessSettings;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseAccess;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
@@ -44,6 +50,9 @@ import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
  */
 public final class InfobaseAccessSupport
 {
+    /** Shared deadline for the store plus its consumer-facing read-back. */
+    public static final long CREDENTIAL_STORE_TIMEOUT_MS = 30_000L;
+
     /** Symbolic name of the bundle that owns the internal PlatformServicesCore (and its Guice injector). */
     private static final String PLATFORM_SERVICES_CORE_BUNDLE_ID =
         "com._1c.g5.v8.dt.platform.services.core"; //$NON-NLS-1$
@@ -52,9 +61,227 @@ public final class InfobaseAccessSupport
     private static final String PLATFORM_SERVICES_CORE_CLASS =
         "com._1c.g5.v8.dt.internal.platform.services.core.PlatformServicesCore"; //$NON-NLS-1$
 
+    /** Fixed replacement for a credential found in platform-produced diagnostic text. */
+    private static final String CREDENTIAL_REDACTION_MARKER = "[REDACTED]"; //$NON-NLS-1$
+
+    /** Safe diagnosis when redacting a one-character credential would reveal or destroy it. */
+    private static final String CREDENTIAL_MESSAGE_WITHHELD =
+        "The platform message was withheld because it contained the supplied credential. " //$NON-NLS-1$
+            + "Retry with a longer password to get a readable diagnosis."; //$NON-NLS-1$
+
+    /** A malformed throwable graph must not make credential-store failure reporting recurse forever. */
+    private static final int MAX_LOGGED_THROWABLE_DEPTH = 16;
+
+    /**
+     * Fixed stripes for serializing access-settings writes by infobase identity. Collisions only
+     * serialize unrelated infobases briefly; the fixed array cannot retain model references.
+     */
+    private static final Object[] ACCESS_SETTINGS_WRITE_LOCKS = createWriteLocks(64);
+
     private InfobaseAccessSupport()
     {
     }
+
+    /** The result of storing settings and reading them back through the consumer-facing resolver. */
+    public static final class StoreResult
+    {
+        /** The three possible conclusions of the read-back. */
+        public enum Verification
+        {
+            VERIFIED,
+            MISMATCHED,
+            NOT_VERIFIABLE
+        }
+
+        private final String error;
+        private final Verification verification;
+        private final String verificationReason;
+        private final Boolean passwordMatched;
+        private final String storedForName;
+        private final String storedForUuid;
+
+        private StoreResult(String error, Verification verification, String verificationReason,
+                Boolean passwordMatched, InfobaseReference ref)
+        {
+            this.error = error;
+            this.verification = verification;
+            this.verificationReason = verificationReason;
+            this.passwordMatched = passwordMatched;
+            String name = ""; //$NON-NLS-1$
+            String uuid = ""; //$NON-NLS-1$
+            try
+            {
+                if (ref != null)
+                {
+                    name = ref.getName() == null ? "" : ref.getName(); //$NON-NLS-1$
+                    uuid = ref.getUuid() == null ? "" : ref.getUuid().toString(); //$NON-NLS-1$
+                }
+            }
+            catch (RuntimeException e)
+            {
+                name = ""; //$NON-NLS-1$
+                uuid = ""; //$NON-NLS-1$
+            }
+            storedForName = name;
+            storedForUuid = uuid;
+        }
+
+        public String error()
+        {
+            return error;
+        }
+
+        public Verification verification()
+        {
+            return verification;
+        }
+
+        /** Lower-case wire value shared by credential-setting and infobase-creation results. */
+        public String verificationName()
+        {
+            return verification == null ? null
+                : verification.name().toLowerCase(java.util.Locale.ROOT);
+        }
+
+        public String verificationReason()
+        {
+            return verificationReason;
+        }
+
+        public Boolean passwordMatched()
+        {
+            return passwordMatched;
+        }
+
+        public String storedForName()
+        {
+            return storedForName;
+        }
+
+        public String storedForUuid()
+        {
+            return storedForUuid;
+        }
+
+        private static StoreResult failed(String error, InfobaseReference ref)
+        {
+            return new StoreResult(error, null, null, null, ref);
+        }
+
+        public static StoreResult verified(InfobaseReference ref)
+        {
+            return new StoreResult(null, Verification.VERIFIED, null, Boolean.TRUE, ref);
+        }
+
+        public static StoreResult mismatched(String reason, boolean passwordMatched,
+                InfobaseReference ref)
+        {
+            return new StoreResult(null, Verification.MISMATCHED, reason,
+                Boolean.valueOf(passwordMatched), ref);
+        }
+
+        public static StoreResult notVerifiable(String reason, InfobaseReference ref)
+        {
+            return new StoreResult(null, Verification.NOT_VERIFIABLE, reason, null, ref);
+        }
+    }
+
+    /** Work performed by the shared bounded credential-store Job. */
+    @FunctionalInterface
+    public interface BoundedStoreWork<T>
+    {
+        /**
+         * @param publish records the latest safe result snapshot for the bounded caller
+         * @param writeCommitted records the persistent-write boundary before read-back begins
+         * @param writeAllowed must be checked immediately before the persistent settings write;
+         *     false means the bounded caller has stopped waiting or cancelled the Job
+         * @throws Exception any operation failure captured by {@link BoundedJob}
+         */
+        void run(Consumer<T> publish, Runnable writeCommitted, BooleanSupplier writeAllowed)
+            throws Exception;
+    }
+
+    /** Bounded Job outcome plus the result and write-boundary snapshots visible at its deadline. */
+    public static final class BoundedStoreResult<T>
+    {
+        private final BoundedJob.Result boundedResult;
+        private final T publishedResult;
+        private final boolean writeCommitted;
+
+        private BoundedStoreResult(BoundedJob.Result boundedResult, T publishedResult,
+            boolean writeCommitted)
+        {
+            this.boundedResult = boundedResult;
+            this.publishedResult = publishedResult;
+            this.writeCommitted = writeCommitted;
+        }
+
+        public BoundedJob.Result boundedResult()
+        {
+            return boundedResult;
+        }
+
+        public T publishedResult()
+        {
+            return publishedResult;
+        }
+
+        public boolean writeCommitted()
+        {
+            return writeCommitted;
+        }
+    }
+
+    /**
+     * Runs credential storage and read-back in one bounded background Job.
+     *
+     * <p>The publisher supports {@code set_infobase_credentials}' persist-first result snapshots;
+     * simpler callers publish once after {@link #storeCredentials} returns. The write callback is
+     * independent so a timeout during read-back can be described without exposing any credential.
+     */
+    public static <T> BoundedStoreResult<T> runBoundedCredentialStore(String target,
+        long timeoutMs, BoundedStoreWork<T> work)
+    {
+        AtomicReference<T> published = new AtomicReference<>();
+        AtomicBoolean writeCommitted = new AtomicBoolean();
+        AtomicBoolean callerFinished = new AtomicBoolean();
+        BoundedJob.Result bounded;
+        try
+        {
+            bounded = BoundedJob.run("Store infobase credentials: " + target, //$NON-NLS-1$
+                timeoutMs, monitor -> {
+                    BooleanSupplier writeAllowed =
+                        () -> !callerFinished.get() && !monitor.isCanceled();
+                    work.run(value -> {
+                        if (writeAllowed.getAsBoolean())
+                        {
+                            published.set(value);
+                        }
+                    }, () -> writeCommitted.set(true), writeAllowed);
+                });
+        }
+        finally
+        {
+            // Cancellation is cooperative. A worker that outlives the wait observes either its
+            // cancelled monitor or this flag before it can enter the persistent write.
+            callerFinished.set(true);
+        }
+        return new BoundedStoreResult<>(bounded, published.get(), writeCommitted.get());
+    }
+
+    /** Credentials that may be supplied to an interactive platform command. */
+    public record Credentials(String userName, String password)
+    {
+        /** Normalizes absent values so callers never need to handle a null secret. */
+        public Credentials
+        {
+            userName = userName == null ? "" : userName; //$NON-NLS-1$
+            password = password == null ? "" : password; //$NON-NLS-1$
+        }
+    }
+
+    /** No stored credentials, or credentials that could not be read. */
+    private static final Credentials NO_CREDENTIALS = new Credentials("", ""); //$NON-NLS-1$ //$NON-NLS-2$
 
     /**
      * Parses the {@code access} argument into an {@link InfobaseAccess} literal.
@@ -132,21 +359,38 @@ public final class InfobaseAccessSupport
      * @param user the infobase user name (empty allowed — demo bases use an empty password user)
      * @param password the infobase user password (empty allowed)
      * @param access the access kind (INFOBASE = 1C user auth, OS = OS auth)
-     * @return {@code null} on success, otherwise an actionable error message describing why the
-     *         credentials could not be stored (no infobase reference could be resolved for this
-     *         application, access manager unavailable, or the {@code updateSettings} call failed)
+     * @return the store and consumer-facing read-back result
      */
-    public static String storeCredentials(IApplication application, String user, String password,
+    public static StoreResult storeCredentials(IApplication application, String user, String password,
             InfobaseAccess access)
+    {
+        return storeCredentials(application, user, password, access, null);
+    }
+
+    /**
+     * Stores credentials and reports the write boundary before consumer-facing read-back begins.
+     *
+     * @param writeCommitted optional callback invoked immediately after {@code updateSettings}
+     *     returns successfully
+     */
+    public static StoreResult storeCredentials(IApplication application, String user, String password,
+            InfobaseAccess access, Runnable writeCommitted)
+    {
+        return storeCredentials(application, user, password, access, writeCommitted, null);
+    }
+
+    /** Same store with the bounded caller's last-moment write permission. */
+    public static StoreResult storeCredentials(IApplication application, String user, String password,
+            InfobaseAccess access, Runnable writeCommitted, BooleanSupplier writeAllowed)
     {
         InfobaseReference ref = resolveInfobaseReference(application);
         if (ref != null)
         {
-            return storeCredentials(ref, user, password, access);
+            return storeCredentials(ref, user, password, access, writeCommitted, writeAllowed);
         }
-        return "Application '" + application.getId() //$NON-NLS-1$
+        return StoreResult.failed("Application '" + application.getId() //$NON-NLS-1$
             + "' exposes no infobase reference — credentials apply to infobases and to standalone " //$NON-NLS-1$
-            + "servers wrapping a registered infobase (issue #275); this application is neither."; //$NON-NLS-1$
+            + "servers wrapping a registered infobase; this application is neither.", null); //$NON-NLS-1$
     }
 
     /**
@@ -201,6 +445,43 @@ public final class InfobaseAccessSupport
     }
 
     /**
+     * Reads the credentials EDT stores for the infobase reference resolved from an application.
+     * The password is returned only to the caller and is never logged. An absent reference,
+     * manager, or settings record means there is nothing to send and returns empty credentials.
+     *
+     * @param application the application whose infobase credentials are needed
+     * @return stored user/password, or empty values when none can be read
+     */
+    public static Credentials readCredentials(IApplication application)
+    {
+        InfobaseReference ref = resolveInfobaseReference(application);
+        if (ref == null)
+        {
+            return NO_CREDENTIALS;
+        }
+        IInfobaseAccessManager manager = resolveAccessManager();
+        if (manager == null)
+        {
+            return NO_CREDENTIALS;
+        }
+        try
+        {
+            IInfobaseAccessSettings settings = manager.resolveSettings(ref);
+            if (settings == null || settings == IInfobaseAccessSettings.NOT_DEFINED)
+            {
+                return NO_CREDENTIALS;
+            }
+            return new Credentials(settings.userName(), settings.password());
+        }
+        catch (Exception e) // NOSONAR credential lookup is optional; the command may not require auth
+        {
+            Activator.logWarning("infobase access: stored credentials could not be read for " //$NON-NLS-1$
+                + application.getId() + ": " + PlatformFailures.describe(e)); //$NON-NLS-1$
+            return NO_CREDENTIALS;
+        }
+    }
+
+    /**
      * Adapts {@code adaptable} (an {@link IApplication} or one of its modules) to an
      * {@link InfobaseReference} via {@link Adapters#adapt(Object, Class)}, the same mechanism
      * EDT's {@code ServerApplicationBehaviourDelegate} launch path uses to resolve the infobase to
@@ -248,32 +529,267 @@ public final class InfobaseAccessSupport
      * @param user the infobase user name (empty allowed)
      * @param password the infobase user password (empty allowed)
      * @param access the access kind (INFOBASE = 1C user auth, OS = OS auth)
-     * @return {@code null} on success, otherwise an actionable error message
+     * @return the store and consumer-facing read-back result
      */
-    public static String storeCredentials(InfobaseReference ref, String user, String password,
+    public static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
             InfobaseAccess access)
+    {
+        return storeCredentials(ref, user, password, access, (Runnable)null);
+    }
+
+    public static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
+            InfobaseAccess access, Runnable writeCommitted)
+    {
+        return storeCredentials(ref, user, password, access, writeCommitted, null);
+    }
+
+    /** Same store with the bounded caller's last-moment write permission. */
+    public static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
+            InfobaseAccess access, Runnable writeCommitted, BooleanSupplier writeAllowed)
     {
         if (ref == null)
         {
-            return "No infobase reference to store credentials for."; //$NON-NLS-1$
+            return StoreResult.failed("No infobase reference to store credentials for.", null); //$NON-NLS-1$
         }
         IInfobaseAccessManager manager = resolveAccessManager();
         if (manager == null)
         {
-            return "EDT infobase access manager is not available (the platform-services plugin may " //$NON-NLS-1$
-                + "not be ready)."; //$NON-NLS-1$
+            return StoreResult.failed("EDT infobase access manager is not available " //$NON-NLS-1$
+                + "(the platform-services plugin may not be ready).", ref); //$NON-NLS-1$
         }
+        return storeCredentials(ref, user, password, access, manager, writeCommitted, writeAllowed);
+    }
+
+    static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
+            InfobaseAccess access, IInfobaseAccessManager manager)
+    {
+        return storeCredentials(ref, user, password, access, manager, null);
+    }
+
+    static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
+            InfobaseAccess access, IInfobaseAccessManager manager, Runnable writeCommitted)
+    {
+        return storeCredentials(ref, user, password, access, manager, writeCommitted, null);
+    }
+
+    /**
+     * Core write/read-back path. The deadline permission check and {@code updateSettings} share the
+     * same infobase-keyed critical section as every other credentials write.
+     */
+    static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
+            InfobaseAccess access, IInfobaseAccessManager manager, Runnable writeCommitted,
+            BooleanSupplier writeAllowed)
+    {
+        String requestedUser = user == null ? "" : user; //$NON-NLS-1$
+        String requestedPassword = password == null ? "" : password; //$NON-NLS-1$
+        synchronized (writeLockFor(ref))
+        {
+            // This check deliberately lives INSIDE the same serialization as the write. A bounded
+            // worker that waited for an earlier write must re-read its deadline state after it
+            // acquires the lock; a worker already writing when its caller times out keeps the lock,
+            // so a later intentional write necessarily runs after it and wins.
+            if (writeAllowed != null && !writeAllowed.getAsBoolean())
+            {
+                return StoreResult.failed(
+                    "Credential storage was cancelled before the settings write.", ref); //$NON-NLS-1$
+            }
+            try
+            {
+                manager.updateSettings(ref, new InfobaseAccessSettings(access,
+                    requestedUser, requestedPassword, "")); //$NON-NLS-1$
+            }
+            catch (Exception e) // NOSONAR a StorageException (secure-storage) or CoreException must surface
+            {
+                String diagnostic = scrubCredentialText(
+                    PlatformFailures.describeWithRootCause(e), requestedPassword);
+                String message = "Failed to store infobase access settings: " //$NON-NLS-1$
+                    + diagnostic;
+                // Keep the platform diagnosis, cause chain and original stack frames in the EDT
+                // log. A scrubbed copy is attached because logging the original throwable would
+                // render its unsanitized messages again after the log line itself was scrubbed.
+                Activator.logError("set credentials: updateSettings failed: " //$NON-NLS-1$
+                    + diagnostic, scrubCredentialFailureForLog(e, requestedPassword));
+                return StoreResult.failed(message, ref);
+            }
+            if (writeCommitted != null)
+            {
+                writeCommitted.run();
+            }
+        }
+
+        IInfobaseAccessSettings readBack;
         try
         {
-            manager.updateSettings(ref, new InfobaseAccessSettings(access,
-                user == null ? "" : user, password == null ? "" : password, "")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            readBack = manager.resolveSettings(ref);
+        }
+        catch (Exception e) // NOSONAR the completed write remains valid when verification cannot run
+        {
+            String failureType = e.getClass().getSimpleName();
+            Activator.logError("set credentials: resolveSettings failed after the write (" //$NON-NLS-1$
+                + failureType + ")", null); //$NON-NLS-1$
+            return StoreResult.notVerifiable(
+                "The settings were stored, but EDT could not read them back for verification (" //$NON-NLS-1$
+                    + failureType + ").", ref); //$NON-NLS-1$
+        }
+        if (readBack == null)
+        {
+            return StoreResult.notVerifiable(
+                "The settings were stored, but EDT returned no settings during verification.", ref); //$NON-NLS-1$
+        }
+
+        InfobaseAccess actualAccess;
+        String actualUser;
+        String actualPassword;
+        try
+        {
+            actualAccess = readBack.access();
+            actualUser = readBack.userName() == null ? "" : readBack.userName(); //$NON-NLS-1$
+            actualPassword = readBack.password() == null ? "" : readBack.password(); //$NON-NLS-1$
+        }
+        catch (RuntimeException e)
+        {
+            String failureType = e.getClass().getSimpleName();
+            Activator.logError("set credentials: reading resolved settings failed (" //$NON-NLS-1$
+                + failureType + ")", null); //$NON-NLS-1$
+            return StoreResult.notVerifiable(
+                "The settings were stored, but EDT could not inspect their read-back (" //$NON-NLS-1$
+                    + failureType + ").", ref); //$NON-NLS-1$
+        }
+        boolean accessMatches = access == actualAccess;
+        boolean userMatches = requestedUser.equals(actualUser);
+        boolean passwordMatches = requestedPassword.equals(actualPassword);
+        if (!accessMatches || !userMatches || !passwordMatches)
+        {
+            return StoreResult.mismatched("Requested access=" + access.name() + ", user='" //$NON-NLS-1$ //$NON-NLS-2$
+                + requestedUser + "', passwordSet=" + !requestedPassword.isEmpty() + "; read back access=" //$NON-NLS-1$ //$NON-NLS-2$
+                + (actualAccess == null ? "null" : actualAccess.name()) + ", user='" //$NON-NLS-1$ //$NON-NLS-2$
+                + actualUser + "', passwordSet=" + !actualPassword.isEmpty() //$NON-NLS-1$ //$NON-NLS-2$
+                + ", passwordMatched=" + passwordMatches + ".", passwordMatches, ref); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (InfobaseAccess.OS == access && requestedUser.isEmpty() && requestedPassword.isEmpty())
+        {
+            return StoreResult.notVerifiable("OS access with an empty user and empty password is " //$NON-NLS-1$
+                + "also EDT's default fallback, so the read-back cannot prove that a stored entry exists.", ref); //$NON-NLS-1$
+        }
+        return StoreResult.verified(ref);
+    }
+
+    /**
+     * Removes the concrete password from platform-produced text without treating it as a regular
+     * expression. Empty values are not secret and remain a no-op. A message containing a
+     * one-character credential is withheld because replacing that character throughout the text
+     * would both destroy the diagnosis and signal the supplied character.
+     */
+    static String scrubCredentialText(String message, String password)
+    {
+        if (message == null || password == null || password.isEmpty())
+        {
+            return message;
+        }
+        if (password.length() == 1)
+        {
+            return message.contains(password) ? CREDENTIAL_MESSAGE_WITHHELD : message;
+        }
+        return message.replace(password, CREDENTIAL_REDACTION_MARKER);
+    }
+
+    /**
+     * Builds the throwable attached to the EDT log. Its messages are scrubbed recursively while
+     * its exception type names, cause/suppressed structure and original stack frames remain
+     * available for triage.
+     */
+    static Throwable scrubCredentialFailureForLog(Throwable failure, String password)
+    {
+        return scrubCredentialFailureForLog(failure, password,
+            new IdentityHashMap<Throwable, Boolean>(), 0);
+    }
+
+    private static Throwable scrubCredentialFailureForLog(Throwable failure, String password,
+            IdentityHashMap<Throwable, Boolean> visited, int depth)
+    {
+        if (failure == null || visited.containsKey(failure) || depth >= MAX_LOGGED_THROWABLE_DEPTH)
+        {
             return null;
         }
-        catch (Exception e) // NOSONAR a StorageException (secure-storage) or CoreException must surface
+        visited.put(failure, Boolean.TRUE);
+
+        String originalMessage = scrubCredentialText(failure.getMessage(), password);
+        String diagnostic = failure.getClass().getName()
+            + (originalMessage == null || originalMessage.isEmpty()
+                ? "" : ": " + originalMessage); //$NON-NLS-1$ //$NON-NLS-2$
+        CredentialStoreLogException scrubbed = new CredentialStoreLogException(diagnostic);
+        scrubbed.setStackTrace(failure.getStackTrace());
+
+        Throwable cause = scrubCredentialFailureForLog(failure.getCause(), password, visited,
+            depth + 1);
+        if (cause != null)
         {
-            Activator.logError("set credentials: updateSettings failed", e); //$NON-NLS-1$
-            return "Failed to store infobase access settings: " + e.getMessage(); //$NON-NLS-1$
+            scrubbed.initCause(cause);
         }
+        for (Throwable suppressed : failure.getSuppressed())
+        {
+            Throwable scrubbedSuppressed = scrubCredentialFailureForLog(suppressed, password,
+                visited, depth + 1);
+            if (scrubbedSuppressed != null)
+            {
+                scrubbed.addSuppressed(scrubbedSuppressed);
+            }
+        }
+        return scrubbed;
+    }
+
+    /** A diagnostic-only throwable whose stack and causal structure mirror the platform failure. */
+    private static final class CredentialStoreLogException
+        extends Exception
+    {
+        private static final long serialVersionUID = 1L;
+
+        CredentialStoreLogException(String message)
+        {
+            super(message);
+        }
+    }
+
+    private static Object[] createWriteLocks(int count)
+    {
+        Object[] locks = new Object[count];
+        for (int i = 0; i < locks.length; i++)
+        {
+            locks[i] = new Object();
+        }
+        return locks;
+    }
+
+    /**
+     * Selects a stable write stripe from the infobase UUID, falling back to its non-secret name and
+     * finally object identity for incomplete test/provisional references.
+     */
+    private static Object writeLockFor(InfobaseReference ref)
+    {
+        int hash = System.identityHashCode(ref);
+        try
+        {
+            Object uuid = ref.getUuid();
+            if (uuid != null)
+            {
+                hash = uuid.hashCode();
+            }
+            else
+            {
+                String name = ref.getName();
+                if (name != null && !name.isEmpty())
+                {
+                    hash = name.hashCode();
+                }
+            }
+        }
+        catch (RuntimeException e)
+        {
+            // A partially disposed reference still gets an identity-based stripe; never log any
+            // access-settings data while choosing a lock.
+        }
+        return ACCESS_SETTINGS_WRITE_LOCKS[(hash & Integer.MAX_VALUE)
+            % ACCESS_SETTINGS_WRITE_LOCKS.length];
     }
 
     /**

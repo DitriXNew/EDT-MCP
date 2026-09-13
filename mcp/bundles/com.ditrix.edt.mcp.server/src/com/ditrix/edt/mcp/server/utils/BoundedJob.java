@@ -6,13 +6,20 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.IJobChangeEvent;
 import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.core.runtime.jobs.JobChangeAdapter;
+
+import com.ditrix.edt.mcp.server.Activator;
 
 /**
  * Runs a unit of platform work in a background {@link Job} and waits for it with a hard
@@ -35,9 +42,9 @@ import org.eclipse.core.runtime.jobs.Job;
  * starting, and reporting THAT as "it may still be running" is the opposite of the truth — hence
  * the separate {@link Outcome#TIMED_OUT_BEFORE_START}.
  *
- * <p>The job is joined synchronously by the calling thread, so an unattended-safety
- * suppressor armed around the call (auth dialogs, launch auto-confirm) still sees the
- * request in flight and keeps covering modals raised from the job thread.
+ * <p>The job is joined synchronously only until the caller's deadline. A caller whose unattended-
+ * safety guard must outlive that bounded wait can use the completion-callback overload to release
+ * the guard when the Job manager reports eventual completion.
  */
 public final class BoundedJob
 {
@@ -81,6 +88,81 @@ public final class BoundedJob
          *     propagated out of the job thread
          */
         void run(IProgressMonitor monitor) throws Exception; // NOSONAR the work is arbitrary platform code
+    }
+
+    @FunctionalInterface
+    interface IJobScheduler
+    {
+        void schedule(Job job);
+    }
+
+    static class CompletionListener extends JobChangeAdapter
+    {
+        private final String jobName;
+        private final Runnable completion;
+        private final AtomicBoolean completionCalled = new AtomicBoolean();
+        private final AtomicReference<Job> attachedJob = new AtomicReference<>();
+
+        CompletionListener(String jobName, Runnable completion)
+        {
+            this.jobName = jobName;
+            this.completion = completion;
+        }
+
+        void attach(Job job)
+        {
+            if (!attachedJob.compareAndSet(null, job))
+            {
+                throw new IllegalStateException("Completion listener is already attached"); //$NON-NLS-1$
+            }
+            try
+            {
+                job.addJobChangeListener(this);
+            }
+            catch (RuntimeException | Error e)
+            {
+                attachedJob.compareAndSet(job, null);
+                throw e;
+            }
+        }
+
+        @Override
+        public void done(IJobChangeEvent event)
+        {
+            complete();
+        }
+
+        synchronized void complete()
+        {
+            if (!completionCalled.compareAndSet(false, true))
+            {
+                return;
+            }
+            Job job = attachedJob.getAndSet(null);
+            try
+            {
+                if (job != null)
+                {
+                    job.removeJobChangeListener(this);
+                }
+            }
+            finally
+            {
+                runCompletion();
+            }
+        }
+
+        private void runCompletion()
+        {
+            try
+            {
+                completion.run();
+            }
+            catch (Throwable t) // NOSONAR lifecycle notification must not damage the Job manager
+            {
+                Activator.logError("Bounded job completion callback failed: " + jobName, t); //$NON-NLS-1$
+            }
+        }
     }
 
     /**
@@ -147,6 +229,12 @@ public final class BoundedJob
         // Utility
     }
 
+    /** Whether the bounded caller returned while the underlying work may still be running. */
+    public static boolean isInconclusive(Outcome outcome)
+    {
+        return outcome == Outcome.TIMED_OUT || outcome == Outcome.INTERRUPTED;
+    }
+
     /**
      * Runs {@code work} in a background job and waits at most {@code timeoutMs} for it.
      *
@@ -163,6 +251,150 @@ public final class BoundedJob
      * @return the outcome — never {@code null}, never throws for a work that raised an Exception
      */
     public static Result run(String jobName, long timeoutMs, IBoundedWork work)
+    {
+        return run(jobName, timeoutMs, work, null);
+    }
+
+    /**
+     * Releases an operation guard after a bounded wait without releasing it while inconclusive work
+     * may still be running.
+     *
+     * <p>Pass {@link #jobFinished()} to the completion-callback overload of {@link #run}, then call
+     * {@link #afterBoundedWait(boolean)} in the bounded caller's {@code finally}. A conclusive wait
+     * releases immediately. A timeout or interruption defers release until the Job's terminal
+     * notification, with a caller-supplied hard cap so a broken Job lifecycle cannot leak the guard
+     * forever. Completion and the cap converge on one exactly-once release.
+     */
+    public static final class DeferredCleanup
+    {
+        private final Runnable cleanup;
+        private final long capMs;
+        private final String timerName;
+        private final AtomicBoolean jobFinished = new AtomicBoolean();
+        private final AtomicBoolean deferred = new AtomicBoolean();
+        private final AtomicBoolean cleaned = new AtomicBoolean();
+        private final AtomicReference<Timer> deadline = new AtomicReference<>();
+
+        /**
+         * @param cleanup the guard release, invoked exactly once
+         * @param capMs maximum time to retain the guard after an inconclusive bounded wait
+         * @param timerName diagnostic name for the daemon timer enforcing the hard cap
+         */
+        public DeferredCleanup(Runnable cleanup, long capMs, String timerName)
+        {
+            this.cleanup = cleanup;
+            this.capMs = Math.max(1L, capMs);
+            this.timerName = timerName;
+        }
+
+        /** Records the underlying Job's terminal notification. */
+        public void jobFinished()
+        {
+            jobFinished.set(true);
+            if (deferred.get())
+            {
+                cleanOnce();
+            }
+        }
+
+        /**
+         * Records the bounded caller's outcome and either releases now or starts the deferred cap.
+         *
+         * @param conclusive {@code true} only when the underlying work has definitely ended
+         */
+        public void afterBoundedWait(boolean conclusive)
+        {
+            if (conclusive)
+            {
+                cleanOnce();
+                return;
+            }
+            deferred.set(true);
+            if (jobFinished.get())
+            {
+                cleanOnce();
+            }
+            if (!cleaned.get())
+            {
+                scheduleDeadline();
+            }
+        }
+
+        private void scheduleDeadline()
+        {
+            Timer timer = new Timer(timerName, true);
+            if (!deadline.compareAndSet(null, timer))
+            {
+                timer.cancel();
+                return;
+            }
+            try
+            {
+                timer.schedule(new TimerTask()
+                {
+                    @Override
+                    public void run()
+                    {
+                        cleanOnce();
+                    }
+                }, capMs);
+            }
+            catch (RuntimeException e)
+            {
+                // If the cap itself is unavailable, release now rather than leak a guard forever.
+                cancelDeadline();
+                cleanOnce();
+                return;
+            }
+            if (cleaned.get())
+            {
+                cancelDeadline();
+            }
+        }
+
+        private void cleanOnce()
+        {
+            if (cleaned.compareAndSet(false, true))
+            {
+                cancelDeadline();
+                cleanup.run();
+            }
+        }
+
+        private void cancelDeadline()
+        {
+            Timer timer = deadline.getAndSet(null);
+            if (timer != null)
+            {
+                timer.cancel();
+            }
+        }
+    }
+
+    /**
+     * Runs {@code work} in a background job, waits at most {@code timeoutMs} for it, and invokes
+     * {@code completion} when the Job manager eventually reports the job done.
+     *
+     * <p>The completion belongs to the Job lifecycle, not the caller's bounded wait: after
+     * {@link Outcome#TIMED_OUT} or {@link Outcome#INTERRUPTED}, this method still returns on time and
+     * the callback runs later when the Job manager reports the Job done. A non-null callback is
+     * invoked exactly once, including when the job is cancelled before entering {@code work}. If
+     * scheduling itself raises, the callback runs before that failure is propagated.
+     *
+     * @param jobName the job name shown in EDT's progress UI
+     * @param timeoutMs the caller's deadline in milliseconds
+     * @param work the work to run
+     * @param completion optional callback invoked after the operation ends, whether work succeeded,
+     *     raised, never started, or could not be scheduled
+     * @return the bounded outcome
+     */
+    public static Result run(String jobName, long timeoutMs, IBoundedWork work, Runnable completion)
+    {
+        return run(jobName, timeoutMs, work, completion, McpJobs::schedule);
+    }
+
+    static Result run(String jobName, long timeoutMs, IBoundedWork work, Runnable completion,
+        IJobScheduler scheduler)
     {
         long startMs = System.currentTimeMillis();
         // Written by the job thread, read by the calling thread only after join() reports the job
@@ -207,8 +439,25 @@ public final class BoundedJob
                 return Status.OK_STATUS;
             }
         };
+        CompletionListener completionListener = null;
+        if (completion != null)
+        {
+            completionListener = new CompletionListener(jobName, completion);
+            completionListener.attach(job);
+        }
         job.setUser(false);
-        McpJobs.schedule(job);
+        try
+        {
+            scheduler.schedule(job);
+        }
+        catch (RuntimeException | Error e)
+        {
+            if (completionListener != null)
+            {
+                completionListener.complete();
+            }
+            throw e;
+        }
 
         boolean finished;
         try

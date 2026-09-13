@@ -68,7 +68,10 @@ public class GetApplicationsTool implements IMcpTool
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the operation succeeded", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.PROJECT, "EDT project name the applications belong to") //$NON-NLS-1$
-            .objectArrayProperty(KEY_APPLICATIONS, "Applications with id, name, type and update state") //$NON-NLS-1$
+            .objectArrayProperty(KEY_APPLICATIONS, "Applications with id, name, type and updateState. " //$NON-NLS-1$
+                + "updateState is a cached infobase-equality comparison refreshed asynchronously; " //$NON-NLS-1$
+                + "immediately after update_database it can still show the pre-update value, while " //$NON-NLS-1$
+                + "update_database stateAfter is the authoritative post-update answer.") //$NON-NLS-1$
             .integerProperty(KEY_COUNT, "Number of applications found") //$NON-NLS-1$
             .stringProperty("message", "Informational message when no applications are found") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("defaultApplicationId", "Id of the project's default application") //$NON-NLS-1$ //$NON-NLS-2$

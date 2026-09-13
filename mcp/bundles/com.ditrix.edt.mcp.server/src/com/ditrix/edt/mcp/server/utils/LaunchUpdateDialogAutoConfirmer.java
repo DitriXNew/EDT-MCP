@@ -15,6 +15,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import org.eclipse.swt.SWT;
@@ -390,6 +393,16 @@ public final class LaunchUpdateDialogAutoConfirmer
      * pathological dialog must not turn one failure into a wall of text.
      */
     private static final int MAX_PORT_CONFLICT_DETAIL_CHARS = 400;
+
+    /**
+     * How long a reconciliation may wait for the SWT UI thread. This hop takes milliseconds when
+     * the UI thread is responsive; when it is not, an unattended call cannot wait it out - it
+     * would block outside every deadline while holding a start claim and the recovery lock.
+     */
+    private static final long UI_RECONCILE_TIMEOUT_MS = 2_000L;
+
+    /** Hand the reconcile to the UI thread and do not wait for it at all. */
+    private static final long QUEUE_ONLY_MS = 0L;
 
     private static final Object LOCK = new Object();
 
@@ -1049,8 +1062,9 @@ public final class LaunchUpdateDialogAutoConfirmer
      *            resolved ({@code null}/blank), the arm is degraded to
      *            {@link ExternalInfobaseChangesPolicy#CANCEL}: the modal is still answered, so the
      *            call cannot hang, but nothing is written on a dialog whose ownership is unproven
+     * @return {@code true} when this call installed its requested arms; {@code false} otherwise
      */
-    public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
+    public static boolean arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName)
     {
         // The port-conflict matcher stays UNARMED for the legacy overloads: they are also used by
@@ -1058,7 +1072,7 @@ public final class LaunchUpdateDialogAutoConfirmer
         // arm held for the whole of one of those would answer a port dialog raised by an unrelated
         // launch or by a human. Only a caller that can actually meet the modal opts in, by passing a
         // policy to the six-argument overload.
-        arm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName, null);
+        return arm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName, null);
     }
 
     /**
@@ -1077,19 +1091,21 @@ public final class LaunchUpdateDialogAutoConfirmer
      *            REWRITE the server configuration. {@code null} is read as the default. The
      *            reassign answer requires UNANIMITY across the outstanding arms — see
      *            {@link #PORT_CONFLICT_ARMS}
+     * @return {@code true} when this call installed its requested arms; {@code false} otherwise
      */
-    public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
+    public static boolean arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName,
         StandaloneServerPortConflictPolicy portPolicy)
     {
         // No server name: a reassign armed this way can answer nothing, by design. Callers that
         // can start a standalone server resolve the name and use the overload below.
-        arm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName,
+        return arm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, infobaseName,
             portPolicy, null);
     }
 
     /**
      * Arms the matchers, naming the standalone server this call may start.
+     * Call the matching {@code disarm} only when this method returns {@code true}.
      *
      * @param updateDialog arm the "Update database configuration" TITLE matcher
      * @param sessionDialog arm the code-1003 "Debug session already exists" BODY matcher
@@ -1101,8 +1117,10 @@ public final class LaunchUpdateDialogAutoConfirmer
      * @param serverName the WST server's own name, resolved from the application. The
      *            {@code REASSIGN} answer is pressed only on a dialog quoting exactly this name;
      *            {@code null} means the write is refused rather than aimed by guesswork
+     * @return {@code true} when this call installed its requested arms; {@code false} when it
+     *         requested nothing or no workbench display was available
      */
-    public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog, // NOSONAR mirrors the existing arm-flag list; a parameter object would move the arity, not remove it
+    public static boolean arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog, // NOSONAR mirrors the existing arm-flag list; a parameter object would move the arity, not remove it
         ExternalInfobaseChangesPolicy conflictPolicy, String infobaseName,
         StandaloneServerPortConflictPolicy portPolicy, String serverName)
     {
@@ -1114,12 +1132,12 @@ public final class LaunchUpdateDialogAutoConfirmer
         if (!updateDialog && !sessionDialog && !restructureDialog && conflictPolicy == null
             && portPolicy == null)
         {
-            return;
+            return false;
         }
         Display display = safeDisplay();
         if (display == null)
         {
-            return;
+            return false;
         }
         synchronized (LOCK)
         {
@@ -1149,7 +1167,25 @@ public final class LaunchUpdateDialogAutoConfirmer
                     attributableAnswer(infobaseName, conflictPolicy)));
             }
         }
-        reconcileOnUiThread(display);
+        // A filter another operation already installed protects this arm immediately: the
+        // listener reads the live counters under LOCK. What still needs the UI thread is the
+        // sweep of shells ALREADY on screen, and nothing in this call depends on when that
+        // runs - so an arm that finds a filter present queues the work instead of waiting.
+        // A bounded wait that expires is equally safe: it leaves the install QUEUED, SWT runs
+        // queued runnables in order so it precedes anything the not-yet-dispatched work can
+        // raise, and a UI thread too busy to run it cannot show a modal either.
+        reconcileOnUiThread(display,
+            filterInstalledOn(display) ? QUEUE_ONLY_MS : UI_RECONCILE_TIMEOUT_MS);
+        return true;
+    }
+
+    /** Whether the shared filter is already installed on this display. */
+    private static boolean filterInstalledOn(Display display)
+    {
+        synchronized (LOCK)
+        {
+            return filter != null && filterDisplay == display && !display.isDisposed();
+        }
     }
 
     /**
@@ -1314,25 +1350,84 @@ public final class LaunchUpdateDialogAutoConfirmer
     }
 
     /**
-     * Marshals {@link #reconcileFilter(Display)} to the UI thread. Called
-     * WITHOUT holding {@code LOCK} (the blocking {@code syncExec} under the
-     * monitor was a deadlock, R1). Never throws: a display disposed between
-     * the check and the {@code syncExec} (workbench shutdown race) is benign —
-     * the filter dies with the display and the counter stays consistent.
+     * Hands one runnable to another thread and waits a bounded time for it to finish.
+     *
+     * @param submit how the work reaches the other thread
+     * @param work the work to run there
+     * @param timeoutMs how long to wait for it
+     * @return {@code true} when the work finished within the bound
      */
-    private static void reconcileOnUiThread(Display display)
+    static boolean runBounded(Consumer<Runnable> submit, Runnable work, long timeoutMs)
+    {
+        CountDownLatch done = new CountDownLatch(1);
+        submit.accept(() -> {
+            try
+            {
+                work.run();
+            }
+            finally
+            {
+                done.countDown();
+            }
+        });
+        try
+        {
+            return done.await(timeoutMs, TimeUnit.MILLISECONDS);
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    /**
+     * Marshals {@link #reconcileFilter(Display)} to the UI thread, bounded. Called WITHOUT
+     * holding {@code LOCK} (blocking under the monitor was a deadlock, R1). Never throws: a
+     * display disposed during the hop (workbench shutdown race) is benign - the filter dies with
+     * the display and the counter stays consistent.
+     *
+     * @param display the display carrying the filter (never {@code null})
+     * @return {@code true} when the reconciliation ran; {@code false} when the UI thread did not
+     *         run it within {@link #UI_RECONCILE_TIMEOUT_MS}
+     */
+    private static boolean reconcileOnUiThread(Display display)
+    {
+        return reconcileOnUiThread(display, UI_RECONCILE_TIMEOUT_MS);
+    }
+
+    /**
+     * Marshals {@link #reconcileFilter(Display)} to the UI thread within the given bound.
+     * {@link #QUEUE_ONLY_MS} hands the work over and returns at once - the reconcile still
+     * runs, the caller just does not wait for it.
+     *
+     * @param display the display carrying the filter (never {@code null})
+     * @param timeoutMs how long to wait for the UI thread to run it
+     * @return {@code true} when the reconciliation ran within the bound
+     */
+    private static boolean reconcileOnUiThread(Display display, long timeoutMs)
     {
         if (display.isDisposed())
         {
-            return;
+            return true;
+        }
+        if (display.getThread() == Thread.currentThread())
+        {
+            // Already on the UI thread: handing the work to asyncExec and then waiting for it
+            // would block the very thread that has to run it.
+            reconcileFilter(display);
+            return true;
         }
         try
         {
-            display.syncExec(() -> reconcileFilter(display));
+            // A late run after this timeout is harmless: reconcileFilter re-reads the arm state
+            // under LOCK, so it sees whatever the caller left behind rather than a stale decision.
+            return runBounded(display::asyncExec, () -> reconcileFilter(display), timeoutMs);
         }
         catch (SWTException e)
         {
-            // ERROR_DEVICE_DISPOSED race on shutdown — nothing to (un)install.
+            // ERROR_DEVICE_DISPOSED race on shutdown - nothing to (un)install.
+            return true;
         }
     }
 

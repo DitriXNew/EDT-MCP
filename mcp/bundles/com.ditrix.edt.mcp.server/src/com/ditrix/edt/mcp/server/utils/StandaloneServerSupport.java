@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Platform;
@@ -25,7 +26,9 @@ import org.osgi.framework.BundleContext;
 import org.osgi.framework.ServiceReference;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
+import com.e1c.g5.dt.applications.IApplicationManager;
 
 /**
  * Reflective access to the EDT WST standalone-server feature, shared by the standalone-server
@@ -49,6 +52,12 @@ public final class StandaloneServerSupport
 {
     /** Application type id of a standalone (WST) server application. */
     public static final String WST_SERVER_APP_TYPE = "com.e1c.g5.dt.applications.type.wst-server"; //$NON-NLS-1$
+
+    /** Start and stop share this bound because both are self-contained EDT server operations. */
+    public static final long SERVER_OPERATION_TIMEOUT_MS = 60_000L;
+
+    /** Hard cap for retaining a start's targeted dialog guard after an inconclusive wait. */
+    public static final long INCONCLUSIVE_START_GUARD_CAP_MS = 300_000L;
 
     /** Symbolic name of the bundle that owns the standalone-server WST service. */
     private static final String WST_CORE_BUNDLE_ID =
@@ -84,6 +93,105 @@ public final class StandaloneServerSupport
         NOT_PRESENT,
         /** The cleanup could not run (reflective failure); the orphan self-heals on the next restart. */
         FAILED
+    }
+
+    /**
+     * Result of one bounded standalone-application lookup, including every attribution value the
+     * following start needs. Keeping the resolved server and names here prevents callers from
+     * performing another synchronous {@code IApplicationManager} lookup outside the deadline.
+     */
+    public static record ApplicationLookup(IApplication application, Object server,
+        String infobaseName, String serverName, String failure)
+    {
+    }
+
+    /** Resolves one complete application snapshot; the caller supplies any required deadline. */
+    public static ApplicationLookup lookupApplication(IApplicationManager manager, IProject project,
+        String applicationId) throws ApplicationException
+    {
+        IApplication application = manager.getApplication(project, applicationId).orElse(null);
+        if (application == null)
+        {
+            return new ApplicationLookup(null, null, null, null, null);
+        }
+        Object server = serverOfApplication(application);
+        return new ApplicationLookup(application, server,
+            LaunchLifecycleUtils.conflictAttributionName(application), nameOfServer(server), null);
+    }
+
+    /** Complete snapshot of one guarded, bounded standalone-server start. */
+    public static final class GuardedStartResult
+    {
+        private final BoundedJob.Result bounded;
+        private final IStatus status;
+        private final String conflictFailure;
+        private final boolean portsReassigned;
+        private final boolean portReassignmentOutcomeUnknown;
+        private final long accessDialogsBefore;
+        private final long accessDialogsAfter;
+        private final long timeoutMs;
+
+        private GuardedStartResult(BoundedJob.Result bounded, IStatus status,
+            String conflictFailure, boolean portsReassigned,
+            boolean portReassignmentOutcomeUnknown, long accessDialogsBefore,
+            long accessDialogsAfter, long timeoutMs)
+        {
+            this.bounded = bounded;
+            this.status = status;
+            this.conflictFailure = conflictFailure;
+            this.portsReassigned = portsReassigned;
+            this.portReassignmentOutcomeUnknown = portReassignmentOutcomeUnknown;
+            this.accessDialogsBefore = accessDialogsBefore;
+            this.accessDialogsAfter = accessDialogsAfter;
+            this.timeoutMs = timeoutMs;
+        }
+
+        /** Whether the underlying Job has definitely ended. */
+        public boolean conclusive()
+        {
+            return !BoundedJob.isInconclusive(bounded.getOutcome());
+        }
+
+        /** Known persistent port rewrite after a conclusive start. */
+        public boolean portsReassigned()
+        {
+            return portsReassigned;
+        }
+
+        /** Whether an in-flight REASSIGN start may still rewrite the server configuration. */
+        public boolean portReassignmentOutcomeUnknown()
+        {
+            return portReassignmentOutcomeUnknown;
+        }
+
+        /**
+         * The start failure, preferring the captured port conflict and appending the repository's
+         * established actionable explanation when an access-settings dialog was auto-cancelled.
+         */
+        public String failure()
+        {
+            String failure = conflictFailure;
+            if (failure == null)
+            {
+                if (bounded.isSuccess())
+                {
+                    failure = status == null
+                        ? "EDT returned no status from the standalone-server start" //$NON-NLS-1$
+                        : status.isOK() ? null : PlatformFailures.describeStatus(status);
+                }
+                else
+                {
+                    failure = startFailureReason(bounded, timeoutMs);
+                }
+            }
+            if (failure == null)
+            {
+                return null;
+            }
+            String note = InfobaseAuthDialogSuppressor.accessSettingsDialogFailureNote(
+                accessDialogsBefore, accessDialogsAfter);
+            return note.isEmpty() ? failure : failure + " " + note; //$NON-NLS-1$
+        }
     }
 
     private StandaloneServerSupport()
@@ -186,6 +294,268 @@ public final class StandaloneServerSupport
             }
             throw new IllegalStateException(cause != null ? cause : ite);
         }
+    }
+
+    /** Reflectively calls the standalone-server service's three-argument start operation. */
+    public static IStatus startServer(Object service, Object server, String launchMode,
+        IProgressMonitor monitor) throws Exception
+    {
+        Method start = findMethod(service.getClass(), "startServer", 3); //$NON-NLS-1$
+        if (start == null)
+        {
+            Activator.logError("standalone-server: IStandaloneServerService.startServer not found", null); //$NON-NLS-1$
+            return new Status(IStatus.ERROR, PLUGIN_ID,
+                "IStandaloneServerService.startServer(IServer, String, IProgressMonitor) was not " //$NON-NLS-1$
+                    + "found in this EDT — the standalone-server API may have changed."); //$NON-NLS-1$
+        }
+        try
+        {
+            Object status = start.invoke(service, server, launchMode, monitor);
+            return (status instanceof IStatus) ? (IStatus)status : null;
+        }
+        catch (InvocationTargetException ite)
+        {
+            Throwable cause = ite.getCause();
+            if (cause instanceof Exception)
+            {
+                throw (Exception)cause;
+            }
+            if (cause instanceof Error)
+            {
+                throw (Error)cause;
+            }
+            throw new IllegalStateException(cause != null ? cause : ite);
+        }
+    }
+
+    /**
+     * Resolves an EDT application without letting its synchronous UI-thread hop hold the caller
+     * beyond {@code timeoutMs}.
+     *
+     * <p>Use this when the caller does not already own a larger bounded preparation phase.
+     */
+    public static ApplicationLookup lookupApplicationBounded(IApplicationManager manager,
+        IProject project, String applicationId, long timeoutMs)
+    {
+        ApplicationLookup[] lookup = new ApplicationLookup[1];
+        BoundedJob.Result result = BoundedJob.run(
+            "Resolve standalone-server application: " + applicationId, timeoutMs, //$NON-NLS-1$
+            monitor -> lookup[0] = lookupApplication(manager, project, applicationId));
+        if (result.isSuccess())
+        {
+            return lookup[0];
+        }
+        if (result.getFailure() != null && result.getOutcome() == BoundedJob.Outcome.COMPLETED)
+        {
+            return failedApplicationLookup("the application could not be resolved: " //$NON-NLS-1$
+                + PlatformFailures.describe(result.getFailure()));
+        }
+
+        return failedApplicationLookup(applicationLookupFailure(applicationId, timeoutMs, result));
+    }
+
+    /** Retains the established lookup-timeout wording for callers with a larger bounded phase. */
+    public static String applicationLookupFailure(String applicationId, long timeoutMs,
+        BoundedJob.Result result)
+    {
+        String target = "the EDT application lookup for application '" //$NON-NLS-1$
+            + applicationId + "'"; //$NON-NLS-1$
+        String deadline = timeoutMs % 1000L == 0L
+            ? (timeoutMs / 1000L) + "s" : timeoutMs + "ms"; //$NON-NLS-1$ //$NON-NLS-2$
+        if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT)
+        {
+            return target + " did not finish within " //$NON-NLS-1$
+                + deadline + " and may still be running"; //$NON-NLS-1$
+        }
+        if (result.getOutcome() == BoundedJob.Outcome.INTERRUPTED)
+        {
+            return "the wait for " + target //$NON-NLS-1$
+                + " was interrupted and the lookup may still be running"; //$NON-NLS-1$
+        }
+        if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
+        {
+            return target + " did not start within " //$NON-NLS-1$
+                + deadline + "; retry when EDT's background Job queue is responsive"; //$NON-NLS-1$
+        }
+        return target + " never ran (" //$NON-NLS-1$
+            + result.getOutcome() + ")"; //$NON-NLS-1$
+    }
+
+    /** Describes a larger bounded precondition phase that did not complete. */
+    public static String boundedPhaseFailure(String target, long timeoutMs,
+        BoundedJob.Result result)
+    {
+        String deadline = timeoutMs % 1000L == 0L
+            ? (timeoutMs / 1000L) + "s" : timeoutMs + "ms"; //$NON-NLS-1$ //$NON-NLS-2$
+        if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT)
+        {
+            return target + " did not finish within " + deadline //$NON-NLS-1$
+                + " and may still be running"; //$NON-NLS-1$
+        }
+        if (result.getOutcome() == BoundedJob.Outcome.INTERRUPTED)
+        {
+            return "the wait for " + target + " was interrupted; it may still be running"; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
+        {
+            return target + " did not start within " + deadline //$NON-NLS-1$
+                + "; retry when EDT's background Job queue is responsive"; //$NON-NLS-1$
+        }
+        return target + " never ran (" + result.getOutcome() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static ApplicationLookup failedApplicationLookup(String failure)
+    {
+        return new ApplicationLookup(null, null, null, null, failure);
+    }
+
+    /** Best-effort reflective {@code IServer.getName()} for an already-resolved server. */
+    private static String nameOfServer(Object server)
+    {
+        if (server == null)
+        {
+            return null;
+        }
+        try
+        {
+            Object name = server.getClass().getMethod("getName").invoke(server); //$NON-NLS-1$
+            if (name == null)
+            {
+                return null;
+            }
+            String trimmed = name.toString().trim();
+            return trimmed.isEmpty() ? null : trimmed;
+        }
+        catch (Exception | LinkageError e) // NOSONAR best-effort attribution, never a precondition
+        {
+            return null;
+        }
+    }
+
+    /**
+     * Arms every unattended guard required by a bounded standalone-server start and ties all of
+     * them to the underlying Job's lifetime.
+     *
+     * <p>The port-conflict confirmer, its conflict watch, and the nested infobase-auth suppression
+     * count are one lifecycle here. A conclusive result releases them before returning; a timeout
+     * or interruption keeps every one armed until {@code completion} reports the Job finished, or
+     * until the shared safety cap expires. Keeping this composition in one helper prevents direct
+     * starts and restoration starts from drifting apart again.
+     */
+    public static GuardedStartResult startServerGuarded(Object service, Object server,
+        String operationName, String launchMode, String infobaseName, String serverName,
+        StandaloneServerPortConflictPolicy portPolicy, long timeoutMs, long cleanupCapMs)
+    {
+        return startServerGuarded(service, server, operationName, launchMode, infobaseName,
+            serverName, portPolicy, timeoutMs, cleanupCapMs, null, null);
+    }
+
+    /** Same guarded start with another operation claim tied to the Job's exact lifecycle. */
+    public static GuardedStartResult startServerGuarded(Object service, Object server,
+        String operationName, String launchMode, String infobaseName, String serverName,
+        StandaloneServerPortConflictPolicy portPolicy, long timeoutMs, long cleanupCapMs,
+        Runnable operationCleanup, Runnable cleanupInstalled)
+    {
+        long accessDialogsBefore = InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount();
+        LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = portPolicy == null
+            ? null : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(infobaseName, serverName);
+        boolean autoConfirmerArmed = LaunchUpdateDialogAutoConfirmer.arm(false, false, false, null,
+            infobaseName, portPolicy, serverName);
+        InfobaseAuthDialogSuppressor.markActivityStart();
+        Runnable cleanup = () -> {
+            try
+            {
+                try
+                {
+                    if (autoConfirmerArmed)
+                    {
+                        LaunchUpdateDialogAutoConfirmer.disarm(false, false, false, null, infobaseName,
+                            portPolicy, serverName);
+                    }
+                }
+                finally
+                {
+                    try
+                    {
+                        if (conflicts != null)
+                        {
+                            conflicts.close();
+                        }
+                    }
+                    finally
+                    {
+                        InfobaseAuthDialogSuppressor.markActivityEnd();
+                    }
+                }
+            }
+            finally
+            {
+                if (operationCleanup != null)
+                {
+                    operationCleanup.run();
+                }
+            }
+        };
+        BoundedJob.DeferredCleanup deferredCleanup = new BoundedJob.DeferredCleanup(cleanup,
+            cleanupCapMs, operationName + " unattended-guard safety cap"); //$NON-NLS-1$
+        IStatus[] status = new IStatus[1];
+        BoundedJob.Result bounded = null;
+        try
+        {
+            if (cleanupInstalled != null)
+            {
+                cleanupInstalled.run();
+            }
+            bounded = BoundedJob.run(operationName, timeoutMs,
+                monitor -> status[0] = startServer(service, server, launchMode, monitor),
+                deferredCleanup::jobFinished);
+            boolean conclusive = !BoundedJob.isInconclusive(bounded.getOutcome());
+            String conflictFailure = conflicts != null && conflicts.portConflicted()
+                ? LaunchUpdateDialogAutoConfirmer.portConflictError(
+                    conflicts.portConflictDetail(), conflicts.portConflictReason())
+                : null;
+            boolean portsReassigned = conclusive && conflicts != null
+                && conflicts.portsReassigned();
+            boolean portReassignmentOutcomeUnknown = !conclusive
+                && portPolicy == StandaloneServerPortConflictPolicy.REASSIGN;
+            return new GuardedStartResult(bounded, status[0], conflictFailure, portsReassigned,
+                portReassignmentOutcomeUnknown, accessDialogsBefore,
+                InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount(), timeoutMs);
+        }
+        finally
+        {
+            // BoundedJob rethrows Error only after its Job has already terminated. Otherwise its
+            // concrete outcome is the sole authority on whether the guards may be released now.
+            deferredCleanup.afterBoundedWait(bounded == null
+                || !BoundedJob.isInconclusive(bounded.getOutcome()));
+        }
+    }
+
+    /** Describes an unsuccessful bounded start without hiding an operation still in flight. */
+    public static String startFailureReason(BoundedJob.Result result, long timeoutMs)
+    {
+        BoundedJob.Outcome outcome = result.getOutcome();
+        switch (outcome)
+        {
+        case TIMED_OUT:
+            long actualTimeoutMs = Math.max(1L, timeoutMs);
+            String deadline = actualTimeoutMs % 1000L == 0L
+                ? (actualTimeoutMs / 1000L) + "s" : actualTimeoutMs + "ms"; //$NON-NLS-1$ //$NON-NLS-2$
+            return "starting it did not finish within " //$NON-NLS-1$
+                + deadline + " and may still be running"; //$NON-NLS-1$
+        case TIMED_OUT_BEFORE_START:
+            return "the bounded start timed out before it began"; //$NON-NLS-1$
+        case INTERRUPTED:
+            return "the wait for the standalone-server start was interrupted; " //$NON-NLS-1$
+                + "the start may still be running"; //$NON-NLS-1$
+        default:
+            break;
+        }
+        if (result.getFailure() != null)
+        {
+            return PlatformFailures.describe(result.getFailure());
+        }
+        return "the standalone-server start did not run (" + outcome + ")"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

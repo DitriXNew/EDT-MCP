@@ -1,0 +1,1036 @@
+/**
+ * MCP Server for EDT
+ * Copyright (C) 2025 DitriX (https://github.com/DitriXNew)
+ * Licensed under AGPL-3.0-or-later
+ */
+
+package com.ditrix.edt.mcp.server.utils;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongConsumer;
+
+import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.debug.core.ILaunch;
+import org.eclipse.debug.core.model.IProcess;
+
+import com.ditrix.edt.mcp.server.Activator;
+import com.e1c.g5.dt.applications.IApplication;
+import com.e1c.g5.dt.applications.IApplicationType;
+import com.e1c.g5.v8.dt.platform.standaloneserver.core.Ibcmd;
+import com.e1c.g5.v8.dt.platform.standaloneserver.core.SessionCommandBuilder;
+
+/**
+ * Reads and terminates standalone-server infobase sessions through {@code ibcmd}.
+ *
+ * <p>The result deliberately makes reachability structural: a readable result always carries a
+ * non-null session list, including an empty list that proves there are no sessions; an unreachable
+ * result carries no list and must name why the server could not be inspected. This prevents a
+ * failed lookup from silently becoming an empty-list claim.
+ */
+public final class InfobaseSessionSupport
+{
+    /** Internal EDT interface matched by name to keep the WST implementation package optional. */
+    private static final String STANDALONE_SERVER_PROCESS_INTERFACE =
+        "com.e1c.g5.v8.dt.internal.platform.standaloneserver.wst.core.IStandaloneServerProcess"; //$NON-NLS-1$
+
+    /** EDT uses the same deadline for its own standalone-server session cleanup command. */
+    private static final long COMMAND_TIMEOUT_MS = 10_000L;
+
+    /** Outer bound includes forced process cleanup and output collection. */
+    private static final long JOB_TIMEOUT_MS = 15_000L;
+
+    /** Grace for a force-killed process and its stream readers to close. */
+    private static final long PROCESS_CLEANUP_TIMEOUT_MS = 2_000L;
+
+    private InfobaseSessionSupport()
+    {
+    }
+
+    /**
+     * Whether session inspection applies to the given application.
+     *
+     * @param application the application to classify
+     * @return {@code true} only for a standalone-server (WST server) application
+     */
+    public static boolean appliesTo(IApplication application)
+    {
+        if (application == null)
+        {
+            return false;
+        }
+        IApplicationType type = application.getType();
+        return type != null && StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(type.getId());
+    }
+
+    /** Whether the session list was actually read. */
+    public enum Reachability
+    {
+        /** {@code ibcmd session list} completed and its list is available, possibly empty. */
+        READABLE,
+        /** The list could not be read; {@link ReadResult#unreachableReason()} names why. */
+        UNREACHABLE
+    }
+
+    /** One session record parsed from an {@code ibcmd session list} key/value block. */
+    public record SessionInfo(String sessionId, Long sessionNumber, String applicationKind,
+        String userName, String host, String startedAt, String lastActiveAt,
+        boolean applicationKindIsDesigner, String sessionNumberText)
+    {
+        /** Creates a synthetic/test record whose numeric token has its canonical spelling. */
+        public SessionInfo(String sessionId, Long sessionNumber, String applicationKind,
+            String userName, String host, String startedAt, String lastActiveAt,
+            boolean applicationKindIsDesigner)
+        {
+            this(sessionId, sessionNumber, applicationKind, userName, host, startedAt,
+                lastActiveAt, applicationKindIsDesigner,
+                sessionNumber == null ? null : sessionNumber.toString());
+        }
+    }
+
+    /**
+     * A three-state observation: a non-empty list, a proven empty list, or an unreachable target.
+     * The compact constructor makes the last two impossible to conflate in Java code.
+     */
+    public record ReadResult(Reachability reachability, List<SessionInfo> sessions,
+        String unreachableReason)
+    {
+        /** Enforces the mutually exclusive readable/unreachable payload shapes. */
+        public ReadResult
+        {
+            if (reachability == Reachability.READABLE)
+            {
+                if (sessions == null || unreachableReason != null)
+                {
+                    throw new IllegalArgumentException(
+                        "A readable session result requires a list and no unreachable reason"); //$NON-NLS-1$
+                }
+                sessions = Collections.unmodifiableList(new ArrayList<>(sessions));
+            }
+            else if (reachability == Reachability.UNREACHABLE)
+            {
+                if (sessions != null || unreachableReason == null || unreachableReason.isBlank())
+                {
+                    throw new IllegalArgumentException(
+                        "An unreachable session result requires a reason and no session list"); //$NON-NLS-1$
+                }
+            }
+            else
+            {
+                throw new IllegalArgumentException("Session reachability is required"); //$NON-NLS-1$
+            }
+        }
+
+        /** @return a readable observation, preserving an empty list as a proven answer */
+        public static ReadResult readable(List<SessionInfo> sessions)
+        {
+            return new ReadResult(Reachability.READABLE, sessions, null);
+        }
+
+        /** @return an unreachable observation carrying its mandatory reason */
+        public static ReadResult unreachable(String reason)
+        {
+            return new ReadResult(Reachability.UNREACHABLE, null, reason);
+        }
+
+        /** @return whether {@code sessions()} is a real observation */
+        public boolean isReadable()
+        {
+            return reachability == Reachability.READABLE;
+        }
+    }
+
+    /** Outcome of one requested termination. */
+    public record TerminationResult(Reachability reachability, boolean terminated,
+        String unreachableReason, boolean mutationOutcomeUnknown)
+    {
+        /** Enforces that only a completed command may claim a termination. */
+        public TerminationResult
+        {
+            if (reachability == Reachability.READABLE)
+            {
+                if (!terminated || unreachableReason != null || mutationOutcomeUnknown)
+                {
+                    throw new IllegalArgumentException(
+                        "A completed termination requires no unreachable reason"); //$NON-NLS-1$
+                }
+            }
+            else if (reachability == Reachability.UNREACHABLE)
+            {
+                if (terminated || unreachableReason == null || unreachableReason.isBlank())
+                {
+                    throw new IllegalArgumentException(
+                        "A failed termination requires an unreachable reason"); //$NON-NLS-1$
+                }
+            }
+            else
+            {
+                throw new IllegalArgumentException("Termination reachability is required"); //$NON-NLS-1$
+            }
+        }
+
+        /** @return a completed termination */
+        public static TerminationResult succeeded()
+        {
+            return new TerminationResult(Reachability.READABLE, true, null, false);
+        }
+
+        /** @return a failure before a terminate command reached its launch boundary */
+        public static TerminationResult notStarted(String reason)
+        {
+            return new TerminationResult(Reachability.UNREACHABLE, false, reason, false);
+        }
+
+        /** @return a failure after a terminate command reached its launch boundary */
+        public static TerminationResult outcomeUnknown(String reason)
+        {
+            return new TerminationResult(Reachability.UNREACHABLE, false, reason, true);
+        }
+    }
+
+    /**
+     * Lists sessions for a running standalone-server application.
+     *
+     * @param application the target application
+     * @return readable sessions, or an unreachable result with a named reason
+     */
+    public static ReadResult listSessions(IApplication application)
+    {
+        try
+        {
+            AtomicReference<CommandExecution> execution = new AtomicReference<>();
+            AtomicReference<String> preparationError = new AtomicReference<>();
+            AtomicBoolean callerAnswered = new AtomicBoolean();
+            BoundedJob.Result bounded = BoundedJob.run("Read standalone-server infobase sessions", //$NON-NLS-1$
+                JOB_TIMEOUT_MS, monitor ->
+                {
+                    PreparedTarget target = prepare(application);
+                    if (target.error != null)
+                    {
+                        preparationError.set(target.error);
+                        return;
+                    }
+                    if (callEnded(monitor, callerAnswered))
+                    {
+                        return;
+                    }
+                    runAtLivePid(target.server, monitor, callerAnswered, execution,
+                        pid -> runCommand(target.ibcmd.session()
+                            .forStandaloneServerProcessWithPid(pid).list().build(),
+                            target.credentials, monitor, callerAnswered));
+                });
+            markCallerAnswered(callerAnswered);
+            CommandExecution command = execution.get();
+            String boundedFailure = boundedFailureOverridesPublished(bounded, command)
+                ? boundedFailure("list", bounded) : null; //$NON-NLS-1$
+            if (boundedFailure != null)
+            {
+                return ReadResult.unreachable(boundedFailure);
+            }
+            String prepareFailure = preparationError.get();
+            if (prepareFailure != null)
+            {
+                return ReadResult.unreachable(prepareFailure);
+            }
+            if (command == null)
+            {
+                return ReadResult.unreachable("The standalone server is not running."); //$NON-NLS-1$
+            }
+            String commandFailure = commandFailure("list", command); //$NON-NLS-1$
+            if (commandFailure != null)
+            {
+                return ReadResult.unreachable(commandFailure);
+            }
+            return readSessionsOutput(command.stdout);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("infobase sessions: session-list infrastructure failed", e); //$NON-NLS-1$
+            return ReadResult.unreachable("Session inspection infrastructure failed: " //$NON-NLS-1$
+                + PlatformFailures.describe(e));
+        }
+    }
+
+    /**
+     * Terminates one session UUID on a running standalone server. Callers must list first so the
+     * UUID is known and the Designer session has already been excluded.
+     *
+     * @param application the target application
+     * @param sessionId the full session UUID
+     * @param message optional message shown to the terminated user
+     * @return completed termination, or an unreachable result with a named reason
+     */
+    public static TerminationResult terminateSession(IApplication application, String sessionId,
+        String message)
+    {
+        AtomicBoolean commandMayHaveStarted = new AtomicBoolean();
+        try
+        {
+            AtomicReference<CommandExecution> execution = new AtomicReference<>();
+            AtomicReference<String> preparationError = new AtomicReference<>();
+            AtomicBoolean callerAnswered = new AtomicBoolean();
+            BoundedJob.Result bounded = BoundedJob.run(
+                "Terminate standalone-server infobase session", //$NON-NLS-1$
+                JOB_TIMEOUT_MS, monitor ->
+                {
+                    PreparedTarget target = prepare(application);
+                    if (target.error != null)
+                    {
+                        preparationError.set(target.error);
+                        return;
+                    }
+                    if (callEnded(monitor, callerAnswered))
+                    {
+                        return;
+                    }
+                    runAtLivePid(target.server, monitor, callerAnswered, execution, pid ->
+                    {
+                        SessionCommandBuilder.TerminateBuilder builder = target.ibcmd.session()
+                            .forStandaloneServerProcessWithPid(pid).terminate();
+                        if (message != null && !message.isBlank())
+                        {
+                            builder = builder.withErrorMessage(message);
+                        }
+                        List<String> command = builder.sessionId(sessionId).build();
+                        // The boundary is process CREATION, not the intent to create one. A
+                        // start that throws, or a cancellation that wins the pre-start check,
+                        // proves the command never ran.
+                        ProcessBuilder started = new ProcessBuilder(command);
+                        return runCommand(target.credentials, monitor, callerAnswered,
+                            mutatingStarter(started::start, commandMayHaveStarted));
+                    });
+                });
+            markCallerAnswered(callerAnswered);
+            CommandExecution command = execution.get();
+            String boundedFailure = boundedFailureOverridesPublished(bounded, command)
+                ? boundedFailure("terminate", bounded) : null; //$NON-NLS-1$
+            if (boundedFailure != null)
+            {
+                return failedTermination(boundedFailure, commandMayHaveStarted);
+            }
+            String prepareFailure = preparationError.get();
+            if (prepareFailure != null)
+            {
+                return TerminationResult.notStarted(prepareFailure);
+            }
+            if (command == null)
+            {
+                return failedTermination("The standalone server is not running.", //$NON-NLS-1$
+                    commandMayHaveStarted);
+            }
+            String commandFailure = commandFailure("terminate", command); //$NON-NLS-1$
+            return commandFailure == null ? TerminationResult.succeeded()
+                : TerminationResult.outcomeUnknown(commandFailure);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("infobase sessions: termination infrastructure failed", e); //$NON-NLS-1$
+            return failedTermination("Session termination infrastructure failed: " //$NON-NLS-1$
+                + PlatformFailures.describe(e), commandMayHaveStarted);
+        }
+    }
+
+    /** Resolves the WST server, runtime, ibcmd executable, and stored credentials. */
+    private static PreparedTarget prepare(IApplication application)
+    {
+        try
+        {
+            return prepareWithStandaloneServerFeature(application);
+        }
+        catch (LinkageError e)
+        {
+            return PreparedTarget.error("Infobase session commands are not available because " //$NON-NLS-1$
+                + "the EDT standalone-server feature is not installed."); //$NON-NLS-1$
+        }
+    }
+
+    /** Uses the optional standalone-server API only inside the guarded preparation boundary. */
+    private static PreparedTarget prepareWithStandaloneServerFeature(IApplication application)
+    {
+        if (application == null)
+        {
+            return PreparedTarget.error("No application was resolved."); //$NON-NLS-1$
+        }
+        if (!appliesTo(application))
+        {
+            return PreparedTarget.error("Application '" + application.getId() //$NON-NLS-1$
+                + "' is not a standalone-server (wst-server) application; ibcmd sessions " //$NON-NLS-1$
+                + "cannot be inspected for this application type."); //$NON-NLS-1$
+        }
+        Object server = StandaloneServerSupport.serverOfApplication(application);
+        if (server == null)
+        {
+            return PreparedTarget.error("EDT could not resolve the standalone server for application '" //$NON-NLS-1$
+                + application.getId() + "'."); //$NON-NLS-1$
+        }
+        Path runtimeLocation;
+        try
+        {
+            runtimeLocation = runtimeLocation(server);
+        }
+        catch (Exception e)
+        {
+            return PreparedTarget.error("The standalone-server runtime location could not be read: " //$NON-NLS-1$
+                + PlatformFailures.describe(unwrap(e)));
+        }
+        if (runtimeLocation == null)
+        {
+            return PreparedTarget.error("The standalone-server runtime location is unknown."); //$NON-NLS-1$
+        }
+        Ibcmd ibcmd = Ibcmd.of(runtimeLocation);
+        if (!ibcmd.exists())
+        {
+            return PreparedTarget.error("ibcmd is missing at '" + ibcmd.getExecutablePath() //$NON-NLS-1$
+                + "'. Select a 1C runtime that includes the standalone server."); //$NON-NLS-1$
+        }
+        return PreparedTarget.of(server, ibcmd,
+            InfobaseAccessSupport.readCredentials(application));
+    }
+
+    /** Preserves uncertainty only after the terminate command reached its launch boundary. */
+    private static TerminationResult failedTermination(String reason,
+        AtomicBoolean commandMayHaveStarted)
+    {
+        return commandMayHaveStarted.get() ? TerminationResult.outcomeUnknown(reason)
+            : TerminationResult.notStarted(reason);
+    }
+
+    /** Reads {@code IServer.getRuntime().getLocation()} without importing the optional WST API. */
+    private static Path runtimeLocation(Object server) throws Exception
+    {
+        Object runtime = invokeNoArg(server, "getRuntime"); //$NON-NLS-1$
+        if (runtime == null)
+        {
+            return null;
+        }
+        Object location = invokeNoArg(runtime, "getLocation"); //$NON-NLS-1$
+        if (location instanceof IPath)
+        {
+            return ((IPath)location).toFile().toPath();
+        }
+        if (location instanceof Path)
+        {
+            return (Path)location;
+        }
+        return null;
+    }
+
+    /** Invokes a public no-argument accessor and unwraps the platform's real failure. */
+    private static Object invokeNoArg(Object target, String methodName) throws Exception
+    {
+        try
+        {
+            return target.getClass().getMethod(methodName).invoke(target);
+        }
+        catch (InvocationTargetException e)
+        {
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception)
+            {
+                throw (Exception)cause;
+            }
+            throw new IllegalStateException(cause != null ? cause : e);
+        }
+    }
+
+    /**
+     * Locates the internal standalone-server process by interface name and executes the callback
+     * from {@code proceedSessionCleanup}. The callback runs while EDT still owns a live process.
+     */
+    private static void runAtLivePid(Object server, IProgressMonitor monitor,
+        AtomicBoolean callerAnswered, AtomicReference<CommandExecution> execution,
+        PidCommand command) throws Exception
+    {
+        Object launchObject = invokeNoArg(server, "getLaunch"); //$NON-NLS-1$
+        if (!(launchObject instanceof ILaunch))
+        {
+            return;
+        }
+        IProcess[] processes = ((ILaunch)launchObject).getProcesses();
+        if (processes == null)
+        {
+            return;
+        }
+        for (IProcess process : processes)
+        {
+            Class<?> processInterface = namedInterface(process == null ? null : process.getClass(),
+                STANDALONE_SERVER_PROCESS_INTERFACE);
+            if (processInterface == null)
+            {
+                continue;
+            }
+            AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
+            LongConsumer consumer = pid -> executeAtPidIfActive(pid, monitor, callerAnswered,
+                execution, callbackFailure, command);
+            try
+            {
+                Method proceed = processInterface.getMethod("proceedSessionCleanup", //$NON-NLS-1$
+                    LongConsumer.class);
+                proceed.invoke(process, consumer);
+            }
+            catch (InvocationTargetException e)
+            {
+                throwAsException(e.getCause() != null ? e.getCause() : e);
+            }
+            if (callbackFailure.get() != null)
+            {
+                throwAsException(callbackFailure.get());
+            }
+            return;
+        }
+    }
+
+    /**
+     * Runs the callback only while the bounded caller is still waiting, and publishes its result
+     * only under that same condition. EDT may invoke the {@code proceedSessionCleanup} consumer
+     * after the outer deadline, so the cancellation check belongs here, immediately beside the
+     * command invocation rather than before the potentially-stalling platform call.
+     */
+    static void executeAtPidIfActive(long pid, IProgressMonitor monitor,
+        AtomicBoolean callerAnswered, AtomicReference<CommandExecution> execution,
+        AtomicReference<Throwable> callbackFailure, PidCommand command)
+    {
+        if (callEnded(monitor, callerAnswered))
+        {
+            return;
+        }
+        try
+        {
+            CommandExecution completed = command.run(pid);
+            synchronized (callerAnswered)
+            {
+                if (completed != null && !callEnded(monitor, callerAnswered))
+                {
+                    execution.compareAndSet(null, completed);
+                }
+            }
+        }
+        catch (Throwable t) // NOSONAR transferred to the bounded job thread while it is still active
+        {
+            synchronized (callerAnswered)
+            {
+                if (!callEnded(monitor, callerAnswered))
+                {
+                    callbackFailure.compareAndSet(null, t);
+                }
+            }
+        }
+    }
+
+    /** Closes result publication before the bounded caller inspects the outcome and returns. */
+    static void markCallerAnswered(AtomicBoolean callerAnswered)
+    {
+        synchronized (callerAnswered)
+        {
+            callerAnswered.set(true);
+        }
+    }
+
+    /** Whether the bounded wait has ended or its monitor has been cancelled. */
+    private static boolean callEnded(IProgressMonitor monitor, AtomicBoolean callerAnswered)
+    {
+        return monitor.isCanceled() || callerAnswered.get();
+    }
+
+    /** Finds an implemented interface recursively by its fully qualified name. */
+    private static Class<?> namedInterface(Class<?> type, String interfaceName)
+    {
+        if (type == null)
+        {
+            return null;
+        }
+        for (Class<?> candidate : type.getInterfaces())
+        {
+            if (interfaceName.equals(candidate.getName()))
+            {
+                return candidate;
+            }
+            Class<?> nested = namedInterface(candidate, interfaceName);
+            if (nested != null)
+            {
+                return nested;
+            }
+        }
+        return namedInterface(type.getSuperclass(), interfaceName);
+    }
+
+    /** Runs one ibcmd process, drains both streams concurrently, and force-kills it on timeout. */
+    private static CommandExecution runCommand(List<String> command,
+        InfobaseAccessSupport.Credentials credentials, IProgressMonitor monitor,
+        AtomicBoolean callerAnswered) throws Exception
+    {
+        ProcessBuilder builder = new ProcessBuilder(command);
+        return runCommand(credentials, monitor, callerAnswered, builder::start);
+    }
+
+    /** Runs one command with an injectable process boundary for cancellation-race tests. */
+    static CommandExecution runCommand(InfobaseAccessSupport.Credentials credentials,
+        IProgressMonitor monitor, AtomicBoolean callerAnswered, ProcessStarter starter)
+        throws Exception
+    {
+        if (callEnded(monitor, callerAnswered))
+        {
+            return null;
+        }
+        Process process = starter.start();
+        // A process may start after the caller gives up. The tool reports an unknown outcome,
+        // and this best-effort check kills the process as soon as the race is observed.
+        if (callEnded(monitor, callerAnswered))
+        {
+            process.destroyForcibly();
+            return null;
+        }
+        try
+        {
+            Charset readCharset = isWindows()
+                ? Charset.forName("CP866") : StandardCharsets.UTF_8; //$NON-NLS-1$
+            FutureTask<String> stdout = streamReader(process.getInputStream(), readCharset);
+            FutureTask<String> stderr = streamReader(process.getErrorStream(), readCharset);
+            writeCredentials(process, credentials);
+
+            boolean finished = process.waitFor(COMMAND_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            if (!finished)
+            {
+                process.destroyForcibly();
+                waitAfterDestroy(process);
+                return new CommandExecution(-1, readStream(stdout), readStream(stderr), true);
+            }
+            return new CommandExecution(process.exitValue(), readStream(stdout),
+                readStream(stderr), false);
+        }
+        catch (InterruptedException e)
+        {
+            process.destroyForcibly();
+            waitAfterDestroy(process);
+            Thread.currentThread().interrupt();
+            throw e;
+        }
+        catch (Exception e)
+        {
+            if (process.isAlive())
+            {
+                process.destroyForcibly();
+                waitAfterDestroy(process);
+            }
+            throw e;
+        }
+    }
+
+    /** Starts a daemon reader so a verbose session list cannot fill a process pipe and deadlock. */
+    private static FutureTask<String> streamReader(InputStream stream, Charset charset)
+    {
+        FutureTask<String> task = new FutureTask<>(() -> readAll(stream, charset));
+        Thread thread = new Thread(task, "EDT-MCP ibcmd output reader"); //$NON-NLS-1$
+        thread.setDaemon(true);
+        thread.start();
+        return task;
+    }
+
+    /** Reads one process stream to EOF. */
+    private static String readAll(InputStream stream, Charset charset) throws IOException
+    {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, charset)))
+        {
+            StringBuilder text = new StringBuilder();
+            char[] buffer = new char[4096];
+            int read;
+            while ((read = reader.read(buffer)) >= 0)
+            {
+                text.append(buffer, 0, read);
+            }
+            return text.toString();
+        }
+    }
+
+    /** Supplies EDT's stored interactive credentials and closes stdin so a prompt fails fast. */
+    private static void writeCredentials(Process process,
+        InfobaseAccessSupport.Credentials credentials) throws IOException
+    {
+        try (OutputStream input = process.getOutputStream())
+        {
+            if (credentials != null && !credentials.userName().isBlank())
+            {
+                String auth = credentials.userName() + "\n" + credentials.password() + "\n"; //$NON-NLS-1$ //$NON-NLS-2$
+                input.write(auth.getBytes(StandardCharsets.UTF_8));
+                input.flush();
+            }
+        }
+    }
+
+    /** Waits briefly for a force-killed process without extending the command deadline indefinitely. */
+    private static void waitAfterDestroy(Process process)
+    {
+        try
+        {
+            process.waitFor(PROCESS_CLEANUP_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** Collects a stream reader's terminal value under a short post-process deadline. */
+    private static String readStream(FutureTask<String> task) throws Exception
+    {
+        try
+        {
+            return task.get(PROCESS_CLEANUP_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        }
+        catch (ExecutionException e)
+        {
+            throwAsException(e.getCause() != null ? e.getCause() : e);
+            return ""; //$NON-NLS-1$ unreachable, required by javac flow analysis
+        }
+        catch (TimeoutException e)
+        {
+            task.cancel(true);
+            throw new IOException("Timed out while collecting ibcmd output", e); //$NON-NLS-1$
+        }
+    }
+
+    /** Parsed sessions plus contentful blocks that were malformed or had no usable session UUID. */
+    static record ParsedSessions(List<SessionInfo> sessions, int unreadableBlocks)
+    {
+        ParsedSessions
+        {
+            sessions = List.copyOf(sessions);
+        }
+    }
+
+    /** Turns successful command output into a readable list only when every parsed block is usable. */
+    static ReadResult readSessionsOutput(String output)
+    {
+        ParsedSessions parsed = parseSessions(output);
+        if (parsed.unreadableBlocks() > 0)
+        {
+            logRawOutput("ibcmd session list returned unreadable session blocks", output); //$NON-NLS-1$
+            return ReadResult.unreachable("ibcmd session list returned " //$NON-NLS-1$
+                + parsed.unreadableBlocks() + " unreadable session block" //$NON-NLS-1$
+                + (parsed.unreadableBlocks() == 1 ? "" : "s") //$NON-NLS-1$ //$NON-NLS-2$
+                + ". The raw output was written to the EDT log."); //$NON-NLS-1$
+        }
+        if (parsed.sessions().isEmpty() && output != null && !output.isBlank())
+        {
+            logRawOutput("ibcmd session list returned unrecognized output", output); //$NON-NLS-1$
+            return ReadResult.unreachable("ibcmd session list returned output that could not be " //$NON-NLS-1$
+                + "parsed as a session list. The raw output was written to the EDT log."); //$NON-NLS-1$
+        }
+        return ReadResult.readable(parsed.sessions());
+    }
+
+    /** Parses one blank-line-separated key/value block per session. */
+    static ParsedSessions parseSessions(String output)
+    {
+        List<SessionInfo> sessions = new ArrayList<>();
+        Map<String, String> current = new LinkedHashMap<>();
+        boolean currentMalformed = false;
+        int unreadableBlocks = 0;
+        String normalized = output == null ? "" : output; //$NON-NLS-1$
+        for (String line : normalized.split("\\R", -1)) //$NON-NLS-1$
+        {
+            if (line.isBlank())
+            {
+                unreadableBlocks += addSession(current, currentMalformed, sessions);
+                current.clear();
+                currentMalformed = false;
+                continue;
+            }
+            int colon = line.indexOf(':');
+            if (colon < 0)
+            {
+                currentMalformed = true;
+                continue;
+            }
+            String key = line.substring(0, colon).trim();
+            String value = line.substring(colon + 1).trim();
+            if ("session".equals(key) && current.containsKey("session")) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                unreadableBlocks += addSession(current, currentMalformed, sessions);
+                current.clear();
+                currentMalformed = false;
+            }
+            current.put(key, value);
+        }
+        unreadableBlocks += addSession(current, currentMalformed, sessions);
+        return new ParsedSessions(sessions, unreadableBlocks);
+    }
+
+    /** Converts a parsed block, returning one when any content cannot form a usable session. */
+    private static int addSession(Map<String, String> values, boolean malformed,
+        List<SessionInfo> sessions)
+    {
+        if (malformed)
+        {
+            return 1;
+        }
+        if (values.isEmpty())
+        {
+            return 0;
+        }
+        String id = values.get("session"); //$NON-NLS-1$
+        if (id == null || id.isBlank())
+        {
+            return 1;
+        }
+        String applicationKind = value(values, "app-id"); //$NON-NLS-1$
+        String sessionNumberText = values.get("session-id"); //$NON-NLS-1$
+        sessions.add(new SessionInfo(id, parseSessionNumber(sessionNumberText),
+            applicationKind, value(values, "user-name"), value(values, "host"), //$NON-NLS-1$ //$NON-NLS-2$
+            value(values, "started-at"), value(values, "last-active-at"), //$NON-NLS-1$ //$NON-NLS-2$
+            "Designer".equalsIgnoreCase(applicationKind), sessionNumberText)); //$NON-NLS-1$
+        return 0;
+    }
+
+    /** Null-safe parsed value; ibcmd uses empty strings for unavailable fields. */
+    private static String value(Map<String, String> values, String key)
+    {
+        String value = values.get(key);
+        return value == null ? "" : value; //$NON-NLS-1$
+    }
+
+    /** Parses the short numeric session-id without affecting the full UUID identity. */
+    private static Long parseSessionNumber(String value)
+    {
+        try
+        {
+            return value == null || value.isBlank() ? null : Long.valueOf(value);
+        }
+        catch (NumberFormatException e)
+        {
+            return null;
+        }
+    }
+
+    /** Converts the outer job result into a named reachability reason, or {@code null}. */
+    /**
+     * Whether a bounded outcome must override a result the worker already published.
+     *
+     * <p>{@link BoundedJob} reports whether the JOB concluded, not whether the COMMAND did. The
+     * worker publishes its execution BEFORE {@link #markCallerAnswered} closes publication, so a
+     * deadline landing inside the Job's own terminal transition would otherwise discard an
+     * outcome this call demonstrably observed - reporting an unknown mutation for a termination
+     * that succeeded, or an unreachable server for a list that came back.
+     *
+     * <p>A THROWN failure still wins. That path proves nothing about the command, and masking it
+     * behind a partial publication would both mis-report it and lose its log entry.
+     *
+     * @param bounded the bounded run's result
+     * @param published what the worker published before the fence, or {@code null}
+     * @return {@code true} when the bounded failure is the authoritative answer
+     */
+    static boolean boundedFailureOverridesPublished(BoundedJob.Result bounded,
+        CommandExecution published)
+    {
+        return published == null || bounded.getFailure() != null;
+    }
+
+    private static String boundedFailure(String action, BoundedJob.Result result)
+    {
+        if (result.isSuccess())
+        {
+            return null;
+        }
+        if (result.getFailure() != null)
+        {
+            Throwable failure = unwrap(result.getFailure());
+            Activator.logError("infobase sessions: ibcmd session " + action + " failed", failure); //$NON-NLS-1$ //$NON-NLS-2$
+            return "ibcmd session " + action + " failed: " + PlatformFailures.describe(failure); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        switch (result.getOutcome())
+        {
+            case TIMED_OUT:
+                return "ibcmd session " + action //$NON-NLS-1$
+                    + " exceeded its bounded worker deadline; the process was asked to stop."; //$NON-NLS-1$
+            case TIMED_OUT_BEFORE_START:
+                return "The bounded ibcmd session " + action //$NON-NLS-1$
+                    + " job timed out before it started; retry after EDT background work settles."; //$NON-NLS-1$
+            case INTERRUPTED:
+                return "The ibcmd session " + action + " command was interrupted; retry the call."; //$NON-NLS-1$ //$NON-NLS-2$
+            case NOT_RUN:
+                return "The ibcmd session " + action //$NON-NLS-1$
+                    + " job was cancelled before it ran; retry the call."; //$NON-NLS-1$
+            default:
+                return "The ibcmd session " + action + " command did not complete."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /** Converts a completed process outcome into a named reason, or {@code null} on exit zero. */
+    private static String commandFailure(String action, CommandExecution command)
+    {
+        if (command.timedOut)
+        {
+            return "ibcmd session " + action + " timed out after 10 seconds and was terminated."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (command.exitCode == 0)
+        {
+            return null;
+        }
+        String diagnostic = command.stderr.isBlank() ? command.stdout : command.stderr;
+        logRawOutput("ibcmd session " + action + " failed with exit code " //$NON-NLS-1$ //$NON-NLS-2$
+            + command.exitCode, diagnostic);
+        return "ibcmd session " + action + " failed with exit code " + command.exitCode //$NON-NLS-1$ //$NON-NLS-2$
+            + ". The raw output was written to the EDT log."; //$NON-NLS-1$
+    }
+
+    /** Writes withheld ibcmd output to the local EDT log without returning it to the tool caller. */
+    private static void logRawOutput(String context, String output)
+    {
+        Activator.logWarning("infobase sessions: " + context //$NON-NLS-1$
+            + "; raw ibcmd output follows:\n" + (output == null ? "" : output)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Unwraps reflective wrappers before they reach the platform failure formatter. */
+    private static Throwable unwrap(Throwable failure)
+    {
+        Throwable current = failure;
+        while (current instanceof InvocationTargetException
+            || current instanceof ExecutionException)
+        {
+            Throwable cause = current.getCause();
+            if (cause == null || cause == current)
+            {
+                break;
+            }
+            current = cause;
+        }
+        return current;
+    }
+
+    /** Rethrows a callback failure through the checked job boundary. */
+    private static void throwAsException(Throwable failure) throws Exception
+    {
+        if (failure instanceof Exception)
+        {
+            throw (Exception)failure;
+        }
+        if (failure instanceof Error)
+        {
+            throw (Error)failure;
+        }
+        throw new IllegalStateException(failure);
+    }
+
+    private static boolean isWindows()
+    {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /** Checked callback invoked only while EDT confirms the standalone-server process exists. */
+    @FunctionalInterface
+    interface PidCommand
+    {
+        CommandExecution run(long pid) throws Exception;
+    }
+
+    /**
+     * Wraps a starter so the caller is warned from the moment a process CAN exist.
+     *
+     * <p>The flag is raised on ENTRY and never lowered, because only two things here are
+     * provable, and both come from control flow rather than from what was thrown:
+     * <ul>
+     * <li>the starter was never invoked - the pre-start check refused, so nothing was created
+     * and the flag stays down;</li>
+     * <li>the starter was invoked - a process may exist from that moment on, including while
+     * {@code start()} is still running past the deadline, and including when it ends in a
+     * throw.</li>
+     * </ul>
+     *
+     * <p>A failure does NOT prove that nothing ran, and no exception type does either.
+     * {@code ProcessBuilder.start()} keeps working after {@code ProcessImpl} has handed it a live
+     * process - a JFR commit, then a {@link System.Logger} block whose own comment reads "Racy
+     * initialization for logging; errors in configuration may throw exceptions". A custom
+     * {@code LoggerFinder} can raise ANY unchecked type from there, and the enclosing
+     * {@code catch (IOException | IllegalArgumentException)} re-wraps its own as
+     * {@code IOException}. Classifying by type would be guesswork wearing a proof.
+     *
+     * <p>The case that motivated a withdrawal - ibcmd missing or unusable - is answered earlier
+     * and properly: {@code prepare(...)} refuses with a named reason before any process is
+     * attempted.
+     *
+     * @param delegate the real process start
+     * @param mutationBoundary raised once the starter is entered
+     * @return a starter that records the possibility of a process
+     */
+    static ProcessStarter mutatingStarter(ProcessStarter delegate, AtomicBoolean mutationBoundary)
+    {
+        return () -> {
+            mutationBoundary.set(true);
+            return delegate.start();
+        };
+    }
+
+    /** Starts the external process at the cancellation boundary. */
+    @FunctionalInterface
+    interface ProcessStarter
+    {
+        Process start() throws IOException;
+    }
+
+    /** Resolved command prerequisites, or a named preparation error. */
+    private static final class PreparedTarget
+    {
+        final Object server;
+        final Ibcmd ibcmd;
+        final InfobaseAccessSupport.Credentials credentials;
+        final String error;
+
+        private PreparedTarget(Object server, Ibcmd ibcmd,
+            InfobaseAccessSupport.Credentials credentials, String error)
+        {
+            this.server = server;
+            this.ibcmd = ibcmd;
+            this.credentials = credentials;
+            this.error = error;
+        }
+
+        static PreparedTarget of(Object server, Ibcmd ibcmd,
+            InfobaseAccessSupport.Credentials credentials)
+        {
+            return new PreparedTarget(server, ibcmd, credentials, null);
+        }
+
+        static PreparedTarget error(String error)
+        {
+            return new PreparedTarget(null, null, null, error);
+        }
+    }
+
+    /** Exit state and captured streams of one bounded ibcmd process. */
+    static final class CommandExecution
+    {
+        final int exitCode;
+        final String stdout;
+        final String stderr;
+        final boolean timedOut;
+
+        CommandExecution(int exitCode, String stdout, String stderr, boolean timedOut)
+        {
+            this.exitCode = exitCode;
+            this.stdout = stdout == null ? "" : stdout; //$NON-NLS-1$
+            this.stderr = stderr == null ? "" : stderr; //$NON-NLS-1$
+            this.timedOut = timedOut;
+        }
+    }
+}

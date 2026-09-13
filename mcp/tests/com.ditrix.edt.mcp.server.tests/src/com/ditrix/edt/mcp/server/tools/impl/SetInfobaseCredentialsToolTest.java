@@ -27,25 +27,31 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
 
 import org.eclipse.core.runtime.CoreException;
-import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
-import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationType;
 import org.eclipse.debug.core.ILaunchConfigurationWorkingCopy;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.platform.services.model.InfobaseAccess;
+import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
+import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.BoundedStoreResult;
+import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.StoreResult;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Tests for {@link SetInfobaseCredentialsTool}.
@@ -64,6 +70,16 @@ import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
  */
 public class SetInfobaseCredentialsToolTest
 {
+    private static final String INFOBASE_UUID = "eb53270d-489b-4f58-9f22-ae7fd9426bc9"; //$NON-NLS-1$
+
+    private static InfobaseReference storedFor()
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        when(ref.getName()).thenReturn("Main infobase"); //$NON-NLS-1$
+        when(ref.getUuid()).thenReturn(UUID.fromString(INFOBASE_UUID));
+        return ref;
+    }
+
     /** Reflective baseline-safe access to the new launch-target resolution seam. */
     private static Object resolveLaunchTarget(ILaunchConfiguration config,
             BiFunction<ILaunchConfiguration, String, String> applicationIdResolver)
@@ -212,6 +228,12 @@ public class SetInfobaseCredentialsToolTest
         assertTrue("outputSchema must declare user", schema.contains("\"user\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must declare access", schema.contains("\"access\"")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("outputSchema must declare passwordSet", schema.contains("\"passwordSet\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("outputSchema must declare the UUID-keyed storage target", //$NON-NLS-1$
+            schema.contains("\"storedFor\"")); //$NON-NLS-1$
+        assertTrue("outputSchema must declare the three-state verification outcome", //$NON-NLS-1$
+            schema.contains("\"verification\"") && schema.contains("not_verifiable")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("outputSchema must expose only a boolean password comparison", //$NON-NLS-1$
+            schema.contains("\"passwordMatched\"")); //$NON-NLS-1$
         assertTrue("outputSchema must declare clientConfigured (issue #359): the caller has no " //$NON-NLS-1$
             + "other way to tell whether the launched client was covered", //$NON-NLS-1$
             schema.contains("\"clientConfigured\"")); //$NON-NLS-1$
@@ -324,11 +346,11 @@ public class SetInfobaseCredentialsToolTest
 
         Method buildSuccess = SetInfobaseCredentialsTool.class.getDeclaredMethod("buildSuccess", //$NON-NLS-1$
             String.class, String.class, boolean.class, String.class, String.class,
-            boolean.class, InfobaseAccess.class, String.class, String.class);
+            boolean.class, InfobaseAccess.class, StoreResult.class, String.class, String.class);
         buildSuccess.setAccessible(true);
         String success = (String)buildSuccess.invoke(null, "B", "app-derived", true, //$NON-NLS-1$ //$NON-NLS-2$
             "Infobase B", "Admin", true, InfobaseAccess.INFOBASE, //$NON-NLS-1$ //$NON-NLS-2$
-            "B Thin Client", null); //$NON-NLS-1$
+            StoreResult.verified(storedFor()), "B Thin Client", null); //$NON-NLS-1$
         assertTrue("the caller must see exactly which application the tool derived", //$NON-NLS-1$
             success.contains("project-default application 'app-derived' was derived for project 'B'")); //$NON-NLS-1$
     }
@@ -361,7 +383,7 @@ public class SetInfobaseCredentialsToolTest
 
     // ==================== Pure storeOutcome seam (no live EDT, no jobs framework) ====================
 
-    /** A representative SUCCESS JSON the bounded Job records the instant updateSettings commits. */
+    /** A representative SUCCESS JSON the bounded Job records once verification concludes. */
     private static final String SUCCESS_JSON =
         "{\"success\":true,\"project\":\"TestProject\",\"applicationId\":\"app1\"," //$NON-NLS-1$
             + "\"applicationName\":\"My Infobase\",\"user\":\"Admin\",\"access\":\"INFOBASE\"," //$NON-NLS-1$
@@ -378,7 +400,7 @@ public class SetInfobaseCredentialsToolTest
     @Test
     public void testStoreOutcomeTimeoutWithRecordedSuccessReturnsSuccess()
     {
-        // Persist-first guarantee: a timeout AFTER updateSettings committed still reports success.
+        // Once verification has produced a final result, a timeout race returns it verbatim.
         String result = SetInfobaseCredentialsTool.storeOutcome(false, SUCCESS_JSON, "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("a persisted success must survive a post-commit timeout", SUCCESS_JSON, result); //$NON-NLS-1$
     }
@@ -393,6 +415,28 @@ public class SetInfobaseCredentialsToolTest
         assertTrue("error must say it timed out", result.contains("timed out")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("error must name the application", result.contains("app1")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("error must name the project", result.contains("TestProject")); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+        assertFalse("a pre-write timeout must not claim a committed mutation", //$NON-NLS-1$
+            json.has("mutationCommitted")); //$NON-NLS-1$
+        assertFalse(json.has("mutationOutcomeUnknown")); //$NON-NLS-1$
+        assertTrue(json.get("error").getAsString().contains("may not be stored")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testStoreOutcomeTimeoutAfterWriteCommitIsAPostMutationError()
+    {
+        String result = SetInfobaseCredentialsTool.storeOutcome(false, null, true,
+            "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+        assertFalse(json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(json.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(json.has("mutationOutcomeUnknown")); //$NON-NLS-1$
+        String error = json.get("error").getAsString(); //$NON-NLS-1$
+        assertTrue(error.contains("write did commit")); //$NON-NLS-1$
+        assertTrue(error.contains("did not finish read-back verification")); //$NON-NLS-1$
+        assertFalse(error.contains("may not be stored")); //$NON-NLS-1$
+        assertFalse(result.contains("secret-value")); //$NON-NLS-1$
     }
 
     @Test
@@ -426,10 +470,10 @@ public class SetInfobaseCredentialsToolTest
      */
     private static final int LATCH_TIMEOUT_SECONDS = 30;
 
-    /** The caller is still waiting: the state every ordinary client write happens in. */
-    private static AtomicBoolean stillWaiting()
+    /** The bounded caller is still waiting: the state every ordinary client write sees. */
+    private static BooleanSupplier writesAllowed()
     {
-        return new AtomicBoolean(false);
+        return () -> true;
     }
 
     /**
@@ -458,8 +502,8 @@ public class SetInfobaseCredentialsToolTest
         ILaunchConfiguration config = localConfig(copy);
 
         assertNull("a clean client write reports no error", //$NON-NLS-1$
-            SetInfobaseCredentialsTool.configureClient(stillWaiting(), CONFIG_NAME, config, "Admin", //$NON-NLS-1$
-                "pwd", false)); //$NON-NLS-1$
+            SetInfobaseCredentialsTool.configureClient(writesAllowed(), CONFIG_NAME, config,
+                "Admin", "pwd", false)); //$NON-NLS-1$ //$NON-NLS-2$
 
         verify(copy).setAttribute(LaunchConfigUtils.ATTR_LAUNCH_USER_NAME, "Admin"); //$NON-NLS-1$
         verify(copy).setAttribute(LaunchConfigUtils.ATTR_LAUNCH_USER_PASSWORD, "pwd"); //$NON-NLS-1$
@@ -478,11 +522,11 @@ public class SetInfobaseCredentialsToolTest
         ILaunchConfiguration config = mock(ILaunchConfiguration.class);
 
         assertNull("no launch configuration named is not a failure", //$NON-NLS-1$
-            SetInfobaseCredentialsTool.configureClient(stillWaiting(), null, config, "Admin", "pwd", //$NON-NLS-1$ //$NON-NLS-2$
-                false));
+            SetInfobaseCredentialsTool.configureClient(writesAllowed(), null, config, "Admin", //$NON-NLS-1$
+                "pwd", false)); //$NON-NLS-1$
         assertNull("an empty name is the same as none", //$NON-NLS-1$
-            SetInfobaseCredentialsTool.configureClient(stillWaiting(), "", config, "Admin", "pwd", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                false));
+            SetInfobaseCredentialsTool.configureClient(writesAllowed(), "", config, "Admin", //$NON-NLS-1$ //$NON-NLS-2$
+                "pwd", false)); //$NON-NLS-1$
 
         verify(config, never()).getWorkingCopy();
     }
@@ -497,8 +541,8 @@ public class SetInfobaseCredentialsToolTest
         doThrow(new CoreException(new Status(IStatus.ERROR, "test", "launch config is read-only"))) //$NON-NLS-1$ //$NON-NLS-2$
             .when(copy).doSave();
 
-        String error = SetInfobaseCredentialsTool.configureClient(stillWaiting(), CONFIG_NAME, config,
-            "Admin", "pwd", false); //$NON-NLS-1$ //$NON-NLS-2$
+        String error = SetInfobaseCredentialsTool.configureClient(writesAllowed(), CONFIG_NAME,
+            config, "Admin", "pwd", false); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertNotNull("a failed client write must be reported", error); //$NON-NLS-1$
         assertTrue("the reason must reach the caller: " + error, error.contains("read-only")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -510,8 +554,8 @@ public class SetInfobaseCredentialsToolTest
         ILaunchConfigurationWorkingCopy copy = mock(ILaunchConfigurationWorkingCopy.class);
         ILaunchConfiguration config = localConfig(copy);
 
-        SetInfobaseCredentialsTool.configureClient(stillWaiting(), CONFIG_NAME, config, "Admin", "pwd", //$NON-NLS-1$ //$NON-NLS-2$
-            true);
+        SetInfobaseCredentialsTool.configureClient(writesAllowed(), CONFIG_NAME, config, "Admin", //$NON-NLS-1$
+            "pwd", true); //$NON-NLS-1$
 
         verify(copy).setAttribute(LaunchConfigUtils.ATTR_LAUNCH_OS_INFOBASE_ACCESS, true);
     }
@@ -530,7 +574,7 @@ public class SetInfobaseCredentialsToolTest
         ILaunchConfigurationWorkingCopy copy = mock(ILaunchConfigurationWorkingCopy.class);
         ILaunchConfiguration config = localConfig(copy);
 
-        String error = SetInfobaseCredentialsTool.configureClient(new AtomicBoolean(true), CONFIG_NAME,
+        String error = SetInfobaseCredentialsTool.configureClient(() -> false, CONFIG_NAME,
             config, "Admin", "pwd", false); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertNotNull("an abandoned client write must be reported, not silently skipped", error); //$NON-NLS-1$
@@ -541,92 +585,125 @@ public class SetInfobaseCredentialsToolTest
     }
 
     @Test
-    public void awaitStoreJobAnswersTheCallerAndSaysSoBeforeItReturns()
+    public void sharedBoundedStoreAnswersTheCallerAndSaysSoBeforeItReturns()
     {
-        // The flag the check above reads is raised HERE, and it has to be raised on every way out -
-        // a path that returns without raising it leaves the Job free to write.
-        AtomicBoolean callerAnswered = new AtomicBoolean();
-        AtomicReference<String> jobResult = new AtomicReference<>(SUCCESS_JSON);
-        // Never scheduled, so join() returns immediately and the test does not wait out the 30s
-        // budget; what is under test is the bookkeeping around the join, not the join itself.
-        Job job = new Job("test: never scheduled") //$NON-NLS-1$
-        {
-            @Override
-            protected IStatus run(IProgressMonitor monitor)
-            {
-                return Status.OK_STATUS;
-            }
-        };
+        AtomicReference<BooleanSupplier> writePermission = new AtomicReference<>();
+        BoundedStoreResult<String> storeRun = InfobaseAccessSupport.runBoundedCredentialStore(
+            "test: quick store", 5_000L, //$NON-NLS-1$
+            (publish, writeCommitted, writeAllowed) -> {
+                writePermission.set(writeAllowed);
+                publish.accept(SUCCESS_JSON);
+            });
 
-        String result = SetInfobaseCredentialsTool.awaitStoreJob(job, jobResult, callerAnswered,
+        String result = SetInfobaseCredentialsTool.finishBoundedStore(storeRun,
             "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertEquals(SUCCESS_JSON, result);
-        assertTrue("awaitStoreJob must raise callerAnswered before it returns: without it a job " //$NON-NLS-1$
-            + "that outran the deadline goes on to write the launch configuration for a call that " //$NON-NLS-1$
-            + "already reported a failure", callerAnswered.get()); //$NON-NLS-1$
+        assertNotNull(writePermission.get());
+        assertFalse("the bounded store must close write permission before it returns", //$NON-NLS-1$
+            writePermission.get().getAsBoolean());
+    }
+
+    @Test
+    public void sharedBoundedStoreReportsACommittedWriteWhenReadBackOutrunsTheDeadline()
+        throws Exception
+    {
+        CountDownLatch readBackStarted = new CountDownLatch(1);
+        CountDownLatch finishReadBack = new CountDownLatch(1);
+        CountDownLatch readBackFinished = new CountDownLatch(1);
+        AtomicReference<BooleanSupplier> writePermission = new AtomicReference<>();
+        BoundedStoreResult<String> storeRun =
+            InfobaseAccessSupport.runBoundedCredentialStore(
+                "test: committed write with slow read-back", 100L, //$NON-NLS-1$
+                (publish, writeCommitted, writeAllowed) -> {
+                    writePermission.set(writeAllowed);
+                    writeCommitted.run();
+                    readBackStarted.countDown();
+                    try
+                    {
+                        finishReadBack.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                    }
+                    finally
+                    {
+                        readBackFinished.countDown();
+                    }
+                });
+        try
+        {
+            assertTrue(readBackStarted.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            String result = SetInfobaseCredentialsTool.finishBoundedStore(storeRun,
+                "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
+
+            JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+            assertFalse(json.get("success").getAsBoolean()); //$NON-NLS-1$
+            assertTrue(json.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+            assertTrue(json.get("error").getAsString().contains("write did commit")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse(writePermission.get().getAsBoolean());
+        }
+        finally
+        {
+            finishReadBack.countDown();
+            assertTrue(readBackFinished.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        }
     }
 
     /**
-     * The defect itself, end to end: a store Job that outruns the deadline must not write the launch
-     * configuration once the caller has been told the call failed.
-     * <p>
-     * Everything here is ordered by latches rather than by timing: the Job signals that it is RUNNING
-     * (so the cancel on the timeout path cannot simply dequeue it before it starts), the caller's
-     * wait is given a 1 ms deadline it cannot meet, and only THEN is the Job let through to its
-     * client half. So the write it attempts is unambiguously a write after the answer - the exact
-     * sequence that used to put a user and a password into a launch configuration behind the back of
-     * a call that returned {@code success:false}.
+     * The defect itself, end to end: the client write is attempted after the bounded runner closes
+     * its deadline but before the caller's result is mapped. Latches make that former flag gap exact,
+     * without relying on thread timing.
      *
-     * @throws Exception when the latches or the job join are interrupted
+     * @throws Exception when the latch waits are interrupted
      */
     @Test
     public void aJobThatOutranTheDeadlineWritesNoLaunchConfigurationAfterwards() throws Exception
     {
         ILaunchConfigurationWorkingCopy copy = mock(ILaunchConfigurationWorkingCopy.class);
         ILaunchConfiguration config = localConfig(copy);
-        AtomicBoolean callerAnswered = new AtomicBoolean();
-        AtomicReference<String> jobResult = new AtomicReference<>();
         AtomicReference<String> clientOutcome = new AtomicReference<>();
         CountDownLatch running = new CountDownLatch(1);
-        CountDownLatch answered = new CountDownLatch(1);
+        CountDownLatch attemptClientWrite = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
 
-        Job job = new Job("test: slower than the deadline") //$NON-NLS-1$
-        {
-            @Override
-            protected IStatus run(IProgressMonitor monitor)
+        BoundedStoreResult<String> storeRun = InfobaseAccessSupport.runBoundedCredentialStore(
+            "test: slower than the deadline", 100L, //$NON-NLS-1$
+            (publish, writeCommitted, writeAllowed) -> {
+            try
             {
                 running.countDown();
                 try
                 {
-                    // Stand in for the agent half still grinding away when the caller gives up.
-                    answered.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                    attemptClientWrite.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 }
                 catch (InterruptedException e)
                 {
                     Thread.currentThread().interrupt();
                 }
-                clientOutcome.set(SetInfobaseCredentialsTool.configureClient(callerAnswered,
+                clientOutcome.set(SetInfobaseCredentialsTool.configureClient(writeAllowed,
                     CONFIG_NAME, config, "Admin", "pwd", false)); //$NON-NLS-1$ //$NON-NLS-2$
-                return Status.OK_STATUS;
             }
-        };
-        job.setSystem(true);
-        job.schedule();
+            finally
+            {
+                finished.countDown();
+            }
+        });
         try
         {
             assertTrue("the job must be RUNNING before the deadline elapses, or cancel() would " //$NON-NLS-1$
                 + "simply dequeue it and the write under test would never be attempted", //$NON-NLS-1$
                 running.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
 
-            String result = SetInfobaseCredentialsTool.awaitStoreJob(job, jobResult, callerAnswered,
-                "TestProject", "app1", 1L); //$NON-NLS-1$ //$NON-NLS-2$
+            // Exercise the old gap: the bounded runner has closed, but its result is not mapped yet.
+            attemptClientWrite.countDown();
+            assertTrue(finished.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+
+            String result = SetInfobaseCredentialsTool.finishBoundedStore(storeRun,
+                "TestProject", "app1"); //$NON-NLS-1$ //$NON-NLS-2$
 
             assertTrue("the caller must be told the call timed out: " + result, //$NON-NLS-1$
                 result.contains("timed out")); //$NON-NLS-1$
-            answered.countDown();
-            job.join();
-
+            JsonObject timeout = JsonParser.parseString(result).getAsJsonObject();
+            assertFalse(timeout.has("mutationCommitted")); //$NON-NLS-1$
+            assertTrue(timeout.get("error").getAsString().contains("may not be stored")); //$NON-NLS-1$ //$NON-NLS-2$
             assertNotNull("the job's client half must report that it stood down", //$NON-NLS-1$
                 clientOutcome.get());
             verify(config, never()).getWorkingCopy();
@@ -634,8 +711,8 @@ public class SetInfobaseCredentialsToolTest
         }
         finally
         {
-            answered.countDown();
-            job.join();
+            attemptClientWrite.countDown();
+            assertTrue(finished.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         }
     }
 
@@ -648,7 +725,7 @@ public class SetInfobaseCredentialsToolTest
         // now work", ran the tests, and got the platform's login dialog. With no launch
         // configuration named, the answer has to say the client is NOT covered and how to cover it.
         String json = SetInfobaseCredentialsTool.buildSuccess("TestProject", "app1", "My Infobase", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            "Admin", true, InfobaseAccess.INFOBASE, null, null); //$NON-NLS-1$
+            "Admin", true, InfobaseAccess.INFOBASE, StoreResult.verified(storedFor()), null, null); //$NON-NLS-1$
 
         assertTrue("clientConfigured must be false with no launch configuration named", //$NON-NLS-1$
             json.contains("\"clientConfigured\":false")); //$NON-NLS-1$
@@ -656,13 +733,19 @@ public class SetInfobaseCredentialsToolTest
             json.contains("NOT covered")); //$NON-NLS-1$
         assertTrue("the message must name the way to cover it: " + json, //$NON-NLS-1$
             json.contains("launchConfigurationName")); //$NON-NLS-1$
+        assertTrue(json.contains("\"storedFor\"")); //$NON-NLS-1$
+        assertTrue(json.contains("\"name\":\"Main infobase\"")); //$NON-NLS-1$
+        assertTrue(json.contains("\"uuid\":\"" + INFOBASE_UUID + "\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(json.contains("\"verification\":\"verified\"")); //$NON-NLS-1$
+        assertTrue(json.contains("\"passwordMatched\":true")); //$NON-NLS-1$
+        assertFalse(json.contains("will now authenticate")); //$NON-NLS-1$
     }
 
     @Test
     public void successReportsTheClientAsConfiguredWhenTheLaunchConfigWasUpdated()
     {
         String json = SetInfobaseCredentialsTool.buildSuccess("TestProject", "app1", "My Infobase", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            "Admin", true, InfobaseAccess.INFOBASE, CONFIG_NAME, null); //$NON-NLS-1$
+            "Admin", true, InfobaseAccess.INFOBASE, StoreResult.verified(storedFor()), CONFIG_NAME, null); //$NON-NLS-1$
 
         assertTrue("clientConfigured must be true once the launch config was updated", //$NON-NLS-1$
             json.contains("\"clientConfigured\":true")); //$NON-NLS-1$
@@ -675,13 +758,61 @@ public class SetInfobaseCredentialsToolTest
         // The agent-side credentials committed, so this is still a success - but claiming the
         // client is configured when its write failed is exactly the lie this field exists to stop.
         String json = SetInfobaseCredentialsTool.buildSuccess("TestProject", "app1", "My Infobase", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            "Admin", true, InfobaseAccess.INFOBASE, CONFIG_NAME, "launch config is read-only"); //$NON-NLS-1$ //$NON-NLS-2$
+            "Admin", true, InfobaseAccess.INFOBASE, StoreResult.verified(storedFor()), CONFIG_NAME, //$NON-NLS-1$
+            "launch config is read-only"); //$NON-NLS-1$
 
         assertTrue("a failed client write is NOT a configured client", //$NON-NLS-1$
             json.contains("\"clientConfigured\":false")); //$NON-NLS-1$
         assertTrue("the message must carry the reason: " + json, json.contains("read-only")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("the message must point at the manual fix: " + json, //$NON-NLS-1$
             json.contains("Client application user")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void mismatchProducesAPostMutationErrorWithoutReturningThePassword()
+    {
+        StoreResult mismatch = StoreResult.mismatched(
+            "Requested access=INFOBASE, user='Admin', passwordSet=true; read back access=OS, " //$NON-NLS-1$
+                + "user='Other', passwordSet=true, passwordMatched=false.", false, storedFor()); //$NON-NLS-1$
+
+        String json = SetInfobaseCredentialsTool.buildVerificationError(
+            "TestProject", "app1", mismatch); //$NON-NLS-1$ //$NON-NLS-2$
+
+        JsonObject result = JsonParser.parseString(json).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(result.has("mutationOutcomeUnknown")); //$NON-NLS-1$
+        assertEquals("Infobase access-settings read-back did not match the requested values: " //$NON-NLS-1$
+            + "Requested access=INFOBASE, user='Admin', passwordSet=true; read back access=OS, " //$NON-NLS-1$
+            + "user='Other', passwordSet=true, passwordMatched=false.", //$NON-NLS-1$
+            result.get("error").getAsString()); //$NON-NLS-1$
+        assertEquals("TestProject", result.get("project").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("app1", result.get("applicationId").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("mismatched", result.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(result.get("passwordMatched").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("Main infobase", //$NON-NLS-1$
+            result.getAsJsonObject("storedFor").get("name").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(INFOBASE_UUID,
+            result.getAsJsonObject("storedFor").get("uuid").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(result.has("password")); //$NON-NLS-1$
+        assertFalse(json.contains("secret-value")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void defaultShapeSuccessNamesWhyItCannotBeVerified()
+    {
+        StoreResult notVerifiable = StoreResult.notVerifiable(
+            "OS access with an empty user and empty password is also EDT's default fallback, " //$NON-NLS-1$
+                + "so the read-back cannot prove that a stored entry exists.", storedFor()); //$NON-NLS-1$
+
+        String json = SetInfobaseCredentialsTool.buildSuccess("TestProject", "app1", //$NON-NLS-1$ //$NON-NLS-2$
+            "My Infobase", "", false, InfobaseAccess.OS, notVerifiable, null, null); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(json.contains("\"verification\":\"not_verifiable\"")); //$NON-NLS-1$
+        assertTrue(json.contains("default fallback")); //$NON-NLS-1$
+        assertFalse(json.contains("\"passwordMatched\"")); //$NON-NLS-1$
+        assertFalse(json.contains("Stored infobase access credentials")); //$NON-NLS-1$
+        assertFalse(json.contains("secret-value")); //$NON-NLS-1$
     }
 
     @Test
@@ -753,7 +884,7 @@ public class SetInfobaseCredentialsToolTest
      * behind in a javadoc cannot satisfy it. The class files are read as resources, the way
      * {@code BareErrorStringRatchetTest} reads constant pools; JaCoCo instruments classes as they
      * are LOADED and never rewrites the file, so what is parsed here is javac's own output. The
-     * tool's anonymous inner classes are scanned too - the bounded store Job is one of them.
+     * tool's generated inner classes are scanned too for compiler-generated implementation bodies.
      * <p>
      * Both calls must sit in the SAME method body: bytecode offsets restart at zero per method, so
      * comparing across bodies would compare meaningless numbers, and a future overload could
@@ -892,8 +1023,8 @@ public class SetInfobaseCredentialsToolTest
     private static final class ToolBytecode
     {
         /**
-         * How many anonymous inner classes to look for. The bounded store Job is one; the loop
-         * simply stops at the first missing resource, so the ceiling only bounds the search.
+         * How many generated inner classes to look for. The loop stops at the first missing
+         * resource, so the ceiling only bounds the search.
          */
         private static final int MAX_INNER_CLASSES = 20;
 
@@ -947,7 +1078,7 @@ public class SetInfobaseCredentialsToolTest
                 fail("class resource not found for " + clazz.getName() + " - a wiring ratchet must " //$NON-NLS-1$ //$NON-NLS-2$
                     + "never pass because it read nothing"); //$NON-NLS-1$
             }
-            // The bounded store Job is an anonymous class, so its body lives in its own class file.
+            // Include implementation bodies the compiler placed in generated inner classes.
             for (int i = 1; i <= MAX_INNER_CLASSES; i++)
             {
                 String inner = simpleName + "$" + i; //$NON-NLS-1$

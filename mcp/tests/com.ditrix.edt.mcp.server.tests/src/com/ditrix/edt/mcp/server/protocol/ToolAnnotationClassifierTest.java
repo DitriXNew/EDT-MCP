@@ -33,6 +33,7 @@ public class ToolAnnotationClassifierTest
         for (String name : new String[] {
             "delete_metadata",
             "update_database",
+            "infobase_sessions",
             "rename_metadata_object",
             "delete_project",
             "cancel_job" })
