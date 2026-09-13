@@ -120,14 +120,14 @@ public class InfobaseSessionsToolTest
                 ReadResult.readable(List.of(CLIENT))))
             .getAsJsonObject();
 
-        JsonObject budgetStopped = JsonParser.parseString(
-            InfobaseSessionsTool.bulkBudgetStoppedResult("Demo", //$NON-NLS-1$
+        JsonObject incomplete = JsonParser.parseString(
+            InfobaseSessionsTool.bulkTerminationIncompleteResult("Demo", //$NON-NLS-1$
                 "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$
-                ReadResult.readable(List.of()), List.of(SECOND_CLIENT)))
+                ReadResult.readable(List.of(SECOND_CLIENT)), List.of(SECOND_CLIENT), 1))
             .getAsJsonObject();
 
         for (JsonObject payload : List.of(success, refusal, failure, beforeLaunchFailure,
-            partialReadBack, budgetStopped))
+            partialReadBack, incomplete))
         {
             for (String emitted : payload.keySet())
             {
@@ -594,56 +594,7 @@ public class InfobaseSessionsToolTest
             TimeUnit.HOURS.toNanos(1)));
     }
 
-    /**
-     * A budget stop is not a success. all=true asks for a clear infobase, and a session the
-     * loop never reached still blocks an update - so the answer must say what is left rather
-     * than report the part it managed.
-     */
-    @Test
-    public void aBudgetStoppedBulkTerminateReportsWhatIsLeftInsteadOfSuccess()
-    {
-        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.bulkBudgetStoppedResult(
-            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
-            ReadResult.readable(List.of(SECOND_CLIENT)), List.of(SECOND_CLIENT)))
-            .getAsJsonObject();
 
-        assertFalse("a partial bulk terminate must not report success", //$NON-NLS-1$
-            result.get("success").getAsBoolean()); //$NON-NLS-1$
-        assertEquals(1, result.get("terminatedCount").getAsInt()); //$NON-NLS-1$
-        assertEquals(1, result.get("attemptedCount").getAsInt()); //$NON-NLS-1$
-        assertEquals(1, result.get("notAttemptedCount").getAsInt()); //$NON-NLS-1$
-        assertEquals("verified", result.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("a terminated session is a real mutation", //$NON-NLS-1$
-            result.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
-        String error = result.get("error").getAsString(); //$NON-NLS-1$
-        assertTrue("the error must name how many were left: " + error, //$NON-NLS-1$
-            error.contains("1 selected session(s) were not attempted")); //$NON-NLS-1$
-        assertTrue("the error must point at the ids, not a re-run: " + error, //$NON-NLS-1$
-            error.contains("Terminate them by id from notAttemptedSessionIds")); //$NON-NLS-1$
-        assertEquals(SECOND_CLIENT.sessionId(),
-            result.getAsJsonArray("notAttemptedSessionIds").get(0).getAsString()); //$NON-NLS-1$
-    }
-
-    /**
-     * A session that survives a terminate keeps its place in the list, so re-running all=true
-     * would spend the next budget on it again and never reach the tail. The continuation must
-     * therefore be by id, and the result must not advise the loop that cannot finish.
-     */
-    @Test
-    public void aBudgetStopHandsBackIdsRatherThanALoopThatCannotFinish()
-    {
-        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.bulkBudgetStoppedResult(
-            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
-            ReadResult.readable(List.of(CLIENT, SECOND_CLIENT)), List.of(SECOND_CLIENT)))
-            .getAsJsonObject();
-
-        JsonArray ids = result.getAsJsonArray("notAttemptedSessionIds"); //$NON-NLS-1$
-        assertEquals(1, ids.size());
-        assertEquals(SECOND_CLIENT.sessionId(), ids.get(0).getAsString());
-        String error = result.get("error").getAsString(); //$NON-NLS-1$
-        assertFalse("advising all=true here would never finish the selection: " + error, //$NON-NLS-1$
-            error.contains("all=true, confirm=true) to continue")); //$NON-NLS-1$
-    }
 
     /**
      * ibcmd exits 0 for a session that had already disconnected, so a re-read establishes the
@@ -662,16 +613,126 @@ public class InfobaseSessionsToolTest
             message.contains("Terminated ")); //$NON-NLS-1$
     }
 
+
+
+
     /**
-     * The budget stop obeys the same evidence rule as an ordinary read-back: only a session
-     * observed gone claims a mutation. Every command reporting success proves nothing.
+     * all=true asks for a clear infobase, so the verdict is what the authoritative re-read
+     * showed. A session that joined while the loop ran blocks an update exactly like one the
+     * budget never reached, and answering from the pre-loop selection would miss it entirely.
      */
     @Test
-    public void aBudgetStoppedTerminateThatChangedNothingDoesNotClaimAMutation()
+    public void aSessionThatJoinedDuringTheLoopStillBlocksTheBulkVerdict()
     {
-        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.bulkBudgetStoppedResult(
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
             "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
-            ReadResult.readable(List.of(CLIENT)), List.of(SECOND_CLIENT)))
+            ReadResult.readable(List.of(SECOND_CLIENT)), List.of(), true)).getAsJsonObject();
+
+        assertFalse("a newcomer still holds the infobase", //$NON-NLS-1$
+            result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(1, result.get("outstandingCount").getAsInt()); //$NON-NLS-1$
+        assertEquals(SECOND_CLIENT.sessionId(),
+            result.getAsJsonArray("outstandingSessionIds").get(0).getAsString()); //$NON-NLS-1$
+    }
+
+    /**
+     * The mirror case: a session the budget never reached left on its own, so nothing is
+     * outstanding and the call is not a partial run at all.
+     */
+    @Test
+    public void anUnreachedTailThatLeftOnItsOwnDoesNotMakeTheCallPartial()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.readable(List.of()), List.of(SECOND_CLIENT), true)).getAsJsonObject();
+
+        assertTrue(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(1, result.get("terminatedCount").getAsInt()); //$NON-NLS-1$
+        assertFalse(result.has("outstandingSessionIds")); //$NON-NLS-1$
+    }
+
+    /** A surviving agent session is not outstanding work: bulk never targets one. */
+    @Test
+    public void aSurvivingAgentSessionDoesNotFailTheBulkVerdict()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.readable(List.of(DESIGNER)), List.of(), true)).getAsJsonObject();
+
+        assertTrue("bulk never targets the agent, so it cannot be outstanding", //$NON-NLS-1$
+            result.get("success").getAsBoolean()); //$NON-NLS-1$
+    }
+
+    /**
+     * An unreadable list settles nothing, so the verdict falls back to what the loop knows it
+     * skipped rather than to a read that did not happen.
+     */
+    @Test
+    public void anUnreadableListFallsBackToWhatTheLoopKnowsItSkipped()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.unreachable("server stopped before verification"), //$NON-NLS-1$
+            List.of(DESIGNER, SECOND_CLIENT), true)).getAsJsonObject();
+
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result.get("mutationOutcomeUnknown").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(2, result.get("outstandingCount").getAsInt()); //$NON-NLS-1$
+        assertEquals(2, result.getAsJsonArray("outstandingSessionIds").size()); //$NON-NLS-1$
+        assertFalse("an unread list cannot count terminations", //$NON-NLS-1$
+            result.has("terminatedCount")); //$NON-NLS-1$
+    }
+
+    /**
+     * A by-id terminate is not a request to clear the infobase, so a stranger being connected
+     * is none of its business - only the session it targeted decides its verdict.
+     */
+    @Test
+    public void aByIdTerminateIgnoresSessionsItWasNeverAskedToTouch()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.readable(List.of(SECOND_CLIENT)))).getAsJsonObject();
+
+        assertTrue(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(1, result.get("terminatedCount").getAsInt()); //$NON-NLS-1$
+    }
+
+    /**
+     * The continuation must be by id: a session that survives a terminate keeps its place in
+     * the list, so re-running all=true could spend the next budget on it and never reach the
+     * rest. The result must not advise the loop that cannot finish.
+     */
+    @Test
+    public void anIncompleteBulkHandsBackIdsRatherThanALoopThatCannotFinish()
+    {
+        JsonObject result = JsonParser.parseString(
+            InfobaseSessionsTool.bulkTerminationIncompleteResult("Demo", //$NON-NLS-1$
+                "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$
+                ReadResult.readable(List.of(CLIENT, SECOND_CLIENT)), List.of(SECOND_CLIENT), 2))
+            .getAsJsonObject();
+
+        JsonArray ids = result.getAsJsonArray("outstandingSessionIds"); //$NON-NLS-1$
+        assertEquals(result.get("outstandingCount").getAsInt(), ids.size()); //$NON-NLS-1$
+        assertEquals(SECOND_CLIENT.sessionId(), ids.get(0).getAsString());
+        String error = result.get("error").getAsString(); //$NON-NLS-1$
+        assertTrue("the budget note must survive: " + error, //$NON-NLS-1$
+            error.contains("stopped 2 selection(s) short")); //$NON-NLS-1$
+        assertFalse("advising all=true here would never finish: " + error, //$NON-NLS-1$
+            error.contains("all=true, confirm=true) to continue")); //$NON-NLS-1$
+    }
+
+    /**
+     * Nothing was observed gone, so no mutation may be claimed - the same evidence rule the
+     * ordinary read-back follows.
+     */
+    @Test
+    public void anIncompleteBulkThatChangedNothingDoesNotClaimAMutation()
+    {
+        JsonObject result = JsonParser.parseString(
+            InfobaseSessionsTool.bulkTerminationIncompleteResult("Demo", //$NON-NLS-1$
+                "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$
+                ReadResult.readable(List.of(CLIENT)), List.of(CLIENT), 0))
             .getAsJsonObject();
 
         assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
@@ -679,89 +740,7 @@ public class InfobaseSessionsToolTest
         assertFalse("nothing was observed gone, so no mutation may be claimed", //$NON-NLS-1$
             result.has("mutationCommitted")); //$NON-NLS-1$
         assertEquals("mismatched", result.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
-    }
-
-    /** An unverifiable budget stop cannot count anything, so it reports an unknown outcome. */
-    @Test
-    public void anUnreadableBudgetStopReportsAnUnknownOutcomeRatherThanACount()
-    {
-        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.bulkBudgetStoppedResult(
-            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
-            ReadResult.unreachable("server stopped before verification"), //$NON-NLS-1$
-            List.of(SECOND_CLIENT)))
-            .getAsJsonObject();
-
-        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
-        assertTrue(result.get("mutationOutcomeUnknown").getAsBoolean()); //$NON-NLS-1$
-        assertFalse("an unread list cannot count terminations", //$NON-NLS-1$
-            result.has("terminatedCount")); //$NON-NLS-1$
-        assertEquals("not_verifiable", result.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
-    }
-    /**
-     * The returned ids must be exactly the set the loop skipped: a caller that terminates them
-     * one by one has to be able to finish, so the count and the list can never disagree.
-     */
-    @Test
-    public void theReturnedIdsAreExactlyTheSessionsTheLoopSkipped()
-    {
-        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.bulkBudgetStoppedResult(
-            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
-            ReadResult.readable(List.of()), List.of(DESIGNER, SECOND_CLIENT)))
-            .getAsJsonObject();
-
-        JsonArray ids = result.getAsJsonArray("notAttemptedSessionIds"); //$NON-NLS-1$
-        assertEquals(result.get("notAttemptedCount").getAsInt(), ids.size()); //$NON-NLS-1$
-        assertEquals(DESIGNER.sessionId(), ids.get(0).getAsString());
-        assertEquals(SECOND_CLIENT.sessionId(), ids.get(1).getAsString());
-    }
-    /**
-     * A session the loop never reached can disconnect on its own before the re-read. It no
-     * longer blocks an update, so it must not appear in the continuation - and when the whole
-     * unreached tail went that way, the call was not partial and must not report an error.
-     */
-    @Test
-    public void aTailThatDisconnectedOnItsOwnIsNotPartOfTheContinuation()
-    {
-        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
-            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
-            ReadResult.readable(List.of()), List.of(SECOND_CLIENT))).getAsJsonObject();
-
-        assertTrue("the infobase is clear, so this is not a budget failure", //$NON-NLS-1$
-            result.get("success").getAsBoolean()); //$NON-NLS-1$
-        assertEquals(1, result.get("terminatedCount").getAsInt()); //$NON-NLS-1$
-        assertFalse("a session that vanished on its own is not outstanding work", //$NON-NLS-1$
-            result.has("notAttemptedSessionIds")); //$NON-NLS-1$
-    }
-
-    /** Only part of the tail vanished, so the continuation names exactly what is left. */
-    @Test
-    public void aPartiallyVanishedTailNarrowsTheContinuationToWhatRemains()
-    {
-        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
-            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
-            ReadResult.readable(List.of(DESIGNER)), List.of(DESIGNER, SECOND_CLIENT)))
-            .getAsJsonObject();
-
-        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
-        assertEquals(1, result.get("notAttemptedCount").getAsInt()); //$NON-NLS-1$
-        JsonArray ids = result.getAsJsonArray("notAttemptedSessionIds"); //$NON-NLS-1$
-        assertEquals(1, ids.size());
-        assertEquals(DESIGNER.sessionId(), ids.get(0).getAsString());
-    }
-
-    /**
-     * An unreadable list is not evidence that the tail went away, so nothing is dropped from
-     * the continuation on the strength of a read that did not happen.
-     */
-    @Test
-    public void anUnreadableListKeepsTheWholeTailInTheContinuation()
-    {
-        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
-            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
-            ReadResult.unreachable("server stopped before verification"), //$NON-NLS-1$
-            List.of(DESIGNER, SECOND_CLIENT))).getAsJsonObject();
-
-        assertEquals(2, result.get("notAttemptedCount").getAsInt()); //$NON-NLS-1$
-        assertEquals(2, result.getAsJsonArray("notAttemptedSessionIds").size()); //$NON-NLS-1$
+        assertFalse("no budget note belongs here: the loop reached everything", //$NON-NLS-1$
+            result.get("error").getAsString().contains("short to stay bounded")); //$NON-NLS-1$
     }
 }

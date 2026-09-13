@@ -120,10 +120,10 @@ public class InfobaseSessionsTool implements IMcpTool
                 "Number of sessions observed gone after the terminate command.") //$NON-NLS-1$
             .integerProperty("attemptedCount", //$NON-NLS-1$
                 "Number of terminate commands accepted when the session list could not be re-read.") //$NON-NLS-1$
-            .integerProperty("notAttemptedCount", //$NON-NLS-1$
-                "Selected sessions the bulk terminate never reached before its budget ran out.") //$NON-NLS-1$
-            .stringArrayProperty("notAttemptedSessionIds", //$NON-NLS-1$
-                "UUIDs of those sessions, so the rest can be terminated by id without " //$NON-NLS-1$
+            .integerProperty("outstandingCount", //$NON-NLS-1$
+                "Non-agent sessions the re-read still reports after a bulk terminate.") //$NON-NLS-1$
+            .stringArrayProperty("outstandingSessionIds", //$NON-NLS-1$
+                "UUIDs of those sessions, so they can be terminated by id without " //$NON-NLS-1$
                     + "depending on list order.") //$NON-NLS-1$
             .enumProperty(KEY_VERIFICATION,
                 "Terminate read-back: verified, mismatched, or not_verifiable.", //$NON-NLS-1$
@@ -369,7 +369,7 @@ public class InfobaseSessionsTool implements IMcpTool
         // list once reports what is actually gone.
         ReadResult after = InfobaseSessionSupport.listSessions(application);
         return terminationReadBackResult(projectName, application.getId(), attempted, after,
-            notAttempted);
+            notAttempted, all);
     }
 
     /**
@@ -461,36 +461,40 @@ public class InfobaseSessionsTool implements IMcpTool
         List<SessionInfo> attempted, ReadResult after)
     {
         return terminationReadBackResult(projectName, applicationId, attempted, after,
-            List.of());
+            List.of(), false);
     }
 
     /**
      * Reports a bulk terminate, including one stopped by its aggregate budget.
      *
-     * <p>A budget stop is an error even though every attempted command succeeded: all=true asks
-     * for a clear infobase, and a session the loop never reached still blocks an update.
-     * Reporting success there would mislead exactly the caller this exists for.
+     * <p>For {@code all=true} the verdict comes from the re-read itself, not from arithmetic
+     * against the selection taken before the loop. That request asks for a clear infobase, and
+     * the only thing the tool can establish about it is what the authoritative list showed: a
+     * session that joined while the loop ran blocks an update exactly like one the budget never
+     * reached, and a session in the unreached tail that left on its own blocks nothing. An
+     * unreadable list settles neither, so it falls back to what the loop knows it skipped.
      *
      * @param projectName target EDT project
      * @param applicationId resolved standalone-server application
      * @param attempted sessions whose terminate command was accepted
      * @param after the list re-read after the loop
      * @param notAttempted selected sessions the loop never reached
+     * @param bulk whether the caller asked to clear every non-agent session
      * @return the serialized tool result
      */
     static String terminationReadBackResult(String projectName, String applicationId,
-        List<SessionInfo> attempted, ReadResult after, List<SessionInfo> notAttempted)
+        List<SessionInfo> attempted, ReadResult after, List<SessionInfo> notAttempted,
+        boolean bulk)
     {
-        // A session in the unreached tail can disconnect on its own while the loop runs. The
-        // re-read proves it no longer blocks anything, so it belongs in neither the
-        // continuation nor the count - and if the whole tail went that way, this was not a
-        // partial run at all. An unreadable list proves nothing, so it drops nothing.
-        List<SessionInfo> outstanding =
-            after.isReadable() ? stillPresentAmong(notAttempted, after) : notAttempted;
+        List<SessionInfo> outstanding = List.of();
+        if (bulk)
+        {
+            outstanding = after.isReadable() ? nonAgentSessions(after.sessions()) : notAttempted;
+        }
         if (!outstanding.isEmpty())
         {
-            return bulkBudgetStoppedResult(projectName, applicationId, attempted, after,
-                outstanding);
+            return bulkTerminationIncompleteResult(projectName, applicationId, attempted, after,
+                outstanding, notAttempted.size());
         }
         if (!after.isReadable())
         {
@@ -568,19 +572,34 @@ public class InfobaseSessionsTool implements IMcpTool
             .toJson();
     }
 
-    /** Builds the partial result for a bulk terminate stopped by its aggregate budget. */
-    static String bulkBudgetStoppedResult(String projectName, String applicationId,
-        List<SessionInfo> attempted, ReadResult after, List<SessionInfo> notAttempted)
+    /**
+     * Builds the result for a bulk terminate that did not leave the infobase clear.
+     *
+     * <p>Re-running all=true is NOT a continuation: a session that survives a terminate keeps
+     * its place in the list and would spend the next budget too, so the tail is never reached.
+     * The ids are the only order-independent way back in.
+     *
+     * @param projectName target EDT project
+     * @param applicationId resolved standalone-server application
+     * @param attempted sessions whose terminate command was accepted
+     * @param after the list re-read after the loop
+     * @param outstanding non-agent sessions that list still reports
+     * @param skippedCount how many of the selection the budget did not reach
+     * @return the serialized tool result
+     */
+    static String bulkTerminationIncompleteResult(String projectName, String applicationId,
+        List<SessionInfo> attempted, ReadResult after, List<SessionInfo> outstanding,
+        int skippedCount)
     {
-        // Re-running all=true is NOT a continuation: a session that survives a terminate keeps
-        // its place in the list and would spend the next budget too, so the tail is never
-        // reached. The ids are the only order-independent way back in.
-        String message = "Session termination stopped after " + attempted.size() //$NON-NLS-1$
-            + " accepted attempt(s) to keep this call bounded: " + notAttempted.size() //$NON-NLS-1$
-            + " selected session(s) were not attempted. Terminate them by id from " //$NON-NLS-1$
-            + "notAttemptedSessionIds - re-running all=true would re-select any session that " //$NON-NLS-1$
-            + "survived a terminate and could spend the budget on it again, never reaching " //$NON-NLS-1$
-            + "the rest."; //$NON-NLS-1$
+        String message = "Bulk termination did not leave the infobase clear: " //$NON-NLS-1$
+            + outstanding.size() + " non-agent session(s) are still reported after " //$NON-NLS-1$
+            + attempted.size() + " accepted attempt(s)" //$NON-NLS-1$
+            + (skippedCount == 0 ? "" //$NON-NLS-1$
+                : ", and this call stopped " + skippedCount + " selection(s) short to stay " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "bounded") //$NON-NLS-1$
+            + ". Terminate them by id from outstandingSessionIds - re-running all=true would " //$NON-NLS-1$
+            + "re-select any session that survived a terminate and could spend the budget on " //$NON-NLS-1$
+            + "it again, never reaching the rest."; //$NON-NLS-1$
         if (!after.isReadable())
         {
             // The commands were accepted but nothing re-read them, so no count is evidence.
@@ -590,8 +609,8 @@ public class InfobaseSessionsTool implements IMcpTool
                 .put(McpKeys.APPLICATION_ID, applicationId)
                 .put(KEY_REACHABLE, true)
                 .put("attemptedCount", attempted.size()) //$NON-NLS-1$
-                .put("notAttemptedCount", notAttempted.size()) //$NON-NLS-1$
-                .put("notAttemptedSessionIds", sessionIds(notAttempted)) //$NON-NLS-1$
+                .put("outstandingCount", outstanding.size()) //$NON-NLS-1$
+                .put("outstandingSessionIds", sessionIds(outstanding)) //$NON-NLS-1$
                 .put(KEY_VERIFICATION, VERIFICATION_NOT_VERIFIABLE)
                 .put(KEY_VERIFICATION_REASON, after.unreachableReason()).toJson();
         }
@@ -605,8 +624,8 @@ public class InfobaseSessionsTool implements IMcpTool
             .put(KEY_REACHABLE, true)
             .put(KEY_SESSIONS, errorSessionMaps(gone))
             .put("attemptedCount", attempted.size()) //$NON-NLS-1$
-            .put("notAttemptedCount", notAttempted.size()) //$NON-NLS-1$
-            .put("notAttemptedSessionIds", sessionIds(notAttempted)) //$NON-NLS-1$
+            .put("outstandingCount", outstanding.size()) //$NON-NLS-1$
+            .put("outstandingSessionIds", sessionIds(outstanding)) //$NON-NLS-1$
             .put("terminatedCount", gone.size()); //$NON-NLS-1$
         if (gone.size() < attempted.size())
         {
@@ -625,7 +644,7 @@ public class InfobaseSessionsTool implements IMcpTool
      * <p>Every id is emitted. The parser never builds a session without one - a record whose
      * id is missing or blank is dropped before a {@code SessionInfo} exists - so filtering here
      * would protect against nothing while letting the returned ids silently disagree with
-     * {@code notAttemptedCount}, which is exactly the set the caller needs to be complete.
+     * {@code outstandingCount}, which is exactly the set the caller needs to be complete.
      *
      * @param sessions the sessions to name
      * @return one id per session, in selection order
@@ -638,6 +657,28 @@ public class InfobaseSessionsTool implements IMcpTool
             ids.add(session.sessionId());
         }
         return ids;
+    }
+
+    /**
+     * The sessions a bulk terminate would target, out of a list the tool just read.
+     *
+     * <p>Mirrors the selection rule exactly: bulk never targets an agent session, so one left
+     * standing is not outstanding work.
+     *
+     * @param sessions the sessions the re-read reported
+     * @return those a bulk terminate would target
+     */
+    static List<SessionInfo> nonAgentSessions(List<SessionInfo> sessions)
+    {
+        List<SessionInfo> selectable = new ArrayList<>();
+        for (SessionInfo session : sessions)
+        {
+            if (!isDesignerSession(session))
+            {
+                selectable.add(session);
+            }
+        }
+        return selectable;
     }
 
     /** The attempted sessions the re-read list no longer reports. */

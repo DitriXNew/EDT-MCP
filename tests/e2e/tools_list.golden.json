@@ -3055,10 +3055,10 @@
         "mutationOutcomeUnknown": {
           "type": "boolean"
         },
-        "notAttemptedCount": {
+        "outstandingCount": {
           "type": "integer"
         },
-        "notAttemptedSessionIds": {
+        "outstandingSessionIds": {
           "items": {
             "type": "string"
           },
