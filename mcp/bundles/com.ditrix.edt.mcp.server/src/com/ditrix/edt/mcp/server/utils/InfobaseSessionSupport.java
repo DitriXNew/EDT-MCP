@@ -945,24 +945,41 @@ public final class InfobaseSessionSupport
     }
 
     /**
-     * Wraps a starter so the caller learns of a mutation only once a process EXISTS.
+     * Wraps a starter so the caller is warned from the moment a process CAN exist, and only
+     * un-warned when it provably cannot.
      *
-     * <p>A terminate that never created a process changed nothing, and both ways that happens
-     * are definitive: {@code start()} throwing (ibcmd gone or no longer executable), and a
-     * cancellation winning the pre-start check. Flipping the flag before the attempt reports an
-     * unknown mutation for a command that provably never ran. A process that starts and is then
-     * destroyed still counts - by then it may have done its work.
+     * <p>Three states have to survive a deadline that lands mid-call, so the flag is raised on
+     * ENTRY rather than on success:
+     * <ul>
+     * <li>never invoked - the pre-start check refused, so nothing was created. Definitive.</li>
+     * <li>invoked and still inside {@code start()} when the caller gives up - a process may yet
+     * appear and be destroyed by the post-start check. UNKNOWN, and raising the flag only on
+     * success would report this one as definitive.</li>
+     * <li>{@code start()} threw {@link IOException} - ibcmd is gone or no longer executable and
+     * no process was created. Definitive, so the warning is withdrawn.</li>
+     * </ul>
+     *
+     * <p>A RuntimeException is deliberately NOT withdrawn: it says nothing about whether a
+     * process exists. Neither is a process that started and was then destroyed - by then it may
+     * have done its work.
      *
      * @param delegate the real process start
-     * @param mutationBoundary set once, immediately after a process exists
-     * @return a starter that records creation
+     * @param mutationBoundary raised while a process may exist, lowered only by a failed start
+     * @return a starter that records the possibility of a process
      */
     static ProcessStarter mutatingStarter(ProcessStarter delegate, AtomicBoolean mutationBoundary)
     {
         return () -> {
-            Process process = delegate.start();
             mutationBoundary.set(true);
-            return process;
+            try
+            {
+                return delegate.start();
+            }
+            catch (IOException e)
+            {
+                mutationBoundary.set(false);
+                throw e;
+            }
         };
     }
 

@@ -519,4 +519,77 @@ public class InfobaseSessionSupportTest
         assertFalse("a call answered before the start cannot have mutated anything", //$NON-NLS-1$
             mutated.get());
     }
+    /**
+     * The case a success-only flag gets wrong: the deadline lands while start() is still
+     * blocked. A process may yet appear and be destroyed by the post-start check, so the
+     * answer the caller has already been given must say "unknown", not "nothing was launched".
+     */
+    @Test
+    public void aStartStillInFlightAlreadyCountsAsAPossibleMutation() throws Exception
+    {
+        AtomicBoolean mutated = new AtomicBoolean();
+        CountDownLatch inside = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        InfobaseSessionSupport.ProcessStarter starter = InfobaseSessionSupport.mutatingStarter(
+            () -> {
+                inside.countDown();
+                try
+                {
+                    release.await(20, TimeUnit.SECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+                throw new IOException("this test never lets the start finish"); //$NON-NLS-1$
+            }, mutated);
+
+        Thread worker = new Thread(() -> {
+            try
+            {
+                starter.start();
+            }
+            catch (IOException expected)
+            {
+                // The blocked start is the subject; its eventual failure is not.
+            }
+        }, "test: blocked process start"); //$NON-NLS-1$
+        worker.start();
+        try
+        {
+            assertTrue(inside.await(20, TimeUnit.SECONDS));
+            assertTrue("a start still in flight must read as a POSSIBLE mutation", //$NON-NLS-1$
+                mutated.get());
+        }
+        finally
+        {
+            release.countDown();
+            worker.join(20_000L);
+        }
+    }
+
+    /**
+     * Withdrawing the warning is allowed only for the failure that PROVES no process exists.
+     * An unchecked failure proves nothing, so the caller stays warned.
+     */
+    @Test
+    public void anUncheckedStartFailureDoesNotWithdrawTheWarning()
+    {
+        AtomicBoolean mutated = new AtomicBoolean();
+        InfobaseSessionSupport.ProcessStarter starter = InfobaseSessionSupport.mutatingStarter(
+            () -> {
+                throw new IllegalStateException("says nothing about the process"); //$NON-NLS-1$
+            }, mutated);
+
+        try
+        {
+            starter.start();
+            fail("the unchecked failure must propagate"); //$NON-NLS-1$
+        }
+        catch (Exception expected)
+        {
+            // Propagation is not the subject; the flag is.
+        }
+        assertTrue("an unchecked failure proves nothing, so the warning stands", mutated.get()); //$NON-NLS-1$
+    }
 }
