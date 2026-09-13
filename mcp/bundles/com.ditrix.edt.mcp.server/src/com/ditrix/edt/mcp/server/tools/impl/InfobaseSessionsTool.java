@@ -660,10 +660,11 @@ public class InfobaseSessionsTool implements IMcpTool
     }
 
     /**
-     * The sessions a bulk terminate would target, out of a list the tool just read.
+     * The sessions a bulk terminate targets, out of any list the tool holds.
      *
-     * <p>Mirrors the selection rule exactly: bulk never targets an agent session, so one left
-     * standing is not outstanding work.
+     * <p>The single definition of that rule: {@link #selectSessions} picks its targets with it
+     * and the read-back decides what is still outstanding with it, so the two cannot drift into
+     * disagreeing about whether a surviving agent session is unfinished work.
      *
      * @param sessions the sessions the re-read reported
      * @return those a bulk terminate would target
@@ -728,15 +729,7 @@ public class InfobaseSessionsTool implements IMcpTool
     {
         if (all)
         {
-            List<SessionInfo> selected = new ArrayList<>();
-            for (SessionInfo session : sessions)
-            {
-                if (!isDesignerSession(session))
-                {
-                    selected.add(session);
-                }
-            }
-            return Selection.of(selected);
+            return Selection.of(nonAgentSessions(sessions));
         }
         for (SessionInfo session : sessions)
         {
