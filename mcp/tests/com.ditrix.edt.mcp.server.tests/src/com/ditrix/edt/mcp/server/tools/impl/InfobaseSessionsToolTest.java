@@ -14,6 +14,7 @@ import static org.junit.Assert.assertTrue;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.Test;
 
@@ -35,6 +36,10 @@ public class InfobaseSessionsToolTest
     private static final SessionInfo CLIENT = new SessionInfo(
         "22222222-2222-2222-2222-222222222222", 42L, "1CV8C", "User", "desk", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "2026-01-01T10:02:00", "2026-01-01T10:03:00", false); //$NON-NLS-1$ //$NON-NLS-2$
+
+    private static final SessionInfo SECOND_CLIENT = new SessionInfo(
+        "33333333-3333-3333-3333-333333333333", 43L, "1CV8C", "Other", "desk2", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        "2026-01-01T10:04:00", "2026-01-01T10:05:00", false); //$NON-NLS-1$ //$NON-NLS-2$
 
     @Test
     public void metadataDeclaresJsonInfobaseDataTool()
@@ -115,8 +120,14 @@ public class InfobaseSessionsToolTest
                 ReadResult.readable(List.of(CLIENT))))
             .getAsJsonObject();
 
+        JsonObject budgetStopped = JsonParser.parseString(
+            InfobaseSessionsTool.bulkBudgetStoppedResult("Demo", //$NON-NLS-1$
+                "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$
+                ReadResult.readable(List.of()), 3))
+            .getAsJsonObject();
+
         for (JsonObject payload : List.of(success, refusal, failure, beforeLaunchFailure,
-            partialReadBack))
+            partialReadBack, budgetStopped))
         {
             for (String emitted : payload.keySet())
             {
@@ -554,5 +565,93 @@ public class InfobaseSessionsToolTest
         assertNull(InfobaseSessionsTool.validate("terminate", //$NON-NLS-1$
             "11111111-1111-1111-1111-111111111111", false, true, //$NON-NLS-1$
             "Maintenance window, please reconnect in 5 minutes")); //$NON-NLS-1$
+    }
+    /**
+     * Each terminate command is bounded on its own, but all=true lets the caller choose how
+     * many run. Without an aggregate budget the call lasts as long as the session count
+     * demands, which is the one thing the bounded worker exists to prevent.
+     */
+    @Test
+    public void theBulkLoopStopsOnceItsAggregateBudgetIsSpent()
+    {
+        long spent = TimeUnit.SECONDS.toNanos(61);
+        long fresh = TimeUnit.SECONDS.toNanos(1);
+
+        assertTrue("an attempt within the budget must run", //$NON-NLS-1$
+            InfobaseSessionsTool.bulkBudgetAllowsAnotherAttempt(1, fresh));
+        assertFalse("the loop must stop once the budget is spent", //$NON-NLS-1$
+            InfobaseSessionsTool.bulkBudgetAllowsAnotherAttempt(1, spent));
+    }
+
+    /**
+     * The budget must never turn a legitimate request into a silent no-op: the first attempt
+     * always runs, and the per-command bound already caps how long that one can take.
+     */
+    @Test
+    public void theFirstBulkAttemptRunsEvenWithTheBudgetAlreadySpent()
+    {
+        assertTrue(InfobaseSessionsTool.bulkBudgetAllowsAnotherAttempt(0,
+            TimeUnit.HOURS.toNanos(1)));
+    }
+
+    /**
+     * A budget stop is not a success. all=true asks for a clear infobase, and a session the
+     * loop never reached still blocks an update - so the answer must say what is left rather
+     * than report the part it managed.
+     */
+    @Test
+    public void aBudgetStoppedBulkTerminateReportsWhatIsLeftInsteadOfSuccess()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.bulkBudgetStoppedResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.readable(List.of(SECOND_CLIENT)), 3)).getAsJsonObject();
+
+        assertFalse("a partial bulk terminate must not report success", //$NON-NLS-1$
+            result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(1, result.get("terminatedCount").getAsInt()); //$NON-NLS-1$
+        assertEquals(1, result.get("attemptedCount").getAsInt()); //$NON-NLS-1$
+        assertEquals(3, result.get("notAttemptedCount").getAsInt()); //$NON-NLS-1$
+        assertEquals("verified", result.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a terminated session is a real mutation", //$NON-NLS-1$
+            result.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        String error = result.get("error").getAsString(); //$NON-NLS-1$
+        assertTrue("the error must name how many were left: " + error, //$NON-NLS-1$
+            error.contains("3 selected session(s) were not attempted")); //$NON-NLS-1$
+        assertTrue("the error must hand back the re-run: " + error, //$NON-NLS-1$
+            error.contains("all=true, confirm=true) to continue with the rest")); //$NON-NLS-1$
+    }
+
+    /**
+     * The budget stop obeys the same evidence rule as an ordinary read-back: only a session
+     * observed gone claims a mutation. Every command reporting success proves nothing.
+     */
+    @Test
+    public void aBudgetStoppedTerminateThatChangedNothingDoesNotClaimAMutation()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.bulkBudgetStoppedResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.readable(List.of(CLIENT)), 2)).getAsJsonObject();
+
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(0, result.get("terminatedCount").getAsInt()); //$NON-NLS-1$
+        assertFalse("nothing was observed gone, so no mutation may be claimed", //$NON-NLS-1$
+            result.has("mutationCommitted")); //$NON-NLS-1$
+        assertEquals("mismatched", result.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** An unverifiable budget stop cannot count anything, so it reports an unknown outcome. */
+    @Test
+    public void anUnreadableBudgetStopReportsAnUnknownOutcomeRatherThanACount()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.bulkBudgetStoppedResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.unreachable("server stopped before verification"), 2)) //$NON-NLS-1$
+            .getAsJsonObject();
+
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result.get("mutationOutcomeUnknown").getAsBoolean()); //$NON-NLS-1$
+        assertFalse("an unread list cannot count terminations", //$NON-NLS-1$
+            result.has("terminatedCount")); //$NON-NLS-1$
+        assertEquals("not_verifiable", result.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
     }
 }

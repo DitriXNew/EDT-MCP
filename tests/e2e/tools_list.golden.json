@@ -3055,6 +3055,9 @@
         "mutationOutcomeUnknown": {
           "type": "boolean"
         },
+        "notAttemptedCount": {
+          "type": "integer"
+        },
         "project": {
           "type": "string"
         },

@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import org.eclipse.core.resources.IProject;
 
@@ -52,6 +53,12 @@ public class InfobaseSessionsTool implements IMcpTool
     private static final String VERIFICATION_VERIFIED = "verified"; //$NON-NLS-1$
     private static final String VERIFICATION_MISMATCHED = "mismatched"; //$NON-NLS-1$
     private static final String VERIFICATION_NOT_VERIFIABLE = "not_verifiable"; //$NON-NLS-1$
+    /**
+     * Aggregate budget for a bulk terminate. Each command is bounded on its own, but all=true
+     * lets the caller choose HOW MANY run, so without this the call lasts as long as the
+     * session count demands and the per-command bound buys nothing.
+     */
+    private static final long BULK_TERMINATION_BUDGET_MS = 60_000L;
     @Override
     public String getName()
     {
@@ -113,6 +120,8 @@ public class InfobaseSessionsTool implements IMcpTool
                 "Number of sessions observed gone after the terminate command.") //$NON-NLS-1$
             .integerProperty("attemptedCount", //$NON-NLS-1$
                 "Number of terminate commands accepted when the session list could not be re-read.") //$NON-NLS-1$
+            .integerProperty("notAttemptedCount", //$NON-NLS-1$
+                "Selected sessions the bulk terminate never reached before its budget ran out.") //$NON-NLS-1$
             .enumProperty(KEY_VERIFICATION,
                 "Terminate read-back: verified, mismatched, or not_verifiable.", //$NON-NLS-1$
                 VERIFICATION_VERIFIED, VERIFICATION_MISMATCHED, VERIFICATION_NOT_VERIFIABLE)
@@ -327,8 +336,15 @@ public class InfobaseSessionsTool implements IMcpTool
         }
 
         List<SessionInfo> attempted = new ArrayList<>();
+        int notAttempted = 0;
+        long startedAt = System.nanoTime();
         for (SessionInfo session : selection.sessions)
         {
+            if (!bulkBudgetAllowsAnotherAttempt(attempted.size(), System.nanoTime() - startedAt))
+            {
+                notAttempted = selection.sessions.size() - attempted.size();
+                break;
+            }
             TerminationResult result = InfobaseSessionSupport.terminateSession(application,
                 session.sessionId(), message);
             if (!result.terminated())
@@ -347,7 +363,25 @@ public class InfobaseSessionsTool implements IMcpTool
         // session was terminated. A terminate completes before ibcmd returns, so re-reading the
         // list once reports what is actually gone.
         ReadResult after = InfobaseSessionSupport.listSessions(application);
-        return terminationReadBackResult(projectName, application.getId(), attempted, after);
+        return terminationReadBackResult(projectName, application.getId(), attempted, after,
+            notAttempted);
+    }
+
+    /**
+     * Whether the bulk loop may start another terminate command.
+     *
+     * <p>The first attempt always runs. A budget that could refuse before anything was tried
+     * would turn a legitimate request into a silent no-op, and the per-command bound already
+     * caps how long that one attempt can take.
+     *
+     * @param attemptedCount commands already accepted in this call
+     * @param elapsedNanos time spent in the loop so far
+     * @return true while another command may start
+     */
+    static boolean bulkBudgetAllowsAnotherAttempt(int attemptedCount, long elapsedNanos)
+    {
+        return attemptedCount == 0
+            || elapsedNanos < TimeUnit.MILLISECONDS.toNanos(BULK_TERMINATION_BUDGET_MS);
     }
 
     /** Selects the honest first-attempt error from whether a command may have started. */
@@ -421,6 +455,31 @@ public class InfobaseSessionsTool implements IMcpTool
     static String terminationReadBackResult(String projectName, String applicationId,
         List<SessionInfo> attempted, ReadResult after)
     {
+        return terminationReadBackResult(projectName, applicationId, attempted, after, 0);
+    }
+
+    /**
+     * Reports a bulk terminate, including one stopped by its aggregate budget.
+     *
+     * <p>A budget stop is an error even though every attempted command succeeded: all=true asks
+     * for a clear infobase, and a session the loop never reached still blocks an update.
+     * Reporting success there would mislead exactly the caller this exists for.
+     *
+     * @param projectName target EDT project
+     * @param applicationId resolved standalone-server application
+     * @param attempted sessions whose terminate command was accepted
+     * @param after the list re-read after the loop
+     * @param notAttemptedCount selected sessions the loop never reached
+     * @return the serialized tool result
+     */
+    static String terminationReadBackResult(String projectName, String applicationId,
+        List<SessionInfo> attempted, ReadResult after, int notAttemptedCount)
+    {
+        if (notAttemptedCount > 0)
+        {
+            return bulkBudgetStoppedResult(projectName, applicationId, attempted, after,
+                notAttemptedCount);
+        }
         if (!after.isReadable())
         {
             return ToolResult.success().put(McpKeys.ACTION, ACTION_TERMINATE)
@@ -436,19 +495,8 @@ public class InfobaseSessionsTool implements IMcpTool
                 .toJson();
         }
 
-        List<SessionInfo> gone = new ArrayList<>();
-        List<SessionInfo> stillPresent = new ArrayList<>();
-        for (SessionInfo session : attempted)
-        {
-            if (containsSessionId(after.sessions(), session.sessionId()))
-            {
-                stillPresent.add(session);
-            }
-            else
-            {
-                gone.add(session);
-            }
-        }
+        List<SessionInfo> gone = goneAmong(attempted, after);
+        List<SessionInfo> stillPresent = stillPresentAmong(attempted, after);
         if (!stillPresent.isEmpty())
         {
             List<String> stillPresentIds = stillPresent.stream()
@@ -504,6 +552,80 @@ public class InfobaseSessionsTool implements IMcpTool
             + " non-agent infobase session(s), confirmed gone by re-reading the session " //$NON-NLS-1$
             + "list; the EDT Designer agent was not targeted.") //$NON-NLS-1$
             .toJson();
+    }
+
+    /** Builds the partial result for a bulk terminate stopped by its aggregate budget. */
+    static String bulkBudgetStoppedResult(String projectName, String applicationId,
+        List<SessionInfo> attempted, ReadResult after, int notAttemptedCount)
+    {
+        String message = "Session termination stopped after " + attempted.size() //$NON-NLS-1$
+            + " accepted attempt(s) to keep this call bounded: " + notAttemptedCount //$NON-NLS-1$
+            + " selected session(s) were not attempted. " //$NON-NLS-1$
+            + "Re-run infobase_sessions(action='terminate', projectName='" + projectName //$NON-NLS-1$
+            + "', applicationId='" + applicationId //$NON-NLS-1$ //$NON-NLS-2$
+            + "', all=true, confirm=true) to continue with the rest."; //$NON-NLS-1$
+        if (!after.isReadable())
+        {
+            // The commands were accepted but nothing re-read them, so no count is evidence.
+            return ToolResult.errorWithUnknownMutationOutcome(message)
+                .put(McpKeys.ACTION, ACTION_TERMINATE)
+                .put(McpKeys.PROJECT, projectName)
+                .put(McpKeys.APPLICATION_ID, applicationId)
+                .put(KEY_REACHABLE, true)
+                .put("attemptedCount", attempted.size()) //$NON-NLS-1$
+                .put("notAttemptedCount", notAttemptedCount) //$NON-NLS-1$
+                .put(KEY_VERIFICATION, VERIFICATION_NOT_VERIFIABLE)
+                .put(KEY_VERIFICATION_REASON, after.unreachableReason()).toJson();
+        }
+        List<SessionInfo> gone = goneAmong(attempted, after);
+        // Same rule as an ordinary read-back: only an observed absence claims a mutation.
+        ToolResult result = gone.isEmpty() ? ToolResult.error(message)
+            : ToolResult.errorAfterMutation(message);
+        result = result.put(McpKeys.ACTION, ACTION_TERMINATE)
+            .put(McpKeys.PROJECT, projectName)
+            .put(McpKeys.APPLICATION_ID, applicationId)
+            .put(KEY_REACHABLE, true)
+            .put(KEY_SESSIONS, errorSessionMaps(gone))
+            .put("attemptedCount", attempted.size()) //$NON-NLS-1$
+            .put("notAttemptedCount", notAttemptedCount) //$NON-NLS-1$
+            .put("terminatedCount", gone.size()); //$NON-NLS-1$
+        if (gone.size() < attempted.size())
+        {
+            return result.put(KEY_VERIFICATION, VERIFICATION_MISMATCHED)
+                .put(KEY_VERIFICATION_REASON, "The session list still reports " //$NON-NLS-1$
+                    + (attempted.size() - gone.size())
+                    + " of them after a terminate command that reported success.") //$NON-NLS-1$
+                .toJson();
+        }
+        return result.put(KEY_VERIFICATION, VERIFICATION_VERIFIED).toJson();
+    }
+
+    /** The attempted sessions the re-read list no longer reports. */
+    static List<SessionInfo> goneAmong(List<SessionInfo> attempted, ReadResult after)
+    {
+        List<SessionInfo> gone = new ArrayList<>();
+        for (SessionInfo session : attempted)
+        {
+            if (!containsSessionId(after.sessions(), session.sessionId()))
+            {
+                gone.add(session);
+            }
+        }
+        return gone;
+    }
+
+    /** The attempted sessions the re-read list still reports. */
+    static List<SessionInfo> stillPresentAmong(List<SessionInfo> attempted, ReadResult after)
+    {
+        List<SessionInfo> stillPresent = new ArrayList<>();
+        for (SessionInfo session : attempted)
+        {
+            if (containsSessionId(after.sessions(), session.sessionId()))
+            {
+                stillPresent.add(session);
+            }
+        }
+        return stillPresent;
     }
 
     /** Whether a re-read list still reports the given session UUID. */
