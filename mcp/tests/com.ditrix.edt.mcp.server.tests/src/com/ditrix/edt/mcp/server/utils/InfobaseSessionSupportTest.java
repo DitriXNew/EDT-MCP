@@ -436,4 +436,44 @@ public class InfobaseSessionSupportTest
     {
         new ReadResult(InfobaseSessionSupport.Reachability.UNREACHABLE, List.of(), "offline"); //$NON-NLS-1$
     }
+    /**
+     * The fence, not the Job state, is the correctness boundary: BoundedJob says whether the
+     * JOB concluded, not whether the COMMAND did. A deadline landing inside the Job's terminal
+     * transition must not discard an outcome the worker already published.
+     */
+    @Test
+    public void publishedOutcomeSurvivesADeadlineThatBeatTheJobTransition()
+    {
+        InfobaseSessionSupport.CommandExecution published =
+            new InfobaseSessionSupport.CommandExecution(0, "done", "", false); //$NON-NLS-1$
+        BoundedJob.Result timedOut = new BoundedJob.Result(BoundedJob.Outcome.TIMED_OUT, 15_000L,
+            null);
+
+        assertFalse("a published outcome must answer the caller, not the bounded timeout", //$NON-NLS-1$
+            InfobaseSessionSupport.boundedFailureOverridesPublished(timedOut, published));
+    }
+
+    @Test
+    public void boundedTimeoutStillWinsWhenNothingWasPublished()
+    {
+        BoundedJob.Result timedOut = new BoundedJob.Result(BoundedJob.Outcome.TIMED_OUT, 15_000L,
+            null);
+
+        assertTrue("with nothing published the bounded failure is all there is", //$NON-NLS-1$
+            InfobaseSessionSupport.boundedFailureOverridesPublished(timedOut, null));
+    }
+
+    @Test
+    public void aThrownFailureIsNeverMaskedByAPartialPublication()
+    {
+        InfobaseSessionSupport.CommandExecution published =
+            new InfobaseSessionSupport.CommandExecution(0, "done", "", false); //$NON-NLS-1$
+        BoundedJob.Result threw = new BoundedJob.Result(BoundedJob.Outcome.COMPLETED, 12L,
+            new IllegalStateException("ibcmd blew up")); //$NON-NLS-1$
+
+        // Reporting the publication here would both mis-answer the caller and lose the log entry
+        // boundedFailure writes for the throwable.
+        assertTrue("a thrown failure proves nothing about the command and must stay reported", //$NON-NLS-1$
+            InfobaseSessionSupport.boundedFailureOverridesPublished(threw, published));
+    }
 }

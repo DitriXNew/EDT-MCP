@@ -241,7 +241,9 @@ public final class InfobaseSessionSupport
                             target.credentials, monitor, callerAnswered));
                 });
             markCallerAnswered(callerAnswered);
-            String boundedFailure = boundedFailure("list", bounded); //$NON-NLS-1$
+            CommandExecution command = execution.get();
+            String boundedFailure = boundedFailureOverridesPublished(bounded, command)
+                ? boundedFailure("list", bounded) : null; //$NON-NLS-1$
             if (boundedFailure != null)
             {
                 return ReadResult.unreachable(boundedFailure);
@@ -251,7 +253,6 @@ public final class InfobaseSessionSupport
             {
                 return ReadResult.unreachable(prepareFailure);
             }
-            CommandExecution command = execution.get();
             if (command == null)
             {
                 return ReadResult.unreachable("The standalone server is not running."); //$NON-NLS-1$
@@ -319,7 +320,9 @@ public final class InfobaseSessionSupport
                     });
                 });
             markCallerAnswered(callerAnswered);
-            String boundedFailure = boundedFailure("terminate", bounded); //$NON-NLS-1$
+            CommandExecution command = execution.get();
+            String boundedFailure = boundedFailureOverridesPublished(bounded, command)
+                ? boundedFailure("terminate", bounded) : null; //$NON-NLS-1$
             if (boundedFailure != null)
             {
                 return failedTermination(boundedFailure, commandMayHaveStarted);
@@ -329,7 +332,6 @@ public final class InfobaseSessionSupport
             {
                 return TerminationResult.notStarted(prepareFailure);
             }
-            CommandExecution command = execution.get();
             if (command == null)
             {
                 return failedTermination("The standalone server is not running.", //$NON-NLS-1$
@@ -820,6 +822,28 @@ public final class InfobaseSessionSupport
     }
 
     /** Converts the outer job result into a named reachability reason, or {@code null}. */
+    /**
+     * Whether a bounded outcome must override a result the worker already published.
+     *
+     * <p>{@link BoundedJob} reports whether the JOB concluded, not whether the COMMAND did. The
+     * worker publishes its execution BEFORE {@link #markCallerAnswered} closes publication, so a
+     * deadline landing inside the Job's own terminal transition would otherwise discard an
+     * outcome this call demonstrably observed - reporting an unknown mutation for a termination
+     * that succeeded, or an unreachable server for a list that came back.
+     *
+     * <p>A THROWN failure still wins. That path proves nothing about the command, and masking it
+     * behind a partial publication would both mis-report it and lose its log entry.
+     *
+     * @param bounded the bounded run's result
+     * @param published what the worker published before the fence, or {@code null}
+     * @return {@code true} when the bounded failure is the authoritative answer
+     */
+    static boolean boundedFailureOverridesPublished(BoundedJob.Result bounded,
+        CommandExecution published)
+    {
+        return published == null || bounded.getFailure() != null;
+    }
+
     private static String boundedFailure(String action, BoundedJob.Result result)
     {
         if (result.isSuccess())
