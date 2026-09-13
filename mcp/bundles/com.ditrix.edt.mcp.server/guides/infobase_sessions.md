@@ -28,7 +28,7 @@ Treating every Designer session as a blocker would refuse every normal EDT updat
 - `applicationId` — an ID from `get_applications`; omitted means the project's default application.
 - `action` — `list` (default) or `terminate`.
 - `sessionId` — for `terminate`, either the full UUID or numeric session number returned by `list`. A Designer session requires its exact full UUID.
-- `all` — for `terminate`, `true` selects every non-agent session. Use exactly one of `sessionId` or `all=true`. A bulk terminate is bounded overall, not just per command: once its budget is spent it stops, reports `notAttemptedCount` for the sessions it never reached, and hands back the call to continue. That result is an error, not a success, because sessions it did not reach still block an update.
+- `all` — for `terminate`, `true` selects every non-agent session. Use exactly one of `sessionId` or `all=true`. A bulk terminate is bounded overall, not just per command: once its budget is spent it stops, reports `notAttemptedCount` and `notAttemptedSessionIds` for the sessions it never reached. Continue by terminating those ids individually: re-running `all=true` re-selects any session that survived a terminate, which could spend the next budget on it again and never reach the rest. That result is an error, not a success, because sessions it did not reach still block an update.
 - `confirm` — must be `true` for `terminate`.
 - `message` — optional text passed to `ibcmd --error-message` and shown to the terminated user. It must not contain a NUL character (U+0000): the platform refuses such an argument, so the call is rejected up front rather than failing with an unknown outcome.
 

@@ -122,6 +122,9 @@ public class InfobaseSessionsTool implements IMcpTool
                 "Number of terminate commands accepted when the session list could not be re-read.") //$NON-NLS-1$
             .integerProperty("notAttemptedCount", //$NON-NLS-1$
                 "Selected sessions the bulk terminate never reached before its budget ran out.") //$NON-NLS-1$
+            .stringArrayProperty("notAttemptedSessionIds", //$NON-NLS-1$
+                "UUIDs of those sessions, so the rest can be terminated by id without " //$NON-NLS-1$
+                    + "depending on list order.") //$NON-NLS-1$
             .enumProperty(KEY_VERIFICATION,
                 "Terminate read-back: verified, mismatched, or not_verifiable.", //$NON-NLS-1$
                 VERIFICATION_VERIFIED, VERIFICATION_MISMATCHED, VERIFICATION_NOT_VERIFIABLE)
@@ -336,13 +339,15 @@ public class InfobaseSessionsTool implements IMcpTool
         }
 
         List<SessionInfo> attempted = new ArrayList<>();
-        int notAttempted = 0;
+        List<SessionInfo> notAttempted = List.of();
         long startedAt = System.nanoTime();
         for (SessionInfo session : selection.sessions)
         {
             if (!bulkBudgetAllowsAnotherAttempt(attempted.size(), System.nanoTime() - startedAt))
             {
-                notAttempted = selection.sessions.size() - attempted.size();
+                // Hand the rest back by id: re-running all=true re-selects survivors first.
+                notAttempted = List.copyOf(
+                    selection.sessions.subList(attempted.size(), selection.sessions.size()));
                 break;
             }
             TerminationResult result = InfobaseSessionSupport.terminateSession(application,
@@ -455,7 +460,8 @@ public class InfobaseSessionsTool implements IMcpTool
     static String terminationReadBackResult(String projectName, String applicationId,
         List<SessionInfo> attempted, ReadResult after)
     {
-        return terminationReadBackResult(projectName, applicationId, attempted, after, 0);
+        return terminationReadBackResult(projectName, applicationId, attempted, after,
+            List.of());
     }
 
     /**
@@ -469,16 +475,16 @@ public class InfobaseSessionsTool implements IMcpTool
      * @param applicationId resolved standalone-server application
      * @param attempted sessions whose terminate command was accepted
      * @param after the list re-read after the loop
-     * @param notAttemptedCount selected sessions the loop never reached
+     * @param notAttempted selected sessions the loop never reached
      * @return the serialized tool result
      */
     static String terminationReadBackResult(String projectName, String applicationId,
-        List<SessionInfo> attempted, ReadResult after, int notAttemptedCount)
+        List<SessionInfo> attempted, ReadResult after, List<SessionInfo> notAttempted)
     {
-        if (notAttemptedCount > 0)
+        if (!notAttempted.isEmpty())
         {
             return bulkBudgetStoppedResult(projectName, applicationId, attempted, after,
-                notAttemptedCount);
+                notAttempted);
         }
         if (!after.isReadable())
         {
@@ -540,30 +546,35 @@ public class InfobaseSessionsTool implements IMcpTool
             .put(KEY_VERIFICATION, VERIFICATION_VERIFIED);
         if (gone.stream().anyMatch(InfobaseSessionsTool::isDesignerSession))
         {
-            return result.put(McpKeys.MESSAGE, "Terminated a session that reported app-id: " //$NON-NLS-1$
-                + "Designer, confirmed gone by re-reading the session list. It may have been " //$NON-NLS-1$
+            return result.put(McpKeys.MESSAGE, "A session that reported app-id: " //$NON-NLS-1$
+                + "Designer is gone after the terminate command. It may have been " //$NON-NLS-1$
                 + "EDT's own update agent or a human Configurator. If it was EDT's, EDT re-creates " //$NON-NLS-1$
                 + "its agent on its next connect and an update running at the moment of " //$NON-NLS-1$
                 + "termination can fail; a person's Configurator session will simply have been " //$NON-NLS-1$
                 + "closed.") //$NON-NLS-1$
                 .toJson();
         }
-        return result.put(McpKeys.MESSAGE, "Terminated " + gone.size() //$NON-NLS-1$
-            + " non-agent infobase session(s), confirmed gone by re-reading the session " //$NON-NLS-1$
-            + "list; the EDT Designer agent was not targeted.") //$NON-NLS-1$
+        // ibcmd reports success for a session that had already gone, so a re-read establishes
+        // the state but never who ended it. The wording claims the state only.
+        return result.put(McpKeys.MESSAGE, gone.size() //$NON-NLS-1$
+            + " targeted non-agent infobase session(s) are gone, confirmed by re-reading the " //$NON-NLS-1$
+            + "session list; the EDT Designer agent was not targeted.") //$NON-NLS-1$
             .toJson();
     }
 
     /** Builds the partial result for a bulk terminate stopped by its aggregate budget. */
     static String bulkBudgetStoppedResult(String projectName, String applicationId,
-        List<SessionInfo> attempted, ReadResult after, int notAttemptedCount)
+        List<SessionInfo> attempted, ReadResult after, List<SessionInfo> notAttempted)
     {
+        // Re-running all=true is NOT a continuation: a session that survives a terminate keeps
+        // its place in the list and would spend the next budget too, so the tail is never
+        // reached. The ids are the only order-independent way back in.
         String message = "Session termination stopped after " + attempted.size() //$NON-NLS-1$
-            + " accepted attempt(s) to keep this call bounded: " + notAttemptedCount //$NON-NLS-1$
-            + " selected session(s) were not attempted. " //$NON-NLS-1$
-            + "Re-run infobase_sessions(action='terminate', projectName='" + projectName //$NON-NLS-1$
-            + "', applicationId='" + applicationId //$NON-NLS-1$ //$NON-NLS-2$
-            + "', all=true, confirm=true) to continue with the rest."; //$NON-NLS-1$
+            + " accepted attempt(s) to keep this call bounded: " + notAttempted.size() //$NON-NLS-1$
+            + " selected session(s) were not attempted. Terminate them by id from " //$NON-NLS-1$
+            + "notAttemptedSessionIds - re-running all=true would re-select any session that " //$NON-NLS-1$
+            + "survived a terminate and could spend the budget on it again, never reaching " //$NON-NLS-1$
+            + "the rest."; //$NON-NLS-1$
         if (!after.isReadable())
         {
             // The commands were accepted but nothing re-read them, so no count is evidence.
@@ -573,7 +584,8 @@ public class InfobaseSessionsTool implements IMcpTool
                 .put(McpKeys.APPLICATION_ID, applicationId)
                 .put(KEY_REACHABLE, true)
                 .put("attemptedCount", attempted.size()) //$NON-NLS-1$
-                .put("notAttemptedCount", notAttemptedCount) //$NON-NLS-1$
+                .put("notAttemptedCount", notAttempted.size()) //$NON-NLS-1$
+                .put("notAttemptedSessionIds", sessionIds(notAttempted)) //$NON-NLS-1$
                 .put(KEY_VERIFICATION, VERIFICATION_NOT_VERIFIABLE)
                 .put(KEY_VERIFICATION_REASON, after.unreachableReason()).toJson();
         }
@@ -587,7 +599,8 @@ public class InfobaseSessionsTool implements IMcpTool
             .put(KEY_REACHABLE, true)
             .put(KEY_SESSIONS, errorSessionMaps(gone))
             .put("attemptedCount", attempted.size()) //$NON-NLS-1$
-            .put("notAttemptedCount", notAttemptedCount) //$NON-NLS-1$
+            .put("notAttemptedCount", notAttempted.size()) //$NON-NLS-1$
+            .put("notAttemptedSessionIds", sessionIds(notAttempted)) //$NON-NLS-1$
             .put("terminatedCount", gone.size()); //$NON-NLS-1$
         if (gone.size() < attempted.size())
         {
@@ -598,6 +611,20 @@ public class InfobaseSessionsTool implements IMcpTool
                 .toJson();
         }
         return result.put(KEY_VERIFICATION, VERIFICATION_VERIFIED).toJson();
+    }
+
+    /** The raw UUIDs of the given sessions, for a continuation that ignores list order. */
+    static List<String> sessionIds(List<SessionInfo> sessions)
+    {
+        List<String> ids = new ArrayList<>();
+        for (SessionInfo session : sessions)
+        {
+            if (session.sessionId() != null)
+            {
+                ids.add(session.sessionId());
+            }
+        }
+        return ids;
     }
 
     /** The attempted sessions the re-read list no longer reports. */

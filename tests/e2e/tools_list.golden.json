@@ -3058,6 +3058,12 @@
         "notAttemptedCount": {
           "type": "integer"
         },
+        "notAttemptedSessionIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "project": {
           "type": "string"
         },

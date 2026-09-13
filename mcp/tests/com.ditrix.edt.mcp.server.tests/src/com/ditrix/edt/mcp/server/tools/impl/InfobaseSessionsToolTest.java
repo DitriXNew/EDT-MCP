@@ -123,7 +123,7 @@ public class InfobaseSessionsToolTest
         JsonObject budgetStopped = JsonParser.parseString(
             InfobaseSessionsTool.bulkBudgetStoppedResult("Demo", //$NON-NLS-1$
                 "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$
-                ReadResult.readable(List.of()), 3))
+                ReadResult.readable(List.of()), List.of(SECOND_CLIENT)))
             .getAsJsonObject();
 
         for (JsonObject payload : List.of(success, refusal, failure, beforeLaunchFailure,
@@ -604,21 +604,62 @@ public class InfobaseSessionsToolTest
     {
         JsonObject result = JsonParser.parseString(InfobaseSessionsTool.bulkBudgetStoppedResult(
             "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
-            ReadResult.readable(List.of(SECOND_CLIENT)), 3)).getAsJsonObject();
+            ReadResult.readable(List.of(SECOND_CLIENT)), List.of(SECOND_CLIENT)))
+            .getAsJsonObject();
 
         assertFalse("a partial bulk terminate must not report success", //$NON-NLS-1$
             result.get("success").getAsBoolean()); //$NON-NLS-1$
         assertEquals(1, result.get("terminatedCount").getAsInt()); //$NON-NLS-1$
         assertEquals(1, result.get("attemptedCount").getAsInt()); //$NON-NLS-1$
-        assertEquals(3, result.get("notAttemptedCount").getAsInt()); //$NON-NLS-1$
+        assertEquals(1, result.get("notAttemptedCount").getAsInt()); //$NON-NLS-1$
         assertEquals("verified", result.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("a terminated session is a real mutation", //$NON-NLS-1$
             result.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
         String error = result.get("error").getAsString(); //$NON-NLS-1$
         assertTrue("the error must name how many were left: " + error, //$NON-NLS-1$
-            error.contains("3 selected session(s) were not attempted")); //$NON-NLS-1$
-        assertTrue("the error must hand back the re-run: " + error, //$NON-NLS-1$
-            error.contains("all=true, confirm=true) to continue with the rest")); //$NON-NLS-1$
+            error.contains("1 selected session(s) were not attempted")); //$NON-NLS-1$
+        assertTrue("the error must point at the ids, not a re-run: " + error, //$NON-NLS-1$
+            error.contains("Terminate them by id from notAttemptedSessionIds")); //$NON-NLS-1$
+        assertEquals(SECOND_CLIENT.sessionId(),
+            result.getAsJsonArray("notAttemptedSessionIds").get(0).getAsString()); //$NON-NLS-1$
+    }
+
+    /**
+     * A session that survives a terminate keeps its place in the list, so re-running all=true
+     * would spend the next budget on it again and never reach the tail. The continuation must
+     * therefore be by id, and the result must not advise the loop that cannot finish.
+     */
+    @Test
+    public void aBudgetStopHandsBackIdsRatherThanALoopThatCannotFinish()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.bulkBudgetStoppedResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.readable(List.of(CLIENT, SECOND_CLIENT)), List.of(SECOND_CLIENT)))
+            .getAsJsonObject();
+
+        JsonArray ids = result.getAsJsonArray("notAttemptedSessionIds"); //$NON-NLS-1$
+        assertEquals(1, ids.size());
+        assertEquals(SECOND_CLIENT.sessionId(), ids.get(0).getAsString());
+        String error = result.get("error").getAsString(); //$NON-NLS-1$
+        assertFalse("advising all=true here would never finish the selection: " + error, //$NON-NLS-1$
+            error.contains("all=true, confirm=true) to continue")); //$NON-NLS-1$
+    }
+
+    /**
+     * ibcmd exits 0 for a session that had already disconnected, so a re-read establishes the
+     * state but never who ended it. The wording must not claim authorship the tool cannot have.
+     */
+    @Test
+    public void averifiedTerminationReportsTheStateWithoutClaimingAuthorship()
+    {
+        JsonObject result = JsonParser.parseString(InfobaseSessionsTool.terminationReadBackResult(
+            "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
+            ReadResult.readable(List.of()))).getAsJsonObject();
+
+        String message = result.get("message").getAsString(); //$NON-NLS-1$
+        assertTrue(message.contains("are gone, confirmed by re-reading the session list")); //$NON-NLS-1$
+        assertFalse("absence does not establish who ended the session: " + message, //$NON-NLS-1$
+            message.contains("Terminated ")); //$NON-NLS-1$
     }
 
     /**
@@ -630,7 +671,8 @@ public class InfobaseSessionsToolTest
     {
         JsonObject result = JsonParser.parseString(InfobaseSessionsTool.bulkBudgetStoppedResult(
             "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
-            ReadResult.readable(List.of(CLIENT)), 2)).getAsJsonObject();
+            ReadResult.readable(List.of(CLIENT)), List.of(SECOND_CLIENT)))
+            .getAsJsonObject();
 
         assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
         assertEquals(0, result.get("terminatedCount").getAsInt()); //$NON-NLS-1$
@@ -645,7 +687,8 @@ public class InfobaseSessionsToolTest
     {
         JsonObject result = JsonParser.parseString(InfobaseSessionsTool.bulkBudgetStoppedResult(
             "Demo", "ServerApplication.Demo", List.of(CLIENT), //$NON-NLS-1$ //$NON-NLS-2$
-            ReadResult.unreachable("server stopped before verification"), 2)) //$NON-NLS-1$
+            ReadResult.unreachable("server stopped before verification"), //$NON-NLS-1$
+            List.of(SECOND_CLIENT)))
             .getAsJsonObject();
 
         assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
