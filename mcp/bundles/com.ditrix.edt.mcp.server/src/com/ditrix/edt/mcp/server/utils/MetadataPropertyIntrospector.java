@@ -1111,8 +1111,9 @@ public final class MetadataPropertyIntrospector
      * its type.</li>
      * </ul>
      *
-     * <p>This says nothing about WRITING such a value: a standard group is not addressable by FQN
-     * and {@code modify_metadata} still refuses it. Reading and reporting one is what was missing.</p>
+     * <p>A standard group is not addressable by FQN, so {@code modify_metadata} takes it as the bare
+     * identifier the platform itself uses - the English {@code name} or the Russian {@code nameRu}
+     * (issue #508). Reading and reporting one is what was missing here.</p>
      *
      * @param value the reference target, never {@code null}
      * @return the target's name, or {@code null} when the platform gives it none

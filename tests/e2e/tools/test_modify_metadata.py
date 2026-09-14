@@ -2699,12 +2699,110 @@ def test_set_command_group_to_nonexistent_group_is_error():
         "properties": [{"name": "group", "value": "CommandGroup.NoSuchGroup_e2e"}],
     })
     e = assert_error(r, "group set to a nonexistent CommandGroup")
-    # The not-found hint is CommandGroup-specific: it names the supported 'CommandGroup.<Name>' shape
-    # and explicitly calls out that the platform's STANDARD command groups are unsupported (issue #262
-    # P3: "do not fake support").
+    # ONE merged not-found hint naming BOTH addressable forms - the 'CommandGroup.<Name>' FQN of a
+    # configuration group and the bare name of a platform STANDARD group - plus the standard names
+    # themselves, so the caller can copy one straight out of the refusal (issue #508).
     assert_error_quality(e, names=["CommandGroup.NoSuchGroup_e2e"],
-                         suggests=["CommandGroup.<Name>", "STANDARD command groups"],
-                         ctx="an unresolvable command group is a clean, actionable error naming the shape")
+                         suggests=["CommandGroup.<Name>", "STANDARD command group",
+                                   "ActionsPanelTools"],
+                         ctx="an unresolvable command group is a clean, actionable error naming both forms")
+    assert "not supported here" not in (e or ""), \
+        "the retired 'not supported here' claim must be gone: %r" % (e,)
+    assert_tree_unchanged(before, "a rejected group set must change nothing")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# issue #508 — a command's `group` also takes a platform STANDARD command group
+#
+# A StandardCommandGroup is not an MdObject and has no FQN: it is addressed by its bare identifier,
+# in English (`ActionsPanelTools`) or the platform's own Russian `nameRu` identifier (see
+# _ACTIONS_PANEL_TOOLS_RU below), NOT the localized UI caption. Whichever is sent, the platform
+# stores the ENGLISH name in the .mdo - which is what these tests assert on disk.
+# ──────────────────────────────────────────────────────────────────────────────
+
+#: The Russian `nameRu` identifier of the ActionsPanelTools standard command group.
+_ACTIONS_PANEL_TOOLS_RU = "\u041f\u0430\u043d\u0435\u043b\u044c\u0414\u0435\u0439\u0441" \
+                          "\u0442\u0432\u0438\u0439\u0421\u0435\u0440\u0432\u0438\u0441"
+
+
+def _seed_command(dp, cmd):
+    """Seeds a DataProcessor and one command on it, and returns the command's FQN."""
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "DataProcessor." + dp}),
+              "seed the owning DataProcessor")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata",
+                   {"projectName": PROJECT, "fqn": "DataProcessor.%s.Command.%s" % (dp, cmd)}),
+              "seed the command")
+    wait_for_project_ready()
+    return "DataProcessor.%s.Command.%s" % (dp, cmd)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_command_group_to_standard_group_english():
+    fqn = _seed_command("E2EMdStdGrpDp", "E2EMdStdGrpCmd")
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "group", "value": "ActionsPanelTools"}],
+    })
+    assert_ok(r, "set the command's group to a platform STANDARD group by its English name")
+    assert "group" in (r.structured.get("applied") or []), \
+        "group must be applied: %r" % (r.structured,)
+    assert r.structured.get("persisted") is True, \
+        "the group change must force-export the owner .mdo: %r" % (r.structured,)
+    poll_diff_contains("<group>ActionsPanelTools</group>",
+                       ctx="the platform writes a standard group by its bare English name")
+
+    # Read back through the ASSIGNABLE surface - the one MetadataPropertyIntrospector renders, and
+    # the only place a standard group's NAME appears. The `### Commands` table deliberately prints
+    # the group's CATEGORY enum instead (ActionsPanel), and does so for a configuration CommandGroup
+    # too, so it cannot say WHICH standard group was written.
+    text = _assignable_text(fqn)
+    group_row = None
+    for line in text.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if cells and cells[0] == "group":
+            group_row = cells
+            break
+    assert group_row is not None, "the assignable table must have a 'group' row: %r" % (text[:600],)
+    assert len(group_row) >= 3 and group_row[2] == "ActionsPanelTools", \
+        "the reader must show the standard group that was just written, got %r: %r" \
+        % (group_row, text[:600])
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_command_group_to_standard_group_russian():
+    fqn = _seed_command("E2EMdStdGrpRuDp", "E2EMdStdGrpRuCmd")
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "group", "value": _ACTIONS_PANEL_TOOLS_RU}],
+    })
+    assert_ok(r, "set the command's group by the Russian nameRu identifier")
+    assert "group" in (r.structured.get("applied") or []), \
+        "group must be applied: %r" % (r.structured,)
+    # The Russian identifier addresses the SAME group; the platform stores the English name.
+    poll_diff_contains("<group>ActionsPanelTools</group>",
+                       ctx="the Russian identifier must land as the English name on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_set_command_group_to_unknown_bare_name_is_error():
+    fqn = _seed_command("E2EMdStdGrpBadDp", "E2EMdStdGrpBadCmd")
+    # Snapshot AFTER the seed dirt (see the defaultForm error test above for the rationale).
+    before = tree_snapshot()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "group", "value": "NotAGroupAtAll"}],
+    })
+    e = assert_error(r, "group set to a bare name that is neither an FQN nor a standard group")
+    assert_error_quality(e, names=["NotAGroupAtAll"],
+                         suggests=["CommandGroup.<Name>", "STANDARD command group",
+                                   "ActionsPanelTools"],
+                         ctx="an unknown bare group name is refused with BOTH accepted forms")
+    assert _ACTIONS_PANEL_TOOLS_RU in (e or ""), \
+        "the refusal must list the Russian identifiers too - they are discoverable nowhere else: %r" % (e,)
     assert_tree_unchanged(before, "a rejected group set must change nothing")
 
 
