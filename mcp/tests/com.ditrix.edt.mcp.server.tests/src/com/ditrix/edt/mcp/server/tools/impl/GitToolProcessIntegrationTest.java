@@ -259,6 +259,90 @@ public class GitToolProcessIntegrationTest
             output.replace('\\', '/'));
     }
 
+    /**
+     * Control bytes leave ESCAPED. Git prints a commit message byte for byte, so an {@code ESC[31m}
+     * stored in one is an ANSI command to whatever renders this output in a terminal, and a
+     * {@code 0x01} is invisible to whatever reads it. Measured on git 2.35.1: {@code log --format=%s}
+     * emits both RAW, which is why this needs a real process rather than a unit test of the helper.
+     */
+    @Test
+    public void testControlBytesInGitOutputReachTheCallerEscaped() throws Exception
+    {
+        commitWithMessage("bad" + (char)0x01 + "msg"); //$NON-NLS-1$ //$NON-NLS-2$
+        commitWithMessage((char)0x1B + "[31mred"); //$NON-NLS-1$
+
+        // Positive control for the whole test: real git must PRINT the raw bytes here, or the
+        // assertions below would hold against a setup that never stored them in the first place.
+        String raw = gitOutput("log", "-2", "--format=%s"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue("git itself must print the raw 0x01", raw.indexOf(0x01) >= 0); //$NON-NLS-1$
+        assertTrue("git itself must print the raw ESC", raw.indexOf(0x1B) >= 0); //$NON-NLS-1$
+
+        JsonObject result = run("log -2 --format=%s"); //$NON-NLS-1$
+        String output = result.get("output").getAsString(); //$NON-NLS-1$
+
+        assertTrue(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(output, output.contains("bad\\x01msg")); //$NON-NLS-1$
+        assertTrue(output, output.contains("\\x1b[31mred")); //$NON-NLS-1$
+        assertEquals("a raw C0 byte must not reach the caller: " + output, -1, output.indexOf(0x01)); //$NON-NLS-1$
+        assertEquals("a raw ESC must not reach the caller: " + output, -1, output.indexOf(0x1B)); //$NON-NLS-1$
+    }
+
+    /**
+     * Tab and the line break are the STRUCTURE of git's output - {@code status --short} is one entry
+     * per line, a diff hunk is indented - so they are exempt from the escaping. (CR is exempt for the
+     * same reason and is pinned by the unit table; git prints LF here on every platform.)
+     */
+    @Test
+    public void testTabAndLineBreaksSurviveUnescaped() throws Exception
+    {
+        commitWithMessage("tab" + (char)0x09 + "here"); //$NON-NLS-1$ //$NON-NLS-2$
+        Files.write(repository.resolve("tracked.txt"), //$NON-NLS-1$
+            "changed line\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+        Files.write(repository.resolve("untracked.txt"), //$NON-NLS-1$
+            "x\n".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+        String subject = run("log -1 --format=%s").get("output").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(subject, subject.contains("tab" + (char)0x09 + "here")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a tab is structure and must not be escaped: " + subject, //$NON-NLS-1$
+            subject.contains("\\x09")); //$NON-NLS-1$
+
+        String status = run("status --short").get("output").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a line break is structure and must not be escaped: " + status, //$NON-NLS-1$
+            status.contains("\\x0a")); //$NON-NLS-1$
+        assertTrue("the entries must stay on separate lines: " + status, //$NON-NLS-1$
+            status.lines().filter(line -> !line.isBlank()).count() >= 2);
+    }
+
+    /**
+     * The escaping runs AFTER the credential redaction, so it cannot hand back a secret the
+     * redaction would otherwise have masked. Both carriers are exercised in one test: a credential
+     * stored in the repository's own config (printed by {@code remote -v}) and one git prints out of
+     * a commit message that ALSO carries a control byte, so one output holds both at once. (A diff
+     * hunk over a file that contains a credential URL and a control byte would do just as well; the
+     * commit message is simply the cheapest way to build such an output.)
+     */
+    @Test
+    public void testEscapingDoesNotDefeatTheCredentialRedaction() throws Exception
+    {
+        git("remote", "add", "origin", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "https://user:s3cr3t-token@example.com/team/repo.git"); //$NON-NLS-1$
+        commitWithMessage("see https://user:s3cr3t-token@example.com/team/repo.git" //$NON-NLS-1$
+            + (char)0x01 + " end"); //$NON-NLS-1$
+
+        String remotes = run("remote -v").get("output").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(remotes, remotes.contains("origin")); //$NON-NLS-1$
+        assertFalse("the stored secret must not reach the caller: " + remotes, //$NON-NLS-1$
+            remotes.contains("s3cr3t-token")); //$NON-NLS-1$
+
+        String log = run("log -1 --format=%s").get("output").getAsString(); //$NON-NLS-1$ //$NON-NLS-2$
+        // Positive control: the line IS there, so the absence below is not the absence of an output.
+        assertTrue(log, log.contains("example.com/team/repo.git")); //$NON-NLS-1$
+        assertTrue("the control byte in the same output must be escaped: " + log, //$NON-NLS-1$
+            log.contains("\\x01")); //$NON-NLS-1$
+        assertFalse("the secret must not reach the caller: " + log, //$NON-NLS-1$
+            log.contains("s3cr3t-token")); //$NON-NLS-1$
+    }
+
     /** Parses {@code command} through the production parser and runs it in the test repository. */
     private JsonObject run(String command) throws Exception
     {
@@ -267,8 +351,42 @@ public class GitToolProcessIntegrationTest
         return JsonParser.parseString(json).getAsJsonObject();
     }
 
+    /**
+     * Commits {@code message} verbatim, with no working-tree change of its own.
+     * <p>
+     * The message travels through a FILE rather than an argv element on purpose: a C0 byte in a
+     * process argument would depend on the platform's command-line encoding, and a setup that
+     * silently mangled it would make every assertion that reads the message back prove nothing.
+     * {@code --cleanup=verbatim} stops git from rewriting what the file holds. The file is created
+     * OUTSIDE the repository, or it would itself show up as an untracked entry in
+     * {@code status --short}.
+     */
+    private void commitWithMessage(String message) throws IOException, InterruptedException
+    {
+        Path messageFile = Files.createTempFile("git-tool-message", ".txt"); //$NON-NLS-1$ //$NON-NLS-2$
+        try
+        {
+            Files.write(messageFile, message.getBytes(StandardCharsets.UTF_8));
+            git("commit", "-q", "--allow-empty", "--cleanup=verbatim", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                "-F", messageFile.toString()); //$NON-NLS-1$
+        }
+        finally
+        {
+            Files.deleteIfExists(messageFile);
+        }
+    }
+
     /** Runs a helper git command directly (test setup, not through the tool under test). */
     private void git(String... args) throws IOException, InterruptedException
+    {
+        gitOutput(args);
+    }
+
+    /**
+     * Runs a helper git command directly and returns its output - for a positive control that says
+     * what real git PRINTS, independently of what the tool then does with it.
+     */
+    private String gitOutput(String... args) throws IOException, InterruptedException
     {
         List<String> argv = new ArrayList<>();
         argv.add(gitExecutable);
@@ -282,6 +400,7 @@ public class GitToolProcessIntegrationTest
 
         HelperResult result = runHelper(repository, argv);
         assertEquals("helper git failed: " + argv + " -> " + result.output, 0, result.exitCode); //$NON-NLS-1$ //$NON-NLS-2$
+        return result.output;
     }
 
     /**
