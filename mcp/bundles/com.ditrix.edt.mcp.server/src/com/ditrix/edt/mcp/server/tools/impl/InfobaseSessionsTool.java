@@ -202,10 +202,13 @@ public class InfobaseSessionsTool implements IMcpTool
             // publish would break its own contract - it refuses with the reason instead.
             LaunchLifecycleUtils.LaunchLock lock =
                 LaunchLifecycleUtils.lockFor(projectName, resolved.application.getId());
-            if (!lock.tryAcquire(LaunchLifecycleUtils.SESSIONS_LOCK_TIMEOUT_MS, null))
+            LaunchLifecycleUtils.Acquisition acquisition =
+                lock.tryAcquire(LaunchLifecycleUtils.SESSIONS_LOCK_TIMEOUT_MS, null);
+            if (!acquisition.acquired())
             {
-                return ToolResult.error(LaunchLifecycleUtils.lockUnavailableMessage(projectName,
-                    resolved.application.getId(), LaunchLifecycleUtils.SESSIONS_LOCK_TIMEOUT_MS)
+                return ToolResult.error(LaunchLifecycleUtils.lockNotAcquiredMessage(acquisition,
+                    projectName, resolved.application.getId(),
+                    LaunchLifecycleUtils.SESSIONS_LOCK_TIMEOUT_MS)
                     + " No session was listed or terminated. Wait for that operation to finish " //$NON-NLS-1$
                     + "and call infobase_sessions again.").toJson(); //$NON-NLS-1$
             }

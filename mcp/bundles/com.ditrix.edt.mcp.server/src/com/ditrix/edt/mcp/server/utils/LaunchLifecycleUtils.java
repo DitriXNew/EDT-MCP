@@ -93,9 +93,10 @@ public final class LaunchLifecycleUtils
     private static final String UNKNOWN_LABEL = "<unknown>"; //$NON-NLS-1$
 
     /**
-     * Wait slice (ms) of one {@link LaunchLock#tryAcquire} attempt. The acquisition re-checks the
-     * caller's progress monitor between slices, so a cancelled monitor is honoured within this
-     * window instead of only at the full deadline.
+     * Wait slice (ms) of one {@link LaunchLock#tryAcquire} attempt made WITH a progress monitor:
+     * the acquisition re-checks it between slices, so a cancelled monitor is honoured within this
+     * window instead of only at the full deadline. An acquisition without a monitor waits in one
+     * timed attempt — slicing a 15-minute bound into 9000 of them buys nothing to re-check.
      */
     private static final long LOCK_WAIT_SLICE_MS = 100L;
 
@@ -604,9 +605,11 @@ public final class LaunchLifecycleUtils
      *
      * <p>Reentrant on purpose — a caller may already hold this lock around its own spawn sequence
      * when the code below it re-enters through {@link LaunchLifecycleUtils#prepareForFreshLaunch}.
-     * Every acquisition therefore needs its own {@code try}/{@code finally} {@link #unlock()}, and
-     * a re-entrant acquisition cannot fail on a deadline: {@code tryLock} on a lock the current
-     * thread already holds returns immediately.
+     * Every acquisition therefore needs its own {@code try}/{@code finally} {@link #unlock()}.
+     * A re-entrant acquisition cannot be refused as {@link Acquisition#CONTENDED} — the hold count
+     * is checked before any waiting — but reentrancy alone does NOT make it infallible: the timed
+     * {@code tryLock} raises on a PENDING interrupt before it looks at the hold count, which is
+     * why {@link #tryAcquire} takes and restores that flag itself.
      */
     public static final class LaunchLock
     {
@@ -620,43 +623,75 @@ public final class LaunchLifecycleUtils
         /**
          * Acquires this lock, waiting at most {@code timeoutMs}.
          *
-         * <p>Waits in {@link LaunchLifecycleUtils#LOCK_WAIT_SLICE_MS} slices against a monotonic
-         * {@code nanoTime} deadline so a cancelled {@code monitor} is honoured promptly. An
-         * interruption restores the thread's interrupt flag and reports failure.
+         * <p>A caller that arrives ALREADY interrupted still attempts the acquisition, exactly as
+         * the {@code synchronized} this replaced did. Measured, not assumed:
+         * {@code ReentrantLock.tryLock(long, TimeUnit)} opens with
+         * {@code if (Thread.interrupted()) throw new InterruptedException()} — before it looks at
+         * the lock at all, and before the hold count that makes a re-entrant acquisition free — so
+         * a pending flag would refuse in ~0 ms and the caller would report a contender that does
+         * not exist AND skip its guarded work. The flag is therefore taken here and restored in the
+         * {@code finally}, the same dance {@code ApplicationSupport.readBounded} does one file over
+         * and for the same reason.
+         *
+         * <p>With a {@code monitor} the wait is sliced into
+         * {@link LaunchLifecycleUtils#LOCK_WAIT_SLICE_MS} pieces against a monotonic
+         * {@code nanoTime} deadline so cancellation is honoured promptly. Without one there is
+         * nothing to re-check between slices, so the wait is a single timed {@code tryLock} — a
+         * 15-minute bound would otherwise cost ~9000 timed acquisitions and their queue churn.
          *
          * @param timeoutMs the bound on the wait; a non-positive value means one attempt only
          * @param monitor cancellation source polled between slices (may be {@code null})
-         * @return {@code true} when the lock is held by the calling thread and must be released
-         *     with {@link #unlock()}; {@code false} when nothing was acquired
+         * @return how the acquisition ended; on {@link Acquisition#ACQUIRED} the lock is held by
+         *     the calling thread and must be released with {@link #unlock()}
          */
-        public boolean tryAcquire(long timeoutMs, IProgressMonitor monitor)
+        public Acquisition tryAcquire(long timeoutMs, IProgressMonitor monitor)
+        {
+            boolean interrupted = Thread.interrupted();
+            try
+            {
+                return acquireWithin(timeoutMs, monitor);
+            }
+            catch (InterruptedException e)
+            {
+                interrupted = true;
+                return Acquisition.INTERRUPTED;
+            }
+            finally
+            {
+                if (interrupted)
+                {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+
+        /** The acquisition proper, run with the caller's interrupt flag already taken. */
+        private Acquisition acquireWithin(long timeoutMs, IProgressMonitor monitor)
+            throws InterruptedException
         {
             long remainingNanos = TimeUnit.MILLISECONDS.toNanos(Math.max(0L, timeoutMs));
+            if (monitor == null)
+            {
+                return lock.tryLock(remainingNanos, TimeUnit.NANOSECONDS)
+                    ? Acquisition.ACQUIRED : Acquisition.CONTENDED;
+            }
             long deadline = System.nanoTime() + remainingNanos;
             do
             {
-                if (monitor != null && monitor.isCanceled())
+                if (monitor.isCanceled())
                 {
-                    return false;
+                    return Acquisition.CANCELLED;
                 }
                 long waitNanos = Math.min(remainingNanos,
                     TimeUnit.MILLISECONDS.toNanos(LOCK_WAIT_SLICE_MS));
-                try
+                if (lock.tryLock(waitNanos, TimeUnit.NANOSECONDS))
                 {
-                    if (lock.tryLock(waitNanos, TimeUnit.NANOSECONDS))
-                    {
-                        return true;
-                    }
-                }
-                catch (InterruptedException e)
-                {
-                    Thread.currentThread().interrupt();
-                    return false;
+                    return Acquisition.ACQUIRED;
                 }
                 remainingNanos = deadline - System.nanoTime();
             }
             while (remainingNanos > 0L);
-            return false;
+            return Acquisition.CONTENDED;
         }
 
         /** Releases one acquisition made by {@link #tryAcquire} on the calling thread. */
@@ -673,8 +708,74 @@ public final class LaunchLifecycleUtils
     }
 
     /**
-     * Shared, named diagnosis for a {@link #lockFor} acquisition that ran out its deadline. Each
-     * site appends what it did NOT do and how to retry.
+     * How one {@link LaunchLock#tryAcquire} ended. Not a boolean: the three failures have nothing
+     * in common for the caller's message, and reporting an interruption or a cancellation as
+     * contention names a rival operation that was never established to exist.
+     */
+    public enum Acquisition
+    {
+        /** The lock is held by the calling thread and must be released with {@code unlock()}. */
+        ACQUIRED,
+        /** The deadline elapsed with another thread holding the lock. */
+        CONTENDED,
+        /** The calling thread was interrupted; nothing was acquired and no contender was seen. */
+        INTERRUPTED,
+        /** The caller's progress monitor was cancelled; nothing was acquired. */
+        CANCELLED;
+
+        /** @return whether the lock is now held by the calling thread */
+        public boolean acquired()
+        {
+            return this == ACQUIRED;
+        }
+    }
+
+    /**
+     * Shared, named diagnosis for a {@link #lockFor} acquisition that did NOT succeed. Each site
+     * appends what it did NOT do and how to retry.
+     *
+     * @param outcome the failed acquisition (never {@link Acquisition#ACQUIRED})
+     * @param projectName the project whose lock was wanted (may be {@code null})
+     * @param applicationId the application whose lock was wanted (may be {@code null})
+     * @param timeoutMs the bound that was given to the acquisition
+     * @return the sentence naming the reason, never {@code null}
+     * @throws IllegalArgumentException for {@link Acquisition#ACQUIRED} — there is no failure to
+     *     diagnose, and wording one would invent a rival operation
+     */
+    public static String lockNotAcquiredMessage(Acquisition outcome, String projectName,
+        String applicationId, long timeoutMs)
+    {
+        switch (outcome)
+        {
+            case CONTENDED:
+                return lockUnavailableMessage(projectName, applicationId, timeoutMs);
+            case INTERRUPTED:
+                return lockPrefix(projectName, applicationId)
+                    + "was not acquired because this call was interrupted (EDT-MCP is stopping, " //$NON-NLS-1$
+                    + "or the background job was cancelled). No other operation was found holding " //$NON-NLS-1$
+                    + "the infobase."; //$NON-NLS-1$
+            case CANCELLED:
+                return lockPrefix(projectName, applicationId)
+                    + "was not acquired because the operation was cancelled while waiting for it. " //$NON-NLS-1$
+                    + "No other operation was found holding the infobase."; //$NON-NLS-1$
+            default:
+                throw new IllegalArgumentException(
+                    "A successful acquisition has no failure to diagnose"); //$NON-NLS-1$
+        }
+    }
+
+    /** The shared opening naming the lock every {@link #lockNotAcquiredMessage} branch reports on. */
+    private static String lockPrefix(String projectName, String applicationId)
+    {
+        return "The launch lock for application '" //$NON-NLS-1$
+            + (applicationId != null ? applicationId : UNKNOWN_LABEL) + "' in project '" //$NON-NLS-1$
+            + (projectName != null ? projectName : UNKNOWN_LABEL) + "' "; //$NON-NLS-1$
+    }
+
+    /**
+     * The {@link Acquisition#CONTENDED} diagnosis: the deadline elapsed with somebody else holding
+     * the lock. Reachable through {@link #lockNotAcquiredMessage}, which is what call sites use —
+     * this wording must never stand in for an interrupted or cancelled acquisition.
      *
      * @param projectName the project whose lock was contended (may be {@code null})
      * @param applicationId the application whose lock was contended (may be {@code null})
@@ -684,10 +785,8 @@ public final class LaunchLifecycleUtils
     public static String lockUnavailableMessage(String projectName, String applicationId,
         long timeoutMs)
     {
-        return "The launch lock for application '" //$NON-NLS-1$
-            + (applicationId != null ? applicationId : UNKNOWN_LABEL) + "' in project '" //$NON-NLS-1$
-            + (projectName != null ? projectName : UNKNOWN_LABEL)
-            + "' did not become available within " + describeLockTimeout(timeoutMs) //$NON-NLS-1$
+        return lockPrefix(projectName, applicationId)
+            + "did not become available within " + describeLockTimeout(timeoutMs) //$NON-NLS-1$
             + ": another operation on that infobase (a database update, a launch or a test run) " //$NON-NLS-1$
             + "is still holding it."; //$NON-NLS-1$
     }
@@ -720,9 +819,11 @@ public final class LaunchLifecycleUtils
     static void holdLockForTest(String projectName, String applicationId, Runnable action)
     {
         LaunchLock lock = lockFor(projectName, applicationId);
-        if (!lock.tryAcquire(5_000L, null))
+        Acquisition acquisition = lock.tryAcquire(5_000L, null);
+        if (!acquisition.acquired())
         {
-            throw new IllegalStateException("The test launch lock could not be acquired"); //$NON-NLS-1$
+            throw new IllegalStateException(
+                "The test launch lock could not be acquired: " + acquisition); //$NON-NLS-1$
         }
         try
         {
@@ -2606,12 +2707,13 @@ public final class LaunchLifecycleUtils
         // calls targeting the same IB from racing on terminate + update. Other
         // (project, applicationId) pairs are unaffected. The lock is reentrant,
         // so callers may already hold it when wrapping their full spawn+register
-        // sequence around the auto-chain; a re-entrant acquisition cannot time out.
+        // sequence around the auto-chain; a re-entrant acquisition is never CONTENDED.
         LaunchLock lock = lockFor(project.getName(), applicationId);
-        if (!lock.tryAcquire(lockTimeoutMs, null))
+        Acquisition acquisition = lock.tryAcquire(lockTimeoutMs, null);
+        if (!acquisition.acquired())
         {
             return new PreLaunchResult(false, 0,
-                lockUnavailableMessage(project.getName(), applicationId, lockTimeoutMs)
+                lockNotAcquiredMessage(acquisition, project.getName(), applicationId, lockTimeoutMs)
                     + " Nothing was terminated, recomputed or updated; retry once that operation " //$NON-NLS-1$
                     + "finishes."); //$NON-NLS-1$
         }

@@ -183,10 +183,14 @@ public final class ApplicationSupport
     public static <T> BoundedRead<T> readBounded(String jobName, String target, long timeoutMs,
         IApplicationRead<T> read)
     {
-        // A caller that arrives ALREADY interrupted must leave still interrupted. Measured, not
-        // assumed: Job.join consumes a pending interrupt instead of raising, so without taking
-        // and restoring the flag here, moving the read off this thread would silently disarm
-        // every interruption check the caller makes afterwards.
+        // A caller that arrives ALREADY interrupted must still RUN the read and leave still
+        // interrupted. Measured against org.eclipse.core.jobs as shipped with EDT 2026.2:
+        // Semaphore.acquire(long) opens with `if (Thread.interrupted()) throw new
+        // InterruptedException()`, and JobManager.join RETHROWS that whenever
+        // LockManager.canBlock() is true — it is, on every thread but the UI one. So without
+        // taking the flag here, join would raise before the read ever ran and an already-
+        // interrupted caller would get INTERRUPTED instead of an answer. Restoring it in the
+        // finally keeps the caller's own interruption checks armed afterwards.
         boolean interruptedOnEntry = Thread.interrupted();
         try
         {

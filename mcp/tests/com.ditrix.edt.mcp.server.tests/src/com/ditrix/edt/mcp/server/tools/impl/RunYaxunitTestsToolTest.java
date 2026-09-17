@@ -63,10 +63,22 @@ import com.e1c.g5.dt.applications.IApplicationManager;
 public class RunYaxunitTestsToolTest
 {
     /**
+     * The bound the BROKEN revision of this read gave up at ({@code REPORT_LOCK_TIMEOUT_MS}).
+     * The contended-read test must out-wait it, or it passes on the very revision it exists to
+     * catch: with a 400 ms hold the broken read acquired at 400 ms and every assertion held.
+     */
+    private static final long BROKEN_REPORT_LOCK_BOUND_MS = 5_000L;
+
+    /**
      * A contended read of a FINISHED run's report must wait for the lock and then read — not
      * return early. Returning early destroys the report: the caller retries, the launch listener
      * has meanwhile evicted the terminated launch from ACTIVE_LAUNCHES, so the retry takes the
      * spawn path, which cleanupTempDir's the report directory.
+     * <p>
+     * The hold deliberately OUT-LASTS {@link #BROKEN_REPORT_LOCK_BOUND_MS}, which costs this test
+     * its wall clock and buys the only thing that matters: a read that gives up at the old short
+     * bound fails here. Both the production entry point (no explicit bound) and the elapsed-time
+     * assertion are load-bearing — the first proves the SITE's bound, the second the wait.
      */
     @Test
     public void testContendedReportReadWaitsForTheLockAndStillReadsTheReport() throws Exception
@@ -86,13 +98,13 @@ public class RunYaxunitTestsToolTest
         ILaunch finished = mock(ILaunch.class);
         Mockito.when(finished.isTerminated()).thenReturn(true);
 
-        // The holder takes the PRODUCTION lock for 400 ms, then releases it.
-        long holdMs = 400L;
+        // The holder takes the PRODUCTION lock for longer than the broken bound, then releases it.
+        long holdMs = BROKEN_REPORT_LOCK_BOUND_MS + 500L;
         CountDownLatch held = new CountDownLatch(1);
         Thread holder = new Thread(() -> {
             LaunchLifecycleUtils.LaunchLock lock =
                 LaunchLifecycleUtils.lockFor(projectName, applicationId);
-            if (!lock.tryAcquire(5_000L, null))
+            if (!lock.tryAcquire(5_000L, null).acquired())
             {
                 return;
             }
@@ -114,11 +126,15 @@ public class RunYaxunitTestsToolTest
         assertTrue("the holder must be provably holding the lock", held.await(5, TimeUnit.SECONDS));
 
         long startedAt = System.nanoTime();
+        // The PRODUCTION overload on purpose: the bound under test is the one this call site
+        // chooses, so a test that passed its own would pin nothing.
         String result = new RunYaxunitTestsTool().handleExistingLaunch(finished, reportDir,
             System.currentTimeMillis() + 1_000L, "contended-run-key", projectName, applicationId);
         long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
-        holder.join(5_000L);
+        holder.join(10_000L);
 
+        assertTrue("the read must out-wait the broken bound, not give up at it: " + elapsedMs
+            + " ms", elapsedMs > BROKEN_REPORT_LOCK_BOUND_MS);
         assertTrue("the read must wait for the holder, not give up: " + elapsedMs + " ms",
             elapsedMs >= holdMs - 50L);
         assertTrue("the read must return the parsed report", result.contains("ContendedMarkerTest")
@@ -126,11 +142,127 @@ public class RunYaxunitTestsToolTest
         assertTrue("the report must NOT have been wiped", Files.exists(junitXml));
         // The wrong outcomes this replaced. A "**Pending:**" sends the owning job's loop back
         // through runTests, which is the path that wipes reportDir; "no JUnit XML found" is what a
-        // read that lost the race to a cleanupTempDir would report.
+        // read that lost the race to a cleanupTempDir would report; the lock refusal is what a
+        // short bound answers with.
         assertFalse("a finished run's report must not be answered with a Pending",
             result.startsWith("**Pending:**"));
         assertFalse("the report must not be reported as missing",
             result.contains("no JUnit XML found"));
+        assertFalse("the read must not have been refused on the lock",
+            result.contains("The launch lock for application"));
+    }
+
+    /**
+     * An ALREADY-interrupted caller must still take the lock and do the guarded work. The
+     * regression: {@code ReentrantLock.tryLock(long, TimeUnit)} raises on a pending interrupt
+     * before it looks at the lock, so the read returned a fabricated "another operation is holding
+     * the lock" in ~0 ms and skipped both the ACTIVE_LAUNCHES eviction and the report read — on a
+     * FREE lock, with nobody contending. On master these sites were {@code synchronized}, which
+     * ignores the flag entirely.
+     */
+    @Test
+    public void testAnInterruptedCallerStillReadsTheReportOfAFinishedRun() throws Exception
+    {
+        String projectName = "InterruptedReadProject";
+        String applicationId = "app-interrupted-read";
+        Path reportDir = Files.createTempDirectory("edt-mcp-yaxunit-interrupted");
+        Path junitXml = reportDir.resolve("junit.xml");
+        Files.write(junitXml, ("<?xml version=\"1.0\"?>"
+            + "<testsuite name=\"All\" tests=\"1\" failures=\"1\" errors=\"0\" skipped=\"0\">"
+            + "<testcase classname=\"OM_a\" name=\"InterruptedMarkerTest\">"
+            + "<failure message=\"marker\">at line 1</failure>"
+            + "</testcase></testsuite>").getBytes(StandardCharsets.UTF_8));
+
+        ILaunch finished = mock(ILaunch.class);
+        Mockito.when(finished.isTerminated()).thenReturn(true);
+
+        String result;
+        boolean stillInterrupted;
+        // Exactly what BackgroundJobs.cancelWork -> future.cancel(true) leaves on this thread.
+        Thread.currentThread().interrupt();
+        try
+        {
+            result = new RunYaxunitTestsTool().handleExistingLaunch(finished, reportDir,
+                System.currentTimeMillis() + 1_000L, "interrupted-run-key", projectName,
+                applicationId);
+            stillInterrupted = Thread.currentThread().isInterrupted();
+        }
+        finally
+        {
+            Thread.interrupted(); // clear it so later tests are unaffected
+        }
+
+        assertTrue("an interrupted caller must still read the report",
+            result.contains("InterruptedMarkerTest") && result.contains("YAXUnit Test Results"));
+        // The fabricated diagnosis this replaced: a free lock reported as held by somebody else.
+        assertFalse("a free lock must not be reported as contended",
+            result.contains("The launch lock for application"));
+        assertTrue("the caller's interrupt flag must survive the guarded work", stillInterrupted);
+    }
+
+    /**
+     * The refusal path end to end, driven with a short bound so it does not wait out the
+     * production one: a read that really cannot take the lock returns the structured error, leaves
+     * the report on disk, and does not pretend the run is still pending.
+     */
+    @Test
+    public void testAReportReadThatCannotTakeTheLockRefusesAndLeavesTheReport() throws Exception
+    {
+        String projectName = "RefusedReadProject";
+        String applicationId = "app-refused-read";
+        Path reportDir = Files.createTempDirectory("edt-mcp-yaxunit-refused");
+        Path junitXml = reportDir.resolve("junit.xml");
+        Files.write(junitXml, "<testsuite name=\"All\" tests=\"0\"/>".getBytes(
+            StandardCharsets.UTF_8));
+
+        ILaunch finished = mock(ILaunch.class);
+        Mockito.when(finished.isTerminated()).thenReturn(true);
+
+        CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            LaunchLifecycleUtils.LaunchLock lock =
+                LaunchLifecycleUtils.lockFor(projectName, applicationId);
+            if (!lock.tryAcquire(5_000L, null).acquired())
+            {
+                return;
+            }
+            try
+            {
+                held.countDown();
+                release.await(10, TimeUnit.SECONDS);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            finally
+            {
+                lock.unlock();
+            }
+        }, "test: held launch lock (refused read)");
+        holder.start();
+        String result;
+        try
+        {
+            assertTrue("the holder must be provably holding the lock",
+                held.await(5, TimeUnit.SECONDS));
+            result = new RunYaxunitTestsTool().handleExistingLaunch(finished, reportDir,
+                System.currentTimeMillis() + 1_000L, "refused-run-key", projectName, applicationId,
+                200L);
+        }
+        finally
+        {
+            release.countDown();
+            holder.join(10_000L);
+        }
+
+        assertTrue("it must be a structured error", result.contains("\"success\": false")
+            || result.contains("\"success\":false"));
+        assertTrue("it must name the bound the call site gave", result.contains("within 200 ms"));
+        assertFalse("it must not be retryable by the owning job's loop",
+            result.startsWith("**Pending:**"));
+        assertTrue("the report must still be on disk", Files.exists(junitXml));
     }
 
     /**
@@ -140,8 +272,10 @@ public class RunYaxunitTestsToolTest
     @Test
     public void testContendedReportExpiryIsATerminalErrorNamingTheReport()
     {
-        String message = RunYaxunitTestsTool.contendedReportError(
-            Paths.get("C:", "tmp", "edt-mcp-yaxunit"), "P1", "app-x");
+        String message = RunYaxunitTestsTool.reportReadLockRefusal(
+            LaunchLifecycleUtils.Acquisition.CONTENDED,
+            Paths.get("C:", "tmp", "edt-mcp-yaxunit"), "P1", "app-x",
+            LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS);
 
         assertTrue("it must be a structured error", message.contains("\"success\": false")
             || message.contains("\"success\":false"));
@@ -151,10 +285,69 @@ public class RunYaxunitTestsToolTest
         assertTrue("it must say the run itself finished",
             message.contains("The run itself finished"));
         assertTrue("it must name where the report still is",
-            message.contains("The JUnit XML is still in"));
+            message.contains("Read the JUnit XML directly at"));
         // The wrong shape: anything the job loop's isPendingResult would retry on.
         assertFalse("the expiry must not be retryable by the owning job's loop",
             message.startsWith("**Pending:**"));
+    }
+
+    /**
+     * The refusal named two ways out as if they were equivalent. They are not: the second
+     * (re-running) reaches the spawn path, whose cleanupTempDir wipes exactly the directory the
+     * first sentence points the reader at.
+     */
+    @Test
+    public void testReportRefusalDoesNotOfferARerunAsAnAlternativeToReadingTheFile()
+    {
+        String message = RunYaxunitTestsTool.reportReadLockRefusal(
+            LaunchLifecycleUtils.Acquisition.CONTENDED,
+            Paths.get("C:", "tmp", "edt-mcp-yaxunit"), "P1", "app-x",
+            LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS);
+
+        assertTrue("reading the file must be named as THE way out",
+            message.contains("Read the JUnit XML directly at"));
+        assertTrue("a re-run must be named as destructive to this report",
+            message.contains("do NOT call run_yaxunit_tests again first"));
+        // The wording this replaced, which offered the report-wiping branch as an equal option.
+        assertFalse("a re-run must not be offered as an alternative",
+            message.contains("read it there, or call run_yaxunit_tests again"));
+    }
+
+    /**
+     * The bound must come from the CALL SITE, not from a constant the message assumes: they agree
+     * today, and nothing enforced that.
+     */
+    @Test
+    public void testReportRefusalReportsTheBoundItWasGivenNotAConstant()
+    {
+        String message = RunYaxunitTestsTool.reportReadLockRefusal(
+            LaunchLifecycleUtils.Acquisition.CONTENDED,
+            Paths.get("C:", "tmp", "edt-mcp-yaxunit"), "P1", "app-x", 250L);
+
+        assertTrue("the supplied bound must be reported", message.contains("within 250 ms"));
+        assertFalse("the production constant must not leak in",
+            message.contains("15 minutes"));
+    }
+
+    /**
+     * An interrupted report read must not blame a rival operation. The contended sentence names
+     * "another operation on that infobase", which nothing established.
+     */
+    @Test
+    public void testAnInterruptedReportReadIsNotReportedAsContention()
+    {
+        String message = RunYaxunitTestsTool.reportReadLockRefusal(
+            LaunchLifecycleUtils.Acquisition.INTERRUPTED,
+            Paths.get("C:", "tmp", "edt-mcp-yaxunit"), "P1", "app-x",
+            LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS);
+
+        assertTrue("it must say it was interrupted", message.contains("was interrupted"));
+        assertFalse("it must not invent a holder",
+            message.contains("is still holding it"));
+        assertFalse("it must not report a deadline that never elapsed",
+            message.contains("did not become available within"));
+        assertTrue("it must still name where the report is",
+            message.contains("Read the JUnit XML directly at"));
     }
 
     @Test

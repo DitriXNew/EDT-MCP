@@ -20,8 +20,11 @@ placeholder). The success envelope is:
      "applications": [ {"id","name","type","updateState","updateStateDescription",
                         ["requiredVersion"]}, ... ],
      "count": <int>,                       # == len(applications)
-     ["defaultApplicationId": "<id>"],     # only when a default exists
-     ["message": "No applications found for project"]}  # only on the empty branch
+     ["defaultApplicationId": "<id>"],     # absent BOTH when no default is recorded
+                                           # AND when that lookup did not conclude
+     ["message": "..."]}                   # "No applications found for project" on the
+                                           # empty branch; "The default application is
+                                           # UNKNOWN: ..." when that lookup expired
 On error the envelope is {"success": false, "error": "<message>"} and the protocol
 layer marks the result isError; assert_error returns that error string.
 

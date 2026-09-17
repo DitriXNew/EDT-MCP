@@ -14,7 +14,9 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
@@ -24,6 +26,8 @@ import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.e1c.g5.dt.applications.ApplicationException;
+import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
 
 /**
@@ -270,5 +274,105 @@ public class DeleteInfobaseToolTest
             target.error.contains("Application not found")); //$NON-NLS-1$
         assertFalse("a measured absence must not be dressed up as a deadline", //$NON-NLS-1$
             target.error.contains("did not finish within")); //$NON-NLS-1$
+    }
+
+    // ============ #622: an unreadable read-back is "unknown", not a confirmed deletion ==========
+
+    @Test
+    public void testAnUnreadableReadBackIsNotAConfirmedRemoval() throws Exception
+    {
+        // The read-back used to map "could not read" straight onto "removed". #622 gave that read
+        // a 30 s deadline on exactly the wedge this work exists for, so on a DESTRUCTIVE tool the
+        // likeliest new outcome was a claim nobody measured.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        when(mgr.getApplications(project))
+            .thenThrow(new ApplicationException("delegates are not up")); //$NON-NLS-1$
+
+        DeleteInfobaseTool.ReadBack outcome =
+            DeleteInfobaseTool.confirmApplicationRemoved(mgr, project, "app-doomed", 1); //$NON-NLS-1$
+
+        assertEquals("an unreadable read-back establishes nothing", //$NON-NLS-1$
+            DeleteInfobaseTool.ReadBack.UNREADABLE, outcome);
+    }
+
+    @Test
+    public void testAnUnknownBeforeCountDoesNotTurnASuccessfulTwinDeletionIntoAFailure()
+        throws Exception
+    {
+        // The twin case (2 -> 1) is recognised by `now < beforeCount`. With beforeCount unknown
+        // (-1) that comparison can never hold, so a successful deletion was reported unconfirmed.
+        // With no baseline the honest answer is UNKNOWN, not "still listed".
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        // Built BEFORE the outer stubbing: app() stubs its own mock, and a nested when(...)
+        // inside thenReturn(...) is an UnfinishedStubbingException.
+        List<IApplication> twin = Collections.singletonList(app("app-twin")); //$NON-NLS-1$
+        when(mgr.getApplications(project)).thenReturn(twin);
+
+        DeleteInfobaseTool.ReadBack outcome = DeleteInfobaseTool.confirmApplicationRemoved(mgr,
+            project, "app-twin", DeleteInfobaseTool.COUNT_UNKNOWN); //$NON-NLS-1$
+
+        assertEquals("with no baseline a surviving twin is unknown, not a failure", //$NON-NLS-1$
+            DeleteInfobaseTool.ReadBack.UNREADABLE, outcome);
+    }
+
+    @Test
+    public void testAMeasuredCountDropStillConfirms() throws Exception
+    {
+        // The other edge: the tri-state must not have cost the ordinary confirmations.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        List<IApplication> twin = Collections.singletonList(app("app-twin")); //$NON-NLS-1$
+        when(mgr.getApplications(project)).thenReturn(twin);
+
+        assertEquals("2 -> 1 is a confirmed twin deletion", //$NON-NLS-1$
+            DeleteInfobaseTool.ReadBack.CONFIRMED,
+            DeleteInfobaseTool.confirmApplicationRemoved(mgr, project, "app-twin", 2)); //$NON-NLS-1$
+
+        IApplicationManager empty = mock(IApplicationManager.class);
+        when(empty.getApplications(project)).thenReturn(Collections.emptyList());
+        assertEquals("a measured zero confirms even with no baseline", //$NON-NLS-1$
+            DeleteInfobaseTool.ReadBack.CONFIRMED,
+            DeleteInfobaseTool.confirmApplicationRemoved(empty, project, "app-gone", //$NON-NLS-1$
+                DeleteInfobaseTool.COUNT_UNKNOWN));
+    }
+
+    @Test
+    public void testACountThatNeverDropsIsStillListed() throws Exception
+    {
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        List<IApplication> stuck = Collections.singletonList(app("app-stuck")); //$NON-NLS-1$
+        when(mgr.getApplications(project)).thenReturn(stuck);
+
+        assertEquals("a count read every time that never dropped is still listed", //$NON-NLS-1$
+            DeleteInfobaseTool.ReadBack.STILL_LISTED,
+            DeleteInfobaseTool.confirmApplicationRemoved(mgr, project, "app-stuck", 1)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEachReadBackStateGetsItsOwnNote()
+    {
+        assertEquals("a confirmed removal adds nothing", //$NON-NLS-1$
+            "", DeleteInfobaseTool.readBackNote(DeleteInfobaseTool.ReadBack.CONFIRMED)); //$NON-NLS-1$
+        assertTrue("a surviving entry keeps the 'briefly' note", //$NON-NLS-1$
+            DeleteInfobaseTool.readBackNote(DeleteInfobaseTool.ReadBack.STILL_LISTED)
+                .contains("may still appear in get_applications briefly")); //$NON-NLS-1$
+        String unreadable = DeleteInfobaseTool.readBackNote(DeleteInfobaseTool.ReadBack.UNREADABLE);
+        assertTrue("an unreadable read-back must say the removal is unconfirmed", //$NON-NLS-1$
+            unreadable.contains("could not be CONFIRMED")); //$NON-NLS-1$
+        // The wrong answers: silence (which reads as a confirmation) and the "briefly" note (which
+        // claims the entry was SEEN, and nothing was).
+        assertFalse("an unreadable read-back must not pass silently", unreadable.isEmpty()); //$NON-NLS-1$
+        assertFalse("an unreadable read-back must not claim the entry was seen", //$NON-NLS-1$
+            unreadable.contains("may still appear in get_applications briefly")); //$NON-NLS-1$
+    }
+
+    private static IApplication app(String id)
+    {
+        IApplication application = mock(IApplication.class);
+        when(application.getId()).thenReturn(id);
+        return application;
     }
 }

@@ -933,7 +933,7 @@ public class DeleteInfobaseTool implements IMcpTool
         }
 
         // Read-back: confirm THIS deletion via a count decrease (tolerant of same-id twins).
-        boolean removed = confirmApplicationRemoved(appManager, project, resolvedId, beforeCount);
+        ReadBack removed = confirmApplicationRemoved(appManager, project, resolvedId, beforeCount);
 
         return buildDeletedResult(id, deleteRegistration,
             new DbFileOutcome(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbSharedWithOthers),
@@ -1081,7 +1081,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * @return the success JSON payload
      */
     private String buildDeletedResult(IbIdentity id, boolean deleteRegistration, DbFileOutcome db,
-        StandaloneServerSupport.RegistryCleanup cleanup, boolean removed)
+        StandaloneServerSupport.RegistryCleanup cleanup, ReadBack removed)
     {
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_DELETED)
@@ -1097,8 +1097,28 @@ public class DeleteInfobaseTool implements IMcpTool
                 + (deleteRegistration ? registryNote(cleanup)
                     : " (infobases.yaml registry entry kept).") //$NON-NLS-1$
                 + databaseResultNote(db)
-                + (removed ? "" : " NOTE: it may still appear in get_applications briefly.")) //$NON-NLS-1$ //$NON-NLS-2$
+                + readBackNote(removed))
             .toJson();
+    }
+
+    /**
+     * The tail naming what the post-deletion read-back established. An {@link ReadBack#UNREADABLE}
+     * read-back gets its own sentence: it is not a confirmation, and it is not evidence that the
+     * application is still there either.
+     */
+    static String readBackNote(ReadBack readBack)
+    {
+        switch (readBack)
+        {
+            case STILL_LISTED:
+                return " NOTE: it may still appear in get_applications briefly."; //$NON-NLS-1$
+            case UNREADABLE:
+                return " NOTE: the removal could not be CONFIRMED — the application list could not " //$NON-NLS-1$
+                    + "be read back (see the EDT log). The deletion itself reported success; check " //$NON-NLS-1$
+                    + "with get_applications."; //$NON-NLS-1$
+            default:
+                return ""; //$NON-NLS-1$
+        }
     }
 
     /**
@@ -1134,26 +1154,51 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /**
+     * What the post-deletion read-back established. Three states, not two: a read that could not be
+     * performed says NOTHING about the application, and reporting it as a confirmation is how a
+     * destructive tool comes to claim an outcome nobody measured.
+     */
+    enum ReadBack
+    {
+        /** The application is gone (or one of several same-id twins is). */
+        CONFIRMED,
+        /** The count was read every time and never dropped — it is still listed. */
+        STILL_LISTED,
+        /** The list could not be read (deadline or platform failure), so nothing was established. */
+        UNREADABLE
+    }
+
+    /** The count of a list that could not be read — never a measured zero. */
+    static final int COUNT_UNKNOWN = -1;
+
+    /**
      * Bounded re-poll that confirms THIS standalone-server deletion took effect, by waiting until the
      * number of applications carrying {@code appId} drops below {@code beforeCount} (absorbs the
      * provision-delegate listener race). Counting (rather than presence) makes it correct even when a
      * same-named twin server shares the id: deleting one of two twins is confirmed when the count goes
-     * 2 -> 1. Returns true once the count decreased (or reached zero), false if it never did.
+     * 2 -> 1.
+     *
+     * <p>An unreadable count is {@link ReadBack#UNREADABLE}, never a confirmation — #622 gave the
+     * read a 30 s deadline on exactly the wedge it exists for, so "could not read" is now a likely
+     * outcome and answering it with "removed" would be a claim about an unasked question.
+     *
+     * <p>A {@code beforeCount} of {@link #COUNT_UNKNOWN} is likewise not a baseline: a twin going
+     * 2 -> 1 cannot be recognised against it, so anything other than a measured zero is
+     * {@link ReadBack#UNREADABLE} rather than a false "still listed".
      */
-    private static boolean confirmApplicationRemoved(IApplicationManager appManager, IProject project,
-            String appId, int beforeCount)
+    static ReadBack confirmApplicationRemoved(IApplicationManager appManager,
+            IProject project, String appId, int beforeCount)
     {
         for (int poll = 0; poll < READ_BACK_MAX_POLLS; poll++)
         {
             int now = countAppsWithId(appManager, project, appId);
-            if (now < 0)
+            if (now == COUNT_UNKNOWN)
             {
-                // Cannot read back — do not block the (already successful) deletion result.
-                return true;
+                return ReadBack.UNREADABLE;
             }
-            if (now == 0 || now < beforeCount)
+            if (now == 0 || (beforeCount != COUNT_UNKNOWN && now < beforeCount))
             {
-                return true;
+                return ReadBack.CONFIRMED;
             }
 
             if (poll < READ_BACK_MAX_POLLS - 1)
@@ -1165,19 +1210,22 @@ public class DeleteInfobaseTool implements IMcpTool
                 catch (InterruptedException ie)
                 {
                     Thread.currentThread().interrupt();
-                    break;
+                    return ReadBack.UNREADABLE;
                 }
             }
         }
-        return false;
+        // Every poll read a count, and it never dropped. With no baseline to compare against, a
+        // non-zero count is not evidence that the deletion failed either.
+        return beforeCount == COUNT_UNKNOWN ? ReadBack.UNREADABLE : ReadBack.STILL_LISTED;
     }
 
     /**
-     * Counts the project's applications whose id equals {@code appId}. Returns -1 if the application list
-     * could not be read (the caller treats that as "cannot confirm" rather than a failure).
+     * Counts the project's applications whose id equals {@code appId}. Returns {@link #COUNT_UNKNOWN}
+     * if the application list could not be read.
      *
      * <p>BOUNDED (#622). An expired deadline is one more way of not being able to read, so it takes
-     * the same -1; the caller's poll loop stops at the first -1, so at most one deadline is paid.
+     * the same {@link #COUNT_UNKNOWN}; the caller's poll loop stops at the first one, so at most one
+     * deadline is paid.
      */
     private static int countAppsWithId(IApplicationManager appManager, IProject project, String appId)
     {
@@ -1188,7 +1236,7 @@ public class DeleteInfobaseTool implements IMcpTool
         {
             Activator.logError("delete_infobase: read-back could not be completed — " //$NON-NLS-1$
                 + read.deadlineFailure(), null);
-            return -1;
+            return COUNT_UNKNOWN;
         }
         try
         {
@@ -1208,7 +1256,7 @@ public class DeleteInfobaseTool implements IMcpTool
         }
         catch (Exception e)
         {
-            return -1;
+            return COUNT_UNKNOWN;
         }
     }
 

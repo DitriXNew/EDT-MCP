@@ -328,10 +328,13 @@ public class ApplicationSupportBoundedReadTest
     @Test
     public void testAnAlreadyInterruptedCallerRunsTheReadAndStaysInterrupted() throws Exception
     {
-        // Measured, not assumed: Job.join CONSUMES a pending interrupt rather than raising on it,
-        // so moving the read off the caller's thread would swallow the flag and disarm every
-        // interruption check downstream (create_infobase's read-back poll is one). The read must
-        // behave exactly as the unbounded call did, and the flag must survive.
+        // Measured against org.eclipse.core.jobs as shipped with EDT 2026.2, not assumed:
+        // Semaphore.acquire(long) THROWS on a pending interrupt before waiting, and
+        // JobManager.join rethrows it whenever LockManager.canBlock() is true (off the UI thread
+        // it always is). Moving the read off the caller's thread would therefore skip the read
+        // entirely for an already-interrupted caller — hence the flag is taken before the join and
+        // restored after, so the read behaves exactly as the unbounded call did AND the flag
+        // survives to arm the caller's own checks (create_infobase's read-back poll is one).
         IApplicationManager manager = mock(IApplicationManager.class);
         IProject project = mock(IProject.class);
         when(project.getName()).thenReturn(PROJECT_NAME);

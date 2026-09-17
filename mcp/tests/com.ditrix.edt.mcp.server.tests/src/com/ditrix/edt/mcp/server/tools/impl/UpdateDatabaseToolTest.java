@@ -1932,4 +1932,91 @@ public class UpdateDatabaseToolTest
             assertTrue(finished.await(5, TimeUnit.SECONDS));
         }
     }
+
+    @Test
+    public void testAWedgedDefaultApplicationReadRefusesInsteadOfSkippingTheCrossCheck()
+        throws Exception
+    {
+        // The fail-closed cross-check ("one application, but the default resolver names another")
+        // is the last guard before this irreversible tool writes a database. Its read used to go
+        // through LaunchLifecycleUtils.resolveDefaultApplicationId, which returns the id it was
+        // GIVEN ("") when the bounded read does not conclude - and the guard's own
+        // `!resolved.isEmpty()` test then waved that through, so a cross-check that never ran
+        // passed silently and the write proceeded. It must refuse, exactly like its sibling list
+        // read in the same method.
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn(PROJECT);
+        IApplication only = app("app-only", "The only infobase"); //$NON-NLS-1$ //$NON-NLS-2$
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        when(mgr.getApplications(project)).thenReturn(Collections.singletonList(only));
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        when(mgr.getDefaultApplication(project)).thenAnswer(invocation -> {
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return Optional.of(only);
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+
+        try
+        {
+            long startMs = System.currentTimeMillis();
+            ApplicationFallback result = UpdateDatabaseTool.resolveSoleApplicationId(project, mgr,
+                PROJECT, CONFIG, 250L);
+
+            assertTrue("the caller must answer on its own deadline, not on the wedge", //$NON-NLS-1$
+                System.currentTimeMillis() - startMs < 20_000L);
+            // The defect, stated as the assertion that fails without the fix: the tool came back
+            // with a target and went on to write a database.
+            assertNull("a cross-check that never ran must not resolve a target", //$NON-NLS-1$
+                result.applicationId);
+            assertNotNull("a cross-check that never ran must be refused", result.errorJson); //$NON-NLS-1$
+            assertTrue("the refusal must say the cross-check could not be done", //$NON-NLS-1$
+                result.errorJson.contains("could not be cross-checked against the project's " //$NON-NLS-1$
+                    + "default application")); //$NON-NLS-1$
+            assertTrue("the refusal must carry the deadline diagnosis", //$NON-NLS-1$
+                result.errorJson.contains("the EDT default-application lookup for project '" //$NON-NLS-1$
+                    + PROJECT + "'")); //$NON-NLS-1$
+            assertTrue("the refusal must say nothing was updated", //$NON-NLS-1$
+                result.errorJson.contains("Nothing was updated")); //$NON-NLS-1$
+            // It must not be worded as the DISAGREEMENT refusal either: nothing disagreed.
+            assertFalse("an unread default must not be reported as a disagreement", //$NON-NLS-1$
+                result.errorJson.contains("but a different default application")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testADefaultApplicationReadThatRaisesRefusesToo() throws ApplicationException
+    {
+        // Consistency with the sibling list read, which refuses on an ApplicationException as well:
+        // a cross-check that blew up established nothing, and "not measured" must not be read as
+        // "no disagreement" by the tool that writes the database.
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn(PROJECT);
+        IApplication only = app("app-only", "The only infobase"); //$NON-NLS-1$ //$NON-NLS-2$
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        when(mgr.getApplications(project)).thenReturn(Collections.singletonList(only));
+        when(mgr.getDefaultApplication(project))
+            .thenThrow(new ApplicationException("delegates are not up")); //$NON-NLS-1$
+
+        ApplicationFallback result =
+            UpdateDatabaseTool.resolveSoleApplicationId(project, mgr, PROJECT, CONFIG);
+
+        assertNull("a cross-check that raised must not resolve a target", result.applicationId); //$NON-NLS-1$
+        assertNotNull("a cross-check that raised must be refused", result.errorJson); //$NON-NLS-1$
+        assertTrue("the refusal must carry the platform reason", //$NON-NLS-1$
+            result.errorJson.contains("delegates are not up")); //$NON-NLS-1$
+        assertTrue("the refusal must say nothing was updated", //$NON-NLS-1$
+            result.errorJson.contains("Nothing was updated")); //$NON-NLS-1$
+    }
 }
