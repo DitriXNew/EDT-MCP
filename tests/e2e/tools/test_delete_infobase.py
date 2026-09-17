@@ -16,8 +16,13 @@ JSON tool (getResponseType() == JSON); payload in r.structured:
   preview:  {"success": true, "action": "preview", "confirmationRequired": true,
              "project", "applicationId", "infobaseName", "deleteRegistration", "message"}
   deleted:  {"success": true, "action": "deleted", "project", "applicationId",
-             "infobaseName", "deleteRegistration", "message"}
+             "infobaseName", "deleteRegistration", "databaseFilesDeleted", "message"}
   error:    {"success": false, "error": "..."}
+
+databaseFilesDeleted=false has THREE causes and only `message` tells them apart:
+a measured co-owner ("still used by other project(s)"), a locked/absent directory,
+and a shared-infobase check that did not complete ("is shared is UNKNOWN") - the
+last one establishes nothing about sharing and is re-run by the next call.
 
 CI STRATEGY
 -----------

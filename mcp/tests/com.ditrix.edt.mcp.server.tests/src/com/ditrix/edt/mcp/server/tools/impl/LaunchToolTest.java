@@ -2273,15 +2273,16 @@ public class LaunchToolTest
         }
     }
 
-    // ==================== #622: a wedged lookup degrades like a raised one ====================
+    // ============ #622: a wedged lookup REFUSES, and says so differently from not-found ============
 
     @Test
-    public void testAWedgedApplicationLookupFallsThroughInsteadOfRefusingTheLaunch()
+    public void testAWedgedApplicationLookupRefusesInsteadOfLaunchingWithoutTheUpdate()
         throws Exception
     {
-        // The ApplicationException branch here is a deliberate degradation: the launch goes on
-        // to look for a launch configuration. A deadline means the same thing - "could not be
-        // checked" - so it must take the SAME path and NOT produce the not-found error payload.
+        // Falling through here looked like a harmless degradation and was not: a null application
+        // gates runPreLaunchUpdateStep off, so the call answered success/launching having skipped
+        // the database update updateBeforeLaunch asked for - while the by-NAME route hard-errors on
+        // the identical wedge. The refusal must also NOT read as a not-found.
         IApplicationManager manager = mock(IApplicationManager.class);
         IProject project = mock(IProject.class);
         CountDownLatch release = new CountDownLatch(1);
@@ -2303,8 +2304,15 @@ public class LaunchToolTest
             LaunchTool.ApplicationResolution resolution = LaunchTool.resolveApplication(project,
                 "Infobase.Wedged", manager, 250L); //$NON-NLS-1$
 
-            assertNull("a wedged lookup must not refuse the launch", resolution.error); //$NON-NLS-1$
+            assertNotNull("a wedged lookup must refuse, not launch without the update", //$NON-NLS-1$
+                resolution.error);
             assertNull("nothing was resolved", resolution.application); //$NON-NLS-1$
+            assertTrue("the refusal names the deadline", //$NON-NLS-1$
+                resolution.error.contains("did not finish within 250ms")); //$NON-NLS-1$
+            assertTrue("the refusal must say nothing was launched", //$NON-NLS-1$
+                resolution.error.contains("Nothing was launched")); //$NON-NLS-1$
+            assertFalse("a deadline is NOT a not-found", //$NON-NLS-1$
+                resolution.error.contains("Application not found")); //$NON-NLS-1$
             assertEquals("the id stays the display name when nothing resolved", //$NON-NLS-1$
                 "Infobase.Wedged", resolution.applicationName); //$NON-NLS-1$
         }

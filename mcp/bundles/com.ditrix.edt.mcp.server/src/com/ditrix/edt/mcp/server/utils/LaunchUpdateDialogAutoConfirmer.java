@@ -543,6 +543,20 @@ public final class LaunchUpdateDialogAutoConfirmer
     public static final String CANCEL_REASON_NOT_ATTRIBUTED = "not-attributed"; //$NON-NLS-1$
 
     /**
+     * Reason value: the dialog could not be attributed because the caller's own infobase-name
+     * lookup did not CONCLUDE (#622) — EDT's application manager did not answer inside the
+     * attribution deadline.
+     *
+     * <p>Separated from {@link #CANCEL_REASON_NOT_ATTRIBUTED} because the advice inverts. That one
+     * means the targeted application resolves no infobase, which no retry changes; this one is a
+     * ten-second deadline on a read that normally returns in milliseconds, and it is exactly the
+     * case where retrying (once EDT answers again) is what helps. A window only reports it when
+     * the caller told it its attribution was inconclusive — see
+     * {@link #beginConflictWatch(String, String, boolean)}.
+     */
+    public static final String CANCEL_REASON_ATTRIBUTION_UNAVAILABLE = "attribution-unavailable"; //$NON-NLS-1$
+
+    /**
      * The conflict-cancel windows currently open — one per update in flight (see
      * {@link #beginConflictWatch(String)}). A cancelled dialog is recorded INTO the windows it
      * belongs to, so both the fact and its reason stay correlated with the caller that owns
@@ -3154,7 +3168,30 @@ public final class LaunchUpdateDialogAutoConfirmer
      */
     public static ConflictWatch beginConflictWatch(String infobaseName, String serverName)
     {
-        ConflictWatch watch = new ConflictWatch(trimToNull(infobaseName), trimToNull(serverName));
+        return beginConflictWatch(infobaseName, serverName, false);
+    }
+
+    /**
+     * Opens a window that also knows whether the caller's attribution lookup CONCLUDED.
+     *
+     * <p>A {@code null} {@code infobaseName} has two very different causes, and the window is the
+     * only place that can still tell them apart: the application genuinely names no infobase, or
+     * the bounded lookup for that name expired (#622). Both degrade the arm to {@code cancel};
+     * only the second is worth retrying, so a window told the lookup was inconclusive reports
+     * {@link #CANCEL_REASON_ATTRIBUTION_UNAVAILABLE} in place of
+     * {@link #CANCEL_REASON_NOT_ATTRIBUTED}.
+     *
+     * @param infobaseName the infobase being worked on (may be {@code null})
+     * @param serverName the WST server name this call may start (may be {@code null})
+     * @param attributionInconclusive {@code true} when the names above are {@code null} because
+     *     the read did not conclude, rather than because there are none
+     * @return the open window, never {@code null}
+     */
+    public static ConflictWatch beginConflictWatch(String infobaseName, String serverName,
+        boolean attributionInconclusive)
+    {
+        ConflictWatch watch = new ConflictWatch(trimToNull(infobaseName), trimToNull(serverName),
+            attributionInconclusive);
         synchronized (LOCK)
         {
             CONFLICT_WATCHES.add(watch);
@@ -3202,6 +3239,9 @@ public final class LaunchUpdateDialogAutoConfirmer
 
         /** The server this window covers, when the caller could resolve it. */
         private final String serverName;
+
+        /** Whether the caller's attribution lookup expired instead of answering (#622). */
+        private final boolean attributionInconclusive;
         private int cancels;
         private String reason;
         private boolean portConflict;
@@ -3212,13 +3252,19 @@ public final class LaunchUpdateDialogAutoConfirmer
 
         ConflictWatch(String infobaseName)
         {
-            this(infobaseName, null);
+            this(infobaseName, null, false);
         }
 
         ConflictWatch(String infobaseName, String serverName)
         {
+            this(infobaseName, serverName, false);
+        }
+
+        ConflictWatch(String infobaseName, String serverName, boolean attributionInconclusive)
+        {
             this.infobaseName = infobaseName;
             this.serverName = serverName;
+            this.attributionInconclusive = attributionInconclusive;
         }
 
         void record(String cancelReason)
@@ -3344,12 +3390,21 @@ public final class LaunchUpdateDialogAutoConfirmer
          * Why the last cancel in this window happened — one of the {@code CANCEL_REASON_*}
          * constants; only meaningful when {@link #cancelled()} is {@code true}.
          *
+         * <p>A {@link #CANCEL_REASON_NOT_ATTRIBUTED} recorded into a window whose own attribution
+         * lookup never concluded is reported as {@link #CANCEL_REASON_ATTRIBUTION_UNAVAILABLE}
+         * instead. The press path cannot make that distinction — it only ever sees a {@code null}
+         * name — but this window knows WHY its name was null, and the two carry opposite advice.
+         *
          * @return the reason token, or {@code null} when nothing was cancelled
          */
         public String reason()
         {
             synchronized (LOCK)
             {
+                if (attributionInconclusive && CANCEL_REASON_NOT_ATTRIBUTED.equals(reason))
+                {
+                    return CANCEL_REASON_ATTRIBUTION_UNAVAILABLE;
+                }
                 return reason;
             }
         }

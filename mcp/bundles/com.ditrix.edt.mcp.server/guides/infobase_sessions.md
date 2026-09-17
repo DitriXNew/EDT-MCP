@@ -4,11 +4,13 @@ Lists or terminates live sessions reported by `ibcmd` for a running EDT standalo
 
 This tool works only with applications whose EDT type is `wst-server` (standalone server). It uses the runtime and live process owned by EDT; it does not inspect file-infobase or client/server applications.
 
-`action='list'` has three meaningful outcomes:
+`action='list'` has three meaningful outcomes plus one refusal:
 
 - `reachable=true` with one or more `sessions` — the list was read;
 - `reachable=true` with `sessions=[]` — the list was read and proves there are no sessions;
 - `reachable=false` with `unreachableReason` and no `sessions` field — the application is the wrong type, the standalone server is not running, the runtime is unknown, `ibcmd` is missing, or the command failed.
+
+The fourth is structurally different: `success=false` with no `reachable` field at all, when the application lookup or the infobase lock did not conclude inside its bound. Nothing was listed or terminated, and whether the application exists was never established — it is neither `reachable=true` nor `reachable=false`. Passing `applicationId` explicitly skips the wedge-prone default-application lookup.
 
 Never interpret `reachable=false` as an empty session list. Fix the named reason or decide explicitly whether the caller can proceed without proof.
 

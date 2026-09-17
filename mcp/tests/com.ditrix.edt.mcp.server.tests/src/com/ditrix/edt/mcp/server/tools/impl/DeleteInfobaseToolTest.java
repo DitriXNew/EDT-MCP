@@ -14,6 +14,8 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -367,6 +369,105 @@ public class DeleteInfobaseToolTest
         assertFalse("an unreadable read-back must not pass silently", unreadable.isEmpty()); //$NON-NLS-1$
         assertFalse("an unreadable read-back must not claim the entry was seen", //$NON-NLS-1$
             unreadable.contains("may still appear in get_applications briefly")); //$NON-NLS-1$
+    }
+
+    // ========== #622/D: an expired shared-infobase check is not measured co-ownership ==========
+
+    @Test
+    public void testAnUnconcludedSharedCheckIsUnknownNotShared() throws Exception
+    {
+        // The enumeration cannot finish inside the deadline, so nothing about co-ownership was
+        // established. The conservative KEEP is right; calling it SHARED is the claim that is not.
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        try
+        {
+            DeleteInfobaseTool.SharedDatabase shared = DeleteInfobaseTool.sharedCheckBounded(250L,
+                () -> {
+                    try
+                    {
+                        release.await(30, TimeUnit.SECONDS);
+                        return Boolean.FALSE;
+                    }
+                    catch (InterruptedException e)
+                    {
+                        Thread.currentThread().interrupt();
+                        return Boolean.FALSE;
+                    }
+                    finally
+                    {
+                        finished.countDown();
+                    }
+                });
+
+            assertEquals(DeleteInfobaseTool.SharedDatabase.UNKNOWN, shared);
+            assertTrue("an unconcluded check must still keep the files", shared.keepsFiles()); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testAConcludedSharedCheckKeepsBothMeasuredAnswers()
+    {
+        assertEquals("a concluded 'yes' is SHARED", DeleteInfobaseTool.SharedDatabase.SHARED, //$NON-NLS-1$
+            DeleteInfobaseTool.sharedCheckBounded(30_000L, () -> Boolean.TRUE));
+        assertEquals("a concluded 'no' is NOT_SHARED", //$NON-NLS-1$
+            DeleteInfobaseTool.SharedDatabase.NOT_SHARED,
+            DeleteInfobaseTool.sharedCheckBounded(30_000L, () -> Boolean.FALSE));
+        assertFalse("only a measured 'no' may delete the files", //$NON-NLS-1$
+            DeleteInfobaseTool.SharedDatabase.NOT_SHARED.keepsFiles());
+        assertTrue(DeleteInfobaseTool.SharedDatabase.SHARED.keepsFiles());
+    }
+
+    @Test
+    public void testAnUnknownSharedCheckIsNotReportedAsCoOwnership()
+    {
+        Path dbDir = Paths.get("C:", "bases", "Demo"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String unknown = DeleteInfobaseTool.databaseResultNote(new DeleteInfobaseTool.DbFileOutcome(
+            true, dbDir, false, DeleteInfobaseTool.SharedDatabase.UNKNOWN));
+        String shared = DeleteInfobaseTool.databaseResultNote(new DeleteInfobaseTool.DbFileOutcome(
+            true, dbDir, false, DeleteInfobaseTool.SharedDatabase.SHARED));
+
+        assertTrue("it must say the files were kept", unknown.contains("were KEPT")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("it must say the check could not be completed", //$NON-NLS-1$
+            unknown.contains("could not be completed")); //$NON-NLS-1$
+        assertTrue("it must say the sharing itself is unknown", //$NON-NLS-1$
+            unknown.contains("is shared is UNKNOWN")); //$NON-NLS-1$
+        // The sentence this replaced, which stated an unmeasured fact as a measured one.
+        assertFalse("an unconcluded check must not claim another project uses the database", //$NON-NLS-1$
+            unknown.contains("still used by other project(s)")); //$NON-NLS-1$
+        // And the genuinely-shared case must keep saying exactly that.
+        assertTrue("a measured co-owner must still be named as one", //$NON-NLS-1$
+            shared.contains("still used by other project(s)")); //$NON-NLS-1$
+        assertFalse(shared.contains("UNKNOWN")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnknownPreviewSaysTheConfirmReRunsTheCheck()
+    {
+        Path dbDir = Paths.get("C:", "bases", "Demo"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String unknown = DeleteInfobaseTool.databasePreviewNote(true, dbDir,
+            DeleteInfobaseTool.SharedDatabase.UNKNOWN);
+        String shared = DeleteInfobaseTool.databasePreviewNote(true, dbDir,
+            DeleteInfobaseTool.SharedDatabase.SHARED);
+
+        // Preview and confirm are separate calls, each running its OWN bounded enumeration, so a
+        // deadline that flips between them makes the preview non-binding. The preview has to say so.
+        assertTrue("the preview must say the files would be kept", unknown.contains("KEPT")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the preview must say the check did not complete", //$NON-NLS-1$
+            unknown.contains("did not complete")); //$NON-NLS-1$
+        assertTrue("the preview must say confirm=true re-runs the check", //$NON-NLS-1$
+            unknown.contains("confirm=true re-runs that check")); //$NON-NLS-1$
+        assertTrue("the preview must admit the files may be deleted after all", //$NON-NLS-1$
+            unknown.contains("may be DELETED after all")); //$NON-NLS-1$
+        assertFalse("an unconcluded preview must not claim other projects use it", //$NON-NLS-1$
+            unknown.contains("still used by other projects")); //$NON-NLS-1$
+        assertTrue("the measured-shared preview keeps its own wording", //$NON-NLS-1$
+            shared.contains("still used by other projects")); //$NON-NLS-1$
     }
 
     private static IApplication app(String id)

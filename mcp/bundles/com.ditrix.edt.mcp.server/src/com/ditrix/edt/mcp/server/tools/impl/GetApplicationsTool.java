@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 
 import org.eclipse.core.resources.IProject;
 
@@ -26,6 +27,7 @@ import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 /**
@@ -72,7 +74,9 @@ public class GetApplicationsTool implements IMcpTool
             .objectArrayProperty(KEY_APPLICATIONS, "Applications with id, name, type and updateState. " //$NON-NLS-1$
                 + "updateState is a cached infobase-equality comparison refreshed asynchronously; " //$NON-NLS-1$
                 + "immediately after update_database it can still show the pre-update value, while " //$NON-NLS-1$
-                + "update_database stateAfter is the authoritative post-update answer.") //$NON-NLS-1$
+                + "update_database stateAfter is the authoritative post-update answer. " //$NON-NLS-1$
+                + "updateState=UNKNOWN (with updateStateError) means that read did not conclude - " //$NON-NLS-1$
+                + "it is NOT a claim that the infobase is up to date.") //$NON-NLS-1$
             .integerProperty(KEY_COUNT, "Number of applications found") //$NON-NLS-1$
             .stringProperty("message", "Informational message: no applications were found, or the " //$NON-NLS-1$ //$NON-NLS-2$
                 + "applications were read but the default application could not be determined " //$NON-NLS-1$
@@ -94,9 +98,9 @@ public class GetApplicationsTool implements IMcpTool
     @Override
     public boolean connectsToInfobase()
     {
-        // addUpdateState()'s appManager.getUpdateState(app) read-back is the async
-        // background recompute that historically raised the auth dialog (issue #230's
-        // history); gate on it here too (issue #270).
+        // The per-application appManager.getUpdateState(app) read-back (see
+        // updateStatesBounded) is the async background recompute that historically raised the
+        // auth dialog (issue #230's history); gate on it here too (issue #270).
         return true;
     }
 
@@ -169,14 +173,7 @@ public class GetApplicationsTool implements IMcpTool
                 .put(KEY_APPLICATIONS, appsArray)
                 .put(KEY_COUNT, applications.size());
 
-            if (defaultApp.id() != null)
-            {
-                result.put("defaultApplicationId", defaultApp.id()); //$NON-NLS-1$
-            }
-            else if (defaultApp.note() != null)
-            {
-                result.put("message", defaultApp.note()); //$NON-NLS-1$
-            }
+            applyDefaultApplication(result, defaultApp);
 
             // Present only on the inherited branch (dependent project whose applications
             // come from its base configuration project).
@@ -205,14 +202,43 @@ public class GetApplicationsTool implements IMcpTool
     }
 
     /**
+     * Writes the default-application answer into the result: its ID, or the note saying why the
+     * id is UNKNOWN — never both.
+     *
+     * <p>Extracted so the SERIALIZED payload can be pinned rather than the record in isolation.
+     * Omitting {@code defaultApplicationId} is how this tool says "this project records no
+     * default", so the one-line mistake of letting an unanswered lookup produce that same silence
+     * has no other symptom: the caller reads an unasked question as an answer.
+     *
+     * @param result the success payload being built
+     * @param defaultApp what the bounded default-application lookup established
+     * @return the same {@code result}, for chaining
+     */
+    static ToolResult applyDefaultApplication(ToolResult result, DefaultApplication defaultApp)
+    {
+        if (defaultApp.id() != null)
+        {
+            result.put("defaultApplicationId", defaultApp.id()); //$NON-NLS-1$
+        }
+        else if (defaultApp.note() != null)
+        {
+            result.put("message", defaultApp.note()); //$NON-NLS-1$
+        }
+        return result;
+    }
+
+    /**
      * Resolves the applications for the named project. For a configuration project this is always
      * the named project's own list. For a dependent project (external-objects / extension) whose
      * own application list is empty, falls back to the BASE configuration project the applications
      * are inherited from.
      *
-     * <p>Both reads are BOUNDED (#622): this tool is the recovery path every other application
+     * <p>Both listings are BOUNDED (#622): this tool is the recovery path every other application
      * error points the agent at ("Use get_applications to list available application IDs"), so it
-     * is the one that must never be the call that hangs.
+     * has to answer even when EDT does not. What that buys is a FINITE worst case, not a fast one —
+     * these two listings, the default-application lookup and the per-application update-state reads
+     * are four separate budgets that ADD UP. The claim this class makes is the one it can keep:
+     * every {@link IApplicationManager} read it performs is bounded.
      *
      * @param appManager the application manager
      * @param project the named project
@@ -287,9 +313,12 @@ public class GetApplicationsTool implements IMcpTool
      */
     private JsonArray buildApplicationsArray(IApplicationManager appManager, List<IApplication> applications)
     {
+        UpdateStates updateStates =
+            updateStatesBounded(appManager, applications, ApplicationSupport.LOOKUP_TIMEOUT_MS);
         JsonArray appsArray = new JsonArray();
-        for (IApplication app : applications)
+        for (int i = 0; i < applications.size(); i++)
         {
+            IApplication app = applications.get(i);
             JsonObject appObj = new JsonObject();
             appObj.addProperty("id", app.getId()); //$NON-NLS-1$
             appObj.addProperty("name", app.getName()); //$NON-NLS-1$
@@ -300,8 +329,8 @@ public class GetApplicationsTool implements IMcpTool
                 appObj.addProperty("type", app.getType().getId()); //$NON-NLS-1$
             }
 
-            // Add update state
-            addUpdateState(appManager, app, appObj);
+            // Add update state (or say it is unknown — never silently omit it)
+            updateStates.mergeInto(appObj, i);
 
             // Add required version if present
             app.getRequiredVersion().ifPresent(version ->
@@ -310,6 +339,96 @@ public class GetApplicationsTool implements IMcpTool
             appsArray.add(appObj);
         }
         return appsArray;
+    }
+
+    /**
+     * Reads the update state of EVERY application under ONE deadline.
+     *
+     * <p>{@code getUpdateState} is an {@link IApplicationManager} call — this file's own comment on
+     * {@code connectsToInfobase()} calls it the dangerous one — and it ran once per application
+     * with no bound at all, which made the tool every other error points the agent at the tool that
+     * could park indefinitely. One budget for the whole loop, not one per application: they queue
+     * behind the same wedged monitor, so N deadlines would multiply the wait by the application
+     * count for no extra information.
+     *
+     * <p>Cells are published through an {@link AtomicReferenceArray} because the job may still be
+     * running when the deadline returns: each entry is filled completely and then set, so a reader
+     * either sees a finished object or nothing, never a half-built one.
+     *
+     * @param appManager the application manager
+     * @param applications the applications, in the order the result renders them
+     * @param timeoutMs the budget for ALL the update-state reads together
+     * @return the filled cells plus the reason any of them are missing; never {@code null}
+     */
+    static UpdateStates updateStatesBounded(IApplicationManager appManager,
+        List<IApplication> applications, long timeoutMs)
+    {
+        AtomicReferenceArray<JsonObject> cells = new AtomicReferenceArray<>(applications.size());
+        ApplicationSupport.BoundedRead<Void> read = ApplicationSupport.readBounded(
+            "Read EDT application update states", //$NON-NLS-1$
+            "the EDT update-state read for the project's applications", //$NON-NLS-1$
+            timeoutMs, () -> {
+                for (int i = 0; i < applications.size(); i++)
+                {
+                    cells.set(i, readUpdateState(appManager, applications.get(i)));
+                }
+                return null;
+            });
+        if (read.concluded())
+        {
+            return new UpdateStates(cells, null);
+        }
+        Activator.logError("get_applications: " + read.deadlineFailure(), null); //$NON-NLS-1$
+        return new UpdateStates(cells, read.deadlineFailure());
+    }
+
+    /**
+     * The per-application update states of ONE call, plus the reason the missing ones are missing.
+     *
+     * <p>A local value, not tool state: the registrar keeps ONE {@link GetApplicationsTool}
+     * instance and concurrent calls share it, so a field here would let one call's deadline
+     * describe another call's applications.
+     */
+    static final class UpdateStates
+    {
+        private final AtomicReferenceArray<JsonObject> cells;
+        private final String unknownReason;
+
+        UpdateStates(AtomicReferenceArray<JsonObject> cells, String unknownReason)
+        {
+            this.cells = cells;
+            this.unknownReason = unknownReason;
+        }
+
+        /**
+         * Copies application {@code index}'s update-state properties into {@code appObj}, or says
+         * they are UNKNOWN.
+         *
+         * <p>A missing cell is REPORTED, not omitted: the caller reads {@code updateState} to
+         * decide whether to run {@code update_database}, and an absent field would read as
+         * "nothing to say" about a question that was never answered.
+         *
+         * @param appObj the application's JSON object
+         * @param index the application's position in the rendered list
+         */
+        void mergeInto(JsonObject appObj, int index)
+        {
+            JsonObject cell = cells.get(index);
+            if (cell != null)
+            {
+                for (Map.Entry<String, JsonElement> entry : cell.entrySet())
+                {
+                    appObj.add(entry.getKey(), entry.getValue());
+                }
+                return;
+            }
+            appObj.addProperty("updateState", "UNKNOWN"); //$NON-NLS-1$ //$NON-NLS-2$
+            appObj.addProperty("updateStateDescription", //$NON-NLS-1$
+                "The update state could not be read, so whether this infobase is behind the model " //$NON-NLS-1$
+                    + "is unknown - it is NOT a claim that it is up to date."); //$NON-NLS-1$
+            appObj.addProperty("updateStateError", unknownReason != null //$NON-NLS-1$
+                ? unknownReason : "the update-state read produced no answer for this application"); //$NON-NLS-1$
+        }
     }
 
     /**
@@ -331,34 +450,40 @@ public class GetApplicationsTool implements IMcpTool
     }
 
     /**
-     * Adds the update-state properties for a single application to its JSON object.
+     * Reads the update-state properties of a single application into their own JSON object.
      * On error the state is reported as {@code "ERROR"} together with the error message,
      * preserving the original inline behaviour.
      *
+     * <p>Returns a self-contained object rather than writing into the application's own: it runs
+     * on the bounded read's job thread, and the result is published through an
+     * {@link AtomicReferenceArray} only once it is complete.
+     *
      * @param appManager the application manager
      * @param app the application whose update state is read
-     * @param appObj the JSON object to populate
+     * @return the update-state properties; empty when the manager reported no state at all
      */
-    private void addUpdateState(IApplicationManager appManager, IApplication app, JsonObject appObj)
+    private static JsonObject readUpdateState(IApplicationManager appManager, IApplication app)
     {
+        JsonObject stateObj = new JsonObject();
         try
         {
             ApplicationUpdateState updateState = appManager.getUpdateState(app);
             if (updateState != null)
             {
-                appObj.addProperty("updateState", updateState.name()); //$NON-NLS-1$
+                stateObj.addProperty("updateState", updateState.name()); //$NON-NLS-1$
 
                 // Add human-readable description
                 String stateDescription = getUpdateStateDescription(updateState);
-                appObj.addProperty("updateStateDescription", stateDescription); //$NON-NLS-1$
+                stateObj.addProperty("updateStateDescription", stateDescription); //$NON-NLS-1$
             }
         }
         catch (ApplicationException e)
         {
             Activator.logError("Error getting update state for application: " + app.getId(), e); //$NON-NLS-1$
-            appObj.addProperty("updateState", "ERROR"); //$NON-NLS-1$ //$NON-NLS-2$
-            appObj.addProperty("updateStateError", e.getMessage()); //$NON-NLS-1$
+            stateObj.addProperty("updateState", "ERROR"); //$NON-NLS-1$ //$NON-NLS-2$
+            stateObj.addProperty("updateStateError", e.getMessage()); //$NON-NLS-1$
         }
+        return stateObj;
     }
 
     /**
@@ -396,8 +521,14 @@ public class GetApplicationsTool implements IMcpTool
         }
         catch (ApplicationException e)
         {
+            // A RAISED lookup establishes exactly as little as an expired one, so it must not fall
+            // into the silence below, which is this tool's way of saying "there is no default".
             Activator.logError("Error getting default application", e); //$NON-NLS-1$
+            return new DefaultApplication(null, "The default application is UNKNOWN: the lookup " //$NON-NLS-1$
+                + "failed (" + e.getMessage() //$NON-NLS-1$
+                + "). The applications above were read successfully."); //$NON-NLS-1$
         }
+        // The one branch that IS a measured answer: the lookup concluded and reported no default.
         return new DefaultApplication(null, null);
     }
 
@@ -425,7 +556,7 @@ public class GetApplicationsTool implements IMcpTool
      * @param state the update state
      * @return description string
      */
-    private String getUpdateStateDescription(ApplicationUpdateState state)
+    private static String getUpdateStateDescription(ApplicationUpdateState state)
     {
         switch (state)
         {

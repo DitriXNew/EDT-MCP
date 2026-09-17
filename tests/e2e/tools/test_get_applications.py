@@ -18,6 +18,8 @@ placeholder). The success envelope is:
     {"success": true,
      "project": "<name>",
      "applications": [ {"id","name","type","updateState","updateStateDescription",
+                        # updateState is "UNKNOWN" + updateStateError when that
+                        # read did not conclude - never read it as "up to date"
                         ["requiredVersion"]}, ... ],
      "count": <int>,                       # == len(applications)
      ["defaultApplicationId": "<id>"],     # absent BOTH when no default is recorded

@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.core.resources.IProject;
 import org.junit.Test;
@@ -61,7 +62,9 @@ public class ApplicationSupportBoundedReadTest
     /** The exact deadline sentence for a singular lookup that timed out at {@link #SHORT_DEADLINE_MS}. */
     private static final String EXPECTED_LOOKUP_TIMEOUT =
         "the EDT application lookup for application 'Infobase.Test' did not finish within 250ms " //$NON-NLS-1$
-            + "and may still be running"; //$NON-NLS-1$
+            + "and may still be running, so it may yet change EDT's stored state; an immediate " //$NON-NLS-1$
+            + "retry queues behind the same wedge, and if it keeps expiring EDT has to be " //$NON-NLS-1$
+            + "restarted"; //$NON-NLS-1$
 
     // ==================== A wedged read answers on the deadline ====================
 
@@ -185,7 +188,9 @@ public class ApplicationSupportBoundedReadTest
 
             assertFalse(read.concluded());
             assertEquals("the EDT application list for project 'TestConfiguration' did not finish " //$NON-NLS-1$
-                + "within 250ms and may still be running", read.deadlineFailure()); //$NON-NLS-1$
+                + "within 250ms and may still be running, so it may yet change EDT's stored " //$NON-NLS-1$
+                + "state; an immediate retry queues behind the same wedge, and if it keeps " //$NON-NLS-1$
+                + "expiring EDT has to be restarted", read.deadlineFailure()); //$NON-NLS-1$
             assertFalse("a wedged listing must not be worded as an empty project", //$NON-NLS-1$
                 read.deadlineFailure().contains("no applications")); //$NON-NLS-1$
         }
@@ -223,7 +228,9 @@ public class ApplicationSupportBoundedReadTest
 
             assertFalse(read.concluded());
             assertEquals("the EDT default-application lookup for project 'TestConfiguration' did " //$NON-NLS-1$
-                + "not finish within 250ms and may still be running", read.deadlineFailure()); //$NON-NLS-1$
+                + "not finish within 250ms and may still be running, so it may yet change EDT's " //$NON-NLS-1$
+                + "stored state; an immediate retry queues behind the same wedge, and if it keeps " //$NON-NLS-1$
+                + "expiring EDT has to be restarted", read.deadlineFailure()); //$NON-NLS-1$
             assertFalse("a wedged default lookup must not read as 'there is no default'", //$NON-NLS-1$
                 read.deadlineFailure().contains("has no default")); //$NON-NLS-1$
         }
@@ -449,13 +456,19 @@ public class ApplicationSupportBoundedReadTest
             new BoundedJob.Result(BoundedJob.Outcome.TIMED_OUT_BEFORE_START, 5_000L, null));
 
         assertEquals("the EDT application lookup for application 'Infobase.Test' did not start " //$NON-NLS-1$
-            + "within 5s; retry when EDT's background Job queue is responsive", beforeStart); //$NON-NLS-1$
+            + "within 5s and was cancelled before it began, so it read nothing and changed " //$NON-NLS-1$
+            + "nothing; retrying is safe", beforeStart); //$NON-NLS-1$
         // A queued job that was cancelled never ran, so claiming it may still be running would be
         // the exact opposite of the truth — and that is the ordinary-timeout wording.
         assertFalse("a never-started read must not claim it may still be running", //$NON-NLS-1$
             beforeStart.contains("may still be running")); //$NON-NLS-1$
         assertFalse("a never-started read must not use the ordinary timeout wording", //$NON-NLS-1$
             beforeStart.contains("did not finish within")); //$NON-NLS-1$
+        // It must not name a condition that cannot produce it either: for a rule-less job the Job
+        // queue always yields a worker, so "wait for a responsive Job queue" was advice about a
+        // state this outcome never reports.
+        assertFalse("the advice must not name the Job queue's responsiveness", //$NON-NLS-1$
+            beforeStart.contains("Job queue is responsive")); //$NON-NLS-1$
     }
 
     @Test
@@ -472,11 +485,14 @@ public class ApplicationSupportBoundedReadTest
             new BoundedJob.Result(BoundedJob.Outcome.NOT_RUN, 5_000L, null));
 
         assertEquals("the EDT application lookup for application 'Infobase.Test' did not finish " //$NON-NLS-1$
-            + "within 5s and may still be running", timedOut); //$NON-NLS-1$
+            + "within 5s and may still be running, so it may yet change EDT's stored state; an " //$NON-NLS-1$
+            + "immediate retry queues behind the same wedge, and if it keeps expiring EDT has to " //$NON-NLS-1$
+            + "be restarted", timedOut); //$NON-NLS-1$
         assertEquals("the wait for the EDT application lookup for application 'Infobase.Test' was " //$NON-NLS-1$
             + "interrupted and the lookup may still be running", interrupted); //$NON-NLS-1$
-        assertEquals("the EDT application lookup for application 'Infobase.Test' never ran " //$NON-NLS-1$
-            + "(NOT_RUN)", notRun); //$NON-NLS-1$
+        assertEquals("the EDT application lookup for application 'Infobase.Test' never ran: it " //$NON-NLS-1$
+            + "left EDT's background job queue without entering the work, so something other than " //$NON-NLS-1$
+            + "this call's deadline cancelled it and nothing was read", notRun); //$NON-NLS-1$
         assertDistinct(timedOut, beforeStart);
         assertDistinct(timedOut, notRun);
         assertDistinct(timedOut, interrupted);
@@ -484,7 +500,86 @@ public class ApplicationSupportBoundedReadTest
         // NOT_RUN is the one outcome our own deadline did NOT cause, so it must not tell the caller
         // to retry with a larger timeout.
         assertFalse("NOT_RUN must not advise waiting for the Job queue", //$NON-NLS-1$
-            notRun.contains("retry when EDT's background Job queue is responsive")); //$NON-NLS-1$
+            notRun.contains("Job queue is responsive")); //$NON-NLS-1$
+        // Nor may it hand the agent a Java enum constant to read.
+        assertFalse("NOT_RUN must not leak its own enum constant into agent prose", //$NON-NLS-1$
+            notRun.contains("NOT_RUN")); //$NON-NLS-1$
+        // The wedge is a monitor: a retry queues behind the same holder, so the ordinary timeout
+        // must name the restart rather than advise a loop that cannot end.
+        assertTrue("a timed-out read must name the EDT restart, not just a retry", //$NON-NLS-1$
+            timedOut.contains("EDT has to be restarted")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheInterruptPolicyIsWhetherTheFlagIsTakenBeforeTheJobIsScheduled()
+        throws Exception
+    {
+        // What the two policies DO differ in, deterministically and on every runtime: whether the
+        // caller's pending interrupt is still set when the job reaches the scheduler. Everything
+        // after that is the platform's decision - org.eclipse.core.jobs 3.15.700's
+        // JobManager.join rethrows an InterruptedException only when lockManager.canBlock(), and
+        // Semaphore.acquire has already CLEARED the flag by then - so a test that asserted a fast
+        // abort would be asserting the runtime's LockListener, not this class.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        when(manager.getApplications(project)).thenReturn(Collections.emptyList());
+        AtomicBoolean flagAtSchedule = new AtomicBoolean();
+
+        Thread.currentThread().interrupt();
+        try
+        {
+            ApplicationSupport.readBounded("Interrupt-aware read", "target", //$NON-NLS-1$ //$NON-NLS-2$
+                SANE_RETURN_MS, () -> manager.getApplications(project), false, job -> {
+                    flagAtSchedule.set(Thread.currentThread().isInterrupted());
+                    McpJobs.schedule(job);
+                });
+        }
+        finally
+        {
+            Thread.interrupted(); // clear it so later tests are unaffected
+        }
+
+        assertTrue("an interrupt-aware caller keeps its flag: the platform decides, not us", //$NON-NLS-1$
+            flagAtSchedule.get());
+
+        flagAtSchedule.set(true);
+        Thread.currentThread().interrupt();
+        try
+        {
+            ApplicationSupport.readBounded("Flag-taking read", "target", //$NON-NLS-1$ //$NON-NLS-2$
+                SANE_RETURN_MS, () -> manager.getApplications(project), true, job -> {
+                    flagAtSchedule.set(Thread.currentThread().isInterrupted());
+                    McpJobs.schedule(job);
+                });
+        }
+        finally
+        {
+            Thread.interrupted();
+        }
+
+        assertFalse("the tool entry points take the flag so the read still runs", //$NON-NLS-1$
+            flagAtSchedule.get());
+    }
+
+    @Test
+    public void testAJobManagerShutdownIsItsOwnNonConcludedRead()
+    {
+        // JobManager.scheduleInternal throws IllegalStateException once EDT's job manager has been
+        // shut down, and BoundedJob rethrows it - so before this, every bounded application read
+        // threw during EDT shutdown where the pre-#622 inline read simply worked.
+        BoundedRead<String> read = ApplicationSupport.readBounded("Shutdown probe", //$NON-NLS-1$
+            "the EDT application lookup for application 'Infobase.Test'", 5_000L, //$NON-NLS-1$
+            () -> "unreachable", true, job -> { //$NON-NLS-1$
+                throw new IllegalStateException("Job manager has been shut down."); //$NON-NLS-1$
+            });
+
+        assertFalse("a refused schedule is not a concluded read", read.concluded()); //$NON-NLS-1$
+        assertEquals(BoundedJob.Outcome.NOT_RUN, read.outcome());
+        assertEquals("the EDT application lookup for application 'Infobase.Test' could not be " //$NON-NLS-1$
+            + "started: EDT's background job manager has been shut down (EDT is stopping), so no " //$NON-NLS-1$
+            + "application read can run until EDT is restarted", read.deadlineFailure()); //$NON-NLS-1$
+        assertFalse("a refused schedule must not be worded as an expired deadline", //$NON-NLS-1$
+            read.deadlineFailure().contains("did not finish within")); //$NON-NLS-1$
     }
 
     @Test

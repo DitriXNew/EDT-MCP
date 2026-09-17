@@ -34,6 +34,19 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  * {@code IStartup} contributions. A slow contribution parks that monitor and every later read
  * blocks on it UNINTERRUPTIBLY. The only way to bound such a read is therefore to move it off
  * the caller's thread — see {@link #readBounded}.
+ *
+ * <h2>None of the three reads is side-effect-free</h2>
+ * Read off EDT's own sources, not assumed. All three end in the infobase provision delegate's
+ * {@code initIfNeeded}, which ASSIGNS a debug port to an application that has none: it scans up
+ * to a hundred candidate ports by actually BINDING a {@code ServerSocket} on each, then stores
+ * the winner through {@code setAttribute}, which flushes the preference store. The
+ * default-application read adds one more — a registered default that no longer resolves is
+ * cleared with an unconditional {@code setDefaultApplication(project, null)} remove.
+ *
+ * <p>So an abandoned read is not merely a question left unanswered: it can bind sockets, persist
+ * a debug port and erase a stored default AFTER the caller has returned. Every message about an
+ * expired deadline here therefore says the state MAY HAVE BEEN MUTATED — never that nothing
+ * happened.
  */
 public final class ApplicationSupport
 {
@@ -104,6 +117,12 @@ public final class ApplicationSupport
     /**
      * Resolves one application by id under a caller-side deadline.
      *
+     * <p><b>Not side-effect-free</b> (see the class comment): the resolution runs the provision
+     * delegate's {@code initIfNeeded}, which may bind up to a hundred sockets looking for a free
+     * debug port and then PERSIST the one it finds. A read abandoned at the deadline can do all
+     * of that after this method returned, so an expired deadline means "no answer, and the
+     * application's stored port may have changed" — never "nothing happened".
+     *
      * @param manager the application manager (never {@code null}) — taken as a parameter, not
      *     looked up here, so a caller's test can drive this with a mock
      * @param project the project to resolve in
@@ -128,6 +147,14 @@ public final class ApplicationSupport
      * afterwards. That is why an expired deadline means "unknown", never "the project has no
      * default application": the caller must not turn it into a not-found.
      *
+     * <p><b>An expired deadline also leaves the STORED default indeterminate.</b> That late clear
+     * is an unconditional remove, not a compare-and-set, and this plugin owns the partner write
+     * ({@code create_infobase}'s {@code setDefaultApplication(project, newApp)}). A read abandoned
+     * here can therefore land afterwards and erase a default the caller set in between. A caller
+     * that writes a default after a non-concluded lookup must RE-READ it before trusting it —
+     * and this method's own listing sibling is not a substitute, because the erase notifies with
+     * the stale application.
+     *
      * @param manager the application manager (never {@code null})
      * @param project the project whose default application is resolved
      * @param timeoutMs how long the CALLER waits
@@ -144,6 +171,13 @@ public final class ApplicationSupport
 
     /**
      * Lists the project's applications under a caller-side deadline.
+     *
+     * <p><b>Not side-effect-free</b> (see the class comment): the listing initialises EVERY
+     * application it returns, so one call can run the bind-a-hundred-sockets port scan once per
+     * application not yet carrying a port, and persist each result. A caller that POLLS this on
+     * a freshly created application — {@code create_infobase}'s read-back is exactly that — pays
+     * the scan on every poll, and a poll abandoned at the deadline can still allocate and store
+     * a port afterwards.
      *
      * @param manager the application manager (never {@code null})
      * @param project the project to list
@@ -183,20 +217,82 @@ public final class ApplicationSupport
     public static <T> BoundedRead<T> readBounded(String jobName, String target, long timeoutMs,
         IApplicationRead<T> read)
     {
+        return readBounded(jobName, target, timeoutMs, read, true);
+    }
+
+    /**
+     * Same bounded read, with the pending-interrupt policy explicit.
+     *
+     * <p>{@code runWhenInterrupted=true} is what the tool entry points want: their callers do not
+     * check the flag before the read, so consuming it here and letting the platform abort would
+     * silently skip the work. A caller that was ALREADY written against the raw
+     * {@code BoundedJob.run} — one that handles {@link BoundedJob.Outcome#INTERRUPTED} itself —
+     * passes {@code false} and keeps exactly the behaviour it had, whatever the runtime's
+     * {@code LockListener} makes of a pending interrupt.
+     *
+     * @param <T> what the read returns
+     * @param jobName the job name shown in EDT's progress UI
+     * @param target what the deadline sentence names
+     * @param timeoutMs how long the CALLER waits
+     * @param read the manager read to run
+     * @param runWhenInterrupted {@code true} to take and restore a pending interrupt so the read
+     *     still runs; {@code false} to let it surface as {@link BoundedJob.Outcome#INTERRUPTED}
+     * @return the bounded read, never {@code null}
+     */
+    public static <T> BoundedRead<T> readBounded(String jobName, String target, long timeoutMs,
+        IApplicationRead<T> read, boolean runWhenInterrupted)
+    {
+        return readBounded(jobName, target, timeoutMs, read, runWhenInterrupted, McpJobs::schedule);
+    }
+
+    /**
+     * Same bounded read with the job SCHEDULER supplied — the seam a test uses to drive the one
+     * outcome a real job manager cannot be made to produce on demand: a schedule refused because
+     * EDT is shutting down.
+     *
+     * @param <T> what the read returns
+     * @param jobName the job name shown in EDT's progress UI
+     * @param target what the deadline sentence names
+     * @param timeoutMs how long the CALLER waits
+     * @param read the manager read to run
+     * @param runWhenInterrupted whether a pending interrupt is taken so the read still runs
+     * @param scheduler how the job reaches the job manager
+     * @return the bounded read, never {@code null}
+     */
+    static <T> BoundedRead<T> readBounded(String jobName, String target, long timeoutMs, // NOSONAR one argument per independent concern; a parameter object would only rename them
+        IApplicationRead<T> read, boolean runWhenInterrupted, BoundedJob.IJobScheduler scheduler)
+    {
         // A caller that arrives ALREADY interrupted must still RUN the read and leave still
-        // interrupted. Measured against org.eclipse.core.jobs as shipped with EDT 2026.2:
+        // interrupted. Read off org.eclipse.core.jobs 3.15.700 as shipped with EDT 2026.2:
         // Semaphore.acquire(long) opens with `if (Thread.interrupted()) throw new
-        // InterruptedException()`, and JobManager.join RETHROWS that whenever
-        // LockManager.canBlock() is true — it is, on every thread but the UI one. So without
-        // taking the flag here, join would raise before the read ever ran and an already-
-        // interrupted caller would get INTERRUPTED instead of an answer. Restoring it in the
-        // finally keeps the caller's own interruption checks armed afterwards.
-        boolean interruptedOnEntry = Thread.interrupted();
+        // InterruptedException()`, and JobManager.join rethrows that only when
+        // LockManager.canBlock() — with a UILockListener installed that is true on every thread
+        // but the UI one, while a runtime whose listener answers false (the headless test runtime
+        // is one) swallows it and waits out the deadline instead, because the semaphore has by
+        // then CLEARED the flag. So what the flag decides is platform-dependent; what is NOT is
+        // that taking it here guarantees the read runs and the finally guarantees the caller's own
+        // interruption checks stay armed.
+        boolean interruptedOnEntry = runWhenInterrupted && Thread.interrupted();
         try
         {
             AtomicReference<T> value = new AtomicReference<>();
-            BoundedJob.Result result =
-                BoundedJob.run(jobName, timeoutMs, monitor -> value.set(read.read()));
+            BoundedJob.Result result;
+            try
+            {
+                result = BoundedJob.run(jobName, timeoutMs, monitor -> value.set(read.read()), null,
+                    scheduler);
+            }
+            catch (IllegalStateException e)
+            {
+                // JobManager.scheduleInternal refuses every schedule once the job manager has been
+                // shut down, and BoundedJob rethrows it. Before the read moved onto a Job this
+                // call simply worked, so it must not now come out as an unhandled throw from a
+                // shutting-down EDT: it is one more read that did not conclude, with its own
+                // sentence, because no retry can help until EDT is running again.
+                Activator.logError("Bounded application read could not be scheduled: " + jobName, e); //$NON-NLS-1$
+                return new BoundedRead<>(null, null, BoundedJob.Outcome.NOT_RUN,
+                    jobManagerUnavailableFailure(target));
+            }
             if (result.getOutcome() != BoundedJob.Outcome.COMPLETED)
             {
                 // NOT_RUN lands here too: a read that never entered the work measured nothing.
@@ -215,6 +311,20 @@ public final class ApplicationSupport
     }
 
     /**
+     * The diagnosis for a read that could not even be SCHEDULED because EDT's background job
+     * manager is shutting down. Kept apart from every deadline wording: no deadline expired, the
+     * work never existed, and the only thing that changes the answer is EDT running again.
+     *
+     * @param target what the sentence names, e.g. "the EDT application list for project 'P'"
+     * @return the diagnosis sentence, never {@code null}
+     */
+    public static String jobManagerUnavailableFailure(String target)
+    {
+        return target + " could not be started: EDT's background job manager has been shut down " //$NON-NLS-1$
+            + "(EDT is stopping), so no application read can run until EDT is restarted"; //$NON-NLS-1$
+    }
+
+    /**
      * The established per-{@link BoundedJob.Outcome} wording for an application read that did not
      * conclude. Shared so that every bounded application read diagnoses itself the same way — and
      * so that none of them can word a deadline as a measured "not found".
@@ -230,8 +340,14 @@ public final class ApplicationSupport
             ? (timeoutMs / 1000L) + "s" : timeoutMs + "ms"; //$NON-NLS-1$ //$NON-NLS-2$
         if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT)
         {
+            // What wedges these reads is a MONITOR inside EDT's application registry, so a repeat
+            // of the same read queues behind the same holder and blocks exactly as long - and
+            // parks one more Eclipse worker thread doing it. Saying only "retry" would therefore
+            // send the caller into the one loop that cannot end; the restart has to be named.
             return target + " did not finish within " //$NON-NLS-1$
-                + deadline + " and may still be running"; //$NON-NLS-1$
+                + deadline + " and may still be running, so it may yet change EDT's stored state; " //$NON-NLS-1$
+                + "an immediate retry queues behind the same wedge, and if it keeps expiring EDT " //$NON-NLS-1$
+                + "has to be restarted"; //$NON-NLS-1$
         }
         if (result.getOutcome() == BoundedJob.Outcome.INTERRUPTED)
         {
@@ -240,11 +356,16 @@ public final class ApplicationSupport
         }
         if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
         {
+            // Cancelling it at the start line is what kept it from running, so NOTHING was read
+            // and nothing is in flight. The old wording sent the caller to wait for "a responsive
+            // Job queue", a condition that cannot produce this outcome for a rule-less job.
             return target + " did not start within " //$NON-NLS-1$
-                + deadline + "; retry when EDT's background Job queue is responsive"; //$NON-NLS-1$
+                + deadline + " and was cancelled before it began, so it read nothing and changed " //$NON-NLS-1$
+                + "nothing; retrying is safe"; //$NON-NLS-1$
         }
-        return target + " never ran (" //$NON-NLS-1$
-            + result.getOutcome() + ")"; //$NON-NLS-1$
+        return target + " never ran: it left EDT's background job queue without entering the " //$NON-NLS-1$
+            + "work, so something other than this call's deadline cancelled it and nothing was " //$NON-NLS-1$
+            + "read"; //$NON-NLS-1$
     }
 
     /**

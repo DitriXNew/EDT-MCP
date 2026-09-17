@@ -97,11 +97,14 @@ public class DeleteInfobaseTool implements IMcpTool
     private static final long READ_BACK_POLL_DELAY_MS = 300;
 
     /**
-     * Bound on the WHOLE shared-infobase enumeration (#622), not on one project's listing: it reads
-     * every workspace project and they all queue behind the same platform monitor, so a per-project
-     * deadline would scale with the workspace. Twice
-     * {@link ApplicationSupport#LOOKUP_TIMEOUT_MS} because it is one wait covering many reads, and
-     * expiry here keeps the database files rather than deleting them.
+     * Bound on the WHOLE shared-infobase enumeration (#622), not on one project's listing.
+     *
+     * <p>One bound, two different reasons it is the right shape. On a WEDGED EDT the per-project
+     * reads all queue behind the same platform monitor, so a per-project deadline would multiply
+     * by the workspace size for no extra information. On a healthy but large workspace they do not
+     * queue — they SUM — and a single bound is then the only thing that keeps a big workspace from
+     * running past it. Twice {@link ApplicationSupport#LOOKUP_TIMEOUT_MS} because it is one wait
+     * covering many reads, and expiry keeps the database files rather than deleting them.
      */
     private static final long SHARED_INFOBASE_CHECK_TIMEOUT_MS = 2 * ApplicationSupport.LOOKUP_TIMEOUT_MS;
 
@@ -267,7 +270,7 @@ public class DeleteInfobaseTool implements IMcpTool
         {
             return buildPreviewResult(
                 new IbIdentity(projectName, ibPlan.resolvedId, ibPlan.resolvedName),
-                deleteRegistration, deleteDatabaseFiles, ibPlan.dbDir, ibPlan.dbSharedWithOthers);
+                deleteRegistration, deleteDatabaseFiles, ibPlan.dbDir, ibPlan.dbShared);
         }
 
         // Destructive-operation consent gate: the LAST check before the infobase is dissociated /
@@ -315,9 +318,9 @@ public class DeleteInfobaseTool implements IMcpTool
         // A file infobase can be bound to SEVERAL projects; wiping the shared data would break the
         // others. If asked to delete files, check (before dissociating) whether any OTHER project still
         // uses this infobase — if so we keep the files.
-        final boolean dbSharedWithOthers = deleteDatabaseFiles && dbDir != null
-            && isSharedWithOtherProjects(appManager, project, dbDir);
-        return FileDeletionPlan.of(ibRef, resolvedName, resolvedId, dbDir, dbSharedWithOthers,
+        final SharedDatabase dbShared = deleteDatabaseFiles && dbDir != null
+            ? isSharedWithOtherProjects(appManager, project, dbDir) : SharedDatabase.NOT_SHARED;
+        return FileDeletionPlan.of(ibRef, resolvedName, resolvedId, dbDir, dbShared,
             deleteRegistration);
     }
 
@@ -334,7 +337,7 @@ public class DeleteInfobaseTool implements IMcpTool
         final InfobaseReference ibRef = plan.ibRef;
         final IbIdentity id = new IbIdentity(projectName, plan.resolvedId, plan.resolvedName);
         final Path dbDir = plan.dbDir;
-        final boolean dbSharedWithOthers = plan.dbSharedWithOthers;
+        final SharedDatabase dbShared = plan.dbShared;
 
         // --- Perform deletion ---
         Activator.logInfo("delete_infobase: dissociating '" + id.resolvedName //$NON-NLS-1$
@@ -366,7 +369,7 @@ public class DeleteInfobaseTool implements IMcpTool
         // Skip when the same on-disk database is still referenced by other workspace projects —
         // deleting it would break those projects (a file infobase can be shared).
         boolean dbFilesDeleted = false;
-        if (deleteDatabaseFiles && dbDir != null && !dbSharedWithOthers)
+        if (deleteDatabaseFiles && dbDir != null && !dbShared.keepsFiles())
         {
             dbFilesDeleted = deleteDatabaseDirBestEffort(dbDir);
         }
@@ -375,7 +378,7 @@ public class DeleteInfobaseTool implements IMcpTool
             + " (dbFilesDeleted=" + dbFilesDeleted + ")"); //$NON-NLS-1$ //$NON-NLS-2$
 
         return buildDeleteSuccessResult(id, plan.deleteRegistration,
-            new DbFileOutcome(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbSharedWithOthers));
+            new DbFileOutcome(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbShared));
     }
 
     /**
@@ -597,20 +600,20 @@ public class DeleteInfobaseTool implements IMcpTool
      * {@code null}), whether it was actually deleted and whether it was kept because shared. A
      * parameter-object that keeps the builders below the 7-parameter bar; carries no behaviour.
      */
-    private static final class DbFileOutcome
+    static final class DbFileOutcome
     {
         final boolean deleteDatabaseFiles;
         final Path dbDir;
         final boolean dbFilesDeleted;
-        final boolean dbSharedWithOthers;
+        final SharedDatabase dbShared;
 
         DbFileOutcome(boolean deleteDatabaseFiles, Path dbDir, boolean dbFilesDeleted,
-                boolean dbSharedWithOthers)
+                SharedDatabase dbShared)
         {
             this.deleteDatabaseFiles = deleteDatabaseFiles;
             this.dbDir = dbDir;
             this.dbFilesDeleted = dbFilesDeleted;
-            this.dbSharedWithOthers = dbSharedWithOthers;
+            this.dbShared = dbShared;
         }
     }
 
@@ -619,7 +622,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * identical to the inline preview the {@code !confirm} gate produced.
      */
     private static String buildPreviewResult(IbIdentity id, boolean deleteRegistration,
-            boolean deleteDatabaseFiles, Path dbDir, boolean dbSharedWithOthers)
+            boolean deleteDatabaseFiles, Path dbDir, SharedDatabase dbShared)
     {
         return ToolResult.success()
             .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
@@ -633,7 +636,7 @@ public class DeleteInfobaseTool implements IMcpTool
                 + (deleteRegistration
                     ? " AND deregister it from the EDT infobases list" //$NON-NLS-1$
                     : " (EDT infobases list entry kept)") //$NON-NLS-1$
-                + databasePreviewNote(deleteDatabaseFiles, dbDir, dbSharedWithOthers)
+                + databasePreviewNote(deleteDatabaseFiles, dbDir, dbShared)
                 + ". Re-call with confirm=true to apply.") //$NON-NLS-1$
             .toJson();
     }
@@ -768,31 +771,32 @@ public class DeleteInfobaseTool implements IMcpTool
         final String resolvedName;
         final String resolvedId;
         final Path dbDir;
-        final boolean dbSharedWithOthers;
+        final SharedDatabase dbShared;
         final boolean deleteRegistration;
 
         private FileDeletionPlan(String error, InfobaseReference ibRef, String resolvedName,
-                String resolvedId, Path dbDir, boolean dbSharedWithOthers, boolean deleteRegistration)
+                String resolvedId, Path dbDir, SharedDatabase dbShared, boolean deleteRegistration)
         {
             this.error = error;
             this.ibRef = ibRef;
             this.resolvedName = resolvedName;
             this.resolvedId = resolvedId;
             this.dbDir = dbDir;
-            this.dbSharedWithOthers = dbSharedWithOthers;
+            this.dbShared = dbShared;
             this.deleteRegistration = deleteRegistration;
         }
 
         static FileDeletionPlan failed(String error)
         {
-            return new FileDeletionPlan(error, null, null, null, null, false, false);
+            return new FileDeletionPlan(error, null, null, null, null, SharedDatabase.NOT_SHARED,
+                false);
         }
 
         static FileDeletionPlan of(InfobaseReference ibRef, String resolvedName, String resolvedId,
-                Path dbDir, boolean dbSharedWithOthers, boolean deleteRegistration)
+                Path dbDir, SharedDatabase dbShared, boolean deleteRegistration)
         {
             return new FileDeletionPlan(null, ibRef, resolvedName, resolvedId, dbDir,
-                dbSharedWithOthers, deleteRegistration);
+                dbShared, deleteRegistration);
         }
     }
 
@@ -828,11 +832,11 @@ public class DeleteInfobaseTool implements IMcpTool
         Object server = deletionCtx.server;
         final String infobaseId = deletionCtx.infobaseId;
         final Path dbDir = deletionCtx.dbDir;
-        final boolean dbSharedWithOthers = deletionCtx.dbSharedWithOthers;
+        final SharedDatabase dbShared = deletionCtx.dbShared;
 
         // --- Confirm-preview gate ---
         String preview = buildStandaloneServerPreview(confirm, id,
-            deleteRegistration, deleteDatabaseFiles, dbDir, dbSharedWithOthers);
+            deleteRegistration, deleteDatabaseFiles, dbDir, dbShared);
         if (preview != null)
         {
             return preview;
@@ -927,7 +931,7 @@ public class DeleteInfobaseTool implements IMcpTool
         // Optionally delete the served-DB files from disk (deleteServer removes only the SERVER config
         // folder, never the served database at database.path — so this is what makes "delete everything").
         boolean dbFilesDeleted = false;
-        if (deleteDatabaseFiles && dbDir != null && !dbSharedWithOthers)
+        if (deleteDatabaseFiles && dbDir != null && !dbShared.keepsFiles())
         {
             dbFilesDeleted = deleteDatabaseDirBestEffort(dbDir);
         }
@@ -936,7 +940,7 @@ public class DeleteInfobaseTool implements IMcpTool
         ReadBack removed = confirmApplicationRemoved(appManager, project, resolvedId, beforeCount);
 
         return buildDeletedResult(id, deleteRegistration,
-            new DbFileOutcome(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbSharedWithOthers),
+            new DbFileOutcome(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbShared),
             cleanup, removed);
     }
 
@@ -997,15 +1001,15 @@ public class DeleteInfobaseTool implements IMcpTool
         final Path dbDir = (dbDirStr != null && !dbDirStr.isEmpty()) ? Paths.get(dbDirStr) : null;
         // A server's served DB is normally dedicated, but EDT does not forbid another project from
         // registering the same directory as a FILE infobase — so apply the same shared-files guard.
-        final boolean dbSharedWithOthers = deleteDatabaseFiles && dbDir != null
-            && isSharedWithOtherProjects(appManager, project, dbDir);
+        final SharedDatabase dbShared = deleteDatabaseFiles && dbDir != null
+            ? isSharedWithOtherProjects(appManager, project, dbDir) : SharedDatabase.NOT_SHARED;
 
         ctx.service = service;
         ctx.server = server;
         ctx.module = module;
         ctx.infobaseId = infobaseId;
         ctx.dbDir = dbDir;
-        ctx.dbSharedWithOthers = dbSharedWithOthers;
+        ctx.dbShared = dbShared;
         return ctx;
     }
 
@@ -1018,7 +1022,7 @@ public class DeleteInfobaseTool implements IMcpTool
      */
     private String buildStandaloneServerPreview(boolean confirm, IbIdentity id,
         boolean deleteRegistration, boolean deleteDatabaseFiles, Path dbDir,
-        boolean dbSharedWithOthers)
+        SharedDatabase dbShared)
     {
         if (confirm)
         {
@@ -1036,7 +1040,7 @@ public class DeleteInfobaseTool implements IMcpTool
                 + "' (stop it, remove the WST server and its server config folder)" //$NON-NLS-1$
                 + (deleteRegistration ? " AND clean its infobases.yaml registry entry" //$NON-NLS-1$
                     : " (infobases.yaml entry kept)") //$NON-NLS-1$
-                + databasePreviewNote(deleteDatabaseFiles, dbDir, dbSharedWithOthers)
+                + databasePreviewNote(deleteDatabaseFiles, dbDir, dbShared)
                 + " for project '" + id.projectName //$NON-NLS-1$
                 + "'. This is irreversible. Re-call with confirm=true to apply.") //$NON-NLS-1$
             .toJson();
@@ -1134,7 +1138,7 @@ public class DeleteInfobaseTool implements IMcpTool
         Object module;
         String infobaseId;
         Path dbDir;
-        boolean dbSharedWithOthers;
+        SharedDatabase dbShared;
         String error;
     }
 
@@ -1288,40 +1292,88 @@ public class DeleteInfobaseTool implements IMcpTool
 
     /**
      * The same on-disk database can be used by SEVERAL projects at once — as a FILE infobase OR as a
-     * standalone (wst) server's served database. Returns {@code true} when ANY project OTHER than
-     * {@code currentProject} still has an application backed by the SAME on-disk directory
-     * ({@code dbDir}) — in which case wiping the files would break those projects, so the caller keeps
-     * the data. Conservative: any failure to enumerate is treated as "shared" (keep).
+     * standalone (wst) server's served database. Returns {@link SharedDatabase#SHARED} when ANY
+     * project OTHER than {@code currentProject} still has an application backed by the SAME on-disk
+     * directory ({@code dbDir}) — in which case wiping the files would break those projects, so the
+     * caller keeps the data.
+     * <p>
+     * A failure to enumerate is {@link SharedDatabase#UNKNOWN}, which keeps the files exactly as
+     * SHARED does. The two are separated only so that the result never STATES co-ownership it did
+     * not measure: "another project uses this database" and "we could not find out" lead a reader
+     * to completely different next steps.
      * <p>
      * CLOSED projects are intentionally NOT skipped: {@code IApplicationManager.getApplications} resolves
      * a project's infobases/servers from WORKSPACE-level stores (the infobase association manager and the
      * standalone-server registry), NOT from the project's open resources (bytecode-verified on 2025.2), so
      * a closed project that still references the same database is visible here and must be honoured.
      * <p>
-     * BOUNDED (#622) as ONE wait around the WHOLE enumeration, not per project: the reads all queue
-     * behind the same wedged platform monitor, so a per-project deadline would multiply by the
-     * workspace size. An expired deadline is one more failure to enumerate, so it keeps the files.
+     * BOUNDED (#622) as ONE wait around the WHOLE enumeration, not per project. On a WEDGED EDT the
+     * per-project reads queue behind the same platform monitor, so one bound covers them all; on a
+     * healthy but large workspace they do not queue, they SUM, so the bound is also what stops a
+     * big workspace from running past it. Either way it is re-run per CALL, so a preview and its
+     * confirm can reach different answers — which is why an UNKNOWN preview says so.
      */
-    private static boolean isSharedWithOtherProjects(IApplicationManager appManager, IProject currentProject,
-            Path dbDir)
+    static SharedDatabase isSharedWithOtherProjects(IApplicationManager appManager,
+            IProject currentProject, Path dbDir)
     {
         if (appManager == null || dbDir == null)
         {
-            return false;
+            return SharedDatabase.NOT_SHARED;
         }
         Path target = dbDir.toAbsolutePath().normalize();
+        return sharedCheckBounded(SHARED_INFOBASE_CHECK_TIMEOUT_MS,
+            () -> enumerateSharedWithOtherProjects(appManager, currentProject, target, dbDir));
+    }
+
+    /**
+     * Runs one shared-infobase enumeration under a deadline and maps it onto the three states.
+     *
+     * <p>Split out so the mapping — and above all the UNKNOWN arm — can be driven without a
+     * workspace: it is the arm that decides whether a DESTRUCTIVE tool states co-ownership it never
+     * measured.
+     *
+     * @param timeoutMs the bound on the whole enumeration
+     * @param enumeration answers whether any OTHER project uses the same on-disk database
+     * @return what the check established, never {@code null}
+     */
+    static SharedDatabase sharedCheckBounded(long timeoutMs,
+        ApplicationSupport.IApplicationRead<Boolean> enumeration)
+    {
         ApplicationSupport.BoundedRead<Boolean> read = ApplicationSupport.readBounded(
             "Check shared infobases", //$NON-NLS-1$
             "the shared-infobase check across the workspace's projects", //$NON-NLS-1$
-            SHARED_INFOBASE_CHECK_TIMEOUT_MS,
-            () -> enumerateSharedWithOtherProjects(appManager, currentProject, target, dbDir));
+            timeoutMs, enumeration);
         if (!read.concluded())
         {
-            Activator.logError("delete_infobase: shared-infobase check failed — keeping the files: " //$NON-NLS-1$
-                + read.deadlineFailure(), null);
-            return true;
+            Activator.logError("delete_infobase: shared-infobase check did not conclude — keeping " //$NON-NLS-1$
+                + "the files without establishing co-ownership: " + read.deadlineFailure(), null); //$NON-NLS-1$
+            return SharedDatabase.UNKNOWN;
         }
-        return Boolean.TRUE.equals(read.valueOrRethrow());
+        return Boolean.TRUE.equals(read.valueOrRethrow())
+            ? SharedDatabase.SHARED : SharedDatabase.NOT_SHARED;
+    }
+
+    /**
+     * What the shared-infobase check established about the on-disk database.
+     *
+     * <p>Three states, because {@link #SHARED} and {@link #UNKNOWN} keep the files for OPPOSITE
+     * reasons: one is a measured co-owner, the other is a question that was never answered. A
+     * destructive tool that reports the second as the first claims an outcome nobody measured.
+     */
+    enum SharedDatabase
+    {
+        /** Another workspace project was found using the same on-disk database. */
+        SHARED,
+        /** The enumeration ran and found no other project using it. */
+        NOT_SHARED,
+        /** The enumeration did not conclude (deadline or platform failure) — nothing established. */
+        UNKNOWN;
+
+        /** @return whether this state means the database files must be kept */
+        boolean keepsFiles()
+        {
+            return this != NOT_SHARED;
+        }
     }
 
     /** The enumeration {@link #isSharedWithOtherProjects} runs under one deadline. */
@@ -1471,8 +1523,8 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /** Preview-message fragment describing what deleteDatabaseFiles will (or will not) do to disk. */
-    private static String databasePreviewNote(boolean deleteDatabaseFiles, Path dbDir,
-            boolean sharedWithOthers)
+    static String databasePreviewNote(boolean deleteDatabaseFiles, Path dbDir,
+            SharedDatabase shared)
     {
         if (!deleteDatabaseFiles)
         {
@@ -1482,15 +1534,25 @@ public class DeleteInfobaseTool implements IMcpTool
         {
             return " (deleteDatabaseFiles was requested but no database directory could be resolved)"; //$NON-NLS-1$
         }
-        if (sharedWithOthers)
+        if (shared == SharedDatabase.SHARED)
         {
             return " (the database files would be KEPT — this infobase is still used by other projects)"; //$NON-NLS-1$
+        }
+        if (shared == SharedDatabase.UNKNOWN)
+        {
+            // Two facts the caller needs and one guess it must not be given: the files would be
+            // kept, WHY they would be kept is unproven, and the confirm call runs this check AGAIN
+            // — so a preview built on an unconcluded check does not bind the deletion.
+            return " (the database files would be KEPT, but NOT because co-ownership was " //$NON-NLS-1$
+                + "established: the shared-infobase check did not complete, so whether another " //$NON-NLS-1$
+                + "project uses this database is UNKNOWN. confirm=true re-runs that check, and if " //$NON-NLS-1$
+                + "it concludes then, the files may be DELETED after all — see the EDT log)"; //$NON-NLS-1$
         }
         return " AND DELETE its database files at '" + dbDir + "' from disk (IRREVERSIBLE)"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** Result-message fragment describing the actual outcome of the database-files deletion. */
-    private static String databaseResultNote(DbFileOutcome db)
+    static String databaseResultNote(DbFileOutcome db)
     {
         if (!db.deleteDatabaseFiles)
         {
@@ -1500,10 +1562,21 @@ public class DeleteInfobaseTool implements IMcpTool
         {
             return " No database directory could be resolved, so nothing was deleted from disk."; //$NON-NLS-1$
         }
-        if (db.dbSharedWithOthers)
+        if (db.dbShared == SharedDatabase.SHARED)
         {
             return " The database files were KEPT: this infobase is still used by other project(s) in " //$NON-NLS-1$
                 + "the workspace; deleting them would break those projects."; //$NON-NLS-1$
+        }
+        if (db.dbShared == SharedDatabase.UNKNOWN)
+        {
+            // The claim this branch exists to avoid making: co-ownership as a MEASURED fact. The
+            // files are kept for the same conservative reason either way, but the reader acts very
+            // differently on "another project uses it" than on "we could not find out".
+            return " The database files at '" + db.dbDir //$NON-NLS-1$
+                + "' were KEPT because the shared-infobase check could not be completed (see the " //$NON-NLS-1$
+                + "EDT log) — NOT because another project was found using them. Whether this " //$NON-NLS-1$
+                + "database is shared is UNKNOWN; re-run delete_infobase once EDT is responsive, " //$NON-NLS-1$
+                + "or remove the directory manually after checking it yourself."; //$NON-NLS-1$
         }
         return db.dbFilesDeleted
             ? " The database files at '" + db.dbDir + "' were deleted from disk." //$NON-NLS-1$ //$NON-NLS-2$

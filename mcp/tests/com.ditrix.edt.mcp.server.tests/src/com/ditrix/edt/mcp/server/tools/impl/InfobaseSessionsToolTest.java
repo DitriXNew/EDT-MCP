@@ -877,4 +877,70 @@ public class InfobaseSessionsToolTest
         assertNull("a healthy resolution must not produce an error", resolved.errorJson); //$NON-NLS-1$
         assertEquals(application, resolved.application);
     }
+
+    /**
+     * #622/L: the DEFAULT-application route is the one with a cheap way round the wedge — passing
+     * an applicationId skips that lookup entirely — and its sibling {@code create_launch_config}
+     * already names it. An explicit id has no such alternative, so it must not be offered one.
+     */
+    @Test
+    public void testOnlyTheDefaultRouteNamesTheApplicationIdRecovery() throws Exception
+    {
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("Proj"); //$NON-NLS-1$
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(2);
+        when(manager.getDefaultApplication(project)).thenAnswer(invocation -> {
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return Optional.empty();
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+        when(manager.getApplication(project, "Infobase.Wedged")).thenAnswer(invocation -> { //$NON-NLS-1$
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return Optional.empty();
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+
+        try
+        {
+            String byDefault = errorOf(InfobaseSessionsTool.resolveApplication(manager, project,
+                "Proj", null, 250L)); //$NON-NLS-1$
+            String byId = errorOf(InfobaseSessionsTool.resolveApplication(manager, project,
+                "Proj", "Infobase.Wedged", 250L)); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertTrue("the default route must name the cheap recovery", //$NON-NLS-1$
+                byDefault.contains("Pass applicationId explicitly")); //$NON-NLS-1$
+            assertTrue("and still say nothing was touched", //$NON-NLS-1$
+                byDefault.contains("No session was listed or terminated")); //$NON-NLS-1$
+            assertFalse("an explicit id has no such alternative to offer", //$NON-NLS-1$
+                byId.contains("Pass applicationId explicitly")); //$NON-NLS-1$
+            assertTrue("it still names the retry", //$NON-NLS-1$
+                byId.contains("Retry once EDT is responsive")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    private static String errorOf(ResolvedApplication resolved)
+    {
+        assertNotNull("the resolution must have refused", resolved.errorJson); //$NON-NLS-1$
+        return JsonParser.parseString(resolved.errorJson).getAsJsonObject()
+            .get("error").getAsString(); //$NON-NLS-1$
+    }
 }

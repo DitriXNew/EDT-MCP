@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.debug.core.ILaunchManager;
 import org.junit.Test;
 import org.mockito.Mockito;
@@ -333,6 +334,47 @@ public class LaunchLifecycleUtilsTest
         assertTrue("an interrupted wait must leave the flag set", flagRestored.get());
     }
 
+    /**
+     * The monitor-bearing acquisition: no production site passes a monitor today, so without this
+     * the sliced wait is a branch nobody exercises — and {@link Acquisition#CANCELLED}, which only
+     * that branch can produce, would be diagnosable but unreachable.
+     */
+    @Test
+    public void testACancelledMonitorStopsTheWaitWithoutNamingAHolder() throws Exception
+    {
+        String projectName = "CancelledMonitorProject";
+        String applicationId = "app-cancelled-monitor";
+        AtomicReference<Acquisition> outcome = new AtomicReference<>();
+        CountDownLatch done = new CountDownLatch(1);
+        NullProgressMonitor monitor = new NullProgressMonitor();
+        monitor.setCanceled(true);
+
+        // Held for the whole attempt, so an acquisition that ignored the monitor would have to
+        // wait its 30-second bound out instead of answering at once.
+        LaunchLifecycleUtils.holdLockForTest(projectName, applicationId, () -> {
+            Thread waiter = new Thread(() -> {
+                outcome.set(LaunchLifecycleUtils.lockFor(projectName, applicationId)
+                    .tryAcquire(30_000L, monitor));
+                done.countDown();
+            }, "test: cancelled-monitor waiter");
+            waiter.start();
+            try
+            {
+                assertTrue("a cancelled monitor must be honoured, not waited out",
+                    done.await(5, TimeUnit.SECONDS));
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                fail("interrupted while waiting for the acquisition");
+            }
+        });
+
+        assertEquals("a cancelled monitor is its own outcome", Acquisition.CANCELLED,
+            outcome.get());
+        assertFalse("nothing may be said about a holder", outcome.get().acquired());
+    }
+
     @Test
     public void testEachFailedAcquisitionGetsItsOwnDiagnosis()
     {
@@ -345,7 +387,7 @@ public class LaunchLifecycleUtilsTest
 
         assertEquals("The launch lock for application 'app-x' in project 'P1' did not become "
             + "available within 200 ms: another operation on that infobase (a database update, a "
-            + "launch or a test run) is still holding it.", contended);
+            + "launch, a test run or an infobase_sessions list/terminate) is still holding it.", contended);
         // The fabricated diagnosis this replaced: an interrupted acquisition used to be reported
         // with the sentence above, naming a holder nothing had established.
         assertFalse("an interruption must not be reported as contention",
@@ -442,7 +484,8 @@ public class LaunchLifecycleUtilsTest
         assertEquals("the refusal must name the reason verbatim",
             "The launch lock for application 'app-prep' in project 'LockedPrepProject' did not "
                 + "become available within 200 ms: another operation on that infobase (a database "
-                + "update, a launch or a test run) is still holding it. Nothing was terminated, "
+                + "update, a launch, a test run or an infobase_sessions list/terminate) is still "
+                + "holding it. Nothing was terminated, "
                 + "recomputed or updated; retry once that operation finishes.",
             result.getError());
         // The broken spellings this could have degraded to: the production bound leaking in
@@ -457,8 +500,9 @@ public class LaunchLifecycleUtilsTest
     public void testLockUnavailableMessageRendersEachBound()
     {
         assertEquals("The launch lock for application 'a' in project 'p' did not become available "
-            + "within 15 minutes: another operation on that infobase (a database update, a launch "
-            + "or a test run) is still holding it.",
+            + "within 15 minutes: another operation on that infobase (a database update, a launch, "
+            + "a test run "
+            + "or an infobase_sessions list/terminate) is still holding it.",
             LaunchLifecycleUtils.lockUnavailableMessage("p", "a",
                 LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS));
         assertEquals("15 minutes",

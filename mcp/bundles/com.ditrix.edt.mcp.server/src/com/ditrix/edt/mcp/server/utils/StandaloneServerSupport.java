@@ -333,6 +333,13 @@ public final class StandaloneServerSupport
      * beyond {@code timeoutMs}.
      *
      * <p>Use this when the caller does not already own a larger bounded preparation phase.
+     *
+     * <p>A PENDING interrupt is left for the PLATFORM to act on rather than taken and restored:
+     * this entry point calls {@code BoundedJob.run} exactly as it did before the read moved into
+     * {@code ApplicationSupport}, so a cancelled {@code build_external_objects} recovery keeps
+     * whatever abort behaviour it had. What that behaviour is depends on the runtime's
+     * {@code LockListener} (see {@code ApplicationSupport.readBounded}), which is precisely why
+     * the decision is left where it was instead of being changed on this consumer's behalf.
      */
     public static ApplicationLookup lookupApplicationBounded(IApplicationManager manager,
         IProject project, String applicationId, long timeoutMs)
@@ -340,7 +347,7 @@ public final class StandaloneServerSupport
         ApplicationSupport.BoundedRead<ApplicationLookup> read = ApplicationSupport.readBounded(
             "Resolve standalone-server application: " + applicationId, //$NON-NLS-1$
             ApplicationSupport.applicationTarget(applicationId), timeoutMs,
-            () -> lookupApplication(manager, project, applicationId));
+            () -> lookupApplication(manager, project, applicationId), false);
         if (!read.concluded())
         {
             return failedApplicationLookup(read.deadlineFailure());

@@ -22,7 +22,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -110,10 +109,11 @@ public final class LaunchLifecycleUtils
      * converts a correct wait into a refusal, while a holder wedged inside a platform call stops
      * parking every other participant forever.
      *
-     * <p>The report reads hold the lock for milliseconds, and wait under this same long bound on
-     * purpose. A short give-up there is not a cheaper answer but a lost one: their guarded work is
-     * the only read of a FINISHED run's report, and a caller that retries after giving up can find
-     * the tracking entry evicted and take the spawn path, which wipes the report directory.
+     * <p>The report reads hold the lock for milliseconds, and take this value as a CEILING rather
+     * than as their bound: they wait the smaller of it and what their own caller's deadline still
+     * allows. The ceiling matters because a short give-up is not a cheaper answer but a lost one —
+     * their guarded work is the only read of a FINISHED run's report — and the caller's deadline
+     * matters because a call that asked for 30 seconds must not be held for fifteen minutes.
      */
     public static final long OPERATION_LOCK_TIMEOUT_MS = 15 * 60 * 1000L;
 
@@ -127,14 +127,20 @@ public final class LaunchLifecycleUtils
     public static final long SESSIONS_LOCK_TIMEOUT_MS = 30_000L;
 
     /**
-     * Bound (ms) on the two best-effort attribution lookups
-     * ({@link #attributionInfobaseName} / {@link #attributionServerName}). Deliberately shorter
-     * than {@link ApplicationSupport#LOOKUP_TIMEOUT_MS}: their answer is only a NAME used to
-     * attribute a dialog, they already degrade to {@code null}, and a launch arms both — so the
-     * whole cost of a wedged manager here has to stay a small fixed addition to the launch, not
-     * a minute of waiting for a cosmetic hint.
+     * Bound (ms) on the attribution lookup ({@link #attributionNames}, and the two single-name
+     * wrappers over it). Deliberately shorter than {@link ApplicationSupport#LOOKUP_TIMEOUT_MS}:
+     * its answer is only a NAME, it already degrades to {@code null}, and the whole cost of a
+     * wedged manager here has to stay a small fixed addition to the launch rather than a minute
+     * of waiting.
+     *
+     * <p><b>Not a cosmetic read.</b> The name is what makes an armed conflict dialog
+     * ATTRIBUTABLE, and an arm without one is degraded to {@code cancel}
+     * ({@code LaunchUpdateDialogAutoConfirmer.attributableAnswer}) — so failing to resolve it
+     * silently replaces the caller's {@code externalInfobaseChanges} policy. That is why the pair
+     * shares ONE read and ONE budget, and why a non-concluded read is reported as such instead of
+     * being folded into "this application has no name".
      */
-    static final long ATTRIBUTION_LOOKUP_TIMEOUT_MS = 10_000L;
+    public static final long ATTRIBUTION_LOOKUP_TIMEOUT_MS = 10_000L;
 
     // =========================================================================
     // Pre-launch preparation in-flight registry (Fix 2: 25 s budget + pending)
@@ -787,8 +793,8 @@ public final class LaunchLifecycleUtils
     {
         return lockPrefix(projectName, applicationId)
             + "did not become available within " + describeLockTimeout(timeoutMs) //$NON-NLS-1$
-            + ": another operation on that infobase (a database update, a launch or a test run) " //$NON-NLS-1$
-            + "is still holding it."; //$NON-NLS-1$
+            + ": another operation on that infobase (a database update, a launch, a test run or " //$NON-NLS-1$
+            + "an infobase_sessions list/terminate) is still holding it."; //$NON-NLS-1$
     }
 
     /**
@@ -1638,9 +1644,15 @@ public final class LaunchLifecycleUtils
      * run headlessly so no dialog appears.
      *
      * <p>Bounded (#622): the read is the wedge-prone one, and a fallback that never returns would
-     * hold the launch open forever. An expired deadline degrades exactly like the
-     * {@link ApplicationException} branch — the original id, logged — because both mean the same
-     * thing here: no default could be established.
+     * hold the launch open forever. This String-returning form degrades an expired deadline to the
+     * id it was GIVEN, exactly like the {@link ApplicationException} branch.
+     *
+     * <p><b>That degradation is only safe where a missing default is visible downstream.</b> The
+     * degraded value is indistinguishable from "this project has no default", so a caller that
+     * turns the result into a LOCK KEY, a mutual-exclusion identity or a measured fact must use
+     * {@link #resolveDefaultApplication} instead and branch on
+     * {@link DefaultApplicationLookup#inconclusive()} — an empty id keys a DIFFERENT
+     * {@link #lockFor} mutex from the real application's, which silently removes the exclusion.
      *
      * @param project the resolved project (may be {@code null})
      * @param applicationId the id from the call / launch config (may be {@code null}/empty)
@@ -1651,36 +1663,93 @@ public final class LaunchLifecycleUtils
     public static String resolveDefaultApplicationId(IProject project, String applicationId,
             IApplicationManager appManager)
     {
+        return resolveDefaultApplication(project, applicationId, appManager,
+            ApplicationSupport.LOOKUP_TIMEOUT_MS).id();
+    }
+
+    /**
+     * Same fallback, reporting WHETHER the default-application read concluded.
+     *
+     * <p>Three outcomes, not two: the id resolved, the project genuinely records no default (the
+     * given id is handed back), or the read did not conclude — in which case the id handed back is
+     * the given one purely as a degradation and says nothing about the project.
+     *
+     * @param project the resolved project (may be {@code null})
+     * @param applicationId the id from the call / launch config (may be {@code null}/empty)
+     * @param appManager the application manager (may be {@code null})
+     * @param timeoutMs the caller-side deadline for the one bounded default-application read
+     * @return the lookup, never {@code null}
+     */
+    public static DefaultApplicationLookup resolveDefaultApplication(IProject project,
+            String applicationId, IApplicationManager appManager, long timeoutMs)
+    {
         if (applicationId != null && !applicationId.isEmpty())
         {
-            return applicationId;
+            return new DefaultApplicationLookup(applicationId, null);
         }
         if (appManager == null || project == null)
         {
-            return applicationId;
+            return new DefaultApplicationLookup(applicationId, null);
         }
         ApplicationSupport.BoundedRead<Optional<IApplication>> read =
-            ApplicationSupport.getDefaultApplicationBounded(appManager, project,
-                ApplicationSupport.LOOKUP_TIMEOUT_MS);
+            ApplicationSupport.getDefaultApplicationBounded(appManager, project, timeoutMs);
         if (!read.concluded())
         {
             Activator.logError("Error resolving default application for project " //$NON-NLS-1$
                 + project.getName() + ": " + read.deadlineFailure(), null); //$NON-NLS-1$
-            return applicationId;
+            return new DefaultApplicationLookup(applicationId, read.deadlineFailure());
         }
         try
         {
             // getDefaultApplication may throw ApplicationException; degrade to the
             // original id (the caller then behaves exactly as before the fallback).
-            return read.valueOrRethrow()
+            return new DefaultApplicationLookup(read.valueOrRethrow()
                 .map(IApplication::getId)
-                .orElse(applicationId);
+                .orElse(applicationId), null);
         }
         catch (ApplicationException e)
         {
             Activator.logError("Error resolving default application for project " //$NON-NLS-1$
                 + project.getName(), e);
-            return applicationId;
+            return new DefaultApplicationLookup(applicationId, null);
+        }
+    }
+
+    /**
+     * What {@link #resolveDefaultApplication} established: the effective application id, plus the
+     * reason the default-application read did not conclude when it did not.
+     *
+     * <p>{@link #id()} is ALWAYS safe to launch with — it is what the unbounded code produced —
+     * but it is only safe to treat as an IDENTITY (a lock key, an existence check, a cross-check)
+     * when {@link #inconclusive()} is {@code false}.
+     */
+    public static final class DefaultApplicationLookup
+    {
+        private final String id;
+        private final String failure;
+
+        DefaultApplicationLookup(String id, String failure)
+        {
+            this.id = id;
+            this.failure = failure;
+        }
+
+        /** @return the effective application id (may be {@code null}/empty) */
+        public String id()
+        {
+            return id;
+        }
+
+        /** @return {@code true} when the read did NOT conclude, so the id is a degradation */
+        public boolean inconclusive()
+        {
+            return failure != null;
+        }
+
+        /** @return why the read did not conclude, or {@code null} when it did */
+        public String failure()
+        {
+            return failure;
         }
     }
 
@@ -2033,6 +2102,10 @@ public final class LaunchLifecycleUtils
      * arm the auto-confirmer with an ATTRIBUTABLE name. Fully guarded and best-effort: a name
      * that cannot be resolved simply yields {@code null}.
      *
+     * <p>A caller that also needs the server name, or that has to tell "no name" from "the name
+     * could not be READ", uses {@link #attributionNames} instead — this form collapses both into
+     * {@code null} and pays a second bounded read for the second name.
+     *
      * @param appManager the EDT application manager (may be {@code null})
      * @param project the project the application belongs to (may be {@code null})
      * @param applicationId the application id (may be {@code null})
@@ -2041,12 +2114,118 @@ public final class LaunchLifecycleUtils
     public static String attributionInfobaseName(IApplicationManager appManager, IProject project,
         String applicationId)
     {
+        return attributionNames(appManager, project, applicationId).infobaseName();
+    }
+
+    /**
+     * Resolves BOTH attribution names from ONE bounded application read.
+     *
+     * <p>The two names come off the same {@link IApplication}, so reading it twice doubled the
+     * cost of a wedged manager for no new information: a launch arms both matchers, and the pair
+     * is what the launch actually pays. One read, one budget
+     * ({@link #ATTRIBUTION_LOOKUP_TIMEOUT_MS}).
+     *
+     * <p>The result separates "this application has no such name" from "the read did not
+     * conclude". That distinction is NOT cosmetic, which is why it is carried out of here: a null
+     * infobase name degrades the caller's {@code externalInfobaseChanges} policy to {@code cancel}
+     * in {@code LaunchUpdateDialogAutoConfirmer}, and the advice attached to that cancel
+     * ("retrying will not help") is true for an application that resolves no infobase and FALSE
+     * for a ten-second deadline.
+     *
+     * @param appManager the EDT application manager (may be {@code null})
+     * @param project the project the application belongs to (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @return the names, never {@code null}
+     */
+    public static AttributionNames attributionNames(IApplicationManager appManager,
+        IProject project, String applicationId)
+    {
+        return attributionNames(appManager, project, applicationId,
+            ATTRIBUTION_LOOKUP_TIMEOUT_MS);
+    }
+
+    /**
+     * Same lookup with the deadline explicit, for a caller whose attribution needed an earlier
+     * bounded step (resolving the delegate application id) and must keep the PAIR inside one
+     * budget rather than restart it.
+     *
+     * @param appManager the EDT application manager (may be {@code null})
+     * @param project the project the application belongs to (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @param timeoutMs what is left of the attribution budget
+     * @return the names, never {@code null}
+     */
+    public static AttributionNames attributionNames(IApplicationManager appManager,
+        IProject project, String applicationId, long timeoutMs)
+    {
         if (appManager == null || project == null || applicationId == null || applicationId.isEmpty())
         {
-            return null;
+            // Nothing to look up: definitively unattributable, and no read was attempted.
+            return new AttributionNames(null, null, false);
         }
-        return attributionLookup(appManager, project, applicationId,
-            LaunchLifecycleUtils::conflictAttributionName);
+        try
+        {
+            ApplicationSupport.BoundedRead<Optional<IApplication>> read =
+                ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
+                    timeoutMs);
+            if (!read.concluded())
+            {
+                // Logged, not swallowed: this is the read whose failure silently degrades a
+                // writing policy to 'cancel', so it must leave a trace the reader can find.
+                Activator.logError("Attribution lookup for application '" + applicationId //$NON-NLS-1$
+                    + "' did not conclude: " + read.deadlineFailure(), null); //$NON-NLS-1$
+                return new AttributionNames(null, null, true);
+            }
+            Optional<IApplication> app = read.valueOrRethrow();
+            return new AttributionNames(app.map(LaunchLifecycleUtils::conflictAttributionName)
+                .orElse(null), app.map(LaunchLifecycleUtils::serverNameOf).orElse(null), false);
+        }
+        catch (Exception e) // NOSONAR a best-effort hint must never break a launch
+        {
+            return new AttributionNames(null, null, false);
+        }
+    }
+
+    /**
+     * The two names one launch window arms with, and whether the read that produced them
+     * concluded.
+     *
+     * <p>{@link #inconclusive()} is the difference between "this application names no infobase"
+     * (permanent — a different application has to be targeted) and "the manager did not answer in
+     * time" (transient — the same call may well work once EDT is responsive). Both yield a
+     * {@code null} name and both degrade a writing policy to {@code cancel}; only the advice
+     * differs, and getting it wrong sends the caller away from the one action that helps.
+     */
+    public static final class AttributionNames
+    {
+        private final String infobaseName;
+        private final String serverName;
+        private final boolean inconclusive;
+
+        AttributionNames(String infobaseName, String serverName, boolean inconclusive)
+        {
+            this.infobaseName = infobaseName;
+            this.serverName = serverName;
+            this.inconclusive = inconclusive;
+        }
+
+        /** @return the infobase display name EDT quotes in its conflict modal, or {@code null} */
+        public String infobaseName()
+        {
+            return infobaseName;
+        }
+
+        /** @return the WST server's own name, or {@code null} */
+        public String serverName()
+        {
+            return serverName;
+        }
+
+        /** @return {@code true} when the names are UNKNOWN because the read did not conclude */
+        public boolean inconclusive()
+        {
+            return inconclusive;
+        }
     }
 
     /**
@@ -2066,46 +2245,7 @@ public final class LaunchLifecycleUtils
     public static String attributionServerName(IApplicationManager appManager, IProject project,
         String applicationId)
     {
-        if (appManager == null || project == null || applicationId == null || applicationId.isEmpty())
-        {
-            return null;
-        }
-        return attributionLookup(appManager, project, applicationId,
-            LaunchLifecycleUtils::serverNameOf);
-    }
-
-    /**
-     * The shared best-effort body of the two attribution lookups: one BOUNDED application read
-     * ({@link #ATTRIBUTION_LOOKUP_TIMEOUT_MS}), then {@code naming} applied to whatever it found.
-     *
-     * <p>Every way of not getting a name — not found, a raised lookup, an expired deadline — is the
-     * same answer here: {@code null}, "cannot attribute". Nothing is logged at ERROR for it,
-     * because a missing cosmetic hint is not a failure of the launch.
-     *
-     * @param appManager the EDT application manager (never {@code null} here)
-     * @param project the project the application belongs to (never {@code null} here)
-     * @param applicationId the application id (never empty here)
-     * @param naming reads the wanted name off the resolved application
-     * @return the name, or {@code null} when it could not be resolved
-     */
-    private static String attributionLookup(IApplicationManager appManager, IProject project,
-        String applicationId, Function<IApplication, String> naming)
-    {
-        try
-        {
-            ApplicationSupport.BoundedRead<Optional<IApplication>> read =
-                ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
-                    ATTRIBUTION_LOOKUP_TIMEOUT_MS);
-            if (!read.concluded())
-            {
-                return null;
-            }
-            return read.valueOrRethrow().map(naming).orElse(null);
-        }
-        catch (Exception e) // NOSONAR a best-effort hint must never break a launch
-        {
-            return null;
-        }
+        return attributionNames(appManager, project, applicationId).serverName();
     }
 
     /**
@@ -3588,6 +3728,13 @@ public final class LaunchLifecycleUtils
      * it never equals the delegate's real/default app id). Returns
      * {@code null} if the id cannot be resolved (no persisted id and no default
      * application).
+     *
+     * <p>{@code null} now also covers a default-application read that did NOT conclude (#622),
+     * and each caller degrades differently: the fresh-run sweep loses its delegate-keyed half, so
+     * EDT's code-1003 "Debug session already exists" modal can fire; the standalone pre-flight
+     * short-circuits, so the stale-server check it exists for is skipped. Neither is a
+     * correctness hole, but both are silent — a caller that needs to SAY so reads the default
+     * through {@link #resolveDefaultApplication} instead.
      */
     public static String resolveDelegateApplicationId(ILaunchConfiguration config, String projectName)
     {
@@ -3604,6 +3751,27 @@ public final class LaunchLifecycleUtils
     public static String resolveDelegateApplicationId(ILaunchConfiguration config, IProject project,
         IApplicationManager appManager)
     {
+        return resolveDelegateApplicationId(config, project, appManager,
+            ApplicationSupport.LOOKUP_TIMEOUT_MS);
+    }
+
+    /**
+     * Same delegate-id rule with the default-application read's deadline supplied.
+     *
+     * <p>The attribution path passes its own small budget: the default lookup is a STEP of the
+     * attribution, not a separate operation, so charging it the full 30 s lookup bound would make
+     * a "small fixed addition" cost three times what the attribution itself is allowed.
+     *
+     * @param config the launch configuration
+     * @param project the resolved project (may be {@code null})
+     * @param appManager the application manager (may be {@code null})
+     * @param defaultLookupTimeoutMs the deadline for the default-application read, used only when
+     *     the configuration carries no persisted application id
+     * @return the delegate's application id, or {@code null} when it cannot be resolved
+     */
+    public static String resolveDelegateApplicationId(ILaunchConfiguration config, IProject project,
+        IApplicationManager appManager, long defaultLookupTimeoutMs)
+    {
         String realId = LaunchConfigUtils.readAttribute(config,
             LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
         if (realId != null && !realId.isEmpty())
@@ -3614,10 +3782,11 @@ public final class LaunchLifecycleUtils
         {
             return null;
         }
-        // resolveDefaultApplicationId returns the original (empty) value when there is
+        // resolveDefaultApplication returns the original (empty) value when there is
         // no default — normalize that to null so findRuntimeClientDebugTarget's
         // empty-id guard short-circuits instead of matching on "".
-        String resolved = resolveDefaultApplicationId(project, null, appManager);
+        String resolved =
+            resolveDefaultApplication(project, null, appManager, defaultLookupTimeoutMs).id();
         return resolved != null && !resolved.isEmpty() ? resolved : null;
     }
 

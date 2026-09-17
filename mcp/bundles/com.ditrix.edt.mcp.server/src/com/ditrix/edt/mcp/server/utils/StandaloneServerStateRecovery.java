@@ -1836,8 +1836,21 @@ public final class StandaloneServerStateRecovery
         {
             return;
         }
-        ensureStartable(project, null,
-            LaunchLifecycleUtils.resolveDefaultApplicationId(project, null, manager), manager);
+        LaunchLifecycleUtils.DefaultApplicationLookup defaultApp = LaunchLifecycleUtils
+            .resolveDefaultApplication(project, null, manager, ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (defaultApp.inconclusive())
+        {
+            // The pre-flight is skipped, and that must not be silent (#622). This method has no
+            // channel back to the tool, so the skip otherwise surfaces only much later as EDT's own
+            // "can only start a stopped server" refusal — the very refusal the pre-flight exists to
+            // prevent — with nothing anywhere saying why the check did not run.
+            Activator.logError("Standalone-server pre-flight skipped for project " //$NON-NLS-1$
+                + project.getName() + ": the project's default application could not be resolved (" //$NON-NLS-1$
+                + defaultApp.failure()
+                + "). A stale STARTED server will not be settled before the next start.", null); //$NON-NLS-1$
+            return;
+        }
+        ensureStartable(project, null, defaultApp.id(), manager);
     }
 
     /** What the pre-flight decided to do about the server's current state. */

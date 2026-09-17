@@ -25,11 +25,17 @@ import java.util.concurrent.TimeUnit;
 import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
+import com.ditrix.edt.mcp.server.protocol.McpKeys;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.GetApplicationsTool.ApplicationListDeadline;
 import com.ditrix.edt.mcp.server.tools.impl.GetApplicationsTool.DefaultApplication;
+import com.e1c.g5.dt.applications.ApplicationException;
+import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Tests for {@link GetApplicationsTool}.
@@ -366,5 +372,127 @@ public class GetApplicationsToolTest
             release.countDown();
             assertTrue(finished.await(5, TimeUnit.SECONDS));
         }
+    }
+
+    // ===== #622/H: the per-application update-state read is bounded and says when it is unknown =====
+
+    @Test
+    public void testAWedgedUpdateStateReadIsAnsweredOnTheDeadlineAsUNKNOWN() throws Exception
+    {
+        // getUpdateState is an IApplicationManager call, and it ran once per application with no
+        // bound at all - which made the tool every other application error points the agent at the
+        // one that could park indefinitely.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IApplication app = mock(IApplication.class);
+        when(app.getId()).thenReturn("Infobase.Wedged"); //$NON-NLS-1$
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        when(manager.getUpdateState(app)).thenAnswer(invocation -> {
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return null;
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+
+        try
+        {
+            long startMs = System.currentTimeMillis();
+            GetApplicationsTool.UpdateStates states = GetApplicationsTool.updateStatesBounded(
+                manager, Collections.singletonList(app), SHORT_DEADLINE_MS);
+            long elapsedMs = System.currentTimeMillis() - startMs;
+            JsonObject appObj = new JsonObject();
+            states.mergeInto(appObj, 0);
+
+            assertTrue("the read must be answered on the deadline, not on the wedge: " //$NON-NLS-1$
+                + elapsedMs, elapsedMs < 20_000L);
+            assertEquals("an unread state must be reported, not omitted", "UNKNOWN", //$NON-NLS-1$ //$NON-NLS-2$
+                appObj.get("updateState").getAsString()); //$NON-NLS-1$
+            assertTrue("it must carry the deadline diagnosis", appObj.get("updateStateError") //$NON-NLS-1$ //$NON-NLS-2$
+                .getAsString().contains("the EDT update-state read")); //$NON-NLS-1$
+            assertTrue("and it must not read as 'up to date'", //$NON-NLS-1$
+                appObj.get("updateStateDescription").getAsString().contains("is NOT a claim")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testAReadUpdateStateStillRendersExactlyAsBefore() throws Exception
+    {
+        // The other edge: bounding the read must not change what a healthy project reports.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IApplication app = mock(IApplication.class);
+        when(app.getId()).thenReturn("Infobase.Main"); //$NON-NLS-1$
+        when(manager.getUpdateState(app)).thenReturn(ApplicationUpdateState.UPDATED);
+
+        GetApplicationsTool.UpdateStates states = GetApplicationsTool.updateStatesBounded(
+            manager, Collections.singletonList(app), GENEROUS_DEADLINE_MS);
+        JsonObject appObj = new JsonObject();
+        states.mergeInto(appObj, 0);
+
+        assertEquals("UPDATED", appObj.get("updateState").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a read state carries no error", appObj.has("updateStateError")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testARaisedDefaultLookupIsAlsoReportedAsUnknown() throws Exception
+    {
+        // The branch right below the deadline one returned the SAME silence as "there is no
+        // default" - and a raised lookup establishes exactly as little as an expired one.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("Raising"); //$NON-NLS-1$
+        when(manager.getDefaultApplication(project))
+            .thenThrow(new ApplicationException("registry unavailable")); //$NON-NLS-1$
+
+        DefaultApplication resolved = GetApplicationsTool.resolveDefaultApplicationId(manager,
+            project, GENEROUS_DEADLINE_MS);
+
+        assertNull(resolved.id());
+        assertNotNull("a raised lookup must not pass as 'there is no default'", resolved.note()); //$NON-NLS-1$
+        assertTrue(resolved.note().startsWith("The default application is UNKNOWN: ")); //$NON-NLS-1$
+        assertTrue("the note must carry the failure", //$NON-NLS-1$
+            resolved.note().contains("registry unavailable")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheThreeDefaultOutcomesAreDistinguishableOnTheSerializedPayload()
+    {
+        // Asserting on the DefaultApplication record alone proves nothing about what the caller
+        // receives: the record is right and the payload can still collapse two outcomes, because
+        // "no defaultApplicationId" is this tool's way of saying BOTH "there is none" and - if the
+        // wiring slips - "the lookup never answered".
+        JsonObject resolved = payloadFor(new DefaultApplication("Infobase.Main", null)); //$NON-NLS-1$
+        JsonObject unknown = payloadFor(new DefaultApplication(null,
+            "The default application is UNKNOWN: the lookup expired.")); //$NON-NLS-1$
+        JsonObject absent = payloadFor(new DefaultApplication(null, null));
+
+        assertEquals("Infobase.Main", resolved.get("defaultApplicationId").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a resolved default needs no message", resolved.has("message")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertFalse("an UNKNOWN default must not be given an id", //$NON-NLS-1$
+            unknown.has("defaultApplicationId")); //$NON-NLS-1$
+        assertTrue("an UNKNOWN default must say so in the payload", unknown.has("message")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(unknown.get("message").getAsString() //$NON-NLS-1$
+            .startsWith("The default application is UNKNOWN: ")); //$NON-NLS-1$
+
+        assertFalse("a measured absence carries no id", absent.has("defaultApplicationId")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("and no explanation either", absent.has("message")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static JsonObject payloadFor(DefaultApplication defaultApp)
+    {
+        ToolResult result = ToolResult.success().put(McpKeys.PROJECT, "P"); //$NON-NLS-1$
+        return JsonParser.parseString(
+            GetApplicationsTool.applyDefaultApplication(result, defaultApp).toJson())
+            .getAsJsonObject();
     }
 }

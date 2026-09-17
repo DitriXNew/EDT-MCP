@@ -304,10 +304,16 @@ public class InfobaseSessionsTool implements IMcpTool
         if (!read.concluded())
         {
             // A refusal, not a not-found: the read never concluded, so whether the application
-            // exists is unknown, and nothing was listed or terminated.
+            // exists is unknown, and nothing was listed or terminated. The DEFAULT-application
+            // route also names the cheap way round it, exactly as create_launch_config's sibling
+            // refusal does: passing applicationId skips the wedge-prone default lookup entirely.
             return ResolvedApplication.error(ToolResult.error(read.deadlineFailure()
                 + ". No session was listed or terminated, and this says nothing about whether " //$NON-NLS-1$
-                + "the application exists. Retry once EDT is responsive.").toJson()); //$NON-NLS-1$
+                + "the application exists. " //$NON-NLS-1$
+                + (byDefault
+                    ? "Pass applicationId explicitly (get_applications lists the ids) to skip the " //$NON-NLS-1$
+                        + "default-application lookup, or retry once EDT is responsive." //$NON-NLS-1$
+                    : "Retry once EDT is responsive.")).toJson()); //$NON-NLS-1$
         }
         Optional<IApplication> application = read.valueOrRethrow();
         if (application.isEmpty())

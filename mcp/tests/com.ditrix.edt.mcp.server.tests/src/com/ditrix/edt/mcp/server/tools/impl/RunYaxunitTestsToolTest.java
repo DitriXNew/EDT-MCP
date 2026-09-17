@@ -10,6 +10,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertTrue;
 
 import static org.mockito.Mockito.mock;
@@ -127,9 +128,11 @@ public class RunYaxunitTestsToolTest
 
         long startedAt = System.nanoTime();
         // The PRODUCTION overload on purpose: the bound under test is the one this call site
-        // chooses, so a test that passed its own would pin nothing.
+        // chooses, so a test that passed its own would pin nothing. The CALLER's deadline is
+        // generous here, because the site takes the SMALLER of it and the publish-sized ceiling —
+        // a short one would cap the wait and this test would stop measuring the ceiling.
         String result = new RunYaxunitTestsTool().handleExistingLaunch(finished, reportDir,
-            System.currentTimeMillis() + 1_000L, "contended-run-key", projectName, applicationId);
+            System.currentTimeMillis() + 120_000L, "contended-run-key", projectName, applicationId);
         long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
         holder.join(10_000L);
 
@@ -150,6 +153,117 @@ public class RunYaxunitTestsToolTest
             result.contains("no JUnit XML found"));
         assertFalse("the read must not have been refused on the lock",
             result.contains("The launch lock for application"));
+    }
+
+    /**
+     * The other edge of the same bound, and the defect it replaced: both report reads RECEIVED the
+     * caller's deadline and then handed {@code OPERATION_LOCK_TIMEOUT_MS} to the acquisition
+     * anyway, so a caller that asked for a fraction of a second was held for fifteen minutes — with
+     * its background-job slot pinned for the duration. The bound must be the SMALLER of the two.
+     */
+    @Test
+    public void testAShortCallerDeadlineCapsTheReportLockWait() throws Exception
+    {
+        String projectName = "CappedReadProject";
+        String applicationId = "app-capped-read";
+        Path reportDir = Files.createTempDirectory("edt-mcp-yaxunit-capped");
+        Files.write(reportDir.resolve("junit.xml"), ("<?xml version=\"1.0\"?>"
+            + "<testsuite name=\"All\" tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\">"
+            + "<testcase classname=\"OM_a\" name=\"CappedMarkerTest\"/>"
+            + "</testsuite>").getBytes(StandardCharsets.UTF_8));
+
+        ILaunch finished = mock(ILaunch.class);
+        Mockito.when(finished.isTerminated()).thenReturn(true);
+
+        // Held for far longer than the caller's deadline and far less than the 15-minute ceiling,
+        // so the elapsed time tells the two bounds apart.
+        long holdMs = 6_000L;
+        CountDownLatch held = new CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            LaunchLifecycleUtils.LaunchLock lock =
+                LaunchLifecycleUtils.lockFor(projectName, applicationId);
+            if (!lock.tryAcquire(5_000L, null).acquired())
+            {
+                return;
+            }
+            try
+            {
+                held.countDown();
+                Thread.sleep(holdMs);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            finally
+            {
+                lock.unlock();
+            }
+        }, "test: held launch lock (capped report read)");
+        holder.start();
+        assertTrue("the holder must be provably holding the lock", held.await(5, TimeUnit.SECONDS));
+
+        long startedAt = System.nanoTime();
+        // The PRODUCTION overload: the bound under test is the one this call site computes.
+        String result = new RunYaxunitTestsTool().handleExistingLaunch(finished, reportDir,
+            System.currentTimeMillis() + 400L, "capped-run-key", projectName, applicationId);
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+        holder.join(15_000L);
+
+        assertTrue("the caller's 400 ms deadline must cap the wait, not the 15-minute ceiling: "
+            + elapsedMs + " ms", elapsedMs < 3_000L);
+        assertTrue("giving up must be a terminal refusal naming the lock",
+            result.contains("The launch lock for application"));
+        // And it must report the bound it actually used, not the constant it no longer passes.
+        assertFalse("the 15-minute ceiling must not be reported as this call's bound",
+            result.contains("15 minutes"));
+    }
+
+    /**
+     * The rule itself, in isolation: a caller's remaining budget is an upper bound on everything
+     * this call does, and the publish-sized constant is only the ceiling.
+     */
+    @Test
+    public void testReportLockBoundIsTheSmallerOfTheDeadlineAndTheCeiling()
+    {
+        long generous = RunYaxunitTestsTool.reportLockTimeoutMs(
+            System.currentTimeMillis() + LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS + 60_000L);
+        assertEquals("a caller with more time than the ceiling still stops at the ceiling",
+            LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS, generous);
+
+        long short_ = RunYaxunitTestsTool.reportLockTimeoutMs(System.currentTimeMillis() + 30_000L);
+        assertTrue("a 30 s caller must not be given the 15-minute bound: " + short_,
+            short_ <= 30_000L);
+        assertTrue("and it must keep most of its own budget: " + short_, short_ > 25_000L);
+
+        assertEquals("an expired deadline leaves no budget at all", 0L,
+            RunYaxunitTestsTool.reportLockTimeoutMs(System.currentTimeMillis() - 5_000L));
+    }
+
+    /**
+     * #622/C: a launch configuration with no persisted applicationId whose project default cannot
+     * be READ must refuse. The degradation it replaced handed the EMPTY id on, which keys a
+     * DIFFERENT {@code lockFor} mutex than the real application's — so the run stopped serialising
+     * against update_database and the other launches of that infobase.
+     */
+    @Test
+    public void testAnUnresolvedDefaultApplicationRefusesInsteadOfRunningUnserialised()
+    {
+        String message = RunYaxunitTestsTool.unresolvedDefaultApplicationError("P1",
+            "the EDT default-application lookup for project 'P1' did not finish within 30s");
+
+        assertTrue("it must be a structured error", message.contains("\"success\": false")
+            || message.contains("\"success\":false"));
+        assertTrue("it must name the project", message.contains("project 'P1'"));
+        assertTrue("it must carry the read's own diagnosis",
+            message.contains("did not finish within 30s"));
+        assertTrue("it must say no run was started", message.contains("No test run was started"));
+        assertTrue("it must name the cheap way round the wedge",
+            message.contains("Pass applicationId explicitly"));
+        // And the empty id it replaced really is a different mutex - that is what the refusal buys.
+        assertNotSame("an empty application id keys a different lock than the real one",
+            LaunchLifecycleUtils.lockFor("P1", ""),
+            LaunchLifecycleUtils.lockFor("P1", "Infobase.Real"));
     }
 
     /**
@@ -285,7 +399,7 @@ public class RunYaxunitTestsToolTest
         assertTrue("it must say the run itself finished",
             message.contains("The run itself finished"));
         assertTrue("it must name where the report still is",
-            message.contains("Read the JUnit XML directly at"));
+            message.contains("The JUnit XML is still on disk at"));
         // The wrong shape: anything the job loop's isPendingResult would retry on.
         assertFalse("the expiry must not be retryable by the owning job's loop",
             message.startsWith("**Pending:**"));
@@ -304,13 +418,17 @@ public class RunYaxunitTestsToolTest
             Paths.get("C:", "tmp", "edt-mcp-yaxunit"), "P1", "app-x",
             LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS);
 
-        assertTrue("reading the file must be named as THE way out",
-            message.contains("Read the JUnit XML directly at"));
+        assertTrue("the surviving report must be located for the reader",
+            message.contains("The JUnit XML is still on disk at"));
         assertTrue("a re-run must be named as destructive to this report",
-            message.contains("do NOT call run_yaxunit_tests again first"));
+            message.contains("Do NOT call run_yaxunit_tests again first"));
         // The wording this replaced, which offered the report-wiping branch as an equal option.
         assertFalse("a re-run must not be offered as an alternative",
             message.contains("read it there, or call run_yaxunit_tests again"));
+        // Nor may the file be offered as an MCP recovery: no tool in this surface reads an
+        // arbitrary path, so an unqualified "read it" names a step the caller cannot take.
+        assertTrue("the message must say the file is not reachable through MCP",
+            message.contains("no EDT-MCP tool reads an arbitrary file"));
     }
 
     /**
@@ -347,7 +465,7 @@ public class RunYaxunitTestsToolTest
         assertFalse("it must not report a deadline that never elapsed",
             message.contains("did not become available within"));
         assertTrue("it must still name where the report is",
-            message.contains("Read the JUnit XML directly at"));
+            message.contains("The JUnit XML is still on disk at"));
     }
 
     @Test

@@ -430,7 +430,8 @@ public class CreateGitBranchTool implements IMcpTool
             return ApplicationReferenceResolution.warning(
                 "Could not resolve application '" + applicationId + "': " //$NON-NLS-1$ //$NON-NLS-2$
                 + read.deadlineFailure() + ". The branch was created; the application was not " //$NON-NLS-1$
-                + "attached to it."); //$NON-NLS-1$
+                + "attached to it. Attach it with set_branch_infobase once EDT is responsive - " //$NON-NLS-1$
+                + "the branch does NOT need to be created again."); //$NON-NLS-1$
         }
         Optional<IApplication> appOpt;
         try
