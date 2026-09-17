@@ -1140,6 +1140,17 @@
         "databaseFilesDeleted": {
           "type": "boolean"
         },
+        "databaseFilesKept": {
+          "enum": [
+            "notRequested",
+            "noDirectory",
+            "shared",
+            "unknown",
+            "deleteFailed",
+            "deregistrationFailed"
+          ],
+          "type": "string"
+        },
         "deleteRegistration": {
           "type": "boolean"
         },
@@ -1674,6 +1685,14 @@
         },
         "count": {
           "type": "integer"
+        },
+        "defaultApplication": {
+          "enum": [
+            "resolved",
+            "none",
+            "unknown"
+          ],
+          "type": "string"
         },
         "defaultApplicationId": {
           "type": "string"
