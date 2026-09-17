@@ -99,24 +99,21 @@ public final class LaunchLifecycleUtils
     private static final long LOCK_WAIT_SLICE_MS = 100L;
 
     /**
-     * Bound (ms) on waiting for {@link #lockFor} at a participant legitimately queued behind
+     * Bound (ms) on waiting for {@link #lockFor} at every participant legitimately queued behind
      * another operation on the SAME infobase: {@link #prepareForFreshLaunch}, the YAXUnit
-     * spawn/debug phase and {@code update_database}. Waiting there is correct behaviour, not a
-     * defect, so the bound only has to be finite — the longest legitimate holder is a FULL
-     * configuration publish, which on a large configuration genuinely runs for many minutes.
-     * Assumed here: no legitimate publish exceeds 15 minutes, so the bound never converts a
-     * correct wait into a refusal, while a holder wedged inside a platform call stops parking
-     * every other participant forever.
+     * spawn/debug phase, {@code update_database} and the two YAXUnit report reads. Waiting there is
+     * correct behaviour, not a defect, so the bound only has to be finite — the longest legitimate
+     * holder is a FULL configuration publish, which on a large configuration genuinely runs for
+     * many minutes. Assumed here: no legitimate publish exceeds 15 minutes, so the bound never
+     * converts a correct wait into a refusal, while a holder wedged inside a platform call stops
+     * parking every other participant forever.
+     *
+     * <p>The report reads hold the lock for milliseconds, and wait under this same long bound on
+     * purpose. A short give-up there is not a cheaper answer but a lost one: their guarded work is
+     * the only read of a FINISHED run's report, and a caller that retries after giving up can find
+     * the tracking entry evicted and take the spawn path, which wipes the report directory.
      */
     public static final long OPERATION_LOCK_TIMEOUT_MS = 15 * 60 * 1000L;
-
-    /**
-     * Bound (ms) on waiting for {@link #lockFor} at the two fast YAXUnit report reads, which hold
-     * the lock for milliseconds but can be BLOCKED by a long holder. 5 seconds covers a concurrent
-     * report read and a short spawn hand-off; past that the honest answer is "call again", which
-     * is what those paths return, so a longer wait would only burn the caller's poll budget.
-     */
-    public static final long REPORT_LOCK_TIMEOUT_MS = 5_000L;
 
     /**
      * Bound (ms) on waiting for {@link #lockFor} in {@code infobase_sessions}, the one participant

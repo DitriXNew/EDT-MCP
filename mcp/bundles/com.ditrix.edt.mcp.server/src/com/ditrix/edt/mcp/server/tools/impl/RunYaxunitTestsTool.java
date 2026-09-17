@@ -738,8 +738,7 @@ public class RunYaxunitTestsTool implements IMcpTool
         return result instanceof String ? (String)result : GsonProvider.toJson(result);
     }
 
-    /** The predicate the owning job's loop retries on; package-private so a test can assert it. */
-    static boolean isPendingResult(String result)
+    private static boolean isPendingResult(String result)
     {
         return result != null && result.startsWith("**Pending:**"); //$NON-NLS-1$
     }
@@ -1456,22 +1455,25 @@ public class RunYaxunitTestsTool implements IMcpTool
      * Worst case still degrades from a torn parse to a clean null; findJunitXml + readResults
      * are fast (ms), so contention is negligible.
      * <p>
-     * The lock is taken with {@link LaunchLifecycleUtils#REPORT_LOCK_TIMEOUT_MS}: this read is fast
-     * but a long holder can block it, and a caller told to call again is a better answer than a
-     * thread parked until that holder finishes.
+     * The lock is taken with {@link LaunchLifecycleUtils#OPERATION_LOCK_TIMEOUT_MS} — long, not
+     * short. That bound exists to guarantee an answer and to honour cancellation, NOT to give up
+     * early: this read is the only read of a finished run's report, and returning without it lets
+     * the retry find the entry evicted (the launch listener drops terminated launches), take the
+     * spawn path and {@link #cleanupTempDir} the report away.
      *
-     * @return the Markdown report, a structured error, or a Pending message — always non-{@code null}
+     * @return for a TERMINATED launch the Markdown report or a structured error, never a Pending;
+     *         for one still running the poll result or a Pending — always non-{@code null}
      */
-    private String handleExistingLaunch(ILaunch existing, Path reportDir, long deadlineMs, String runKey, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+    String handleExistingLaunch(ILaunch existing, Path reportDir, long deadlineMs, String runKey, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String projectName, String applicationId) throws InterruptedException
     {
         if (existing.isTerminated())
         {
             LaunchLifecycleUtils.LaunchLock readLock =
                 LaunchLifecycleUtils.lockFor(projectName, applicationId);
-            if (!readLock.tryAcquire(LaunchLifecycleUtils.REPORT_LOCK_TIMEOUT_MS, null))
+            if (!readLock.tryAcquire(LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS, null))
             {
-                return buildContendedReportMessage(reportDir, projectName, applicationId);
+                return contendedReportError(reportDir, projectName, applicationId);
             }
             try
             {
@@ -2142,8 +2144,9 @@ public class RunYaxunitTestsTool implements IMcpTool
      * it across the {@link Thread#sleep} window would serialise the whole IB for the poll duration.
      * Worst case still degrades from a torn parse to a clean null.
      * <p>
-     * Same bound as the sibling read ({@link LaunchLifecycleUtils#REPORT_LOCK_TIMEOUT_MS}); on
-     * expiry the tracking entry is kept and the caller is told to call again.
+     * Same long bound as the sibling read ({@link LaunchLifecycleUtils#OPERATION_LOCK_TIMEOUT_MS})
+     * and for the same reason: giving up before the read would let the retry spawn a new run over
+     * this one's report.
      */
     private String pollLaunch(ILaunch launch, Path reportDir, long deadline, String runKey,
             String projectName, String applicationId)
@@ -2167,11 +2170,9 @@ public class RunYaxunitTestsTool implements IMcpTool
 
         LaunchLifecycleUtils.LaunchLock readLock =
             LaunchLifecycleUtils.lockFor(projectName, applicationId);
-        if (!readLock.tryAcquire(LaunchLifecycleUtils.REPORT_LOCK_TIMEOUT_MS, null))
+        if (!readLock.tryAcquire(LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS, null))
         {
-            // The tracking entry is left in place on purpose: the next call finds it and retries
-            // the read through handleExistingLaunch.
-            return buildContendedReportMessage(reportDir, projectName, applicationId);
+            return contendedReportError(reportDir, projectName, applicationId);
         }
         try
         {
@@ -2200,28 +2201,27 @@ public class RunYaxunitTestsTool implements IMcpTool
     }
 
     /**
-     * Honest answer for a finished launch whose report could not be read because the per-IB lock
-     * was still held. Shaped like {@link #buildPendingMessage(Path)} on purpose: the read has to be
-     * retried (the owning job's loop does that), and an error would claim the run failed when it
-     * did not. Reading without the lock is not an option — the holder may be wiping
-     * {@code reportDir} for a fresh run.
+     * Terminal answer for a finished run whose report could not be read inside the whole
+     * {@link LaunchLifecycleUtils#OPERATION_LOCK_TIMEOUT_MS} bound.
+     *
+     * <p>Deliberately an ERROR and not a {@code **Pending:**}: a Pending sends the owning job's
+     * loop back through {@code runTests}, which may find the tracking entry evicted, take the spawn
+     * path and wipe the report. A structured error ends the job with the report still on disk, and
+     * names where it is.
      *
      * @param reportDir the report directory of the finished run
      * @param projectName the contended project
      * @param applicationId the contended application
-     * @return the Markdown pending answer, never {@code null}
+     * @return the structured error JSON, never {@code null}
      */
-    static String buildContendedReportMessage(Path reportDir, String projectName,
-            String applicationId)
+    static String contendedReportError(Path reportDir, String projectName, String applicationId)
     {
-        return "**Pending:** the YAXUnit run finished, but its report was not read yet.\n\n" //$NON-NLS-1$
-            + LaunchLifecycleUtils.lockUnavailableMessage(projectName, applicationId,
-                LaunchLifecycleUtils.REPORT_LOCK_TIMEOUT_MS)
-            + " Reading the report while that operation may be replacing the directory would " //$NON-NLS-1$
-            + "report a torn or missing result.\n\n" //$NON-NLS-1$
-            + "Report directory: `" + reportDir + "`\n\n" //$NON-NLS-1$ //$NON-NLS-2$
-            + "The owning background job retries the read; if you received this directly, call " //$NON-NLS-1$
-            + "`run_yaxunit_tests` again with the same parameters.\n"; //$NON-NLS-1$
+        return ToolResult.error(LaunchLifecycleUtils.lockUnavailableMessage(projectName,
+            applicationId, LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS)
+            + " The run itself finished; only its report could not be read, and nothing was " //$NON-NLS-1$
+            + "changed. The JUnit XML is still in " + reportDir //$NON-NLS-1$
+            + " — read it there, or call run_yaxunit_tests again once that operation finishes.") //$NON-NLS-1$
+            .toJson();
     }
 
     /**

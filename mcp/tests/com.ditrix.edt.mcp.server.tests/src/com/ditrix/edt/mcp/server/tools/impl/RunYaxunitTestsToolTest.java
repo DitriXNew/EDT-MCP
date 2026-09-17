@@ -16,6 +16,9 @@ import static org.mockito.Mockito.mock;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -31,8 +34,10 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IStatus;
+import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchManager;
 import org.junit.Test;
+import org.mockito.Mockito;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
@@ -57,29 +62,99 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  */
 public class RunYaxunitTestsToolTest
 {
+    /**
+     * A contended read of a FINISHED run's report must wait for the lock and then read — not
+     * return early. Returning early destroys the report: the caller retries, the launch listener
+     * has meanwhile evicted the terminated launch from ACTIVE_LAUNCHES, so the retry takes the
+     * spawn path, which cleanupTempDir's the report directory.
+     */
     @Test
-    public void testContendedReportReadAnswersPendingNotAnError()
+    public void testContendedReportReadWaitsForTheLockAndStillReadsTheReport() throws Exception
     {
-        // A report read blocked by a long holder must tell the caller to call again. An error
-        // would claim the run failed when it finished successfully.
-        String message = RunYaxunitTestsTool.buildContendedReportMessage(
+        String projectName = "ContendedReadProject";
+        String applicationId = "app-contended-read";
+        Path reportDir = Files.createTempDirectory("edt-mcp-yaxunit-contended");
+        Path junitXml = reportDir.resolve("junit.xml");
+        // A FAILING case on purpose: the formatter renders per-test names only for failures, so a
+        // passing fixture would give the assertion below nothing of the report to recognise.
+        Files.write(junitXml, ("<?xml version=\"1.0\"?>"
+            + "<testsuite name=\"All\" tests=\"1\" failures=\"1\" errors=\"0\" skipped=\"0\">"
+            + "<testcase classname=\"OM_a\" name=\"ContendedMarkerTest\">"
+            + "<failure message=\"marker\">at line 1</failure>"
+            + "</testcase></testsuite>").getBytes(StandardCharsets.UTF_8));
+
+        ILaunch finished = mock(ILaunch.class);
+        Mockito.when(finished.isTerminated()).thenReturn(true);
+
+        // The holder takes the PRODUCTION lock for 400 ms, then releases it.
+        long holdMs = 400L;
+        CountDownLatch held = new CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            LaunchLifecycleUtils.LaunchLock lock =
+                LaunchLifecycleUtils.lockFor(projectName, applicationId);
+            if (!lock.tryAcquire(5_000L, null))
+            {
+                return;
+            }
+            try
+            {
+                held.countDown();
+                Thread.sleep(holdMs);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            finally
+            {
+                lock.unlock();
+            }
+        }, "test: held launch lock (report read)");
+        holder.start();
+        assertTrue("the holder must be provably holding the lock", held.await(5, TimeUnit.SECONDS));
+
+        long startedAt = System.nanoTime();
+        String result = new RunYaxunitTestsTool().handleExistingLaunch(finished, reportDir,
+            System.currentTimeMillis() + 1_000L, "contended-run-key", projectName, applicationId);
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+        holder.join(5_000L);
+
+        assertTrue("the read must wait for the holder, not give up: " + elapsedMs + " ms",
+            elapsedMs >= holdMs - 50L);
+        assertTrue("the read must return the parsed report", result.contains("ContendedMarkerTest")
+            && result.contains("YAXUnit Test Results"));
+        assertTrue("the report must NOT have been wiped", Files.exists(junitXml));
+        // The wrong outcomes this replaced. A "**Pending:**" sends the owning job's loop back
+        // through runTests, which is the path that wipes reportDir; "no JUnit XML found" is what a
+        // read that lost the race to a cleanupTempDir would report.
+        assertFalse("a finished run's report must not be answered with a Pending",
+            result.startsWith("**Pending:**"));
+        assertFalse("the report must not be reported as missing",
+            result.contains("no JUnit XML found"));
+    }
+
+    /**
+     * The whole-bound expiry is a terminal error, never a Pending: a Pending would re-enter
+     * runTests and could reach the spawn path that wipes the report.
+     */
+    @Test
+    public void testContendedReportExpiryIsATerminalErrorNamingTheReport()
+    {
+        String message = RunYaxunitTestsTool.contendedReportError(
             Paths.get("C:", "tmp", "edt-mcp-yaxunit"), "P1", "app-x");
 
-        // Asserted through the predicate the owning job's loop uses, not through its literal:
-        // a message the loop does not recognise would be handed back as the run's final answer.
-        assertTrue("the owning job must treat it as pending and retry the read",
-            RunYaxunitTestsTool.isPendingResult(message));
-        assertTrue("it must name the lock and the holder",
+        assertTrue("it must be a structured error", message.contains("\"success\": false")
+            || message.contains("\"success\":false"));
+        assertTrue("it must name the lock and the bound",
             message.contains("The launch lock for application 'app-x' in project 'P1' did not "
-                + "become available within 5 seconds"));
-        assertTrue("it must name the retry",
-            message.contains("call `run_yaxunit_tests` again with the same parameters"));
-        // The broken spellings: a JSON error payload, or the generic "tests are still running"
-        // Pending, which would describe a run that has already finished.
-        assertFalse("a finished run must not be reported as an error",
-            message.contains("\"success\""));
-        assertFalse("a finished run must not be reported as still running",
-            message.contains("YAXUnit tests are still running"));
+                + "become available within 15 minutes"));
+        assertTrue("it must say the run itself finished",
+            message.contains("The run itself finished"));
+        assertTrue("it must name where the report still is",
+            message.contains("The JUnit XML is still in"));
+        // The wrong shape: anything the job loop's isPendingResult would retry on.
+        assertFalse("the expiry must not be retryable by the owning job's loop",
+            message.startsWith("**Pending:**"));
     }
 
     @Test

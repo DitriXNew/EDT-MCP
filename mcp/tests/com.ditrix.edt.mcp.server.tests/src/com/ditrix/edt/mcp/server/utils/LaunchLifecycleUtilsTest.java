@@ -300,8 +300,7 @@ public class LaunchLifecycleUtilsTest
             LaunchLifecycleUtils.describeLockTimeout(LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS));
         assertEquals("30 seconds",
             LaunchLifecycleUtils.describeLockTimeout(LaunchLifecycleUtils.SESSIONS_LOCK_TIMEOUT_MS));
-        assertEquals("5 seconds",
-            LaunchLifecycleUtils.describeLockTimeout(LaunchLifecycleUtils.REPORT_LOCK_TIMEOUT_MS));
+        assertEquals("5 seconds", LaunchLifecycleUtils.describeLockTimeout(5_000L));
         assertEquals("1 minute", LaunchLifecycleUtils.describeLockTimeout(60_000L));
         assertEquals("1 second", LaunchLifecycleUtils.describeLockTimeout(1_000L));
         assertEquals("200 ms", LaunchLifecycleUtils.describeLockTimeout(200L));
