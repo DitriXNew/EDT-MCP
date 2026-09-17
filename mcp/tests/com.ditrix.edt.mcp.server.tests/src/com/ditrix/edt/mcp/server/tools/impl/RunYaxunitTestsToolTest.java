@@ -16,6 +16,7 @@ import static org.mockito.Mockito.mock;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -56,6 +57,31 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  */
 public class RunYaxunitTestsToolTest
 {
+    @Test
+    public void testContendedReportReadAnswersPendingNotAnError()
+    {
+        // A report read blocked by a long holder must tell the caller to call again. An error
+        // would claim the run failed when it finished successfully.
+        String message = RunYaxunitTestsTool.buildContendedReportMessage(
+            Paths.get("C:", "tmp", "edt-mcp-yaxunit"), "P1", "app-x");
+
+        // Asserted through the predicate the owning job's loop uses, not through its literal:
+        // a message the loop does not recognise would be handed back as the run's final answer.
+        assertTrue("the owning job must treat it as pending and retry the read",
+            RunYaxunitTestsTool.isPendingResult(message));
+        assertTrue("it must name the lock and the holder",
+            message.contains("The launch lock for application 'app-x' in project 'P1' did not "
+                + "become available within 5 seconds"));
+        assertTrue("it must name the retry",
+            message.contains("call `run_yaxunit_tests` again with the same parameters"));
+        // The broken spellings: a JSON error payload, or the generic "tests are still running"
+        // Pending, which would describe a run that has already finished.
+        assertFalse("a finished run must not be reported as an error",
+            message.contains("\"success\""));
+        assertFalse("a finished run must not be reported as still running",
+            message.contains("YAXUnit tests are still running"));
+    }
+
     @Test
     public void testToolName()
     {

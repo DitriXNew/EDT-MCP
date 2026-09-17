@@ -763,8 +763,19 @@ public class UpdateDatabaseTool implements IMcpTool
             // module version (stale code even after a successful publish); the reused sweep is
             // client-typed-thread discriminated (never a debug-server session) and exempts MCP-owned
             // launches. Runs only on confirm=true, never in preview.
+            // Bounded: queueing behind another operation on this infobase is correct, but a holder
+            // wedged in a platform call must not park this call forever.
             ApplicationUpdateState stateAfter;
-            synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
+            LaunchLifecycleUtils.LaunchLock updateLock =
+                LaunchLifecycleUtils.lockFor(projectName, applicationId);
+            if (!updateLock.tryAcquire(LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS, null))
+            {
+                return ToolResult.error(LaunchLifecycleUtils.lockUnavailableMessage(projectName,
+                    applicationId, LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS)
+                    + " The infobase was not updated and no client was terminated. Wait for that " //$NON-NLS-1$
+                    + "operation to finish and call update_database again.").toJson(); //$NON-NLS-1$
+            }
+            try
             {
                 if (terminateRunningClients)
                 {
@@ -904,6 +915,10 @@ public class UpdateDatabaseTool implements IMcpTool
                             InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
                     }
                 }
+            }
+            finally
+            {
+                updateLock.unlock();
             }
 
             return buildUpdatedResult(projectName, applicationId, application, updateType,

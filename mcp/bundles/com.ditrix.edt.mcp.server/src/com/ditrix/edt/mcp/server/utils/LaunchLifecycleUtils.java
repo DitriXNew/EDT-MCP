@@ -19,12 +19,14 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.debug.core.DebugException;
@@ -80,11 +82,50 @@ public final class LaunchLifecycleUtils
      * and {@code appManager.update()}. Keys are interned tuples and never
      * removed — the set of (project, applicationId) pairs is finite in
      * practice (one per EDT launch configuration).
+     *
+     * <p>That is also why nothing evicts them: dropping an entry while another thread waits on it
+     * would hand the next caller a different lock and break the exclusion outright.
      */
-    private static final ConcurrentMap<String, Object> KEY_LOCKS = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<String, LaunchLock> KEY_LOCKS = new ConcurrentHashMap<>();
 
     /** Fallback label for a launch whose configuration name is unavailable. */
     private static final String UNKNOWN_LABEL = "<unknown>"; //$NON-NLS-1$
+
+    /**
+     * Wait slice (ms) of one {@link LaunchLock#tryAcquire} attempt. The acquisition re-checks the
+     * caller's progress monitor between slices, so a cancelled monitor is honoured within this
+     * window instead of only at the full deadline.
+     */
+    private static final long LOCK_WAIT_SLICE_MS = 100L;
+
+    /**
+     * Bound (ms) on waiting for {@link #lockFor} at a participant legitimately queued behind
+     * another operation on the SAME infobase: {@link #prepareForFreshLaunch}, the YAXUnit
+     * spawn/debug phase and {@code update_database}. Waiting there is correct behaviour, not a
+     * defect, so the bound only has to be finite — the longest legitimate holder is a FULL
+     * configuration publish, which on a large configuration genuinely runs for many minutes.
+     * Assumed here: no legitimate publish exceeds 15 minutes, so the bound never converts a
+     * correct wait into a refusal, while a holder wedged inside a platform call stops parking
+     * every other participant forever.
+     */
+    public static final long OPERATION_LOCK_TIMEOUT_MS = 15 * 60 * 1000L;
+
+    /**
+     * Bound (ms) on waiting for {@link #lockFor} at the two fast YAXUnit report reads, which hold
+     * the lock for milliseconds but can be BLOCKED by a long holder. 5 seconds covers a concurrent
+     * report read and a short spawn hand-off; past that the honest answer is "call again", which
+     * is what those paths return, so a longer wait would only burn the caller's poll budget.
+     */
+    public static final long REPORT_LOCK_TIMEOUT_MS = 5_000L;
+
+    /**
+     * Bound (ms) on waiting for {@link #lockFor} in {@code infobase_sessions}, the one participant
+     * that advertises a bounded answer and must refuse rather than queue behind a publish.
+     * 30 seconds is above a normal {@code ibcmd} session read — the holder such a call
+     * realistically queues behind — and follows the same reasoning as the settle timeout in
+     * {@code StandaloneServerStateRecovery}.
+     */
+    public static final long SESSIONS_LOCK_TIMEOUT_MS = 30_000L;
 
     // =========================================================================
     // Pre-launch preparation in-flight registry (Fix 2: 25 s budget + pending)
@@ -544,21 +585,163 @@ public final class LaunchLifecycleUtils
     }
 
     /**
-     * Returns the monitor object used to serialise {@link #prepareForFreshLaunch}
-     * for the given {@code project + applicationId} pair. Callers that also
-     * need the same lock around their own pre-launch steps (e.g. updating a
-     * working copy) can synchronise on the returned object.
+     * One {@code project + applicationId} pair's launch lock: the mutual exclusion that serialises
+     * the auto-chain (terminate + update + spawn) across MCP tools.
+     *
+     * <p>A {@link ReentrantLock}, not a monitor. A thread parked in {@code synchronized} takes no
+     * deadline and cannot be interrupted, so a holder wedged inside a platform operation would park
+     * every other participant forever. Its monitor is deliberately NOT part of the API:
+     * {@code synchronized} on this object would exclude nothing, because every real participant
+     * holds {@link #lock} instead.
+     *
+     * <p>Reentrant on purpose — a caller may already hold this lock around its own spawn sequence
+     * when the code below it re-enters through {@link LaunchLifecycleUtils#prepareForFreshLaunch}.
+     * Every acquisition therefore needs its own {@code try}/{@code finally} {@link #unlock()}, and
+     * a re-entrant acquisition cannot fail on a deadline: {@code tryLock} on a lock the current
+     * thread already holds returns immediately.
+     */
+    public static final class LaunchLock
+    {
+        private final ReentrantLock lock = new ReentrantLock();
+
+        private LaunchLock()
+        {
+            // Instantiated only by lockFor.
+        }
+
+        /**
+         * Acquires this lock, waiting at most {@code timeoutMs}.
+         *
+         * <p>Waits in {@link LaunchLifecycleUtils#LOCK_WAIT_SLICE_MS} slices against a monotonic
+         * {@code nanoTime} deadline so a cancelled {@code monitor} is honoured promptly. An
+         * interruption restores the thread's interrupt flag and reports failure.
+         *
+         * @param timeoutMs the bound on the wait; a non-positive value means one attempt only
+         * @param monitor cancellation source polled between slices (may be {@code null})
+         * @return {@code true} when the lock is held by the calling thread and must be released
+         *     with {@link #unlock()}; {@code false} when nothing was acquired
+         */
+        public boolean tryAcquire(long timeoutMs, IProgressMonitor monitor)
+        {
+            long remainingNanos = TimeUnit.MILLISECONDS.toNanos(Math.max(0L, timeoutMs));
+            long deadline = System.nanoTime() + remainingNanos;
+            do
+            {
+                if (monitor != null && monitor.isCanceled())
+                {
+                    return false;
+                }
+                long waitNanos = Math.min(remainingNanos,
+                    TimeUnit.MILLISECONDS.toNanos(LOCK_WAIT_SLICE_MS));
+                try
+                {
+                    if (lock.tryLock(waitNanos, TimeUnit.NANOSECONDS))
+                    {
+                        return true;
+                    }
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+                remainingNanos = deadline - System.nanoTime();
+            }
+            while (remainingNanos > 0L);
+            return false;
+        }
+
+        /** Releases one acquisition made by {@link #tryAcquire} on the calling thread. */
+        public void unlock()
+        {
+            lock.unlock();
+        }
+
+        /** @return whether the calling thread currently holds this lock */
+        public boolean isHeldByCurrentThread()
+        {
+            return lock.isHeldByCurrentThread();
+        }
+    }
+
+    /**
+     * Shared, named diagnosis for a {@link #lockFor} acquisition that ran out its deadline. Each
+     * site appends what it did NOT do and how to retry.
+     *
+     * @param projectName the project whose lock was contended (may be {@code null})
+     * @param applicationId the application whose lock was contended (may be {@code null})
+     * @param timeoutMs the bound that elapsed
+     * @return the sentence naming the reason, never {@code null}
+     */
+    public static String lockUnavailableMessage(String projectName, String applicationId,
+        long timeoutMs)
+    {
+        return "The launch lock for application '" //$NON-NLS-1$
+            + (applicationId != null ? applicationId : UNKNOWN_LABEL) + "' in project '" //$NON-NLS-1$
+            + (projectName != null ? projectName : UNKNOWN_LABEL)
+            + "' did not become available within " + describeLockTimeout(timeoutMs) //$NON-NLS-1$
+            + ": another operation on that infobase (a database update, a launch or a test run) " //$NON-NLS-1$
+            + "is still holding it."; //$NON-NLS-1$
+    }
+
+    /**
+     * Renders a lock deadline for {@link #lockUnavailableMessage}: whole minutes, else seconds,
+     * else milliseconds. The last case keeps a sub-second bound from reading as "0 seconds".
+     */
+    static String describeLockTimeout(long timeoutMs)
+    {
+        long millis = Math.max(0L, timeoutMs);
+        long seconds = millis / 1000L;
+        if (seconds >= 60L && seconds % 60L == 0L)
+        {
+            long minutes = seconds / 60L;
+            return minutes + (minutes == 1L ? " minute" : " minutes"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (seconds >= 1L)
+        {
+            return seconds + (seconds == 1L ? " second" : " seconds"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return millis + " ms"; //$NON-NLS-1$
+    }
+
+    /**
+     * Runs test coordination while holding the PRODUCTION launch lock, so a test can pin what a
+     * contended acquisition does. Mirrors {@code holdRecoveryLockForTest} in
+     * {@link StandaloneServerStateRecovery}.
+     */
+    static void holdLockForTest(String projectName, String applicationId, Runnable action)
+    {
+        LaunchLock lock = lockFor(projectName, applicationId);
+        if (!lock.tryAcquire(5_000L, null))
+        {
+            throw new IllegalStateException("The test launch lock could not be acquired"); //$NON-NLS-1$
+        }
+        try
+        {
+            action.run();
+        }
+        finally
+        {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Returns the lock that serialises {@link #prepareForFreshLaunch} for the given
+     * {@code project + applicationId} pair. Callers that also need the same lock around their own
+     * pre-launch steps (e.g. updating a working copy) acquire it with
+     * {@link LaunchLock#tryAcquire} and release it in a {@code finally}.
      *
      * <p>The internal key uses a NUL ({@code \u0000}) separator because
      * Eclipse project names may contain spaces and other printable characters,
      * which would otherwise allow keys to collide (e.g. {@code project="My",
      * appId="Project x"} vs {@code project="My Project", appId="x"}).
      */
-    public static Object lockFor(String projectName, String applicationId)
+    public static LaunchLock lockFor(String projectName, String applicationId)
     {
         String key = (projectName != null ? projectName : "") //$NON-NLS-1$
             + "\u0000" + (applicationId != null ? applicationId : ""); //$NON-NLS-1$ //$NON-NLS-2$
-        return KEY_LOCKS.computeIfAbsent(key, k -> new Object());
+        return KEY_LOCKS.computeIfAbsent(key, k -> new LaunchLock());
     }
 
     /**
@@ -2332,6 +2515,23 @@ public final class LaunchLifecycleUtils
             int terminateTimeoutSeconds, String updateScope, ExternalInfobaseChangesPolicy policy,
             Consumer<String> phaseSink)
     {
+        return prepareForFreshLaunch(launchManager, project, applicationId, appManager,
+            terminateTimeoutSeconds, updateScope, policy, phaseSink, OPERATION_LOCK_TIMEOUT_MS);
+    }
+
+    /**
+     * Same contract, with the launch-lock deadline supplied instead of taken from
+     * {@link #OPERATION_LOCK_TIMEOUT_MS} — the seam a test uses to pin what a contended
+     * acquisition does without waiting out the production bound.
+     *
+     * @param lockTimeoutMs the bound on acquiring {@link #lockFor}
+     * @return the prep result
+     */
+    static PreLaunchResult prepareForFreshLaunch(ILaunchManager launchManager, // NOSONAR pass-through signature; the lock bound is a deadline, not a new concern
+            IProject project, String applicationId, IApplicationManager appManager,
+            int terminateTimeoutSeconds, String updateScope, ExternalInfobaseChangesPolicy policy,
+            Consumer<String> phaseSink, long lockTimeoutMs)
+    {
         if (launchManager == null)
         {
             return new PreLaunchResult(false, 0, "Launch manager is not available"); //$NON-NLS-1$
@@ -2354,10 +2554,18 @@ public final class LaunchLifecycleUtils
 
         // Per-key lock prevents concurrent run_yaxunit_tests / debug_yaxunit_tests
         // calls targeting the same IB from racing on terminate + update. Other
-        // (project, applicationId) pairs are unaffected. Java synchronized is
-        // reentrant, so callers may already hold this monitor when wrapping
-        // their full spawn+register sequence around the auto-chain.
-        synchronized (lockFor(project.getName(), applicationId))
+        // (project, applicationId) pairs are unaffected. The lock is reentrant,
+        // so callers may already hold it when wrapping their full spawn+register
+        // sequence around the auto-chain; a re-entrant acquisition cannot time out.
+        LaunchLock lock = lockFor(project.getName(), applicationId);
+        if (!lock.tryAcquire(lockTimeoutMs, null))
+        {
+            return new PreLaunchResult(false, 0,
+                lockUnavailableMessage(project.getName(), applicationId, lockTimeoutMs)
+                    + " Nothing was terminated, recomputed or updated; retry once that operation " //$NON-NLS-1$
+                    + "finishes."); //$NON-NLS-1$
+        }
+        try
         {
             // Prune terminated entries so a stale registration cannot
             // permanently block future auto-chains.
@@ -2380,6 +2588,10 @@ public final class LaunchLifecycleUtils
 
             return finalizeFreshLaunchPrep(project, applicationId, appManager, updateScope, policy,
                 outcome.terminated, phaseSink);
+        }
+        finally
+        {
+            lock.unlock();
         }
     }
 

@@ -189,11 +189,26 @@ public class InfobaseSessionsTool implements IMcpTool
             {
                 return resolved.errorJson;
             }
-            synchronized (LaunchLifecycleUtils.lockFor(projectName, resolved.application.getId()))
+            // Bounded, and short: this tool advertises an answer in seconds, so queueing behind a
+            // publish would break its own contract - it refuses with the reason instead.
+            LaunchLifecycleUtils.LaunchLock lock =
+                LaunchLifecycleUtils.lockFor(projectName, resolved.application.getId());
+            if (!lock.tryAcquire(LaunchLifecycleUtils.SESSIONS_LOCK_TIMEOUT_MS, null))
+            {
+                return ToolResult.error(LaunchLifecycleUtils.lockUnavailableMessage(projectName,
+                    resolved.application.getId(), LaunchLifecycleUtils.SESSIONS_LOCK_TIMEOUT_MS)
+                    + " No session was listed or terminated. Wait for that operation to finish " //$NON-NLS-1$
+                    + "and call infobase_sessions again.").toJson(); //$NON-NLS-1$
+            }
+            try
             {
                 return ACTION_LIST.equals(action)
                     ? list(projectName, resolved.application) : terminate(projectName,
                         resolved.application, sessionId, all, message);
+            }
+            finally
+            {
+                lock.unlock();
             }
         }
         catch (Exception e)

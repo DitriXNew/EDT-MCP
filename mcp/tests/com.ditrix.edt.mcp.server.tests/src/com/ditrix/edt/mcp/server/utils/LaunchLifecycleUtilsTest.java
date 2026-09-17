@@ -8,13 +8,25 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.lang.reflect.Constructor;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import org.eclipse.core.resources.IProject;
+import org.eclipse.debug.core.ILaunchManager;
 import org.junit.Test;
+import org.mockito.Mockito;
 
+import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.LaunchLock;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 
 /**
@@ -103,9 +115,9 @@ public class LaunchLifecycleUtilsTest
     @Test
     public void testLockForReturnsSameInstanceForSameKey()
     {
-        Object a = LaunchLifecycleUtils.lockFor("MyProject", "app-1");
-        Object b = LaunchLifecycleUtils.lockFor("MyProject", "app-1");
-        assertEquals("same (project, appId) must return same lock instance", a, b);
+        LaunchLock a = LaunchLifecycleUtils.lockFor("MyProject", "app-1");
+        LaunchLock b = LaunchLifecycleUtils.lockFor("MyProject", "app-1");
+        assertSame("same (project, appId) must return same lock instance", a, b);
     }
 
     @Test
@@ -113,9 +125,189 @@ public class LaunchLifecycleUtilsTest
     {
         // Guards against printable-delimiter collisions:
         //   {project='My', appId='Project x'} vs {project='My Project', appId='x'}.
-        Object a = LaunchLifecycleUtils.lockFor("My", "Project x");
-        Object b = LaunchLifecycleUtils.lockFor("My Project", "x");
-        assertFalse("locks for distinct (project, appId) must not collide", a == b);
+        LaunchLock a = LaunchLifecycleUtils.lockFor("My", "Project x");
+        LaunchLock b = LaunchLifecycleUtils.lockFor("My Project", "x");
+        assertNotSame("locks for distinct (project, appId) must not collide", a, b);
+    }
+
+    @Test
+    public void testFreeLockIsAcquiredWithoutBurningTheDeadline()
+    {
+        // A bug that always waits the full timeout would still "succeed" - so the cost is pinned,
+        // not just the outcome.
+        LaunchLock lock = LaunchLifecycleUtils.lockFor("PromptProject", "app-prompt");
+        long startedAt = System.nanoTime();
+        assertTrue("a free lock must be acquired", lock.tryAcquire(5_000L, null));
+        try
+        {
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+            assertTrue("an uncontended acquisition must not wait out the bound: " + elapsedMs
+                + " ms", elapsedMs < 500L);
+        }
+        finally
+        {
+            lock.unlock();
+        }
+    }
+
+    @Test
+    public void testLockIsReentrantForTheSameThread() throws Exception
+    {
+        // Load-bearing: a caller holding this lock around its spawn sequence re-enters it through
+        // prepareForFreshLaunch. Each acquisition owns its own unlock.
+        LaunchLock lock = LaunchLifecycleUtils.lockFor("ReentrantProject", "app-reentrant");
+        AtomicInteger worked = new AtomicInteger();
+        assertTrue("outer acquisition must succeed", lock.tryAcquire(2_000L, null));
+        try
+        {
+            assertTrue("a re-entrant acquisition must not fail on the deadline",
+                lock.tryAcquire(0L, null));
+            try
+            {
+                worked.incrementAndGet();
+            }
+            finally
+            {
+                lock.unlock();
+            }
+            assertTrue("the outer hold must survive the inner release",
+                lock.isHeldByCurrentThread());
+        }
+        finally
+        {
+            lock.unlock();
+        }
+
+        assertEquals("the guarded work must have run once", 1, worked.get());
+        assertFalse("the counts must balance back to zero", lock.isHeldByCurrentThread());
+        // Proven from another thread: isHeldByCurrentThread on this one cannot see a leaked hold.
+        AtomicBoolean free = new AtomicBoolean();
+        Thread probe = new Thread(() -> {
+            if (lock.tryAcquire(1_000L, null))
+            {
+                try
+                {
+                    free.set(true);
+                }
+                finally
+                {
+                    lock.unlock();
+                }
+            }
+        }, "test: reentrancy balance probe");
+        probe.start();
+        probe.join(5_000L);
+        assertTrue("balanced unlocks must leave the lock free for another thread", free.get());
+    }
+
+    @Test
+    public void testHeldLockIsRefusedAtTheDeadline() throws Exception
+    {
+        LaunchLock lock = LaunchLifecycleUtils.lockFor("ContendedProject", "app-contended");
+        CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Thread holder = new Thread(() -> LaunchLifecycleUtils.holdLockForTest("ContendedProject",
+            "app-contended", () -> {
+                held.countDown();
+                try
+                {
+                    release.await(5, TimeUnit.SECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+            }), "test: held launch lock");
+        holder.start();
+        try
+        {
+            assertTrue("the holder must be provably holding the lock", held.await(5,
+                TimeUnit.SECONDS));
+            assertFalse("a held lock must be refused at the deadline, not waited on forever",
+                lock.tryAcquire(200L, null));
+        }
+        finally
+        {
+            release.countDown();
+            holder.join(5_000L);
+            assertFalse(holder.isAlive());
+        }
+    }
+
+    @Test
+    public void testPrepareForFreshLaunchRefusesWhenTheLockIsHeld() throws Exception
+    {
+        IProject project = Mockito.mock(IProject.class);
+        Mockito.when(project.getName()).thenReturn("LockedPrepProject");
+        ILaunchManager launchManager = Mockito.mock(ILaunchManager.class);
+        List<String> phases = new ArrayList<>();
+        CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Thread holder = new Thread(() -> LaunchLifecycleUtils.holdLockForTest("LockedPrepProject",
+            "app-prep", () -> {
+                held.countDown();
+                try
+                {
+                    release.await(5, TimeUnit.SECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+            }), "test: held launch lock (prepare)");
+        holder.start();
+        PreLaunchResult result;
+        try
+        {
+            assertTrue("the holder must be provably holding the lock", held.await(5,
+                TimeUnit.SECONDS));
+            result = LaunchLifecycleUtils.prepareForFreshLaunch(launchManager, project, "app-prep",
+                null, 1, null, null, phases::add, 200L);
+        }
+        finally
+        {
+            release.countDown();
+            holder.join(5_000L);
+            assertFalse(holder.isAlive());
+        }
+
+        assertFalse("a contended preparation must not report success", result.isOk());
+        assertEquals("no guarded stage may have been entered", 0, phases.size());
+        Mockito.verify(launchManager, Mockito.never()).getLaunches();
+        assertEquals("the refusal must name the reason verbatim",
+            "The launch lock for application 'app-prep' in project 'LockedPrepProject' did not "
+                + "become available within 200 ms: another operation on that infobase (a database "
+                + "update, a launch or a test run) is still holding it. Nothing was terminated, "
+                + "recomputed or updated; retry once that operation finishes.",
+            result.getError());
+        // The broken spellings this could have degraded to: the production bound leaking in
+        // instead of the supplied one, and the generic pre-lock validation refusals.
+        assertFalse("the supplied bound must be reported, not the production constant",
+            result.getError().contains("15 minutes"));
+        assertFalse("this must not be reported as a missing launch manager",
+            result.getError().contains("Launch manager is not available"));
+    }
+
+    @Test
+    public void testLockUnavailableMessageRendersEachBound()
+    {
+        assertEquals("The launch lock for application 'a' in project 'p' did not become available "
+            + "within 15 minutes: another operation on that infobase (a database update, a launch "
+            + "or a test run) is still holding it.",
+            LaunchLifecycleUtils.lockUnavailableMessage("p", "a",
+                LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS));
+        assertEquals("15 minutes",
+            LaunchLifecycleUtils.describeLockTimeout(LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS));
+        assertEquals("30 seconds",
+            LaunchLifecycleUtils.describeLockTimeout(LaunchLifecycleUtils.SESSIONS_LOCK_TIMEOUT_MS));
+        assertEquals("5 seconds",
+            LaunchLifecycleUtils.describeLockTimeout(LaunchLifecycleUtils.REPORT_LOCK_TIMEOUT_MS));
+        assertEquals("1 minute", LaunchLifecycleUtils.describeLockTimeout(60_000L));
+        assertEquals("1 second", LaunchLifecycleUtils.describeLockTimeout(1_000L));
+        assertEquals("200 ms", LaunchLifecycleUtils.describeLockTimeout(200L));
+        // The broken spelling a naive seconds-only renderer produces for a sub-second bound.
+        assertFalse("a sub-second bound must not read as zero seconds",
+            LaunchLifecycleUtils.describeLockTimeout(200L).contains("0 second"));
     }
 
     /**
