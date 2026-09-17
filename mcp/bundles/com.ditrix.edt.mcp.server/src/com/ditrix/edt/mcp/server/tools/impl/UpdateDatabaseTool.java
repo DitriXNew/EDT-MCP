@@ -452,10 +452,30 @@ public class UpdateDatabaseTool implements IMcpTool
     static ApplicationFallback resolveSoleApplicationId(IProject project,
             IApplicationManager appManager, String projectName, String configName)
     {
+        return resolveSoleApplicationId(project, appManager, projectName, configName,
+            ApplicationSupport.LOOKUP_TIMEOUT_MS);
+    }
+
+    /** Same fallback with an explicit deadline for the bounded application listing. */
+    static ApplicationFallback resolveSoleApplicationId(IProject project,
+            IApplicationManager appManager, String projectName, String configName, long timeoutMs)
+    {
+        // Bounded (#622): an empty or unread list decides which database gets written, so a read
+        // that never concluded must refuse, never fall into the "no applications" branch below.
+        ApplicationSupport.BoundedRead<List<IApplication>> listRead =
+            ApplicationSupport.getApplicationsBounded(appManager, project, timeoutMs);
+        if (!listRead.concluded())
+        {
+            return ApplicationFallback.error(noBindingPrefix(configName)
+                + "and the applications of project '" + projectName + "' could not be listed: " //$NON-NLS-1$ //$NON-NLS-2$
+                + listRead.deadlineFailure()
+                + ". Nothing was updated. Retry in a moment, or pass projectName + applicationId " //$NON-NLS-1$
+                + "explicitly (get_applications lists the application ids)."); //$NON-NLS-1$
+        }
         List<IApplication> applications;
         try
         {
-            applications = appManager.getApplications(project);
+            applications = listRead.valueOrRethrow();
         }
         catch (ApplicationException e)
         {
@@ -687,15 +707,25 @@ public class UpdateDatabaseTool implements IMcpTool
             IProject project = mr.project();
             IApplicationManager appManager = mr.manager();
             
-            // Find application by ID
-            Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
+            // Find application by ID. Bounded (#622): a deadline is NOT a not-found — nothing was
+            // measured and, importantly here, nothing was updated.
+            ApplicationSupport.BoundedRead<Optional<IApplication>> appRead =
+                ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
+                    ApplicationSupport.LOOKUP_TIMEOUT_MS);
+            if (!appRead.concluded())
+            {
+                return ToolResult.error("Could not resolve application '" + applicationId + "': " //$NON-NLS-1$ //$NON-NLS-2$
+                        + appRead.deadlineFailure()
+                        + ". The database was NOT updated. Retry once EDT is responsive.").toJson(); //$NON-NLS-1$
+            }
+            Optional<IApplication> appOpt = appRead.valueOrRethrow();
             if (!appOpt.isPresent())
             {
                 return ToolResult.error("Application not found: " + applicationId //$NON-NLS-1$
                         + "." + describeLaunchIdentifierHint(applicationId) //$NON-NLS-1$
                         + " Use get_applications to get valid application IDs.").toJson(); //$NON-NLS-1$
             }
-            
+
             IApplication application = appOpt.get();
             
             // Check current update state before proceeding

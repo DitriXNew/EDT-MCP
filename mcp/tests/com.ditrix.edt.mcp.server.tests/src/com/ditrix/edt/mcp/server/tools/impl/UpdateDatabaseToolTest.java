@@ -25,6 +25,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
@@ -1880,5 +1882,54 @@ public class UpdateDatabaseToolTest
             json.get("willCheckInfobaseSessions").getAsBoolean()); //$NON-NLS-1$
         assertTrue(json.get("message").getAsString() //$NON-NLS-1$
             .contains("clear those with infobase_sessions")); //$NON-NLS-1$
+    }
+
+    // ==================== #622: a wedged listing refuses, it does not guess ====================
+
+    @Test
+    public void testAWedgedApplicationListingRefusesInsteadOfHanging() throws Exception
+    {
+        // The narrowed fallback decides WHICH DATABASE gets written from this list. A read that
+        // never concluded must therefore refuse - never fall into the "no applications" branch,
+        // which reads as a measured fact about the project.
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn(PROJECT);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        when(mgr.getApplications(project)).thenAnswer(invocation -> {
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return Collections.emptyList();
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+
+        try
+        {
+            long startMs = System.currentTimeMillis();
+            ApplicationFallback result = UpdateDatabaseTool.resolveSoleApplicationId(project, mgr,
+                PROJECT, CONFIG, 250L);
+
+            assertTrue("the caller must answer on its own deadline, not on the wedge", //$NON-NLS-1$
+                System.currentTimeMillis() - startMs < 20_000L);
+            assertNull("a wedged listing must not resolve a target", result.applicationId); //$NON-NLS-1$
+            assertNotNull("a wedged listing must be refused", result.errorJson); //$NON-NLS-1$
+            assertTrue("the refusal must carry the deadline diagnosis", //$NON-NLS-1$
+                result.errorJson.contains("the EDT application list for project '" + PROJECT + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue("the refusal must say nothing was updated", //$NON-NLS-1$
+                result.errorJson.contains("Nothing was updated")); //$NON-NLS-1$
+            assertFalse("an unread list must never be reported as a project with no applications", //$NON-NLS-1$
+                result.errorJson.contains("has no applications of its own")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
     }
 }

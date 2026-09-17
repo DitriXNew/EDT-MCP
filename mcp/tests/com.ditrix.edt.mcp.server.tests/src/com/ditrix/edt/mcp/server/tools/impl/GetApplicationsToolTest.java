@@ -9,14 +9,27 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
+import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.tools.impl.GetApplicationsTool.ApplicationListDeadline;
+import com.ditrix.edt.mcp.server.tools.impl.GetApplicationsTool.DefaultApplication;
+import com.e1c.g5.dt.applications.IApplication;
+import com.e1c.g5.dt.applications.IApplicationManager;
 
 /**
  * Tests for {@link GetApplicationsTool}.
@@ -183,5 +196,175 @@ public class GetApplicationsToolTest
         String result = new GetApplicationsTool().execute(new HashMap<>());
         assertFalse("a validation error must not emit inheritedFromProject", //$NON-NLS-1$
             result.contains("inheritedFromProject")); //$NON-NLS-1$
+    }
+
+    // ==================== #622: a wedged read never passes for an answer ====================
+    //
+    // get_applications is the recovery path every other application error names, so it is the one
+    // tool that must not hang - and the one whose silences are read as facts: an empty list means
+    // "this project has no applications" and a missing defaultApplicationId means "there is no
+    // default". Neither may be produced by a read that never concluded.
+
+    /** Small, round deadline so a wedged read is answered fast and its sentence pinned. */
+    private static final long SHORT_DEADLINE_MS = 250L;
+
+    /** Deadline for the reads that are expected to answer on their own. */
+    private static final long GENEROUS_DEADLINE_MS = 60_000L;
+
+    @Test
+    public void testAWedgedListingIsRaisedRatherThanReadAsAnEmptyProject() throws Exception
+    {
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("Wedged"); //$NON-NLS-1$
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        when(manager.getApplications(project)).thenAnswer(invocation -> {
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return Collections.emptyList();
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+
+        try
+        {
+            GetApplicationsTool.listBounded(manager, project, SHORT_DEADLINE_MS);
+            fail("a wedged listing must not return a list at all"); //$NON-NLS-1$
+        }
+        catch (ApplicationListDeadline expected)
+        {
+            assertTrue("the refusal must name the project and the deadline", //$NON-NLS-1$
+                expected.getMessage().contains("the EDT application list for project 'Wedged'")); //$NON-NLS-1$
+            assertFalse("a wedged listing must not be worded as an empty project", //$NON-NLS-1$
+                expected.getMessage().contains("No applications found")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testAWedgedDefaultLookupIsReportedInsteadOfSilentlyOmittingTheKey() throws Exception
+    {
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("Wedged"); //$NON-NLS-1$
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        when(manager.getDefaultApplication(project)).thenAnswer(invocation -> {
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return Optional.empty();
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+
+        try
+        {
+            DefaultApplication resolved =
+                GetApplicationsTool.resolveDefaultApplicationId(manager, project, SHORT_DEADLINE_MS);
+
+            assertNull("a wedged lookup must not invent an id", resolved.id()); //$NON-NLS-1$
+            assertNotNull("the deadline must be reported, not swallowed", resolved.note()); //$NON-NLS-1$
+            assertTrue("the note must say the default is UNKNOWN", //$NON-NLS-1$
+                resolved.note().startsWith("The default application is UNKNOWN: ")); //$NON-NLS-1$
+            assertTrue("the note must carry the deadline diagnosis", //$NON-NLS-1$
+                resolved.note().contains(
+                    "the EDT default-application lookup for project 'Wedged'")); //$NON-NLS-1$
+            assertFalse("UNKNOWN must not be worded as 'there is no default application'", //$NON-NLS-1$
+                resolved.note().contains("has no default application")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testAMeasuredAbsenceOfADefaultStaysSilent() throws Exception
+    {
+        // The other edge of the same change: a lookup that CONCLUDED with no default must keep
+        // producing the plain "no id, no note" answer, or every healthy project would now carry
+        // an explanation it does not need.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        when(manager.getDefaultApplication(project)).thenReturn(Optional.empty());
+
+        DefaultApplication resolved = GetApplicationsTool.resolveDefaultApplicationId(manager,
+            project, GENEROUS_DEADLINE_MS);
+
+        assertNull(resolved.id());
+        assertNull("a measured absence must not be explained away as unknown", resolved.note()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAResolvedDefaultIsReturnedUnchanged() throws Exception
+    {
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        IApplication application = mock(IApplication.class);
+        when(application.getId()).thenReturn("Infobase.Main"); //$NON-NLS-1$
+        when(manager.getDefaultApplication(project)).thenReturn(Optional.of(application));
+
+        DefaultApplication resolved = GetApplicationsTool.resolveDefaultApplicationId(manager,
+            project, GENEROUS_DEADLINE_MS);
+
+        assertEquals("Infobase.Main", resolved.id()); //$NON-NLS-1$
+        assertNull("a resolved default needs no note", resolved.note()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAWedgedListingIsAnsweredOnTheDeadlineNotOnTheWedge() throws Exception
+    {
+        // Without this, an implementation that waited out the WHOLE wedge would satisfy every
+        // assertion above - it would still end up raising, just minutes later.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("Wedged"); //$NON-NLS-1$
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        when(manager.getApplications(project)).thenAnswer(invocation -> {
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return Collections.emptyList();
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+
+        try
+        {
+            long startMs = System.currentTimeMillis();
+            try
+            {
+                GetApplicationsTool.listBounded(manager, project, SHORT_DEADLINE_MS);
+                fail("a wedged listing must not return"); //$NON-NLS-1$
+            }
+            catch (ApplicationListDeadline expected)
+            {
+                assertTrue("the caller must return on its own deadline, not on the wedge", //$NON-NLS-1$
+                    System.currentTimeMillis() - startMs < 20_000L);
+            }
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
     }
 }

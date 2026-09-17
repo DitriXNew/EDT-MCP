@@ -49,6 +49,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobPolling;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobRenderer;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
@@ -2228,13 +2229,33 @@ public class RunYaxunitTestsTool implements IMcpTool
      * Validates that the given application exists for the project. Returns {@code null} when the
      * application resolves, or a JSON error string (identical to the previous inline handling) when
      * the application is not found or the lookup throws.
+     *
+     * <p>BOUNDED (#622): a validation that never returns would hold the whole test run open. An
+     * expired deadline refuses with its own message and is deliberately NOT worded as a
+     * not-found, because nothing about the application was established.
      */
-    private String validateApplicationExists(IApplicationManager appManager, IProject project,
+    String validateApplicationExists(IApplicationManager appManager, IProject project,
             String applicationId)
     {
+        return validateApplicationExists(appManager, project, applicationId,
+            ApplicationSupport.LOOKUP_TIMEOUT_MS);
+    }
+
+    /** Same validation with an explicit deadline for the bounded application read. */
+    String validateApplicationExists(IApplicationManager appManager, IProject project,
+            String applicationId, long timeoutMs)
+    {
+        ApplicationSupport.BoundedRead<Optional<IApplication>> read =
+            ApplicationSupport.getApplicationBounded(appManager, project, applicationId, timeoutMs);
+        if (!read.concluded())
+        {
+            return ToolResult.error("Failed to validate application: " + applicationId //$NON-NLS-1$
+                    + " (" + read.deadlineFailure() //$NON-NLS-1$
+                    + "). No test run was started.").toJson(); //$NON-NLS-1$
+        }
         try
         {
-            Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
+            Optional<IApplication> appOpt = read.valueOrRethrow();
             if (!appOpt.isPresent())
             {
                 return ToolResult.error("Application not found: " + applicationId //$NON-NLS-1$

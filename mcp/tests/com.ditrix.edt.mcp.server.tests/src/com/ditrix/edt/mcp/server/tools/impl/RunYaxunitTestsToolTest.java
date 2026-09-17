@@ -1977,4 +1977,63 @@ public class RunYaxunitTestsToolTest
         }
         return changed.size() == 1 ? changed.get(0) : changed.toString();
     }
+
+    // ==================== #622: a wedged validation refuses, it does not hang ==================
+
+    @Test
+    public void testAWedgedApplicationValidationRefusesWithoutStartingARun() throws Exception
+    {
+        IApplicationManager manager = Mockito.mock(IApplicationManager.class);
+        IProject project = Mockito.mock(IProject.class);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        Mockito.when(manager.getApplication(project, "Infobase.Wedged")).thenAnswer(inv -> { //$NON-NLS-1$
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return java.util.Optional.empty();
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+
+        try
+        {
+            String error = new RunYaxunitTestsTool().validateApplicationExists(manager, project,
+                "Infobase.Wedged", 250L); //$NON-NLS-1$
+
+            assertNotNull("a wedged validation must refuse", error); //$NON-NLS-1$
+            assertTrue("the refusal must carry the deadline diagnosis", //$NON-NLS-1$
+                error.contains("the EDT application lookup for application 'Infobase.Wedged'")); //$NON-NLS-1$
+            assertTrue("the refusal must say no run was started", //$NON-NLS-1$
+                error.contains("No test run was started")); //$NON-NLS-1$
+            assertFalse("an unread lookup must not be reported as a measured not-found", //$NON-NLS-1$
+                error.contains("Application not found")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testAConcludedEmptyValidationKeepsTheNotFoundWording() throws Exception
+    {
+        IApplicationManager manager = Mockito.mock(IApplicationManager.class);
+        IProject project = Mockito.mock(IProject.class);
+        Mockito.when(manager.getApplication(project, "Infobase.Missing")) //$NON-NLS-1$
+            .thenReturn(java.util.Optional.empty());
+
+        String error = new RunYaxunitTestsTool().validateApplicationExists(manager, project,
+            "Infobase.Missing", 60_000L); //$NON-NLS-1$
+
+        assertNotNull(error);
+        assertTrue("a measured absence must keep the not-found wording", //$NON-NLS-1$
+            error.contains("Application not found: Infobase.Missing")); //$NON-NLS-1$
+        assertFalse("a measured absence must not be dressed up as a deadline", //$NON-NLS-1$
+            error.contains("did not finish within")); //$NON-NLS-1$
+    }
 }

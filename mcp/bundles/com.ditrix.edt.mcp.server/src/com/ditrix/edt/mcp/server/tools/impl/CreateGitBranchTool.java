@@ -36,6 +36,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.git.GitCheckoutSupport;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
@@ -418,10 +419,23 @@ public class CreateGitBranchTool implements IMcpTool
                 "Could not attach application '" + applicationId + "': IApplicationManager service is not " //$NON-NLS-1$ //$NON-NLS-2$
                 + "available."); //$NON-NLS-1$
         }
+        // Bounded (#622). The branch already exists at this point, so an expired deadline takes the
+        // SAME degradation as a raised lookup: a warning on an otherwise successful create.
+        ApplicationSupport.BoundedRead<Optional<IApplication>> read =
+            ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
+                ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (!read.concluded())
+        {
+            Activator.logError("create_git_branch: " + read.deadlineFailure(), null); //$NON-NLS-1$
+            return ApplicationReferenceResolution.warning(
+                "Could not resolve application '" + applicationId + "': " //$NON-NLS-1$ //$NON-NLS-2$
+                + read.deadlineFailure() + ". The branch was created; the application was not " //$NON-NLS-1$
+                + "attached to it."); //$NON-NLS-1$
+        }
         Optional<IApplication> appOpt;
         try
         {
-            appOpt = appManager.getApplication(project, applicationId);
+            appOpt = read.valueOrRethrow();
         }
         catch (Exception e) // NOSONAR EDT application lookup — surface as an actionable warning
         {

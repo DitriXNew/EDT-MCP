@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.eclipse.core.resources.IProject;
 
@@ -73,7 +74,10 @@ public class GetApplicationsTool implements IMcpTool
                 + "immediately after update_database it can still show the pre-update value, while " //$NON-NLS-1$
                 + "update_database stateAfter is the authoritative post-update answer.") //$NON-NLS-1$
             .integerProperty(KEY_COUNT, "Number of applications found") //$NON-NLS-1$
-            .stringProperty("message", "Informational message when no applications are found") //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty("message", "Informational message: no applications were found, or the " //$NON-NLS-1$ //$NON-NLS-2$
+                + "applications were read but the default application could not be determined " //$NON-NLS-1$
+                + "(defaultApplicationId is then absent because it is UNKNOWN, not because there " //$NON-NLS-1$
+                + "is none).") //$NON-NLS-1$
             .stringProperty("defaultApplicationId", "Id of the project's default application") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("inheritedFromProject", //$NON-NLS-1$
                 "Base/parent project the applications are inherited from (present only for " //$NON-NLS-1$
@@ -156,16 +160,22 @@ public class GetApplicationsTool implements IMcpTool
             JsonArray appsArray = buildApplicationsArray(appManager, applications);
 
             // Get default application from whichever project supplied the applications
-            String defaultAppId = resolveDefaultApplicationId(appManager, resolved.applicationsProject);
+            DefaultApplication defaultApp =
+                resolveDefaultApplicationId(appManager, resolved.applicationsProject,
+                    ApplicationSupport.LOOKUP_TIMEOUT_MS);
 
             ToolResult result = ToolResult.success()
                 .put(McpKeys.PROJECT, projectName)
                 .put(KEY_APPLICATIONS, appsArray)
                 .put(KEY_COUNT, applications.size());
 
-            if (defaultAppId != null)
+            if (defaultApp.id() != null)
             {
-                result.put("defaultApplicationId", defaultAppId); //$NON-NLS-1$
+                result.put("defaultApplicationId", defaultApp.id()); //$NON-NLS-1$
+            }
+            else if (defaultApp.note() != null)
+            {
+                result.put("message", defaultApp.note()); //$NON-NLS-1$
             }
 
             // Present only on the inherited branch (dependent project whose applications
@@ -176,6 +186,16 @@ public class GetApplicationsTool implements IMcpTool
             }
 
             return result.toJson();
+        }
+        catch (ApplicationListDeadline e)
+        {
+            // Not "no applications": the read never concluded, so nothing was measured. Reported as
+            // an error precisely so the caller cannot read an empty list as an answer.
+            Activator.logError("Error getting applications for project: " + projectName //$NON-NLS-1$
+                + " — " + e.getMessage(), null); //$NON-NLS-1$
+            return ToolResult.error("Error getting applications: " + e.getMessage() //$NON-NLS-1$
+                + ". This says nothing about whether project '" + projectName //$NON-NLS-1$
+                + "' has applications — retry once EDT is responsive.").toJson(); //$NON-NLS-1$
         }
         catch (ApplicationException e)
         {
@@ -190,6 +210,10 @@ public class GetApplicationsTool implements IMcpTool
      * own application list is empty, falls back to the BASE configuration project the applications
      * are inherited from.
      *
+     * <p>Both reads are BOUNDED (#622): this tool is the recovery path every other application
+     * error points the agent at ("Use get_applications to list available application IDs"), so it
+     * is the one that must never be the call that hangs.
+     *
      * @param appManager the application manager
      * @param project the named project
      * @return the resolved applications together with the supplying project and (for the inherited
@@ -199,7 +223,8 @@ public class GetApplicationsTool implements IMcpTool
     private ResolvedApplications resolveApplications(IApplicationManager appManager, IProject project)
         throws ApplicationException
     {
-        List<IApplication> applications = appManager.getApplications(project);
+        List<IApplication> applications =
+            listBounded(appManager, project, ApplicationSupport.LOOKUP_TIMEOUT_MS);
         if (applications != null && !applications.isEmpty())
         {
             return new ResolvedApplications(applications, project, null);
@@ -208,7 +233,8 @@ public class GetApplicationsTool implements IMcpTool
         IProject base = ExtensionOriginUtils.resolveBaseProject(project);
         if (base != null && base.exists() && base.isOpen())
         {
-            List<IApplication> baseApplications = appManager.getApplications(base);
+            List<IApplication> baseApplications =
+                listBounded(appManager, base, ApplicationSupport.LOOKUP_TIMEOUT_MS);
             if (baseApplications != null && !baseApplications.isEmpty())
             {
                 return new ResolvedApplications(baseApplications, base, base.getName());
@@ -216,6 +242,39 @@ public class GetApplicationsTool implements IMcpTool
         }
 
         return new ResolvedApplications(applications, project, null);
+    }
+
+    /**
+     * One bounded application listing.
+     *
+     * @param appManager the application manager
+     * @param project the project to list
+     * @param timeoutMs the caller-side deadline for this one read
+     * @return the project's applications
+     * @throws ApplicationListDeadline when the read did not conclude — never an empty list, which
+     *     is the one answer this tool must not invent, because the caller acts on "no applications"
+     */
+    static List<IApplication> listBounded(IApplicationManager appManager, IProject project,
+        long timeoutMs)
+    {
+        ApplicationSupport.BoundedRead<List<IApplication>> read =
+            ApplicationSupport.getApplicationsBounded(appManager, project, timeoutMs);
+        if (!read.concluded())
+        {
+            throw new ApplicationListDeadline(read.deadlineFailure());
+        }
+        return read.valueOrRethrow();
+    }
+
+    /** An application listing that did not conclude inside its deadline (#622). */
+    static final class ApplicationListDeadline extends RuntimeException
+    {
+        private static final long serialVersionUID = 1L;
+
+        ApplicationListDeadline(String message)
+        {
+            super(message);
+        }
     }
 
     /**
@@ -303,28 +362,53 @@ public class GetApplicationsTool implements IMcpTool
     }
 
     /**
-     * Resolves the id of the project's default application, or {@code null} when there is no
-     * default application or it could not be determined.
+     * Resolves the id of the project's default application.
+     *
+     * <p>BOUNDED (#622), and the deadline is not swallowed. Omitting {@code defaultApplicationId}
+     * is how this tool says "this project has no default application", so a lookup that never
+     * concluded must not produce the same silence — the caller would read an unanswered question
+     * as an answer. The deadline is carried out in {@link DefaultApplication#note()} for the
+     * existing {@code message} field instead.
      *
      * @param appManager the application manager
      * @param project the project
-     * @return the default application id, or {@code null}
+     * @param timeoutMs the caller-side deadline for this one read
+     * @return the resolved id, or the reason it is unknown; never both
      */
-    private String resolveDefaultApplicationId(IApplicationManager appManager, IProject project)
+    static DefaultApplication resolveDefaultApplicationId(IApplicationManager appManager,
+        IProject project, long timeoutMs)
     {
+        ApplicationSupport.BoundedRead<Optional<IApplication>> read =
+            ApplicationSupport.getDefaultApplicationBounded(appManager, project, timeoutMs);
+        if (!read.concluded())
+        {
+            Activator.logError("Error getting default application: " + read.deadlineFailure(), null); //$NON-NLS-1$
+            return new DefaultApplication(null, "The default application is UNKNOWN: " //$NON-NLS-1$
+                + read.deadlineFailure() + ". The applications above were read successfully."); //$NON-NLS-1$
+        }
         try
         {
-            IApplication defaultApp = appManager.getDefaultApplication(project).orElse(null);
+            IApplication defaultApp = read.valueOrRethrow().orElse(null);
             if (defaultApp != null)
             {
-                return defaultApp.getId();
+                return new DefaultApplication(defaultApp.getId(), null);
             }
         }
         catch (ApplicationException e)
         {
             Activator.logError("Error getting default application", e); //$NON-NLS-1$
         }
-        return null;
+        return new DefaultApplication(null, null);
+    }
+
+    /**
+     * The default-application answer: its id, or the note saying why the id is unknown.
+     *
+     * @param id the resolved default application id, or {@code null}
+     * @param note why the id is unknown, or {@code null} when there simply is no default
+     */
+    record DefaultApplication(String id, String note)
+    {
     }
 
     /**

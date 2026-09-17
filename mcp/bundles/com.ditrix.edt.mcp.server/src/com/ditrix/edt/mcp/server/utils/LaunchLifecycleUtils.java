@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -123,6 +124,16 @@ public final class LaunchLifecycleUtils
      * {@code StandaloneServerStateRecovery}.
      */
     public static final long SESSIONS_LOCK_TIMEOUT_MS = 30_000L;
+
+    /**
+     * Bound (ms) on the two best-effort attribution lookups
+     * ({@link #attributionInfobaseName} / {@link #attributionServerName}). Deliberately shorter
+     * than {@link ApplicationSupport#LOOKUP_TIMEOUT_MS}: their answer is only a NAME used to
+     * attribute a dialog, they already degrade to {@code null}, and a launch arms both — so the
+     * whole cost of a wedged manager here has to stay a small fixed addition to the launch, not
+     * a minute of waiting for a cosmetic hint.
+     */
+    static final long ATTRIBUTION_LOOKUP_TIMEOUT_MS = 10_000L;
 
     // =========================================================================
     // Pre-launch preparation in-flight registry (Fix 2: 25 s budget + pending)
@@ -1525,6 +1536,11 @@ public final class LaunchLifecycleUtils
      * {@code get_applications} reports as {@code defaultApplicationId}) lets the update
      * run headlessly so no dialog appears.
      *
+     * <p>Bounded (#622): the read is the wedge-prone one, and a fallback that never returns would
+     * hold the launch open forever. An expired deadline degrades exactly like the
+     * {@link ApplicationException} branch — the original id, logged — because both mean the same
+     * thing here: no default could be established.
+     *
      * @param project the resolved project (may be {@code null})
      * @param applicationId the id from the call / launch config (may be {@code null}/empty)
      * @param appManager the application manager (may be {@code null})
@@ -1542,11 +1558,20 @@ public final class LaunchLifecycleUtils
         {
             return applicationId;
         }
+        ApplicationSupport.BoundedRead<Optional<IApplication>> read =
+            ApplicationSupport.getDefaultApplicationBounded(appManager, project,
+                ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (!read.concluded())
+        {
+            Activator.logError("Error resolving default application for project " //$NON-NLS-1$
+                + project.getName() + ": " + read.deadlineFailure(), null); //$NON-NLS-1$
+            return applicationId;
+        }
         try
         {
             // getDefaultApplication may throw ApplicationException; degrade to the
             // original id (the caller then behaves exactly as before the fallback).
-            return appManager.getDefaultApplication(project)
+            return read.valueOrRethrow()
                 .map(IApplication::getId)
                 .orElse(applicationId);
         }
@@ -1677,9 +1702,19 @@ public final class LaunchLifecycleUtils
             return Optional.of("Project is not available: " //$NON-NLS-1$
                 + (project != null ? project.getName() : "<null>")); //$NON-NLS-1$
         }
+        // Bounded (#622): an unbounded lookup here would hold the whole pre-launch update open.
+        // A deadline is NOT a not-found — it is reported as its own unresolved-target message.
+        ApplicationSupport.BoundedRead<Optional<IApplication>> lookup =
+            ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
+                ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (!lookup.concluded())
+        {
+            return Optional.of("Application '" + applicationId + "' could not be resolved: " //$NON-NLS-1$ //$NON-NLS-2$
+                + lookup.deadlineFailure() + "."); //$NON-NLS-1$
+        }
         try
         {
-            Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
+            Optional<IApplication> appOpt = lookup.valueOrRethrow();
             if (!appOpt.isPresent())
             {
                 return Optional.of("Application not found: " + applicationId); //$NON-NLS-1$
@@ -1909,16 +1944,8 @@ public final class LaunchLifecycleUtils
         {
             return null;
         }
-        try
-        {
-            return appManager.getApplication(project, applicationId)
-                .map(LaunchLifecycleUtils::conflictAttributionName)
-                .orElse(null);
-        }
-        catch (Exception e) // NOSONAR a best-effort hint must never break a launch
-        {
-            return null;
-        }
+        return attributionLookup(appManager, project, applicationId,
+            LaunchLifecycleUtils::conflictAttributionName);
     }
 
     /**
@@ -1942,11 +1969,37 @@ public final class LaunchLifecycleUtils
         {
             return null;
         }
+        return attributionLookup(appManager, project, applicationId,
+            LaunchLifecycleUtils::serverNameOf);
+    }
+
+    /**
+     * The shared best-effort body of the two attribution lookups: one BOUNDED application read
+     * ({@link #ATTRIBUTION_LOOKUP_TIMEOUT_MS}), then {@code naming} applied to whatever it found.
+     *
+     * <p>Every way of not getting a name — not found, a raised lookup, an expired deadline — is the
+     * same answer here: {@code null}, "cannot attribute". Nothing is logged at ERROR for it,
+     * because a missing cosmetic hint is not a failure of the launch.
+     *
+     * @param appManager the EDT application manager (never {@code null} here)
+     * @param project the project the application belongs to (never {@code null} here)
+     * @param applicationId the application id (never empty here)
+     * @param naming reads the wanted name off the resolved application
+     * @return the name, or {@code null} when it could not be resolved
+     */
+    private static String attributionLookup(IApplicationManager appManager, IProject project,
+        String applicationId, Function<IApplication, String> naming)
+    {
         try
         {
-            return appManager.getApplication(project, applicationId)
-                .map(LaunchLifecycleUtils::serverNameOf)
-                .orElse(null);
+            ApplicationSupport.BoundedRead<Optional<IApplication>> read =
+                ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
+                    ATTRIBUTION_LOOKUP_TIMEOUT_MS);
+            if (!read.concluded())
+            {
+                return null;
+            }
+            return read.valueOrRethrow().map(naming).orElse(null);
         }
         catch (Exception e) // NOSONAR a best-effort hint must never break a launch
         {

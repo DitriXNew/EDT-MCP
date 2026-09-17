@@ -111,10 +111,23 @@ public final class EventLogLocator
         IProject project = mr.project();
         IApplicationManager manager = mr.manager();
 
+        // Bounded (#622): an unbounded listing here would hold get_event_log open indefinitely.
+        ApplicationSupport.BoundedRead<List<IApplication>> read =
+            ApplicationSupport.getApplicationsBounded(manager, project,
+                ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (!read.concluded())
+        {
+            Activator.logError("get_event_log: " + read.deadlineFailure(), null); //$NON-NLS-1$
+            return Resolution.failed(ToolResult.error(
+                "Could not list applications for project '" + projectName + "': " //$NON-NLS-1$ //$NON-NLS-2$
+                    + read.deadlineFailure()
+                    + ". Retry once EDT is responsive, or pass logDir to point at a 1Cv8Log " //$NON-NLS-1$
+                    + "directory directly.").toJson()); //$NON-NLS-1$
+        }
         List<IApplication> apps;
         try
         {
-            apps = manager.getApplications(project);
+            apps = read.valueOrRethrow();
         }
         catch (ApplicationException e)
         {

@@ -7,15 +7,24 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
+import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.e1c.g5.dt.applications.IApplicationManager;
 
 /**
  * Tests for {@link DeleteInfobaseTool}.
@@ -196,5 +205,70 @@ public class DeleteInfobaseToolTest
         String result = new DeleteInfobaseTool().execute(params);
         assertTrue("missing both applicationId and infobaseName must produce an error", //$NON-NLS-1$
             result.contains("applicationId") && result.contains("infobaseName")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ==================== #622: a wedged lookup refuses before anything is deleted ==============
+
+    @Test
+    public void testAWedgedApplicationLookupRefusesWithoutDeletingAnything() throws Exception
+    {
+        // This resolution names what a DESTRUCTIVE call is about to delete, so a lookup that
+        // never concluded must refuse in its own words - "Application not found" would be a
+        // claim about the project that nothing measured.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        when(mgr.getApplication(project, "Infobase.Doomed")).thenAnswer(invocation -> { //$NON-NLS-1$
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return Optional.empty();
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+
+        try
+        {
+            DeleteInfobaseTool.TargetApplication target = DeleteInfobaseTool
+                .resolveTargetApplication(mgr, project, "Proj", "Infobase.Doomed", null, 250L); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertNull("a wedged lookup must not resolve a deletion target", target.app); //$NON-NLS-1$
+            assertNotNull("a wedged lookup must be refused", target.error); //$NON-NLS-1$
+            assertTrue("the refusal must carry the deadline diagnosis", //$NON-NLS-1$
+                target.error.contains(
+                    "the EDT application lookup for application 'Infobase.Doomed'")); //$NON-NLS-1$
+            assertTrue("the refusal must state that nothing was deleted", //$NON-NLS-1$
+                target.error.contains("Nothing was deleted")); //$NON-NLS-1$
+            assertFalse("an unread lookup must not be reported as a measured not-found", //$NON-NLS-1$
+                target.error.contains("Application not found")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testAConcludedEmptyLookupIsStillAMeasuredNotFound() throws Exception
+    {
+        // The other edge: bounding the read must not have turned a real not-found into a
+        // deadline-flavoured refusal.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        when(mgr.getApplication(project, "Infobase.Missing")).thenReturn(Optional.empty()); //$NON-NLS-1$
+
+        DeleteInfobaseTool.TargetApplication target = DeleteInfobaseTool
+            .resolveTargetApplication(mgr, project, "Proj", "Infobase.Missing", null, 60_000L); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull(target.error);
+        assertTrue("a measured absence must keep the not-found wording", //$NON-NLS-1$
+            target.error.contains("Application not found")); //$NON-NLS-1$
+        assertFalse("a measured absence must not be dressed up as a deadline", //$NON-NLS-1$
+            target.error.contains("did not finish within")); //$NON-NLS-1$
     }
 }

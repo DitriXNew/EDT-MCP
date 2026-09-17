@@ -2272,4 +2272,62 @@ public class LaunchToolTest
             throw new AssertionError(e);
         }
     }
+
+    // ==================== #622: a wedged lookup degrades like a raised one ====================
+
+    @Test
+    public void testAWedgedApplicationLookupFallsThroughInsteadOfRefusingTheLaunch()
+        throws Exception
+    {
+        // The ApplicationException branch here is a deliberate degradation: the launch goes on
+        // to look for a launch configuration. A deadline means the same thing - "could not be
+        // checked" - so it must take the SAME path and NOT produce the not-found error payload.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        when(manager.getApplication(project, "Infobase.Wedged")).thenAnswer(invocation -> { //$NON-NLS-1$
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return Optional.empty();
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+
+        try
+        {
+            LaunchTool.ApplicationResolution resolution = LaunchTool.resolveApplication(project,
+                "Infobase.Wedged", manager, 250L); //$NON-NLS-1$
+
+            assertNull("a wedged lookup must not refuse the launch", resolution.error); //$NON-NLS-1$
+            assertNull("nothing was resolved", resolution.application); //$NON-NLS-1$
+            assertEquals("the id stays the display name when nothing resolved", //$NON-NLS-1$
+                "Infobase.Wedged", resolution.applicationName); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testAConcludedEmptyLookupStillRefusesWithNotFound() throws Exception
+    {
+        // The other edge of the same branch: only a read that CONCLUDED empty is a definitive
+        // not-found, and bounding the read must not have weakened that.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        when(manager.getApplication(project, "Infobase.Missing")).thenReturn(Optional.empty()); //$NON-NLS-1$
+
+        LaunchTool.ApplicationResolution resolution = LaunchTool.resolveApplication(project,
+            "Infobase.Missing", manager, 60_000L); //$NON-NLS-1$
+
+        assertNotNull("a measured absence must still refuse", resolution.error); //$NON-NLS-1$
+        assertTrue(resolution.error.contains("Application not found: Infobase.Missing")); //$NON-NLS-1$
+    }
 }

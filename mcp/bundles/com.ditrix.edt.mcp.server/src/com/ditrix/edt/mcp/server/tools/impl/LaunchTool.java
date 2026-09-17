@@ -35,6 +35,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
@@ -1614,23 +1615,44 @@ public class LaunchTool implements IMcpTool
      * {@link ApplicationException} is logged and swallowed so the caller still tries to
      * find a launch configuration.
      *
+     * <p>BOUNDED (#622). An expired deadline takes the SAME degradation as the
+     * {@link ApplicationException} branch — logged, no error payload, fall through to the launch
+     * configuration search — because both mean "the id could not be checked". Only a read that
+     * CONCLUDED empty is a definitive not-found.
+     *
      * @param project the project to look the application up in
      * @param applicationId the application id to resolve
      * @param appManager the application manager (may be null)
      * @return an {@link ApplicationResolution}; its {@code error} is non-null only when the
      *     id was definitively not found
      */
-    private static ApplicationResolution resolveApplication(IProject project, String applicationId,
+    static ApplicationResolution resolveApplication(IProject project, String applicationId,
         IApplicationManager appManager)
+    {
+        return resolveApplication(project, applicationId, appManager,
+            ApplicationSupport.LOOKUP_TIMEOUT_MS);
+    }
+
+    /** Same resolution with an explicit deadline for the bounded application read. */
+    static ApplicationResolution resolveApplication(IProject project, String applicationId,
+        IApplicationManager appManager, long timeoutMs)
     {
         ApplicationResolution resolution = new ApplicationResolution();
         resolution.applicationName = applicationId; // Default to ID if can't get name
 
         if (appManager != null)
         {
+            ApplicationSupport.BoundedRead<Optional<IApplication>> read =
+                ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
+                    timeoutMs);
+            if (!read.concluded())
+            {
+                Activator.logError("Error checking application: " + read.deadlineFailure(), null); //$NON-NLS-1$
+                return resolution;
+            }
             try
             {
-                Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
+                Optional<IApplication> appOpt = read.valueOrRethrow();
                 if (!appOpt.isPresent())
                 {
                     resolution.error = ToolResult.error("Application not found: " + applicationId + //$NON-NLS-1$
@@ -1696,7 +1718,7 @@ public class LaunchTool implements IMcpTool
      * Holder for {@link #resolveApplication}: the resolved {@link IApplication} (may stay
      * null) and its display name, or an {@code error} payload the caller returns as-is.
      */
-    private static class ApplicationResolution
+    static class ApplicationResolution
     {
         IApplication application;
         String applicationName;

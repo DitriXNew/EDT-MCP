@@ -11,14 +11,22 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.tools.impl.InfobaseSessionsTool.ResolvedApplication;
+import com.e1c.g5.dt.applications.IApplication;
+import com.e1c.g5.dt.applications.IApplicationManager;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.ReadResult;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo;
 import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.TerminationResult;
@@ -742,5 +750,131 @@ public class InfobaseSessionsToolTest
         assertEquals("mismatched", result.get("verification").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("no budget note belongs here: the loop reached everything", //$NON-NLS-1$
             result.get("error").getAsString().contains("short to stay bounded")); //$NON-NLS-1$
+    }
+
+    // ==================== #622: the seconds-budget tool refuses, it never hangs ================
+
+    @Test
+    public void testTheApplicationLookupDeadlineIsSecondsNotTheSharedDefault()
+    {
+        // The whole point of a separate constant here: this tool advertises a bounded answer, so
+        // it must not inherit the longer shared lookup budget.
+        assertTrue("infobase_sessions must bound its lookup in seconds", //$NON-NLS-1$
+            InfobaseSessionsTool.APPLICATION_LOOKUP_TIMEOUT_MS <= 15_000L);
+    }
+
+    @Test
+    public void testAWedgedApplicationLookupRefusesWithoutTouchingSessions() throws Exception
+    {
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        when(manager.getApplication(project, "Infobase.Wedged")).thenAnswer(inv -> { //$NON-NLS-1$
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return Optional.empty();
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+
+        try
+        {
+            ResolvedApplication resolved = InfobaseSessionsTool.resolveApplication(manager,
+                project, "Proj", "Infobase.Wedged", 250L); //$NON-NLS-1$ //$NON-NLS-2$
+
+            assertNotNull("a wedged lookup must be refused", resolved.errorJson); //$NON-NLS-1$
+            JsonObject json = JsonParser.parseString(resolved.errorJson).getAsJsonObject();
+            assertFalse(json.get("success").getAsBoolean()); //$NON-NLS-1$
+            String error = json.get("error").getAsString(); //$NON-NLS-1$
+            assertTrue("the refusal must carry the deadline diagnosis", //$NON-NLS-1$
+                error.contains("the EDT application lookup for application 'Infobase.Wedged'")); //$NON-NLS-1$
+            assertTrue("the refusal must state that no session was touched", //$NON-NLS-1$
+                error.contains("No session was listed or terminated")); //$NON-NLS-1$
+            assertFalse("an unread lookup must not be reported as a measured not-found", //$NON-NLS-1$
+                error.contains("Application not found")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testAWedgedDefaultLookupIsNotReportedAsNoDefaultApplication() throws Exception
+    {
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        when(manager.getDefaultApplication(project)).thenAnswer(inv -> {
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return Optional.empty();
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+
+        try
+        {
+            ResolvedApplication resolved = InfobaseSessionsTool.resolveApplication(manager,
+                project, "Proj", null, 250L); //$NON-NLS-1$
+
+            assertNotNull(resolved.errorJson);
+            String error = JsonParser.parseString(resolved.errorJson).getAsJsonObject()
+                .get("error").getAsString(); //$NON-NLS-1$
+            assertFalse("a wedged default lookup must not claim the project has no default", //$NON-NLS-1$
+                error.contains("has no default application")); //$NON-NLS-1$
+            assertTrue("it must name the default-application lookup and its deadline", //$NON-NLS-1$
+                error.contains("the EDT default-application lookup for project")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testAConcludedEmptyDefaultLookupStillSaysThereIsNoDefault() throws Exception
+    {
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        when(manager.getDefaultApplication(project)).thenReturn(Optional.empty());
+
+        ResolvedApplication resolved = InfobaseSessionsTool.resolveApplication(manager, project,
+            "Proj", null, 60_000L); //$NON-NLS-1$
+
+        assertNotNull(resolved.errorJson);
+        String error = JsonParser.parseString(resolved.errorJson).getAsJsonObject()
+            .get("error").getAsString(); //$NON-NLS-1$
+        assertTrue("a measured absence must keep its own wording", //$NON-NLS-1$
+            error.contains("Project 'Proj' has no default application.")); //$NON-NLS-1$
+        assertFalse("a measured absence must not be dressed up as a deadline", //$NON-NLS-1$
+            error.contains("did not finish within")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAResolvedApplicationIsHandedBackUnchanged() throws Exception
+    {
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        IApplication application = mock(IApplication.class);
+        when(manager.getApplication(project, "Infobase.Ok")).thenReturn(Optional.of(application)); //$NON-NLS-1$
+
+        ResolvedApplication resolved = InfobaseSessionsTool.resolveApplication(manager, project,
+            "Proj", "Infobase.Ok", 60_000L); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull("a healthy resolution must not produce an error", resolved.errorJson); //$NON-NLS-1$
+        assertEquals(application, resolved.application);
     }
 }

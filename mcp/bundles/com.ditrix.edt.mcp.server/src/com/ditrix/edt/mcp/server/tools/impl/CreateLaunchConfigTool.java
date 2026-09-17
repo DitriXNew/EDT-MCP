@@ -22,6 +22,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.e1c.g5.dt.applications.ApplicationException;
@@ -604,6 +605,10 @@ public class CreateLaunchConfigTool implements IMcpTool
      * "not found" (an empty {@link Optional}) from a transient {@link ApplicationException} (EDT
      * mid-index) with the same messages as the original inline block. Returns an
      * {@link AppIdResolution} carrying either an error JSON string or the resolved id.
+     *
+     * <p>Both reads are BOUNDED (#622), and a third outcome joins the two: a deadline that expired
+     * says NOTHING about the application, so it is neither a not-found nor "the project has no
+     * applications" — it gets its own wording.
      */
     private static AppIdResolution resolveApplicationId(IProject project, String projectName,
         String applicationIdParam)
@@ -620,9 +625,19 @@ public class CreateLaunchConfigTool implements IMcpTool
             // Caller supplied an explicit id — validate it exists for this project.
             // Distinguish "not found" (empty Optional) from a transient service failure
             // (exception while EDT is mid-index) so the diagnosis is not misleading.
+            ApplicationSupport.BoundedRead<Optional<IApplication>> read =
+                ApplicationSupport.getApplicationBounded(appManager, project, applicationIdParam,
+                    ApplicationSupport.LOOKUP_TIMEOUT_MS);
+            if (!read.concluded())
+            {
+                return AppIdResolution.error(ToolResult.error("Could not resolve application '" //$NON-NLS-1$
+                    + applicationIdParam + "' for project '" + projectName + "': " //$NON-NLS-1$ //$NON-NLS-2$
+                    + read.deadlineFailure()
+                    + ". No launch configuration was created.").toJson()); //$NON-NLS-1$
+            }
             try
             {
-                Optional<IApplication> appOpt = appManager.getApplication(project, applicationIdParam);
+                Optional<IApplication> appOpt = read.valueOrRethrow();
                 if (!appOpt.isPresent())
                 {
                     return AppIdResolution.error(buildAppNotFoundError(projectName, applicationIdParam));
@@ -639,9 +654,19 @@ public class CreateLaunchConfigTool implements IMcpTool
             }
         }
         // Resolve the project's default application.
+        ApplicationSupport.BoundedRead<Optional<IApplication>> defaultRead =
+            ApplicationSupport.getDefaultApplicationBounded(appManager, project,
+                ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (!defaultRead.concluded())
+        {
+            return AppIdResolution.error(ToolResult.error("Cannot resolve default application for '" //$NON-NLS-1$
+                + projectName + "': " + defaultRead.deadlineFailure() //$NON-NLS-1$
+                + ". This does not mean the project has no applications — use get_applications " //$NON-NLS-1$
+                + "to list them, or pass applicationId explicitly.").toJson()); //$NON-NLS-1$
+        }
         try
         {
-            Optional<IApplication> defaultApp = appManager.getDefaultApplication(project);
+            Optional<IApplication> defaultApp = defaultRead.valueOrRethrow();
             if (!defaultApp.isPresent())
             {
                 return AppIdResolution.error(ToolResult.error("Project '" + projectName //$NON-NLS-1$

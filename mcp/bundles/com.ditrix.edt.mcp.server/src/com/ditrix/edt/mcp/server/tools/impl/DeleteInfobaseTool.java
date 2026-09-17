@@ -32,6 +32,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
@@ -94,6 +95,15 @@ public class DeleteInfobaseTool implements IMcpTool
 
     /** Delay between read-back re-poll attempts (ms). */
     private static final long READ_BACK_POLL_DELAY_MS = 300;
+
+    /**
+     * Bound on the WHOLE shared-infobase enumeration (#622), not on one project's listing: it reads
+     * every workspace project and they all queue behind the same platform monitor, so a per-project
+     * deadline would scale with the workspace. Twice
+     * {@link ApplicationSupport#LOOKUP_TIMEOUT_MS} because it is one wait covering many reads, and
+     * expiry here keeps the database files rather than deleting them.
+     */
+    private static final long SHARED_INFOBASE_CHECK_TIMEOUT_MS = 2 * ApplicationSupport.LOOKUP_TIMEOUT_MS;
 
     @Override
     public String getName()
@@ -483,13 +493,35 @@ public class DeleteInfobaseTool implements IMcpTool
      * carries the tool-result JSON for the SAME early-return cases the inline code produced
      * (application id not found, error listing applications, name not found); otherwise {@code error}
      * is {@code null} and {@code app} is the resolved application.
+     *
+     * <p>Both reads are BOUNDED (#622). This resolution names what a DESTRUCTIVE call is about to
+     * delete, so an expired deadline refuses with its own wording rather than fall into either
+     * not-found branch.
      */
-    private static TargetApplication resolveTargetApplication(IApplicationManager appManager, // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
+    static TargetApplication resolveTargetApplication(IApplicationManager appManager,
             IProject project, String projectName, String applicationId, String infobaseName)
+    {
+        return resolveTargetApplication(appManager, project, projectName, applicationId,
+            infobaseName, ApplicationSupport.LOOKUP_TIMEOUT_MS);
+    }
+
+    /** Same resolution with an explicit deadline for the two bounded application reads. */
+    static TargetApplication resolveTargetApplication(IApplicationManager appManager, // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
+            IProject project, String projectName, String applicationId, String infobaseName,
+            long timeoutMs)
     {
         if (applicationId != null && !applicationId.isEmpty())
         {
-            Optional<IApplication> found = appManager.getApplication(project, applicationId);
+            ApplicationSupport.BoundedRead<Optional<IApplication>> read =
+                ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
+                    timeoutMs);
+            if (!read.concluded())
+            {
+                return TargetApplication.failed(ToolResult.error("Could not resolve application '" //$NON-NLS-1$
+                    + applicationId + "' for project '" + projectName + "': " //$NON-NLS-1$ //$NON-NLS-2$
+                    + read.deadlineFailure() + ". Nothing was deleted.").toJson()); //$NON-NLS-1$
+            }
+            Optional<IApplication> found = read.valueOrRethrow();
             if (!found.isPresent())
             {
                 return TargetApplication.failed(ToolResult.error("Application not found: '" //$NON-NLS-1$
@@ -501,9 +533,16 @@ public class DeleteInfobaseTool implements IMcpTool
 
         // Find by display name among the project's infobase-type OR standalone-server applications.
         IApplication targetApp = null;
+        ApplicationSupport.BoundedRead<List<IApplication>> listRead =
+            ApplicationSupport.getApplicationsBounded(appManager, project, timeoutMs);
+        if (!listRead.concluded())
+        {
+            return TargetApplication.failed(ToolResult.error("Error listing applications: " //$NON-NLS-1$
+                + listRead.deadlineFailure() + ". Nothing was deleted.").toJson()); //$NON-NLS-1$
+        }
         try
         {
-            List<IApplication> apps = appManager.getApplications(project);
+            List<IApplication> apps = listRead.valueOrRethrow();
             if (apps != null)
             {
                 for (IApplication app : apps)
@@ -691,7 +730,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * {@code error} is non-null it carries a ready tool-result JSON and {@code app} is {@code null};
      * otherwise {@code error} is {@code null} and {@code app} is the resolved application.
      */
-    private static final class TargetApplication
+    static final class TargetApplication
     {
         final String error;
         final IApplication app;
@@ -1136,12 +1175,24 @@ public class DeleteInfobaseTool implements IMcpTool
     /**
      * Counts the project's applications whose id equals {@code appId}. Returns -1 if the application list
      * could not be read (the caller treats that as "cannot confirm" rather than a failure).
+     *
+     * <p>BOUNDED (#622). An expired deadline is one more way of not being able to read, so it takes
+     * the same -1; the caller's poll loop stops at the first -1, so at most one deadline is paid.
      */
     private static int countAppsWithId(IApplicationManager appManager, IProject project, String appId)
     {
+        ApplicationSupport.BoundedRead<List<IApplication>> read =
+            ApplicationSupport.getApplicationsBounded(appManager, project,
+                ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (!read.concluded())
+        {
+            Activator.logError("delete_infobase: read-back could not be completed — " //$NON-NLS-1$
+                + read.deadlineFailure(), null);
+            return -1;
+        }
         try
         {
-            List<IApplication> apps = appManager.getApplications(project);
+            List<IApplication> apps = read.valueOrRethrow();
             int count = 0;
             if (apps != null)
             {
@@ -1198,6 +1249,10 @@ public class DeleteInfobaseTool implements IMcpTool
      * a project's infobases/servers from WORKSPACE-level stores (the infobase association manager and the
      * standalone-server registry), NOT from the project's open resources (bytecode-verified on 2025.2), so
      * a closed project that still references the same database is visible here and must be honoured.
+     * <p>
+     * BOUNDED (#622) as ONE wait around the WHOLE enumeration, not per project: the reads all queue
+     * behind the same wedged platform monitor, so a per-project deadline would multiply by the
+     * workspace size. An expired deadline is one more failure to enumerate, so it keeps the files.
      */
     private static boolean isSharedWithOtherProjects(IApplicationManager appManager, IProject currentProject,
             Path dbDir)
@@ -1207,6 +1262,24 @@ public class DeleteInfobaseTool implements IMcpTool
             return false;
         }
         Path target = dbDir.toAbsolutePath().normalize();
+        ApplicationSupport.BoundedRead<Boolean> read = ApplicationSupport.readBounded(
+            "Check shared infobases", //$NON-NLS-1$
+            "the shared-infobase check across the workspace's projects", //$NON-NLS-1$
+            SHARED_INFOBASE_CHECK_TIMEOUT_MS,
+            () -> enumerateSharedWithOtherProjects(appManager, currentProject, target, dbDir));
+        if (!read.concluded())
+        {
+            Activator.logError("delete_infobase: shared-infobase check failed — keeping the files: " //$NON-NLS-1$
+                + read.deadlineFailure(), null);
+            return true;
+        }
+        return Boolean.TRUE.equals(read.valueOrRethrow());
+    }
+
+    /** The enumeration {@link #isSharedWithOtherProjects} runs under one deadline. */
+    private static boolean enumerateSharedWithOtherProjects(IApplicationManager appManager,
+            IProject currentProject, Path target, Path dbDir)
+    {
         try
         {
             for (IProject other : ProjectContext.allProjects()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability

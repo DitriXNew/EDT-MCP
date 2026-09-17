@@ -1067,6 +1067,66 @@ public class CreateInfobaseToolTest
     }
 
     @Test
+    public void testAReadBackInterruptedMidFlightIsNotBlamedOnAReadFailure() throws Exception
+    {
+        // #622 bounded the read-back, and a bounded wait has an outcome the unbounded call did not:
+        // the WAIT was interrupted. Nothing failed and nothing was logged, so it must produce the
+        // "budget not spent" message, not the one that sends the reader to the EDT error log.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        when(mgr.getApplications(project)).thenAnswer(invocation -> {
+            entered.countDown();
+            try
+            {
+                release.await(60, TimeUnit.SECONDS);
+                return Collections.emptyList();
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+        Thread waiter = Thread.currentThread();
+        Thread interrupter = new Thread(() -> {
+            try
+            {
+                entered.await(5, TimeUnit.SECONDS);
+                waiter.interrupt();
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+        }, "read-back-interrupter"); //$NON-NLS-1$
+
+        JsonObject json;
+        try
+        {
+            interrupter.start();
+            json = readBackResult(mgr, project, false, false, null);
+        }
+        finally
+        {
+            Thread.interrupted(); // clear the flag so later tests are unaffected
+            release.countDown();
+            interrupter.join(5_000L);
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+
+        assertTrue("an interrupted read-back establishes no absence", //$NON-NLS-1$
+            json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(json.has("boundToProject")); //$NON-NLS-1$
+        String message = json.get("message").getAsString(); //$NON-NLS-1$
+        assertTrue("an interrupted WAIT must name the real reason", //$NON-NLS-1$
+            message.contains("interrupted before its budget was spent")); //$NON-NLS-1$
+        assertFalse("nothing failed, so do not promise an EDT log entry", //$NON-NLS-1$
+            message.contains("EDT error log")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testUnreadableApplicationIdentityIsUnverifiedNotAbsence() throws Exception
     {
         // An infobase application whose connection string cannot be read is NOT evidence that our
