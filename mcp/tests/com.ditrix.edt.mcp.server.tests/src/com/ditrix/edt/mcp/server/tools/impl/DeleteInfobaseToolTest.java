@@ -28,9 +28,12 @@ import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Tests for {@link DeleteInfobaseTool}.
@@ -138,6 +141,34 @@ public class DeleteInfobaseToolTest
             schema.contains("\"databaseFilesDeleted\"")); //$NON-NLS-1$
         assertTrue("outputSchema must declare applicationKind (standalone-server removals)", //$NON-NLS-1$
             schema.contains("\"applicationKind\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOutputSchemaDeclaresEveryKeepReasonTheCodeCanProduce()
+    {
+        // databaseFilesDeleted=false is six different answers, and until now only the prose told
+        // them apart - so a client could not separate a MEASURED co-owner from a shared check that
+        // never concluded. The declared vocabulary must cover exactly the reasons the code emits:
+        // no invented value, and no omitted one (deregistrationFailed is a real branch).
+        String schema = new DeleteInfobaseTool().getOutputSchema();
+        assertTrue("outputSchema must declare databaseFilesKept", //$NON-NLS-1$
+            schema.contains("\"databaseFilesKept\"")); //$NON-NLS-1$
+        assertTrue("it must be a closed enum, not a free string", schema.contains("\"enum\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String value : new String[] { DeleteInfobaseTool.KEPT_NOT_REQUESTED,
+            DeleteInfobaseTool.KEPT_NO_DIRECTORY, DeleteInfobaseTool.KEPT_SHARED,
+            DeleteInfobaseTool.KEPT_UNKNOWN, DeleteInfobaseTool.KEPT_DELETE_FAILED,
+            DeleteInfobaseTool.KEPT_DEREGISTRATION_FAILED })
+        {
+            assertTrue("outputSchema must declare the keep reason " + value, //$NON-NLS-1$
+                schema.contains("\"" + value + "\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        // The values themselves are the wire vocabulary; pin the spelling.
+        assertEquals("notRequested", DeleteInfobaseTool.KEPT_NOT_REQUESTED); //$NON-NLS-1$
+        assertEquals("noDirectory", DeleteInfobaseTool.KEPT_NO_DIRECTORY); //$NON-NLS-1$
+        assertEquals("shared", DeleteInfobaseTool.KEPT_SHARED); //$NON-NLS-1$
+        assertEquals("unknown", DeleteInfobaseTool.KEPT_UNKNOWN); //$NON-NLS-1$
+        assertEquals("deleteFailed", DeleteInfobaseTool.KEPT_DELETE_FAILED); //$NON-NLS-1$
+        assertEquals("deregistrationFailed", DeleteInfobaseTool.KEPT_DEREGISTRATION_FAILED); //$NON-NLS-1$
     }
 
     @Test
@@ -468,6 +499,160 @@ public class DeleteInfobaseToolTest
             unknown.contains("still used by other projects")); //$NON-NLS-1$
         assertTrue("the measured-shared preview keeps its own wording", //$NON-NLS-1$
             shared.contains("still used by other projects")); //$NON-NLS-1$
+    }
+
+    // ===== #622: the keep reason is DECLARED on the payload, not only spelled out in the prose =====
+
+    /** The identity every payload test reuses; the names are irrelevant to the discriminator. */
+    private static DeleteInfobaseTool.IbIdentity ibId()
+    {
+        return new DeleteInfobaseTool.IbIdentity("Proj", "app-1", "Demo"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    private static final Path DB_DIR = Paths.get("C:", "bases", "Demo"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+    private static JsonObject parse(String json)
+    {
+        return JsonParser.parseString(json).getAsJsonObject();
+    }
+
+    private static String keptOf(JsonObject payload)
+    {
+        return payload.has("databaseFilesKept") //$NON-NLS-1$
+            ? payload.get("databaseFilesKept").getAsString() : null; //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEveryKeepReasonThatCanReachADeletionPayloadIsNamedOnIt()
+    {
+        // One assertion per branch databaseResultNote can take - the serialized payload, because
+        // that is what a client reads. A record or a sentence proves nothing about the wire.
+        JsonObject notRequested = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+            new DeleteInfobaseTool.DbFileOutcome(false, DB_DIR, false,
+                DeleteInfobaseTool.SharedDatabase.NOT_SHARED)));
+        JsonObject noDirectory = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+            new DeleteInfobaseTool.DbFileOutcome(true, null, false,
+                DeleteInfobaseTool.SharedDatabase.NOT_SHARED)));
+        JsonObject shared = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+            new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, false,
+                DeleteInfobaseTool.SharedDatabase.SHARED)));
+        JsonObject unknown = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+            new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, false,
+                DeleteInfobaseTool.SharedDatabase.UNKNOWN)));
+        JsonObject deleteFailed = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+            new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, false,
+                DeleteInfobaseTool.SharedDatabase.NOT_SHARED)));
+
+        assertEquals("notRequested", keptOf(notRequested)); //$NON-NLS-1$
+        assertEquals("noDirectory", keptOf(noDirectory)); //$NON-NLS-1$
+        assertEquals("shared", keptOf(shared)); //$NON-NLS-1$
+        assertEquals("unknown", keptOf(unknown)); //$NON-NLS-1$
+        assertEquals("deleteFailed", keptOf(deleteFailed)); //$NON-NLS-1$
+
+        // The distinction the whole change exists for: a measured co-owner and an unconcluded
+        // check keep the files for OPPOSITE reasons and must never serialize to the same value.
+        assertFalse("an unconcluded check must not serialize as measured co-ownership", //$NON-NLS-1$
+            "shared".equals(keptOf(unknown))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testADeletionThatWentThroughCarriesNoKeepReason()
+    {
+        // The over-correction guard for the delete side: a reason always attached would make
+        // "kept" meaningless, and would contradict databaseFilesDeleted=true in the same payload.
+        JsonObject deleted = parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+            new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, true,
+                DeleteInfobaseTool.SharedDatabase.NOT_SHARED)));
+
+        assertTrue("the files went", deleted.get("databaseFilesDeleted").getAsBoolean()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("a completed deletion has no keep reason", keptOf(deleted)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testKeptAndDeletedAreTwoHalvesOfOneAnswer()
+    {
+        // The invariant the shared writer exists to guarantee: databaseFilesDeleted=false is never
+        // reported without naming why, and deleted=true never carries a keep reason. Both keys are
+        // written in ONE place so a future builder cannot emit half the answer.
+        for (boolean requested : new boolean[] { true, false })
+        {
+            for (Path dir : new Path[] { DB_DIR, null })
+            {
+                for (DeleteInfobaseTool.SharedDatabase state : DeleteInfobaseTool.SharedDatabase
+                    .values())
+                {
+                    for (boolean deleted : new boolean[] { true, false })
+                    {
+                        JsonObject payload =
+                            parse(DeleteInfobaseTool.buildDeleteSuccessResult(ibId(), true,
+                                new DeleteInfobaseTool.DbFileOutcome(requested, dir, deleted,
+                                    state)));
+                        boolean reportedDeleted =
+                            payload.get("databaseFilesDeleted").getAsBoolean(); //$NON-NLS-1$
+                        assertEquals("deleted=" + reportedDeleted + " must decide whether a keep " //$NON-NLS-1$ //$NON-NLS-2$
+                            + "reason is present", reportedDeleted, keptOf(payload) == null); //$NON-NLS-1$
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    public void testAFailedDeregistrationNamesItselfAsTheKeepReason()
+    {
+        // This branch returns BEFORE the deletion step, so no shared-infobase answer applies to
+        // it: reporting it as notRequested or deleteFailed would name a cause that never ran.
+        JsonObject wanted = parse(DeleteInfobaseTool.buildDeregisterFailedResult(ibId(), true,
+            new IllegalStateException("registry locked"))); //$NON-NLS-1$
+        JsonObject notWanted = parse(DeleteInfobaseTool.buildDeregisterFailedResult(ibId(), false,
+            new IllegalStateException("registry locked"))); //$NON-NLS-1$
+
+        assertFalse("the files were not deleted", //$NON-NLS-1$
+            wanted.get("databaseFilesDeleted").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("deregistrationFailed", keptOf(wanted)); //$NON-NLS-1$
+        assertEquals("notRequested", keptOf(notWanted)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAPreviewDeclaresTheReasonItWouldKeepTheFiles()
+    {
+        // The preview is where the agent decides whether to call confirm=true, so the shared /
+        // unknown distinction matters MOST here - and it was prose-only.
+        JsonObject shared = parse(DeleteInfobaseTool.buildPreviewResult(ibId(), true, true, DB_DIR,
+            DeleteInfobaseTool.SharedDatabase.SHARED));
+        JsonObject unknown = parse(DeleteInfobaseTool.buildPreviewResult(ibId(), true, true, DB_DIR,
+            DeleteInfobaseTool.SharedDatabase.UNKNOWN));
+        JsonObject wouldDelete = parse(DeleteInfobaseTool.buildPreviewResult(ibId(), true, true,
+            DB_DIR, DeleteInfobaseTool.SharedDatabase.NOT_SHARED));
+        JsonObject serverUnknown = parse(DeleteInfobaseTool.buildStandaloneServerPreview(false,
+            ibId(), true, true, DB_DIR, DeleteInfobaseTool.SharedDatabase.UNKNOWN));
+
+        assertEquals("shared", keptOf(shared)); //$NON-NLS-1$
+        assertEquals("unknown", keptOf(unknown)); //$NON-NLS-1$
+        assertNull("a preview that would delete names no keep reason", keptOf(wouldDelete)); //$NON-NLS-1$
+        assertEquals("the standalone-server preview answers the same way", //$NON-NLS-1$
+            "unknown", keptOf(serverUnknown)); //$NON-NLS-1$
+        // A preview changes nothing, so it must not claim an outcome.
+        assertFalse("a preview must not report databaseFilesDeleted", //$NON-NLS-1$
+            unknown.has("databaseFilesDeleted")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheStandaloneServerDeletionDeclaresTheSameReasons()
+    {
+        // The second deletion path had its own result-builder; both must answer identically or the
+        // field means something different depending on the application kind.
+        JsonObject unknown = parse(DeleteInfobaseTool.buildDeletedResult(ibId(), true,
+            new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, false,
+                DeleteInfobaseTool.SharedDatabase.UNKNOWN),
+            StandaloneServerSupport.RegistryCleanup.REMOVED, DeleteInfobaseTool.ReadBack.CONFIRMED));
+        JsonObject deleted = parse(DeleteInfobaseTool.buildDeletedResult(ibId(), true,
+            new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, true,
+                DeleteInfobaseTool.SharedDatabase.NOT_SHARED),
+            StandaloneServerSupport.RegistryCleanup.REMOVED, DeleteInfobaseTool.ReadBack.CONFIRMED));
+
+        assertEquals("unknown", keptOf(unknown)); //$NON-NLS-1$
+        assertNull("a completed deletion has no keep reason", keptOf(deleted)); //$NON-NLS-1$
     }
 
     private static IApplication app(String id)

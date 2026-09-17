@@ -14,15 +14,18 @@ RESPONSE SHAPE
 --------------
 JSON tool (getResponseType() == JSON); payload in r.structured:
   preview:  {"success": true, "action": "preview", "confirmationRequired": true,
-             "project", "applicationId", "infobaseName", "deleteRegistration", "message"}
+             "project", "applicationId", "infobaseName", "deleteRegistration",
+             ["databaseFilesKept"], "message"}
   deleted:  {"success": true, "action": "deleted", "project", "applicationId",
-             "infobaseName", "deleteRegistration", "databaseFilesDeleted", "message"}
+             "infobaseName", "deleteRegistration", "databaseFilesDeleted",
+             ["databaseFilesKept"], "message"}
   error:    {"success": false, "error": "..."}
 
-databaseFilesDeleted=false has THREE causes and only `message` tells them apart:
-a measured co-owner ("still used by other project(s)"), a locked/absent directory,
-and a shared-infobase check that did not complete ("is shared is UNKNOWN") - the
-last one establishes nothing about sharing and is re-run by the next call.
+databaseFilesDeleted=false has six causes, and `databaseFilesKept` DECLARES which:
+notRequested | noDirectory | shared | unknown | deleteFailed | deregistrationFailed.
+It is absent exactly when the files were (or, on a preview, would be) deleted.
+`shared` is a MEASURED co-owner; `unknown` is a shared-infobase check that did not
+complete - it establishes nothing about sharing and is re-run by the next call.
 
 CI STRATEGY
 -----------

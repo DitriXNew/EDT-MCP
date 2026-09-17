@@ -22,8 +22,12 @@ placeholder). The success envelope is:
                         # read did not conclude - never read it as "up to date"
                         ["requiredVersion"]}, ... ],
      "count": <int>,                       # == len(applications)
-     ["defaultApplicationId": "<id>"],     # absent BOTH when no default is recorded
-                                           # AND when that lookup did not conclude
+     "defaultApplication": "resolved"|"none"|"unknown",
+                                           # ALWAYS present on success; the declared
+                                           # discriminator - "unknown" = the lookup did
+                                           # not conclude, never "there is none"
+     ["defaultApplicationId": "<id>"],     # present only with "resolved"; absent BOTH
+                                           # for "none" and for "unknown"
      ["message": "..."]}                   # "No applications found for project" on the
                                            # empty branch; "The default application is
                                            # UNKNOWN: ..." when that lookup expired
@@ -196,6 +200,19 @@ def test_returns_consistent_envelope_and_does_not_mutate():
     sc = r.structured
     apps, count = _envelope(r, "fixture project envelope")
 
+    # The declared discriminator is what a programmatic client branches on, so it must be
+    # on EVERY success payload and must agree with the id it explains. "unknown" here is
+    # a live lookup that did not conclude - possible, but it must never come with an id.
+    default_state = sc.get("defaultApplication")
+    if default_state not in ("resolved", "none", "unknown"):
+        raise AssertionError(
+            "every success payload must declare defaultApplication as one of "
+            "resolved/none/unknown: %r" % default_state)
+    if (default_state == "resolved") != ("defaultApplicationId" in sc):
+        raise AssertionError(
+            "defaultApplication=%r and defaultApplicationId presence must agree: %r"
+            % (default_state, sc.get("defaultApplicationId")))
+
     if count == 0:
         # Empty branch is a real, distinct code path: the tool sets count=0, an
         # empty list, AND a specific human message. Assert all three so a tool that
@@ -206,6 +223,12 @@ def test_returns_consistent_envelope_and_does_not_mutate():
             raise AssertionError(
                 "empty branch must carry the explicit 'No applications found' message: %r"
                 % sc.get("message"))
+        # A listing that CONCLUDED and found nothing is a measured "no default", not an
+        # unmeasured one - the empty branch never runs the lookup and must still say so.
+        if default_state != "none":
+            raise AssertionError(
+                "a concluded empty listing must declare defaultApplication='none': %r"
+                % default_state)
     else:
         # Non-empty: every entry must carry the round-trip identifiers the sibling
         # tools require. Missing 'id' would break update_database / launch.

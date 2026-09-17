@@ -68,6 +68,33 @@ public class DeleteInfobaseTool implements IMcpTool
     /** Output key: whether the database files on disk were deleted. */
     private static final String KEY_DATABASE_FILES_DELETED = "databaseFilesDeleted"; //$NON-NLS-1$
 
+    /**
+     * Output key: the DECLARED reason the database files were (or, on a preview, would be) KEPT.
+     *
+     * <p>{@code databaseFilesDeleted=false} has six causes and only the prose told them apart, so
+     * a programmatic client could not distinguish a MEASURED co-owner from a shared-infobase check
+     * that never concluded — the one distinction #622 exists to keep.
+     */
+    private static final String KEY_DATABASE_FILES_KEPT = "databaseFilesKept"; //$NON-NLS-1$
+
+    /** {@link #KEY_DATABASE_FILES_KEPT}: deleteDatabaseFiles was not requested. */
+    static final String KEPT_NOT_REQUESTED = "notRequested"; //$NON-NLS-1$
+
+    /** {@link #KEY_DATABASE_FILES_KEPT}: no on-disk database directory could be resolved. */
+    static final String KEPT_NO_DIRECTORY = "noDirectory"; //$NON-NLS-1$
+
+    /** {@link #KEY_DATABASE_FILES_KEPT}: another workspace project was FOUND using the same database. */
+    static final String KEPT_SHARED = "shared"; //$NON-NLS-1$
+
+    /** {@link #KEY_DATABASE_FILES_KEPT}: the shared-infobase check did not conclude — nothing measured. */
+    static final String KEPT_UNKNOWN = "unknown"; //$NON-NLS-1$
+
+    /** {@link #KEY_DATABASE_FILES_KEPT}: the removal ran or was refused and the directory is not gone. */
+    static final String KEPT_DELETE_FAILED = "deleteFailed"; //$NON-NLS-1$
+
+    /** {@link #KEY_DATABASE_FILES_KEPT}: deregistration failed, so the deletion was not attempted. */
+    static final String KEPT_DEREGISTRATION_FAILED = "deregistrationFailed"; //$NON-NLS-1$
+
     /** Output value for {@link McpKeys#ACTION}: the infobase was removed. */
     private static final String VAL_DELETED = "deleted"; //$NON-NLS-1$
 
@@ -169,6 +196,20 @@ public class DeleteInfobaseTool implements IMcpTool
             .booleanProperty(KEY_DATABASE_FILES_DELETED,
                 "Whether the database files on disk were actually deleted (only when " //$NON-NLS-1$
                 + "deleteDatabaseFiles=true; false otherwise or if the directory could not be removed).") //$NON-NLS-1$
+            .enumProperty(KEY_DATABASE_FILES_KEPT,
+                "WHY the database files were kept; absent exactly when they were (or, on a " //$NON-NLS-1$
+                    + "preview, would be) deleted. 'notRequested' = deleteDatabaseFiles was not " //$NON-NLS-1$
+                    + "asked for. 'noDirectory' = no on-disk database directory could be resolved. " //$NON-NLS-1$
+                    + "'shared' = another workspace project was FOUND using the same database. " //$NON-NLS-1$
+                    + "'unknown' = the shared-infobase check did not conclude, so co-ownership was " //$NON-NLS-1$
+                    + "never measured - do NOT read it as 'shared'; the next call re-runs the " //$NON-NLS-1$
+                    + "check. 'deleteFailed' = the directory is still there (locked, already " //$NON-NLS-1$
+                    + "absent, a filesystem root, or no 1Cv8.1CD) - remove it manually. " //$NON-NLS-1$
+                    + "'deregistrationFailed' = deregistration failed, so the deletion was " //$NON-NLS-1$
+                    + "deliberately not attempted. The last two arise only on a deletion, never " //$NON-NLS-1$
+                    + "on a preview.", //$NON-NLS-1$
+                KEPT_NOT_REQUESTED, KEPT_NO_DIRECTORY, KEPT_SHARED, KEPT_UNKNOWN, KEPT_DELETE_FAILED,
+                KEPT_DEREGISTRATION_FAILED)
             .stringProperty(McpKeys.MESSAGE, "Human-readable status message.") //$NON-NLS-1$
             .build();
     }
@@ -580,7 +621,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * id / name (and, for the success builders, the deleteRegistration flag is passed alongside). A
      * parameter-object that keeps the builders below the 7-parameter bar; carries no behaviour.
      */
-    private static final class IbIdentity
+    static final class IbIdentity
     {
         final String projectName;
         final String resolvedId;
@@ -618,19 +659,111 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /**
-     * Builds the confirm-preview tool-result JSON for a file infobase (no change is made). Byte-for-byte
-     * identical to the inline preview the {@code !confirm} gate produced.
+     * The reason the database files are kept that is already known BEFORE any deletion is
+     * attempted — the only reasons a preview can report.
+     *
+     * <p>Ordered exactly like {@link #databasePreviewNote}, so the declared value and the prose
+     * cannot drift apart. {@link SharedDatabase#SHARED} and {@link SharedDatabase#UNKNOWN} keep the
+     * files for OPPOSITE reasons and get their own values.
+     *
+     * @param deleteDatabaseFiles whether the caller asked for the files to be deleted
+     * @param dbDir the resolved on-disk database directory, or {@code null}
+     * @param shared what the shared-infobase check established
+     * @return the keep reason, or {@code null} when the files are (or would be) deleted
      */
-    private static String buildPreviewResult(IbIdentity id, boolean deleteRegistration,
+    static String prospectiveDatabaseFilesKept(boolean deleteDatabaseFiles, Path dbDir,
+            SharedDatabase shared)
+    {
+        if (!deleteDatabaseFiles)
+        {
+            return KEPT_NOT_REQUESTED;
+        }
+        if (dbDir == null)
+        {
+            return KEPT_NO_DIRECTORY;
+        }
+        if (shared == SharedDatabase.SHARED)
+        {
+            return KEPT_SHARED;
+        }
+        if (shared == SharedDatabase.UNKNOWN)
+        {
+            return KEPT_UNKNOWN;
+        }
+        return null;
+    }
+
+    /**
+     * The reason the database files were kept after the deletion step ran.
+     *
+     * @param db the on-disk outcome cluster
+     * @return the keep reason, or {@code null} exactly when the files were deleted
+     */
+    static String databaseFilesKept(DbFileOutcome db)
+    {
+        if (db.dbFilesDeleted)
+        {
+            return null;
+        }
+        String prospective =
+            prospectiveDatabaseFilesKept(db.deleteDatabaseFiles, db.dbDir, db.dbShared);
+        return prospective != null ? prospective : KEPT_DELETE_FAILED;
+    }
+
+    /**
+     * Writes the on-disk outcome into a result: whether the files went, and — whenever they did
+     * not — the DECLARED reason. Both keys are written HERE, so a payload cannot report
+     * {@code databaseFilesDeleted=false} without naming why.
+     *
+     * @param result the payload being built
+     * @param db the on-disk outcome cluster
+     * @return the same {@code result}, for chaining
+     */
+    static ToolResult applyDatabaseFilesOutcome(ToolResult result, DbFileOutcome db)
+    {
+        result.put(KEY_DATABASE_FILES_DELETED, db.dbFilesDeleted);
+        String kept = databaseFilesKept(db);
+        if (kept != null)
+        {
+            result.put(KEY_DATABASE_FILES_KEPT, kept);
+        }
+        return result;
+    }
+
+    /**
+     * Writes a preview's prospective keep reason. A preview makes no change, so it carries the
+     * reason WITHOUT {@code databaseFilesDeleted}; an absent key means the files would go.
+     *
+     * @param result the payload being built
+     * @param deleteDatabaseFiles whether the caller asked for the files to be deleted
+     * @param dbDir the resolved on-disk database directory, or {@code null}
+     * @param shared what the shared-infobase check established
+     * @return the same {@code result}, for chaining
+     */
+    static ToolResult applyProspectiveDatabaseFilesKept(ToolResult result,
+            boolean deleteDatabaseFiles, Path dbDir, SharedDatabase shared)
+    {
+        String kept = prospectiveDatabaseFilesKept(deleteDatabaseFiles, dbDir, shared);
+        if (kept != null)
+        {
+            result.put(KEY_DATABASE_FILES_KEPT, kept);
+        }
+        return result;
+    }
+
+    /**
+     * Builds the confirm-preview tool-result JSON for a file infobase (no change is made).
+     */
+    static String buildPreviewResult(IbIdentity id, boolean deleteRegistration,
             boolean deleteDatabaseFiles, Path dbDir, SharedDatabase dbShared)
     {
-        return ToolResult.success()
+        return applyProspectiveDatabaseFilesKept(ToolResult.success()
             .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
             .put(KEY_CONFIRMATION_REQUIRED, true)
             .put(McpKeys.PROJECT, id.projectName)
             .put(McpKeys.APPLICATION_ID, id.resolvedId)
             .put(KEY_INFOBASE_NAME, id.resolvedName)
-            .put(KEY_DELETE_REGISTRATION, deleteRegistration)
+            .put(KEY_DELETE_REGISTRATION, deleteRegistration), deleteDatabaseFiles, dbDir, dbShared)
             .put(McpKeys.MESSAGE, "PREVIEW: this would dissociate infobase '" + id.resolvedName //$NON-NLS-1$
                 + MSG_FROM_PROJECT + id.projectName + "'" //$NON-NLS-1$
                 + (deleteRegistration
@@ -647,7 +780,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * deregister-failure catch produced; the database files are reported as KEPT (the safe choice when
      * deregistration failed). Read-only — the dissociation has already happened at the call site.
      */
-    private static String buildDeregisterFailedResult(IbIdentity id, boolean deleteDatabaseFiles,
+    static String buildDeregisterFailedResult(IbIdentity id, boolean deleteDatabaseFiles,
             Exception e)
     {
         return ToolResult.success()
@@ -657,6 +790,10 @@ public class DeleteInfobaseTool implements IMcpTool
             .put(KEY_INFOBASE_NAME, id.resolvedName)
             .put(KEY_DELETE_REGISTRATION, false)
             .put(KEY_DATABASE_FILES_DELETED, false)
+            // The deregistration failure is what kept the files here: this branch returns BEFORE
+            // the deletion step, so no shared-infobase answer applies.
+            .put(KEY_DATABASE_FILES_KEPT,
+                deleteDatabaseFiles ? KEPT_DEREGISTRATION_FAILED : KEPT_NOT_REQUESTED)
             .put(McpKeys.MESSAGE, "Infobase '" + id.resolvedName //$NON-NLS-1$
                 + "' was dissociated from project '" + id.projectName //$NON-NLS-1$
                 + "' but could not be deregistered from the EDT list: " //$NON-NLS-1$
@@ -674,16 +811,15 @@ public class DeleteInfobaseTool implements IMcpTool
      * identical to the inline result the success path produced. Read-only — all mutations
      * (dissociate / deregister / file deletion) have already happened at the call site.
      */
-    private static String buildDeleteSuccessResult(IbIdentity id, boolean deleteRegistration,
+    static String buildDeleteSuccessResult(IbIdentity id, boolean deleteRegistration,
             DbFileOutcome db)
     {
-        return ToolResult.success()
+        return applyDatabaseFilesOutcome(ToolResult.success()
             .put(McpKeys.ACTION, VAL_DELETED)
             .put(McpKeys.PROJECT, id.projectName)
             .put(McpKeys.APPLICATION_ID, id.resolvedId)
             .put(KEY_INFOBASE_NAME, id.resolvedName)
-            .put(KEY_DELETE_REGISTRATION, deleteRegistration)
-            .put(KEY_DATABASE_FILES_DELETED, db.dbFilesDeleted)
+            .put(KEY_DELETE_REGISTRATION, deleteRegistration), db)
             .put(McpKeys.MESSAGE, "Infobase '" + id.resolvedName //$NON-NLS-1$
                 + "' removed from project '" + id.projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
                 + (deleteRegistration ? " and deregistered from the EDT infobases list." //$NON-NLS-1$
@@ -1020,7 +1156,7 @@ public class DeleteInfobaseTool implements IMcpTool
      *
      * @return the preview JSON payload, or {@code null} when {@code confirm} is true
      */
-    private String buildStandaloneServerPreview(boolean confirm, IbIdentity id,
+    static String buildStandaloneServerPreview(boolean confirm, IbIdentity id,
         boolean deleteRegistration, boolean deleteDatabaseFiles, Path dbDir,
         SharedDatabase dbShared)
     {
@@ -1028,14 +1164,14 @@ public class DeleteInfobaseTool implements IMcpTool
         {
             return null;
         }
-        return ToolResult.success()
+        return applyProspectiveDatabaseFilesKept(ToolResult.success()
             .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
             .put(KEY_CONFIRMATION_REQUIRED, true)
             .put(KEY_APPLICATION_KIND, "standaloneServer") //$NON-NLS-1$
             .put(McpKeys.PROJECT, id.projectName)
             .put(McpKeys.APPLICATION_ID, id.resolvedId)
             .put(KEY_INFOBASE_NAME, id.resolvedName)
-            .put(KEY_DELETE_REGISTRATION, deleteRegistration)
+            .put(KEY_DELETE_REGISTRATION, deleteRegistration), deleteDatabaseFiles, dbDir, dbShared)
             .put(McpKeys.MESSAGE, "PREVIEW: this would delete standalone server '" + id.resolvedName //$NON-NLS-1$
                 + "' (stop it, remove the WST server and its server config folder)" //$NON-NLS-1$
                 + (deleteRegistration ? " AND clean its infobases.yaml registry entry" //$NON-NLS-1$
@@ -1084,17 +1220,16 @@ public class DeleteInfobaseTool implements IMcpTool
      *
      * @return the success JSON payload
      */
-    private String buildDeletedResult(IbIdentity id, boolean deleteRegistration, DbFileOutcome db,
+    static String buildDeletedResult(IbIdentity id, boolean deleteRegistration, DbFileOutcome db,
         StandaloneServerSupport.RegistryCleanup cleanup, ReadBack removed)
     {
-        return ToolResult.success()
+        return applyDatabaseFilesOutcome(ToolResult.success()
             .put(McpKeys.ACTION, VAL_DELETED)
             .put(KEY_APPLICATION_KIND, "standaloneServer") //$NON-NLS-1$
             .put(McpKeys.PROJECT, id.projectName)
             .put(McpKeys.APPLICATION_ID, id.resolvedId)
             .put(KEY_INFOBASE_NAME, id.resolvedName)
-            .put(KEY_DELETE_REGISTRATION, deleteRegistration)
-            .put(KEY_DATABASE_FILES_DELETED, db.dbFilesDeleted)
+            .put(KEY_DELETE_REGISTRATION, deleteRegistration), db)
             .put(McpKeys.MESSAGE, "Standalone server '" + id.resolvedName //$NON-NLS-1$
                 + "' deleted from project '" + id.projectName //$NON-NLS-1$
                 + "' (server stopped, WST server and its server config folder removed)" //$NON-NLS-1$
@@ -1522,7 +1657,12 @@ public class DeleteInfobaseTool implements IMcpTool
         }
     }
 
-    /** Preview-message fragment describing what deleteDatabaseFiles will (or will not) do to disk. */
+    /**
+     * Preview-message fragment describing what deleteDatabaseFiles will (or will not) do to disk.
+     * Its branches are ordered exactly like
+     * {@link #prospectiveDatabaseFilesKept(boolean, Path, SharedDatabase)}, which declares the same
+     * answer as a machine-readable value — keep the two in step.
+     */
     static String databasePreviewNote(boolean deleteDatabaseFiles, Path dbDir,
             SharedDatabase shared)
     {

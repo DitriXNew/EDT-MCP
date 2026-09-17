@@ -150,6 +150,27 @@ public class GetApplicationsToolTest
             schema.contains("pre-update value") && schema.contains("stateAfter")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    @Test
+    public void testOutputSchemaDeclaresTheDefaultApplicationDiscriminator()
+    {
+        // #622 on the wire: defaultApplicationId is absent for two OPPOSITE reasons, so a
+        // schema-driven client that only sees the id cannot honour "an expired deadline is
+        // UNKNOWN, never none". The discriminator has to be DECLARED, with its closed vocabulary.
+        String schema = new GetApplicationsTool().getOutputSchema();
+        assertTrue("outputSchema must declare defaultApplication", //$NON-NLS-1$
+            schema.contains("\"defaultApplication\"")); //$NON-NLS-1$
+        assertTrue("it must be a closed enum, not a free string", schema.contains("\"enum\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the vocabulary must carry the resolved value", //$NON-NLS-1$
+            schema.contains("\"resolved\"")); //$NON-NLS-1$
+        assertTrue("the vocabulary must carry the measured-absence value", //$NON-NLS-1$
+            schema.contains("\"none\"")); //$NON-NLS-1$
+        assertTrue("the vocabulary must carry the unmeasured value", //$NON-NLS-1$
+            schema.contains("\"unknown\"")); //$NON-NLS-1$
+        assertEquals("resolved", GetApplicationsTool.DEFAULT_APPLICATION_RESOLVED); //$NON-NLS-1$
+        assertEquals("none", GetApplicationsTool.DEFAULT_APPLICATION_NONE); //$NON-NLS-1$
+        assertEquals("unknown", GetApplicationsTool.DEFAULT_APPLICATION_UNKNOWN); //$NON-NLS-1$
+    }
+
     // ==================== Argument validation (no live workbench needed) ====================
 
     @Test
@@ -486,6 +507,83 @@ public class GetApplicationsToolTest
 
         assertFalse("a measured absence carries no id", absent.has("defaultApplicationId")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("and no explanation either", absent.has("message")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // The prose above is for a human. The DECLARED discriminator is what a programmatic client
+        // reads, and it is the only key that separates the two id-less outcomes without parsing a
+        // sentence - so each one must carry its own value, on the serialized payload.
+        assertEquals("resolved", defaultApplicationOf(resolved)); //$NON-NLS-1$
+        assertEquals("unknown", defaultApplicationOf(unknown)); //$NON-NLS-1$
+        assertEquals("none", defaultApplicationOf(absent)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheDiscriminatorIsPresentOnEveryDefaultOutcome()
+    {
+        // A key that is sometimes absent is a fourth state nobody declared, and the client falls
+        // back to guessing from defaultApplicationId again.
+        assertTrue(payloadFor(new DefaultApplication("Infobase.Main", null)) //$NON-NLS-1$
+            .has("defaultApplication")); //$NON-NLS-1$
+        assertTrue(payloadFor(new DefaultApplication(null, "expired")).has("defaultApplication")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(payloadFor(new DefaultApplication(null, null)).has("defaultApplication")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAMeasuredOutcomeIsNeverSerializedAsUnknown() throws Exception
+    {
+        // The over-correction guard. A discriminator wired to answer "unknown" whatever happened
+        // would satisfy every assertion about the wedged case above while destroying the field's
+        // only use. Driven from the REAL bounded lookup, not from a hand-built record, so the
+        // wiring between "the read concluded" and the value on the wire is what is pinned.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        IApplication application = mock(IApplication.class);
+        when(application.getId()).thenReturn("Infobase.Main"); //$NON-NLS-1$
+        when(manager.getDefaultApplication(project)).thenReturn(Optional.of(application));
+
+        JsonObject withDefault = payloadFor(
+            GetApplicationsTool.resolveDefaultApplicationId(manager, project, GENEROUS_DEADLINE_MS));
+
+        assertEquals("a lookup that answered must not be reported as unmeasured", //$NON-NLS-1$
+            "resolved", defaultApplicationOf(withDefault)); //$NON-NLS-1$
+        assertEquals("Infobase.Main", withDefault.get("defaultApplicationId").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+
+        IApplicationManager empty = mock(IApplicationManager.class);
+        IProject emptyProject = mock(IProject.class);
+        when(empty.getDefaultApplication(emptyProject)).thenReturn(Optional.empty());
+
+        JsonObject withoutDefault = payloadFor(GetApplicationsTool.resolveDefaultApplicationId(
+            empty, emptyProject, GENEROUS_DEADLINE_MS));
+
+        assertEquals("a concluded 'there is no default' must stay 'none'", //$NON-NLS-1$
+            "none", defaultApplicationOf(withoutDefault)); //$NON-NLS-1$
+        assertFalse("and it must not be explained away as unknown", //$NON-NLS-1$
+            withoutDefault.has("message")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAConcludedEmptyListingStillDeclaresNone()
+    {
+        // The one success payload that never runs a default lookup. listBounded raises rather than
+        // return an empty list, so reaching this branch IS a measured "this project has none" -
+        // and it has to say so in the same key as every other success, or the field is unreliable
+        // exactly where a caller would fall back to guessing.
+        JsonObject payload =
+            JsonParser.parseString(GetApplicationsTool.noApplicationsResult("Empty")) //$NON-NLS-1$
+                .getAsJsonObject();
+
+        assertEquals(0, payload.get("count").getAsInt()); //$NON-NLS-1$
+        assertEquals("none", defaultApplicationOf(payload)); //$NON-NLS-1$
+        assertFalse("an empty project has no default id to echo", //$NON-NLS-1$
+            payload.has("defaultApplicationId")); //$NON-NLS-1$
+        assertEquals("No applications found for project", //$NON-NLS-1$
+            payload.get("message").getAsString()); //$NON-NLS-1$
+    }
+
+    private static String defaultApplicationOf(JsonObject payload)
+    {
+        assertTrue("every success payload must declare defaultApplication", //$NON-NLS-1$
+            payload.has("defaultApplication")); //$NON-NLS-1$
+        return payload.get("defaultApplication").getAsString(); //$NON-NLS-1$
     }
 
     private static JsonObject payloadFor(DefaultApplication defaultApp)

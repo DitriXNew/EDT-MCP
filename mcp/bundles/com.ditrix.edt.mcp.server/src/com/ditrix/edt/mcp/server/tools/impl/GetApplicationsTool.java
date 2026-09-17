@@ -44,6 +44,32 @@ public class GetApplicationsTool implements IMcpTool
     /** Output key: number of applications found. */
     private static final String KEY_COUNT = "count"; //$NON-NLS-1$
 
+    /** Output key: id of the project's default application (present only when resolved). */
+    private static final String KEY_DEFAULT_APPLICATION_ID = "defaultApplicationId"; //$NON-NLS-1$
+
+    /** Output key: informational message. */
+    private static final String KEY_MESSAGE = "message"; //$NON-NLS-1$
+
+    /**
+     * Output key: the DECLARED outcome of the default-application lookup.
+     *
+     * <p>Present on every success payload. {@link #KEY_DEFAULT_APPLICATION_ID} is absent for two
+     * opposite reasons - "there is none" and "the lookup never concluded" - and absence alone
+     * cannot tell them apart, so a programmatic client reading {@code structuredContent} has no
+     * way to honour the rule that an expired deadline is UNKNOWN, never "none". This key is that
+     * way.
+     */
+    private static final String KEY_DEFAULT_APPLICATION = "defaultApplication"; //$NON-NLS-1$
+
+    /** {@link #KEY_DEFAULT_APPLICATION}: the lookup concluded and named a default application. */
+    static final String DEFAULT_APPLICATION_RESOLVED = "resolved"; //$NON-NLS-1$
+
+    /** {@link #KEY_DEFAULT_APPLICATION}: the lookup concluded and this project records no default. */
+    static final String DEFAULT_APPLICATION_NONE = "none"; //$NON-NLS-1$
+
+    /** {@link #KEY_DEFAULT_APPLICATION}: the lookup did not conclude, so nothing was established. */
+    static final String DEFAULT_APPLICATION_UNKNOWN = "unknown"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -78,11 +104,22 @@ public class GetApplicationsTool implements IMcpTool
                 + "updateState=UNKNOWN (with updateStateError) means that read did not conclude - " //$NON-NLS-1$
                 + "it is NOT a claim that the infobase is up to date.") //$NON-NLS-1$
             .integerProperty(KEY_COUNT, "Number of applications found") //$NON-NLS-1$
-            .stringProperty("message", "Informational message: no applications were found, or the " //$NON-NLS-1$ //$NON-NLS-2$
+            .stringProperty(KEY_MESSAGE, "Informational message: no applications were found, or the " //$NON-NLS-1$
                 + "applications were read but the default application could not be determined " //$NON-NLS-1$
                 + "(defaultApplicationId is then absent because it is UNKNOWN, not because there " //$NON-NLS-1$
                 + "is none).") //$NON-NLS-1$
-            .stringProperty("defaultApplicationId", "Id of the project's default application") //$NON-NLS-1$ //$NON-NLS-2$
+            .enumProperty(KEY_DEFAULT_APPLICATION,
+                "What the default-application lookup established. Always present on success; read " //$NON-NLS-1$
+                    + "it instead of inferring from a missing defaultApplicationId, which is absent " //$NON-NLS-1$
+                    + "in two of the three cases. 'resolved' = defaultApplicationId is present. " //$NON-NLS-1$
+                    + "'none' = the lookup concluded and this project records no default. " //$NON-NLS-1$
+                    + "'unknown' = the lookup did not conclude (deadline or failure), so nothing " //$NON-NLS-1$
+                    + "was established - see message, and pick from applications by name/type or " //$NON-NLS-1$
+                    + "retry.", //$NON-NLS-1$
+                DEFAULT_APPLICATION_RESOLVED, DEFAULT_APPLICATION_NONE, DEFAULT_APPLICATION_UNKNOWN)
+            .stringProperty(KEY_DEFAULT_APPLICATION_ID,
+                "Id of the project's default application (present only with " //$NON-NLS-1$
+                    + "defaultApplication='resolved').") //$NON-NLS-1$
             .stringProperty("inheritedFromProject", //$NON-NLS-1$
                 "Base/parent project the applications are inherited from (present only for " //$NON-NLS-1$
                     + "external-objects/extension projects whose applications come from their base project).") //$NON-NLS-1$
@@ -152,12 +189,7 @@ public class GetApplicationsTool implements IMcpTool
 
             if (applications == null || applications.isEmpty())
             {
-                return ToolResult.success()
-                    .put(McpKeys.PROJECT, projectName)
-                    .put(KEY_APPLICATIONS, new JsonArray())
-                    .put(KEY_COUNT, 0)
-                    .put("message", "No applications found for project") //$NON-NLS-1$ //$NON-NLS-2$
-                    .toJson();
+                return noApplicationsResult(projectName);
             }
 
             // Build applications array
@@ -202,13 +234,14 @@ public class GetApplicationsTool implements IMcpTool
     }
 
     /**
-     * Writes the default-application answer into the result: its ID, or the note saying why the
-     * id is UNKNOWN — never both.
+     * Writes the default-application answer into the result: the declared
+     * {@code defaultApplication} discriminator, plus its ID or the note saying why the id is
+     * UNKNOWN — never both.
      *
      * <p>Extracted so the SERIALIZED payload can be pinned rather than the record in isolation.
-     * Omitting {@code defaultApplicationId} is how this tool says "this project records no
-     * default", so the one-line mistake of letting an unanswered lookup produce that same silence
-     * has no other symptom: the caller reads an unasked question as an answer.
+     * The discriminator and the id are written HERE together, so an unanswered lookup cannot
+     * produce the same silence as "this project records no default" — that silence used to be the
+     * only symptom, and the caller read an unasked question as an answer.
      *
      * @param result the success payload being built
      * @param defaultApp what the bounded default-application lookup established
@@ -218,13 +251,38 @@ public class GetApplicationsTool implements IMcpTool
     {
         if (defaultApp.id() != null)
         {
-            result.put("defaultApplicationId", defaultApp.id()); //$NON-NLS-1$
+            return result.put(KEY_DEFAULT_APPLICATION, DEFAULT_APPLICATION_RESOLVED)
+                .put(KEY_DEFAULT_APPLICATION_ID, defaultApp.id());
         }
-        else if (defaultApp.note() != null)
+        if (defaultApp.note() != null)
         {
-            result.put("message", defaultApp.note()); //$NON-NLS-1$
+            return result.put(KEY_DEFAULT_APPLICATION, DEFAULT_APPLICATION_UNKNOWN)
+                .put(KEY_MESSAGE, defaultApp.note());
         }
-        return result;
+        return result.put(KEY_DEFAULT_APPLICATION, DEFAULT_APPLICATION_NONE);
+    }
+
+    /**
+     * The payload for a project whose application listing CONCLUDED and was empty.
+     *
+     * <p>Extracted so the serialized answer of this branch can be pinned: it is the one success
+     * payload that never runs a default-application lookup, and it still has to carry the
+     * discriminator. {@code none} is a measured answer here — {@link #listBounded} raises rather
+     * than return an empty list, so reaching this branch means both listings concluded, and a
+     * project with no applications has no default application.
+     *
+     * @param projectName the project that was listed
+     * @return the serialized success payload
+     */
+    static String noApplicationsResult(String projectName)
+    {
+        return ToolResult.success()
+            .put(McpKeys.PROJECT, projectName)
+            .put(KEY_APPLICATIONS, new JsonArray())
+            .put(KEY_COUNT, 0)
+            .put(KEY_DEFAULT_APPLICATION, DEFAULT_APPLICATION_NONE)
+            .put(KEY_MESSAGE, "No applications found for project") //$NON-NLS-1$
+            .toJson();
     }
 
     /**
@@ -489,11 +547,11 @@ public class GetApplicationsTool implements IMcpTool
     /**
      * Resolves the id of the project's default application.
      *
-     * <p>BOUNDED (#622), and the deadline is not swallowed. Omitting {@code defaultApplicationId}
-     * is how this tool says "this project has no default application", so a lookup that never
-     * concluded must not produce the same silence — the caller would read an unanswered question
-     * as an answer. The deadline is carried out in {@link DefaultApplication#note()} for the
-     * existing {@code message} field instead.
+     * <p>BOUNDED (#622), and the deadline is not swallowed. A lookup that never concluded is
+     * {@code unknown}, never "this project has no default application": the deadline is carried
+     * out in {@link DefaultApplication#note()}, which
+     * {@link #applyDefaultApplication(ToolResult, DefaultApplication)} turns into the declared
+     * discriminator plus the {@code message} field.
      *
      * @param appManager the application manager
      * @param project the project
