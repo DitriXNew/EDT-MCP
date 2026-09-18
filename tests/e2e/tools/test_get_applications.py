@@ -239,6 +239,25 @@ def test_returns_consistent_envelope_and_does_not_mutate():
                 raise AssertionError("every application entry must carry a non-empty 'id': %r" % entry)
             if "name" not in entry:
                 raise AssertionError("every application entry must carry a 'name': %r" % entry)
+            # updateState is what a caller branches on to decide whether to run
+            # update_database, and it is never OMITTED: a read that did not answer -
+            # expired, raised, or a manager reporting nothing - says UNKNOWN out loud,
+            # because an absent field reads as "nothing to say" about a question that was
+            # never answered.
+            if "updateState" not in entry:
+                raise AssertionError(
+                    "every application entry must declare an updateState (UNKNOWN when it "
+                    "could not be read): %r" % entry)
+            # UNKNOWN is also a state EDT itself reports (not connected), so its presence
+            # alone proves nothing. What must hold either way: a state carrying a failure
+            # reason must never also read as "up to date".
+            if entry.get("updateStateError") is not None:
+                if entry["updateState"] not in ("UNKNOWN", "ERROR"):
+                    raise AssertionError(
+                        "a state with an error must be UNKNOWN or ERROR: %r" % entry)
+                if "up to date" in (entry.get("updateStateDescription") or "").lower():
+                    raise AssertionError(
+                        "an unread updateState must not read as up to date: %r" % entry)
         # When entries exist the tool also computes a default application id; if it
         # reported one, it MUST be one of the listed application ids (it is derived
         # from getDefaultApplication on the same project). This catches a default

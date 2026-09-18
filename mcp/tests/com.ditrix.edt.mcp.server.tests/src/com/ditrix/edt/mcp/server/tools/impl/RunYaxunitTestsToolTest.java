@@ -52,6 +52,7 @@ import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PrepInFlight;
+import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplicationManager;
 
 /**
@@ -156,10 +157,11 @@ public class RunYaxunitTestsToolTest
     }
 
     /**
-     * The other edge of the same bound, and the defect it replaced: both report reads RECEIVED the
-     * caller's deadline and then handed {@code OPERATION_LOCK_TIMEOUT_MS} to the acquisition
-     * anyway, so a caller that asked for a fraction of a second was held for fifteen minutes — with
-     * its background-job slot pinned for the duration. The bound must be the SMALLER of the two.
+     * A RULE, not shipped behaviour. The production caller passes {@code Long.MAX_VALUE} — the run
+     * is owned by a background job with no deadline — so no live call reaches a bound below the
+     * 15-minute ceiling. What this pins is that the production overload computes its bound from the
+     * deadline it was GIVEN, so a future caller with a real budget is honoured instead of being
+     * held for fifteen minutes with its job slot.
      */
     @Test
     public void testAShortCallerDeadlineCapsTheReportLockWait() throws Exception
@@ -204,7 +206,9 @@ public class RunYaxunitTestsToolTest
         assertTrue("the holder must be provably holding the lock", held.await(5, TimeUnit.SECONDS));
 
         long startedAt = System.nanoTime();
-        // The PRODUCTION overload: the bound under test is the one this call site computes.
+        // The PRODUCTION overload, driven with a deadline production never passes: what is proven
+        // is that this call site derives its bound from the deadline, not that any shipped caller
+        // supplies a short one.
         String result = new RunYaxunitTestsTool().handleExistingLaunch(finished, reportDir,
             System.currentTimeMillis() + 400L, "capped-run-key", projectName, applicationId);
         long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
@@ -221,7 +225,9 @@ public class RunYaxunitTestsToolTest
 
     /**
      * The rule itself, in isolation: a caller's remaining budget is an upper bound on everything
-     * this call does, and the publish-sized constant is only the ceiling.
+     * this call does, and the publish-sized constant is only the ceiling. Production always lands
+     * on the ceiling branch ({@code Long.MAX_VALUE}); the other two branches are for a caller that
+     * one day has a deadline of its own.
      */
     @Test
     public void testReportLockBoundIsTheSmallerOfTheDeadlineAndTheCeiling()
@@ -264,6 +270,33 @@ public class RunYaxunitTestsToolTest
         assertNotSame("an empty application id keys a different lock than the real one",
             LaunchLifecycleUtils.lockFor("P1", ""),
             LaunchLifecycleUtils.lockFor("P1", "Infobase.Real"));
+    }
+
+    /**
+     * The same refusal reached through the OTHER way the lookup fails to answer: the manager
+     * raised. {@code deriveLaunchContext} branches on {@code inconclusive()} alone, so a raise that
+     * left it {@code false} ran the whole suite under {@code lockFor(project, "")} — a different
+     * mutex from the one a concurrent {@code update_database} holds. This composes the two halves
+     * exactly as that method does, without needing a workspace.
+     */
+    @Test
+    public void testARaisedDefaultApplicationReachesTheSameRefusal() throws Exception
+    {
+        IProject project = mock(IProject.class);
+        Mockito.when(project.getName()).thenReturn("P1");
+        IApplicationManager manager = mock(IApplicationManager.class);
+        Mockito.when(manager.getDefaultApplication(project))
+            .thenThrow(new ApplicationException("the registered default no longer resolves"));
+
+        LaunchLifecycleUtils.DefaultApplicationLookup lookup =
+            LaunchLifecycleUtils.resolveDefaultApplication(project, "", manager, 30_000L);
+
+        assertTrue("the gate deriveLaunchContext branches on must fire", lookup.inconclusive());
+        String message =
+            RunYaxunitTestsTool.unresolvedDefaultApplicationError("P1", lookup.failure());
+        assertTrue("the refusal must carry what the manager raised: " + message,
+            message.contains("the registered default no longer resolves"));
+        assertTrue("it must say no run was started", message.contains("No test run was started"));
     }
 
     /**

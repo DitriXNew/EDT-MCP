@@ -42,13 +42,21 @@ from harness import (
     assert_error,
     assert_error_quality,
     assert_no_diff,
+    assert_ok,
     e2e_test,
+    E2ESkip,
     PROJECT,
 )
 
 NONEXISTENT_PROJECT = "NoSuchProject_di_zzz"
 NONEXISTENT_APP_ID = "no_such_app_di_zzz"
 NONEXISTENT_IB_NAME = "no_such_infobase_di_zzz"
+
+# Every value the declared databaseFilesKept enum may take, and the subset a PREVIEW may
+# reach: deleteFailed/deregistrationFailed describe steps a preview never runs.
+KEPT_VALUES = ("notRequested", "noDirectory", "shared", "unknown",
+               "deleteFailed", "deregistrationFailed")
+KEPT_PREVIEW_VALUES = ("notRequested", "noDirectory", "shared", "unknown")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -122,3 +130,71 @@ def test_preview_on_nonexistent_is_not_ok():
     # The existence check must reject this, not preview it.
     assert_error(r, "preview on nonexistent app must error, not preview")
     assert_no_diff("a rejected call must not touch the fixture")
+
+
+def _first_infobase_application():
+    """The fixture project's first FILE-infobase application, or skip.
+
+    A preview changes nothing, so it is the one way to assert the real serialized
+    payload of this destructive tool without deleting anything.
+    """
+    r = call("get_applications", {"projectName": PROJECT})
+    assert_ok(r, "get_applications for the delete_infobase preview")
+    apps = (r.structured or {}).get("applications") or []
+    for app in apps:
+        if app.get("type") == "com.e1c.g5.dt.applications.type.infobase" and app.get("id"):
+            return app
+    raise E2ESkip("the fixture project has no file infobase to preview a deletion of")
+
+
+@e2e_test(tool="delete_infobase", kind="action")
+def test_preview_declares_why_the_database_files_would_be_kept():
+    """`databaseFilesKept` is a DECLARED enum, not prose: `databaseFilesDeleted=false` has
+    six causes and only this field tells a programmatic client which. The preview is where
+    the agent decides whether to call confirm=true, so the value must be present, be one of
+    the declared six, and belong to the four a preview can reach — a preview runs neither
+    the deletion nor the deregistration.
+
+    Also pins the presence invariant in both directions: the key is absent EXACTLY when the
+    files would be deleted, and a preview never claims an outcome (`databaseFilesDeleted`)."""
+    app = _first_infobase_application()
+
+    # Default: deleteDatabaseFiles is not asked for, so the reason is measured, not guessed.
+    r = call("delete_infobase", {"projectName": PROJECT, "applicationId": app["id"]})
+    assert_ok(r, "delete_infobase preview (files not requested)")
+    sc = r.structured
+    assert sc.get("action") == "preview", "no-confirm delete must preview: %r" % sc
+    assert sc.get("confirmationRequired") is True, "preview must set confirmationRequired"
+    assert "databaseFilesDeleted" not in sc, \
+        "a preview changes nothing and must not claim an outcome: %r" % sc
+    if sc.get("databaseFilesKept") != "notRequested":
+        raise AssertionError(
+            "deleteDatabaseFiles omitted must declare databaseFilesKept='notRequested': %r"
+            % sc.get("databaseFilesKept"))
+
+    # Asked for: the answer is now whatever the shared-infobase check established. It may
+    # legitimately be absent (the files WOULD go), but never a deletion-only value.
+    r2 = call("delete_infobase", {"projectName": PROJECT, "applicationId": app["id"],
+                                  "deleteDatabaseFiles": True})
+    assert_ok(r2, "delete_infobase preview (files requested)")
+    sc2 = r2.structured
+    assert sc2.get("action") == "preview", "no-confirm delete must preview: %r" % sc2
+    kept = sc2.get("databaseFilesKept")
+    if kept is not None and kept not in KEPT_PREVIEW_VALUES:
+        raise AssertionError(
+            "a preview may only report a reason it can actually establish (%r), not %r"
+            % (list(KEPT_PREVIEW_VALUES), kept))
+    if kept is not None and kept not in KEPT_VALUES:
+        raise AssertionError("undeclared databaseFilesKept value: %r" % kept)
+    # 'unknown' is an unconcluded check, never a co-owner: the two must stay distinct.
+    if kept == "unknown":
+        message = sc2.get("message") or ""
+        assert "still used by other projects" not in message, \
+            "an unconcluded check must not claim a co-owner was found: %r" % message
+        assert "UNKNOWN" in message, \
+            "an unconcluded check must say so in the message too: %r" % message
+    if kept == "shared":
+        assert "still used by other projects" in (sc2.get("message") or ""), \
+            "a MEASURED co-owner must be named in the message: %r" % sc2.get("message")
+
+    assert_no_diff("a preview must not touch the fixture")

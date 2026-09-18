@@ -1501,10 +1501,10 @@ public class RunYaxunitTestsTool implements IMcpTool
      * are fast (ms), so contention is negligible.
      * <p>
      * The lock is taken with {@link #reportLockTimeoutMs}: the SMALLER of what this call's own
-     * deadline still allows and {@link LaunchLifecycleUtils#OPERATION_LOCK_TIMEOUT_MS}. The long
-     * bound is the ceiling because a legitimate holder can be a full configuration publish; the
-     * caller's remaining budget is the floor because a caller that asked for 30 seconds must not
-     * be held for fifteen minutes. Giving up early is safe here ONLY because expiry is a terminal
+     * deadline still allows and {@link LaunchLifecycleUtils#OPERATION_LOCK_TIMEOUT_MS} — in the
+     * shipped call path always the latter, because the owning background job carries no deadline
+     * (see {@link #reportLockTimeoutMs}). The long bound is the ceiling because a legitimate holder
+     * can be a full configuration publish. Giving up early is safe here ONLY because expiry is a terminal
      * error: a {@code **Pending:**} would send the owning job back through {@code runTests}, where
      * an evicted tracking entry routes it to the spawn path and {@link #cleanupTempDir} wipes the
      * report this read exists to return.
@@ -1523,10 +1523,21 @@ public class RunYaxunitTestsTool implements IMcpTool
      * How long a report read may wait for the launch lock: never past the caller's own deadline,
      * never longer than a publish-sized {@link LaunchLifecycleUtils#OPERATION_LOCK_TIMEOUT_MS}.
      *
-     * <p>Threading the bound through for testability was not enough on its own: both reads still
-     * PASSED the 15-minute constant, so a caller asking for 30 s was held for 15 minutes and its
-     * background-job slot with it. The caller's deadline is an upper bound on everything this call
-     * does, including waiting for a lock.
+     * <p><b>Today this changes nothing, and the javadoc says so rather than implying otherwise.</b>
+     * {@code runTests} has exactly ONE production caller and it passes {@link Long#MAX_VALUE}, so
+     * the minimum is always the 15-minute ceiling. That is deliberate, not an oversight: the run is
+     * owned by a registry background job that must OUTLIVE the MCP call's poll window (the client
+     * gets a Pending and polls {@code get_job_status}), and the guarded work is the only read of a
+     * finished run's report — a job that gave up when the client's window closed would lose the
+     * report rather than answer sooner. Threading the MCP call's own budget in here would do
+     * exactly that.
+     *
+     * <p>So this is the rule for a caller that HAS a deadline: what its budget still allows caps
+     * the lock wait, instead of the publish-sized constant being handed to the acquisition
+     * regardless. The bound is computed once, at entry, and threaded through {@code pollLaunch} —
+     * so a read that polls for a while can still wait the remainder this call STARTED with, not
+     * the remainder as of the acquisition. The tests drive it with their own short deadlines and
+     * pin that rule; no shipped call path reaches a bound below the ceiling.
      *
      * @param deadlineMs the call's absolute wall-clock deadline
      * @return the lock bound in milliseconds, never negative

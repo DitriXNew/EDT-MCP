@@ -31,8 +31,8 @@ JSON with `action` ('preview'/'deleted'), `confirmationRequired` (preview only),
 | `noDirectory` | no on-disk database directory could be resolved. |
 | `shared` | another workspace project was FOUND using the same database. |
 | `unknown` | the shared-infobase check did NOT conclude, so co-ownership was never measured — this is not `shared`; the next call re-runs the check. |
-| `deleteFailed` | the directory is still there (locked, already absent, a filesystem root, or no `1Cv8.1CD`) — remove it manually. |
-| `deregistrationFailed` | deregistration failed, so the deletion was deliberately not attempted. |
+| `deleteFailed` | the removal did not leave the directory gone: it was refused (a filesystem root, or no `1Cv8.1CD` — which is also how a directory that was already gone looks) or the delete itself failed (locked). Check the EDT log and remove it manually if it is still there. |
+| `deregistrationFailed` | deregistration failed, so the deletion was deliberately not attempted — and no earlier reason applied. A measured `shared`/`unknown`/`noDirectory` still wins over it, so the confirm answer never contradicts the preview. |
 
 The last two arise only on a deletion; a preview can only report the first four.
 

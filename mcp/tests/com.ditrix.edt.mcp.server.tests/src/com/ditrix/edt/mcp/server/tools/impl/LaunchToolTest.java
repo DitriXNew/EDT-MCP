@@ -2338,4 +2338,29 @@ public class LaunchToolTest
         assertNotNull("a measured absence must still refuse", resolution.error); //$NON-NLS-1$
         assertTrue(resolution.error.contains("Application not found: Infobase.Missing")); //$NON-NLS-1$
     }
+
+    @Test
+    public void testARaisedApplicationLookupRefusesTheSameWayAsAnExpiredOne() throws Exception
+    {
+        // The door the deadline fix left open: the catch below it logged and CONTINUED, leaving
+        // `application` null - the very thing that gates runPreLaunchUpdateStep off. So a raising
+        // manager still produced success:true, status:"launching" with updateBeforeLaunch (default
+        // true) silently skipped, while the deadline three lines above refused.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        when(manager.getApplication(project, "Infobase.Raising")) //$NON-NLS-1$
+            .thenThrow(new ApplicationException("the provision delegate is unavailable")); //$NON-NLS-1$
+
+        LaunchTool.ApplicationResolution resolution = LaunchTool.resolveApplication(project,
+            "Infobase.Raising", manager, 60_000L); //$NON-NLS-1$
+
+        assertNotNull("a raised lookup must refuse, not fall through", resolution.error); //$NON-NLS-1$
+        assertTrue("the refusal names the raise: " + resolution.error, //$NON-NLS-1$
+            resolution.error.contains("the provision delegate is unavailable")); //$NON-NLS-1$
+        assertTrue("the refusal must say nothing was launched", //$NON-NLS-1$
+            resolution.error.contains("Nothing was launched")); //$NON-NLS-1$
+        assertFalse("a raise is NOT a not-found", //$NON-NLS-1$
+            resolution.error.contains("Application not found")); //$NON-NLS-1$
+        assertNull("and it must not hand on a resolved application", resolution.application); //$NON-NLS-1$
+    }
 }

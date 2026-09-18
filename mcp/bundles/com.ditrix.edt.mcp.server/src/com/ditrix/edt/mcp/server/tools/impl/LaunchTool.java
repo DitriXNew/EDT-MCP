@@ -1609,26 +1609,25 @@ public class LaunchTool implements IMcpTool
 
     /**
      * Resolves the application by id and its display name for the legacy
-     * project+applicationId path. Mirrors the original inline guard: when {@code appManager}
-     * is null the application stays unresolved (name defaults to the id); a present manager
-     * that cannot find the id yields an {@code error} payload, while an
-     * {@link ApplicationException} is logged and swallowed so the caller still tries to
-     * find a launch configuration.
+     * project+applicationId path. When {@code appManager} is null the application stays unresolved
+     * (name defaults to the id); a present manager that cannot find the id yields an {@code error}
+     * payload.
      *
-     * <p>BOUNDED (#622), and an expired deadline REFUSES rather than degrading. Degrading looked
-     * harmless — log it, leave {@code application} null, fall through — but that null is exactly
-     * what gates {@link #runPreLaunchUpdateStep} off, so the call returned
+     * <p>BOUNDED (#622), and a lookup that did not ANSWER REFUSES rather than degrading — both
+     * ways of not answering, the expired deadline and the raised {@link ApplicationException}.
+     * Degrading looked harmless — log it, leave {@code application} null, fall through — but that
+     * null is exactly what gates {@link #runPreLaunchUpdateStep} off, so the call returned
      * {@code success:true, status:"launching"} having silently skipped the database update
      * {@code updateBeforeLaunch} (default true) asked for. The by-NAME route already hard-errors on
      * the identical wedge ("the configuration's application could not be resolved"); the same tool
-     * must not answer the same condition two opposite ways. On a healthy EDT this branch is
-     * unreachable, and on a wedged one the pre-change code hung here.
+     * must not answer the same condition two opposite ways. On a healthy EDT neither branch is
+     * reachable, and on a wedged one the pre-change code hung here.
      *
      * @param project the project to look the application up in
      * @param applicationId the application id to resolve
      * @param appManager the application manager (may be null)
      * @return an {@link ApplicationResolution}; its {@code error} is non-null when the id was
-     *     definitively not found OR when the lookup did not conclude — the two say so differently
+     *     definitively not found OR when the lookup did not answer — the three say so differently
      */
     static ApplicationResolution resolveApplication(IProject project, String applicationId,
         IApplicationManager appManager)
@@ -1673,8 +1672,18 @@ public class LaunchTool implements IMcpTool
             }
             catch (ApplicationException e)
             {
+                // Same refusal as the expired deadline above, for the same reason: a RAISED lookup
+                // establishes nothing either, and leaving `application` null is what gates
+                // runPreLaunchUpdateStep off - so "continue and find a launch config" returned
+                // success:true, status:"launching" with updateBeforeLaunch silently skipped.
                 Activator.logError("Error checking application", e); //$NON-NLS-1$
-                // Continue - we'll try to find launch config anyway
+                resolution.error = ToolResult.error("Could not resolve application '" //$NON-NLS-1$
+                    + applicationId + "': the EDT application lookup failed (" //$NON-NLS-1$
+                    + PlatformFailures.describe(e)
+                    + "). Nothing was launched, and this is NOT a not-found - whether that " //$NON-NLS-1$
+                    + "application exists was never established. Retry once EDT is responsive.") //$NON-NLS-1$
+                    .toJson();
+                return resolution;
             }
         }
         return resolution;
@@ -2139,15 +2148,23 @@ public class LaunchTool implements IMcpTool
      * auto-confirmer window can be armed with ATTRIBUTABLE names. Best-effort: absent names simply
      * refuse the writing answer.
      *
-     * <p>ONE bounded budget for the pair (#622). Each name previously cost a delegate-id
-     * resolution (which for a config with no persisted id goes to the 30 s default-application
-     * read) PLUS an application read, and a launch needs both — four wedge-prone reads for two
-     * strings taken off ONE application. Here the delegate id is resolved once, under the
-     * attribution budget, and what is left of that budget pays for the single application read.
+     * <p>HALF the bounded reads (#622). Each name previously cost a delegate-id resolution PLUS an
+     * application read, and a launch needs both — four wedge-prone reads for two strings taken off
+     * ONE application. Here the delegate id is resolved once and one application read serves both
+     * names.
+     *
+     * <p><b>The two steps keep INDEPENDENT bounds, each the one it already had</b> — the
+     * delegate-id step {@link ApplicationSupport#LOOKUP_TIMEOUT_MS}, the attribution read
+     * {@link LaunchLifecycleUtils#ATTRIBUTION_LOOKUP_TIMEOUT_MS}. Sharing one budget was tried and
+     * reverted: a slow first step left the second with milliseconds, so the name came back
+     * {@code null} and {@code LaunchUpdateDialogAutoConfirmer.attributableAnswer} silently
+     * downgraded the caller's {@code externalInfobaseChanges} policy to {@code cancel}. Halving
+     * the read COUNT is the win here; squeezing each read's deadline only re-creates the failure
+     * the names exist to prevent.
      *
      * @param config the launch configuration about to be started (may be {@code null})
      * @return the names, never {@code null}; {@code inconclusive()} separates "no such name" from
-     *     "the read did not conclude"
+     *     "the read did not answer"
      */
     private static LaunchLifecycleUtils.AttributionNames launchAttributionNames(
         ILaunchConfiguration config)
@@ -2164,23 +2181,15 @@ public class LaunchTool implements IMcpTool
             {
                 return LaunchLifecycleUtils.attributionNames(null, null, null);
             }
-            long startedMs = System.currentTimeMillis();
             // The DELEGATE id, the same one standaloneServerPortPolicy resolves: a runtime
             // configuration without a stored ATTR_APPLICATION_ID launches the default application,
             // while getApplicationIdFor yields a synthetic "launch:<name>" that no
             // IApplicationManager knows - so attribution came back null and the arm, though
             // created, could never authorise the re-address the caller asked for.
             String applicationId = LaunchLifecycleUtils.resolveDelegateApplicationId(config,
-                ctx.project(), Activator.getDefault().getApplicationManager(),
-                LaunchLifecycleUtils.ATTRIBUTION_LOOKUP_TIMEOUT_MS);
-            // Whatever the delegate-id step did not spend. The attribution as a whole keeps the
-            // one small bound its javadoc promises, instead of the two independent ones that
-            // silently made it twice as expensive.
-            long leftMs = Math.max(1L, LaunchLifecycleUtils.ATTRIBUTION_LOOKUP_TIMEOUT_MS
-                - (System.currentTimeMillis() - startedMs));
+                ctx.project(), Activator.getDefault().getApplicationManager());
             return LaunchLifecycleUtils.attributionNames(
-                Activator.getDefault().getApplicationManager(), ctx.project(), applicationId,
-                leftMs);
+                Activator.getDefault().getApplicationManager(), ctx.project(), applicationId);
         }
         catch (Exception e) // NOSONAR a best-effort hint must never break the launch
         {

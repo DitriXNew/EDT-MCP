@@ -178,6 +178,37 @@ public class LaunchLifecycleUtilsResolveAppTest
     }
 
     @Test
+    public void testARaisedDefaultLookupIsInconclusiveToo() throws Exception
+    {
+        // The hole the deadline fix left open. getDefaultApplication RAISES (a registered default
+        // pointing at a WST server entry that is gone is what the provision delegates actually
+        // raise on), the catch handed back the empty id with failure == null, so inconclusive()
+        // was false - and RunYaxunitTestsTool.deriveLaunchContext, which refuses only on
+        // inconclusive(), ran the whole suite under lockFor(project, ""), a DIFFERENT mutex from
+        // the one a concurrent update_database holds.
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("Raising");
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        when(mgr.getDefaultApplication(project))
+            .thenThrow(new ApplicationException("the registered default no longer resolves"));
+
+        LaunchLifecycleUtils.DefaultApplicationLookup lookup =
+            LaunchLifecycleUtils.resolveDefaultApplication(project, "", mgr, 30_000L);
+
+        assertTrue("a raised lookup established nothing either", lookup.inconclusive());
+        assertNotNull("the raise must be carried, not swallowed", lookup.failure());
+        assertTrue("the reason must name the project and the raise: " + lookup.failure(),
+            lookup.failure().contains("the EDT default-application lookup for project 'Raising'"));
+        assertTrue("the reason must name what the manager said: " + lookup.failure(),
+            lookup.failure().contains("the registered default no longer resolves"));
+        assertEquals("the id stays the degradation it was given", "", lookup.id());
+        // The identity the degradation silently changed - the whole point of #621.
+        assertNotSame("an empty id keys a different lock than a real application id",
+            LaunchLifecycleUtils.lockFor("Raising", lookup.id()),
+            LaunchLifecycleUtils.lockFor("Raising", DEFAULT_ID));
+    }
+
+    @Test
     public void testAConcludedAbsenceOfADefaultIsNotInconclusive() throws ApplicationException
     {
         // The other edge: a read that ran and reported no default must NOT be flagged, or every
@@ -268,6 +299,26 @@ public class LaunchLifecycleUtilsResolveAppTest
             release.countDown();
             assertTrue(finished.await(5, TimeUnit.SECONDS));
         }
+    }
+
+    @Test
+    public void testARaisedAttributionLookupSaysUnknownRatherThanNoSuchName() throws Exception
+    {
+        // Same asymmetry as the default-application lookup: a raise came back inconclusive=false,
+        // so the caller attached the PERMANENT advice ("repeating the same policy would only
+        // degrade again") to a manager failure a retry may well get past.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        when(mgr.getApplication(project, "Infobase.Raising"))
+            .thenThrow(new ApplicationException("the provision delegate is unavailable"));
+
+        LaunchLifecycleUtils.AttributionNames names =
+            LaunchLifecycleUtils.attributionNames(mgr, project, "Infobase.Raising");
+
+        assertNull(names.infobaseName());
+        assertNull(names.serverName());
+        assertTrue("a raised attribution read must say the names are UNKNOWN",
+            names.inconclusive());
     }
 
     @Test

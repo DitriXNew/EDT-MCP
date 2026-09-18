@@ -207,10 +207,14 @@ public final class ApplicationSupport
      * interrupted while WAITING gets {@link BoundedJob.Outcome#INTERRUPTED} — which
      * {@link BoundedRead#interrupted()} separates from an expired deadline.
      *
+     * <p>A {@code timeoutMs} of zero or less does not reach the job manager at all: it returns a
+     * non-concluded read straight away. Scheduling one would be a mutating read abandoned a
+     * millisecond later, not a cheap no-op.
+     *
      * @param <T> what the read returns
      * @param jobName the job name shown in EDT's progress UI
      * @param target what the deadline sentence names, e.g. "the EDT application list for project 'P'"
-     * @param timeoutMs how long the CALLER waits
+     * @param timeoutMs how long the CALLER waits; zero or less is refused without scheduling
      * @param read the manager read to run
      * @return the bounded read, never {@code null}
      */
@@ -246,6 +250,32 @@ public final class ApplicationSupport
     }
 
     /**
+     * Same bounded read, notifying {@code completion} when the JOB ends rather than when the
+     * caller stops waiting.
+     *
+     * <p>For a caller holding an unattended-safety guard — an armed dialog suppressor, an
+     * auto-confirmer window — that must outlive an abandoned read: the read keeps running after
+     * the deadline, and a guard released at the deadline leaves the dialog it was raised for with
+     * nobody to answer. Pair it with {@link BoundedJob.DeferredCleanup}, exactly as
+     * {@code StandaloneServerSupport} does.
+     *
+     * @param <T> what the read returns
+     * @param jobName the job name shown in EDT's progress UI
+     * @param target what the deadline sentence names
+     * @param timeoutMs how long the CALLER waits; zero or less is refused without scheduling, and
+     *     {@code completion} then runs before this returns
+     * @param read the manager read to run
+     * @param completion invoked exactly once when the job reaches its terminal state (or, for a
+     *     read that was never scheduled, before this method returns)
+     * @return the bounded read, never {@code null}
+     */
+    public static <T> BoundedRead<T> readBounded(String jobName, String target, long timeoutMs,
+        IApplicationRead<T> read, Runnable completion)
+    {
+        return readBounded(jobName, target, timeoutMs, read, true, McpJobs::schedule, completion);
+    }
+
+    /**
      * Same bounded read with the job SCHEDULER supplied — the seam a test uses to drive the one
      * outcome a real job manager cannot be made to produce on demand: a schedule refused because
      * EDT is shutting down.
@@ -262,6 +292,37 @@ public final class ApplicationSupport
     static <T> BoundedRead<T> readBounded(String jobName, String target, long timeoutMs, // NOSONAR one argument per independent concern; a parameter object would only rename them
         IApplicationRead<T> read, boolean runWhenInterrupted, BoundedJob.IJobScheduler scheduler)
     {
+        return readBounded(jobName, target, timeoutMs, read, runWhenInterrupted, scheduler, null);
+    }
+
+    /**
+     * The one implementation behind every {@code readBounded} overload.
+     *
+     * @param <T> what the read returns
+     * @param jobName the job name shown in EDT's progress UI
+     * @param target what the deadline sentence names
+     * @param timeoutMs how long the CALLER waits
+     * @param read the manager read to run
+     * @param runWhenInterrupted whether a pending interrupt is taken so the read still runs
+     * @param scheduler how the job reaches the job manager
+     * @param completion job-terminal callback, or {@code null}
+     * @return the bounded read, never {@code null}
+     */
+    static <T> BoundedRead<T> readBounded(String jobName, String target, long timeoutMs, // NOSONAR one argument per independent concern; a parameter object would only rename them
+        IApplicationRead<T> read, boolean runWhenInterrupted, BoundedJob.IJobScheduler scheduler,
+        Runnable completion)
+    {
+        if (timeoutMs <= 0L)
+        {
+            // An exhausted budget must not SCHEDULE. BoundedJob clamps its join to 1 ms, but the
+            // job itself still starts, and none of these reads is side-effect-free (see the class
+            // comment): a 1 ms bound would bind up to a hundred sockets looking for a debug port,
+            // persist the winner, or clear a stored default - and then be abandoned. Not asking is
+            // the only way to leave the state alone.
+            runCompletion(jobName, completion);
+            return new BoundedRead<>(null, null, BoundedJob.Outcome.NOT_RUN,
+                exhaustedBudgetFailure(target));
+        }
         // A caller that arrives ALREADY interrupted must still RUN the read and leave still
         // interrupted. Read off org.eclipse.core.jobs 3.15.700 as shipped with EDT 2026.2:
         // Semaphore.acquire(long) opens with `if (Thread.interrupted()) throw new
@@ -279,8 +340,8 @@ public final class ApplicationSupport
             BoundedJob.Result result;
             try
             {
-                result = BoundedJob.run(jobName, timeoutMs, monitor -> value.set(read.read()), null,
-                    scheduler);
+                result = BoundedJob.run(jobName, timeoutMs, monitor -> value.set(read.read()),
+                    completion, scheduler);
             }
             catch (IllegalStateException e)
             {
@@ -308,6 +369,45 @@ public final class ApplicationSupport
                 Thread.currentThread().interrupt();
             }
         }
+    }
+
+    /**
+     * Runs a job-terminal callback for a read that never reached the job manager, with the same
+     * "a notification must not damage the caller" guard {@link BoundedJob} applies to its own.
+     *
+     * @param jobName the job that was not scheduled, for the log line
+     * @param completion the callback, or {@code null}
+     */
+    private static void runCompletion(String jobName, Runnable completion)
+    {
+        if (completion == null)
+        {
+            return;
+        }
+        try
+        {
+            completion.run();
+        }
+        catch (RuntimeException | Error e) // NOSONAR the guard release must not replace the answer
+        {
+            Activator.logError("Bounded application read completion callback failed: " //$NON-NLS-1$
+                + jobName, e);
+        }
+    }
+
+    /**
+     * The diagnosis for a read a caller asked for with NO time left. Deliberately not a deadline
+     * sentence: the deadline was already gone when the call arrived, so the read was never
+     * scheduled and — unlike every abandoned read here — it cannot have touched EDT's state.
+     *
+     * @param target what the sentence names, e.g. "the EDT application list for project 'P'"
+     * @return the diagnosis sentence, never {@code null}
+     */
+    public static String exhaustedBudgetFailure(String target)
+    {
+        return target + " was not started: the caller had no time left to wait for it, and " //$NON-NLS-1$
+            + "starting a read it would abandon immediately can still change EDT's stored state, " //$NON-NLS-1$
+            + "so nothing was read and nothing was changed"; //$NON-NLS-1$
     }
 
     /**

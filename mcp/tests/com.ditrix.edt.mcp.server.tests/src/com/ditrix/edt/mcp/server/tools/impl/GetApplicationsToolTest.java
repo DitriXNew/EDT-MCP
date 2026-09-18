@@ -15,6 +15,7 @@ import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -30,6 +31,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.GetApplicationsTool.ApplicationListDeadline;
 import com.ditrix.edt.mcp.server.tools.impl.GetApplicationsTool.DefaultApplication;
+import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
 import com.e1c.g5.dt.applications.IApplication;
@@ -461,6 +463,168 @@ public class GetApplicationsToolTest
 
         assertEquals("UPDATED", appObj.get("updateState").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("a read state carries no error", appObj.has("updateStateError")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testARaisedUpdateStateLoopIsDiagnosedInsteadOfSilentlyPassingForSuccess()
+        throws Exception
+    {
+        // readBounded reports a RAISED work as COMPLETED-with-a-failure, so branching on
+        // concluded() alone made a thrown loop indistinguishable from a successful one: the throw
+        // aborts the lambda at application #1, every later cell stays null, and each of them
+        // rendered "the update-state read produced no answer for this application" - false, with
+        // the throwable dropped and nothing in the log.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IApplication first = mock(IApplication.class);
+        IApplication second = mock(IApplication.class);
+        when(first.getId()).thenReturn("Infobase.First"); //$NON-NLS-1$
+        when(second.getId()).thenReturn("Infobase.Second"); //$NON-NLS-1$
+        when(manager.getUpdateState(first))
+            .thenThrow(new IllegalStateException("the application registry is detached")); //$NON-NLS-1$
+        when(manager.getUpdateState(second)).thenReturn(ApplicationUpdateState.UPDATED);
+
+        GetApplicationsTool.UpdateStates states = GetApplicationsTool.updateStatesBounded(
+            manager, Arrays.asList(first, second), GENEROUS_DEADLINE_MS);
+        JsonObject firstObj = new JsonObject();
+        JsonObject secondObj = new JsonObject();
+        states.mergeInto(firstObj, 0);
+        states.mergeInto(secondObj, 1);
+
+        for (JsonObject appObj : new JsonObject[] {firstObj, secondObj})
+        {
+            assertEquals("an unread state must be UNKNOWN", "UNKNOWN", //$NON-NLS-1$ //$NON-NLS-2$
+                appObj.get("updateState").getAsString()); //$NON-NLS-1$
+            String error = appObj.get("updateStateError").getAsString(); //$NON-NLS-1$
+            assertTrue("the throw must be named, not dropped: " + error, //$NON-NLS-1$
+                error.contains("the application registry is detached")); //$NON-NLS-1$
+            assertFalse("and it must not claim the read simply produced no answer: " + error, //$NON-NLS-1$
+                error.contains("produced no answer for this application")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testAManagerThatReportsNoStateStillDeclaresItUnknown() throws Exception
+    {
+        // A null from getUpdateState used to produce an EMPTY cell, mergeInto copied zero entries,
+        // and the application rendered with NO updateState at all - the one shape mergeInto's own
+        // contract promises never to produce.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IApplication app = mock(IApplication.class);
+        when(app.getId()).thenReturn("Infobase.Stateless"); //$NON-NLS-1$
+        when(manager.getUpdateState(app)).thenReturn(null);
+
+        GetApplicationsTool.UpdateStates states = GetApplicationsTool.updateStatesBounded(
+            manager, Collections.singletonList(app), GENEROUS_DEADLINE_MS);
+        JsonObject appObj = new JsonObject();
+        states.mergeInto(appObj, 0);
+
+        assertTrue("updateState must never be omitted", appObj.has("updateState")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("UNKNOWN", appObj.get("updateState").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("and it must not read as 'up to date'", //$NON-NLS-1$
+            appObj.get("updateStateDescription").getAsString().contains("is NOT a claim")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the reason must name the manager's silence", //$NON-NLS-1$
+            appObj.get("updateStateError").getAsString().contains("reported no update state")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTheAuthDialogSuppressionOutlivesATimedOutUpdateStateJob() throws Exception
+    {
+        // getUpdateState is the read that historically raised EDT's credentials modal. Releasing
+        // the suppression when the DEADLINE returns leaves the abandoned job free to raise one
+        // with nobody to answer it: on master the loop ran inline inside execute() and the
+        // dispatch's own arm always covered it.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IApplication app = mock(IApplication.class);
+        when(app.getId()).thenReturn("Infobase.Wedged"); //$NON-NLS-1$
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        when(manager.getUpdateState(app)).thenAnswer(invocation -> {
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return ApplicationUpdateState.UPDATED;
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+
+        int before = settledInFlight();
+        try
+        {
+            GetApplicationsTool.updateStatesBounded(manager, Collections.singletonList(app),
+                SHORT_DEADLINE_MS);
+
+            assertTrue("the guard must still be armed while the abandoned job runs", //$NON-NLS-1$
+                InfobaseAuthDialogSuppressor.inFlightCount() > before);
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+        assertTrue("and it must be released once the job ends, not leaked", //$NON-NLS-1$
+            awaitInFlightDownTo(before));
+    }
+
+    @Test
+    public void testAConcludedUpdateStateReadReleasesTheGuardAtOnce() throws Exception
+    {
+        // The other edge: a read that finished must not hold the suppression for its cap, or every
+        // healthy get_applications would fight a human opening the same dialog in the GUI.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IApplication app = mock(IApplication.class);
+        when(app.getId()).thenReturn("Infobase.Main"); //$NON-NLS-1$
+        when(manager.getUpdateState(app)).thenReturn(ApplicationUpdateState.UPDATED);
+
+        int before = settledInFlight();
+        GetApplicationsTool.updateStatesBounded(manager, Collections.singletonList(app),
+            GENEROUS_DEADLINE_MS);
+
+        assertTrue("a concluded read releases before it returns", //$NON-NLS-1$
+            InfobaseAuthDialogSuppressor.inFlightCount() <= before);
+    }
+
+    /**
+     * A suppression count no earlier test is still about to decrement.
+     *
+     * <p>The guard of a TIMED-OUT read is released by the Job's own terminal notification, which
+     * can land after that test returned. Reading the counter cold would then capture a baseline
+     * that falls by one mid-test, and the assertions here would answer about the neighbour rather
+     * than about this call.
+     *
+     * @return a reading that stayed the same across two samples
+     * @throws InterruptedException if the wait is interrupted
+     */
+    private static int settledInFlight() throws InterruptedException
+    {
+        int last = InfobaseAuthDialogSuppressor.inFlightCount();
+        for (int i = 0; i < 60; i++)
+        {
+            Thread.sleep(50L);
+            int now = InfobaseAuthDialogSuppressor.inFlightCount();
+            if (now == last)
+            {
+                return now;
+            }
+            last = now;
+        }
+        return last;
+    }
+
+    /** Waits briefly for the suppression counter to come back down to {@code expected}. */
+    private static boolean awaitInFlightDownTo(int expected) throws InterruptedException
+    {
+        for (int i = 0; i < 100; i++)
+        {
+            if (InfobaseAuthDialogSuppressor.inFlightCount() <= expected)
+            {
+                return true;
+            }
+            Thread.sleep(50L);
+        }
+        return false;
     }
 
     @Test

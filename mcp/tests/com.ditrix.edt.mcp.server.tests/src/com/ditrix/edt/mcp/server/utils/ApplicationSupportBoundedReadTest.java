@@ -615,6 +615,133 @@ public class ApplicationSupportBoundedReadTest
             StandaloneServerSupport.applicationLookupFailure(APP_ID, 250L, timedOut));
     }
 
+    // ============ An exhausted budget must not SCHEDULE a read it would abandon ============
+
+    @Test
+    public void testAnExhaustedBudgetIsRefusedWithoutEverRunningTheRead()
+    {
+        // BoundedJob clamps its join to 1 ms, so a caller that arrived with nothing left would
+        // still START the read - and none of these reads is side-effect-free: getApplication
+        // reaches initIfNeeded, which binds up to a hundred sockets looking for a debug port and
+        // PERSISTS the winner. Scheduling one to abandon it a millisecond later is a mutation with
+        // no answer, which is strictly worse than not asking.
+        AtomicBoolean ran = new AtomicBoolean();
+        AtomicBoolean scheduled = new AtomicBoolean();
+
+        BoundedRead<String> read = ApplicationSupport.readBounded("Exhausted budget", //$NON-NLS-1$
+            "the EDT application lookup for application 'Infobase.Test'", 0L, //$NON-NLS-1$
+            () -> {
+                ran.set(true);
+                return "unreachable"; //$NON-NLS-1$
+            }, true, job -> scheduled.set(true));
+
+        assertFalse("the read must not have run", ran.get()); //$NON-NLS-1$
+        assertFalse("and the job must not even have been scheduled", scheduled.get()); //$NON-NLS-1$
+        assertFalse("a read that never ran is not a conclusion", read.concluded()); //$NON-NLS-1$
+        assertEquals(BoundedJob.Outcome.NOT_RUN, read.outcome());
+        assertTrue("it must say nothing was changed: " + read.deadlineFailure(), //$NON-NLS-1$
+            read.deadlineFailure().contains("nothing was read and nothing was changed")); //$NON-NLS-1$
+        assertFalse("and it must not be worded as an expired deadline", //$NON-NLS-1$
+            read.deadlineFailure().contains("did not finish within")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testANegativeBudgetIsRefusedTheSameWay()
+    {
+        AtomicBoolean scheduled = new AtomicBoolean();
+
+        BoundedRead<String> read = ApplicationSupport.readBounded("Negative budget", //$NON-NLS-1$
+            "the EDT application list for project 'P'", -5_000L, () -> "unreachable", //$NON-NLS-1$ //$NON-NLS-2$
+            true, job -> scheduled.set(true));
+
+        assertFalse(scheduled.get());
+        assertFalse(read.concluded());
+        assertEquals(ApplicationSupport.exhaustedBudgetFailure(
+            "the EDT application list for project 'P'"), read.deadlineFailure()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheSmallestPositiveBudgetStillReachesTheJobManager()
+    {
+        // The other edge of the same rule: ONLY zero or less is refused. A caller that still has a
+        // millisecond gets the read it asked for.
+        AtomicBoolean scheduled = new AtomicBoolean();
+
+        BoundedRead<String> read = ApplicationSupport.readBounded("Minimal budget", //$NON-NLS-1$
+            "the EDT application list for project 'P'", 1L, () -> "answered", //$NON-NLS-1$ //$NON-NLS-2$
+            true, job -> {
+                scheduled.set(true);
+                McpJobs.schedule(job);
+            });
+
+        assertTrue("a positive budget must still be scheduled", scheduled.get()); //$NON-NLS-1$
+        // Whether it CONCLUDES within 1 ms is a race; that it was allowed to try is the contract.
+        assertTrue("a positive budget must never get the not-scheduled refusal", //$NON-NLS-1$
+            read.concluded()
+                || !read.deadlineFailure().contains("nothing was read and nothing was changed")); //$NON-NLS-1$
+    }
+
+    // ============ A guard may outlive the caller's bounded wait ============
+
+    @Test
+    public void testACompletionCallbackFiresWhenTheJobEndsNotWhenTheCallerStopsWaiting()
+        throws Exception
+    {
+        // The seam an unattended-safety guard needs: the auth-dialog suppression around
+        // get_applications' update-state loop must stay armed while the ABANDONED job keeps
+        // running, or a dialog raised once the wedge clears has nobody to answer it.
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch completed = new CountDownLatch(1);
+
+        try
+        {
+            BoundedRead<String> read = ApplicationSupport.readBounded("Guarded read", //$NON-NLS-1$
+                "the EDT application list for project 'Wedged'", 250L, () -> { //$NON-NLS-1$
+                    awaitQuietly(release);
+                    return "late"; //$NON-NLS-1$
+                }, completed::countDown);
+
+            assertFalse("the caller must be answered on its deadline", read.concluded()); //$NON-NLS-1$
+            assertFalse("and the guard must NOT have been released yet", //$NON-NLS-1$
+                completed.await(200L, TimeUnit.MILLISECONDS));
+        }
+        finally
+        {
+            release.countDown();
+        }
+        assertTrue("the guard is released when the JOB ends", //$NON-NLS-1$
+            completed.await(10, TimeUnit.SECONDS));
+    }
+
+    @Test
+    public void testAnUnscheduledReadStillReleasesItsGuard() throws Exception
+    {
+        // Otherwise the ONE path that never reaches the job manager would hold an armed guard
+        // until its safety cap expired, for a read that did nothing at all.
+        CountDownLatch completed = new CountDownLatch(1);
+
+        BoundedRead<String> read = ApplicationSupport.readBounded("No budget", //$NON-NLS-1$
+            "the EDT application list for project 'P'", 0L, () -> "unreachable", //$NON-NLS-1$ //$NON-NLS-2$
+            completed::countDown);
+
+        assertFalse(read.concluded());
+        assertTrue("a read that was never scheduled must release the guard at once", //$NON-NLS-1$
+            completed.await(1, TimeUnit.SECONDS));
+    }
+
+    /** Waits on {@code latch} inside an {@code IApplicationRead}, which may not throw it. */
+    private static void awaitQuietly(CountDownLatch latch)
+    {
+        try
+        {
+            latch.await(30, TimeUnit.SECONDS);
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private static void assertDistinct(String one, String other)
     {
         assertFalse("the two outcomes must not share one sentence: " + other, //$NON-NLS-1$

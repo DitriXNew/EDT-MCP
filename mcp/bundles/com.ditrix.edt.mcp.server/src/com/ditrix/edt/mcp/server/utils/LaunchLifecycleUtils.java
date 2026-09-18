@@ -136,9 +136,16 @@ public final class LaunchLifecycleUtils
      * <p><b>Not a cosmetic read.</b> The name is what makes an armed conflict dialog
      * ATTRIBUTABLE, and an arm without one is degraded to {@code cancel}
      * ({@code LaunchUpdateDialogAutoConfirmer.attributableAnswer}) — so failing to resolve it
-     * silently replaces the caller's {@code externalInfobaseChanges} policy. That is why the pair
-     * shares ONE read and ONE budget, and why a non-concluded read is reported as such instead of
+     * silently replaces the caller's {@code externalInfobaseChanges} policy. That is why both
+     * names come off ONE read, and why a read that did not answer is reported as such instead of
      * being folded into "this application has no name".
+     *
+     * <p><b>It is the bound on this read alone, not on a launch's whole attribution.</b> An
+     * attribution that first has to resolve the delegate application id pays that step against its
+     * own bound ({@link ApplicationSupport#LOOKUP_TIMEOUT_MS}). Sharing one budget across the two
+     * was tried and is wrong: a slow first step then leaves the second with milliseconds, the name
+     * comes back {@code null}, and the caller's policy is silently downgraded to {@code cancel} —
+     * the exact failure this value exists to make rare.
      */
     public static final long ATTRIBUTION_LOOKUP_TIMEOUT_MS = 10_000L;
 
@@ -1644,8 +1651,9 @@ public final class LaunchLifecycleUtils
      * run headlessly so no dialog appears.
      *
      * <p>Bounded (#622): the read is the wedge-prone one, and a fallback that never returns would
-     * hold the launch open forever. This String-returning form degrades an expired deadline to the
-     * id it was GIVEN, exactly like the {@link ApplicationException} branch.
+     * hold the launch open forever. This String-returning form degrades BOTH ways of not answering
+     * — an expired deadline and an {@link ApplicationException} — to the id it was GIVEN, and
+     * reports neither.
      *
      * <p><b>That degradation is only safe where a missing default is visible downstream.</b> The
      * degraded value is indistinguishable from "this project has no default", so a caller that
@@ -1668,11 +1676,15 @@ public final class LaunchLifecycleUtils
     }
 
     /**
-     * Same fallback, reporting WHETHER the default-application read concluded.
+     * Same fallback, reporting WHETHER the default-application read answered.
      *
      * <p>Three outcomes, not two: the id resolved, the project genuinely records no default (the
-     * given id is handed back), or the read did not conclude — in which case the id handed back is
+     * given id is handed back), or the read did not ANSWER — in which case the id handed back is
      * the given one purely as a degradation and says nothing about the project.
+     *
+     * <p>"Did not answer" covers both ways the read can fail to establish anything: the caller's
+     * deadline expired, or the manager RAISED. Only the first outcome is a measured absence, so
+     * both of the others set {@link DefaultApplicationLookup#inconclusive()}.
      *
      * @param project the resolved project (may be {@code null})
      * @param applicationId the id from the call / launch config (may be {@code null}/empty)
@@ -1709,15 +1721,35 @@ public final class LaunchLifecycleUtils
         }
         catch (ApplicationException e)
         {
+            // A RAISED lookup establishes exactly as little as an expired one, so it is carried as
+            // a failure too. The id handed back is still the degradation the caller arrived with,
+            // and an IDENTITY taken from it keys a DIFFERENT lockFor mutex than the real
+            // application's - the mutual exclusion #621 exists to preserve.
             Activator.logError("Error resolving default application for project " //$NON-NLS-1$
                 + project.getName(), e);
-            return new DefaultApplicationLookup(applicationId, null);
+            return new DefaultApplicationLookup(applicationId,
+                defaultLookupRaisedFailure(project, e));
         }
     }
 
     /**
+     * The diagnosis for a default-application lookup that RAISED, worded alongside
+     * {@link ApplicationSupport#lookupDeadlineFailure} so both ways of not answering read the same
+     * to a caller: nothing about the project was established.
+     *
+     * @param project the project whose default was being resolved (never {@code null} here)
+     * @param failure what the manager raised
+     * @return the diagnosis sentence, never {@code null}
+     */
+    private static String defaultLookupRaisedFailure(IProject project, Throwable failure)
+    {
+        return "the EDT default-application lookup for project '" + project.getName() //$NON-NLS-1$
+            + "' failed: " + PlatformFailures.describe(failure); //$NON-NLS-1$
+    }
+
+    /**
      * What {@link #resolveDefaultApplication} established: the effective application id, plus the
-     * reason the default-application read did not conclude when it did not.
+     * reason the default-application read did not answer when it did not.
      *
      * <p>{@link #id()} is ALWAYS safe to launch with — it is what the unbounded code produced —
      * but it is only safe to treat as an IDENTITY (a lock key, an existence check, a cross-check)
@@ -1740,13 +1772,16 @@ public final class LaunchLifecycleUtils
             return id;
         }
 
-        /** @return {@code true} when the read did NOT conclude, so the id is a degradation */
+        /**
+         * @return {@code true} when the read did not ANSWER — its deadline expired or it raised —
+         *     so the id is a degradation and not a measured fact
+         */
         public boolean inconclusive()
         {
             return failure != null;
         }
 
-        /** @return why the read did not conclude, or {@code null} when it did */
+        /** @return why the read did not answer, or {@code null} when it did */
         public String failure()
         {
             return failure;
@@ -2145,14 +2180,14 @@ public final class LaunchLifecycleUtils
     }
 
     /**
-     * Same lookup with the deadline explicit, for a caller whose attribution needed an earlier
-     * bounded step (resolving the delegate application id) and must keep the PAIR inside one
-     * budget rather than restart it.
+     * Same lookup with the deadline explicit, so a test can drive the non-concluded branch without
+     * waiting out {@link #ATTRIBUTION_LOOKUP_TIMEOUT_MS}. Production always calls the overload
+     * above.
      *
      * @param appManager the EDT application manager (may be {@code null})
      * @param project the project the application belongs to (may be {@code null})
      * @param applicationId the application id (may be {@code null})
-     * @param timeoutMs what is left of the attribution budget
+     * @param timeoutMs the caller-side deadline for the one bounded application read
      * @return the names, never {@code null}
      */
     public static AttributionNames attributionNames(IApplicationManager appManager,
@@ -2176,25 +2211,38 @@ public final class LaunchLifecycleUtils
                     + "' did not conclude: " + read.deadlineFailure(), null); //$NON-NLS-1$
                 return new AttributionNames(null, null, true);
             }
+            if (read.failure() != null)
+            {
+                // A RAISED read answered nothing either. Folding it into "this application has no
+                // name" would attach the permanent advice ("retrying will not help") to a
+                // manager failure that a retry may well get past.
+                Activator.logError("Attribution lookup for application '" + applicationId //$NON-NLS-1$
+                    + "' failed", read.failure()); //$NON-NLS-1$
+                return new AttributionNames(null, null, true);
+            }
+            // Both failure channels are already handled above, so this cannot rethrow.
             Optional<IApplication> app = read.valueOrRethrow();
             return new AttributionNames(app.map(LaunchLifecycleUtils::conflictAttributionName)
                 .orElse(null), app.map(LaunchLifecycleUtils::serverNameOf).orElse(null), false);
         }
         catch (Exception e) // NOSONAR a best-effort hint must never break a launch
         {
+            // Only what happens AFTER the read concluded lands here (name extraction is
+            // reflective), and that really is "no such name": the application resolved.
             return new AttributionNames(null, null, false);
         }
     }
 
     /**
      * The two names one launch window arms with, and whether the read that produced them
-     * concluded.
+     * ANSWERED.
      *
      * <p>{@link #inconclusive()} is the difference between "this application names no infobase"
-     * (permanent — a different application has to be targeted) and "the manager did not answer in
-     * time" (transient — the same call may well work once EDT is responsive). Both yield a
-     * {@code null} name and both degrade a writing policy to {@code cancel}; only the advice
-     * differs, and getting it wrong sends the caller away from the one action that helps.
+     * (permanent — a different application has to be targeted) and "the manager did not answer",
+     * whether its deadline expired or it raised (transient — the same call may well work once EDT
+     * is responsive). Both yield a {@code null} name and both degrade a writing policy to
+     * {@code cancel}; only the advice differs, and getting it wrong sends the caller away from the
+     * one action that helps.
      */
     public static final class AttributionNames
     {
@@ -3747,30 +3795,22 @@ public final class LaunchLifecycleUtils
         return resolveDelegateApplicationId(config, ctx.project(), appManager);
     }
 
-    /** Same delegate-id rule with the project and manager already resolved by the caller. */
-    public static String resolveDelegateApplicationId(ILaunchConfiguration config, IProject project,
-        IApplicationManager appManager)
-    {
-        return resolveDelegateApplicationId(config, project, appManager,
-            ApplicationSupport.LOOKUP_TIMEOUT_MS);
-    }
-
     /**
-     * Same delegate-id rule with the default-application read's deadline supplied.
+     * Same delegate-id rule with the project and manager already resolved by the caller.
      *
-     * <p>The attribution path passes its own small budget: the default lookup is a STEP of the
-     * attribution, not a separate operation, so charging it the full 30 s lookup bound would make
-     * a "small fixed addition" cost three times what the attribution itself is allowed.
+     * <p>The default-application read gets the full {@link ApplicationSupport#LOOKUP_TIMEOUT_MS}
+     * from every caller, including the attribution path. Charging it a smaller share so a later
+     * step could keep the rest was tried and reverted: this step's answer is what the later step
+     * LOOKS UP, so starving it produces the very {@code null} name the attribution exists to
+     * avoid.
      *
      * @param config the launch configuration
      * @param project the resolved project (may be {@code null})
      * @param appManager the application manager (may be {@code null})
-     * @param defaultLookupTimeoutMs the deadline for the default-application read, used only when
-     *     the configuration carries no persisted application id
      * @return the delegate's application id, or {@code null} when it cannot be resolved
      */
     public static String resolveDelegateApplicationId(ILaunchConfiguration config, IProject project,
-        IApplicationManager appManager, long defaultLookupTimeoutMs)
+        IApplicationManager appManager)
     {
         String realId = LaunchConfigUtils.readAttribute(config,
             LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
@@ -3785,8 +3825,8 @@ public final class LaunchLifecycleUtils
         // resolveDefaultApplication returns the original (empty) value when there is
         // no default — normalize that to null so findRuntimeClientDebugTarget's
         // empty-id guard short-circuits instead of matching on "".
-        String resolved =
-            resolveDefaultApplication(project, null, appManager, defaultLookupTimeoutMs).id();
+        String resolved = resolveDefaultApplication(project, null, appManager,
+            ApplicationSupport.LOOKUP_TIMEOUT_MS).id();
         return resolved != null && !resolved.isEmpty() ? resolved : null;
     }
 

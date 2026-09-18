@@ -20,7 +20,10 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
+import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
+import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
+import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
@@ -69,6 +72,23 @@ public class GetApplicationsTool implements IMcpTool
 
     /** {@link #KEY_DEFAULT_APPLICATION}: the lookup did not conclude, so nothing was established. */
     static final String DEFAULT_APPLICATION_UNKNOWN = "unknown"; //$NON-NLS-1$
+
+    /**
+     * How long (ms) past its own deadline the abandoned update-state job may keep the auth-dialog
+     * suppression armed. One more full read bound: a job that has not ended after twice its
+     * budget is wedged rather than slow, and holding the guard on a wedge would fight a human who
+     * opens the same dialog in the GUI.
+     */
+    static final long UPDATE_STATE_GUARD_CAP_MS = ApplicationSupport.LOOKUP_TIMEOUT_MS;
+
+    /**
+     * The one wording for {@code updateState: "UNKNOWN"}, whatever produced it — a read that never
+     * ran, one that raised, or a manager that answered {@code null}. Shared so no branch can drift
+     * into claiming the infobase is up to date.
+     */
+    static final String UNKNOWN_STATE_DESCRIPTION =
+        "The update state could not be read, so whether this infobase is behind the model is " //$NON-NLS-1$
+            + "unknown - it is NOT a claim that it is up to date."; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -413,6 +433,17 @@ public class GetApplicationsTool implements IMcpTool
      * running when the deadline returns: each entry is filled completely and then set, so a reader
      * either sees a finished object or nothing, never a half-built one.
      *
+     * <p>A loop that RAISED is treated exactly like one whose deadline expired. The throw aborts
+     * the lambda, so every application after it keeps a null cell and renders {@code UNKNOWN} —
+     * and with the failure dropped, the sentence attached to those cells claimed the read
+     * "produced no answer" when in truth it threw, with nothing in the log. Both ways of not
+     * answering are diagnosed here, and both are logged.
+     *
+     * <p>The auth-dialog suppression is held until the JOB ends, not until this method returns:
+     * {@code getUpdateState} is the read that historically raised EDT's credentials modal, and a
+     * job abandoned at the deadline can raise it afterwards. {@link BoundedJob.DeferredCleanup}
+     * caps that extension so a broken job lifecycle cannot hold the guard forever.
+     *
      * @param appManager the application manager
      * @param applications the applications, in the order the result renders them
      * @param timeoutMs the budget for ALL the update-state reads together
@@ -422,22 +453,57 @@ public class GetApplicationsTool implements IMcpTool
         List<IApplication> applications, long timeoutMs)
     {
         AtomicReferenceArray<JsonObject> cells = new AtomicReferenceArray<>(applications.size());
-        ApplicationSupport.BoundedRead<Void> read = ApplicationSupport.readBounded(
-            "Read EDT application update states", //$NON-NLS-1$
-            "the EDT update-state read for the project's applications", //$NON-NLS-1$
-            timeoutMs, () -> {
-                for (int i = 0; i < applications.size(); i++)
-                {
-                    cells.set(i, readUpdateState(appManager, applications.get(i)));
-                }
-                return null;
-            });
-        if (read.concluded())
+        InfobaseAuthDialogSuppressor.markActivityStart();
+        BoundedJob.DeferredCleanup guard = new BoundedJob.DeferredCleanup(
+            InfobaseAuthDialogSuppressor::markActivityEnd, UPDATE_STATE_GUARD_CAP_MS,
+            "get_applications update-state guard cap"); //$NON-NLS-1$
+        ApplicationSupport.BoundedRead<Void> read = null;
+        try
+        {
+            read = ApplicationSupport.readBounded(
+                "Read EDT application update states", //$NON-NLS-1$
+                "the EDT update-state read for the project's applications", //$NON-NLS-1$
+                timeoutMs, () -> {
+                    for (int i = 0; i < applications.size(); i++)
+                    {
+                        cells.set(i, readUpdateState(appManager, applications.get(i)));
+                    }
+                    return null;
+                }, guard::jobFinished);
+        }
+        finally
+        {
+            guard.afterBoundedWait(read != null && read.concluded());
+        }
+        String unknownReason = updateStateUnknownReason(read);
+        if (unknownReason == null)
         {
             return new UpdateStates(cells, null);
         }
-        Activator.logError("get_applications: " + read.deadlineFailure(), null); //$NON-NLS-1$
-        return new UpdateStates(cells, read.deadlineFailure());
+        Activator.logError("get_applications: " + unknownReason, read.failure()); //$NON-NLS-1$
+        return new UpdateStates(cells, unknownReason);
+    }
+
+    /**
+     * Why the update-state cells this read left behind may be missing, or {@code null} when the
+     * read both concluded and returned.
+     *
+     * @param read the bounded update-state read (never {@code null} once it has returned)
+     * @return the diagnosis sentence, or {@code null} when nothing is unknown
+     */
+    private static String updateStateUnknownReason(ApplicationSupport.BoundedRead<Void> read)
+    {
+        if (!read.concluded())
+        {
+            return read.deadlineFailure();
+        }
+        if (read.failure() != null)
+        {
+            return "the EDT update-state read for the project's applications failed: " //$NON-NLS-1$
+                + PlatformFailures.describe(read.failure())
+                + ". Every application after the failing one was left unread."; //$NON-NLS-1$
+        }
+        return null;
     }
 
     /**
@@ -481,9 +547,7 @@ public class GetApplicationsTool implements IMcpTool
                 return;
             }
             appObj.addProperty("updateState", "UNKNOWN"); //$NON-NLS-1$ //$NON-NLS-2$
-            appObj.addProperty("updateStateDescription", //$NON-NLS-1$
-                "The update state could not be read, so whether this infobase is behind the model " //$NON-NLS-1$
-                    + "is unknown - it is NOT a claim that it is up to date."); //$NON-NLS-1$
+            appObj.addProperty("updateStateDescription", UNKNOWN_STATE_DESCRIPTION); //$NON-NLS-1$
             appObj.addProperty("updateStateError", unknownReason != null //$NON-NLS-1$
                 ? unknownReason : "the update-state read produced no answer for this application"); //$NON-NLS-1$
         }
@@ -516,9 +580,15 @@ public class GetApplicationsTool implements IMcpTool
      * on the bounded read's job thread, and the result is published through an
      * {@link AtomicReferenceArray} only once it is complete.
      *
+     * <p>A manager that reports {@code null} is UNKNOWN, not silence. It used to return an empty
+     * object, {@link UpdateStates#mergeInto} copied zero entries, and the application rendered
+     * with no {@code updateState} at all — the one shape that javadoc promises never to produce,
+     * and the one a caller reads as "nothing to say" about a question that was answered "I do not
+     * know".
+     *
      * @param appManager the application manager
      * @param app the application whose update state is read
-     * @return the update-state properties; empty when the manager reported no state at all
+     * @return the update-state properties; never empty
      */
     private static JsonObject readUpdateState(IApplicationManager appManager, IApplication app)
     {
@@ -533,6 +603,14 @@ public class GetApplicationsTool implements IMcpTool
                 // Add human-readable description
                 String stateDescription = getUpdateStateDescription(updateState);
                 stateObj.addProperty("updateStateDescription", stateDescription); //$NON-NLS-1$
+            }
+            else
+            {
+                stateObj.addProperty("updateState", "UNKNOWN"); //$NON-NLS-1$ //$NON-NLS-2$
+                stateObj.addProperty("updateStateDescription", //$NON-NLS-1$
+                    UNKNOWN_STATE_DESCRIPTION);
+                stateObj.addProperty("updateStateError", //$NON-NLS-1$
+                    "EDT reported no update state for this application"); //$NON-NLS-1$
             }
         }
         catch (ApplicationException e)

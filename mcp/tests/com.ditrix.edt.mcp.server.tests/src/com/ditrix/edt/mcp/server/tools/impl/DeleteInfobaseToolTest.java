@@ -598,19 +598,90 @@ public class DeleteInfobaseToolTest
     }
 
     @Test
-    public void testAFailedDeregistrationNamesItselfAsTheKeepReason()
+    public void testAFailedDeregistrationNamesItselfOnlyWhenNothingElseAlreadyExplainedTheKeep()
     {
-        // This branch returns BEFORE the deletion step, so no shared-infobase answer applies to
-        // it: reporting it as notRequested or deleteFailed would name a cause that never ran.
-        JsonObject wanted = parse(DeleteInfobaseTool.buildDeregisterFailedResult(ibId(), true,
+        // The deregistration failure is the LAST reason, not the overriding one: it may name
+        // itself only where the files would otherwise have been deleted.
+        JsonObject wouldHaveDeleted = parse(DeleteInfobaseTool.buildDeregisterFailedResult(ibId(),
+            new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, false,
+                DeleteInfobaseTool.SharedDatabase.NOT_SHARED),
             new IllegalStateException("registry locked"))); //$NON-NLS-1$
-        JsonObject notWanted = parse(DeleteInfobaseTool.buildDeregisterFailedResult(ibId(), false,
+        JsonObject notRequested = parse(DeleteInfobaseTool.buildDeregisterFailedResult(ibId(),
+            new DeleteInfobaseTool.DbFileOutcome(false, DB_DIR, false,
+                DeleteInfobaseTool.SharedDatabase.NOT_SHARED),
             new IllegalStateException("registry locked"))); //$NON-NLS-1$
 
         assertFalse("the files were not deleted", //$NON-NLS-1$
-            wanted.get("databaseFilesDeleted").getAsBoolean()); //$NON-NLS-1$
-        assertEquals("deregistrationFailed", keptOf(wanted)); //$NON-NLS-1$
-        assertEquals("notRequested", keptOf(notWanted)); //$NON-NLS-1$
+            wouldHaveDeleted.get("databaseFilesDeleted").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("deregistrationFailed", keptOf(wouldHaveDeleted)); //$NON-NLS-1$
+        assertEquals("notRequested", keptOf(notRequested)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFailedDeregistrationDoesNotOverwriteAMeasuredCoOwnershipAnswer()
+    {
+        // The shared-database check has ALREADY run when this branch is reached, and its answer is
+        // about the same unchanged fact the preview reported. Answering 'deregistrationFailed'
+        // over it lost the 'shared' signal from the machine-readable field and told the user to
+        // remove a directory that belongs to another project - while the preview of the identical
+        // input said 'shared'.
+        IllegalStateException registryLocked = new IllegalStateException("registry locked"); //$NON-NLS-1$
+        JsonObject shared = parse(DeleteInfobaseTool.buildDeregisterFailedResult(ibId(),
+            new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, false,
+                DeleteInfobaseTool.SharedDatabase.SHARED), registryLocked));
+        JsonObject unknown = parse(DeleteInfobaseTool.buildDeregisterFailedResult(ibId(),
+            new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, false,
+                DeleteInfobaseTool.SharedDatabase.UNKNOWN), registryLocked));
+        JsonObject noDirectory = parse(DeleteInfobaseTool.buildDeregisterFailedResult(ibId(),
+            new DeleteInfobaseTool.DbFileOutcome(true, null, false,
+                DeleteInfobaseTool.SharedDatabase.NOT_SHARED), registryLocked));
+
+        assertEquals("a MEASURED co-owner must survive the deregistration failure", //$NON-NLS-1$
+            "shared", keptOf(shared)); //$NON-NLS-1$
+        assertEquals("an unconcluded check must stay 'unknown', not become a different reason", //$NON-NLS-1$
+            "unknown", keptOf(unknown)); //$NON-NLS-1$
+        assertEquals("noDirectory", keptOf(noDirectory)); //$NON-NLS-1$
+
+        // And the prose must not contradict the field it ships beside.
+        String sharedMessage = shared.get("message").getAsString(); //$NON-NLS-1$
+        assertTrue("a shared database must be named as such in the message: " + sharedMessage, //$NON-NLS-1$
+            sharedMessage.contains("still used by other project")); //$NON-NLS-1$
+        assertFalse("it must not tell the user to delete a co-owned directory: " + sharedMessage, //$NON-NLS-1$
+            sharedMessage.contains("remove the directory manually if intended")); //$NON-NLS-1$
+        assertFalse("nor claim a directory exists when none was resolved: " //$NON-NLS-1$
+            + noDirectory.get("message").getAsString(), //$NON-NLS-1$
+            noDirectory.get("message").getAsString() //$NON-NLS-1$
+                .contains("remove the directory manually if intended")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFailedDeregistrationAndThePreviewAgreeOnTheSameUnchangedFact()
+    {
+        // preview -> confirm on one input must not flip the answer about co-ownership: only the
+        // deletion changes, and this branch never reaches it.
+        for (DeleteInfobaseTool.SharedDatabase shared : DeleteInfobaseTool.SharedDatabase.values())
+        {
+            for (Path dir : new Path[] {DB_DIR, null})
+            {
+                JsonObject preview =
+                    parse(DeleteInfobaseTool.buildPreviewResult(ibId(), true, true, dir, shared));
+                JsonObject confirmed = parse(DeleteInfobaseTool.buildDeregisterFailedResult(ibId(),
+                    new DeleteInfobaseTool.DbFileOutcome(true, dir, false, shared),
+                    new IllegalStateException("registry locked"))); //$NON-NLS-1$
+                String previewKept = keptOf(preview);
+                if (previewKept != null)
+                {
+                    assertEquals("preview and a deregister-failed confirm must agree for " //$NON-NLS-1$
+                        + shared + "/" + dir, previewKept, keptOf(confirmed)); //$NON-NLS-1$
+                }
+                else
+                {
+                    assertEquals("only where the preview would have DELETED may the " //$NON-NLS-1$
+                        + "deregistration name itself", "deregistrationFailed", //$NON-NLS-1$ //$NON-NLS-2$
+                        keptOf(confirmed));
+                }
+            }
+        }
     }
 
     @Test

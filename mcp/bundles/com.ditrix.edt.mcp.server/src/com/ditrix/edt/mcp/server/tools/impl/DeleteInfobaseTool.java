@@ -92,7 +92,11 @@ public class DeleteInfobaseTool implements IMcpTool
     /** {@link #KEY_DATABASE_FILES_KEPT}: the removal ran or was refused and the directory is not gone. */
     static final String KEPT_DELETE_FAILED = "deleteFailed"; //$NON-NLS-1$
 
-    /** {@link #KEY_DATABASE_FILES_KEPT}: deregistration failed, so the deletion was not attempted. */
+    /**
+     * {@link #KEY_DATABASE_FILES_KEPT}: deregistration failed, so the deletion was not attempted —
+     * and nothing measured earlier already explained the keep. It is the LAST reason, never one
+     * that overwrites a co-ownership answer the same call had already established.
+     */
     static final String KEPT_DEREGISTRATION_FAILED = "deregistrationFailed"; //$NON-NLS-1$
 
     /** Output value for {@link McpKeys#ACTION}: the infobase was removed. */
@@ -203,11 +207,14 @@ public class DeleteInfobaseTool implements IMcpTool
                     + "'shared' = another workspace project was FOUND using the same database. " //$NON-NLS-1$
                     + "'unknown' = the shared-infobase check did not conclude, so co-ownership was " //$NON-NLS-1$
                     + "never measured - do NOT read it as 'shared'; the next call re-runs the " //$NON-NLS-1$
-                    + "check. 'deleteFailed' = the directory is still there (locked, already " //$NON-NLS-1$
-                    + "absent, a filesystem root, or no 1Cv8.1CD) - remove it manually. " //$NON-NLS-1$
+                    + "check. 'deleteFailed' = the removal did not leave the directory gone: it " //$NON-NLS-1$
+                    + "was refused (a filesystem root, or no 1Cv8.1CD - which is also how a " //$NON-NLS-1$
+                    + "directory that was already gone looks) or the delete itself failed " //$NON-NLS-1$
+                    + "(locked) - check the EDT log and remove it manually if it is still there. " //$NON-NLS-1$
                     + "'deregistrationFailed' = deregistration failed, so the deletion was " //$NON-NLS-1$
-                    + "deliberately not attempted. The last two arise only on a deletion, never " //$NON-NLS-1$
-                    + "on a preview.", //$NON-NLS-1$
+                    + "deliberately not attempted, AND no earlier reason applied - a measured " //$NON-NLS-1$
+                    + "'shared'/'unknown'/'noDirectory' still wins, so confirm never contradicts " //$NON-NLS-1$
+                    + "the preview. The last two arise only on a deletion, never on a preview.", //$NON-NLS-1$
                 KEPT_NOT_REQUESTED, KEPT_NO_DIRECTORY, KEPT_SHARED, KEPT_UNKNOWN, KEPT_DELETE_FAILED,
                 KEPT_DEREGISTRATION_FAILED)
             .stringProperty(McpKeys.MESSAGE, "Human-readable status message.") //$NON-NLS-1$
@@ -399,8 +406,8 @@ public class DeleteInfobaseTool implements IMcpTool
 
         // Step 2: optionally deregister from the global EDT infobases list. A non-null result is the
         // partial-failure JSON returned as-is (the database files are then KEPT); null = continue.
-        String deregisterFailed = deregisterFileInfobase(ibManager, ibRef, id, deleteDatabaseFiles,
-            plan.deleteRegistration);
+        String deregisterFailed = deregisterFileInfobase(ibManager, ibRef, id,
+            new DbFileOutcome(deleteDatabaseFiles, dbDir, false, dbShared), plan.deleteRegistration);
         if (deregisterFailed != null)
         {
             return deregisterFailed;
@@ -428,10 +435,14 @@ public class DeleteInfobaseTool implements IMcpTool
      * {@code deleteRegistration && ibRef != null} guard. A missing {@code IInfobaseManager} is logged
      * and treated as non-fatal (the dissociation already succeeded). Returns the partial-failure JSON
      * (which the caller returns as-is — the database files are then KEPT) when the delete throws, or
-     * {@code null} to continue. Extracted verbatim from {@link #deleteInfobase}.
+     * {@code null} to continue.
+     *
+     * <p>Takes the whole {@link DbFileOutcome} rather than the {@code deleteDatabaseFiles} flag
+     * alone: the shared-database check has already run by this point, and the partial-failure
+     * payload must report what it MEASURED rather than overwrite it with its own branch.
      */
     private String deregisterFileInfobase(IInfobaseManager ibManager, InfobaseReference ibRef,
-            IbIdentity id, boolean deleteDatabaseFiles, boolean deleteRegistration)
+            IbIdentity id, DbFileOutcome db, boolean deleteRegistration)
     {
         if (deleteRegistration && ibRef != null)
         {
@@ -454,7 +465,7 @@ public class DeleteInfobaseTool implements IMcpTool
                     // Non-fatal: return success but note the partial deletion. We deliberately do NOT
                     // delete the database files here even if requested — deregistration failed, so the
                     // safe choice is to leave the data and say so explicitly (schema-consistent).
-                    return buildDeregisterFailedResult(id, deleteDatabaseFiles, e);
+                    return buildDeregisterFailedResult(id, db, e);
                 }
             }
         }
@@ -776,13 +787,28 @@ public class DeleteInfobaseTool implements IMcpTool
 
     /**
      * Builds the tool-result JSON for the partial-success case where the infobase was dissociated but
-     * could NOT be deregistered from the EDT list. Byte-for-byte identical to the inline result the
-     * deregister-failure catch produced; the database files are reported as KEPT (the safe choice when
-     * deregistration failed). Read-only — the dissociation has already happened at the call site.
+     * could NOT be deregistered from the EDT list. The database files are reported as KEPT (the safe
+     * choice when deregistration failed). Read-only — the dissociation has already happened at the
+     * call site.
+     *
+     * <p>The keep REASON is the one {@link #prospectiveDatabaseFilesKept} already established,
+     * and only when that has nothing to say does the deregistration failure name itself. This
+     * branch is reached AFTER the shared-database check has run, so answering
+     * {@code deregistrationFailed} unconditionally overwrote a MEASURED co-ownership: a database
+     * this very call had found shared with another project came back as
+     * "remove the directory manually if intended", and the preview of the same input said
+     * {@code shared}. Preview and confirm must not disagree about a fact neither of them changed.
+     *
+     * @param id the resolved infobase identity
+     * @param db the on-disk outcome cluster as measured BEFORE the deletion step (never deleted:
+     *     this branch returns before it)
+     * @param e what {@code IInfobaseManager.delete} raised
+     * @return the serialized partial-success payload
      */
-    static String buildDeregisterFailedResult(IbIdentity id, boolean deleteDatabaseFiles,
-            Exception e)
+    static String buildDeregisterFailedResult(IbIdentity id, DbFileOutcome db, Exception e)
     {
+        String measured = prospectiveDatabaseFilesKept(db.deleteDatabaseFiles, db.dbDir, db.dbShared);
+        boolean deregistrationIsTheReason = measured == null;
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_DELETED)
             .put(McpKeys.PROJECT, id.projectName)
@@ -790,20 +816,41 @@ public class DeleteInfobaseTool implements IMcpTool
             .put(KEY_INFOBASE_NAME, id.resolvedName)
             .put(KEY_DELETE_REGISTRATION, false)
             .put(KEY_DATABASE_FILES_DELETED, false)
-            // The deregistration failure is what kept the files here: this branch returns BEFORE
-            // the deletion step, so no shared-infobase answer applies.
             .put(KEY_DATABASE_FILES_KEPT,
-                deleteDatabaseFiles ? KEPT_DEREGISTRATION_FAILED : KEPT_NOT_REQUESTED)
+                deregistrationIsTheReason ? KEPT_DEREGISTRATION_FAILED : measured)
             .put(McpKeys.MESSAGE, "Infobase '" + id.resolvedName //$NON-NLS-1$
                 + "' was dissociated from project '" + id.projectName //$NON-NLS-1$
                 + "' but could not be deregistered from the EDT list: " //$NON-NLS-1$
                 + e.getMessage()
                 + ". You can remove it manually from the Infobases view in EDT." //$NON-NLS-1$
-                + (deleteDatabaseFiles
-                    ? " The database files on disk were KEPT (deregistration failed); " //$NON-NLS-1$
-                        + "remove the directory manually if intended." //$NON-NLS-1$
-                    : "")) //$NON-NLS-1$
+                + deregisterFailedDatabaseNote(db, deregistrationIsTheReason))
             .toJson();
+    }
+
+    /**
+     * The database sentence of {@link #buildDeregisterFailedResult}: it says the same thing as the
+     * declared keep reason, so the prose cannot tell the user to delete a directory the
+     * machine-readable field says belongs to another project (or says does not exist).
+     *
+     * @param db the measured on-disk outcome cluster
+     * @param deregistrationIsTheReason whether the deregistration failure is what kept the files
+     * @return the sentence to append, possibly empty
+     */
+    private static String deregisterFailedDatabaseNote(DbFileOutcome db,
+            boolean deregistrationIsTheReason)
+    {
+        if (!db.deleteDatabaseFiles)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        if (deregistrationIsTheReason)
+        {
+            return " The database files on disk were KEPT (deregistration failed); " //$NON-NLS-1$
+                + "remove the directory manually if intended."; //$NON-NLS-1$
+        }
+        // A measured reason: the SAME sentence the completed deletion would have produced, so the
+        // two paths cannot describe one unchanged fact differently.
+        return databaseResultNote(db);
     }
 
     /**
