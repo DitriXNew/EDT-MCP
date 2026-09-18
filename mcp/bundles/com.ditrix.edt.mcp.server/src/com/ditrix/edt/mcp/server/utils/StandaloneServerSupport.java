@@ -333,52 +333,46 @@ public final class StandaloneServerSupport
      * beyond {@code timeoutMs}.
      *
      * <p>Use this when the caller does not already own a larger bounded preparation phase.
+     *
+     * <p>A PENDING interrupt is left for the PLATFORM to act on rather than taken and restored:
+     * this entry point calls {@code BoundedJob.run} exactly as it did before the read moved into
+     * {@code ApplicationSupport}, so a cancelled {@code build_external_objects} recovery keeps
+     * whatever abort behaviour it had. What that behaviour is depends on the runtime's
+     * {@code LockListener} (see {@code ApplicationSupport.readBounded}), which is precisely why
+     * the decision is left where it was instead of being changed on this consumer's behalf.
      */
     public static ApplicationLookup lookupApplicationBounded(IApplicationManager manager,
         IProject project, String applicationId, long timeoutMs)
     {
-        ApplicationLookup[] lookup = new ApplicationLookup[1];
-        BoundedJob.Result result = BoundedJob.run(
-            "Resolve standalone-server application: " + applicationId, timeoutMs, //$NON-NLS-1$
-            monitor -> lookup[0] = lookupApplication(manager, project, applicationId));
-        if (result.isSuccess())
+        ApplicationSupport.BoundedRead<ApplicationLookup> read = ApplicationSupport.readBounded(
+            "Resolve standalone-server application: " + applicationId, //$NON-NLS-1$
+            ApplicationSupport.applicationTarget(applicationId), timeoutMs,
+            () -> lookupApplication(manager, project, applicationId), false);
+        if (!read.concluded())
         {
-            return lookup[0];
+            return failedApplicationLookup(read.deadlineFailure());
         }
-        if (result.getFailure() != null && result.getOutcome() == BoundedJob.Outcome.COMPLETED)
+        if (read.failure() != null)
         {
             return failedApplicationLookup("the application could not be resolved: " //$NON-NLS-1$
-                + PlatformFailures.describe(result.getFailure()));
+                + PlatformFailures.describe(read.failure()));
         }
-
-        return failedApplicationLookup(applicationLookupFailure(applicationId, timeoutMs, result));
+        return read.valueOrRethrow();
     }
 
-    /** Retains the established lookup-timeout wording for callers with a larger bounded phase. */
+    /**
+     * Retains the established lookup-timeout wording for callers with a larger bounded phase.
+     *
+     * @param applicationId the application the lookup was for
+     * @param timeoutMs the deadline that expired
+     * @param result the bounded outcome
+     * @return the shared diagnosis sentence
+     */
     public static String applicationLookupFailure(String applicationId, long timeoutMs,
         BoundedJob.Result result)
     {
-        String target = "the EDT application lookup for application '" //$NON-NLS-1$
-            + applicationId + "'"; //$NON-NLS-1$
-        String deadline = timeoutMs % 1000L == 0L
-            ? (timeoutMs / 1000L) + "s" : timeoutMs + "ms"; //$NON-NLS-1$ //$NON-NLS-2$
-        if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT)
-        {
-            return target + " did not finish within " //$NON-NLS-1$
-                + deadline + " and may still be running"; //$NON-NLS-1$
-        }
-        if (result.getOutcome() == BoundedJob.Outcome.INTERRUPTED)
-        {
-            return "the wait for " + target //$NON-NLS-1$
-                + " was interrupted and the lookup may still be running"; //$NON-NLS-1$
-        }
-        if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
-        {
-            return target + " did not start within " //$NON-NLS-1$
-                + deadline + "; retry when EDT's background Job queue is responsive"; //$NON-NLS-1$
-        }
-        return target + " never ran (" //$NON-NLS-1$
-            + result.getOutcome() + ")"; //$NON-NLS-1$
+        return ApplicationSupport.lookupDeadlineFailure(
+            ApplicationSupport.applicationTarget(applicationId), timeoutMs, result);
     }
 
     /** Describes a larger bounded precondition phase that did not complete. */

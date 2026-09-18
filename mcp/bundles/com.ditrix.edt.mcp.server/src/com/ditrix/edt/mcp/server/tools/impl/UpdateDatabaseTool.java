@@ -439,6 +439,11 @@ public class UpdateDatabaseTool implements IMcpTool
      * EDT cannot produce it: this bundle is compiled against one EDT version and runs on later
      * ones, and failing closed is the cheap side of that bet.
      *
+     * <p>Failing closed means the cross-check must actually RUN. A default-application read that
+     * expires on its deadline or raises is refused too: it establishes nothing, and treating "not
+     * measured" as "no disagreement" would let the guard pass on an unanswered question and write
+     * a database — the very outcome it exists to prevent.
+     *
      * <p>Side-effect-free with respect to the infobase and the project sources: it reads the
      * application list and asks for the default application (which can make EDT drop a stale
      * default-application preference, exactly as {@code get_applications} already does).
@@ -452,10 +457,30 @@ public class UpdateDatabaseTool implements IMcpTool
     static ApplicationFallback resolveSoleApplicationId(IProject project,
             IApplicationManager appManager, String projectName, String configName)
     {
+        return resolveSoleApplicationId(project, appManager, projectName, configName,
+            ApplicationSupport.LOOKUP_TIMEOUT_MS);
+    }
+
+    /** Same fallback with an explicit deadline for the bounded application listing. */
+    static ApplicationFallback resolveSoleApplicationId(IProject project,
+            IApplicationManager appManager, String projectName, String configName, long timeoutMs)
+    {
+        // Bounded (#622): an empty or unread list decides which database gets written, so a read
+        // that never concluded must refuse, never fall into the "no applications" branch below.
+        ApplicationSupport.BoundedRead<List<IApplication>> listRead =
+            ApplicationSupport.getApplicationsBounded(appManager, project, timeoutMs);
+        if (!listRead.concluded())
+        {
+            return ApplicationFallback.error(noBindingPrefix(configName)
+                + "and the applications of project '" + projectName + "' could not be listed: " //$NON-NLS-1$ //$NON-NLS-2$
+                + listRead.deadlineFailure()
+                + ". Nothing was updated. Retry in a moment, or pass projectName + applicationId " //$NON-NLS-1$
+                + "explicitly (get_applications lists the application ids)."); //$NON-NLS-1$
+        }
         List<IApplication> applications;
         try
         {
-            applications = appManager.getApplications(project);
+            applications = listRead.valueOrRethrow();
         }
         catch (ApplicationException e)
         {
@@ -495,7 +520,36 @@ public class UpdateDatabaseTool implements IMcpTool
                 + "' reports no id — nothing to target. Pass projectName + applicationId " //$NON-NLS-1$
                 + "explicitly (get_applications lists the application ids)."); //$NON-NLS-1$
         }
-        String resolved = LaunchLifecycleUtils.resolveDefaultApplicationId(project, "", appManager); //$NON-NLS-1$
+        // Read the default DIRECTLY, not through LaunchLifecycleUtils.resolveDefaultApplicationId:
+        // that helper degrades an unconcluded read to the id it was given (here ""), which this
+        // guard's own emptiness test would then wave through - a cross-check that never ran would
+        // pass silently and this irreversible tool would write a database. The helper's degradation
+        // is right for the LAUNCH fallback, where a missing default is visible downstream; here the
+        // value is read as a measured fact, so an unknown must refuse, exactly like the sibling
+        // list read above.
+        ApplicationSupport.BoundedRead<Optional<IApplication>> defaultRead =
+            ApplicationSupport.getDefaultApplicationBounded(appManager, project, timeoutMs);
+        if (!defaultRead.concluded())
+        {
+            return ApplicationFallback.error(crossCheckUnavailable(configName, projectName, onlyId)
+                + defaultRead.deadlineFailure()
+                + ". Nothing was updated. Retry in a moment, or pass projectName + applicationId " //$NON-NLS-1$
+                + "explicitly (get_applications lists the application ids)."); //$NON-NLS-1$
+        }
+        String resolved;
+        try
+        {
+            resolved = defaultRead.valueOrRethrow().map(IApplication::getId).orElse(null);
+        }
+        catch (ApplicationException e)
+        {
+            Activator.logError("Error resolving the default application of project " //$NON-NLS-1$
+                + projectName, e);
+            return ApplicationFallback.error(crossCheckUnavailable(configName, projectName, onlyId)
+                + e.getMessage()
+                + ". Nothing was updated. Retry in a moment, or pass projectName + applicationId " //$NON-NLS-1$
+                + "explicitly (get_applications lists the application ids)."); //$NON-NLS-1$
+        }
         if (resolved != null && !resolved.isEmpty() && !resolved.equals(onlyId))
         {
             return ApplicationFallback.error(noBindingPrefix(configName)
@@ -505,6 +559,18 @@ public class UpdateDatabaseTool implements IMcpTool
                 + projectName + "' and an explicit applicationId (get_applications lists them)."); //$NON-NLS-1$
         }
         return ApplicationFallback.of(onlyId);
+    }
+
+    /**
+     * The opening of both refusals for a cross-check that could not be PERFORMED (deadline or
+     * platform failure), as opposed to one that ran and disagreed. Named separately so the two are
+     * never confused: this one says nothing about whether the ids agree.
+     */
+    private static String crossCheckUnavailable(String configName, String projectName, String onlyId)
+    {
+        return noBindingPrefix(configName)
+            + "and project '" + projectName + "' reports a single application '" + onlyId //$NON-NLS-1$ //$NON-NLS-2$
+            + "', but that could not be cross-checked against the project's default application: "; //$NON-NLS-1$
     }
 
     /**
@@ -687,15 +753,25 @@ public class UpdateDatabaseTool implements IMcpTool
             IProject project = mr.project();
             IApplicationManager appManager = mr.manager();
             
-            // Find application by ID
-            Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
+            // Find application by ID. Bounded (#622): a deadline is NOT a not-found — nothing was
+            // measured and, importantly here, nothing was updated.
+            ApplicationSupport.BoundedRead<Optional<IApplication>> appRead =
+                ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
+                    ApplicationSupport.LOOKUP_TIMEOUT_MS);
+            if (!appRead.concluded())
+            {
+                return ToolResult.error("Could not resolve application '" + applicationId + "': " //$NON-NLS-1$ //$NON-NLS-2$
+                        + appRead.deadlineFailure()
+                        + ". The database was NOT updated. Retry once EDT is responsive.").toJson(); //$NON-NLS-1$
+            }
+            Optional<IApplication> appOpt = appRead.valueOrRethrow();
             if (!appOpt.isPresent())
             {
                 return ToolResult.error("Application not found: " + applicationId //$NON-NLS-1$
                         + "." + describeLaunchIdentifierHint(applicationId) //$NON-NLS-1$
                         + " Use get_applications to get valid application IDs.").toJson(); //$NON-NLS-1$
             }
-            
+
             IApplication application = appOpt.get();
             
             // Check current update state before proceeding
@@ -763,8 +839,21 @@ public class UpdateDatabaseTool implements IMcpTool
             // module version (stale code even after a successful publish); the reused sweep is
             // client-typed-thread discriminated (never a debug-server session) and exempts MCP-owned
             // launches. Runs only on confirm=true, never in preview.
+            // Bounded: queueing behind another operation on this infobase is correct, but a holder
+            // wedged in a platform call must not park this call forever.
             ApplicationUpdateState stateAfter;
-            synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
+            LaunchLifecycleUtils.LaunchLock updateLock =
+                LaunchLifecycleUtils.lockFor(projectName, applicationId);
+            LaunchLifecycleUtils.Acquisition acquisition =
+                updateLock.tryAcquire(LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS, null);
+            if (!acquisition.acquired())
+            {
+                return ToolResult.error(LaunchLifecycleUtils.lockNotAcquiredMessage(acquisition,
+                    projectName, applicationId, LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS)
+                    + " The infobase was not updated and no client was terminated. Wait for that " //$NON-NLS-1$
+                    + "operation to finish and call update_database again.").toJson(); //$NON-NLS-1$
+            }
+            try
             {
                 if (terminateRunningClients)
                 {
@@ -904,6 +993,10 @@ public class UpdateDatabaseTool implements IMcpTool
                             InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
                     }
                 }
+            }
+            finally
+            {
+                updateLock.unlock();
             }
 
             return buildUpdatedResult(projectName, applicationId, application, updateType,

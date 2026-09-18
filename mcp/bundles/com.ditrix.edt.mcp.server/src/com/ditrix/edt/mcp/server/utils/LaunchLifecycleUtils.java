@@ -19,12 +19,14 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.debug.core.DebugException;
@@ -80,11 +82,72 @@ public final class LaunchLifecycleUtils
      * and {@code appManager.update()}. Keys are interned tuples and never
      * removed — the set of (project, applicationId) pairs is finite in
      * practice (one per EDT launch configuration).
+     *
+     * <p>That is also why nothing evicts them: dropping an entry while another thread waits on it
+     * would hand the next caller a different lock and break the exclusion outright.
      */
-    private static final ConcurrentMap<String, Object> KEY_LOCKS = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<String, LaunchLock> KEY_LOCKS = new ConcurrentHashMap<>();
 
     /** Fallback label for a launch whose configuration name is unavailable. */
     private static final String UNKNOWN_LABEL = "<unknown>"; //$NON-NLS-1$
+
+    /**
+     * Wait slice (ms) of one {@link LaunchLock#tryAcquire} attempt made WITH a progress monitor:
+     * the acquisition re-checks it between slices, so a cancelled monitor is honoured within this
+     * window instead of only at the full deadline. An acquisition without a monitor waits in one
+     * timed attempt — slicing a 15-minute bound into 9000 of them buys nothing to re-check.
+     */
+    private static final long LOCK_WAIT_SLICE_MS = 100L;
+
+    /**
+     * Bound (ms) on waiting for {@link #lockFor} at every participant legitimately queued behind
+     * another operation on the SAME infobase: {@link #prepareForFreshLaunch}, the YAXUnit
+     * spawn/debug phase, {@code update_database} and the two YAXUnit report reads. Waiting there is
+     * correct behaviour, not a defect, so the bound only has to be finite — the longest legitimate
+     * holder is a FULL configuration publish, which on a large configuration genuinely runs for
+     * many minutes. Assumed here: no legitimate publish exceeds 15 minutes, so the bound never
+     * converts a correct wait into a refusal, while a holder wedged inside a platform call stops
+     * parking every other participant forever.
+     *
+     * <p>The report reads hold the lock for milliseconds, and take this value as a CEILING rather
+     * than as their bound: they wait the smaller of it and what their own caller's deadline still
+     * allows. The ceiling matters because a short give-up is not a cheaper answer but a lost one —
+     * their guarded work is the only read of a FINISHED run's report — and the caller's deadline
+     * matters because a call that asked for 30 seconds must not be held for fifteen minutes.
+     */
+    public static final long OPERATION_LOCK_TIMEOUT_MS = 15 * 60 * 1000L;
+
+    /**
+     * Bound (ms) on waiting for {@link #lockFor} in {@code infobase_sessions}, the one participant
+     * that advertises a bounded answer and must refuse rather than queue behind a publish.
+     * 30 seconds is above a normal {@code ibcmd} session read — the holder such a call
+     * realistically queues behind — and follows the same reasoning as the settle timeout in
+     * {@code StandaloneServerStateRecovery}.
+     */
+    public static final long SESSIONS_LOCK_TIMEOUT_MS = 30_000L;
+
+    /**
+     * Bound (ms) on the attribution lookup ({@link #attributionNames}, and the two single-name
+     * wrappers over it). Deliberately shorter than {@link ApplicationSupport#LOOKUP_TIMEOUT_MS}:
+     * its answer is only a NAME, it already degrades to {@code null}, and the whole cost of a
+     * wedged manager here has to stay a small fixed addition to the launch rather than a minute
+     * of waiting.
+     *
+     * <p><b>Not a cosmetic read.</b> The name is what makes an armed conflict dialog
+     * ATTRIBUTABLE, and an arm without one is degraded to {@code cancel}
+     * ({@code LaunchUpdateDialogAutoConfirmer.attributableAnswer}) — so failing to resolve it
+     * silently replaces the caller's {@code externalInfobaseChanges} policy. That is why both
+     * names come off ONE read, and why a read that did not answer is reported as such instead of
+     * being folded into "this application has no name".
+     *
+     * <p><b>It is the bound on this read alone, not on a launch's whole attribution.</b> An
+     * attribution that first has to resolve the delegate application id pays that step against its
+     * own bound ({@link ApplicationSupport#LOOKUP_TIMEOUT_MS}). Sharing one budget across the two
+     * was tried and is wrong: a slow first step then leaves the second with milliseconds, the name
+     * comes back {@code null}, and the caller's policy is silently downgraded to {@code cancel} —
+     * the exact failure this value exists to make rare.
+     */
+    public static final long ATTRIBUTION_LOOKUP_TIMEOUT_MS = 10_000L;
 
     // =========================================================================
     // Pre-launch preparation in-flight registry (Fix 2: 25 s budget + pending)
@@ -544,21 +607,263 @@ public final class LaunchLifecycleUtils
     }
 
     /**
-     * Returns the monitor object used to serialise {@link #prepareForFreshLaunch}
-     * for the given {@code project + applicationId} pair. Callers that also
-     * need the same lock around their own pre-launch steps (e.g. updating a
-     * working copy) can synchronise on the returned object.
+     * One {@code project + applicationId} pair's launch lock: the mutual exclusion that serialises
+     * the auto-chain (terminate + update + spawn) across MCP tools.
+     *
+     * <p>A {@link ReentrantLock}, not a monitor. A thread parked in {@code synchronized} takes no
+     * deadline and cannot be interrupted, so a holder wedged inside a platform operation would park
+     * every other participant forever. Its monitor is deliberately NOT part of the API:
+     * {@code synchronized} on this object would exclude nothing, because every real participant
+     * holds {@link #lock} instead.
+     *
+     * <p>Reentrant on purpose — a caller may already hold this lock around its own spawn sequence
+     * when the code below it re-enters through {@link LaunchLifecycleUtils#prepareForFreshLaunch}.
+     * Every acquisition therefore needs its own {@code try}/{@code finally} {@link #unlock()}.
+     * A re-entrant acquisition cannot be refused as {@link Acquisition#CONTENDED} — the hold count
+     * is checked before any waiting — but reentrancy alone does NOT make it infallible: the timed
+     * {@code tryLock} raises on a PENDING interrupt before it looks at the hold count, which is
+     * why {@link #tryAcquire} takes and restores that flag itself.
+     */
+    public static final class LaunchLock
+    {
+        private final ReentrantLock lock = new ReentrantLock();
+
+        private LaunchLock()
+        {
+            // Instantiated only by lockFor.
+        }
+
+        /**
+         * Acquires this lock, waiting at most {@code timeoutMs}.
+         *
+         * <p>A caller that arrives ALREADY interrupted still attempts the acquisition, exactly as
+         * the {@code synchronized} this replaced did. Measured, not assumed:
+         * {@code ReentrantLock.tryLock(long, TimeUnit)} opens with
+         * {@code if (Thread.interrupted()) throw new InterruptedException()} — before it looks at
+         * the lock at all, and before the hold count that makes a re-entrant acquisition free — so
+         * a pending flag would refuse in ~0 ms and the caller would report a contender that does
+         * not exist AND skip its guarded work. The flag is therefore taken here and restored in the
+         * {@code finally}, the same dance {@code ApplicationSupport.readBounded} does one file over
+         * and for the same reason.
+         *
+         * <p>With a {@code monitor} the wait is sliced into
+         * {@link LaunchLifecycleUtils#LOCK_WAIT_SLICE_MS} pieces against a monotonic
+         * {@code nanoTime} deadline so cancellation is honoured promptly. Without one there is
+         * nothing to re-check between slices, so the wait is a single timed {@code tryLock} — a
+         * 15-minute bound would otherwise cost ~9000 timed acquisitions and their queue churn.
+         *
+         * @param timeoutMs the bound on the wait; a non-positive value means one attempt only
+         * @param monitor cancellation source polled between slices (may be {@code null})
+         * @return how the acquisition ended; on {@link Acquisition#ACQUIRED} the lock is held by
+         *     the calling thread and must be released with {@link #unlock()}
+         */
+        public Acquisition tryAcquire(long timeoutMs, IProgressMonitor monitor)
+        {
+            boolean interrupted = Thread.interrupted();
+            try
+            {
+                return acquireWithin(timeoutMs, monitor);
+            }
+            catch (InterruptedException e)
+            {
+                interrupted = true;
+                return Acquisition.INTERRUPTED;
+            }
+            finally
+            {
+                if (interrupted)
+                {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+
+        /** The acquisition proper, run with the caller's interrupt flag already taken. */
+        private Acquisition acquireWithin(long timeoutMs, IProgressMonitor monitor)
+            throws InterruptedException
+        {
+            long remainingNanos = TimeUnit.MILLISECONDS.toNanos(Math.max(0L, timeoutMs));
+            if (monitor == null)
+            {
+                return lock.tryLock(remainingNanos, TimeUnit.NANOSECONDS)
+                    ? Acquisition.ACQUIRED : Acquisition.CONTENDED;
+            }
+            long deadline = System.nanoTime() + remainingNanos;
+            do
+            {
+                if (monitor.isCanceled())
+                {
+                    return Acquisition.CANCELLED;
+                }
+                long waitNanos = Math.min(remainingNanos,
+                    TimeUnit.MILLISECONDS.toNanos(LOCK_WAIT_SLICE_MS));
+                if (lock.tryLock(waitNanos, TimeUnit.NANOSECONDS))
+                {
+                    return Acquisition.ACQUIRED;
+                }
+                remainingNanos = deadline - System.nanoTime();
+            }
+            while (remainingNanos > 0L);
+            return Acquisition.CONTENDED;
+        }
+
+        /** Releases one acquisition made by {@link #tryAcquire} on the calling thread. */
+        public void unlock()
+        {
+            lock.unlock();
+        }
+
+        /** @return whether the calling thread currently holds this lock */
+        public boolean isHeldByCurrentThread()
+        {
+            return lock.isHeldByCurrentThread();
+        }
+    }
+
+    /**
+     * How one {@link LaunchLock#tryAcquire} ended. Not a boolean: the three failures have nothing
+     * in common for the caller's message, and reporting an interruption or a cancellation as
+     * contention names a rival operation that was never established to exist.
+     */
+    public enum Acquisition
+    {
+        /** The lock is held by the calling thread and must be released with {@code unlock()}. */
+        ACQUIRED,
+        /** The deadline elapsed with another thread holding the lock. */
+        CONTENDED,
+        /** The calling thread was interrupted; nothing was acquired and no contender was seen. */
+        INTERRUPTED,
+        /** The caller's progress monitor was cancelled; nothing was acquired. */
+        CANCELLED;
+
+        /** @return whether the lock is now held by the calling thread */
+        public boolean acquired()
+        {
+            return this == ACQUIRED;
+        }
+    }
+
+    /**
+     * Shared, named diagnosis for a {@link #lockFor} acquisition that did NOT succeed. Each site
+     * appends what it did NOT do and how to retry.
+     *
+     * @param outcome the failed acquisition (never {@link Acquisition#ACQUIRED})
+     * @param projectName the project whose lock was wanted (may be {@code null})
+     * @param applicationId the application whose lock was wanted (may be {@code null})
+     * @param timeoutMs the bound that was given to the acquisition
+     * @return the sentence naming the reason, never {@code null}
+     * @throws IllegalArgumentException for {@link Acquisition#ACQUIRED} — there is no failure to
+     *     diagnose, and wording one would invent a rival operation
+     */
+    public static String lockNotAcquiredMessage(Acquisition outcome, String projectName,
+        String applicationId, long timeoutMs)
+    {
+        switch (outcome)
+        {
+            case CONTENDED:
+                return lockUnavailableMessage(projectName, applicationId, timeoutMs);
+            case INTERRUPTED:
+                return lockPrefix(projectName, applicationId)
+                    + "was not acquired because this call was interrupted (EDT-MCP is stopping, " //$NON-NLS-1$
+                    + "or the background job was cancelled). No other operation was found holding " //$NON-NLS-1$
+                    + "the infobase."; //$NON-NLS-1$
+            case CANCELLED:
+                return lockPrefix(projectName, applicationId)
+                    + "was not acquired because the operation was cancelled while waiting for it. " //$NON-NLS-1$
+                    + "No other operation was found holding the infobase."; //$NON-NLS-1$
+            default:
+                throw new IllegalArgumentException(
+                    "A successful acquisition has no failure to diagnose"); //$NON-NLS-1$
+        }
+    }
+
+    /** The shared opening naming the lock every {@link #lockNotAcquiredMessage} branch reports on. */
+    private static String lockPrefix(String projectName, String applicationId)
+    {
+        return "The launch lock for application '" //$NON-NLS-1$
+            + (applicationId != null ? applicationId : UNKNOWN_LABEL) + "' in project '" //$NON-NLS-1$
+            + (projectName != null ? projectName : UNKNOWN_LABEL) + "' "; //$NON-NLS-1$
+    }
+
+    /**
+     * The {@link Acquisition#CONTENDED} diagnosis: the deadline elapsed with somebody else holding
+     * the lock. Reachable through {@link #lockNotAcquiredMessage}, which is what call sites use —
+     * this wording must never stand in for an interrupted or cancelled acquisition.
+     *
+     * @param projectName the project whose lock was contended (may be {@code null})
+     * @param applicationId the application whose lock was contended (may be {@code null})
+     * @param timeoutMs the bound that elapsed
+     * @return the sentence naming the reason, never {@code null}
+     */
+    public static String lockUnavailableMessage(String projectName, String applicationId,
+        long timeoutMs)
+    {
+        return lockPrefix(projectName, applicationId)
+            + "did not become available within " + describeLockTimeout(timeoutMs) //$NON-NLS-1$
+            + ": another operation on that infobase (a database update, a launch, a test run or " //$NON-NLS-1$
+            + "an infobase_sessions list/terminate) is still holding it."; //$NON-NLS-1$
+    }
+
+    /**
+     * Renders a lock deadline for {@link #lockUnavailableMessage}: whole minutes, else seconds,
+     * else milliseconds. The last case keeps a sub-second bound from reading as "0 seconds".
+     */
+    static String describeLockTimeout(long timeoutMs)
+    {
+        long millis = Math.max(0L, timeoutMs);
+        long seconds = millis / 1000L;
+        if (seconds >= 60L && seconds % 60L == 0L)
+        {
+            long minutes = seconds / 60L;
+            return minutes + (minutes == 1L ? " minute" : " minutes"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (seconds >= 1L)
+        {
+            return seconds + (seconds == 1L ? " second" : " seconds"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return millis + " ms"; //$NON-NLS-1$
+    }
+
+    /**
+     * Runs test coordination while holding the PRODUCTION launch lock, so a test can pin what a
+     * contended acquisition does. Mirrors {@code holdRecoveryLockForTest} in
+     * {@link StandaloneServerStateRecovery}.
+     */
+    static void holdLockForTest(String projectName, String applicationId, Runnable action)
+    {
+        LaunchLock lock = lockFor(projectName, applicationId);
+        Acquisition acquisition = lock.tryAcquire(5_000L, null);
+        if (!acquisition.acquired())
+        {
+            throw new IllegalStateException(
+                "The test launch lock could not be acquired: " + acquisition); //$NON-NLS-1$
+        }
+        try
+        {
+            action.run();
+        }
+        finally
+        {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Returns the lock that serialises {@link #prepareForFreshLaunch} for the given
+     * {@code project + applicationId} pair. Callers that also need the same lock around their own
+     * pre-launch steps (e.g. updating a working copy) acquire it with
+     * {@link LaunchLock#tryAcquire} and release it in a {@code finally}.
      *
      * <p>The internal key uses a NUL ({@code \u0000}) separator because
      * Eclipse project names may contain spaces and other printable characters,
      * which would otherwise allow keys to collide (e.g. {@code project="My",
      * appId="Project x"} vs {@code project="My Project", appId="x"}).
      */
-    public static Object lockFor(String projectName, String applicationId)
+    public static LaunchLock lockFor(String projectName, String applicationId)
     {
         String key = (projectName != null ? projectName : "") //$NON-NLS-1$
             + "\u0000" + (applicationId != null ? applicationId : ""); //$NON-NLS-1$ //$NON-NLS-2$
-        return KEY_LOCKS.computeIfAbsent(key, k -> new Object());
+        return KEY_LOCKS.computeIfAbsent(key, k -> new LaunchLock());
     }
 
     /**
@@ -1345,6 +1650,18 @@ public final class LaunchLifecycleUtils
      * {@code get_applications} reports as {@code defaultApplicationId}) lets the update
      * run headlessly so no dialog appears.
      *
+     * <p>Bounded (#622): the read is the wedge-prone one, and a fallback that never returns would
+     * hold the launch open forever. This String-returning form degrades BOTH ways of not answering
+     * — an expired deadline and an {@link ApplicationException} — to the id it was GIVEN, and
+     * reports neither.
+     *
+     * <p><b>That degradation is only safe where a missing default is visible downstream.</b> The
+     * degraded value is indistinguishable from "this project has no default", so a caller that
+     * turns the result into a LOCK KEY, a mutual-exclusion identity or a measured fact must use
+     * {@link #resolveDefaultApplication} instead and branch on
+     * {@link DefaultApplicationLookup#inconclusive()} — an empty id keys a DIFFERENT
+     * {@link #lockFor} mutex from the real application's, which silently removes the exclusion.
+     *
      * @param project the resolved project (may be {@code null})
      * @param applicationId the id from the call / launch config (may be {@code null}/empty)
      * @param appManager the application manager (may be {@code null})
@@ -1354,27 +1671,120 @@ public final class LaunchLifecycleUtils
     public static String resolveDefaultApplicationId(IProject project, String applicationId,
             IApplicationManager appManager)
     {
+        return resolveDefaultApplication(project, applicationId, appManager,
+            ApplicationSupport.LOOKUP_TIMEOUT_MS).id();
+    }
+
+    /**
+     * Same fallback, reporting WHETHER the default-application read answered.
+     *
+     * <p>Three outcomes, not two: the id resolved, the project genuinely records no default (the
+     * given id is handed back), or the read did not ANSWER — in which case the id handed back is
+     * the given one purely as a degradation and says nothing about the project.
+     *
+     * <p>"Did not answer" covers both ways the read can fail to establish anything: the caller's
+     * deadline expired, or the manager RAISED. Only the first outcome is a measured absence, so
+     * both of the others set {@link DefaultApplicationLookup#inconclusive()}.
+     *
+     * @param project the resolved project (may be {@code null})
+     * @param applicationId the id from the call / launch config (may be {@code null}/empty)
+     * @param appManager the application manager (may be {@code null})
+     * @param timeoutMs the caller-side deadline for the one bounded default-application read
+     * @return the lookup, never {@code null}
+     */
+    public static DefaultApplicationLookup resolveDefaultApplication(IProject project,
+            String applicationId, IApplicationManager appManager, long timeoutMs)
+    {
         if (applicationId != null && !applicationId.isEmpty())
         {
-            return applicationId;
+            return new DefaultApplicationLookup(applicationId, null);
         }
         if (appManager == null || project == null)
         {
-            return applicationId;
+            return new DefaultApplicationLookup(applicationId, null);
+        }
+        ApplicationSupport.BoundedRead<Optional<IApplication>> read =
+            ApplicationSupport.getDefaultApplicationBounded(appManager, project, timeoutMs);
+        if (!read.concluded())
+        {
+            Activator.logError("Error resolving default application for project " //$NON-NLS-1$
+                + project.getName() + ": " + read.deadlineFailure(), null); //$NON-NLS-1$
+            return new DefaultApplicationLookup(applicationId, read.deadlineFailure());
         }
         try
         {
             // getDefaultApplication may throw ApplicationException; degrade to the
             // original id (the caller then behaves exactly as before the fallback).
-            return appManager.getDefaultApplication(project)
+            return new DefaultApplicationLookup(read.valueOrRethrow()
                 .map(IApplication::getId)
-                .orElse(applicationId);
+                .orElse(applicationId), null);
         }
         catch (ApplicationException e)
         {
+            // A RAISED lookup establishes exactly as little as an expired one, so it is carried as
+            // a failure too. The id handed back is still the degradation the caller arrived with,
+            // and an IDENTITY taken from it keys a DIFFERENT lockFor mutex than the real
+            // application's - the mutual exclusion #621 exists to preserve.
             Activator.logError("Error resolving default application for project " //$NON-NLS-1$
                 + project.getName(), e);
-            return applicationId;
+            return new DefaultApplicationLookup(applicationId,
+                defaultLookupRaisedFailure(project, e));
+        }
+    }
+
+    /**
+     * The diagnosis for a default-application lookup that RAISED, worded alongside
+     * {@link ApplicationSupport#lookupDeadlineFailure} so both ways of not answering read the same
+     * to a caller: nothing about the project was established.
+     *
+     * @param project the project whose default was being resolved (never {@code null} here)
+     * @param failure what the manager raised
+     * @return the diagnosis sentence, never {@code null}
+     */
+    private static String defaultLookupRaisedFailure(IProject project, Throwable failure)
+    {
+        return "the EDT default-application lookup for project '" + project.getName() //$NON-NLS-1$
+            + "' failed: " + PlatformFailures.describe(failure); //$NON-NLS-1$
+    }
+
+    /**
+     * What {@link #resolveDefaultApplication} established: the effective application id, plus the
+     * reason the default-application read did not answer when it did not.
+     *
+     * <p>{@link #id()} is ALWAYS safe to launch with — it is what the unbounded code produced —
+     * but it is only safe to treat as an IDENTITY (a lock key, an existence check, a cross-check)
+     * when {@link #inconclusive()} is {@code false}.
+     */
+    public static final class DefaultApplicationLookup
+    {
+        private final String id;
+        private final String failure;
+
+        DefaultApplicationLookup(String id, String failure)
+        {
+            this.id = id;
+            this.failure = failure;
+        }
+
+        /** @return the effective application id (may be {@code null}/empty) */
+        public String id()
+        {
+            return id;
+        }
+
+        /**
+         * @return {@code true} when the read did not ANSWER — its deadline expired or it raised —
+         *     so the id is a degradation and not a measured fact
+         */
+        public boolean inconclusive()
+        {
+            return failure != null;
+        }
+
+        /** @return why the read did not answer, or {@code null} when it did */
+        public String failure()
+        {
+            return failure;
         }
     }
 
@@ -1497,9 +1907,19 @@ public final class LaunchLifecycleUtils
             return Optional.of("Project is not available: " //$NON-NLS-1$
                 + (project != null ? project.getName() : "<null>")); //$NON-NLS-1$
         }
+        // Bounded (#622): an unbounded lookup here would hold the whole pre-launch update open.
+        // A deadline is NOT a not-found — it is reported as its own unresolved-target message.
+        ApplicationSupport.BoundedRead<Optional<IApplication>> lookup =
+            ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
+                ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (!lookup.concluded())
+        {
+            return Optional.of("Application '" + applicationId + "' could not be resolved: " //$NON-NLS-1$ //$NON-NLS-2$
+                + lookup.deadlineFailure() + "."); //$NON-NLS-1$
+        }
         try
         {
-            Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
+            Optional<IApplication> appOpt = lookup.valueOrRethrow();
             if (!appOpt.isPresent())
             {
                 return Optional.of("Application not found: " + applicationId); //$NON-NLS-1$
@@ -1717,6 +2137,10 @@ public final class LaunchLifecycleUtils
      * arm the auto-confirmer with an ATTRIBUTABLE name. Fully guarded and best-effort: a name
      * that cannot be resolved simply yields {@code null}.
      *
+     * <p>A caller that also needs the server name, or that has to tell "no name" from "the name
+     * could not be READ", uses {@link #attributionNames} instead — this form collapses both into
+     * {@code null} and pays a second bounded read for the second name.
+     *
      * @param appManager the EDT application manager (may be {@code null})
      * @param project the project the application belongs to (may be {@code null})
      * @param applicationId the application id (may be {@code null})
@@ -1725,19 +2149,130 @@ public final class LaunchLifecycleUtils
     public static String attributionInfobaseName(IApplicationManager appManager, IProject project,
         String applicationId)
     {
+        return attributionNames(appManager, project, applicationId).infobaseName();
+    }
+
+    /**
+     * Resolves BOTH attribution names from ONE bounded application read.
+     *
+     * <p>The two names come off the same {@link IApplication}, so reading it twice doubled the
+     * cost of a wedged manager for no new information: a launch arms both matchers, and the pair
+     * is what the launch actually pays. One read, one budget
+     * ({@link #ATTRIBUTION_LOOKUP_TIMEOUT_MS}).
+     *
+     * <p>The result separates "this application has no such name" from "the read did not
+     * conclude". That distinction is NOT cosmetic, which is why it is carried out of here: a null
+     * infobase name degrades the caller's {@code externalInfobaseChanges} policy to {@code cancel}
+     * in {@code LaunchUpdateDialogAutoConfirmer}, and the advice attached to that cancel
+     * ("retrying will not help") is true for an application that resolves no infobase and FALSE
+     * for a ten-second deadline.
+     *
+     * @param appManager the EDT application manager (may be {@code null})
+     * @param project the project the application belongs to (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @return the names, never {@code null}
+     */
+    public static AttributionNames attributionNames(IApplicationManager appManager,
+        IProject project, String applicationId)
+    {
+        return attributionNames(appManager, project, applicationId,
+            ATTRIBUTION_LOOKUP_TIMEOUT_MS);
+    }
+
+    /**
+     * Same lookup with the deadline explicit, so a test can drive the non-concluded branch without
+     * waiting out {@link #ATTRIBUTION_LOOKUP_TIMEOUT_MS}. Production always calls the overload
+     * above.
+     *
+     * @param appManager the EDT application manager (may be {@code null})
+     * @param project the project the application belongs to (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @param timeoutMs the caller-side deadline for the one bounded application read
+     * @return the names, never {@code null}
+     */
+    public static AttributionNames attributionNames(IApplicationManager appManager,
+        IProject project, String applicationId, long timeoutMs)
+    {
         if (appManager == null || project == null || applicationId == null || applicationId.isEmpty())
         {
-            return null;
+            // Nothing to look up: definitively unattributable, and no read was attempted.
+            return new AttributionNames(null, null, false);
         }
         try
         {
-            return appManager.getApplication(project, applicationId)
-                .map(LaunchLifecycleUtils::conflictAttributionName)
-                .orElse(null);
+            ApplicationSupport.BoundedRead<Optional<IApplication>> read =
+                ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
+                    timeoutMs);
+            if (!read.concluded())
+            {
+                // Logged, not swallowed: this is the read whose failure silently degrades a
+                // writing policy to 'cancel', so it must leave a trace the reader can find.
+                Activator.logError("Attribution lookup for application '" + applicationId //$NON-NLS-1$
+                    + "' did not conclude: " + read.deadlineFailure(), null); //$NON-NLS-1$
+                return new AttributionNames(null, null, true);
+            }
+            if (read.failure() != null)
+            {
+                // A RAISED read answered nothing either. Folding it into "this application has no
+                // name" would attach the permanent advice ("retrying will not help") to a
+                // manager failure that a retry may well get past.
+                Activator.logError("Attribution lookup for application '" + applicationId //$NON-NLS-1$
+                    + "' failed", read.failure()); //$NON-NLS-1$
+                return new AttributionNames(null, null, true);
+            }
+            // Both failure channels are already handled above, so this cannot rethrow.
+            Optional<IApplication> app = read.valueOrRethrow();
+            return new AttributionNames(app.map(LaunchLifecycleUtils::conflictAttributionName)
+                .orElse(null), app.map(LaunchLifecycleUtils::serverNameOf).orElse(null), false);
         }
         catch (Exception e) // NOSONAR a best-effort hint must never break a launch
         {
-            return null;
+            // Only what happens AFTER the read concluded lands here (name extraction is
+            // reflective), and that really is "no such name": the application resolved.
+            return new AttributionNames(null, null, false);
+        }
+    }
+
+    /**
+     * The two names one launch window arms with, and whether the read that produced them
+     * ANSWERED.
+     *
+     * <p>{@link #inconclusive()} is the difference between "this application names no infobase"
+     * (permanent — a different application has to be targeted) and "the manager did not answer",
+     * whether its deadline expired or it raised (transient — the same call may well work once EDT
+     * is responsive). Both yield a {@code null} name and both degrade a writing policy to
+     * {@code cancel}; only the advice differs, and getting it wrong sends the caller away from the
+     * one action that helps.
+     */
+    public static final class AttributionNames
+    {
+        private final String infobaseName;
+        private final String serverName;
+        private final boolean inconclusive;
+
+        AttributionNames(String infobaseName, String serverName, boolean inconclusive)
+        {
+            this.infobaseName = infobaseName;
+            this.serverName = serverName;
+            this.inconclusive = inconclusive;
+        }
+
+        /** @return the infobase display name EDT quotes in its conflict modal, or {@code null} */
+        public String infobaseName()
+        {
+            return infobaseName;
+        }
+
+        /** @return the WST server's own name, or {@code null} */
+        public String serverName()
+        {
+            return serverName;
+        }
+
+        /** @return {@code true} when the names are UNKNOWN because the read did not conclude */
+        public boolean inconclusive()
+        {
+            return inconclusive;
         }
     }
 
@@ -1758,20 +2293,7 @@ public final class LaunchLifecycleUtils
     public static String attributionServerName(IApplicationManager appManager, IProject project,
         String applicationId)
     {
-        if (appManager == null || project == null || applicationId == null || applicationId.isEmpty())
-        {
-            return null;
-        }
-        try
-        {
-            return appManager.getApplication(project, applicationId)
-                .map(LaunchLifecycleUtils::serverNameOf)
-                .orElse(null);
-        }
-        catch (Exception e) // NOSONAR a best-effort hint must never break a launch
-        {
-            return null;
-        }
+        return attributionNames(appManager, project, applicationId).serverName();
     }
 
     /**
@@ -2332,6 +2854,23 @@ public final class LaunchLifecycleUtils
             int terminateTimeoutSeconds, String updateScope, ExternalInfobaseChangesPolicy policy,
             Consumer<String> phaseSink)
     {
+        return prepareForFreshLaunch(launchManager, project, applicationId, appManager,
+            terminateTimeoutSeconds, updateScope, policy, phaseSink, OPERATION_LOCK_TIMEOUT_MS);
+    }
+
+    /**
+     * Same contract, with the launch-lock deadline supplied instead of taken from
+     * {@link #OPERATION_LOCK_TIMEOUT_MS} — the seam a test uses to pin what a contended
+     * acquisition does without waiting out the production bound.
+     *
+     * @param lockTimeoutMs the bound on acquiring {@link #lockFor}
+     * @return the prep result
+     */
+    static PreLaunchResult prepareForFreshLaunch(ILaunchManager launchManager, // NOSONAR pass-through signature; the lock bound is a deadline, not a new concern
+            IProject project, String applicationId, IApplicationManager appManager,
+            int terminateTimeoutSeconds, String updateScope, ExternalInfobaseChangesPolicy policy,
+            Consumer<String> phaseSink, long lockTimeoutMs)
+    {
         if (launchManager == null)
         {
             return new PreLaunchResult(false, 0, "Launch manager is not available"); //$NON-NLS-1$
@@ -2354,10 +2893,19 @@ public final class LaunchLifecycleUtils
 
         // Per-key lock prevents concurrent run_yaxunit_tests / debug_yaxunit_tests
         // calls targeting the same IB from racing on terminate + update. Other
-        // (project, applicationId) pairs are unaffected. Java synchronized is
-        // reentrant, so callers may already hold this monitor when wrapping
-        // their full spawn+register sequence around the auto-chain.
-        synchronized (lockFor(project.getName(), applicationId))
+        // (project, applicationId) pairs are unaffected. The lock is reentrant,
+        // so callers may already hold it when wrapping their full spawn+register
+        // sequence around the auto-chain; a re-entrant acquisition is never CONTENDED.
+        LaunchLock lock = lockFor(project.getName(), applicationId);
+        Acquisition acquisition = lock.tryAcquire(lockTimeoutMs, null);
+        if (!acquisition.acquired())
+        {
+            return new PreLaunchResult(false, 0,
+                lockNotAcquiredMessage(acquisition, project.getName(), applicationId, lockTimeoutMs)
+                    + " Nothing was terminated, recomputed or updated; retry once that operation " //$NON-NLS-1$
+                    + "finishes."); //$NON-NLS-1$
+        }
+        try
         {
             // Prune terminated entries so a stale registration cannot
             // permanently block future auto-chains.
@@ -2380,6 +2928,10 @@ public final class LaunchLifecycleUtils
 
             return finalizeFreshLaunchPrep(project, applicationId, appManager, updateScope, policy,
                 outcome.terminated, phaseSink);
+        }
+        finally
+        {
+            lock.unlock();
         }
     }
 
@@ -3224,6 +3776,13 @@ public final class LaunchLifecycleUtils
      * it never equals the delegate's real/default app id). Returns
      * {@code null} if the id cannot be resolved (no persisted id and no default
      * application).
+     *
+     * <p>{@code null} now also covers a default-application read that did NOT conclude (#622),
+     * and each caller degrades differently: the fresh-run sweep loses its delegate-keyed half, so
+     * EDT's code-1003 "Debug session already exists" modal can fire; the standalone pre-flight
+     * short-circuits, so the stale-server check it exists for is skipped. Neither is a
+     * correctness hole, but both are silent — a caller that needs to SAY so reads the default
+     * through {@link #resolveDefaultApplication} instead.
      */
     public static String resolveDelegateApplicationId(ILaunchConfiguration config, String projectName)
     {
@@ -3236,7 +3795,20 @@ public final class LaunchLifecycleUtils
         return resolveDelegateApplicationId(config, ctx.project(), appManager);
     }
 
-    /** Same delegate-id rule with the project and manager already resolved by the caller. */
+    /**
+     * Same delegate-id rule with the project and manager already resolved by the caller.
+     *
+     * <p>The default-application read gets the full {@link ApplicationSupport#LOOKUP_TIMEOUT_MS}
+     * from every caller, including the attribution path. Charging it a smaller share so a later
+     * step could keep the rest was tried and reverted: this step's answer is what the later step
+     * LOOKS UP, so starving it produces the very {@code null} name the attribution exists to
+     * avoid.
+     *
+     * @param config the launch configuration
+     * @param project the resolved project (may be {@code null})
+     * @param appManager the application manager (may be {@code null})
+     * @return the delegate's application id, or {@code null} when it cannot be resolved
+     */
     public static String resolveDelegateApplicationId(ILaunchConfiguration config, IProject project,
         IApplicationManager appManager)
     {
@@ -3250,10 +3822,11 @@ public final class LaunchLifecycleUtils
         {
             return null;
         }
-        // resolveDefaultApplicationId returns the original (empty) value when there is
+        // resolveDefaultApplication returns the original (empty) value when there is
         // no default — normalize that to null so findRuntimeClientDebugTarget's
         // empty-id guard short-circuits instead of matching on "".
-        String resolved = resolveDefaultApplicationId(project, null, appManager);
+        String resolved = resolveDefaultApplication(project, null, appManager,
+            ApplicationSupport.LOOKUP_TIMEOUT_MS).id();
         return resolved != null && !resolved.isEmpty() ? resolved : null;
     }
 

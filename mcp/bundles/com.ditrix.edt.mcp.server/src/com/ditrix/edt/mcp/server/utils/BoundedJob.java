@@ -26,11 +26,15 @@ import com.ditrix.edt.mcp.server.Activator;
  * deadline, so an unattended MCP call can never be held open indefinitely by a wedged
  * platform operation.
  *
- * <p>Two layers of protection, deliberately combined:
+ * <p>Two layers of protection, but only ONE of them is always present:
  * <ul>
  * <li>the work receives the {@link Job}'s own {@link IProgressMonitor}, which is cancelled
  * when the deadline elapses — a platform call that polls its monitor (notably one waiting
- * for a conflicting scheduling rule) unwinds with {@code OperationCanceledException};</li>
+ * for a conflicting scheduling rule) unwinds with {@code OperationCanceledException}. This
+ * layer only exists for work that HAS a monitor to poll: {@code ApplicationSupport}'s six
+ * bounded entry points wrap {@code IApplicationManager} calls that take no monitor at all
+ * (EDT declares no such overload), so for every one of them this layer is inert by
+ * construction and the deadline below is the whole guarantee;</li>
  * <li>the caller stops waiting at the deadline regardless — cancellation is cooperative and
  * cannot preempt code that never polls, so the bound on the CALLER is what actually
  * guarantees an answer.</li>
@@ -59,6 +63,12 @@ public final class BoundedJob
          * The deadline elapsed while the job was still QUEUED, and cancelling it kept it from ever
          * starting. The work did NOT run and will not run — the opposite of {@link #TIMED_OUT},
          * where it is still in flight, and the distinction the caller's message turns on.
+         *
+         * <p>RARE for the job shape used here. A rule-less job is never held by
+         * {@code findBlockingJob}, and {@code jobQueued} always produces a worker for it, so it
+         * normally starts at once; a SUSPENDED job manager makes {@code join} return immediately
+         * and lands on {@link #NOT_RUN} instead. Treat this as the narrow race where our cancel
+         * beats the worker to the start line, not as "the queue was busy".
          */
         TIMED_OUT_BEFORE_START,
         /** The waiting thread was interrupted; the job was cancelled but may still be running. */

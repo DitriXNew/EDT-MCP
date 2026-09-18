@@ -59,6 +59,15 @@ public class InfobaseSessionsTool implements IMcpTool
      * session count demands and the per-command bound buys nothing.
      */
     private static final long BULK_TERMINATION_BUDGET_MS = 60_000L;
+
+    /**
+     * Bound on resolving the target application (#622). This tool advertises a bounded answer, so
+     * its application read refuses with a named reason rather than queue behind EDT's provision
+     * delegates; 15 seconds is the same order as the lock bound it already refuses on, and well
+     * above a healthy read, which returns in milliseconds.
+     */
+    static final long APPLICATION_LOOKUP_TIMEOUT_MS = 15_000L;
+
     @Override
     public String getName()
     {
@@ -189,11 +198,29 @@ public class InfobaseSessionsTool implements IMcpTool
             {
                 return resolved.errorJson;
             }
-            synchronized (LaunchLifecycleUtils.lockFor(projectName, resolved.application.getId()))
+            // Bounded, and short: this tool advertises an answer in seconds, so queueing behind a
+            // publish would break its own contract - it refuses with the reason instead.
+            LaunchLifecycleUtils.LaunchLock lock =
+                LaunchLifecycleUtils.lockFor(projectName, resolved.application.getId());
+            LaunchLifecycleUtils.Acquisition acquisition =
+                lock.tryAcquire(LaunchLifecycleUtils.SESSIONS_LOCK_TIMEOUT_MS, null);
+            if (!acquisition.acquired())
+            {
+                return ToolResult.error(LaunchLifecycleUtils.lockNotAcquiredMessage(acquisition,
+                    projectName, resolved.application.getId(),
+                    LaunchLifecycleUtils.SESSIONS_LOCK_TIMEOUT_MS)
+                    + " No session was listed or terminated. Wait for that operation to finish " //$NON-NLS-1$
+                    + "and call infobase_sessions again.").toJson(); //$NON-NLS-1$
+            }
+            try
             {
                 return ACTION_LIST.equals(action)
                     ? list(projectName, resolved.application) : terminate(projectName,
                         resolved.application, sessionId, all, message);
+            }
+            finally
+            {
+                lock.unlock();
             }
         }
         catch (Exception e)
@@ -253,14 +280,45 @@ public class InfobaseSessionsTool implements IMcpTool
         {
             return ResolvedApplication.error(managerResult.errorJson());
         }
-        IProject project = managerResult.project();
-        IApplicationManager manager = managerResult.manager();
-        Optional<IApplication> application = applicationId == null || applicationId.isBlank()
-            ? manager.getDefaultApplication(project)
-            : manager.getApplication(project, applicationId);
+        return resolveApplication(managerResult.manager(), managerResult.project(), projectName,
+            applicationId, APPLICATION_LOOKUP_TIMEOUT_MS);
+    }
+
+    /**
+     * The manager-dependent half of the resolution, with the deadline explicit.
+     *
+     * @param manager the resolved application manager
+     * @param project the resolved open project
+     * @param projectName the project name echoed into the messages
+     * @param applicationId the explicit application id, or {@code null}/blank for the default
+     * @param timeoutMs the caller-side deadline for the one bounded application read
+     * @return the resolved application, or the error JSON to return verbatim
+     */
+    static ResolvedApplication resolveApplication(IApplicationManager manager, IProject project,
+        String projectName, String applicationId, long timeoutMs)
+    {
+        boolean byDefault = applicationId == null || applicationId.isBlank();
+        ApplicationSupport.BoundedRead<Optional<IApplication>> read = byDefault
+            ? ApplicationSupport.getDefaultApplicationBounded(manager, project, timeoutMs)
+            : ApplicationSupport.getApplicationBounded(manager, project, applicationId, timeoutMs);
+        if (!read.concluded())
+        {
+            // A refusal, not a not-found: the read never concluded, so whether the application
+            // exists is unknown, and nothing was listed or terminated. The DEFAULT-application
+            // route also names the cheap way round it, exactly as create_launch_config's sibling
+            // refusal does: passing applicationId skips the wedge-prone default lookup entirely.
+            return ResolvedApplication.error(ToolResult.error(read.deadlineFailure()
+                + ". No session was listed or terminated, and this says nothing about whether " //$NON-NLS-1$
+                + "the application exists. " //$NON-NLS-1$
+                + (byDefault
+                    ? "Pass applicationId explicitly (get_applications lists the ids) to skip the " //$NON-NLS-1$
+                        + "default-application lookup, or retry once EDT is responsive." //$NON-NLS-1$
+                    : "Retry once EDT is responsive.")).toJson()); //$NON-NLS-1$
+        }
+        Optional<IApplication> application = read.valueOrRethrow();
         if (application.isEmpty())
         {
-            String target = applicationId == null || applicationId.isBlank()
+            String target = byDefault
                 ? "Project '" + projectName + "' has no default application." //$NON-NLS-1$ //$NON-NLS-2$
                 : "Application not found: " + applicationId + "."; //$NON-NLS-1$ //$NON-NLS-2$
             return ResolvedApplication.error(ToolResult.error(target
@@ -824,7 +882,7 @@ public class InfobaseSessionsTool implements IMcpTool
     }
 
     /** Project/application resolution outcome. */
-    private static final class ResolvedApplication
+    static final class ResolvedApplication
     {
         final IApplication application;
         final String errorJson;

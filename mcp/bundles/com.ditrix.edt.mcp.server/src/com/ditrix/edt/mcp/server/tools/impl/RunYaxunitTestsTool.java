@@ -49,6 +49,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobPolling;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobRenderer;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
@@ -1015,7 +1016,19 @@ public class RunYaxunitTestsTool implements IMcpTool
                 // is extracted but stays INLINE under the SAME two locks here so the
                 // lock scopes are byte-for-byte the inline behaviour.
                 state.set(PHASE_SPAWN);
-                synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
+                LaunchLifecycleUtils.LaunchLock spawnLock =
+                    LaunchLifecycleUtils.lockFor(projectName, applicationId);
+                LaunchLifecycleUtils.Acquisition spawnAcquisition =
+                    spawnLock.tryAcquire(LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS, null);
+                if (!spawnAcquisition.acquired())
+                {
+                    return ToolResult.error(LaunchLifecycleUtils.lockNotAcquiredMessage(
+                        spawnAcquisition, projectName, applicationId,
+                        LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS)
+                        + " No test run was started. Wait for that operation to finish and call " //$NON-NLS-1$
+                        + "run_yaxunit_tests again.").toJson(); //$NON-NLS-1$
+                }
+                try
                 {
                     synchronized (ACTIVE_LAUNCHES)
                     {
@@ -1023,12 +1036,16 @@ public class RunYaxunitTestsTool implements IMcpTool
                             runKey, reportDir, execution);
                     }
                 }
+                finally
+                {
+                    spawnLock.unlock();
+                }
             }
 
             execution.trackLaunch(launch, reportDir);
             state.set(PHASE_RUN);
             String pollResult = pollLaunch(launch, reportDir, deadlineMs, runKey,
-                    projectName, applicationId);
+                    projectName, applicationId, reportLockTimeoutMs(deadlineMs));
             if (pollResult != null)
             {
                 return prependPreLaunchInfo(preLaunch, pollResult);
@@ -1135,15 +1152,15 @@ public class RunYaxunitTestsTool implements IMcpTool
         // The project comes from the launch CONFIGURATION, not from req: a caller addressing the
         // run by launchConfigurationName leaves req.projectName null.
         ProjectContext launchCtx = ProjectContext.of(configProjectName(matchingConfig));
-        String launchInfobase = LaunchLifecycleUtils.attributionInfobaseName(
+        // ONE bounded read for both names. The server's OWN name is what the port-conflict dialog
+        // quotes - the infobase name inside it is not enough to tell "Base" from "My Base", and
+        // the answer rewrites whichever server the dialog belongs to - but it comes off the same
+        // application, so reading it separately only doubled what a wedged manager costs here.
+        LaunchLifecycleUtils.AttributionNames names = LaunchLifecycleUtils.attributionNames(
             Activator.getDefault().getApplicationManager(),
             launchCtx.isOpen() ? launchCtx.project() : null, applicationId);
-        // The server's OWN name, which is what the port-conflict dialog quotes: the infobase
-        // name inside it is not enough to tell "Base" from "My Base", and the answer rewrites
-        // whichever server the dialog belongs to.
-        String launchServer = LaunchLifecycleUtils.attributionServerName(
-            Activator.getDefault().getApplicationManager(),
-            launchCtx.isOpen() ? launchCtx.project() : null, applicationId);
+        String launchInfobase = names.infobaseName();
+        String launchServer = names.serverName();
         // Armed even without a resolved name: the confirmer degrades such an arm to 'cancel', so
         // the modal is answered (no hang) but nothing is written on an unattributable dialog.
         ExternalInfobaseChangesPolicy launchPolicy = armFlags[0] ? req.externalChanges : null;
@@ -1161,11 +1178,14 @@ public class RunYaxunitTestsTool implements IMcpTool
         // port-conflict reason exactly when updateBeforeLaunch=false: the matcher is armed (it must
         // be, or the run hangs), the conflict is refused, and the run then failed with a generic
         // "no report" instead of the busy ports.
+        // The window is told WHY the names may be null: an unresolved name degrades the policy to
+        // 'cancel', and the advice for "this application names no infobase" is the opposite of
+        // the advice for "the lookup expired".
         LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts =
             launchPolicy == null && launchPortPolicy == null
                 ? null
                 : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase,
-                    launchServer);
+                    launchServer, names.inconclusive());
         boolean autoConfirmerArmed = LaunchUpdateDialogAutoConfirmer.arm(armFlags[0], armFlags[1],
             armFlags[0], launchPolicy, launchInfobase, launchPortPolicy, launchServer);
         ILaunch launch;
@@ -1381,7 +1401,21 @@ public class RunYaxunitTestsTool implements IMcpTool
         // bound to an application). Fall back to the project's default application
         // so updateBeforeLaunch has a target and the EDT launch delegate does not
         // pop its blocking "Update infobase before launch?" modal.
-        applicationId = LaunchLifecycleUtils.resolveDefaultApplicationId(project, applicationId, appManager);
+        LaunchLifecycleUtils.DefaultApplicationLookup defaultApp =
+            LaunchLifecycleUtils.resolveDefaultApplication(project, applicationId, appManager,
+                ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (defaultApp.inconclusive())
+        {
+            // REFUSED, not degraded. The degraded value here is the EMPTY id this config came
+            // with, and an empty id is not merely "no target for the update": lockFor(project, "")
+            // is a DIFFERENT mutex from lockFor(project, realId), so the run would stop serialising
+            // against update_database and the other launches of that very infobase - and the
+            // "Update infobase before launch?" modal this fallback exists to close would reopen.
+            // Neither is worth starting a test run over an unanswered question.
+            return LaunchContext.failure(
+                unresolvedDefaultApplicationError(projectName, defaultApp.failure()));
+        }
+        applicationId = defaultApp.id();
 
         if (applicationId != null && !applicationId.isEmpty())
         {
@@ -1393,6 +1427,30 @@ public class RunYaxunitTestsTool implements IMcpTool
         }
 
         return LaunchContext.success(matchingConfig, projectName, applicationId, project, appManager);
+    }
+
+    /**
+     * The refusal for a launch configuration with no persisted applicationId whose project default
+     * could not be READ (#622).
+     *
+     * <p>Deliberately an error rather than the empty-id degradation the unbounded code produced:
+     * that empty id keys a different {@link LaunchLifecycleUtils#lockFor} mutex than the real
+     * application's, which silently drops the serialisation against {@code update_database} and
+     * the other launches of the same infobase — and it re-opens the EDT modal the fallback exists
+     * to close.
+     *
+     * @param projectName the project whose default could not be resolved
+     * @param failure the non-concluded read's own diagnosis
+     * @return the structured error JSON, never {@code null}
+     */
+    static String unresolvedDefaultApplicationError(String projectName, String failure)
+    {
+        return ToolResult.error(
+            "The launch configuration carries no applicationId and the default application of " //$NON-NLS-1$
+            + "project '" + projectName + "' could not be resolved: " + failure //$NON-NLS-1$ //$NON-NLS-2$
+            + ". No test run was started, and nothing about that project was established. Pass " //$NON-NLS-1$
+            + "applicationId explicitly (get_applications lists them), or retry once EDT is " //$NON-NLS-1$
+            + "responsive.").toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -1441,15 +1499,73 @@ public class RunYaxunitTestsTool implements IMcpTool
      * a racing identical call may have put under the same runKey since the get() above.
      * Worst case still degrades from a torn parse to a clean null; findJunitXml + readResults
      * are fast (ms), so contention is negligible.
+     * <p>
+     * The lock is taken with {@link #reportLockTimeoutMs}: the SMALLER of what this call's own
+     * deadline still allows and {@link LaunchLifecycleUtils#OPERATION_LOCK_TIMEOUT_MS} — in the
+     * shipped call path always the latter, because the owning background job carries no deadline
+     * (see {@link #reportLockTimeoutMs}). The long bound is the ceiling because a legitimate holder
+     * can be a full configuration publish. Giving up early is safe here ONLY because expiry is a terminal
+     * error: a {@code **Pending:**} would send the owning job back through {@code runTests}, where
+     * an evicted tracking entry routes it to the spawn path and {@link #cleanupTempDir} wipes the
+     * report this read exists to return.
      *
-     * @return the Markdown report, a structured error, or a Pending message — always non-{@code null}
+     * @return for a TERMINATED launch the Markdown report or a structured error, never a Pending;
+     *         for one still running the poll result or a Pending — always non-{@code null}
      */
-    private String handleExistingLaunch(ILaunch existing, Path reportDir, long deadlineMs, String runKey, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+    String handleExistingLaunch(ILaunch existing, Path reportDir, long deadlineMs, String runKey, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String projectName, String applicationId) throws InterruptedException
+    {
+        return handleExistingLaunch(existing, reportDir, deadlineMs, runKey, projectName,
+            applicationId, reportLockTimeoutMs(deadlineMs));
+    }
+
+    /**
+     * How long a report read may wait for the launch lock: never past the caller's own deadline,
+     * never longer than a publish-sized {@link LaunchLifecycleUtils#OPERATION_LOCK_TIMEOUT_MS}.
+     *
+     * <p><b>Today this changes nothing, and the javadoc says so rather than implying otherwise.</b>
+     * {@code runTests} has exactly ONE production caller and it passes {@link Long#MAX_VALUE}, so
+     * the minimum is always the 15-minute ceiling. That is deliberate, not an oversight: the run is
+     * owned by a registry background job that must OUTLIVE the MCP call's poll window (the client
+     * gets a Pending and polls {@code get_job_status}), and the guarded work is the only read of a
+     * finished run's report — a job that gave up when the client's window closed would lose the
+     * report rather than answer sooner. Threading the MCP call's own budget in here would do
+     * exactly that.
+     *
+     * <p>So this is the rule for a caller that HAS a deadline: what its budget still allows caps
+     * the lock wait, instead of the publish-sized constant being handed to the acquisition
+     * regardless. The bound is computed once, at entry, and threaded through {@code pollLaunch} —
+     * so a read that polls for a while can still wait the remainder this call STARTED with, not
+     * the remainder as of the acquisition. The tests drive it with their own short deadlines and
+     * pin that rule; no shipped call path reaches a bound below the ceiling.
+     *
+     * @param deadlineMs the call's absolute wall-clock deadline
+     * @return the lock bound in milliseconds, never negative
+     */
+    static long reportLockTimeoutMs(long deadlineMs)
+    {
+        return Math.min(remainingMillis(deadlineMs), LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS);
+    }
+
+    /**
+     * Same handling with an explicit lock bound, so a test can drive the refusal path without
+     * waiting out the production bound. Production always calls the overload above.
+     */
+    String handleExistingLaunch(ILaunch existing, Path reportDir, long deadlineMs, String runKey, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+            String projectName, String applicationId, long lockTimeoutMs)
+        throws InterruptedException
     {
         if (existing.isTerminated())
         {
-            synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
+            LaunchLifecycleUtils.LaunchLock readLock =
+                LaunchLifecycleUtils.lockFor(projectName, applicationId);
+            LaunchLifecycleUtils.Acquisition acquisition = readLock.tryAcquire(lockTimeoutMs, null);
+            if (!acquisition.acquired())
+            {
+                return reportReadLockRefusal(acquisition, reportDir, projectName, applicationId,
+                    lockTimeoutMs);
+            }
+            try
             {
                 ACTIVE_LAUNCHES.remove(runKey, existing);
                 File junitXml = YaxunitReportUtils.findJunitXml(reportDir);
@@ -1460,9 +1576,13 @@ public class RunYaxunitTestsTool implements IMcpTool
                 return ToolResult.error("Previous launch finished but no JUnit XML found in " //$NON-NLS-1$
                         + reportDir + ". Make sure YAXUnit extension is installed.").toJson(); //$NON-NLS-1$
             }
+            finally
+            {
+                readLock.unlock();
+            }
         }
         String pollResult = pollLaunch(existing, reportDir, deadlineMs, runKey,
-                projectName, applicationId);
+                projectName, applicationId, lockTimeoutMs);
         return pollResult != null ? pollResult : buildPendingMessage(reportDir);
     }
 
@@ -1553,7 +1673,19 @@ public class RunYaxunitTestsTool implements IMcpTool
         }
 
         state.set(PHASE_SPAWN);
-        synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
+        LaunchLifecycleUtils.LaunchLock debugSpawnLock =
+            LaunchLifecycleUtils.lockFor(projectName, applicationId);
+        LaunchLifecycleUtils.Acquisition debugSpawnAcquisition =
+            debugSpawnLock.tryAcquire(LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS, null);
+        if (!debugSpawnAcquisition.acquired())
+        {
+            return ToolResult.error(LaunchLifecycleUtils.lockNotAcquiredMessage(
+                debugSpawnAcquisition, projectName, applicationId,
+                LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS)
+                + " No debug launch was started. Wait for that operation to finish and call " //$NON-NLS-1$
+                + "run_yaxunit_tests again.").toJson(); //$NON-NLS-1$
+        }
+        try
         {
             // Fresh-run guarantee — PART OF THE updateBeforeLaunch AUTO-CHAIN: with
             // updateBeforeLaunch=true a YAXUnit debug run is ALWAYS a new session —
@@ -1607,12 +1739,14 @@ public class RunYaxunitTestsTool implements IMcpTool
             // non-destructive "Keep existing and start new" so an unattended call
             // never hangs on the modal.
             boolean[] armFlags = debugPathArmFlags(req.updateBeforeLaunch);
-            // Same as the RUN path: gated on the update opt-out, and the only armed window
-            // around a standalone-server application's delegate-performed update.
-            String launchInfobase = LaunchLifecycleUtils.attributionInfobaseName(appManager, project,
-                applicationId);
-            String launchServer = LaunchLifecycleUtils.attributionServerName(appManager,
-                project, applicationId);
+            // Same as the RUN path: gated on the update opt-out, the only armed window around a
+            // standalone-server application's delegate-performed update, and ONE bounded read for
+            // both names - this one is taken while the launch lock is held, so its cost is paid by
+            // every other operation on the infobase.
+            LaunchLifecycleUtils.AttributionNames names =
+                LaunchLifecycleUtils.attributionNames(appManager, project, applicationId);
+            String launchInfobase = names.infobaseName();
+            String launchServer = names.serverName();
             ExternalInfobaseChangesPolicy launchPolicy = armFlags[0] ? req.externalChanges : null;
             // The port matcher is armed only for a STANDALONE-SERVER target: a file or client-server
             // application cannot raise that modal, and an arm held for the whole run would claim a
@@ -1628,7 +1762,7 @@ public class RunYaxunitTestsTool implements IMcpTool
                 launchPolicy == null && launchPortPolicy == null
                     ? null
                     : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase,
-                        launchServer);
+                        launchServer, names.inconclusive());
             boolean autoConfirmerArmed = LaunchUpdateDialogAutoConfirmer.arm(armFlags[0], armFlags[1],
                 armFlags[0], launchPolicy, launchInfobase, launchPortPolicy, launchServer);
             ILaunch[] spawned = new ILaunch[1];
@@ -1676,6 +1810,10 @@ public class RunYaxunitTestsTool implements IMcpTool
             }
             LaunchLifecycleUtils.registerOwnedLaunch(spawned[0]);
             execution.trackLaunch(spawned[0], reportDir);
+        }
+        finally
+        {
+            debugSpawnLock.unlock();
         }
         return buildDebugLaunchMarkdown(matchingConfig.getName(), projectName, applicationId,
             reportDir, junitFile, preLaunch);
@@ -2100,9 +2238,13 @@ public class RunYaxunitTestsTool implements IMcpTool
      * this thread's remove and read. The poll loop itself is deliberately OUTSIDE the lock: holding
      * it across the {@link Thread#sleep} window would serialise the whole IB for the poll duration.
      * Worst case still degrades from a torn parse to a clean null.
+     * <p>
+     * Same bound rule as the sibling read — production passes {@link #reportLockTimeoutMs}, the
+     * smaller of the caller's remaining deadline and the publish-sized ceiling. The bound stays a
+     * parameter so the refusal can report the value this call actually used.
      */
-    private String pollLaunch(ILaunch launch, Path reportDir, long deadline, String runKey,
-            String projectName, String applicationId)
+    private String pollLaunch(ILaunch launch, Path reportDir, long deadline, String runKey, // NOSONAR signature is inherent; a parameter-object would not improve clarity
+            String projectName, String applicationId, long lockTimeoutMs)
             throws InterruptedException
     {
         // An ABSOLUTE deadline, not a second count: rounding the remainder down to whole seconds
@@ -2121,7 +2263,15 @@ public class RunYaxunitTestsTool implements IMcpTool
             Thread.sleep(Math.min(POLL_INTERVAL_MS, remaining));
         }
 
-        synchronized (LaunchLifecycleUtils.lockFor(projectName, applicationId))
+        LaunchLifecycleUtils.LaunchLock readLock =
+            LaunchLifecycleUtils.lockFor(projectName, applicationId);
+        LaunchLifecycleUtils.Acquisition acquisition = readLock.tryAcquire(lockTimeoutMs, null);
+        if (!acquisition.acquired())
+        {
+            return reportReadLockRefusal(acquisition, reportDir, projectName, applicationId,
+                lockTimeoutMs);
+        }
+        try
         {
             // Remove by identity. While this thread was blocked on the lock, a concurrent identical
             // call could have observed THIS launch already evicted (the termination listener) and
@@ -2141,19 +2291,81 @@ public class RunYaxunitTestsTool implements IMcpTool
 
             return YaxunitReportUtils.renderAndSave(junitXml);
         }
+        finally
+        {
+            readLock.unlock();
+        }
+    }
+
+    /**
+     * Terminal answer for a finished run whose report could not be read because the launch lock
+     * was not acquired.
+     *
+     * <p>Deliberately an ERROR and not a {@code **Pending:**}: a Pending sends the owning job's
+     * loop back through {@code runTests}, which may find the tracking entry evicted, take the spawn
+     * path and wipe the report. A structured error ends the job with the report still on disk, and
+     * names where it is.
+     *
+     * <p>The file is named as the place the report SURVIVES, not as an MCP recovery: no tool in
+     * this surface reads an arbitrary path, so the message says so rather than pointing the caller
+     * at a step it cannot take. A second {@code run_yaxunit_tests} is not an alternative either:
+     * with the terminated launch already evicted it reaches the spawn path, whose
+     * {@code cleanupTempDir(reportDir)} wipes exactly the directory this message points at.
+     *
+     * @param acquisition why the lock was not acquired (never
+     *     {@link LaunchLifecycleUtils.Acquisition#ACQUIRED}) — an interrupted read must not be
+     *     reported as a rival operation
+     * @param reportDir the report directory of the finished run
+     * @param projectName the project whose lock was wanted
+     * @param applicationId the application whose lock was wanted
+     * @param lockTimeoutMs the bound the CALL SITE gave the acquisition, so the sentence can never
+     *     name a deadline the site did not actually use
+     * @return the structured error JSON, never {@code null}
+     */
+    static String reportReadLockRefusal(LaunchLifecycleUtils.Acquisition acquisition, Path reportDir,
+        String projectName, String applicationId, long lockTimeoutMs)
+    {
+        return ToolResult.error(LaunchLifecycleUtils.lockNotAcquiredMessage(acquisition,
+            projectName, applicationId, lockTimeoutMs)
+            + " The run itself finished; only its report could not be read, and nothing was " //$NON-NLS-1$
+            + "changed. The JUnit XML is still on disk at " + reportDir //$NON-NLS-1$
+            + " — no EDT-MCP tool reads an arbitrary file, so read it outside MCP if you need it. " //$NON-NLS-1$
+            + "Do NOT call run_yaxunit_tests again first: a fresh run clears that directory " //$NON-NLS-1$
+            + "before it starts, and this report would be lost.") //$NON-NLS-1$
+            .toJson();
     }
 
     /**
      * Validates that the given application exists for the project. Returns {@code null} when the
      * application resolves, or a JSON error string (identical to the previous inline handling) when
      * the application is not found or the lookup throws.
+     *
+     * <p>BOUNDED (#622): a validation that never returns would hold the whole test run open. An
+     * expired deadline refuses with its own message and is deliberately NOT worded as a
+     * not-found, because nothing about the application was established.
      */
-    private String validateApplicationExists(IApplicationManager appManager, IProject project,
+    String validateApplicationExists(IApplicationManager appManager, IProject project,
             String applicationId)
     {
+        return validateApplicationExists(appManager, project, applicationId,
+            ApplicationSupport.LOOKUP_TIMEOUT_MS);
+    }
+
+    /** Same validation with an explicit deadline for the bounded application read. */
+    String validateApplicationExists(IApplicationManager appManager, IProject project,
+            String applicationId, long timeoutMs)
+    {
+        ApplicationSupport.BoundedRead<Optional<IApplication>> read =
+            ApplicationSupport.getApplicationBounded(appManager, project, applicationId, timeoutMs);
+        if (!read.concluded())
+        {
+            return ToolResult.error("Failed to validate application: " + applicationId //$NON-NLS-1$
+                    + " (" + read.deadlineFailure() //$NON-NLS-1$
+                    + "). No test run was started.").toJson(); //$NON-NLS-1$
+        }
         try
         {
-            Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
+            Optional<IApplication> appOpt = read.valueOrRethrow();
             if (!appOpt.isPresent())
             {
                 return ToolResult.error("Application not found: " + applicationId //$NON-NLS-1$

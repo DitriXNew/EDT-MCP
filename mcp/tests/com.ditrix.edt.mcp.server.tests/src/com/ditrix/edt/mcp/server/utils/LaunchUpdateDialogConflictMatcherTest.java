@@ -384,6 +384,71 @@ public class LaunchUpdateDialogConflictMatcherTest
             .attributableAnswer("agent-base", ExternalInfobaseChangesPolicy.IMPORT)); //$NON-NLS-1$
     }
 
+    // ===== #622/B: a name missing because the READ expired is not a name that does not exist =====
+
+    @Test
+    public void testAWindowWhoseAttributionExpiredReportsItsOwnCancelReason()
+    {
+        // Both windows see the SAME cancel - the press path only ever sees a null name. What the
+        // window adds is WHY its name was null, and the two carry opposite advice.
+        try (LaunchUpdateDialogAutoConfirmer.ConflictWatch expired =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch(null, null, true);
+            LaunchUpdateDialogAutoConfirmer.ConflictWatch nameless =
+                LaunchUpdateDialogAutoConfirmer.beginConflictWatch(null, null, false))
+        {
+            LaunchUpdateDialogAutoConfirmer.recordConflictCancelForTest(
+                LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_NOT_ATTRIBUTED, null);
+
+            assertEquals("an expired attribution reports its own reason", //$NON-NLS-1$
+                LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_ATTRIBUTION_UNAVAILABLE,
+                expired.reason());
+            assertEquals("an application that names no infobase keeps the permanent reason", //$NON-NLS-1$
+                LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_NOT_ATTRIBUTED, nameless.reason());
+        }
+    }
+
+    @Test
+    public void testAnExpiredAttributionDoesNotRelabelOtherCancelReasons()
+    {
+        // Only the NOT_ATTRIBUTED reason is re-read: a missing button in the same window means
+        // what it always meant.
+        try (LaunchUpdateDialogAutoConfirmer.ConflictWatch expired =
+            LaunchUpdateDialogAutoConfirmer.beginConflictWatch(null, null, true))
+        {
+            LaunchUpdateDialogAutoConfirmer.recordConflictCancelForTest(
+                LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_BUTTON_NOT_FOUND, null);
+
+            assertEquals(LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_BUTTON_NOT_FOUND,
+                expired.reason());
+        }
+    }
+
+    @Test
+    public void testTheTwoUnattributedCausesGiveOppositeAdvice()
+    {
+        String expired = ExternalInfobaseChangesPolicy.declinedUpdateError(
+            ExternalInfobaseChangesPolicy.OVERRIDE,
+            LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_ATTRIBUTION_UNAVAILABLE);
+        String nameless = ExternalInfobaseChangesPolicy.declinedUpdateError(
+            ExternalInfobaseChangesPolicy.OVERRIDE,
+            LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_NOT_ATTRIBUTED);
+
+        // The false sentence a ten-second deadline used to produce.
+        assertFalse("a transient deadline must not be called permanent", //$NON-NLS-1$
+            expired.contains("will not help")); //$NON-NLS-1$
+        assertTrue("it must name the policy that was degraded", //$NON-NLS-1$
+            expired.contains("externalInfobaseChanges=override")); //$NON-NLS-1$
+        assertTrue("it must name the retry", //$NON-NLS-1$
+            expired.contains("retry once EDT is responsive")); //$NON-NLS-1$
+        assertTrue("and the restart, because the wedge is a monitor", //$NON-NLS-1$
+            expired.contains("has to be restarted")); //$NON-NLS-1$
+        // The permanent cause keeps its own, correct advice.
+        assertTrue("an application that resolves no infobase is still permanent", //$NON-NLS-1$
+            nameless.contains("will not help")); //$NON-NLS-1$
+        assertFalse("the permanent cause must not offer the restart", //$NON-NLS-1$
+            nameless.contains("has to be restarted")); //$NON-NLS-1$
+    }
+
     private static LaunchUpdateDialogAutoConfirmer.ConflictArm arm(String infobase,
         ExternalInfobaseChangesPolicy policy)
     {
