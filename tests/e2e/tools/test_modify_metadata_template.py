@@ -11,10 +11,12 @@ precedent — NO new tool:
 
     modify_metadata(fqn="CommonTemplate.X" | "Catalog.Y.Template.Z",
                     template={
-                        cells:  [{row, col, text?|parameter?, bold?, fontSize?, hAlign?, vAlign?, wrap?}],
+                        cells:  [{row, col, text?|parameter?, bold?, fontSize?, hAlign?, vAlign?,
+                                  wrap?, textOrientation?, autoIndent?, autoMarkIncomplete?}],
                         merges: [{fromRow, fromCol, toRow, toCol}],
                         areas:  [{name, fromRow, fromCol, toRow, toCol}],
-                        columnWidths: [...], rowHeights: [...] })
+                        columnWidths: [{col, width?, autoWidthCalculation?, widthWeightFactor?}],
+                        rowHeights: [...] })
 
 The write goes through a BM write transaction and force-exports the template so its CONTENT resource
 (the `Template.mxlx` moxel file that lives BESIDE the .mdo, not inline in it) drains to disk — the
@@ -179,6 +181,71 @@ def test_template_content_lands_in_mxlx_on_disk():
         "the authored column width must serialize as a <format> width in the .mxlx (%s): %r" % (mxlx, doc[:600])
     assert "<height>%d</height>" % row_height in doc, \
         "the authored row height must serialize as a <format> height in the .mxlx (%s): %r" % (mxlx, doc[:600])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Happy — the CELL-FORMAT and COLUMN-SIZING properties (#461) reach the .mxlx on disk
+# in EXACTLY the platform's own spelling and unit
+# ══════════════════════════════════════════════════════════════════════════════
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_cell_rotation_and_auto_column_width_land_in_mxlx_on_disk():
+    fqn, mxlx = _seed_owned_template("E2EMxlxFormat")
+
+    # 900 is the PLATFORM unit (tenths of a degree) for 90 degrees: EDT's cell-property editor shows
+    # degrees and multiplies by ten before storing. If the writer ever "helpfully" converted degrees,
+    # the file would carry 90 (== 9 degrees) — asserted absent below.
+    rotation = 900
+    auto_indent = 7
+    weight = 3
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "template": {
+            "cells": [
+                {"row": 0, "col": 0, "text": "Rotated 461",
+                 "textOrientation": rotation, "autoIndent": auto_indent, "autoMarkIncomplete": True},
+            ],
+            "columnWidths": [{"col": 0, "autoWidthCalculation": True, "widthWeightFactor": weight}],
+        },
+    })
+    assert_ok(r, "author a rotated cell + an auto-width column")
+    _template_result(r, "cell rotation / auto column width author")
+
+    poll_diff_contains("<textOrientation>", ctx="the rotation must flush to the template's .mxlx on disk")
+    doc = read_disk(mxlx)
+    # EXACT serialized form, not a substring of the value: V8MoxelSerializer writes each Format attribute
+    # as its own element, guarded by isSetXxx(), so these elements exist only if the value really landed.
+    for element, value in (
+            ("textOrientation", rotation),
+            ("autoIndent", auto_indent),
+            ("widthWeightFactor", weight)):
+        assert "<%s>%d</%s>" % (element, value, element) in doc, \
+            "<%s>%d</%s> must serialize into the .mxlx (%s): %r" % (element, value, element, mxlx, doc[:900])
+    for element in ("autoMarkIncomplete", "autoWidthCalculation"):
+        assert "<%s>true</%s>" % (element, element) in doc, \
+            "<%s>true</%s> must serialize into the .mxlx (%s): %r" % (element, element, mxlx, doc[:900])
+    # Anti-cheat on the UNIT: the degree reading (90) must NOT be what was written.
+    assert "<textOrientation>90</textOrientation>" not in doc, \
+        "the rotation must stay in the platform's tenths-of-a-degree unit, not be rescaled to degrees " \
+        "(%s): %r" % (mxlx, doc[:900])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Negative — a width weight factor with no auto width calculation is REFUSED, not
+# written where the platform never reads it
+# ══════════════════════════════════════════════════════════════════════════════
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_width_weight_factor_without_auto_width_is_refused():
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": FIXTURE_TEMPLATE,
+        "template": {"columnWidths": [{"col": 0, "width": 40, "widthWeightFactor": 3}]},
+    })
+    e = assert_error(r, "a width weight factor without auto width calculation")
+    assert_error_quality(e, names=["widthWeightFactor", "3"], suggests=["autoWidthCalculation"],
+                         ctx="weight factor without auto width")
+    assert_no_diff(ctx="a refused template write must leave the fixture template untouched")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

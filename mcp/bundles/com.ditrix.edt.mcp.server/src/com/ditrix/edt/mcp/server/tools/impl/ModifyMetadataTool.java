@@ -345,10 +345,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "author, instead of 'properties'. An object with any of: 'cells' [{row, col (both " //$NON-NLS-1$
                 + "0-based, required), text? OR parameter? (a print-time parameter name), bold?, " //$NON-NLS-1$
                 + "fontSize?, hAlign? ('Left'/'Center'/'Right'/'Auto'/'Width'), vAlign? " //$NON-NLS-1$
-                + "('Top'/'Center'/'Bottom'), wrap? (true word-wraps the cell text)}]; 'merges' " //$NON-NLS-1$
+                + "('Top'/'Center'/'Bottom'), wrap? (true word-wraps the cell text), textOrientation? " //$NON-NLS-1$
+                + "(rotation in the platform's own unit - TENTHS of a degree, 0..3600, so 90 degrees is " //$NON-NLS-1$
+                + "900), autoIndent? (0..100), autoMarkIncomplete?}]; 'merges' " //$NON-NLS-1$
                 + "[{fromRow, fromCol, toRow, toCol}] merged cell ranges; 'areas' [{name, fromRow, " //$NON-NLS-1$
                 + "fromCol, toRow, toCol}] named areas (for ПолучитьОбласть / Вывести output); " //$NON-NLS-1$
-                + "'columnWidths' [{col, width}] and 'rowHeights' [{row, height}] column / row sizes. " //$NON-NLS-1$
+                + "'columnWidths' [{col, width?, autoWidthCalculation?, widthWeightFactor? - the share " //$NON-NLS-1$
+                + "of the free width, only alongside autoWidthCalculation:true}] and 'rowHeights' " //$NON-NLS-1$
+                + "[{row, height}] column / row sizes. An omitted formatting key leaves that property " //$NON-NLS-1$
+                + "UNSET (the cell inherits it); an explicit 0 / false overrides that inheritance. " //$NON-NLS-1$
                 + "Setting a cell overwrites that (row, col); the rest of the content is kept. Valid " //$NON-NLS-1$
                 + "only for a SpreadsheetDocument template FQN; cannot be combined with 'properties' / " //$NON-NLS-1$
                 + "'content' / a Role payload.") //$NON-NLS-1$
@@ -1511,6 +1516,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         /** Nullable: a null project still yields a templateMode=true document. */
         IDtProject dtProject;
         ITopObjectFqnGenerator fqnGenerator;
+        /**
+         * The project's 1C:Enterprise runtime version (the DT project manifest's {@code Runtime-Version},
+         * which is what the moxel serializer gates its version-dependent members on). Nullable: a version
+         * that cannot be resolved skips the version check rather than refusing a legal write.
+         */
+        Version projectVersion;
     }
 
     /**
@@ -1569,6 +1580,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         writeCtx.dtProject =
             dtProjectManager == null ? null : dtProjectManager.getDtProject(ctx.project);
 
+        // The moxel serializer gates autoWidthCalculation / widthWeightFactor on the project's RUNTIME
+        // version (the DT manifest's Runtime-Version, which is exactly what IV8Project.getVersion()
+        // returns) - not on the configuration's compatibilityMode. Below 8.3.10 it writes neither, so the
+        // writer refuses them there instead of reporting success for a dropped value.
+        IV8ProjectManager v8ProjectManager = Activator.getDefault().getV8ProjectManager();
+        IV8Project v8Project = v8ProjectManager == null ? null : v8ProjectManager.getProject(ctx.project);
+        writeCtx.projectVersion = v8Project == null ? null : v8Project.getVersion();
+
         // The moxel content is a transient @ExternalProperty of the template - its own .mxlx resource, NOT
         // an inline BM reference. A freshly-materialized content doc must be ATTACHED as a BM top object
         // under its generated external-property FQN (the same machinery FormElementWriter uses for a form's
@@ -1608,7 +1627,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // materialized + attachTopObject'd inside resolveSpreadsheetContent), so its own resource
         // FQN resolves and is force-exported alongside the template so the sibling .mxlx drains.
         contentFqnHolder[0] = contentResourceExportFqn(doc);
-        SpreadsheetTemplateWriter.Result applied = SpreadsheetTemplateWriter.apply(doc, templateSpec);
+        SpreadsheetTemplateWriter.Result applied =
+            SpreadsheetTemplateWriter.apply(doc, templateSpec, writeCtx.projectVersion);
         if (applied.hasError())
         {
             // Roll the whole write back so a validation failure leaves nothing on disk.
