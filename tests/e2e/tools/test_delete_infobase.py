@@ -133,10 +133,17 @@ def test_preview_on_nonexistent_is_not_ok():
 
 
 def _first_infobase_application():
-    """The fixture project's first FILE-infobase application, or skip.
+    """An application of the fixture project to preview a deletion of, or skip.
 
     A preview changes nothing, so it is the one way to assert the real serialized
     payload of this destructive tool without deleting anything.
+
+    A FILE infobase is preferred, but a standalone-server application is accepted.
+    Requiring a file infobase made this test SKIP on the committed fixture, which has
+    only a standalone-server application - so it asserted nothing, here or on CI, and a
+    skip is not a pass. Both kinds write `databaseFilesKept` through the same helper;
+    verified live on the standalone application: files not requested -> 'notRequested',
+    files requested -> the key absent because they would be deleted.
     """
     r = call("get_applications", {"projectName": PROJECT})
     assert_ok(r, "get_applications for the delete_infobase preview")
@@ -144,7 +151,10 @@ def _first_infobase_application():
     for app in apps:
         if app.get("type") == "com.e1c.g5.dt.applications.type.infobase" and app.get("id"):
             return app
-    raise E2ESkip("the fixture project has no file infobase to preview a deletion of")
+    for app in apps:
+        if app.get("id"):
+            return app
+    raise E2ESkip("the fixture project has no application to preview a deletion of")
 
 
 @e2e_test(tool="delete_infobase", kind="action")
