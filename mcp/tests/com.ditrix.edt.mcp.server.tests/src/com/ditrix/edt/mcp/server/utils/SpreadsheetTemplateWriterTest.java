@@ -29,6 +29,7 @@ import com._1c.g5.v8.dt.moxel.content.FillType;
 import com._1c.g5.v8.dt.moxel.content.HorizontalAlignment;
 import com._1c.g5.v8.dt.moxel.content.TextPlacement;
 import com._1c.g5.v8.dt.moxel.content.VerticalAlignment;
+import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter.CellPlan;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter.ParseResult;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter.Result;
@@ -282,6 +283,180 @@ public class SpreadsheetTemplateWriterTest
         assertEquals(20, doc.getFormats().get(row.getFormatIndex()).getHeight());
     }
 
+    // ==================== cells: text rotation / auto indent / auto-mark-incomplete ==============
+    // Every Format attribute is UNSETTABLE and V8MoxelSerializer writes each one only when its
+    // isSetXxx() holds, so "the feature is set to V" IS the serialization precondition; the exact
+    // on-disk element is pinned by tests/e2e/tools/test_modify_metadata_template.py.
+
+    @Test
+    public void testTextOrientationLandsOnTheCellFormatInTenthsOfADegree()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"Qty\",\"textOrientation\":900}]}")); //$NON-NLS-1$
+        assertFalse("a valid rotation must not error: " + r.error, r.hasError()); //$NON-NLS-1$
+        Format fmt = formatOf(doc, cellAt(doc, 0, 0));
+        assertTrue("the rotation must be SET (the serializer writes it only when isSet)", //$NON-NLS-1$
+            fmt.isSetTextOrientation());
+        // The platform unit is TENTHS of a degree: 900 IS 90 degrees. The wrong spelling - passing the
+        // degree value through - would store 90, so pin that it did NOT happen.
+        assertEquals(900, fmt.getTextOrientation());
+        assertFalse("90 would be 9 degrees: the value must not be re-scaled", //$NON-NLS-1$
+            fmt.getTextOrientation() == 90);
+    }
+
+    @Test
+    public void testOmittedTextOrientationLeavesTheFeatureUnset()
+    {
+        SpreadsheetDocument doc = newDocument();
+        SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"bold\":true}]}")); //$NON-NLS-1$
+        Format fmt = formatOf(doc, cellAt(doc, 0, 0));
+        // Unset != 0: an omitted key must leave the cell inheriting the row / column / document rotation,
+        // so the serializer emits no <textOrientation> at all.
+        assertFalse("an omitted 'textOrientation' must leave the feature UNSET", //$NON-NLS-1$
+            fmt.isSetTextOrientation());
+    }
+
+    @Test
+    public void testExplicitNullTextOrientationCountsAsOmitted()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"textOrientation\":null}]}")); //$NON-NLS-1$
+        assertFalse("an explicit null must be accepted as 'absent': " + r.error, r.hasError()); //$NON-NLS-1$
+        // Absent styling -> the cell keeps the neutral base format (index 0) and no format is interned.
+        assertEquals("an explicit null must not intern a styled format", 1, doc.getFormats().size()); //$NON-NLS-1$
+        assertEquals(0, cellAt(doc, 0, 0).getFormatIndex());
+        assertFalse(doc.getFormats().get(0).isSetTextOrientation());
+    }
+
+    @Test
+    public void testZeroTextOrientationIsAnExplicitValueNotAnOmission()
+    {
+        SpreadsheetDocument doc = newDocument();
+        SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"textOrientation\":0}]}")); //$NON-NLS-1$
+        Cell cell = cellAt(doc, 0, 0);
+        // 0 means "explicitly horizontal", which OVERRIDES a rotation inherited from the row / column
+        // format - so it must intern its own format rather than fall back to the neutral base (index 0).
+        assertTrue("an explicit 0 must not reuse the neutral base format", cell.getFormatIndex() > 0); //$NON-NLS-1$
+        Format fmt = formatOf(doc, cell);
+        assertTrue("an explicit 0 must be SET, not left unset", fmt.isSetTextOrientation()); //$NON-NLS-1$
+        assertEquals(0, fmt.getTextOrientation());
+    }
+
+    @Test
+    public void testAutoIndentLandsOnTheCellFormat()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"autoIndent\":4}]}")); //$NON-NLS-1$
+        assertFalse("a valid autoIndent must not error: " + r.error, r.hasError()); //$NON-NLS-1$
+        Format fmt = formatOf(doc, cellAt(doc, 0, 0));
+        assertTrue(fmt.isSetAutoIndent());
+        assertEquals(4, fmt.getAutoIndent());
+        assertFalse("autoIndent must not leak into the rotation", fmt.isSetTextOrientation()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAutoMarkIncompleteFalseIsAnExplicitValue()
+    {
+        SpreadsheetDocument doc = newDocument();
+        SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"autoMarkIncomplete\":false}]}")); //$NON-NLS-1$
+        Cell cell = cellAt(doc, 0, 0);
+        assertTrue("an explicit false must intern its own format", cell.getFormatIndex() > 0); //$NON-NLS-1$
+        Format fmt = formatOf(doc, cell);
+        // false-and-SET is a real value overriding an inherited true; false-and-UNSET says nothing.
+        assertTrue("an explicit false must be SET", fmt.isSetAutoMarkIncomplete()); //$NON-NLS-1$
+        assertFalse(fmt.isAutoMarkIncomplete());
+    }
+
+    @Test
+    public void testAutoMarkIncompleteTrueLandsOnTheCellFormat()
+    {
+        SpreadsheetDocument doc = newDocument();
+        SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"autoMarkIncomplete\":true}]}")); //$NON-NLS-1$
+        Format fmt = formatOf(doc, cellAt(doc, 0, 0));
+        assertTrue(fmt.isSetAutoMarkIncomplete());
+        assertTrue(fmt.isAutoMarkIncomplete());
+    }
+
+    @Test
+    public void testIdenticalRotatedCellsShareOneInternedFormat()
+    {
+        SpreadsheetDocument doc = newDocument();
+        SpreadsheetTemplateWriter.apply(doc, json("{\"cells\":[" //$NON-NLS-1$
+            + "{\"row\":0,\"col\":0,\"text\":\"A\",\"textOrientation\":900}," //$NON-NLS-1$
+            + "{\"row\":0,\"col\":1,\"text\":\"B\",\"textOrientation\":900}," //$NON-NLS-1$
+            + "{\"row\":0,\"col\":2,\"text\":\"C\",\"textOrientation\":450}]}")); //$NON-NLS-1$
+        assertEquals("two identically-rotated cells must share one pool entry", //$NON-NLS-1$
+            cellAt(doc, 0, 0).getFormatIndex(), cellAt(doc, 0, 1).getFormatIndex());
+        assertTrue("a differently-rotated cell must get its own pool entry", //$NON-NLS-1$
+            cellAt(doc, 0, 2).getFormatIndex() != cellAt(doc, 0, 0).getFormatIndex());
+        assertEquals("formats must be base + the two distinct rotations", 3, doc.getFormats().size()); //$NON-NLS-1$
+    }
+
+    // ==================== column widths: auto width + weight factor ==============================
+
+    @Test
+    public void testAutoWidthCalculationAndWeightFactorLandOnTheColumnFormat()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc, json("{\"columnWidths\":[{\"col\":1," //$NON-NLS-1$
+            + "\"width\":50,\"autoWidthCalculation\":true,\"widthWeightFactor\":3}]}")); //$NON-NLS-1$
+        assertFalse("a valid auto-width column must not error: " + r.error, r.hasError()); //$NON-NLS-1$
+        assertEquals(1, r.columnWidths);
+        com._1c.g5.v8.dt.moxel.Column column = doc.getColumns().getColumns().get(Integer.valueOf(1));
+        assertNotNull("the sized column must exist", column); //$NON-NLS-1$
+        Format fmt = doc.getFormats().get(column.getFormatIndex());
+        // The platform reads both ONLY from the COLUMN's format (SheetAccessor.isAutoWidthCalculation /
+        // getWidthWeightFactor), so this is the format they must land on.
+        assertTrue(fmt.isSetAutoWidthCalculation());
+        assertTrue(fmt.isAutoWidthCalculation());
+        assertTrue(fmt.isSetWidthWeightFactor());
+        assertEquals(3, fmt.getWidthWeightFactor());
+        assertEquals("an explicit width stays as the auto-width minimum", 50, fmt.getWidth()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testColumnMayCarryAutoWidthWithoutAnExplicitWidth()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"columnWidths\":[{\"col\":0,\"autoWidthCalculation\":true}]}")); //$NON-NLS-1$
+        assertFalse("auto width alone must be accepted: " + r.error, r.hasError()); //$NON-NLS-1$
+        com._1c.g5.v8.dt.moxel.Column column = doc.getColumns().getColumns().get(Integer.valueOf(0));
+        Format fmt = doc.getFormats().get(column.getFormatIndex());
+        assertTrue(fmt.isAutoWidthCalculation());
+        assertFalse("no 'width' was given, so the width must stay UNSET", fmt.isSetWidth()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAutoWidthCalculationFalseIsAnExplicitValue()
+    {
+        SpreadsheetDocument doc = newDocument();
+        SpreadsheetTemplateWriter.apply(doc,
+            json("{\"columnWidths\":[{\"col\":0,\"width\":40,\"autoWidthCalculation\":false}]}")); //$NON-NLS-1$
+        com._1c.g5.v8.dt.moxel.Column column = doc.getColumns().getColumns().get(Integer.valueOf(0));
+        Format fmt = doc.getFormats().get(column.getFormatIndex());
+        assertTrue("an explicit false must be SET", fmt.isSetAutoWidthCalculation()); //$NON-NLS-1$
+        assertFalse(fmt.isAutoWidthCalculation());
+    }
+
+    @Test
+    public void testPlainColumnWidthLeavesTheAutoWidthMembersUnset()
+    {
+        SpreadsheetDocument doc = newDocument();
+        SpreadsheetTemplateWriter.apply(doc, json("{\"columnWidths\":[{\"col\":0,\"width\":40}]}")); //$NON-NLS-1$
+        com._1c.g5.v8.dt.moxel.Column column = doc.getColumns().getColumns().get(Integer.valueOf(0));
+        Format fmt = doc.getFormats().get(column.getFormatIndex());
+        assertFalse(fmt.isSetAutoWidthCalculation());
+        assertFalse(fmt.isSetWidthWeightFactor());
+    }
+
     // ==================== grid extent (declared sheet bounds) ====================
 
     @Test
@@ -396,6 +571,237 @@ public class SpreadsheetTemplateWriterTest
         assertTrue("a cell with no content or formatting must error", r.hasError()); //$NON-NLS-1$
     }
 
+    // ==================== errors: the new formatting keys ========================================
+
+    @Test
+    public void testTextOrientationAboveTheMaximumIsError()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"textOrientation\":3601}]}")); //$NON-NLS-1$
+        assertTrue("a rotation past 360 degrees must error", r.hasError()); //$NON-NLS-1$
+        assertTrue("the error must name the offending value: " + r.error, r.error.contains("3601")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the error must name the range: " + r.error, r.error.contains("0..3600")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the error must name the platform unit: " + r.error, //$NON-NLS-1$
+            r.error.contains("tenths of a degree")); //$NON-NLS-1$
+        assertTrue("nothing must be written on a validation error", doc.getRows().isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNegativeTextOrientationIsError()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"textOrientation\":-1}]}")); //$NON-NLS-1$
+        assertTrue("a negative rotation must error", r.hasError()); //$NON-NLS-1$
+        assertTrue(r.error.contains("-1")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAutoIndentAboveTheMaximumIsError()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"autoIndent\":101}]}")); //$NON-NLS-1$
+        assertTrue("an autoIndent past 100 must error", r.hasError()); //$NON-NLS-1$
+        assertTrue("the error must name the offending value: " + r.error, r.error.contains("101")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the error must name the range: " + r.error, r.error.contains("0..100")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testNonBooleanAutoMarkIncompleteIsError()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"autoMarkIncomplete\":\"maybe\"}]}")); //$NON-NLS-1$
+        assertTrue("a non-boolean autoMarkIncomplete must error", r.hasError()); //$NON-NLS-1$
+        assertTrue(r.error.contains("maybe")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testWidthWeightFactorWithoutAutoWidthCalculationIsRefused()
+    {
+        SpreadsheetDocument doc = newDocument();
+        // The platform shares the free width out by weight ONLY across auto-width columns
+        // (PositionHolder.recalcDynamicColumnWidths reads getWidthWeightFactor only for those), and this
+        // call REPLACES the column's format - so a lone weight factor would be written where nothing
+        // reads it. That is the accepted-but-ignored trap, so it is refused.
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"columnWidths\":[{\"col\":0,\"width\":40,\"widthWeightFactor\":3}]}")); //$NON-NLS-1$
+        assertTrue("a weight factor without auto width must error", r.hasError()); //$NON-NLS-1$
+        assertTrue("the error must name the offending value: " + r.error, r.error.contains("3")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the error must name the fix: " + r.error, //$NON-NLS-1$
+            r.error.contains("autoWidthCalculation")); //$NON-NLS-1$
+        assertNull("nothing must be written on a validation error", doc.getColumns()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testWidthWeightFactorWithAutoWidthCalculationFalseIsRefused()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc, json("{\"columnWidths\":[{\"col\":0," //$NON-NLS-1$
+            + "\"autoWidthCalculation\":false,\"widthWeightFactor\":3}]}")); //$NON-NLS-1$
+        assertTrue("auto width explicitly OFF must refuse a weight factor too", r.hasError()); //$NON-NLS-1$
+        assertTrue(r.error.contains("autoWidthCalculation")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNegativeWidthWeightFactorIsError()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc, json("{\"columnWidths\":[{\"col\":0," //$NON-NLS-1$
+            + "\"autoWidthCalculation\":true,\"widthWeightFactor\":-2}]}")); //$NON-NLS-1$
+        assertTrue("a negative weight factor must error", r.hasError()); //$NON-NLS-1$
+        assertTrue(r.error.contains("-2")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testColumnWidthEntryWithNoSizingMemberIsError()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc, json("{\"columnWidths\":[{\"col\":0}]}")); //$NON-NLS-1$
+        assertTrue("a column entry with no sizing member must error", r.hasError()); //$NON-NLS-1$
+        assertTrue("the error must still name 'width': " + r.error, r.error.contains("width")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testNonPositiveColumnWidthIsStillError()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"columnWidths\":[{\"col\":0,\"width\":0}]}")); //$NON-NLS-1$
+        assertTrue("a zero width must still error", r.hasError()); //$NON-NLS-1$
+        assertTrue(r.error.contains("positive integer 'width'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testColumnOnlyKeyOnACellIsRefused()
+    {
+        SpreadsheetDocument doc = newDocument();
+        // A cell's format is NEVER consulted for auto width calculation, so accepting it would report
+        // success for a value the platform never reads.
+        Result r = SpreadsheetTemplateWriter.apply(doc, json("{\"cells\":[{\"row\":0,\"col\":0," //$NON-NLS-1$
+            + "\"text\":\"A\",\"autoWidthCalculation\":true}]}")); //$NON-NLS-1$
+        assertTrue("a column property on a cell must error", r.hasError()); //$NON-NLS-1$
+        assertTrue("the error must name the bad key: " + r.error, //$NON-NLS-1$
+            r.error.contains("autoWidthCalculation")); //$NON-NLS-1$
+        assertTrue("the error must name the fix: " + r.error, r.error.contains("columnWidths")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("nothing must be written on a validation error", doc.getRows().isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testWidthWeightFactorOnACellIsRefused()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc, json("{\"cells\":[{\"row\":0,\"col\":0," //$NON-NLS-1$
+            + "\"text\":\"A\",\"widthWeightFactor\":2}]}")); //$NON-NLS-1$
+        assertTrue("a width weight factor on a cell must error", r.hasError()); //$NON-NLS-1$
+        assertTrue(r.error.contains("columnWidths")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCellOnlyKeyOnAColumnWidthIsRefused()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc, json("{\"columnWidths\":[{\"col\":0," //$NON-NLS-1$
+            + "\"width\":40,\"textOrientation\":900}]}")); //$NON-NLS-1$
+        assertTrue("a cell property on a column entry must error", r.hasError()); //$NON-NLS-1$
+        assertTrue("the error must name the bad key: " + r.error, //$NON-NLS-1$
+            r.error.contains("textOrientation")); //$NON-NLS-1$
+        assertTrue("the error must name the fix: " + r.error, r.error.contains("cells")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("nothing must be written on a validation error", doc.getColumns()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCellOnlyKeyOnARowHeightIsRefused()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc, json("{\"rowHeights\":[{\"row\":0," //$NON-NLS-1$
+            + "\"height\":20,\"autoIndent\":3}]}")); //$NON-NLS-1$
+        assertTrue("a cell property on a row entry must error", r.hasError()); //$NON-NLS-1$
+        assertTrue(r.error.contains("autoIndent")); //$NON-NLS-1$
+        assertTrue(r.error.contains("cells")); //$NON-NLS-1$
+        assertTrue("nothing must be written on a validation error", doc.getRows().isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testColumnOnlyKeyOnARowHeightIsRefused()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc, json("{\"rowHeights\":[{\"row\":0," //$NON-NLS-1$
+            + "\"height\":20,\"widthWeightFactor\":2}]}")); //$NON-NLS-1$
+        assertTrue("a column property on a row entry must error", r.hasError()); //$NON-NLS-1$
+        assertTrue(r.error.contains("columnWidths")); //$NON-NLS-1$
+    }
+
+    // ==================== the 8.3.10 floor on the column-sizing members =========================
+    // V8MoxelSerializer writes autoWidthCalculation / widthWeightFactor only for a project on 8.3.10+
+    // (and its reader drops them again below that), so on an older project they would be accepted,
+    // mutated into the model and then silently discarded by the export.
+
+    @Test
+    public void testAutoWidthCalculationIsRefusedBelow8310()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"columnWidths\":[{\"col\":0,\"autoWidthCalculation\":true}]}"), Version.V8_3_9); //$NON-NLS-1$
+        assertTrue("auto width on a pre-8.3.10 project must error", r.hasError()); //$NON-NLS-1$
+        assertTrue("the error must name the key: " + r.error, //$NON-NLS-1$
+            r.error.contains("autoWidthCalculation")); //$NON-NLS-1$
+        assertTrue("the error must name the floor: " + r.error, r.error.contains("8.3.10")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the error must name the project's version: " + r.error, //$NON-NLS-1$
+            r.error.contains("8.3.9")); //$NON-NLS-1$
+        assertNull("nothing must be written on a validation error", doc.getColumns()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testWidthWeightFactorIsRefusedBelow8310()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc, json("{\"columnWidths\":[{\"col\":0," //$NON-NLS-1$
+            + "\"autoWidthCalculation\":true,\"widthWeightFactor\":2}]}"), Version.V8_3_8); //$NON-NLS-1$
+        assertTrue("a weight factor on a pre-8.3.10 project must error", r.hasError()); //$NON-NLS-1$
+        assertTrue(r.error.contains("8.3.10")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAutoWidthCalculationIsAcceptedFrom8310()
+    {
+        SpreadsheetDocument doc = newDocument();
+        // The other edge of the refusal: 8.3.10 itself is the first version that persists it, so the
+        // floor must ADMIT it rather than round the project away.
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"columnWidths\":[{\"col\":0,\"autoWidthCalculation\":true}]}"), Version.V8_3_10); //$NON-NLS-1$
+        assertFalse("8.3.10 must be accepted: " + r.error, r.hasError()); //$NON-NLS-1$
+        com._1c.g5.v8.dt.moxel.Column column = doc.getColumns().getColumns().get(Integer.valueOf(0));
+        assertTrue(doc.getFormats().get(column.getFormatIndex()).isAutoWidthCalculation());
+    }
+
+    @Test
+    public void testAPlainColumnWidthIsUnaffectedByAnOldProjectVersion()
+    {
+        SpreadsheetDocument doc = newDocument();
+        // The refusal must not over-reach: a fixed width has no version floor at all.
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"columnWidths\":[{\"col\":0,\"width\":40}]}"), Version.V8_3_9); //$NON-NLS-1$
+        assertFalse("a plain width must stay legal on an old project: " + r.error, r.hasError()); //$NON-NLS-1$
+        com._1c.g5.v8.dt.moxel.Column column = doc.getColumns().getColumns().get(Integer.valueOf(0));
+        assertEquals(40, doc.getFormats().get(column.getFormatIndex()).getWidth());
+    }
+
+    @Test
+    public void testCellRotationIsUnaffectedByAnOldProjectVersion()
+    {
+        SpreadsheetDocument doc = newDocument();
+        // textOrientation / autoIndent / autoMarkIncomplete are written by the serializer with NO version
+        // gate, so the 8.3.10 floor must not spill onto them.
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"textOrientation\":900}]}"), //$NON-NLS-1$
+            Version.V8_3_9);
+        assertFalse("a rotation must stay legal on an old project: " + r.error, r.hasError()); //$NON-NLS-1$
+        assertEquals(900, formatOf(doc, cellAt(doc, 0, 0)).getTextOrientation());
+    }
+
     // ==================== pure parse / enum resolution (no model) ====================
 
     @Test
@@ -435,5 +841,28 @@ public class SpreadsheetTemplateWriterTest
     {
         ParseResult parsed = SpreadsheetTemplateWriter.parse(json("{\"cells\":\"nope\"}")); //$NON-NLS-1$
         assertNotNull("cells that is not an array must error", parsed.error); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParseKeepsTheRotationUnscaledAndTheOtherMembersNull()
+    {
+        ParseResult parsed = SpreadsheetTemplateWriter.parse(json("{\"cells\":[{\"row\":0,\"col\":0," //$NON-NLS-1$
+            + "\"text\":\"A\",\"textOrientation\":900}]}")); //$NON-NLS-1$
+        assertNull("a valid spec must parse: " + parsed.error, parsed.error); //$NON-NLS-1$
+        CellPlan cell = parsed.plan.cells.get(0);
+        assertEquals(Integer.valueOf(900), cell.textOrientation);
+        assertNull("an omitted 'autoIndent' must stay null (unset)", cell.autoIndent); //$NON-NLS-1$
+        assertNull("an omitted 'autoMarkIncomplete' must stay null (unset)", cell.autoMarkIncomplete); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testParseAcceptsARotationOnlyCellWithNoContent()
+    {
+        // Rotation is a style member, so it alone makes a content-less cell entry meaningful (the same
+        // rule 'bold' / 'wrap' already follow) rather than tripping the "needs at least one of" refusal.
+        ParseResult parsed = SpreadsheetTemplateWriter.parse(
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"textOrientation\":900}]}")); //$NON-NLS-1$
+        assertNull("a rotation-only cell must parse: " + parsed.error, parsed.error); //$NON-NLS-1$
+        assertEquals(Integer.valueOf(900), parsed.plan.cells.get(0).textOrientation);
     }
 }
