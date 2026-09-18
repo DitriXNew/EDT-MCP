@@ -3746,7 +3746,9 @@ public final class FormElementWriter
             EObject container = item.eContainer();
             if (container == null)
             {
-                throw new IllegalStateException("Form item '" + itemName //$NON-NLS-1$
+                // Both raises here are refusals from OUR validation, so they are marked and log
+                // at WARNING without a stack; an unmarked failure keeps its ERROR.
+                throw Refusals.state("Form item '" + itemName //$NON-NLS-1$
                     + "' has no parent container and cannot be moved."); //$NON-NLS-1$
             }
             err = moveItemInto(formModel, item, container, containerLabel(formModel, container),
@@ -3758,7 +3760,7 @@ public final class FormElementWriter
         }
         if (err != null)
         {
-            throw new IllegalArgumentException(err);
+            throw Refusals.argument(err);
         }
         return destinationOf(formModel, item);
     }

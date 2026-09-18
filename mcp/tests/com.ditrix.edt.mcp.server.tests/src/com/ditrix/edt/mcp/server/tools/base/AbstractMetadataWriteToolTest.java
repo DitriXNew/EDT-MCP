@@ -624,4 +624,25 @@ public class AbstractMetadataWriteToolTest
         assertEquals("the inherited default must wait for projectName", PROJECT, //$NON-NLS-1$
             environment.askedFor);
     }
+
+    // ========== the refusal marker must not change what the CLIENT is told ==========
+
+    @Test
+    public void testMarkedRefusalUnwrapsToTheSameClientMessage()
+    {
+        // Every converted throw site builds the caller's error as
+        // "<prefix>: " + unwrapCauseMessage(e). Marking the exception changes its CLASS, never its
+        // message, so this must stay byte-identical - the e2e suite asserts those messages.
+        String refusal = "Form attribute 'NoSuchAttr_zz' not found - create it first."; //$NON-NLS-1$
+
+        Exception before = new RuntimeException("BM task failed", //$NON-NLS-1$
+            new IllegalStateException(refusal));
+        Exception after = new RuntimeException("BM task failed", //$NON-NLS-1$
+            com.ditrix.edt.mcp.server.utils.Refusals.state(refusal));
+
+        assertEquals("marking a refusal must not alter the client-visible message", //$NON-NLS-1$
+            AbstractMetadataWriteTool.unwrapCauseMessage(before),
+            AbstractMetadataWriteTool.unwrapCauseMessage(after));
+        assertEquals(refusal, AbstractMetadataWriteTool.unwrapCauseMessage(after));
+    }
 }

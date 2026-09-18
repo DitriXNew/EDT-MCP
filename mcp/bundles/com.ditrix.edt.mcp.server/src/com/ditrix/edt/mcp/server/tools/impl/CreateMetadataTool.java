@@ -54,6 +54,7 @@ import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
@@ -1005,7 +1006,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     PredefinedWriter.create(txOwner, createItemName, props, expectedNotExists);
                 if (result.isError())
                 {
-                    throw new IllegalStateException(result.error);
+                    // A refusal: the message is OUR validation's, so mark it and keep the log quiet.
+                    throw Refusals.state(result.error);
                 }
                 createdKindHolder[0] = result.item.eClass().getName();
                 return null;
@@ -1013,7 +1015,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         catch (Exception e)
         {
-            Activator.logError("Error creating predefined item", e); //$NON-NLS-1$
+            Refusals.log("Error creating predefined item", e); //$NON-NLS-1$
             return ToolResult.error(unwrapCauseMessage(e)).toJson();
         }
 
@@ -1705,7 +1707,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                             titleLanguage, titleText, russianAutoNames, createdKind);
                     if (err != null)
                     {
-                        throw new IllegalStateException(err);
+                        // A refusal: the writer returned OUR validation's message, so mark it.
+                        throw Refusals.state(err);
                     }
                 });
         }
@@ -1716,7 +1719,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             {
                 return ready;
             }
-            Activator.logError("Error creating form member", e); //$NON-NLS-1$
+            Refusals.log("Error creating form member", e); //$NON-NLS-1$
             return ToolResult.error("Failed to create form element: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
@@ -2242,7 +2245,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             {
                 return ready;
             }
-            Activator.logError("Error creating form handler", e); //$NON-NLS-1$
+            Refusals.log("Error creating form handler", e); //$NON-NLS-1$
             return ToolResult.error("Failed to create form handler: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
@@ -2321,7 +2324,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             // With advice the subject is the KIND, so the message names it: nothing of that kind
             // bears the name, even though something else does. Without it, the plain miss stands.
             String kindTail = " (kind '" + spec.ref.itemKindToken + "')"; //$NON-NLS-1$ //$NON-NLS-2$
-            throw new IllegalStateException(spec.commandOwner
+            // Both raises are refusals built from OUR validation, so they are marked.
+            throw Refusals.state(spec.commandOwner
                 ? "Form command not found: " + spec.ref.itemName //$NON-NLS-1$
                     + (advice.isEmpty() ? ". Create the command first, then add the handler." //$NON-NLS-1$
                         : kindTail + advice)
@@ -2333,7 +2337,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             spec.version, spec.langCode, spec.callType, spec.createdKind);
         if (err != null)
         {
-            throw new IllegalStateException(err);
+            throw Refusals.state(err);
         }
     }
 

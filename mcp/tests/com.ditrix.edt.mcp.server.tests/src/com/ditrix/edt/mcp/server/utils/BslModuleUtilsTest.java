@@ -22,6 +22,10 @@ import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.emf.common.util.URI;
+import org.eclipse.emf.ecore.resource.ResourceSet;
+import org.eclipse.emf.ecore.resource.URIConverter;
 import org.junit.Test;
 
 /**
@@ -1205,5 +1209,63 @@ public class BslModuleUtilsTest
             .find());
         assertFalse("a procedure must still not classify as a function", //$NON-NLS-1$
             BslModuleUtils.FUNC_KEYWORD_PATTERN.matcher("Async Procedure Baz(").find()); //$NON-NLS-1$
+    }
+
+    // ========== moduleLoadStatus / uriExists: a missing module is not a failure ==========
+
+    /** The module URI both directions are decided for. */
+    private static final URI MODULE_URI =
+        URI.createPlatformResourceURI("P/src/CommonModules/M/Module.bsl", true); //$NON-NLS-1$
+
+    @Test
+    public void testAbsentModuleLogsAtWarningWithoutAStack()
+    {
+        // A module that simply is not there is the caller asking for something that does not
+        // exist - a refusal, not a defect. loadModule answers null either way.
+        IStatus status = BslModuleUtils.moduleLoadStatus(false, MODULE_URI,
+            new IllegalStateException("does not exist")); //$NON-NLS-1$
+
+        assertEquals("an absent module must not be logged at ERROR", //$NON-NLS-1$
+            IStatus.WARNING, status.getSeverity());
+        assertNull("nothing failed, so there is no stack worth keeping", status.getException()); //$NON-NLS-1$
+        assertTrue(status.getMessage().contains(MODULE_URI.toString()));
+    }
+
+    @Test
+    public void testPresentModuleThatFailsToLoadKeepsErrorAndItsStack()
+    {
+        // The module IS there and the load still failed: a real defect (a broken grammar, a
+        // changed platform API). This is the entry the log triage must not lose.
+        IllegalStateException failure = new IllegalStateException("parser blew up"); //$NON-NLS-1$
+
+        IStatus status = BslModuleUtils.moduleLoadStatus(true, MODULE_URI, failure);
+
+        assertEquals(IStatus.ERROR, status.getSeverity());
+        assertSame("the stack must still reach the log", failure, status.getException()); //$NON-NLS-1$
+        assertTrue(status.getMessage().startsWith("Failed to load BSL module: ")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUriExistsAsksTheResourceSetsOwnConverter()
+    {
+        URIConverter converter = mock(URIConverter.class);
+        ResourceSet resourceSet = mock(ResourceSet.class);
+        when(resourceSet.getURIConverter()).thenReturn(converter);
+        when(converter.exists(any(), any())).thenReturn(false);
+
+        assertFalse("the probe must report what the converter answered", //$NON-NLS-1$
+            BslModuleUtils.uriExists(resourceSet, MODULE_URI));
+    }
+
+    @Test
+    public void testUnanswerableProbeStaysLoud()
+    {
+        // If we cannot establish that the module is absent, we must NOT demote: an unknown state
+        // silencing an error is exactly the failure this change exists to prevent.
+        ResourceSet resourceSet = mock(ResourceSet.class);
+        when(resourceSet.getURIConverter()).thenThrow(new IllegalStateException("no converter")); //$NON-NLS-1$
+
+        assertTrue("a probe that cannot answer must report 'present' so the ERROR survives", //$NON-NLS-1$
+            BslModuleUtils.uriExists(resourceSet, MODULE_URI));
     }
 }

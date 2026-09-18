@@ -23,7 +23,9 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Path;
+import org.eclipse.core.runtime.Status;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
@@ -314,10 +316,52 @@ public final class BslModuleUtils
         }
         catch (Exception e)
         {
-            Activator.logError("Failed to load BSL module: " + uri, e); //$NON-NLS-1$
+            Log.log(moduleLoadStatus(uriExists(resourceSet, uri), uri, e));
         }
 
         return null;
+    }
+
+    /**
+     * The status for a failed {@code getResource}: a module that is simply ABSENT is not a failure
+     * (the three checks above already treat "nothing to load" as a warning, and this method's
+     * contract is to answer {@code null}), so it logs at WARNING with no stack. A load that failed
+     * for any OTHER reason keeps its ERROR and its stack - the demotion is decided by whether the
+     * resource EXISTS, never by the exception's class.
+     *
+     * @param resourceExists whether the URI names a resource that is actually there
+     * @param uri the module URI the load was attempted for
+     * @param e the exception the load threw
+     * @return the status to emit
+     */
+    static IStatus moduleLoadStatus(boolean resourceExists, URI uri, Exception e)
+    {
+        if (resourceExists)
+        {
+            return new Status(IStatus.ERROR, Log.pluginId(), "Failed to load BSL module: " + uri, e); //$NON-NLS-1$
+        }
+        return new Status(IStatus.WARNING, Log.pluginId(), "BSL module does not exist: " + uri, null); //$NON-NLS-1$
+    }
+
+    /**
+     * Asks the resource set's own URI converter whether {@code uri} names something that exists -
+     * the same question, about the same URI, that the failed load asked. A probe that cannot answer
+     * reports {@code true} so the caller stays LOUD: an unknown state must never silence an error.
+     *
+     * @param resourceSet the resource set the load was attempted on
+     * @param uri the module URI
+     * @return whether the resource exists ({@code true} also when the probe itself failed)
+     */
+    static boolean uriExists(ResourceSet resourceSet, URI uri)
+    {
+        try
+        {
+            return resourceSet.getURIConverter().exists(uri, null);
+        }
+        catch (RuntimeException probeFailed) // NOSONAR an unanswerable probe must not silence the error
+        {
+            return true;
+        }
     }
 
     /**
