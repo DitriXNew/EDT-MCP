@@ -17,6 +17,7 @@ import java.util.stream.Collectors;
 import org.eclipse.jface.preference.IPreferenceStore;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.SseStreamRegistry;
 
 /**
  * Service managing tool enablement state.
@@ -486,7 +487,10 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     }
 
     /**
-     * Saves the set of disabled tool names to preferences.
+     * Saves the set of disabled tool names to preferences and, when the set actually changed,
+     * tells connected clients that {@code tools/list} changed with it.
+     *
+     * @param disabledTools the tool names to disable
      */
     public void setDisabledTools(Set<String> disabledTools)
     {
@@ -495,8 +499,46 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         {
             return;
         }
+        applyDisabledTools(store, disabledTools);
+    }
+
+    /**
+     * Writes the disabled set into {@code store} and pushes {@code notifications/tools/list_changed}
+     * when that write CHANGED the set.
+     * <p>
+     * Enablement is a {@code tools/list} input: {@code getVisibleTools()} drops a disabled tool, so a
+     * tick on the Tools tab removes a tool from the list a connected client already holds. The server
+     * advertises {@code tools.listChanged: true} in {@code initialize}, so staying silent breaks a
+     * capability it promised and leaves that client calling a tool that now refuses (#576). This is
+     * the single write path - the Tools tab, {@link #setToolEnabled} and {@link #applyPreset} all
+     * funnel through it - so the notification cannot be lost by adding another caller.
+     * </p>
+     * <p>
+     * Only a real change notifies: Apply with nothing edited must not wake every client. The
+     * comparison is on the parsed SETS, so a reordered or differently-spaced stored value reads as
+     * unchanged. Under progressive disclosure a disabled tool may already be hidden by its toolset,
+     * which makes the notification redundant rather than wrong - over-notifying costs one
+     * {@code tools/list}, under-notifying is the bug.
+     * </p>
+     *
+     * @param store the preference store to write (never {@code null})
+     * @param disabledTools the tool names to disable
+     * @return {@code true} when the stored set changed and clients were notified
+     */
+    boolean applyDisabledTools(IPreferenceStore store, Set<String> disabledTools)
+    {
         String value = serializeDisabledTools(disabledTools);
+        boolean changed = !parseDisabledTools(store.getString(PreferenceConstants.PREF_DISABLED_TOOLS))
+            .equals(parseDisabledTools(value));
         store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, value);
+        if (changed)
+        {
+            // Synchronous, like the enable_toolset push: a frame of tens of bytes, written to
+            // already-open streams. It runs BEFORE the preference page's server restart, which is
+            // the only order in which an open stream can still receive it.
+            SseStreamRegistry.getInstance().notifyToolsListChanged();
+        }
+        return changed;
     }
 
     /**
