@@ -417,13 +417,15 @@ def test_form_corpus_every_field_type_is_settable():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
-def test_form_corpus_a_kind_change_drops_only_the_handlers_the_new_kind_lost():
-    """Issue #601. `handlers` live on the ITEM, beside the extInfo, so they survive a kind change.
+def test_form_corpus_a_kind_change_keeps_what_the_new_kind_still_publishes():
+    """Issue #601. An item's `<extInfo>` IS an event-handler container: everything its ext-info TYPE
+    publishes is bound INSIDE the node, and only the base-type events sit on the item itself.
 
-    On disk an event is serialized by NAME (`<event>OnChange</event>`), so a same-named event of the
-    new kind picks the same procedure up - that one legitimately migrates. The defect is the other
-    case: a subscription to an event the new kind publishes NOTHING for stayed in the file. Both
-    edges are pinned here, because a fix that removed EVERY handler would pass a removal-only test.
+    So a kind change has two duties. It must CARRY the node's bindings over to the new node - a bare
+    replacement destroyed every one of them, including the ones the new kind still publishes - and
+    it must then drop only the subscriptions the new kind publishes no event for. Both are asserted
+    on the FILE, and the kept one is deliberately an event that lives in the node, not the item's
+    own OnChange, or the carry-over would not be exercised at all.
 
     Which events each kind publishes is asked of the platform (the refusal that lists them), never
     assumed - see _available_events.
@@ -437,19 +439,25 @@ def test_form_corpus_a_kind_change_drops_only_the_handlers_the_new_kind_lost():
         "projectName": PROJECT, "fqn": field,
         "properties": [{"name": "dataPath", "value": "Data"}]}), "seed the field")
     assert_ok(_set_item_type(field, "InputField"), "start from an InputField")
-
-    # The two event sets, taken from the platform with nothing bound yet.
     input_events = _available_events(field)
-    assert_ok(_set_item_type(field, "CheckBoxField"), "probe the other kind's events")
-    checkbox_events = _available_events(field)
-    assert_ok(_set_item_type(field, "InputField"), "back to the kind the handlers are bound on")
 
-    migrating = [e for e in input_events if e in checkbox_events]
-    lost = [e for e in input_events if e not in checkbox_events]
-    assert migrating and lost, (
-        "this test needs an InputField event a CheckBoxField keeps AND one it does not: "
-        "kept=%r lost=%r" % (migrating, lost))
-    kept_event, lost_event = migrating[0], lost[0]
+    # A target kind that both KEEPS one of the input field's non-base events and LOSES another.
+    # OnChange is excluded from the kept side on purpose: it is the one event that lives on the
+    # item's own list, so keeping it would prove nothing about the node's contents.
+    target, kept_event, lost_event = None, None, None
+    for candidate in ("TextDocumentField", "LabelField", "HTMLDocumentField", "CheckBoxField"):
+        assert_ok(_set_item_type(field, candidate), "probe the events of " + candidate)
+        its_events = _available_events(field)
+        migrating = [e for e in input_events if e in its_events and e != "OnChange"]
+        losing = [e for e in input_events if e not in its_events]
+        if migrating and losing:
+            target, kept_event, lost_event = candidate, migrating[0], losing[0]
+            break
+    assert target, (
+        "no candidate kind both keeps a non-base InputField event and loses one; the corpus this "
+        "test needs has changed, so it must be re-aimed rather than left proving less. "
+        "InputField publishes %r" % (input_events,))
+    assert_ok(_set_item_type(field, "InputField"), "back to the kind the handlers are bound on")
 
     for event, procedure in ((kept_event, "ProbeKept"), (lost_event, "ProbeLost")):
         assert_ok(call("create_metadata", {
@@ -459,22 +467,22 @@ def test_form_corpus_a_kind_change_drops_only_the_handlers_the_new_kind_lost():
     poll_disk_contains(form_file, "<event>%s</event>" % lost_event,
                        ctx="both bindings must reach disk before the kind changes")
 
-    r = _set_item_type(field, "CheckBoxField")
-    assert_ok(r, "change the field's kind")
+    r = _set_item_type(field, target)
+    assert_ok(r, "change the field's kind to " + target)
     removed = (r.structured or {}).get("removedEventHandlers")
     assert removed == ["%s (ProbeLost)" % lost_event], (
-        "the caller addressed the TYPE, not the subscription, so the dropped one must be named "
-        "back: %r" % (removed,))
+        "the caller addressed the TYPE, not the subscriptions, so exactly the dropped one must be "
+        "named back (kept=%r lost=%r target=%r): %r" % (kept_event, lost_event, target, removed))
 
     poll_disk_lacks(form_file, "<event>%s</event>" % lost_event,
                     ctx="an event the new kind does not publish may not stay bound in the file")
     xml = read_disk(form_file)
-    assert "<event>%s</event>" % kept_event in xml, \
-        "the same-named event legitimately migrates and must still be bound: %r" % (kept_event,)
-    assert "ProbeKept" in xml, "...and it keeps its own procedure"
+    assert "<event>%s</event>" % kept_event in xml, (
+        "the binding for an event the new kind STILL publishes must have been carried over to the "
+        "new node, not destroyed with the old one: %r" % (kept_event,))
+    assert "ProbeKept" in xml, "...with its procedure"
     assert "ProbeLost" not in xml, \
         "while the dropped subscription is gone from the file, procedure and all"
-
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_form_corpus_every_group_type_is_settable():

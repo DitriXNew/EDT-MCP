@@ -203,9 +203,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private static final String KEY_PERSISTED = "persisted"; //$NON-NLS-1$
 
     /**
-     * Output result key: the event handlers a form item's KIND change un-published, each named
-     * {@code "Event (Procedure)"} (issue #601). Reported only when non-empty, like
-     * {@code demotedMainAttributes} - a change to something the caller did not address.
+     * Output result key: the event handlers a form item's KIND change took with it, each named
+     * {@code "Event (Procedure)"} (issue #601) - the ones the new kind publishes no event for, plus
+     * any that went with an ext-info node the new type pairs with nothing to replace. Reported only
+     * when non-empty, like {@code demotedMainAttributes}: a change to something the caller did not
+     * address. The BSL procedure is never touched, only the subscription.
      */
     static final String KEY_REMOVED_EVENT_HANDLERS = "removedEventHandlers"; //$NON-NLS-1$
 
@@ -3416,7 +3418,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // Attributes this call took the main flag AWAY from - a change to a member the caller did
         // not address, so it is reported rather than left to be discovered.
         final List<String> demotedMains = new ArrayList<>();
-        // Same rule for the handlers a KIND change un-published (issue #601): the caller addressed
+        // Same rule for the bindings a KIND change took with it (issue #601): the caller addressed
         // the item's type, not its subscriptions, so a removal it did not ask for is reported.
         final List<String> removedHandlers = new ArrayList<>();
 
@@ -3438,6 +3440,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 List<EObject> localizedHolders = new ArrayList<>();
                 List<PreparedChange> localizedChanges = new ArrayList<>();
                 boolean mainFlagWritten = false;
+                boolean itemKindWritten = false;
                 for (HolderChange hc : changes)
                 {
                     // A direct feature lands on the target; a property on the nested <extInfo> lands
@@ -3450,11 +3453,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     localizedReport.rememberPreState(holder, List.of(hc.change));
                     hc.change.applyTo(holder, tx);
                     applied.add(hc.change.featureName());
-                    if (syncExtInfoAfter(hc, formModel, target, version, removedHandlers))
+                    if (syncExtInfoAfter(hc, formModel, target, removedHandlers))
                     {
                         applied.add("extInfo"); //$NON-NLS-1$
                     }
                     mainFlagWritten = mainFlagWritten || decidesFormExtInfo(hc);
+                    itemKindWritten = itemKindWritten || writesItemKind(hc);
                     if (hc.change.isLocalized())
                     {
                         // Remember the receiver the change actually landed on: a title on the
@@ -3462,6 +3466,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         localizedHolders.add(holder);
                         localizedChanges.add(hc.change);
                     }
+                }
+                // Which events the item still publishes is decided ONCE, on the kind the batch
+                // LEAVES. Per change it would answer about an intermediate kind: applied in order,
+                // [type=LabelField, type=InputField] would drop, at the LabelField step, the very
+                // subscriptions InputField publishes. Same last-write-wins rule the retype verdict
+                // and the main flag follow.
+                if (itemKindWritten)
+                {
+                    removedHandlers.addAll(
+                        FormElementWriter.dropUnpublishedItemHandlers(target, version));
                 }
                 // A main-attribute promotion is the platform's setMainAttribute: it demotes the
                 // previous main first, then re-derives the root ext-info from the FINAL state of
@@ -3936,12 +3950,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * @param hc the change that was just applied
      * @param formModel the editable content form
      * @param member the form member the change landed on
-     * @param version the platform version, for the event set the item's NEW kind publishes
-     * @param removedHandlers collects the handlers the kind change un-published (issue #601)
+     * @param lostHandlers collects the bindings an ext-info node took with it when the new type
+     *            pairs with none to carry them into (issue #601)
      * @return {@code true} when an extInfo is now attached (so the caller can report it as applied)
      */
     private static boolean syncExtInfoAfter(HolderChange hc, EObject formModel, EObject member,
-        Version version, List<String> removedHandlers)
+        List<String> lostHandlers)
     {
         if (hc.onExtInfo)
         {
@@ -3953,10 +3967,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         if ("type".equalsIgnoreCase(hc.change.featureName())) //$NON-NLS-1$
         {
-            return FormElementWriter.syncItemExtInfo(formModel, member, version, removedHandlers)
-                != null;
+            return FormElementWriter.syncItemExtInfo(formModel, member, lostHandlers) != null;
         }
         return false;
+    }
+
+    /** Whether this change writes a form ITEM's display KIND - the {@code type} enum on the item. */
+    private static boolean writesItemKind(HolderChange hc)
+    {
+        return !hc.onExtInfo && !hc.change.isTypeChange()
+            && "type".equalsIgnoreCase(hc.change.featureName()); //$NON-NLS-1$
     }
 
     /**
