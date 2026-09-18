@@ -138,12 +138,16 @@ def _first_infobase_application():
     A preview changes nothing, so it is the one way to assert the real serialized
     payload of this destructive tool without deleting anything.
 
-    A FILE infobase is preferred, but a standalone-server application is accepted.
-    Requiring a file infobase made this test SKIP on the committed fixture, which has
-    only a standalone-server application - so it asserted nothing, here or on CI, and a
-    skip is not a pass. Both kinds write `databaseFilesKept` through the same helper;
-    verified live on the standalone application: files not requested -> 'notRequested',
-    files requested -> the key absent because they would be deleted.
+    A FILE infobase is preferred, but a standalone-server application is accepted:
+    both kinds write `databaseFilesKept` through the same helper. Verified live on a
+    standalone application - files not requested -> 'notRequested', files requested ->
+    the key absent because they would be deleted.
+
+    STAND-ONLY COVERAGE, measured not assumed: on CI the committed fixture has NO
+    applications at all (an application is workspace state, not fixture content), so
+    this self-skips there - confirmed in the CI results XML. It asserts only on a stand
+    whose workspace has one. Requiring a FILE infobase made it skip in BOTH places, which
+    is why the accepted kinds were widened; a skip is not a pass either way.
     """
     r = call("get_applications", {"projectName": PROJECT})
     assert_ok(r, "get_applications for the delete_infobase preview")
