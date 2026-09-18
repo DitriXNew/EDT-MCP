@@ -26,6 +26,7 @@ import com._1c.g5.v8.dt.mcore.StringQualifiers;
 import com._1c.g5.v8.dt.mcore.Type;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
+import com._1c.g5.v8.dt.mcore.util.McoreUtil;
 import com._1c.g5.v8.dt.md.resource.MdTypeUtil;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
@@ -1795,6 +1796,82 @@ public final class MetadataTypeBuilder
             case "datetime": //$NON-NLS-1$
             default:
                 return DateFractions.DATE_TIME;
+        }
+    }
+
+    /**
+     * Whether two value types describe the SAME type - used to tell a real retype from a write that
+     * leaves the member's type exactly as it was (issue #599).
+     *
+     * <p>The two failure directions are NOT equal in cost. Answering "different" for equal types
+     * costs one dialog nobody needed; answering "same" for DIFFERENT types silences a destructive
+     * consent gate and loses stored data without a question. So nothing is equal by default: the
+     * answer is {@code true} only for two descriptions whose every type NAMES itself and matches
+     * position by position, with equal qualifiers. Everything else - an absent or non-description
+     * value, an EMPTY type list (which would leave the verdict to the qualifiers alone), a type item
+     * whose name cannot be read, a proxy the type-name resolver does not know - is DIFFERENT.</p>
+     *
+     * <p>Identity is the type NAME, which is also what the {@code .form} / {@code .mdo} file stores,
+     * and {@link McoreUtil#getTypeName} answers the ENGLISH name for a resolved type and for a proxy
+     * alike - so a type written in either language compares identically. The EClass is deliberately
+     * not compared: the stored side is normally a lazily resolved proxy and the built side a fresh
+     * one, and requiring the same class there would call every identical type different.</p>
+     *
+     * <p>The structural comparison itself is the platform's own {@link McoreUtil#compareTypeDescriptions}
+     * - order-sensitive over the type list and exact over the string / number / date / BINARY
+     * qualifiers, including "set" vs "unset" (a {@code String} written with no length is therefore
+     * NOT the same as a stored {@code String(10)}). It is called only once every name on both sides
+     * has been read, because it dereferences those names without a null check.</p>
+     *
+     * @param current the type the member carries now (anything at all; only a {@code TypeDescription}
+     *            can compare equal)
+     * @param next the type the batch would leave on it
+     * @return {@code true} only when the two are certainly the same type
+     */
+    public static boolean describesSameType(Object current, Object next)
+    {
+        if (!(current instanceof TypeDescription) || !(next instanceof TypeDescription))
+        {
+            return false;
+        }
+        TypeDescription stored = (TypeDescription)current;
+        TypeDescription built = (TypeDescription)next;
+        List<TypeItem> storedTypes = stored.getTypes();
+        List<TypeItem> builtTypes = built.getTypes();
+        if (storedTypes.isEmpty() || storedTypes.size() != builtTypes.size())
+        {
+            return false;
+        }
+        for (int i = 0; i < storedTypes.size(); i++)
+        {
+            if (comparableTypeName(storedTypes.get(i)) == null
+                || comparableTypeName(builtTypes.get(i)) == null)
+            {
+                return false;
+            }
+        }
+        return McoreUtil.compareTypeDescriptions(stored, built);
+    }
+
+    /**
+     * The name a type item can be COMPARED by, or {@code null} when it names nothing this process can
+     * read - an unresolved proxy whose URI the type-name resolver does not know throws or answers
+     * null there, and a type that names nothing may not compare equal to anything.
+     */
+    private static String comparableTypeName(TypeItem item)
+    {
+        if (item == null)
+        {
+            return null;
+        }
+        try
+        {
+            String name = McoreUtil.getTypeName(item);
+            return name == null || name.isEmpty() ? null : name;
+        }
+        catch (RuntimeException e)
+        {
+            return null;
         }
     }
 
