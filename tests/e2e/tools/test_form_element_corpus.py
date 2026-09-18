@@ -30,6 +30,8 @@ landed ahead of resync_to_disk's full-export test, which then re-exported a Conf
 that no longer matched the committed one.)
 """
 
+import re
+
 from harness import (
     call,
     assert_ok,
@@ -40,6 +42,7 @@ from harness import (
     assert_no_diff,
     poll_disk_contains,
     poll_disk_lacks,
+    read_disk,
     wait_for_project_ready,
     e2e_test,
     PROJECT,
@@ -161,6 +164,33 @@ def _set_attribute_type(attr_fqn, kind):
         "projectName": PROJECT, "fqn": attr_fqn,
         "properties": [{"name": "type", "value": {"types": [{"kind": kind}]}}],
     })
+
+
+def _set_item_type(item_fqn, kind):
+    return call("modify_metadata", {
+        "projectName": PROJECT, "fqn": item_fqn,
+        "properties": [{"name": "type", "value": kind}],
+    })
+
+
+# An event name as the refusal lists them: an English identifier, nothing else on the line.
+_EVENT_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
+
+
+def _available_events(item_fqn):
+    """The events the item's CURRENT kind publishes, read off the refusal that lists them.
+
+    The published-event set per kind is the platform's, not a table kept here - asking for it this
+    way keeps the test honest when the platform's own list changes.
+    """
+    err = assert_error(call("create_metadata", {
+        "projectName": PROJECT, "fqn": item_fqn + ".Handler.NotARealEvent_zz",
+        "properties": [{"name": "procedure", "value": "NeverBound"}]}),
+        "a bogus event must be refused with the list of the real ones")
+    marker = "Available events:"
+    assert marker in err, "the refusal must list the events the kind publishes: %r" % (err,)
+    listed = err.split(marker, 1)[1].splitlines()[0]
+    return [e for e in (t.strip().rstrip(".") for t in listed.split(",")) if _EVENT_NAME.match(e)]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -384,6 +414,66 @@ def test_form_corpus_every_field_type_is_settable():
     assert_ok(d, "read back the form")
     assert_contains(d.text, FIELD_TYPES[-1][0],
                     "the field must actually carry the last type that was set")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_corpus_a_kind_change_drops_only_the_handlers_the_new_kind_lost():
+    """Issue #601. `handlers` live on the ITEM, beside the extInfo, so they survive a kind change.
+
+    On disk an event is serialized by NAME (`<event>OnChange</event>`), so a same-named event of the
+    new kind picks the same procedure up - that one legitimately migrates. The defect is the other
+    case: a subscription to an event the new kind publishes NOTHING for stayed in the file. Both
+    edges are pinned here, because a fix that removed EVERY handler would pass a removal-only test.
+
+    Which events each kind publishes is asked of the platform (the refusal that lists them), never
+    assumed - see _available_events.
+    """
+    base, form, form_file = _seed_form("Handlers")
+    attr = form + ".Attribute.Data"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": attr}),
+              "seed the bound attribute")
+    field = form + ".Field.Probe"
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": field,
+        "properties": [{"name": "dataPath", "value": "Data"}]}), "seed the field")
+    assert_ok(_set_item_type(field, "InputField"), "start from an InputField")
+
+    # The two event sets, taken from the platform with nothing bound yet.
+    input_events = _available_events(field)
+    assert_ok(_set_item_type(field, "CheckBoxField"), "probe the other kind's events")
+    checkbox_events = _available_events(field)
+    assert_ok(_set_item_type(field, "InputField"), "back to the kind the handlers are bound on")
+
+    migrating = [e for e in input_events if e in checkbox_events]
+    lost = [e for e in input_events if e not in checkbox_events]
+    assert migrating and lost, (
+        "this test needs an InputField event a CheckBoxField keeps AND one it does not: "
+        "kept=%r lost=%r" % (migrating, lost))
+    kept_event, lost_event = migrating[0], lost[0]
+
+    for event, procedure in ((kept_event, "ProbeKept"), (lost_event, "ProbeLost")):
+        assert_ok(call("create_metadata", {
+            "projectName": PROJECT, "fqn": "%s.Handler.%s" % (field, event),
+            "properties": [{"name": "procedure", "value": procedure}]}), "bind " + event)
+    wait_for_project_ready()
+    poll_disk_contains(form_file, "<event>%s</event>" % lost_event,
+                       ctx="both bindings must reach disk before the kind changes")
+
+    r = _set_item_type(field, "CheckBoxField")
+    assert_ok(r, "change the field's kind")
+    removed = (r.structured or {}).get("removedEventHandlers")
+    assert removed == ["%s (ProbeLost)" % lost_event], (
+        "the caller addressed the TYPE, not the subscription, so the dropped one must be named "
+        "back: %r" % (removed,))
+
+    poll_disk_lacks(form_file, "<event>%s</event>" % lost_event,
+                    ctx="an event the new kind does not publish may not stay bound in the file")
+    xml = read_disk(form_file)
+    assert "<event>%s</event>" % kept_event in xml, \
+        "the same-named event legitimately migrates and must still be bound: %r" % (kept_event,)
+    assert "ProbeKept" in xml, "...and it keeps its own procedure"
+    assert "ProbeLost" not in xml, \
+        "while the dropped subscription is gone from the file, procedure and all"
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

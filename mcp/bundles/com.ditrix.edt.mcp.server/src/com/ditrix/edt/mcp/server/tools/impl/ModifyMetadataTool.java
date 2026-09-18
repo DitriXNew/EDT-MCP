@@ -202,6 +202,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /** Output result key: whether the change was exported to disk. */
     private static final String KEY_PERSISTED = "persisted"; //$NON-NLS-1$
 
+    /**
+     * Output result key: the event handlers a form item's KIND change un-published, each named
+     * {@code "Event (Procedure)"} (issue #601). Reported only when non-empty, like
+     * {@code demotedMainAttributes} - a change to something the caller did not address.
+     */
+    static final String KEY_REMOVED_EVENT_HANDLERS = "removedEventHandlers"; //$NON-NLS-1$
+
     /** Echoes the locale a localized property was actually written under (#298). */
     private static final String KEY_LANGUAGE = "language"; //$NON-NLS-1$
 
@@ -3409,6 +3416,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // Attributes this call took the main flag AWAY from - a change to a member the caller did
         // not address, so it is reported rather than left to be discovered.
         final List<String> demotedMains = new ArrayList<>();
+        // Same rule for the handlers a KIND change un-published (issue #601): the caller addressed
+        // the item's type, not its subscriptions, so a removal it did not ask for is reported.
+        final List<String> removedHandlers = new ArrayList<>();
 
         // Validate + apply inside ONE BM write transaction: resolve the target, validate every
         // property (a failure throws FormValidationException carrying the JSON error BEFORE any eSet,
@@ -3440,7 +3450,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     localizedReport.rememberPreState(holder, List.of(hc.change));
                     hc.change.applyTo(holder, tx);
                     applied.add(hc.change.featureName());
-                    if (syncExtInfoAfter(hc, formModel, target))
+                    if (syncExtInfoAfter(hc, formModel, target, version, removedHandlers))
                     {
                         applied.add("extInfo"); //$NON-NLS-1$
                     }
@@ -3488,6 +3498,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (!demotedMains.isEmpty())
         {
             result.put("demotedMainAttributes", demotedMains); //$NON-NLS-1$
+        }
+        if (!removedHandlers.isEmpty())
+        {
+            result.put(KEY_REMOVED_EVENT_HANDLERS, removedHandlers);
         }
         return result
             .put(McpKeys.MESSAGE, MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -3922,9 +3936,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * @param hc the change that was just applied
      * @param formModel the editable content form
      * @param member the form member the change landed on
+     * @param version the platform version, for the event set the item's NEW kind publishes
+     * @param removedHandlers collects the handlers the kind change un-published (issue #601)
      * @return {@code true} when an extInfo is now attached (so the caller can report it as applied)
      */
-    private static boolean syncExtInfoAfter(HolderChange hc, EObject formModel, EObject member)
+    private static boolean syncExtInfoAfter(HolderChange hc, EObject formModel, EObject member,
+        Version version, List<String> removedHandlers)
     {
         if (hc.onExtInfo)
         {
@@ -3936,7 +3953,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         if ("type".equalsIgnoreCase(hc.change.featureName())) //$NON-NLS-1$
         {
-            return FormElementWriter.syncItemExtInfo(formModel, member) != null;
+            return FormElementWriter.syncItemExtInfo(formModel, member, version, removedHandlers)
+                != null;
         }
         return false;
     }

@@ -44,6 +44,7 @@ import org.eclipse.emf.ecore.util.EContentAdapter;
 import org.eclipse.emf.ecore.util.EcoreEList;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.mcore.Event;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.Type;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
@@ -6320,12 +6321,12 @@ public class FormElementWriterTest
         ItemModel model = new ItemModel("Decoration", DECORATION_EXT_INFO_MATRIX); //$NON-NLS-1$
         model.setType("Label"); //$NON-NLS-1$
         assertEquals("LabelDecorationExtInfo", //$NON-NLS-1$
-            FormElementWriter.syncItemExtInfo(model.form, model.item));
+            FormElementWriter.syncItemExtInfo(model.form, model.item, null, null));
 
         model.dropClassifier("PictureDecorationExtInfo"); //$NON-NLS-1$
         model.setType("Picture"); //$NON-NLS-1$
 
-        assertNull(FormElementWriter.syncItemExtInfo(model.form, model.item));
+        assertNull(FormElementWriter.syncItemExtInfo(model.form, model.item, null, null));
         assertNull("a Picture decoration must not keep the LabelDecorationExtInfo", //$NON-NLS-1$
             model.item.eGet(feature(model.item, "extInfo"))); //$NON-NLS-1$
     }
@@ -6476,7 +6477,7 @@ public class FormElementWriterTest
             ItemModel model = new ItemModel(eClassName, matrix);
             model.setType(pair[0]);
 
-            String applied = FormElementWriter.syncItemExtInfo(model.form, model.item);
+            String applied = FormElementWriter.syncItemExtInfo(model.form, model.item, null, null);
 
             assertEquals(eClassName + " type " + pair[0], pair[1], applied); //$NON-NLS-1$
             EObject extInfo = (EObject)model.item.eGet(feature(model.item, "extInfo")); //$NON-NLS-1$
@@ -6499,11 +6500,11 @@ public class FormElementWriterTest
         // with, so every extInfo property then resolved against the wrong EClass.
         ItemModel model = new ItemModel("Decoration", DECORATION_EXT_INFO_MATRIX); //$NON-NLS-1$
         model.setType("Label"); //$NON-NLS-1$
-        FormElementWriter.syncItemExtInfo(model.form, model.item);
+        FormElementWriter.syncItemExtInfo(model.form, model.item, null, null);
 
         model.setType("Picture"); //$NON-NLS-1$
         assertEquals("PictureDecorationExtInfo", //$NON-NLS-1$
-            FormElementWriter.syncItemExtInfo(model.form, model.item));
+            FormElementWriter.syncItemExtInfo(model.form, model.item, null, null));
         assertEquals("PictureDecorationExtInfo", ((EObject)model.item.eGet( //$NON-NLS-1$
             feature(model.item, "extInfo"))).eClass().getName()); //$NON-NLS-1$
     }
@@ -6513,11 +6514,11 @@ public class FormElementWriterTest
     {
         ItemModel model = new ItemModel(ITEM_ECLASS_GROUP, GROUP_EXT_INFO_MATRIX);
         model.setType("UsualGroup"); //$NON-NLS-1$
-        FormElementWriter.syncItemExtInfo(model.form, model.item);
+        FormElementWriter.syncItemExtInfo(model.form, model.item, null, null);
         assertNotNull(model.item.eGet(feature(model.item, "extInfo"))); //$NON-NLS-1$
 
         model.setType("ContextMenu"); //$NON-NLS-1$
-        assertNull(FormElementWriter.syncItemExtInfo(model.form, model.item));
+        assertNull(FormElementWriter.syncItemExtInfo(model.form, model.item, null, null));
         assertNull("a ContextMenu must not keep the UsualGroupExtInfo", //$NON-NLS-1$
             model.item.eGet(feature(model.item, "extInfo"))); //$NON-NLS-1$
     }
@@ -6528,10 +6529,10 @@ public class FormElementWriterTest
         // Re-creating it would reset the layout properties already set on the holder.
         ItemModel model = new ItemModel(ITEM_ECLASS_GROUP, GROUP_EXT_INFO_MATRIX);
         model.setType("Pages"); //$NON-NLS-1$
-        FormElementWriter.syncItemExtInfo(model.form, model.item);
+        FormElementWriter.syncItemExtInfo(model.form, model.item, null, null);
         Object first = model.item.eGet(feature(model.item, "extInfo")); //$NON-NLS-1$
 
-        FormElementWriter.syncItemExtInfo(model.form, model.item);
+        FormElementWriter.syncItemExtInfo(model.form, model.item, null, null);
 
         assertSame(first, model.item.eGet(feature(model.item, "extInfo"))); //$NON-NLS-1$
     }
@@ -6546,7 +6547,7 @@ public class FormElementWriterTest
             model.extInfoClass("LabelDecorationExtInfo")); //$NON-NLS-1$
 
         assertEquals("LabelDecorationExtInfo", //$NON-NLS-1$
-            FormElementWriter.syncItemExtInfo(model.form, model.item));
+            FormElementWriter.syncItemExtInfo(model.form, model.item, null, null));
         assertNotNull("a Table's extInfo must survive an item sync", //$NON-NLS-1$
             model.item.eGet(feature(model.item, "extInfo"))); //$NON-NLS-1$
     }
@@ -6564,6 +6565,7 @@ public class FormElementWriterTest
         final EObject form;
         final EObject item;
         private final EPackage pkg;
+        private final EClass handlerClass;
 
         ItemModel(String itemEClassName, String[][] matrix)
         {
@@ -6630,6 +6632,26 @@ public class FormElementWriterTest
             extInfoRef.setContainment(true);
             extInfoRef.setUpperBound(1);
             itemClass.getEStructuralFeatures().add(extInfoRef);
+            // The handlers live on the ITEM, beside the extInfo - which is why they survive a kind
+            // change and need cleaning up after one (issue #601).
+            handlerClass = f.createEClass();
+            handlerClass.setName("EventHandler"); //$NON-NLS-1$
+            EAttribute handlerName = f.createEAttribute();
+            handlerName.setName("name"); //$NON-NLS-1$
+            handlerName.setEType(EcorePackage.Literals.ESTRING);
+            handlerClass.getEStructuralFeatures().add(handlerName);
+            EReference handlerEvent = f.createEReference();
+            handlerEvent.setName("event"); //$NON-NLS-1$
+            handlerEvent.setEType(EcorePackage.Literals.EOBJECT);
+            handlerEvent.setUpperBound(1);
+            handlerClass.getEStructuralFeatures().add(handlerEvent);
+            pkg.getEClassifiers().add(handlerClass);
+            EReference handlers = f.createEReference();
+            handlers.setName("handlers"); //$NON-NLS-1$
+            handlers.setEType(handlerClass);
+            handlers.setContainment(true);
+            handlers.setUpperBound(-1);
+            itemClass.getEStructuralFeatures().add(handlers);
             pkg.getEClassifiers().add(itemClass);
 
             EClass formClass = f.createEClass();
@@ -6664,6 +6686,173 @@ public class FormElementWriterTest
         {
             pkg.getEClassifiers().remove(pkg.getEClassifier(name));
         }
+
+        /**
+         * Subscribes {@code procedure} to an event spelled {@code eventName} (and {@code eventNameRu}
+         * when given) - a real mcore {@code Event}, because that is what the writer reads the
+         * spellings off. A {@code null} English name leaves the event nameless.
+         */
+        void bind(String eventName, String eventNameRu, String procedure)
+        {
+            Event event = McoreFactory.eINSTANCE.createEvent();
+            event.setName(eventName);
+            event.setNameRu(eventNameRu);
+            EObject handler = pkg.getEFactoryInstance().create(handlerClass);
+            handler.eSet(handlerClass.getEStructuralFeature("name"), procedure); //$NON-NLS-1$
+            handler.eSet(handlerClass.getEStructuralFeature("event"), event); //$NON-NLS-1$
+            addTo(item, "handlers", handler); //$NON-NLS-1$
+        }
+
+        /** The ENGLISH event name of every handler still bound, in order. */
+        @SuppressWarnings("unchecked")
+        List<String> boundEvents()
+        {
+            List<String> names = new ArrayList<>();
+            for (EObject handler : (List<EObject>)item.eGet(feature(item, "handlers"))) //$NON-NLS-1$
+            {
+                Event event = (Event)handler.eGet(handlerClass.getEStructuralFeature("event")); //$NON-NLS-1$
+                names.add(event == null ? null : event.getName());
+            }
+            return names;
+        }
+
+        /** The PROCEDURE of every handler still bound, in order. */
+        @SuppressWarnings("unchecked")
+        List<String> boundProcedures()
+        {
+            List<String> names = new ArrayList<>();
+            for (EObject handler : (List<EObject>)item.eGet(feature(item, "handlers"))) //$NON-NLS-1$
+            {
+                names.add((String)handler.eGet(handlerClass.getEStructuralFeature("name"))); //$NON-NLS-1$
+            }
+            return names;
+        }
+    }
+
+    // ---- handlers a kind change un-publishes (issue #601) ---------------------------------------
+
+    /** The Russian spelling of OnChange - ASCII source, like every other 1C token in this repo. */
+    private static final String RU_ON_CHANGE =
+        "\u041F\u0440\u0438\u0418\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u0438"; //$NON-NLS-1$
+
+    /**
+     * BOTH edges of the rule at once. A kind change carries the handlers over, so the one bound to
+     * an event the new kind still publishes must survive WITH its procedure, and only the one the
+     * new kind publishes nothing for is dropped. A fix that removed everything would pass a test
+     * that asserted removal alone.
+     */
+    @Test
+    public void testOnlyTheHandlersTheNewKindDoesNotPublishAreRemoved()
+    {
+        ItemModel model = new ItemModel("FormField", FIELD_EXT_INFO_MATRIX); //$NON-NLS-1$
+        model.bind("OnChange", RU_ON_CHANGE, "GoodsOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        model.bind("AutoComplete", null, "GoodsAutoComplete"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        List<String> removed = FormElementWriter.removeHandlersForUnpublishedEvents(model.item,
+            Set.of("onchange", "clearing")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("the report names the event AND the procedure left unbound", //$NON-NLS-1$
+            List.of("AutoComplete (GoodsAutoComplete)"), removed); //$NON-NLS-1$
+        assertEquals("a same-named event legitimately migrates", List.of("OnChange"), //$NON-NLS-1$ //$NON-NLS-2$
+            model.boundEvents());
+        assertEquals("and it keeps its own procedure, not the other one", //$NON-NLS-1$
+            List.of("GoodsOnChange"), model.boundProcedures()); //$NON-NLS-1$
+        assertFalse("the un-published binding must be gone, not merely re-pointed", //$NON-NLS-1$
+            model.boundProcedures().contains("GoodsAutoComplete")); //$NON-NLS-1$
+        assertFalse(model.boundEvents().contains("AutoComplete")); //$NON-NLS-1$
+    }
+
+    /**
+     * An empty published set means "publishes nothing", "cannot tell" and "the union did not fully
+     * resolve" all at once, and none of the three is grounds for deleting a user's handler.
+     */
+    @Test
+    public void testAnUnestablishedEventSetRemovesNothing()
+    {
+        ItemModel model = new ItemModel("FormField", FIELD_EXT_INFO_MATRIX); //$NON-NLS-1$
+        model.bind("OnChange", null, "GoodsOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(List.of(), FormElementWriter.removeHandlersForUnpublishedEvents(model.item,
+            Collections.emptySet()));
+        assertEquals(List.of("GoodsOnChange"), model.boundProcedures()); //$NON-NLS-1$
+    }
+
+    /** A binding whose event names nothing readable is not evidence of an un-published event. */
+    @Test
+    public void testABindingWithANamelessEventIsKept()
+    {
+        ItemModel model = new ItemModel("FormField", FIELD_EXT_INFO_MATRIX); //$NON-NLS-1$
+        model.bind(null, null, "GoodsMystery"); //$NON-NLS-1$
+
+        assertEquals(List.of(), FormElementWriter.removeHandlersForUnpublishedEvents(model.item,
+            Set.of("onchange"))); //$NON-NLS-1$
+        assertEquals(List.of("GoodsMystery"), model.boundProcedures()); //$NON-NLS-1$
+    }
+
+    /**
+     * 1C publishes every event under two spellings and a binding may carry either, so the match is
+     * made on BOTH - and on case, because the two sides are read from different objects.
+     */
+    @Test
+    public void testEitherSpellingOfTheEventKeepsTheBinding()
+    {
+        ItemModel russianSide = new ItemModel("FormField", FIELD_EXT_INFO_MATRIX); //$NON-NLS-1$
+        russianSide.bind("OnChange", RU_ON_CHANGE, "GoodsOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("matched on the RUSSIAN spelling alone", List.of(), //$NON-NLS-1$
+            FormElementWriter.removeHandlersForUnpublishedEvents(russianSide.item,
+                Set.of(RU_ON_CHANGE.toLowerCase(java.util.Locale.ROOT))));
+        assertEquals(List.of("GoodsOnChange"), russianSide.boundProcedures()); //$NON-NLS-1$
+
+        ItemModel englishSide = new ItemModel("FormField", FIELD_EXT_INFO_MATRIX); //$NON-NLS-1$
+        englishSide.bind("OnChange", RU_ON_CHANGE, "GoodsOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("and on the ENGLISH one in a different case", List.of(), //$NON-NLS-1$
+            FormElementWriter.removeHandlersForUnpublishedEvents(englishSide.item,
+                Set.of("onchange"))); //$NON-NLS-1$
+
+        ItemModel neither = new ItemModel("FormField", FIELD_EXT_INFO_MATRIX); //$NON-NLS-1$
+        neither.bind("OnChange", RU_ON_CHANGE, "GoodsOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("a set carrying neither spelling drops it", //$NON-NLS-1$
+            List.of("OnChange (GoodsOnChange)"), //$NON-NLS-1$
+            FormElementWriter.removeHandlersForUnpublishedEvents(neither.item,
+                Set.of("clearing"))); //$NON-NLS-1$
+        assertEquals(List.of(), neither.boundProcedures());
+    }
+
+    /** A handler with no procedure name is reported by its event alone, never as "Event (null)". */
+    @Test
+    public void testAHandlerWithNoProcedureIsReportedByItsEvent()
+    {
+        ItemModel model = new ItemModel("FormField", FIELD_EXT_INFO_MATRIX); //$NON-NLS-1$
+        model.bind("AutoComplete", null, null); //$NON-NLS-1$
+
+        assertEquals(List.of("AutoComplete"), //$NON-NLS-1$
+            FormElementWriter.removeHandlersForUnpublishedEvents(model.item,
+                Set.of("onchange"))); //$NON-NLS-1$
+    }
+
+    /**
+     * The whole sync, not just the decision: a kind change whose event set cannot be established -
+     * which is every call without a platform version - must leave every handler where it is. The
+     * cleanup is wired into the REPLACE path, so this is the one direction a headless model can
+     * prove about it, and it is the direction that costs a user their handler when it is wrong.
+     */
+    @Test
+    public void testAKindChangeWithNoResolvableEventSetKeepsEveryHandler()
+    {
+        ItemModel model = new ItemModel("FormField", FIELD_EXT_INFO_MATRIX); //$NON-NLS-1$
+        model.setType("InputField"); //$NON-NLS-1$
+        assertEquals("InputFieldExtInfo", //$NON-NLS-1$
+            FormElementWriter.syncItemExtInfo(model.form, model.item, null, null));
+        model.bind("OnChange", RU_ON_CHANGE, "GoodsOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        List<String> removed = new ArrayList<>();
+        model.setType("CheckBoxField"); //$NON-NLS-1$
+        assertEquals("CheckBoxFieldExtInfo", //$NON-NLS-1$
+            FormElementWriter.syncItemExtInfo(model.form, model.item, null, removed));
+
+        assertEquals("nothing may be removed on an event set that could not be read", //$NON-NLS-1$
+            List.of(), removed);
+        assertEquals(List.of("GoodsOnChange"), model.boundProcedures()); //$NON-NLS-1$
     }
 
     /** Gives {@code member} a real mcore {@code TypeDescription} carrying one {@code Type} per name. */

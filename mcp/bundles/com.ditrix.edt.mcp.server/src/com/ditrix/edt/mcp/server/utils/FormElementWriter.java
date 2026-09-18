@@ -5164,11 +5164,21 @@ public final class FormElementWriter
      * its callers only mean to reach INTO the holder - this one is authoritative about the class,
      * because the type just changed.</p>
      *
+     * <p>The {@code handlers} live on the ITEM, not inside the node, so they survive the swap. An
+     * event is bound by NAME on disk, so a same-named event of the new kind legitimately picks the
+     * procedure up; a subscription the new kind publishes NO event for is left addressing an event
+     * the item does not have, and is dropped here (issue #601).</p>
+     *
      * @param formModel the editable content form (owns the form EPackage the classifier comes from)
      * @param item the form item whose {@code type} has just been set, re-fetched inside the tx
+     * @param version the platform version the item's published events are resolved for; without one
+     *            no event set can be established and no handler is dropped
+     * @param removedHandlers collects the dropped handlers as {@code "Event (Procedure)"}; may be
+     *            {@code null} when the caller does not report them - the cleanup is not optional
      * @return the EClass name of the ext-info now on the item, or {@code null} when it carries none
      */
-    public static String syncItemExtInfo(EObject formModel, EObject item)
+    public static String syncItemExtInfo(EObject formModel, EObject item, Version version,
+        List<String> removedHandlers)
     {
         EStructuralFeature feature = item.eClass().getEStructuralFeature(FEATURE_EXT_INFO);
         if (!(feature instanceof EReference) || feature.isMany())
@@ -5184,16 +5194,128 @@ public final class FormElementWriter
             if (current != null && enumLiteralOf(item, FEATURE_TYPE) != null)
             {
                 item.eSet(feature, null);
+                dropUnpublishedHandlers(item, version, removedHandlers);
                 return null;
             }
             return current == null ? null : current.eClass().getName();
         }
         if (current != null && classifier.equals(current.eClass().getName()))
         {
+            // The node did not change, so neither did the event set: nothing was un-published.
             return classifier;
         }
         EObject created = replaceExtInfoClassifier(formModel, item, feature, classifier);
+        dropUnpublishedHandlers(item, version, removedHandlers);
         return created == null ? null : created.eClass().getName();
+    }
+
+    /**
+     * Drops the item's handlers for events its NEW kind does not publish, reading the published set
+     * off the item as it stands AFTER the ext-info swap.
+     *
+     * <p>An empty published set is never read as "publishes nothing": {@link #availableEventNames}
+     * already documents that empty also means "cannot tell" and "the union did not fully resolve",
+     * and none of the three may delete a user's handler. So an unresolvable set removes nothing.</p>
+     */
+    private static void dropUnpublishedHandlers(EObject item, Version version,
+        List<String> removedHandlers)
+    {
+        List<String> removed = removeHandlersForUnpublishedEvents(item,
+            publishedEventSpellings(item, version));
+        if (removedHandlers != null)
+        {
+            removedHandlers.addAll(removed);
+        }
+    }
+
+    /**
+     * Removes from {@code item}'s {@code handlers} every binding whose event is absent from
+     * {@code publishedSpellings}, naming each as {@code "Event (Procedure)"} (the event alone when
+     * the procedure cannot be read). The decision taken as DATA, so it is provable without a
+     * platform type registry.
+     *
+     * <p>Two things are deliberately KEPT, because neither is evidence that the new kind stopped
+     * publishing the event: a binding whose event names nothing readable, and every binding at all
+     * when the published set is empty (see {@link #dropUnpublishedHandlers}).</p>
+     *
+     * @param item the form item, after its ext-info was re-paired
+     * @param publishedSpellings every spelling the new kind publishes, lower-cased
+     * @return the dropped bindings, in the order they were bound
+     */
+    static List<String> removeHandlersForUnpublishedEvents(EObject item,
+        Set<String> publishedSpellings)
+    {
+        List<String> removed = new ArrayList<>();
+        if (publishedSpellings.isEmpty())
+        {
+            return removed;
+        }
+        EStructuralFeature handlersFeat = item.eClass().getEStructuralFeature(KEY_HANDLERS);
+        if (!(handlersFeat instanceof EReference) || !handlersFeat.isMany())
+        {
+            return removed;
+        }
+        List<EObject> doomed = new ArrayList<>();
+        for (EObject handler : referenceList(item, KEY_HANDLERS))
+        {
+            List<String> spellings = eventSpellings(singleReference(handler, FEATURE_EVENT));
+            if (spellings.isEmpty() || publishesAnyOf(publishedSpellings, spellings))
+            {
+                continue;
+            }
+            doomed.add(handler);
+            String procedure = stringFeature(handler, FEATURE_NAME);
+            removed.add(procedure == null || procedure.isEmpty() ? spellings.get(0)
+                : spellings.get(0) + " (" + procedure + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (!doomed.isEmpty())
+        {
+            referenceList(item, KEY_HANDLERS).removeAll(doomed);
+        }
+        return removed;
+    }
+
+    /** Whether any spelling of the bound event is one the element still publishes. */
+    private static boolean publishesAnyOf(Set<String> publishedSpellings, List<String> spellings)
+    {
+        for (String spelling : spellings)
+        {
+            if (publishedSpellings.contains(spelling.toLowerCase(Locale.ROOT)))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Every spelling - English and Russian, lower-cased - of the events {@code container} publishes,
+     * or an EMPTY set when the set cannot be established. Both spellings are collected because the
+     * bound event carries both and a handler written in either language is the same subscription.
+     *
+     * <p>Same guards as {@link #availableEventNames}, for the same reason: an element whose ext-info
+     * pairing is unreadable, or a union that did not fully resolve, answers nothing.</p>
+     */
+    private static Set<String> publishedEventSpellings(EObject container, Version version)
+    {
+        if (!publishesKnownEventSet(container))
+        {
+            return Collections.emptySet();
+        }
+        EventUnion union = availableEvents(container, version);
+        if (!union.complete())
+        {
+            return Collections.emptySet();
+        }
+        Set<String> spellings = new HashSet<>();
+        for (AvailableEvent available : union.events())
+        {
+            for (String spelling : eventSpellings(available.event))
+            {
+                spellings.add(spelling.toLowerCase(Locale.ROOT));
+            }
+        }
+        return spellings;
     }
 
     /**
