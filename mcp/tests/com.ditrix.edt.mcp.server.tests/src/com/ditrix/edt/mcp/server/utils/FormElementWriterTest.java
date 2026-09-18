@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.eclipse.core.runtime.IStatus;
 import org.eclipse.emf.common.notify.Notification;
 import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.common.util.TreeIterator;
@@ -644,6 +645,10 @@ public class FormElementWriterTest
             assertNotNull(e.getMessage());
             assertTrue("message should mention '" + fragment + "' but was: " + e.getMessage(), //$NON-NLS-1$ //$NON-NLS-2$
                 e.getMessage().contains(fragment));
+            // A malformed 'position' is the CALLER's input being rejected, so it must be MARKED:
+            // unmarked, an ordinary bad argument keeps logging ERROR with a stack (issue #593).
+            assertEquals("a position refusal must be marked, or it logs as a server error", //$NON-NLS-1$
+                e.getMessage(), Refusals.messageOf(e));
         }
     }
 
@@ -1375,14 +1380,30 @@ public class FormElementWriterTest
     }
 
     @Test
-    public void testBindEventHandlerWithoutExtensionTypeErrors()
+    public void testBindEventHandlerWithoutExtensionTypeRaisesAnUnmarkedModelFailure()
     {
         // A form model lacking the EventHandlerExtension type cannot host extension interception.
+        // That is one of OUR constants failing to resolve - PLATFORM DRIFT, not caller input - so it
+        // is RAISED, not returned: returning it would send it down the same string channel as the
+        // caller refusals, where the calling tool marks everything it gets back and the drift would
+        // be logged at INFO with no stack. Issue #593; this is the TextSearcher failure class.
         HandlerModel m = newHandlerModel(false);
-        String err = FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
-            "OnChange", "x", "After", new String[1]); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        assertNotNull(err);
-        assertTrue(err.contains("EventHandlerExtension")); //$NON-NLS-1$
+        try
+        {
+            FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+                "OnChange", "x", "After", new String[1]); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            fail("a model that cannot represent an extension handler must raise, not answer"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertTrue("the caller's message is unchanged", //$NON-NLS-1$
+                e.getMessage().contains("EventHandlerExtension")); //$NON-NLS-1$
+            assertNull("a MODEL failure must NOT be marked as a refusal, or it goes quiet", //$NON-NLS-1$
+                Refusals.messageOf(e));
+            assertEquals("...so it keeps ERROR", //$NON-NLS-1$
+                IStatus.ERROR, Refusals.statusFor("ctx", e).getSeverity()); //$NON-NLS-1$
+            assertSame("...and its stack", e, Refusals.statusFor("ctx", e).getException()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         // The base path still works on the same model.
         assertNull(FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
             "OnChange", "x", null, new String[1])); //$NON-NLS-1$ //$NON-NLS-2$

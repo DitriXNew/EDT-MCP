@@ -12,8 +12,14 @@ package com.ditrix.edt.mcp.server.utils;
  * {@code ToolResult.error(...).toJson()} payload: the caller surfaces the actionable JSON directly
  * (via {@link #jsonOf}) instead of wrapping it in a generic failure message. Throwing BEFORE any
  * {@code eSet} rolls the enclosing BM transaction back with no partial mutation.
+ * <p>
+ * A {@link Refusals.Marker}: this is our validation refusing the caller's input, so a path whose
+ * catch block does not short-circuit on {@link #jsonOf} still logs it as a refusal rather than an
+ * ERROR with a stack.
  */
-public final class FormValidationException extends RuntimeException
+public final class FormValidationException
+    extends RuntimeException
+    implements Refusals.Marker
 {
     private static final long serialVersionUID = 1L;
 
@@ -30,6 +36,17 @@ public final class FormValidationException extends RuntimeException
 
     /** @return the ready JSON error payload carried by this exception */
     public String json()
+    {
+        return json;
+    }
+
+    /**
+     * The actionable text lives in {@link #json()}; {@code getMessage()} is the fixed
+     * {@code "form validation failed"}. Without this override, a path that reached the log without
+     * short-circuiting on {@link #jsonOf} would write an entry with no content in it.
+     */
+    @Override
+    public String logDetail()
     {
         return json;
     }

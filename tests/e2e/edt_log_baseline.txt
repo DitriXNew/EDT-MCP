@@ -4,14 +4,23 @@
 # normal run. They are accepted so a genuinely NEW error cannot hide among them — not because
 # they are healthy.
 #
-# ALL of them are the same shape: a NEGATIVE test asks a tool to do something invalid, the tool
-# correctly refuses and returns an actionable error to the caller, and then ALSO logs an ERROR
-# with a stack trace. A rejected request is not a server error. The right fix is to demote
-# those log calls (warning, or nothing at all — the caller already got the answer), which would
-# let these lines be deleted. Until then they are pinned here, visible and countable.
+# The refusal entries this file used to hold are GONE, not accepted: our own validation now
+# raises a MARKED exception (utils/Refusals) and the catch site logs it at INFO without a stack,
+# so a rejected request no longer reports itself as a server error. The marker is set where the
+# refusal is RAISED; demoting by exception class was rejected deliberately, because
+# IllegalStateException is raised both by our validation and by the platform and a blanket rule
+# would hide the next platform defect. Anything unmarked still logs at ERROR with its stack,
+# which is why the two lines below survive.
 #
-# Do NOT add a line to make a red run green. If an entry is a real failure, fix the cause; if
-# it is a refusal, fix the log call. Deleting lines as they are cleaned up is the point.
+# What remains, and why it cannot be cleaned the same way: in both cases the exception is raised
+# by the PLATFORM inside a call we make, so there is no site of ours to mark. Turning either into
+# a refusal means checking the precondition OURSELVES before the call (that the workspace project
+# exists; that a 1C:Enterprise installation is registered), which changes the message the caller
+# receives. Recognizing them at the catch site by class or message text is exactly the guess this
+# design forbids.
+#
+# Do NOT add a line to make a red run green. If an entry is a real failure, fix the cause; if it
+# is a refusal, mark it at the throw site. Deleting lines as they are cleaned up is the point.
 #
 # Deliberately absent: "Error collecting exact rename matches". That one was a REAL defect —
 # reflective construction of EDT's TextSearcher against a pinned constructor the platform no
@@ -20,12 +29,5 @@
 # EDT, so the compiler would certify a signature the runtime lacks. The arguments are bound by
 # TYPE instead, and an unsatisfiable signature now throws. It must never reappear.
 
-Error creating predefined item
-Error modifying predefined item
-Error creating form member
-Error creating form handler
-Error moving form item
-Failed to load BSL module: platform:/resource/TestConfiguration/src/CommonModules/NoSuchModule_e<n>e/Module.bsl
-Failed to load BSL module: platform:/resource/TestConfiguration/src/CommonModules/DoesNotExistModule/Module.bsl
 create_infobase: creation failed for C:\infobases\ci_probe_test
 Export failed

@@ -23,7 +23,9 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Path;
+import org.eclipse.core.runtime.Status;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
@@ -314,10 +316,75 @@ public final class BslModuleUtils
         }
         catch (Exception e)
         {
-            Activator.logError("Failed to load BSL module: " + uri, e); //$NON-NLS-1$
+            Log.log(moduleLoadStatus(
+                !isDemotableAbsence(modulePath, uriExists(resourceSet, uri)), uri, e));
         }
 
         return null;
+    }
+
+    /**
+     * The status for a failed {@code getResource}: a module that is simply ABSENT is not a failure
+     * (the three checks above already treat "nothing to load" as a warning, and this method's
+     * contract is to answer {@code null}), so it logs at WARNING with no stack. A load that failed
+     * for any OTHER reason keeps its ERROR and its stack - the demotion is decided by whether the
+     * resource EXISTS, never by the exception's class.
+     * <p>
+     * See {@link #isDemotableAbsence} for the one absence that is NOT demotable.
+     *
+     * @param resourceExists whether the URI names a resource that is actually there
+     * @param uri the module URI the load was attempted for
+     * @param e the exception the load threw
+     * @return the status to emit
+     */
+    static IStatus moduleLoadStatus(boolean resourceExists, URI uri, Exception e)
+    {
+        if (resourceExists)
+        {
+            return new Status(IStatus.ERROR, Log.pluginId(), "Failed to load BSL module: " + uri, e); //$NON-NLS-1$
+        }
+        return new Status(IStatus.WARNING, Log.pluginId(), "BSL module does not exist: " + uri, null); //$NON-NLS-1$
+    }
+
+    /**
+     * Whether a failed load may be treated as a plain ABSENCE (the caller named a module that is not
+     * there) rather than a failure worth an ERROR.
+     * <p>
+     * An absolute {@code modulePath} disqualifies it. The URI is always built as
+     * {@code <project>/src/<modulePath>}, so an absolute path yields an address that cannot exist -
+     * and {@link #extractModulePath} returns its input UNCHANGED when it finds no {@code /src/}
+     * marker, which is how such a path arises ({@code MetadataRenameService} feeds it
+     * {@code file.getFullPath()}). A miss there is OUR derivation defect, not a module anybody
+     * asked for, so it keeps its ERROR and its stack instead of passing as routine.
+     *
+     * @param modulePath the path the load was asked for
+     * @param resourceExists what the existence probe answered
+     * @return {@code true} when the miss is an ordinary absence
+     */
+    static boolean isDemotableAbsence(String modulePath, boolean resourceExists)
+    {
+        return !resourceExists && !looksLikeAbsolutePath(modulePath);
+    }
+
+    /**
+     * Asks the resource set's own URI converter whether {@code uri} names something that exists -
+     * the same question, about the same URI, that the failed load asked. A probe that cannot answer
+     * reports {@code true} so the caller stays LOUD: an unknown state must never silence an error.
+     *
+     * @param resourceSet the resource set the load was attempted on
+     * @param uri the module URI
+     * @return whether the resource exists ({@code true} also when the probe itself failed)
+     */
+    static boolean uriExists(ResourceSet resourceSet, URI uri)
+    {
+        try
+        {
+            return resourceSet.getURIConverter().exists(uri, null);
+        }
+        catch (RuntimeException probeFailed) // NOSONAR an unanswerable probe must not silence the error
+        {
+            return true;
+        }
     }
 
     /**
