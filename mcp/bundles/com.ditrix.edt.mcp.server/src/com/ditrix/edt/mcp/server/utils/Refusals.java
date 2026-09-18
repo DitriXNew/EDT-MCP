@@ -40,18 +40,22 @@ import org.eclipse.core.runtime.Status;
 public final class Refusals
 {
     /**
-     * Bound on the cause-chain walk, so a cyclic chain cannot spin the logger.
-     */
-    private static final int MAX_CAUSE_DEPTH = 32;
-
-    /**
      * Marker carried by an exception that our OWN validation raised to refuse the caller's input.
      * Implemented only by exceptions built at a validation site that knows, by construction, that
-     * the message came from our own checks.
+     * the message came from our own checks - never by a site that merely relays a message some
+     * writer handed back, because such a string may describe a PLATFORM failure instead.
      */
     public interface Marker
     {
-        // Marker only.
+        /**
+         * The text to log for this refusal, when {@code getMessage()} is not the actionable one.
+         *
+         * @return the log text, or {@code null} to use {@code getMessage()}
+         */
+        default String logDetail()
+        {
+            return null;
+        }
     }
 
     /** A refused precondition, raised where an {@code IllegalStateException} is the natural type. */
@@ -112,24 +116,28 @@ public final class Refusals
     }
 
     /**
-     * The refusal message carried somewhere in {@code t}'s cause chain (a BM task runner may wrap
-     * the thrown exception), or {@code null} when nothing in the chain is marked - which is the
+     * The refusal message when {@code t} ITSELF is marked, or {@code null} otherwise - which is the
      * "this is a real failure, stay loud" answer.
+     * <p>
+     * Deliberately the OUTERMOST throwable only, not a cause-chain scan. A scan would demote a
+     * genuine failure that happens to wrap a refusal, discarding the outer exception's message and
+     * stack - the failure mode this whole change exists to prevent. Measured before choosing: in
+     * all 48 entries of the run this issue cites the marked exception IS the outermost throwable
+     * (no {@code Caused by} anywhere), and {@code BmTransactions} rethrows the write lambda's
+     * exception unwrapped. So the strict rule costs nothing today, and if a wrapping site ever
+     * appears its refusals simply go back to ERROR - noisy, visible in the log ratchet, and safe.
      *
      * @param t the caught exception, may be {@code null}
-     * @return the marked refusal's message, or {@code null} when the chain carries no marker
+     * @return the refusal's log text, or {@code null} when {@code t} is not marked
      */
     public static String messageOf(Throwable t)
     {
-        Throwable c = t;
-        for (int depth = 0; c != null && depth < MAX_CAUSE_DEPTH; c = c.getCause(), depth++)
+        if (!(t instanceof Marker))
         {
-            if (c instanceof Marker)
-            {
-                return c.getMessage();
-            }
+            return null;
         }
-        return null;
+        String detail = ((Marker)t).logDetail();
+        return detail != null ? detail : t.getMessage();
     }
 
     /**

@@ -2311,7 +2311,7 @@ public final class FormElementWriter
         EObject attr = createFromFeatureType(formModel, FEATURE_ATTRIBUTES);
         if (attr == null)
         {
-            return "Cannot create a form attribute for this form model."; //$NON-NLS-1$
+            throw modelLacks("Cannot create a form attribute for this form model."); //$NON-NLS-1$
         }
         setStringFeature(attr, FEATURE_NAME, name);
         setIntFeature(attr, FEATURE_ID, nextAttributeId(formModel));
@@ -2355,7 +2355,7 @@ public final class FormElementWriter
         EObject parameter = createFromFeatureType(formModel, FEATURE_PARAMETERS);
         if (parameter == null)
         {
-            return "Cannot create a form parameter for this form model."; //$NON-NLS-1$
+            throw modelLacks("Cannot create a form parameter for this form model."); //$NON-NLS-1$
         }
         setStringFeature(parameter, FEATURE_NAME, name);
         setDefaultValueType(parameter);
@@ -2407,7 +2407,7 @@ public final class FormElementWriter
         EObject column = createFromFeatureType(owner, FEATURE_COLUMNS);
         if (column == null)
         {
-            return "Cannot create an attribute column for this form model."; //$NON-NLS-1$
+            throw modelLacks("Cannot create an attribute column for this form model."); //$NON-NLS-1$
         }
         setStringFeature(column, FEATURE_NAME, name);
         setIntFeature(column, FEATURE_ID, nextAttributeId(formModel));
@@ -3571,7 +3571,7 @@ public final class FormElementWriter
         EObject cmd = createFromFeatureType(formModel, FEATURE_FORM_COMMANDS);
         if (cmd == null)
         {
-            return "Cannot create a form command for this form model."; //$NON-NLS-1$
+            throw modelLacks("Cannot create a form command for this form model."); //$NON-NLS-1$
         }
         setStringFeature(cmd, FEATURE_NAME, name);
         setIntFeature(cmd, FEATURE_ID, nextCommandId(formModel));
@@ -3607,7 +3607,7 @@ public final class FormElementWriter
         EObject item = createFromClassifier(formModel, classifier);
         if (item == null)
         {
-            return "Cannot create a form " + classifier + " for this form model."; //$NON-NLS-1$ //$NON-NLS-2$
+            throw modelLacks("Cannot create a form " + classifier + " for this form model."); //$NON-NLS-1$ //$NON-NLS-2$
         }
         // An explicit group type ({name:'type', value:'Popup'}) is validated against the model's
         // ManagedFormGroupType literals (case-insensitive); the container default applies otherwise.
@@ -3714,7 +3714,7 @@ public final class FormElementWriter
         EObject item = findUniqueItem(formModel, itemName);
         if (item == null)
         {
-            throw new IllegalArgumentException("Form item not found: '" + itemName //$NON-NLS-1$
+            throw Refusals.argument("Form item not found: '" + itemName //$NON-NLS-1$
                 + "'. Use get_metadata_details on the form to inspect its items."); //$NON-NLS-1$
         }
         return moveResolvedItem(formModel, item, itemName, targetParent, position, formName);
@@ -3747,7 +3747,7 @@ public final class FormElementWriter
             if (container == null)
             {
                 // Both raises here are refusals from OUR validation, so they are marked and log
-                // at WARNING without a stack; an unmarked failure keeps its ERROR.
+                // at INFO without a stack; an unmarked failure keeps its ERROR and its stack.
                 throw Refusals.state("Form item '" + itemName //$NON-NLS-1$
                     + "' has no parent container and cannot be moved."); //$NON-NLS-1$
             }
@@ -3760,6 +3760,8 @@ public final class FormElementWriter
         }
         if (err != null)
         {
+            // A refusal: the move core RAISES a model failure (modelLacks) and only RETURNS a
+            // caller refusal, so a returned string is always the caller being told no.
             throw Refusals.argument(err);
         }
         return destinationOf(formModel, item);
@@ -3776,7 +3778,14 @@ public final class FormElementWriter
         String parentLabel, String position)
     {
         EClassifier formItem = formModel.eClass().getEPackage().getEClassifier(ECLASS_FORM_ITEM);
-        if (!(formItem instanceof EClass) || !((EClass)formItem).isInstance(item))
+        if (!(formItem instanceof EClass))
+        {
+            // Split from the instance check below: OUR constant not resolving is model drift, and
+            // folding it into the refusal would report a platform break as the caller's mistake.
+            throw modelLacks("The form model does not expose a " + ECLASS_FORM_ITEM //$NON-NLS-1$
+                + " classifier."); //$NON-NLS-1$
+        }
+        if (!((EClass)formItem).isInstance(item))
         {
             return "Only a visual form item (field / button / group / decoration / table) can be " //$NON-NLS-1$
                 + "moved; '" + item.eClass().getName() //$NON-NLS-1$
@@ -3881,14 +3890,14 @@ public final class FormElementWriter
             int idx = Integer.parseInt(position.trim());
             if (idx < 0)
             {
-                throw new IllegalArgumentException("Invalid position index '" + position //$NON-NLS-1$
+                throw Refusals.argument("Invalid position index '" + position //$NON-NLS-1$
                     + "': must be zero or positive."); //$NON-NLS-1$
             }
             return idx;
         }
         catch (NumberFormatException e)
         {
-            throw new IllegalArgumentException("Invalid position '" + position //$NON-NLS-1$
+            throw Refusals.argument("Invalid position '" + position //$NON-NLS-1$
                 + "'. Expected an integer index, 'first', 'last', 'before:<name>' or 'after:<name>'."); //$NON-NLS-1$
         }
     }
@@ -3898,12 +3907,12 @@ public final class FormElementWriter
     {
         if (sibling.isEmpty())
         {
-            throw new IllegalArgumentException("Position reference is missing a sibling name " //$NON-NLS-1$
+            throw Refusals.argument("Position reference is missing a sibling name " //$NON-NLS-1$
                 + "(use 'before:<name>' or 'after:<name>')."); //$NON-NLS-1$
         }
         if (sibling.equalsIgnoreCase(movedName))
         {
-            throw new IllegalArgumentException("Position cannot reference the moved item itself: '" //$NON-NLS-1$
+            throw Refusals.argument("Position cannot reference the moved item itself: '" //$NON-NLS-1$
                 + sibling + "'."); //$NON-NLS-1$
         }
         for (int i = 0; i < destNames.size(); i++)
@@ -3913,7 +3922,7 @@ public final class FormElementWriter
                 return i;
             }
         }
-        throw new IllegalArgumentException("Sibling '" + sibling //$NON-NLS-1$
+        throw Refusals.argument("Sibling '" + sibling //$NON-NLS-1$
             + "' not found in the destination container."); //$NON-NLS-1$
     }
 
@@ -3958,7 +3967,7 @@ public final class FormElementWriter
         collectItemsByName(formModel, name, (EClass)formItem, matches);
         if (matches.size() > 1)
         {
-            throw new IllegalArgumentException("Form item name '" + name //$NON-NLS-1$
+            throw Refusals.argument("Form item name '" + name //$NON-NLS-1$
                 + "' is ambiguous (it matches more than one item)."); //$NON-NLS-1$
         }
         return matches.isEmpty() ? null : matches.get(0);
@@ -4130,7 +4139,7 @@ public final class FormElementWriter
         EObject item = createFromClassifier(formModel, ECLASS_FORM_FIELD);
         if (item == null)
         {
-            return "Cannot create a form field for this form model."; //$NON-NLS-1$
+            throw modelLacks("Cannot create a form field for this form model."); //$NON-NLS-1$
         }
         setStringFeature(item, FEATURE_NAME, name);
         applyVisibleDefaults(item);
@@ -4212,7 +4221,7 @@ public final class FormElementWriter
         EObject table = createFromClassifier(formModel, ECLASS_TABLE);
         if (table == null)
         {
-            return "Cannot create a form table for this form model."; //$NON-NLS-1$
+            throw modelLacks("Cannot create a form table for this form model."); //$NON-NLS-1$
         }
         setStringFeature(table, FEATURE_NAME, name);
         applyVisibleDefaults(table);
@@ -4703,7 +4712,7 @@ public final class FormElementWriter
         EObject item = createFromClassifier(formModel, ELEM_BUTTON);
         if (item == null)
         {
-            return "Cannot create a form button for this form model."; //$NON-NLS-1$
+            throw modelLacks("Cannot create a form button for this form model."); //$NON-NLS-1$
         }
         setStringFeature(item, FEATURE_NAME, name);
         applyVisibleDefaults(item);
@@ -5336,7 +5345,7 @@ public final class FormElementWriter
         List<AvailableEvent> events = availableEvents(container, version).events();
         if (events.isEmpty())
         {
-            return "Could not resolve the available events for this form element."; //$NON-NLS-1$
+            throw modelLacks("Could not resolve the available events for this form element."); //$NON-NLS-1$
         }
         AvailableEvent matched = null;
         for (AvailableEvent candidate : events)
@@ -5400,7 +5409,7 @@ public final class FormElementWriter
         EClass baseEhType = ((EReference)handlersFeat).getEReferenceType();
         if (baseEhType == null || baseEhType.getEPackage() == null)
         {
-            return "Cannot create an event handler for this form model."; //$NON-NLS-1$
+            throw modelLacks("Cannot create an event handler for this form model."); //$NON-NLS-1$
         }
         // Resolve the extension type and call-type literal UP FRONT - a wrong literal must fail loudly,
         // never silently produce an extension handler whose callType is left unset.
@@ -5412,8 +5421,8 @@ public final class FormElementWriter
                 baseEhType.getEPackage().getEClassifier(ECLASS_EVENT_HANDLER_EXTENSION);
             if (!(extClassifier instanceof EClass))
             {
-                return "This form model has no '" + ECLASS_EVENT_HANDLER_EXTENSION //$NON-NLS-1$
-                    + "' type; extension event interception is not available here."; //$NON-NLS-1$
+                throw modelLacks("This form model has no '" + ECLASS_EVENT_HANDLER_EXTENSION //$NON-NLS-1$
+                    + "' type; extension event interception is not available here."); //$NON-NLS-1$
             }
             ehType = (EClass)extClassifier;
             callTypeLiteral = resolveEventCallType(ehType, callType);
@@ -5463,7 +5472,7 @@ public final class FormElementWriter
             EStructuralFeature ctFeat = handler.eClass().getEStructuralFeature(FEATURE_CALL_TYPE);
             if (ctFeat == null)
             {
-                return "The form model's EventHandlerExtension has no 'callType' attribute."; //$NON-NLS-1$
+                throw modelLacks("The form model's EventHandlerExtension has no 'callType' attribute."); //$NON-NLS-1$
             }
             handler.eSet(ctFeat, callTypeLiteral.getInstance());
         }
@@ -5548,7 +5557,7 @@ public final class FormElementWriter
         EStructuralFeature actionFeat = command.eClass().getEStructuralFeature(FEATURE_ACTION);
         if (!(actionFeat instanceof EReference))
         {
-            return "This form model does not support a command action handler."; //$NON-NLS-1$
+            throw modelLacks("This form model does not support a command action handler."); //$NON-NLS-1$
         }
         if (command.eGet(actionFeat) != null)
         {
@@ -5561,7 +5570,7 @@ public final class FormElementWriter
             container != null ? container.eClass().getEStructuralFeature(FEATURE_HANDLER) : null;
         if (handler == null || !(handlerFeat instanceof EReference))
         {
-            return "Cannot create a command action handler for this form model."; //$NON-NLS-1$
+            throw modelLacks("Cannot create a command action handler for this form model."); //$NON-NLS-1$
         }
         String proc = (procName == null || procName.isEmpty())
             ? stringFeature(command, FEATURE_NAME) : procName;
@@ -6027,6 +6036,26 @@ public final class FormElementWriter
     }
 
     // ---- element factories (reflective, via the form EPackage) ----------------------------------
+
+    /**
+     * The form metamodel does not expose a classifier or feature this writer needs: one of OUR OWN
+     * constants failed to resolve against the form EPackage. That is PLATFORM DRIFT, never caller
+     * input, so it is raised UNMARKED and keeps its ERROR and its stack.
+     * <p>
+     * Raised rather than returned on purpose. These writers answer a caller REFUSAL with a message
+     * string, and the calling tool marks whatever string comes back as a refusal; a model failure
+     * travelling that same channel would be demoted along with them, which is the swallowed
+     * API-change class a green suite hides. Raising separates the two at the point of detection
+     * instead of guessing later from the text. The wording is unchanged, so the caller still sees
+     * the same message via {@code unwrapCauseMessage}.
+     *
+     * @param message the existing wording
+     * @return the exception to throw
+     */
+    private static IllegalStateException modelLacks(String message)
+    {
+        return new IllegalStateException(message);
+    }
 
     /** Creates an instance of a mono-typed collection's element EType (attributes / formCommands). */
     private static EObject createFromFeatureType(EObject formModel, String featureName)

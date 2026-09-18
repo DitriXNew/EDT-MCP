@@ -41,6 +41,17 @@ public final class FormValidationException
     }
 
     /**
+     * The actionable text lives in {@link #json()}; {@code getMessage()} is the fixed
+     * {@code "form validation failed"}. Without this override, a path that reached the log without
+     * short-circuiting on {@link #jsonOf} would write an entry with no content in it.
+     */
+    @Override
+    public String logDetail()
+    {
+        return json;
+    }
+
+    /**
      * Finds a {@link FormValidationException} in the cause chain (the BM task runner may wrap the
      * thrown exception) and returns its JSON, or {@code null} when none is present.
      *

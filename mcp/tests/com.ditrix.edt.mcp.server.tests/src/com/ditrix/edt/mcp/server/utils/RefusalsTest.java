@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
@@ -67,20 +68,6 @@ public class RefusalsTest
     }
 
     @Test
-    public void testRefusalIsFoundThroughACauseChain()
-    {
-        // The BM task runner may wrap the thrown exception before the tool's catch sees it.
-        Exception wrapped = new RuntimeException("BM task failed", //$NON-NLS-1$
-            new RuntimeException("reactor", Refusals.state(REFUSAL))); //$NON-NLS-1$
-
-        IStatus status = Refusals.statusFor(CONTEXT, wrapped);
-
-        assertEquals("a wrapped refusal is still a refusal", IStatus.INFO, status.getSeverity()); //$NON-NLS-1$
-        assertNull(status.getException());
-        assertTrue(status.getMessage().contains(REFUSAL));
-    }
-
-    @Test
     public void testFormValidationExceptionIsARefusal()
     {
         // The ready-JSON refusal normally short-circuits before the log; when a path does not
@@ -91,7 +78,38 @@ public class RefusalsTest
         assertNull(status.getException());
     }
 
+    @Test
+    public void testFormValidationExceptionLogsItsPayloadNotItsFixedMessage()
+    {
+        // getMessage() is the constant "form validation failed"; the actionable text is the JSON.
+        // Without logDetail() this entry would carry no information at all.
+        IStatus status =
+            Refusals.statusFor(CONTEXT, new FormValidationException("{\"error\":\"bad dataPath\"}")); //$NON-NLS-1$
+
+        assertTrue("the ready JSON must reach the log entry", //$NON-NLS-1$
+            status.getMessage().contains("bad dataPath")); //$NON-NLS-1$
+        assertFalse("the fixed placeholder must not be what gets logged", //$NON-NLS-1$
+            status.getMessage().contains("form validation failed")); //$NON-NLS-1$
+    }
+
     // ========== the failure direction: ERROR, WITH the stack ==========
+
+    @Test
+    public void testAGenuineFailureWrappingARefusalStaysLoud()
+    {
+        // The demotion looks at the OUTERMOST throwable only. A cause-chain scan would discard this
+        // wrapper - its message AND its stack - because something further down happens to be marked,
+        // which is the silent-swallow this change exists to prevent. Measured: in all 48 entries of
+        // the cited run the marked exception IS the outermost throwable, so strictness costs nothing.
+        Exception wrapped = new RuntimeException("BM commit failed writing the form", //$NON-NLS-1$
+            Refusals.state(REFUSAL));
+
+        IStatus status = Refusals.statusFor(CONTEXT, wrapped);
+
+        assertEquals("a genuine failure must not be demoted by what it wraps", //$NON-NLS-1$
+            IStatus.ERROR, status.getSeverity());
+        assertSame("...and it must keep its own stack", wrapped, status.getException()); //$NON-NLS-1$
+    }
 
     @Test
     public void testUnmarkedExceptionKeepsErrorAndItsStack()
@@ -142,17 +160,6 @@ public class RefusalsTest
         assertEquals(IStatus.ERROR, Refusals.statusFor(CONTEXT, null).getSeverity());
     }
 
-    @Test
-    public void testCyclicCauseChainTerminatesAndStaysLoud()
-    {
-        Throwable a = new RuntimeException("a"); //$NON-NLS-1$
-        Throwable b = new RuntimeException("b", a); //$NON-NLS-1$
-        a.initCause(b);
-
-        // Must return rather than spin, and an unmarked cycle carries no refusal.
-        assertEquals(IStatus.ERROR, Refusals.statusFor(CONTEXT, a).getSeverity());
-    }
-
     // ========== the client-visible message must not change ==========
 
     @Test
@@ -186,6 +193,8 @@ public class RefusalsTest
         assertNull(Refusals.messageOf(new IllegalStateException(REFUSAL)));
         assertNull(Refusals.messageOf(new RuntimeException("boom"))); //$NON-NLS-1$
         assertEquals(REFUSAL, Refusals.messageOf(Refusals.state(REFUSAL)));
+        // A marker BELOW the surface does not count: the outer throwable is the real failure.
+        assertNull(Refusals.messageOf(new RuntimeException("outer", Refusals.state(REFUSAL))));
     }
 
     // ========== log() must actually emit what statusFor decided ==========

@@ -1268,4 +1268,24 @@ public class BslModuleUtilsTest
         assertTrue("a probe that cannot answer must report 'present' so the ERROR survives", //$NON-NLS-1$
             BslModuleUtils.uriExists(resourceSet, MODULE_URI));
     }
+
+    @Test
+    public void testAPathWeDerivedWronglyIsNotTreatedAsAnAbsentModule()
+    {
+        // loadModule builds its URI as <project>/src/<modulePath>, so an ABSOLUTE modulePath makes
+        // an address that cannot exist. extractModulePath returns its input UNCHANGED when it finds
+        // no /src/ marker, so such a path is one WE derived wrongly (MetadataRenameService feeds it
+        // file.getFullPath()), not a module the caller asked for. Demoting it would turn our own
+        // derivation defect into a routine "not found" that the ERROR-severity ratchet never reads.
+        String fabricated = "/TestConfiguration/ext/Module.bsl"; //$NON-NLS-1$
+        assertEquals("extractModulePath returns a non-src path unchanged - the fabrication source", //$NON-NLS-1$
+            fabricated, BslModuleUtils.extractModulePath(fabricated));
+
+        assertFalse("a path WE derived wrongly must not pass as a routine absence", //$NON-NLS-1$
+            BslModuleUtils.isDemotableAbsence(fabricated, false));
+        assertTrue("a module the caller named and that is not there IS a routine absence", //$NON-NLS-1$
+            BslModuleUtils.isDemotableAbsence("CommonModules/NoSuchModule_e2e/Module.bsl", false)); //$NON-NLS-1$
+        assertFalse("a module that EXISTS is never an absence, whatever its path shape", //$NON-NLS-1$
+            BslModuleUtils.isDemotableAbsence("CommonModules/Real/Module.bsl", true)); //$NON-NLS-1$
+    }
 }

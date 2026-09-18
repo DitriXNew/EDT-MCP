@@ -316,7 +316,8 @@ public final class BslModuleUtils
         }
         catch (Exception e)
         {
-            Log.log(moduleLoadStatus(uriExists(resourceSet, uri), uri, e));
+            Log.log(moduleLoadStatus(
+                !isDemotableAbsence(modulePath, uriExists(resourceSet, uri)), uri, e));
         }
 
         return null;
@@ -328,6 +329,8 @@ public final class BslModuleUtils
      * contract is to answer {@code null}), so it logs at WARNING with no stack. A load that failed
      * for any OTHER reason keeps its ERROR and its stack - the demotion is decided by whether the
      * resource EXISTS, never by the exception's class.
+     * <p>
+     * See {@link #isDemotableAbsence} for the one absence that is NOT demotable.
      *
      * @param resourceExists whether the URI names a resource that is actually there
      * @param uri the module URI the load was attempted for
@@ -341,6 +344,26 @@ public final class BslModuleUtils
             return new Status(IStatus.ERROR, Log.pluginId(), "Failed to load BSL module: " + uri, e); //$NON-NLS-1$
         }
         return new Status(IStatus.WARNING, Log.pluginId(), "BSL module does not exist: " + uri, null); //$NON-NLS-1$
+    }
+
+    /**
+     * Whether a failed load may be treated as a plain ABSENCE (the caller named a module that is not
+     * there) rather than a failure worth an ERROR.
+     * <p>
+     * An absolute {@code modulePath} disqualifies it. The URI is always built as
+     * {@code <project>/src/<modulePath>}, so an absolute path yields an address that cannot exist -
+     * and {@link #extractModulePath} returns its input UNCHANGED when it finds no {@code /src/}
+     * marker, which is how such a path arises ({@code MetadataRenameService} feeds it
+     * {@code file.getFullPath()}). A miss there is OUR derivation defect, not a module anybody
+     * asked for, so it keeps its ERROR and its stack instead of passing as routine.
+     *
+     * @param modulePath the path the load was asked for
+     * @param resourceExists what the existence probe answered
+     * @return {@code true} when the miss is an ordinary absence
+     */
+    static boolean isDemotableAbsence(String modulePath, boolean resourceExists)
+    {
+        return !resourceExists && !looksLikeAbsolutePath(modulePath);
     }
 
     /**

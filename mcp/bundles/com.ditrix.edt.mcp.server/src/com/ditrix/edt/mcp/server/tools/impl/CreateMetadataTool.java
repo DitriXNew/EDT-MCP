@@ -1707,7 +1707,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                             titleLanguage, titleText, russianAutoNames, createdKind);
                     if (err != null)
                     {
-                        // A refusal: the writer returned OUR validation's message, so mark it.
+                        // A refusal. The writers RAISE a model/platform failure (modelLacks) and
+                        // only RETURN caller refusals, so what arrives here is always the latter.
                         throw Refusals.state(err);
                     }
                 });
@@ -2337,6 +2338,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             spec.version, spec.langCode, spec.callType, spec.createdKind);
         if (err != null)
         {
+            // A refusal: createHandler RAISES a model/platform failure (modelLacks) and only
+            // RETURNS a caller refusal, so a returned string is always the caller being told no.
             throw Refusals.state(err);
         }
     }
