@@ -23,7 +23,7 @@ Run this when a piece of work is finished — it is the gate that proves the who
 3. **Build + unit (Tier 1)** — `bash source/compile.sh` → **BUILD SUCCESS** + every ratchet green (`BuiltInToolTestCoverageTest`, `ToolContractConsistencyTest`, e2e coverage ratchet). Toolchain isn't on PATH — pass `--java-home`/`--maven-home`.
    - **Then run the agent-pack validator: `python docs/validate_agent_skills.py`.** It is a SEPARATE CI job (`Validate business-project skills`) that `compile.sh` does not cover, and it owns its own ratchets — the tool-docs↔registrar match and the single-word tool-name list. On Windows ignore its `CR/CRLF is not allowed` lines: those are the local checkout's line endings, and the committed blobs are LF (`git show HEAD:<file> | grep -c $'\r'` → 0).
 
-   - **Touched the target platform, or a call into an EDT/platform API? Also compile against the OLDEST supported EDT: `bash source/verify-oldest-platform.sh <edt-install-dir>`.** The build compiles against the NEWEST platform, and neither the BREE nor the lower-bound imports can express "no signature that only the newer release has" — that binds fine and fails at the call site with `NoSuchMethodError` on the older EDT. The script points the target platform at a local installation and compiles; it restores the working tree on every exit path.
+   - **Touched the target platform, or a call into an EDT/platform API? Also compile against the older EDTs: `bash source/verify-oldest-platform.sh <edt-install-dir>`, once per installation.** The build compiles against the NEWEST platform, and neither the BREE nor the lower-bound imports can express "no signature that only the newer release has" — that binds fine and fails at the call site with `NoSuchMethodError` on the older EDT. The script points the target platform at a local installation and compiles; it restores the working tree on every exit path. Run it against **2026.1** (the oldest supported major) and against **2026.2.0** (the previous service release of the current major). The second one is not optional cover: 1C deletes the previous service release from its channel, so CI builds only against what `ruby/2026.2/` serves today and a local install is the only remaining proof that the single artifact still loads on 2026.2.0.
 
 4. **README updated** — bump the tool count (both places), add/adjust the group table, the flat tool table, and the detailed section; parameters must match the schema.
 
@@ -45,7 +45,7 @@ Run this when a piece of work is finished — it is the gate that proves the who
 - [ ] No stray Cyrillic / English surface / lowerCamelCase / `ToolResult.error` / tx boundary
 - [ ] Unit `XxxToolTest` + e2e `test_<tool>.py` (+ bilingual case if resolution changed)
 - [ ] `compile.sh` BUILD SUCCESS + ratchets green; `docs/validate_agent_skills.py` clean
-- [ ] `verify-oldest-platform.sh` green (only if the target platform or a platform API call changed)
+- [ ] `verify-oldest-platform.sh` green on BOTH local installs — 2026.1 and 2026.2.0 (only if the target platform or a platform API call changed)
 - [ ] README count + tables + detail updated
 - [ ] Redeployed live; deployed jar verified (anti-stale); projects `ready`
 - [ ] Golden regenerated + committed (if `tools/list` changed)
