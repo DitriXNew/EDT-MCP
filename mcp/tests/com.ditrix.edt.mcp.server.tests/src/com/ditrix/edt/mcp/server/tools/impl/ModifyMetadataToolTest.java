@@ -15,6 +15,7 @@ import static org.junit.Assert.assertTrue;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -2723,19 +2724,16 @@ public class ModifyMetadataToolTest
             "InformationRegister.Reg.Form.RecordForm.Attribute.Record"); //$NON-NLS-1$
         String fqn = "InformationRegister.Reg.Form.RecordForm.Attribute.Record"; //$NON-NLS-1$
 
-        ConsentPreview retypeOnly =
-            ModifyMetadataTool.formRetypePreview(fqn, ref, props("valueType", "String"), false); //$NON-NLS-1$ //$NON-NLS-2$
+        ConsentPreview retypeOnly = ModifyMetadataTool.formRetypePreview(fqn, ref, true, false);
         assertEquals(List.of("valueType"), retypeOnly.getTopNames()); //$NON-NLS-1$
 
-        ConsentPreview mainOnly =
-            ModifyMetadataTool.formRetypePreview(fqn, ref, props("main", "false"), true); //$NON-NLS-1$ //$NON-NLS-2$
+        ConsentPreview mainOnly = ModifyMetadataTool.formRetypePreview(fqn, ref, false, true);
         assertEquals(List.of("main"), mainOnly.getTopNames()); //$NON-NLS-1$
         assertTrue("a main-only prompt is about the ext-info, not about stored values: " //$NON-NLS-1$
             + mainOnly.getSubtitle(),
             mainOnly.getSubtitle().contains("ext-info")); //$NON-NLS-1$
 
-        ConsentPreview both = ModifyMetadataTool.formRetypePreview(fqn, ref,
-            List.of(props("valueType", "String").get(0), props("main", "false").get(0)), true); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        ConsentPreview both = ModifyMetadataTool.formRetypePreview(fqn, ref, true, true);
         assertEquals("both losses are named", List.of("valueType", "main"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             both.getTopNames());
         assertTrue("and the subtitle spells out the second one: " + both.getSubtitle(), //$NON-NLS-1$
@@ -2743,10 +2741,11 @@ public class ModifyMetadataToolTest
     }
 
     /**
-     * The other edge of the same rule. A batch may carry BOTH a retype and a main write and still
-     * lose no handler - the node merely changes kind, and its data is carried over. The dialog is
-     * therefore built from what the pre-check FOUND, not from what the request could have carried:
-     * a prompt that promises a deletion which will not happen teaches the reader to ignore it.
+     * The other edge of the same rule, in BOTH directions. A batch may carry a retype and a main
+     * write and still lose no handler - the node merely changes kind, and its data is carried over;
+     * and it may name {@code valueType} while leaving the type exactly as it was (issue #599). The
+     * dialog is therefore built from what the pre-check FOUND, never from what the request carried:
+     * a prompt that promises a loss which will not happen teaches the reader to ignore it.
      */
     @Test
     public void testThePreviewDoesNotClaimALossThePreCheckDidNotFind()
@@ -2755,12 +2754,20 @@ public class ModifyMetadataToolTest
             "InformationRegister.Reg.Form.RecordForm.Attribute.Record"); //$NON-NLS-1$
         String fqn = "InformationRegister.Reg.Form.RecordForm.Attribute.Record"; //$NON-NLS-1$
 
-        ConsentPreview harmlessMain = ModifyMetadataTool.formRetypePreview(fqn, ref,
-            List.of(props("valueType", "String").get(0), props("main", "true").get(0)), false); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        ConsentPreview harmlessMain = ModifyMetadataTool.formRetypePreview(fqn, ref, true, false);
         assertEquals("only the retype is at stake", List.of("valueType"), //$NON-NLS-1$ //$NON-NLS-2$
             harmlessMain.getTopNames());
         assertFalse("so the dialog must not promise a deletion that will not happen: " //$NON-NLS-1$
             + harmlessMain.getSubtitle(), harmlessMain.getSubtitle().contains("ext-info")); //$NON-NLS-1$
+
+        // The mirror case: the batch WROTE valueType, but the pre-check found the resulting type
+        // equal to the stored one, so only the ext-info loss is at stake.
+        ConsentPreview noRealRetype = ModifyMetadataTool.formRetypePreview(fqn, ref, false, true);
+        assertEquals("a valueType write that retypes nothing is not named", List.of("main"), //$NON-NLS-1$ //$NON-NLS-2$
+            noRealRetype.getTopNames());
+        assertFalse("and the subtitle may not talk about stored values: " //$NON-NLS-1$
+            + noRealRetype.getSubtitle(),
+            noRealRetype.getSubtitle().contains("stored values")); //$NON-NLS-1$
     }
 
     /**
@@ -2786,6 +2793,121 @@ public class ModifyMetadataToolTest
             "String", ModifyMetadataTool.categoryAfter(prepared, null)); //$NON-NLS-1$
         assertNull("a batch that retypes nothing falls back to the member", //$NON-NLS-1$
             ModifyMetadataTool.categoryAfter(List.of(), null));
+    }
+
+    /**
+     * Issue #599. The gate decided by property NAME, so writing {@code valueType} with the type the
+     * attribute ALREADY has raised a destructive dialog for a write that loses nothing.
+     */
+    @Test
+    public void testAValueTypeWriteThatLandsTheSameTypeIsNotARetype()
+    {
+        EObject attribute = attributeTyped(singleType("CatalogObject.Goods")); //$NON-NLS-1$
+
+        assertFalse("the resulting type equals the stored one, so nothing is destroyed", //$NON-NLS-1$
+            ModifyMetadataTool.retypesMember(
+                preparedTypes(singleType("CatalogObject.Goods")), attribute)); //$NON-NLS-1$
+        assertTrue("...and the mirror case must still ask", //$NON-NLS-1$
+            ModifyMetadataTool.retypesMember(preparedTypes(singleType("String")), attribute)); //$NON-NLS-1$
+    }
+
+    /**
+     * The answer is a property of the batch's END STATE, not of any single entry: applied in order,
+     * {@code [valueType=String, valueType=CatalogObject]} on an attribute already typed
+     * {@code CatalogObject} ends where it started. A first-match loop would answer about a state the
+     * batch never reaches - and, read the other way round, would go silent on a real retype.
+     */
+    @Test
+    public void testARepeatedValueTypeWriteIsJudgedByWhatTheBatchLEAVES()
+    {
+        EObject attribute = attributeTyped(singleType("CatalogObject.Goods")); //$NON-NLS-1$
+
+        assertFalse("the batch ends on the type it started with", //$NON-NLS-1$
+            ModifyMetadataTool.retypesMember(preparedTypes(singleType("String"), //$NON-NLS-1$
+                singleType("CatalogObject.Goods")), attribute)); //$NON-NLS-1$
+        assertTrue("and the other way round it really retypes", //$NON-NLS-1$
+            ModifyMetadataTool.retypesMember(preparedTypes(singleType("CatalogObject.Goods"), //$NON-NLS-1$
+                singleType("String")), attribute)); //$NON-NLS-1$
+    }
+
+    /**
+     * The direction that matters: not knowing is NOT knowing that nothing changes. Every case the
+     * verdict cannot decide keeps raising the dialog, because a silent gate loses data.
+     */
+    @Test
+    public void testAnUndecidableRetypeStillAsks()
+    {
+        assertTrue("a batch with no prepared type write cannot claim the type is unchanged", //$NON-NLS-1$
+            ModifyMetadataTool.retypesMember(List.of(), attributeTyped(singleType("String")))); //$NON-NLS-1$
+        assertTrue("nor can one with no member to compare against", //$NON-NLS-1$
+            ModifyMetadataTool.retypesMember(preparedTypes(singleType("String")), null)); //$NON-NLS-1$
+        assertTrue("a member whose valueType is unset is not the type about to be written", //$NON-NLS-1$
+            ModifyMetadataTool.retypesMember(preparedTypes(singleType("String")), plainColumn())); //$NON-NLS-1$
+        assertTrue("nor is a member carrying no valueType feature at all", //$NON-NLS-1$
+            ModifyMetadataTool.retypesMember(preparedTypes(singleType("String")), //$NON-NLS-1$
+                attributeWithAnAdjustableFlag()));
+    }
+
+    /**
+     * A change on the nested {@code <extInfo>} is a property INSIDE the holder, never the member's
+     * own data type - counting it would compare a value the member's {@code valueType} never gets.
+     */
+    @Test
+    public void testAnExtInfoChangeIsNotTheMembersOwnRetype()
+    {
+        EAttribute valueTypeFeature = EcoreFactory.eINSTANCE.createEAttribute();
+        valueTypeFeature.setName("valueType"); //$NON-NLS-1$
+        List<ModifyMetadataTool.HolderChange> onExtInfo = List.of(
+            new ModifyMetadataTool.HolderChange(true,
+                ModifyMetadataTool.PreparedChange.typeDescription(valueTypeFeature,
+                    singleType("CatalogObject.Goods")))); //$NON-NLS-1$
+
+        assertTrue("no type write on the member itself - so the verdict is 'ask'", //$NON-NLS-1$
+            ModifyMetadataTool.retypesMember(onExtInfo,
+                attributeTyped(singleType("CatalogObject.Goods")))); //$NON-NLS-1$
+    }
+
+    /**
+     * A form attribute CARRYING {@code stored} in its {@code valueType} - the model side the gate
+     * compares the batch against.
+     *
+     * <p>Its {@code valueType} targets the REAL {@code McorePackage} EClass, not the look-alike the
+     * preparation-only fixtures declare: the gate reads a type the writer BUILT, and EMF refuses to
+     * store an mcore {@code TypeDescription} in a reference typed by a same-named copy.</p>
+     */
+    private static EObject attributeTyped(TypeDescription stored)
+    {
+        EcoreFactory factory = EcoreFactory.eINSTANCE;
+        EPackage pkg = factory.createEPackage();
+        pkg.setName("formtyped"); //$NON-NLS-1$
+        pkg.setNsPrefix("formtyped"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/formtyped"); //$NON-NLS-1$
+        EClass attributeClass = factory.createEClass();
+        attributeClass.setName("FormAttribute"); //$NON-NLS-1$
+        EReference valueType = factory.createEReference();
+        valueType.setName("valueType"); //$NON-NLS-1$
+        valueType.setEType(McorePackage.Literals.TYPE_DESCRIPTION);
+        valueType.setContainment(true);
+        attributeClass.getEStructuralFeatures().add(valueType);
+        pkg.getEClassifiers().add(attributeClass);
+
+        EObject attribute = new DynamicEObjectImpl(attributeClass);
+        attribute.eSet(valueType, stored);
+        return attribute;
+    }
+
+    /** The prepared {@code valueType} writes of one batch, in the order they would be applied. */
+    private static List<ModifyMetadataTool.HolderChange> preparedTypes(TypeDescription... written)
+    {
+        EAttribute valueTypeFeature = EcoreFactory.eINSTANCE.createEAttribute();
+        valueTypeFeature.setName("valueType"); //$NON-NLS-1$
+        List<ModifyMetadataTool.HolderChange> prepared = new ArrayList<>();
+        for (TypeDescription description : written)
+        {
+            prepared.add(new ModifyMetadataTool.HolderChange(false,
+                ModifyMetadataTool.PreparedChange.typeDescription(valueTypeFeature, description)));
+        }
+        return prepared;
     }
 
     /** A {@code TypeDescription} naming exactly one type, the shape a retype prepares. */
