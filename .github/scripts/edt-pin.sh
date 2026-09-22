@@ -93,15 +93,28 @@ artifact_keys() {
 
 # The served build is the HIGHEST version the metadata lists - the one p2 resolves.
 EDT_ACTUAL="$(read_versions content.xml.xz 'metadata index' | tail -n 1)"
-EDT_ARTIFACTS="$(read_versions artifacts.xml.xz 'artifact index')"
+
+# The artifact index is judged READABLE on its own, so a readable index that lacks the sentinel
+# is an inconsistency, not a flake. (grep -c, not -q: -q would SIGPIPE xz under pipefail.)
+ARTIFACTS_READ=0
+EDT_ARTIFACTS=""
+if curl -fsSL --retry 3 --retry-delay 10 "${EDT_P2}artifacts.xml.xz" -o "$WORK/artifacts.xml.xz" 2>/dev/null \
+  && [ "$(xz -dc "$WORK/artifacts.xml.xz" 2>/dev/null | grep -c '<artifact ')" -gt 0 ]; then
+  ARTIFACTS_READ=1
+  EDT_ARTIFACTS="$(xz -dc "$WORK/artifacts.xml.xz" 2>/dev/null \
+    | grep -oE "id='com\._1c\.g5\.v8\.dt\.core' version='[^']+'" \
+    | sed -E "s/.*version='([^']+)'.*/\1/" | sort -uV)"
+else
+  log "::warning::edt-pin.sh: could not read ${EDT_P2}artifacts.xml.xz (network flake?); skipping the artifact-index check."
+fi
 
 # ── GUARD 1: every jar the metadata resolves must be STORED ──────────────────────────
-# Only decidable when BOTH were read; one missing is a flake, not a verdict. Resolution follows
-# content.xml.xz and downloads per artifacts.xml.xz, so any resolved artifact with no stored jar
-# 404s. Checking one sentinel bundle is not enough: a partial publish can store it and still miss
+# Only decidable when BOTH indexes were read; one unreadable is a flake, not a verdict. Resolution
+# follows content.xml.xz and downloads per artifacts.xml.xz, so any resolved artifact with no stored
+# jar 404s. Checking one sentinel bundle is not enough: a partial publish can store it and still miss
 # another. For each artifact the HIGHEST referenced version is the one p2 resolves; older versions
 # still listed, and extra stored ones, are harmless.
-if [ -n "$EDT_ACTUAL" ] && [ -n "$EDT_ARTIFACTS" ]; then
+if [ -n "$EDT_ACTUAL" ] && [ "$ARTIFACTS_READ" = 1 ]; then
   RESOLVED="$(artifact_keys "$WORK/content.xml.xz" | sort -t'|' -k1,1 -k2,2 -k3,3V \
     | awk -F'|' '{ last[$1 "|" $2] = $0 } END { for (k in last) print last[k] }' | sort)"
   STORED="$(artifact_keys "$WORK/artifacts.xml.xz" | sort -u)"
