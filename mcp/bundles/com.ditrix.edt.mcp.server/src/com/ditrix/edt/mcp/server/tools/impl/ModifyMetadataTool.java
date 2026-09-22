@@ -62,6 +62,7 @@ import com._1c.g5.v8.dt.moxel.sheet.SheetFactory;
 import com._1c.g5.v8.dt.xdto.model.ObjectType;
 import com._1c.g5.v8.dt.xdto.model.Package;
 import com._1c.g5.v8.dt.xdto.model.Property;
+import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -90,6 +91,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.StandardCommandGroupResolver;
 import com.ditrix.edt.mcp.server.utils.MethodReferenceValidator;
 import com.ditrix.edt.mcp.server.utils.PictureValueBuilder;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
@@ -5084,7 +5086,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case TYPE_DESCRIPTION:
                 return prepareTypeDescription(ctx, name, prop, info, out, isExtensionProject);
             case REFERENCE:
-                return prepareReference(ctx.scope, target, name, value, info, out);
+                return prepareReference(ctx, target, name, value, info, out);
             case MANY_REFERENCE:
                 return prepareManyReference(ctx.scope, name, prop, info, out);
             case MCORE_VALUE_LIST:
@@ -5423,22 +5425,107 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * mutation). {@code owner} is the element the property is being set on (e.g. the DataProcessor a
      * {@code defaultForm} is set on) - passed to {@link #resolveReferenceTarget} so a bare short form
      * Name (no dots) can resolve against the owner's OWN {@code getForms()} collection (issue #262).
+     *
+     * <p>A command's {@code group} additionally admits a platform STANDARD command group by its bare
+     * name - see {@link #queueStandardCommandGroup} (issue #508).</p>
      */
-    private String prepareReference(MetadataScope scope, EObject owner, String name, String value,
+    private String prepareReference(PrepareContext ctx, EObject owner, String name, String value,
         PropertyInfo info, List<PreparedChange> out)
+    {
+        // The catalogue is fetched only for a command-group reference, so no other property pays a
+        // platform lookup for it.
+        return prepareReferenceWith(isCommandGroupReference(info.feature)
+            ? StandardCommandGroupResolver.providerFor(ctx.version) : null,
+            ctx.scope, owner, name, value, info, out);
+    }
+
+    /**
+     * The whole single-reference path with the platform command-group catalogue supplied rather than
+     * fetched, so a headless test can drive it end to end - including the ORDER of its two resolution
+     * attempts, which is what makes a standard group reachable at all.
+     *
+     * @param groupCatalogue the platform command-group catalogue, {@code null} for every reference
+     *     that is not a command group and when the platform supplied none
+     * @param scope the resolution root an FQN resolves against
+     * @param owner the element the property is being set on, or {@code null}
+     * @param name the property name
+     * @param value the reference value as supplied by the caller
+     * @param info the resolved property
+     * @param out collects the prepared change
+     * @return a JSON error, or {@code null} on success
+     */
+    static String prepareReferenceWith(IEObjectProvider groupCatalogue, MetadataScope scope, // NOSONAR the parameter list is the reference path's own inputs; folding it would hide the injected catalogue
+        EObject owner, String name, String value, PropertyInfo info, List<PreparedChange> out)
     {
         if (value == null || value.isEmpty())
         {
             return requireValueError(name);
         }
+        if (queueStandardCommandGroup(info.feature, value, groupCatalogue, out))
+        {
+            return null;
+        }
         MdObject targetMd = resolveReferenceTarget(scope, owner, value);
-        String vErr = validateReferenceTarget(name, info.feature, targetMd, value);
+        String vErr = validateReferenceTarget(name, info.feature, targetMd, value, groupCatalogue);
         if (vErr != null)
         {
             return vErr;
         }
         out.add(PreparedChange.reference(info.feature, ((IBmObject)targetMd).bmGetId()));
         return null;
+    }
+
+    /**
+     * Queues a platform STANDARD command group ({@code ActionsPanelTools},
+     * {@code NavigationPanelSeeAlso}, ... - English or Russian identifier, any case) as a SCALAR set
+     * of the platform's own proxy, and answers whether it did (issue #508).
+     *
+     * <p>It is a SCALAR and not a {@link PreparedChange#reference}: a standard group is not an
+     * {@code MdObject} and carries no BM id, so there is nothing to re-fetch inside the write
+     * transaction - the proxy itself is the persistable value, and the exporter spells it back out as
+     * the group's English name.</p>
+     *
+     * <p>Answers {@code false} - leaving the caller on the unchanged FQN path - for every reference
+     * that is not a command group, for a DOTTED value (that is the {@code CommandGroup.<Name>}
+     * address space), when the platform supplied no catalogue, and for an identifier the catalogue
+     * does not know.</p>
+     *
+     * <p>A bare identifier that answers {@code false} is NOT short-circuited: it goes on through
+     * {@link #resolveReferenceTarget} like any other value, which for a dotless value includes the
+     * owner's-own-form probe ({@code owner instanceof MdObject && no dot}). That probe cannot match
+     * here - {@code group} is declared only on commands, and a command owns no forms - so the value
+     * arrives at the shared not-found refusal, which names both accepted forms. The probe is passed
+     * through rather than skipped: this branch adds an address space, it does not remove one.</p>
+     *
+     * <p>Package-visible so a headless test can drive the branch with an injected catalogue; the live
+     * path takes one from the versioned platform registry.</p>
+     */
+    static boolean queueStandardCommandGroup(EStructuralFeature feature, String value,
+        IEObjectProvider catalogue, List<PreparedChange> out)
+    {
+        if (catalogue == null || value == null || value.indexOf('.') >= 0
+            || !isCommandGroupReference(feature))
+        {
+            return false;
+        }
+        EObject group = StandardCommandGroupResolver.resolve(catalogue, value).group;
+        if (group == null)
+        {
+            return false;
+        }
+        out.add(PreparedChange.scalar(feature, group));
+        return true;
+    }
+
+    /**
+     * Whether a reference feature's declared target is the mcore {@code CommandGroup} interface - the
+     * base both a configuration {@code CommandGroup} (an {@code MdObject}, FQN-addressed) and a
+     * platform {@code StandardCommandGroup} (name-addressed) implement.
+     */
+    private static boolean isCommandGroupReference(EStructuralFeature feature)
+    {
+        return feature instanceof EReference
+            && ((EReference)feature).getEReferenceType() == McorePackage.Literals.COMMAND_GROUP;
     }
 
     /**
@@ -5801,10 +5888,30 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     static String validateReferenceTarget(String prop, EStructuralFeature feature,
         MdObject target, String fqn)
     {
+        return validateReferenceTarget(prop, feature, target, fqn, null);
+    }
+
+    /**
+     * The {@link #validateReferenceTarget(String, EStructuralFeature, MdObject, String)} variant that
+     * also carries the platform command-group catalogue, so a {@code group} refusal can name the
+     * standard groups the caller may use instead (issue #508). {@code groupCatalogue} is {@code null}
+     * for every other reference, and on a command group when the platform supplied none - the refusal
+     * then still names both accepted forms.
+     *
+     * @param prop the property name
+     * @param feature the reference feature
+     * @param target the resolved target, or {@code null} when nothing resolved
+     * @param fqn the reference value as supplied by the caller
+     * @param groupCatalogue the platform command-group catalogue, may be {@code null}
+     * @return a JSON error, or {@code null} when the target is usable
+     */
+    static String validateReferenceTarget(String prop, EStructuralFeature feature,
+        MdObject target, String fqn, IEObjectProvider groupCatalogue)
+    {
         if (target == null)
         {
             return ToolResult.error(MSG_REFERENCE_TARGET + fqn + MSG_FOR_PROP + prop + "' was not found. " //$NON-NLS-1$
-                + referenceNotFoundHint(feature)).toJson();
+                + referenceNotFoundHint(feature, groupCatalogue)).toJson();
         }
         if (!(target instanceof IBmObject))
         {
@@ -5831,19 +5938,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /**
      * The "how to address this reference" hint appended to a not-found error: a {@code group} feature
      * (declared against the mcore {@code CommandGroup} interface - see
-     * {@link MetadataPropertyIntrospector} class doc) points specifically at the supported
-     * {@code CommandGroup.<Name>} FQN shape and names the UNSUPPORTED shape (a platform STANDARD
-     * command group, a different enum-addressed value space - issue #262 P3: "do not fake support");
-     * every other reference feature gets the generic FQN hint.
+     * {@link MetadataPropertyIntrospector} class doc) gets ONE merged hint naming BOTH forms it
+     * accepts - the {@code CommandGroup.<Name>} FQN of a configuration group and the bare name of a
+     * platform STANDARD group - plus the standard groups themselves, in both identifiers, because the
+     * Russian one is discoverable nowhere else (issue #508). Every other reference feature gets the
+     * generic FQN hint.
      */
-    private static String referenceNotFoundHint(EStructuralFeature feature)
+    private static String referenceNotFoundHint(EStructuralFeature feature,
+        IEObjectProvider groupCatalogue)
     {
-        EClass targetType = feature instanceof EReference ? ((EReference)feature).getEReferenceType() : null;
-        if (targetType == McorePackage.Literals.COMMAND_GROUP)
+        if (isCommandGroupReference(feature))
         {
-            return "Use a 'CommandGroup.<Name>' FQN (a top-level metadata object; create it with " //$NON-NLS-1$
-                + "create_metadata). The platform's built-in STANDARD command groups are a " //$NON-NLS-1$
-                + "different, enum-addressed value space and are not supported here."; //$NON-NLS-1$
+            return StandardCommandGroupResolver.addressingHint(groupCatalogue);
         }
         return "Use a valid FQN (e.g. 'Catalog.Products'); check with get_metadata_objects."; //$NON-NLS-1$
     }
