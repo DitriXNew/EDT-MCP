@@ -40,6 +40,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.CliReflectionErrors;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
+import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
 
@@ -89,10 +90,12 @@ import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
  * {@code manuallyLockedProjectsExist()} turns false, EDT's watchdog schedules
  * {@code DefaultContextsStartJob}, and that job issues its own {@code startWorkspaceProjects} for
  * the same project - which the {@code !isStarted} gate cannot see, because it has already
- * answered. It is therefore called only as a RECOVERY, after the post-import step itself threw -
- * the workspace refresh or {@code startWorkspaceProjects}: the watchdog is then the only remaining
- * route to a started project, and the release also un-freezes context startup for every OTHER
- * project in the workspace.
+ * answered. It is therefore called only as a RECOVERY, when no start of ours is coming: after the
+ * post-import step itself threw - the workspace refresh, or the start request (the
+ * {@code isStarted} gate or {@code startWorkspaceProjects}) - or when the bounded job that runs
+ * the step never entered it at all. The watchdog is then the only
+ * remaining route to a started project, and the release also un-freezes context startup for every
+ * OTHER project in the workspace.
  */
 public class ImportConfigurationFromXmlTool implements IMcpTool
 {
@@ -119,6 +122,15 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
 
     /** How often {@code isStarted} is polled while waiting for the project start. */
     private static final long START_POLL_PERIOD_MS = 250L;
+
+    /**
+     * The sentence every error answer that released the import latch ends with: EDT's own
+     * watchdog may start the project by itself now, stated as the secondary possibility it is,
+     * not as the thing to wait for.
+     */
+    private static final String LATCH_RELEASED_HINT = "The import latch has been released, so EDT " //$NON-NLS-1$
+        + "may also recover on its own - `list_projects` reporting the project `ready` would show " //$NON-NLS-1$
+        + "that - but do not wait on it."; //$NON-NLS-1$
 
     /**
      * Project names whose import is running right now, mapped to the millisecond instant the
@@ -374,9 +386,9 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
     /**
      * Renders the answer for one observed post-import outcome.
      *
-     * <p>Separate from the step that produces the outcome so every one of the five things the
-     * step can observe is exercisable headless - including the two that a live run only reaches
-     * by missing a five-minute deadline.
+     * <p>Separate from the step that produces the outcome so every one of the seven
+     * {@link StartPhase}s the step can end in is exercisable headless - including the three that a
+     * live run only reaches by missing a five-minute deadline.
      *
      * @param projectName the imported project name
      * @param importPath the normalized source directory
@@ -400,9 +412,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
                 + "', but the workspace refresh failed before any start was requested: " //$NON-NLS-1$
                 + PlatformFailures.describe(outcome.failure)
                 + ". The project exists on disk and its name is taken, so do NOT re-import it; " //$NON-NLS-1$
-                + "close and reopen the project in EDT to start it. The import latch has been " //$NON-NLS-1$
-                + "released, so EDT may also recover on its own - `list_projects` reporting the " //$NON-NLS-1$
-                + "project `ready` would show that - but do not wait on it.").toJson()); //$NON-NLS-1$
+                + "close and reopen the project in EDT to start it. " + LATCH_RELEASED_HINT).toJson()); //$NON-NLS-1$
         }
         if (outcome.phase == StartPhase.FAILED)
         {
@@ -416,12 +426,15 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
         }
         if (outcome.phase == StartPhase.NOT_SCHEDULED)
         {
+            // No start was ever requested here either, and the latch WAS released (see
+            // releaseLatchAfterAStartThatNeverRan): the same shape as REFRESH_FAILED - the manual
+            // recovery first, the watchdog as the secondary possibility.
             return ToolResult.markErrorAfterMutation(ToolResult.error(
                 "The XML files were imported into project '" + projectName //$NON-NLS-1$
                 + "', but the start could not be scheduled: EDT's job scheduler never ran it, so " //$NON-NLS-1$
                 + "nothing has asked EDT to start the project. The project exists on disk and " //$NON-NLS-1$
                 + "its name is taken, so do NOT re-import it; close and reopen the project in " //$NON-NLS-1$
-                + "EDT to start it.").toJson()); //$NON-NLS-1$
+                + "EDT to start it. " + LATCH_RELEASED_HINT).toJson()); //$NON-NLS-1$
         }
 
         // Action result: status + the source path, the created project name and the state EDT
@@ -464,8 +477,18 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
                 .append("`list_projects` until this project reports `ready`; if it never does, ") //$NON-NLS-1$
                 .append("close and reopen the project in EDT. Do not repeat the import.\n"); //$NON-NLS-1$
         }
+        else if (outcome.phase == StartPhase.START_REQUESTED)
+        {
+            body.append("- Project state: the start request was handed to EDT after the workspace ") //$NON-NLS-1$
+                .append("refresh finished, and EDT had still not returned from it after ") //$NON-NLS-1$
+                .append(budgetSeconds).append(" seconds. The import itself is done and the files ") //$NON-NLS-1$
+                .append("are on disk. Poll `list_projects` until this project reports `ready` ") //$NON-NLS-1$
+                .append("before calling model tools on it, and do not repeat the import.\n"); //$NON-NLS-1$
+        }
         else
         {
+            // START_ISSUED: the request returned (or the project was already started) and the
+            // wait for isStarted ran out.
             body.append("- Project state: the start request was issued and EDT is still starting ") //$NON-NLS-1$
                 .append("this project - it had not finished after ").append(budgetSeconds) //$NON-NLS-1$
                 .append(" seconds. The import itself is done and the files are on disk. Poll ") //$NON-NLS-1$
@@ -483,6 +506,22 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
     }
 
     /**
+     * The post-import lifecycle step on the production job scheduler.
+     *
+     * @param project the imported project
+     * @param projectName the imported project name, for the job label
+     * @param lifecycle the platform lifecycle to drive
+     * @param budgetMs how long to wait for the start, in milliseconds
+     * @return what was observed
+     * @see #startImportedProject(IProject, String, IImportLifecycle, long, BoundedJob.IJobScheduler)
+     */
+    static StartOutcome startImportedProject(IProject project, String projectName,
+        IImportLifecycle lifecycle, long budgetMs)
+    {
+        return startImportedProject(project, projectName, lifecycle, budgetMs, McpJobs::schedule);
+    }
+
+    /**
      * The post-import lifecycle step, with the platform injected so a headless test can drive it.
      *
      * <p>Order is load-bearing and is what the pins protect: the workspace refresh the CLI API
@@ -490,7 +529,9 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
      * the start request is issued ONLY for a project EDT has not started, because
      * {@code startWorkspaceProjects} begins by STOPPING the contexts of dependent projects.
      * {@code permitImport} is deliberately absent from this path - see the class javadoc - and is
-     * called only when the refresh or the start request itself threw.
+     * called only when no start of ours is coming: the refresh or the start request itself threw,
+     * or the bounded job never entered the step at all
+     * ({@link #releaseLatchAfterAStartThatNeverRan}).
      *
      * <p>All of it runs inside a {@link BoundedJob}, because
      * {@code refreshLocal(DEPTH_INFINITE)} over a large configuration and
@@ -506,7 +547,9 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
      * hidden. The platform calls therefore receive a monitor that never reports cancellation, and
      * ONLY the poll loop is bounded; the job runs the refresh and the start to completion in the
      * background. What the answer says is decided by how far the step had got
-     * ({@link StartPhase}), not by how the wait ended.
+     * ({@link StartPhase}), not by how the wait ended - and the phase is advanced when a platform
+     * call is ENTERED, not when it returns, because either call can be the one still running at
+     * the deadline.
      *
      * <p>A failure the step raises AFTER the deadline has nowhere to go: the caller has already
      * been answered {@code state: importing} and told to poll, and {@link BoundedJob} never reads
@@ -519,10 +562,13 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
      * @param projectName the imported project name, for the job label
      * @param lifecycle the platform lifecycle to drive
      * @param budgetMs how long to wait for the start, in milliseconds
+     * @param scheduler what hands the bounded job to the job manager; production passes
+     *     {@code McpJobs::schedule}, a test may hold the job back to produce a start that never
+     *     runs
      * @return what was observed
      */
     static StartOutcome startImportedProject(IProject project, String projectName,
-        IImportLifecycle lifecycle, long budgetMs)
+        IImportLifecycle lifecycle, long budgetMs, BoundedJob.IJobScheduler scheduler)
     {
         AtomicReference<StartPhase> phase = new AtomicReference<>(StartPhase.REFRESHING);
         // Set the moment the refresh returned: a failure raised while it is still false came from
@@ -535,10 +581,11 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
                     IProgressMonitor platformMonitor = new UncancellableMonitor(monitor);
                     refresh(project, lifecycle, platformMonitor);
                     refreshDone.set(true);
-                    if (!lifecycle.isStarted(project))
-                    {
-                        issueStart(project, lifecycle, platformMonitor);
-                    }
+                    // Advanced BEFORE the start request is handed to EDT, not when it returns:
+                    // startWorkspaceProjects can outlive the budget on its own, and the answer
+                    // composed at the deadline must not then blame a refresh that has finished.
+                    phase.set(StartPhase.START_REQUESTED);
+                    issueStart(project, lifecycle, platformMonitor);
                     phase.set(StartPhase.START_ISSUED);
                     while (!monitor.isCanceled() && !lifecycle.isStarted(project))
                     {
@@ -557,7 +604,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
                     }
                     throw t;
                 }
-            });
+            }, null, scheduler);
 
         // A timed-out run may still be writing the failure holder, so BoundedJob reports none for
         // it - which is right here: a start that is still running is not a start that failed.
@@ -569,6 +616,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
         }
         if (startNeverRan(result.getOutcome()))
         {
+            releaseLatchAfterAStartThatNeverRan(project, projectName, lifecycle);
             return new StartOutcome(StartPhase.NOT_SCHEDULED, null);
         }
         // Asked again on the calling thread: whether the project is usable is a fact about EDT
@@ -581,13 +629,51 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
     }
 
     /**
+     * Releases the import latch after a bounded run that never entered its work.
+     *
+     * <p>{@link BoundedJob.Outcome#NOT_RUN} and {@link BoundedJob.Outcome#TIMED_OUT_BEFORE_START}
+     * both guarantee that the job body did not run and will not: no refresh, no start request -
+     * and no release of the latch either, which only the two failure paths ({@link #refresh},
+     * {@link #issueStart}) perform. Left alone, the MANUAL latch the CLI import parked would stand
+     * for the rest of the EDT session, and while it stands EDT's watchdog schedules
+     * {@code DefaultContextsStartJob} for NO project in the workspace. So this is the third and
+     * last release site, and the same class as the other two: no start of ours is coming, the
+     * watchdog is the only route left, and the release cannot arm a start that competes with ours
+     * because ours was never issued.
+     *
+     * <p>A release that itself throws does not change the verdict. The answer already sends the
+     * caller to close and reopen the project in EDT, which drops the latch on close regardless;
+     * the failure is logged so an operator can see why the watchdog did not recover by itself.
+     *
+     * @param project the imported project
+     * @param projectName the imported project name, for the log line
+     * @param lifecycle the platform lifecycle to drive
+     */
+    private static void releaseLatchAfterAStartThatNeverRan(IProject project, String projectName,
+        IImportLifecycle lifecycle)
+    {
+        try
+        {
+            lifecycle.permitImport(project);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError(NAME + ": the post-import start of project '" + projectName //$NON-NLS-1$
+                + "' was never scheduled, and releasing the import latch afterwards failed too; " //$NON-NLS-1$
+                + "the project stays unstarted - and EDT starts no other project either - until " //$NON-NLS-1$
+                + "it is closed and reopened in EDT.", e); //$NON-NLS-1$
+        }
+    }
+
+    /**
      * Performs the workspace refresh the CLI API disabled, releasing the import latch when it
      * throws.
      *
      * <p>A refresh that fails leaves the project with NO start request issued, and the caller is
      * told exactly that ({@link StartPhase#REFRESH_FAILED}). Releasing the latch here is the same
-     * recovery as in {@link #issueStart}: EDT's own watchdog is then the only route to a started
-     * project, and it cannot take it while the latch is blocked.
+     * recovery as in {@link #issueStart} and {@link #releaseLatchAfterAStartThatNeverRan}: EDT's
+     * own watchdog is then the only route to a started project, and it cannot take it while the
+     * latch is blocked.
      *
      * @param project the imported project
      * @param lifecycle the platform lifecycle to drive
@@ -609,14 +695,21 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
     }
 
     /**
-     * Issues the start request, releasing the import latch when it throws.
+     * Issues the start request - only for a project EDT has not started yet - releasing the
+     * import latch when the request throws.
      *
-     * <p>{@code permitImport} here and in {@link #refresh}'s failure path, nowhere else: after a
-     * failed post-import step EDT's own watchdog is the only remaining route to a started project,
-     * and it cannot take that route while the latch the CLI import parked is still blocked - which
-     * also keeps context startup frozen for every OTHER project in the workspace. On the happy
-     * path the same call would arm a SECOND, competing start (see the class javadoc), so it must
-     * not be made there.
+     * <p>The request is the {@code isStarted} gate AND {@code startWorkspaceProjects}, both inside
+     * one guarded block: a gate that throws has issued no start either, so it is the same failure
+     * as a start request that throws, and it must release the latch just the same.
+     *
+     * <p>{@code permitImport} here, in {@link #refresh}'s failure path and in
+     * {@link #releaseLatchAfterAStartThatNeverRan} - the three cases in which no start of ours is
+     * coming - and nowhere else: EDT's own watchdog is then the only remaining route to a started
+     * project, and it cannot take that route while the latch the CLI import parked is still
+     * blocked - which also keeps context startup frozen for every OTHER project in the workspace.
+     * On the happy path, and on a wait that ran out while our start is still in EDT's hands, the
+     * same call would arm a SECOND, competing start (see the class javadoc), so it must not be
+     * made there; nor after a failure raised by the poll that FOLLOWS a returned request.
      *
      * @param project the imported project
      * @param lifecycle the platform lifecycle to drive
@@ -627,10 +720,13 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
     {
         try
         {
-            lifecycle.startWorkspaceProjects(
-                Collections.singletonList(new WorkspaceProjectStartRequest(project,
-                    ProjectStartType.CLEAN_IMPORT)),
-                monitor);
+            if (!lifecycle.isStarted(project))
+            {
+                lifecycle.startWorkspaceProjects(
+                    Collections.singletonList(new WorkspaceProjectStartRequest(project,
+                        ProjectStartType.CLEAN_IMPORT)),
+                    monitor);
+            }
         }
         catch (RuntimeException e)
         {
@@ -644,6 +740,10 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
      *
      * <p>Names the project and the step it failed in, because that is what an operator reading
      * the EDT log needs to match it to the {@code state: importing} answer the caller got.
+     *
+     * <p>{@link StartPhase#START_REQUESTED} with the refresh done is the START step - the request
+     * itself was in EDT's hands - and shares its text with the instant before the phase advanced;
+     * only {@link StartPhase#START_ISSUED} is the wait AFTER the request returned.
      *
      * @param projectName the imported project name
      * @param refreshDone whether the workspace refresh had returned when the failure was raised
@@ -667,7 +767,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
         {
             step = "while asking EDT to start it"; //$NON-NLS-1$
         }
-        return NAME + ": the post-import start of project '" + projectName + "' failed " + step //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return NAME + ": the post-import start of project '" + projectName + "' failed " + step //$NON-NLS-1$ //$NON-NLS-2$
             + ", AFTER the " + (budgetMs / 1000L) + "-second wait had already answered the caller " //$NON-NLS-1$ //$NON-NLS-2$
             + "with 'state: importing'. That answer told the caller to poll list_projects for a " //$NON-NLS-1$
             + "project that may now never start; if it does not, close and reopen the project in " //$NON-NLS-1$
@@ -789,6 +889,14 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
         REFRESHING,
 
         /**
+         * The workspace refresh has returned and the start request has been handed to EDT (the
+         * {@code isStarted} gate, then {@code startWorkspaceProjects} for a project not started
+         * yet) but has not returned yet. On a large configuration that call alone can outlive the
+         * budget; it keeps running and the poll follows it.
+         */
+        START_REQUESTED,
+
+        /**
          * The start request was issued (or the project was already started) and EDT has not
          * finished starting the project yet.
          */
@@ -812,7 +920,9 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
 
         /**
          * The bounded job never entered its work, so nothing asked EDT to start anything. The
-         * one outcome that must not be reported as "still starting".
+         * one outcome that must not be reported as "still starting". The import latch is
+         * released on this path ({@code releaseLatchAfterAStartThatNeverRan}), exactly as after
+         * a failed refresh: with no start of ours coming, the watchdog is the only route left.
          */
         NOT_SCHEDULED
     }

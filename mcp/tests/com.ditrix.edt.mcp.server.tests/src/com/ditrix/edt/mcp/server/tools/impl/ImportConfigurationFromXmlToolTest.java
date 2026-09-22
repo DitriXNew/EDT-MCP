@@ -79,6 +79,9 @@ public class ImportConfigurationFromXmlToolTest
      */
     private static final long REFRESH_PROGRESS_WAIT_MS = 5_000;
 
+    /** The same bound for "the blocked start request is still polling its monitor". */
+    private static final long START_PROGRESS_WAIT_MS = 5_000;
+
     @Test
     public void testName()
     {
@@ -322,6 +325,10 @@ public class ImportConfigurationFromXmlToolTest
         assertNotNull("the bounded wait must have produced an outcome", observed); //$NON-NLS-1$
         assertEquals("a refresh that is still running must be reported as such", //$NON-NLS-1$
             StartPhase.REFRESHING, observed.phase);
+        // Pinning the ABSENCE on the timed-out path: our step is still running and WILL issue
+        // the start, so releasing the latch here would arm a second, competing start.
+        assertFalse("permitImport must NOT be called when the wait merely ran out, got " //$NON-NLS-1$
+            + lifecycle.calls, lifecycle.calls.contains(RecordingLifecycle.PERMIT));
 
         String answer = ImportConfigurationFromXmlTool.renderImportAnswer("Imported", //$NON-NLS-1$
             java.nio.file.Paths.get("C:/dump"), false, observed, SHORT_START_BUDGET_MS); //$NON-NLS-1$
@@ -346,6 +353,93 @@ public class ImportConfigurationFromXmlToolTest
             lifecycle.awaitStartIssued(SANE_WAIT_MS));
         assertTrue("the start request must be issued once the refresh finished, got " //$NON-NLS-1$
             + lifecycle.calls, lifecycle.calls.contains(RecordingLifecycle.START));
+        assertFalse("and the start that completed must not have been joined by a release, got " //$NON-NLS-1$
+            + lifecycle.calls, lifecycle.calls.contains(RecordingLifecycle.PERMIT));
+    }
+
+    @Test
+    public void testADeadlineInsideTheStartRequestIsNotBlamedOnTheRefresh() throws Exception
+    {
+        // The refresh case one step later. startWorkspaceProjects runs on the same uncancellable
+        // monitor, and on a large configuration it alone can outlive the budget: BoundedJob then
+        // reports TIMED_OUT with no failure, the project is not started, and the answer is
+        // whatever the phase says. A phase that only advances when the start request RETURNS
+        // still reads REFRESHING there, and the caller is told the refresh is still running and
+        // no start request has been issued - false on both counts: the refresh is done and the
+        // request is in EDT's hands.
+        RecordingLifecycle lifecycle = new RecordingLifecycle();
+        lifecycle.startsOnRequest = true;
+        lifecycle.blockStartUntilReleased();
+        AtomicReference<StartOutcome> outcome = new AtomicReference<>();
+        Thread caller = new Thread(() -> outcome.set(ImportConfigurationFromXmlTool
+            .startImportedProject(projectHandle(), "Imported", lifecycle, SHORT_START_BUDGET_MS)), //$NON-NLS-1$
+            "import-647-start"); //$NON-NLS-1$
+        caller.setDaemon(true);
+        caller.start();
+        caller.join(SANE_WAIT_MS);
+        try
+        {
+            assertFalse("the bounded wait must return while the start request is still running", //$NON-NLS-1$
+                caller.isAlive());
+            StartOutcome observed = outcome.get();
+            assertNotNull("the bounded wait must have produced an outcome", observed); //$NON-NLS-1$
+            assertTrue("the scenario: the refresh returned and the start was entered, got " //$NON-NLS-1$
+                + lifecycle.calls, lifecycle.calls.contains(RecordingLifecycle.START));
+            assertEquals("a start request still in EDT's hands must be reported as such", //$NON-NLS-1$
+                StartPhase.START_REQUESTED, observed.phase);
+            // Pinning the ABSENCE: our start request is still running, so a release here would
+            // arm a second, competing start behind its back.
+            assertFalse("permitImport must NOT be called while our start is in EDT's hands, got " //$NON-NLS-1$
+                + lifecycle.calls, lifecycle.calls.contains(RecordingLifecycle.PERMIT));
+
+            String answer = ImportConfigurationFromXmlTool.renderImportAnswer("Imported", //$NON-NLS-1$
+                java.nio.file.Paths.get("C:/dump"), false, observed, SHORT_START_BUDGET_MS); //$NON-NLS-1$
+            assertTrue("the answer must say the request was handed to EDT after the refresh: " //$NON-NLS-1$
+                + answer, answer.contains(
+                    "the start request was handed to EDT after the workspace refresh finished")); //$NON-NLS-1$
+            assertFalse("and must not claim the request has not been issued: " + answer, //$NON-NLS-1$
+                answer.contains("the start request has not been issued yet")); //$NON-NLS-1$
+            assertTrue("it is still 'importing', not an error: " + answer, //$NON-NLS-1$
+                answer.contains("state: importing")); //$NON-NLS-1$
+
+            // The same technique as the refresh case: BoundedJob cancelled the job BEFORE the join
+            // above came back, so two MORE polls prove the start request survived that cancel.
+            int polled = lifecycle.startPolls.get();
+            assertTrue("the start must keep polling after the deadline cancelled the job", //$NON-NLS-1$
+                lifecycle.awaitStartPolls(polled + 2, START_PROGRESS_WAIT_MS));
+            assertFalse("the monitor handed to the start must never report cancellation", //$NON-NLS-1$
+                lifecycle.startSawCancel.get());
+        }
+        finally
+        {
+            lifecycle.releaseStart();
+        }
+        assertTrue("the start must run to completion after the deadline", //$NON-NLS-1$
+            lifecycle.awaitStartIssued(SANE_WAIT_MS));
+        assertFalse("and the start that completed must not have been joined by a release, got " //$NON-NLS-1$
+            + lifecycle.calls, lifecycle.calls.contains(RecordingLifecycle.PERMIT));
+    }
+
+    @Test
+    public void testAThrowingStartGateReleasesTheLatch()
+    {
+        // The isStarted gate is part of the start request: when it throws, no start of ours was
+        // issued, exactly as when startWorkspaceProjects throws. Outside the guarded block it
+        // would yield FAILED with the latch still blocked - and EDT then starts no project in
+        // the workspace until this one is closed and reopened.
+        RecordingLifecycle lifecycle = new RecordingLifecycle();
+        lifecycle.isStartedFailure = new IllegalStateException("orchestrator unavailable"); //$NON-NLS-1$
+        StartOutcome outcome = ImportConfigurationFromXmlTool.startImportedProject(projectHandle(),
+            "Imported", lifecycle, AMPLE_START_BUDGET_MS); //$NON-NLS-1$
+
+        assertEquals("a gate that throws after the refresh is a failed start request", //$NON-NLS-1$
+            StartPhase.FAILED, outcome.phase);
+        assertSame("the outcome must carry the gate's own failure", lifecycle.isStartedFailure, //$NON-NLS-1$
+            outcome.failure);
+        assertEquals("permitImport must be called exactly once, got " + lifecycle.calls, 1, //$NON-NLS-1$
+            Collections.frequency(lifecycle.calls, RecordingLifecycle.PERMIT));
+        assertFalse("no start may have been requested, got " + lifecycle.calls, //$NON-NLS-1$
+            lifecycle.calls.contains(RecordingLifecycle.START));
     }
 
     @Test
@@ -366,6 +460,108 @@ public class ImportConfigurationFromXmlToolTest
             answer.contains("do NOT re-import it; close and reopen the project in EDT")); //$NON-NLS-1$
         assertTrue("the import already ran, so it is an after-mutation error: " + answer, //$NON-NLS-1$
             answer.contains("mutationCommitted")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAStartThatNeverRanReleasesTheLatch()
+    {
+        // NOT_RUN: the job left the scheduler without ever entering the work. Nothing refreshed,
+        // nothing asked EDT to start the project - and nothing released the latch the CLI import
+        // parked, which would then stand for the rest of the EDT session and keep the watchdog
+        // from starting ANY project in the workspace. The two failure paths release it; this one
+        // is the same class and must too. It cannot arm a competing start: ours was never issued
+        // and BoundedJob guarantees it never will be.
+        RecordingLifecycle lifecycle = new RecordingLifecycle();
+        lifecycle.startsOnRequest = true;
+        StartOutcome outcome = ImportConfigurationFromXmlTool.startImportedProject(projectHandle(),
+            "Imported", lifecycle, SHORT_START_BUDGET_MS, job -> { //$NON-NLS-1$
+                // Never scheduled: join returns at once and the outcome is NOT_RUN.
+            });
+
+        assertNeverRanAndReleasedTheLatch("NOT_RUN", outcome, lifecycle); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAStartCancelledAtTheDeadlineBeforeItBeganReleasesTheLatch()
+    {
+        // TIMED_OUT_BEFORE_START: the job was still SLEEPING when the deadline cancelled it, so it
+        // never entered the work either. Same latch, same release.
+        RecordingLifecycle lifecycle = new RecordingLifecycle();
+        lifecycle.startsOnRequest = true;
+        StartOutcome outcome = ImportConfigurationFromXmlTool.startImportedProject(projectHandle(),
+            "Imported", lifecycle, SHORT_START_BUDGET_MS, job -> job.schedule(60_000L)); //$NON-NLS-1$
+
+        assertNeverRanAndReleasedTheLatch("TIMED_OUT_BEFORE_START", outcome, lifecycle); //$NON-NLS-1$
+    }
+
+    private static void assertNeverRanAndReleasedTheLatch(String outcomeName, StartOutcome outcome,
+        RecordingLifecycle lifecycle)
+    {
+        assertEquals(outcomeName + ": a start that never ran is NOT_SCHEDULED", //$NON-NLS-1$
+            StartPhase.NOT_SCHEDULED, outcome.phase);
+        assertEquals(outcomeName + ": permitImport must be called exactly once, got " //$NON-NLS-1$
+            + lifecycle.calls, 1, Collections.frequency(lifecycle.calls, RecordingLifecycle.PERMIT));
+        assertFalse(outcomeName + ": the refresh must not have run, got " + lifecycle.calls, //$NON-NLS-1$
+            lifecycle.calls.contains(RecordingLifecycle.REFRESH));
+        assertFalse(outcomeName + ": no start may have been requested, got " + lifecycle.calls, //$NON-NLS-1$
+            lifecycle.calls.contains(RecordingLifecycle.START));
+    }
+
+    @Test
+    public void testALatchReleaseThatFailsDoesNotHideTheNeverRanVerdict() throws Exception
+    {
+        // The release is a courtesy to the watchdog; the verdict is the caller's. A release that
+        // throws must neither turn NOT_SCHEDULED into FAILED (whose recovery is to poll for a
+        // start nobody issued) nor escape the tool. It is logged: the answer already sends the
+        // caller to close/reopen, which drops the latch regardless.
+        RecordingLifecycle lifecycle = new RecordingLifecycle();
+        lifecycle.permitFailure = new IllegalStateException("bootstrap refused"); //$NON-NLS-1$
+        String projectName = uniqueProjectName();
+        LogRecorder log = LogRecorder.start();
+        try
+        {
+            StartOutcome outcome = ImportConfigurationFromXmlTool.startImportedProject(
+                ResourcesPlugin.getWorkspace().getRoot().getProject(projectName), projectName,
+                lifecycle, SHORT_START_BUDGET_MS, job -> {
+                    // Never scheduled.
+                });
+            assertEquals("the verdict must stay NOT_SCHEDULED", StartPhase.NOT_SCHEDULED, //$NON-NLS-1$
+                outcome.phase);
+            assertNull("and must not carry the release failure as its own", outcome.failure); //$NON-NLS-1$
+            assertTrue("the release must have been attempted: " + lifecycle.calls, //$NON-NLS-1$
+                lifecycle.calls.contains(RecordingLifecycle.PERMIT));
+            IStatus entry = log.awaitEntryNaming(projectName, SANE_WAIT_MS);
+            assertNotNull("a latch release that fails must be logged", entry); //$NON-NLS-1$
+            assertEquals("and logged as an ERROR", IStatus.ERROR, entry.getSeverity()); //$NON-NLS-1$
+            assertTrue("the log line must say the latch release failed: " + entry.getMessage(), //$NON-NLS-1$
+                entry.getMessage().contains("import latch")); //$NON-NLS-1$
+            assertSame("the throwable itself must be attached", lifecycle.permitFailure, //$NON-NLS-1$
+                entry.getException());
+        }
+        finally
+        {
+            log.stop();
+        }
+    }
+
+    @Test
+    public void testANeverScheduledAnswerSaysTheLatchWasReleased()
+    {
+        // The latch IS released on this path, so EDT's watchdog may start the project by itself.
+        // The answer says so as the secondary possibility it is, and keeps the manual recovery as
+        // the thing to do.
+        String answer = ImportConfigurationFromXmlTool.renderImportAnswer("Imported", //$NON-NLS-1$
+            java.nio.file.Paths.get("C:/dump"), false, //$NON-NLS-1$
+            new StartOutcome(StartPhase.NOT_SCHEDULED, null), SHORT_START_BUDGET_MS);
+
+        assertTrue("it must say the latch has been released: " + answer, //$NON-NLS-1$
+            answer.contains("The import latch has been released")); //$NON-NLS-1$
+        assertTrue("with list_projects as the 'may recover on its own' hint: " + answer, //$NON-NLS-1$
+            answer.contains("may also recover on its own") && answer.contains("list_projects")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("and still forbid a re-import and name the manual recovery: " + answer, //$NON-NLS-1$
+            answer.contains("do NOT re-import it; close and reopen the project in EDT")); //$NON-NLS-1$
+        assertTrue("and still be an error: " + answer, //$NON-NLS-1$
+            answer.contains("\"success\": false") || answer.contains("\"success\":false")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -395,6 +591,30 @@ public class ImportConfigurationFromXmlToolTest
             answer.contains("the start request was issued and EDT is still starting")); //$NON-NLS-1$
         assertFalse("and must not blame the refresh: " + answer, //$NON-NLS-1$
             answer.contains("workspace refresh")); //$NON-NLS-1$
+        assertFalse("nor borrow the request-still-in-EDT's-hands text: " + answer, //$NON-NLS-1$
+            answer.contains("the start request was handed to EDT")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAStartRequestInEdtsHandsIsToldApartFromBothNeighbours()
+    {
+        // Three 'importing' bodies, one literal each. A caller told "the refresh is still running"
+        // would wait on the wrong thing; one told "the request was issued" would take EDT to have
+        // already accepted it.
+        String answer = ImportConfigurationFromXmlTool.renderImportAnswer("Imported", //$NON-NLS-1$
+            java.nio.file.Paths.get("C:/dump"), false, //$NON-NLS-1$
+            new StartOutcome(StartPhase.START_REQUESTED, null), SHORT_START_BUDGET_MS);
+
+        assertTrue("it must say the request was handed to EDT after the refresh finished: " //$NON-NLS-1$
+            + answer, answer.contains(
+                "the start request was handed to EDT after the workspace refresh finished")); //$NON-NLS-1$
+        assertTrue("and that EDT had not returned from it: " + answer, //$NON-NLS-1$
+            answer.contains("EDT had still not returned from it")); //$NON-NLS-1$
+        assertFalse("and must not use the refresh-still-running text: " + answer, //$NON-NLS-1$
+            answer.contains("the workspace refresh of the imported files was STILL running")); //$NON-NLS-1$
+        assertFalse("nor the request-issued text: " + answer, //$NON-NLS-1$
+            answer.contains("the start request was issued and EDT is still starting")); //$NON-NLS-1$
+        assertTrue("it is 'importing': " + answer, answer.contains("state: importing")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -685,8 +905,12 @@ public class ImportConfigurationFromXmlToolTest
             StartPhase.REFRESHING, SHORT_START_BUDGET_MS);
         String waiting = ImportConfigurationFromXmlTool.lateFailureMessage("Imported", true, //$NON-NLS-1$
             StartPhase.START_ISSUED, SHORT_START_BUDGET_MS);
+        // The request itself was in EDT's hands when it failed: that is the START step, not the
+        // wait after it.
+        String askingInEdtsHands = ImportConfigurationFromXmlTool.lateFailureMessage("Imported", //$NON-NLS-1$
+            true, StartPhase.START_REQUESTED, SHORT_START_BUDGET_MS);
 
-        for (String message : new String[] { refreshing, asking, waiting })
+        for (String message : new String[] { refreshing, asking, waiting, askingInEdtsHands })
         {
             assertTrue("every late-failure line must name the project: " + message, //$NON-NLS-1$
                 message.contains("'Imported'")); //$NON-NLS-1$
@@ -696,6 +920,9 @@ public class ImportConfigurationFromXmlToolTest
         assertTrue(refreshing, refreshing.contains("while refreshing the workspace")); //$NON-NLS-1$
         assertTrue(asking, asking.contains("while asking EDT to start it")); //$NON-NLS-1$
         assertTrue(waiting, waiting.contains("while waiting for EDT to start it")); //$NON-NLS-1$
+        assertTrue(askingInEdtsHands, askingInEdtsHands.contains("while asking EDT to start it")); //$NON-NLS-1$
+        assertFalse("a request still in EDT's hands is not the wait after it: " + askingInEdtsHands, //$NON-NLS-1$
+            askingInEdtsHands.contains("while waiting")); //$NON-NLS-1$
         assertFalse("the three steps must not collapse into one text", //$NON-NLS-1$
             refreshing.equals(asking) || asking.equals(waiting));
     }
@@ -858,6 +1085,24 @@ public class ImportConfigurationFromXmlToolTest
             guide.contains("only if that post-import step itself fails")); //$NON-NLS-1$
         assertTrue("naming both halves of that step, since both release it: " + guide, //$NON-NLS-1$
             guide.contains("the workspace refresh or the start request")); //$NON-NLS-1$
+        assertTrue("and the third case, a step that was never scheduled at all: " + guide, //$NON-NLS-1$
+            guide.contains("or could not be scheduled at all")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideNamesTheThreeImportingSubStates()
+    {
+        // The answer has three 'importing' bodies; a guide that still promised two would leave the
+        // caller unable to read the middle one.
+        String guide = new ImportConfigurationFromXmlTool().getGuide();
+        assertTrue("the guide must say the body names the step still running: " + guide, //$NON-NLS-1$
+            guide.contains("says which step is still running")); //$NON-NLS-1$
+        assertTrue("the refresh case: " + guide, //$NON-NLS-1$
+            guide.contains("the start request has not been issued yet")); //$NON-NLS-1$
+        assertTrue("the request-in-EDT's-hands case: " + guide, //$NON-NLS-1$
+            guide.contains("EDT is still processing it")); //$NON-NLS-1$
+        assertTrue("the request-returned case: " + guide, //$NON-NLS-1$
+            guide.contains("the start request returned and EDT is still starting the project")); //$NON-NLS-1$
     }
 
     @Test
@@ -1078,11 +1323,20 @@ public class ImportConfigurationFromXmlToolTest
         volatile boolean dtProject = true;
         volatile RuntimeException startFailure;
 
+        /** Thrown by {@code permitImport}, after the call has been recorded. */
+        volatile RuntimeException permitFailure;
+
+        /** Thrown by {@code isStarted}, after the call has been recorded. */
+        volatile RuntimeException isStartedFailure;
+
         /** Thrown by the refresh once it is done waiting (at once, when nothing blocks it). */
         volatile CoreException refreshFailure;
 
         /** Set when the refresh must park until {@link #releaseRefresh()}. */
         private volatile CountDownLatch refreshRelease;
+
+        /** Set when the start request must park until {@link #releaseStart()}. */
+        private volatile CountDownLatch startRelease;
 
         /** Counts down when the start request has been issued (or deliberately skipped). */
         private final CountDownLatch startIssued = new CountDownLatch(1);
@@ -1093,6 +1347,12 @@ public class ImportConfigurationFromXmlToolTest
         /** How many times the blocked refresh has asked its monitor whether it was cancelled. */
         final AtomicInteger refreshPolls = new AtomicInteger();
 
+        /** Whether the monitor handed to the start request ever reported cancellation. */
+        final AtomicBoolean startSawCancel = new AtomicBoolean();
+
+        /** How many times the blocked start request has asked its monitor whether it was cancelled. */
+        final AtomicInteger startPolls = new AtomicInteger();
+
         void blockRefreshUntilReleased()
         {
             refreshRelease = new CountDownLatch(1);
@@ -1100,7 +1360,21 @@ public class ImportConfigurationFromXmlToolTest
 
         void releaseRefresh()
         {
-            CountDownLatch latch = refreshRelease;
+            release(refreshRelease);
+        }
+
+        void blockStartUntilReleased()
+        {
+            startRelease = new CountDownLatch(1);
+        }
+
+        void releaseStart()
+        {
+            release(startRelease);
+        }
+
+        private static void release(CountDownLatch latch)
+        {
             if (latch != null)
             {
                 latch.countDown();
@@ -1114,10 +1388,21 @@ public class ImportConfigurationFromXmlToolTest
 
         boolean awaitRefreshPolls(int target, long timeoutMs) throws InterruptedException
         {
+            return awaitPolls(refreshPolls, target, timeoutMs);
+        }
+
+        boolean awaitStartPolls(int target, long timeoutMs) throws InterruptedException
+        {
+            return awaitPolls(startPolls, target, timeoutMs);
+        }
+
+        private static boolean awaitPolls(AtomicInteger polls, int target, long timeoutMs)
+            throws InterruptedException
+        {
             long deadline = System.currentTimeMillis() + timeoutMs;
             while (System.currentTimeMillis() < deadline)
             {
-                if (refreshPolls.get() >= target)
+                if (polls.get() >= target)
                 {
                     return true;
                 }
@@ -1155,7 +1440,7 @@ public class ImportConfigurationFromXmlToolTest
             CountDownLatch latch = refreshRelease;
             if (latch != null)
             {
-                awaitRefreshRelease(latch, monitor);
+                awaitRelease(latch, monitor, refreshPolls, refreshSawCancel);
             }
             CoreException failure = refreshFailure;
             if (failure != null)
@@ -1166,14 +1451,15 @@ public class ImportConfigurationFromXmlToolTest
 
         /**
          * A well-behaved platform call: it polls its monitor and unwinds when cancelled. That is
-         * exactly what must NOT happen here, so the monitor the tool hands it decides whether this
-         * refresh survives the deadline.
+         * exactly what must NOT happen here, so the monitor the tool hands it decides whether the
+         * blocked call (the refresh or the start request) survives the deadline.
          *
          * <p>The monitor is polled FIRST and the release waited on second. The other order lets a
          * release that lands inside the same wait window end the loop before the cancel is ever
          * seen - which made the deadline pin pass against a refresh that DID honour the deadline.
          */
-        private void awaitRefreshRelease(CountDownLatch latch, IProgressMonitor monitor)
+        private static void awaitRelease(CountDownLatch latch, IProgressMonitor monitor,
+            AtomicInteger polls, AtomicBoolean sawCancel)
         {
             try
             {
@@ -1181,10 +1467,10 @@ public class ImportConfigurationFromXmlToolTest
                 {
                     if (monitor.isCanceled())
                     {
-                        refreshSawCancel.set(true);
+                        sawCancel.set(true);
                         throw new OperationCanceledException();
                     }
-                    refreshPolls.incrementAndGet();
+                    polls.incrementAndGet();
                     if (latch.await(20, TimeUnit.MILLISECONDS))
                     {
                         return;
@@ -1201,12 +1487,22 @@ public class ImportConfigurationFromXmlToolTest
         public void permitImport(IProject project)
         {
             calls.add(PERMIT);
+            RuntimeException failure = permitFailure;
+            if (failure != null)
+            {
+                throw failure;
+            }
         }
 
         @Override
         public boolean isStarted(IProject project)
         {
             calls.add(IS_STARTED);
+            RuntimeException failure = isStartedFailure;
+            if (failure != null)
+            {
+                throw failure;
+            }
             return started;
         }
 
@@ -1216,6 +1512,11 @@ public class ImportConfigurationFromXmlToolTest
         {
             calls.add(START);
             startRequests.add(requests);
+            CountDownLatch latch = startRelease;
+            if (latch != null)
+            {
+                awaitRelease(latch, monitor, startPolls, startSawCancel);
+            }
             if (startFailure != null)
             {
                 throw startFailure;
