@@ -3004,71 +3004,37 @@ public class ModifyMetadataToolTest
     }
 
     /**
-     * The gate judges a batch's END state, so the apply must not act on an intermediate classifier:
-     * {@code [valueType=String, valueType=ValueList]} would drop a ValueList's item type at the
-     * first write and rebuild it empty at the second. Only the last value-type write survives,
-     * and the unrelated change keeps its place.
+     * A classifier may be written ONCE per call: each write rebuilds the ext-info, so
+     * {@code [valueType=String, valueType=ValueList]} would drop a ValueList's item type at the first
+     * write while the gate and the retype guards judged a state the batch never reaches.
      */
     @Test
-    public void testFoldKeepsOnlyTheLastValueTypeWrite()
+    public void testComboRejectsARepeatedAttributeValueType()
     {
-        EAttribute valueTypeFeature = EcoreFactory.eINSTANCE.createEAttribute();
-        valueTypeFeature.setName("valueType"); //$NON-NLS-1$
-        EAttribute titleFeature = EcoreFactory.eINSTANCE.createEAttribute();
-        titleFeature.setName("toolTip"); //$NON-NLS-1$
-        ModifyMetadataTool.HolderChange toString = new ModifyMetadataTool.HolderChange(false,
-            ModifyMetadataTool.PreparedChange.typeDescription(valueTypeFeature, singleType("String"))); //$NON-NLS-1$
-        ModifyMetadataTool.HolderChange other = new ModifyMetadataTool.HolderChange(false,
-            ModifyMetadataTool.PreparedChange.scalar(titleFeature, "hint")); //$NON-NLS-1$
-        ModifyMetadataTool.HolderChange backToValueList = new ModifyMetadataTool.HolderChange(false,
-            ModifyMetadataTool.PreparedChange.typeDescription(valueTypeFeature, singleType("ValueList"))); //$NON-NLS-1$
+        EPackage pkg = buildAttributeLikePackage();
+        EObject attribute = newAttributeWithExtInfo(pkg);
 
-        List<ModifyMetadataTool.HolderChange> folded =
-            ModifyMetadataTool.foldClassifierWrites(List.of(toString, other, backToValueList));
-
-        assertEquals(List.of(other, backToValueList), folded);
+        String err = ModifyMetadataTool.formTypeExtInfoComboError(attribute, Arrays.asList(
+            prop("valueType", "String"), prop("valueType", "ValueList"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertNotNull("a repeated value type must be refused", err); //$NON-NLS-1$
+        assertTrue(err, err.contains("only ONCE per call")); //$NON-NLS-1$
+        // Both spellings are one classifier on an attribute: `type` normalizes to `valueType`.
+        assertNotNull("a `type` + `valueType` pair is the same repeat", //$NON-NLS-1$
+            ModifyMetadataTool.formTypeExtInfoComboError(attribute, Arrays.asList(
+                prop("type", "String"), prop("valueType", "ValueList")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
     }
 
-    /** The item-kind twin: {@code Pages -> ContextMenu -> Pages} must not pass through ContextMenu. */
+    /** The item-kind twin: {@code ContextMenu -> Pages} in one call is refused, not applied twice. */
     @Test
-    public void testFoldKeepsOnlyTheLastItemKindWrite()
+    public void testComboRejectsARepeatedItemKind()
     {
-        EAttribute typeFeature = EcoreFactory.eINSTANCE.createEAttribute();
-        typeFeature.setName("type"); //$NON-NLS-1$
-        ModifyMetadataTool.HolderChange pages = new ModifyMetadataTool.HolderChange(false,
-            ModifyMetadataTool.PreparedChange.scalar(typeFeature, "Pages")); //$NON-NLS-1$
-        ModifyMetadataTool.HolderChange contextMenu = new ModifyMetadataTool.HolderChange(false,
-            ModifyMetadataTool.PreparedChange.scalar(typeFeature, "ContextMenu")); //$NON-NLS-1$
-        ModifyMetadataTool.HolderChange pagesAgain = new ModifyMetadataTool.HolderChange(false,
-            ModifyMetadataTool.PreparedChange.scalar(typeFeature, "Pages")); //$NON-NLS-1$
+        EPackage pkg = buildFormLikePackage();
+        EObject group = newGroupWithExtInfo(pkg, new EObject[1]);
 
-        assertEquals(List.of(pagesAgain),
-            ModifyMetadataTool.foldClassifierWrites(List.of(pages, contextMenu, pagesAgain)));
-    }
-
-    /** What the fold must leave alone: a batch without repeats, and changes landing on the ext-info. */
-    @Test
-    public void testFoldLeavesNonRepeatedAndExtInfoChangesAlone()
-    {
-        EAttribute valueTypeFeature = EcoreFactory.eINSTANCE.createEAttribute();
-        valueTypeFeature.setName("valueType"); //$NON-NLS-1$
-        EAttribute typeFeature = EcoreFactory.eINSTANCE.createEAttribute();
-        typeFeature.setName("type"); //$NON-NLS-1$
-        ModifyMetadataTool.HolderChange retype = new ModifyMetadataTool.HolderChange(false,
-            ModifyMetadataTool.PreparedChange.typeDescription(valueTypeFeature, singleType("String"))); //$NON-NLS-1$
-        ModifyMetadataTool.HolderChange kind = new ModifyMetadataTool.HolderChange(false,
-            ModifyMetadataTool.PreparedChange.scalar(typeFeature, "Pages")); //$NON-NLS-1$
-        assertEquals("one write per classifier is kept as is", List.of(retype, kind), //$NON-NLS-1$
-            ModifyMetadataTool.foldClassifierWrites(List.of(retype, kind)));
-
-        // A 'type' INSIDE the ext-info is a property of the holder, not the member's classifier.
-        ModifyMetadataTool.HolderChange onExtInfo1 = new ModifyMetadataTool.HolderChange(true,
-            ModifyMetadataTool.PreparedChange.scalar(typeFeature, "A")); //$NON-NLS-1$
-        ModifyMetadataTool.HolderChange onExtInfo2 = new ModifyMetadataTool.HolderChange(true,
-            ModifyMetadataTool.PreparedChange.scalar(typeFeature, "B")); //$NON-NLS-1$
-        assertEquals(List.of(onExtInfo1, onExtInfo2),
-            ModifyMetadataTool.foldClassifierWrites(List.of(onExtInfo1, onExtInfo2)));
-        assertEquals(List.of(), ModifyMetadataTool.foldClassifierWrites(List.of()));
+        String err = ModifyMetadataTool.formTypeExtInfoComboError(group, Arrays.asList(
+            prop("type", "ContextMenu"), prop("type", "Pages"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertNotNull("a repeated item kind must be refused", err); //$NON-NLS-1$
+        assertTrue(err, err.contains("'type' can be set only ONCE per call")); //$NON-NLS-1$
     }
 
     /**

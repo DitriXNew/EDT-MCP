@@ -3930,59 +3930,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
             changes.add(prepareFormMemberChange(scope, version, member, prop, normReport));
         }
-        // Every entry is validated above; only the survivors of the fold are applied.
-        return foldClassifierWrites(changes);
-    }
-
-    /**
-     * Keeps only the LAST write of each classifier feature - an attribute's value type and an item's
-     * {@code type} kind, the two {@link #syncExtInfoAfter} rebuilds the ext-info for - and every
-     * other change in its original order. The gate judges the batch's end state; applying an
-     * intermediate classifier would drop the ext-info (a ValueList's item type, a Pages item's
-     * handlers) that the final one keeps.
-     *
-     * @param changes the prepared batch, in request order
-     * @return the batch the apply loop runs, never {@code null}
-     */
-    static List<HolderChange> foldClassifierWrites(List<HolderChange> changes)
-    {
-        Map<String, Integer> lastWrite = new LinkedHashMap<>();
-        for (int i = 0; i < changes.size(); i++)
-        {
-            String key = classifierKey(changes.get(i));
-            if (key != null)
-            {
-                lastWrite.put(key, i);
-            }
-        }
-        if (lastWrite.isEmpty())
-        {
-            return changes;
-        }
-        List<HolderChange> folded = new ArrayList<>(changes.size());
-        for (int i = 0; i < changes.size(); i++)
-        {
-            String key = classifierKey(changes.get(i));
-            if (key == null || lastWrite.get(key).intValue() == i)
-            {
-                folded.add(changes.get(i));
-            }
-        }
-        return folded;
-    }
-
-    /** The classifier feature {@code hc} writes, or {@code null} for any other change. */
-    private static String classifierKey(HolderChange hc)
-    {
-        if (hc.onExtInfo)
-        {
-            return null;
-        }
-        if (hc.change.isTypeChange())
-        {
-            return "valueType"; //$NON-NLS-1$
-        }
-        return "type".equalsIgnoreCase(hc.change.featureName()) ? "type" : null; //$NON-NLS-1$ //$NON-NLS-2$
+        return changes;
     }
 
     /**
@@ -4068,7 +4016,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      */
     static String formTypeExtInfoComboError(EObject member, List<JsonObject> properties)
     {
-        boolean hasDirectTypeChange = false;
+        int directTypeChanges = 0;
+        String typeName = null;
         boolean hasExtInfoChange = false;
         for (JsonObject prop : properties)
         {
@@ -4087,9 +4036,20 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // has already rewritten its `type` to `valueType` by the time this reads the name, and a
                 // guard that only knew the enum spelling let the attribute case straight through
                 // (issue #369 review). A value type decides the ext-info exactly as an item's enum does.
-                hasDirectTypeChange = true;
+                directTypeChanges++;
+                typeName = name;
             }
         }
+        if (directTypeChanges > 1)
+        {
+            // Each write rebuilds the ext-info, so an intermediate value would drop what the final
+            // one keeps, while the retype gate and the guards judge a state the batch never reaches.
+            return ToolResult.error("A form member's '" + typeName + "' can be set only ONCE per " //$NON-NLS-1$ //$NON-NLS-2$
+                + "call: each write rebuilds its <extInfo>, so an intermediate value would drop what " //$NON-NLS-1$
+                + "the final one keeps (a ValueList's item type, a Pages group's event handlers). " //$NON-NLS-1$
+                + "Pass only the final value.").toJson(); //$NON-NLS-1$
+        }
+        boolean hasDirectTypeChange = directTypeChanges > 0;
         if (hasDirectTypeChange && hasExtInfoChange)
         {
             return ToolResult.error("Changing a form member's 'type' cannot be combined with a " //$NON-NLS-1$

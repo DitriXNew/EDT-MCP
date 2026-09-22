@@ -485,11 +485,10 @@ def test_form_corpus_a_kind_change_keeps_what_the_new_kind_still_publishes():
         "while the dropped subscription is gone from the file, procedure and all"
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
-def test_form_corpus_a_kind_round_trip_in_one_batch_keeps_the_bound_handler():
-    """A batch is judged by its END state, so `Pages -> ContextMenu -> Pages` in ONE call ends where
-    it started and may destroy nothing. Applied entry by entry, the ContextMenu step (a kind that
-    pairs with no ext-info) dropped the Pages node and its bindings, and the final Pages could only
-    build an empty one. The binding must survive, and nothing may be reported as removed.
+def test_form_corpus_a_repeated_kind_in_one_batch_is_refused_and_keeps_the_handler():
+    """Every `type` write rebuilds the ext-info, so `ContextMenu -> Pages` in ONE call would drop
+    the Pages node's bindings at the intermediate step. Such a batch is refused before anything is
+    applied, and the binding stays on disk.
 
     The event is asked of the platform (the refusal that lists what the kind publishes), never
     assumed - see _available_events.
@@ -512,15 +511,14 @@ def test_form_corpus_a_kind_round_trip_in_one_batch_keeps_the_bound_handler():
         "projectName": PROJECT, "fqn": group,
         "properties": [{"name": "type", "value": "ContextMenu"},
                        {"name": "type", "value": "Pages"}]})
-    assert_ok(r, "a kind round trip in one batch")
-    removed = (r.structured or {}).get("removedEventHandlers")
-    assert not removed, "a batch that ends where it started removes nothing: %r" % (removed,)
+    err = assert_error(r, "a batch setting the kind twice must be refused")
+    assert_error_quality(err, suggests=["only ONCE per call"], ctx="the repeated-kind refusal")
 
     wait_for_project_ready()
     xml = read_disk(form_file)
     assert "<event>%s</event>" % event in xml, (
-        "the binding must survive a round trip that never left Pages in the end state: %r" % event)
-    assert "ProbeRoundTrip" in xml, "...with its procedure"
+        "the refused batch must not have touched the binding: %r" % event)
+    assert "ProbeRoundTrip" in xml, "...nor its procedure"
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
