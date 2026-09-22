@@ -16,6 +16,7 @@ import org.osgi.util.tracker.ServiceTracker;
 import com._1c.g5.v8.dt.bm.xtext.BmAwareResourceSetProvider;
 import com._1c.g5.v8.dt.compare.core.IComparisonManager;
 import com._1c.g5.v8.dt.core.event.IEventBroker;
+import com._1c.g5.v8.dt.core.lifecycle.IDtProjectResourceLifecycleBootstrap;
 import com._1c.g5.v8.dt.core.model.IModelObjectCollectionRuntimeOrderSorter;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
@@ -27,6 +28,7 @@ import com._1c.g5.v8.dt.core.platform.IConfigurationProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExternalObjectProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExtensionProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.core.platform.IWorkspaceOrchestrator;
 import com._1c.g5.v8.dt.form.refactoring.IFormRefactoringService;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.md.MdPlugin;
@@ -60,6 +62,9 @@ public class EdtServices
     /** Service trackers */
     private ServiceTracker<IV8ProjectManager, IV8ProjectManager> v8ProjectManagerTracker;
     private ServiceTracker<IDtProjectManager, IDtProjectManager> dtProjectManagerTracker;
+    private ServiceTracker<IWorkspaceOrchestrator, IWorkspaceOrchestrator> workspaceOrchestratorTracker;
+    private ServiceTracker<IDtProjectResourceLifecycleBootstrap,
+        IDtProjectResourceLifecycleBootstrap> dtProjectLifecycleBootstrapTracker;
     private ServiceTracker<IConfigurationProvider, IConfigurationProvider> configurationProviderTracker;
     private ServiceTracker<IMarkerManager, IMarkerManager> markerManagerTracker;
     private ServiceTracker<ICheckScheduler, ICheckScheduler> checkSchedulerTracker;
@@ -153,6 +158,18 @@ public class EdtServices
 
         dtProjectManagerTracker = new ServiceTracker<>(context, IDtProjectManager.class, null);
         dtProjectManagerTracker.open();
+
+        // The two halves of EDT's project lifecycle. import_configuration_from_xml needs them to
+        // start a project the CLI import API leaves parked behind a blocked MANUAL start latch
+        // (issue #647): the orchestrator issues and observes the start, the bootstrap releases the
+        // latch. Both are Guice service-aware singletons in EDT's CoreModule, i.e. published as
+        // OSGi services, so a plain tracker reaches them.
+        workspaceOrchestratorTracker = new ServiceTracker<>(context, IWorkspaceOrchestrator.class, null);
+        workspaceOrchestratorTracker.open();
+
+        dtProjectLifecycleBootstrapTracker =
+            new ServiceTracker<>(context, IDtProjectResourceLifecycleBootstrap.class, null);
+        dtProjectLifecycleBootstrapTracker.open();
 
         configurationProviderTracker = new ServiceTracker<>(context, IConfigurationProvider.class, null);
         configurationProviderTracker.open();
@@ -288,6 +305,8 @@ public class EdtServices
         // exactly reproducing the former "if (t != null) { t.close(); t = null; }" per-field block). // NOSONAR explanatory comment, not commented-out code
         v8ProjectManagerTracker = closeTracker(v8ProjectManagerTracker);
         dtProjectManagerTracker = closeTracker(dtProjectManagerTracker);
+        workspaceOrchestratorTracker = closeTracker(workspaceOrchestratorTracker);
+        dtProjectLifecycleBootstrapTracker = closeTracker(dtProjectLifecycleBootstrapTracker);
         configurationProviderTracker = closeTracker(configurationProviderTracker);
         markerManagerTracker = closeTracker(markerManagerTracker);
         checkSchedulerTracker = closeTracker(checkSchedulerTracker);
@@ -385,6 +404,36 @@ public class EdtServices
             return null;
         }
         return dtProjectManagerTracker.getService();
+    }
+
+    /**
+     * Returns the IWorkspaceOrchestrator service - the entry point that starts a project's context
+     * and answers whether it is started.
+     *
+     * @return workspace orchestrator or null if not available
+     */
+    public IWorkspaceOrchestrator getWorkspaceOrchestrator()
+    {
+        if (workspaceOrchestratorTracker == null)
+        {
+            return null;
+        }
+        return workspaceOrchestratorTracker.getService();
+    }
+
+    /**
+     * Returns the IDtProjectResourceLifecycleBootstrap service - the owner of the project start
+     * latches, whose {@code permitImport} releases the one the CLI import API parks.
+     *
+     * @return the project resource lifecycle bootstrap or null if not available
+     */
+    public IDtProjectResourceLifecycleBootstrap getDtProjectLifecycleBootstrap()
+    {
+        if (dtProjectLifecycleBootstrapTracker == null)
+        {
+            return null;
+        }
+        return dtProjectLifecycleBootstrapTracker.getService();
     }
 
     /**

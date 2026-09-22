@@ -108,11 +108,14 @@ def _success_envelope(r, ctx):
     if cleaned != len(projects):
         raise AssertionError(
             "projectsCleaned(%d) must equal len(projects)(%d) [%s]" % (cleaned, len(projects), ctx))
-    # The fixed completion message is part of the contract: a tool that finished the
-    # CLEAN_BUILD but skipped/garbled the message (or returned a stale one) is caught.
-    if sc.get("message") != "Clean and revalidation completed.":
+    # The completion message is part of the contract, but only its PREFIX is fixed: when the
+    # workspace holds an open EDT project EDT never started, clean-all appends a clause naming it
+    # as skipped (issue #647) instead of quietly leaving it out of the account. A tool that
+    # finished the CLEAN_BUILD but skipped/garbled the message (or returned a stale one) is still
+    # caught by the prefix.
+    if not str(sc.get("message") or "").startswith("Clean and revalidation completed."):
         raise AssertionError(
-            "success envelope must carry the exact completion message [%s]: %r"
+            "success envelope must carry the completion message [%s]: %r"
             % (ctx, sc.get("message")))
     return projects, cleaned
 

@@ -7,10 +7,13 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.lang.reflect.Proxy;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -19,6 +22,7 @@ import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.jobs.IJobChangeEvent;
@@ -32,6 +36,13 @@ import org.junit.Test;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings;
 import com.ditrix.edt.mcp.server.preferences.ToolParameterSettings.ParameterDef;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IProjectDescription;
+
+import com._1c.g5.v8.dt.core.platform.IDtProject;
+import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
+import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool.CleanCollection;
+import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool.IDtProjectSettle;
 import com.ditrix.edt.mcp.server.tools.impl.CleanProjectTool.ProjectCleanInfo;
 
 /**
@@ -357,5 +368,350 @@ public class CleanProjectToolTest
         {
             Thread.currentThread().interrupt();
         }
+    }
+
+    // ==================== A project EDT never started (issue #647) ===============================
+
+    @Test
+    public void testNamedProjectEdtNeverStartedIsRefusedWithTheRecovery()
+    {
+        // The clean would refresh the files and schedule a CLEAN_BUILD, then SKIP both waits -
+        // not exhaust them, skip them, because the DtProject they wait on does not exist - and
+        // still answer "Clean and revalidation completed."
+        CleanCollection collection = new CleanCollection();
+        CleanProjectTool.collectNamedObservation("Demo", null, null, true, Boolean.TRUE, //$NON-NLS-1$
+            NEVER_SETTLES, collection);
+
+        assertNotNull("an un-started EDT project must be refused, not queued", collection.error); //$NON-NLS-1$
+        assertTrue("the refusal must name the project: " + collection.error, //$NON-NLS-1$
+            collection.error.contains("Demo")); //$NON-NLS-1$
+        assertTrue("the refusal must say EDT has not started it: " + collection.error, //$NON-NLS-1$
+            collection.error.contains("EDT has not started this project")); //$NON-NLS-1$
+        assertTrue("the refusal must offer the recovery: " + collection.error, //$NON-NLS-1$
+            collection.error.contains("list_projects"));  //$NON-NLS-1$
+        assertTrue("nothing may be queued for cleaning", collection.projectsToClean.isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNamedProjectWithADtProjectStillProceedsToTheClean()
+    {
+        // The mirror: "always refuse" would break every healthy clean, and only this notices.
+        CleanCollection collection = new CleanCollection();
+        CleanProjectTool.collectNamedObservation("Demo", null, dtProjectStub(), true, //$NON-NLS-1$
+            Boolean.TRUE, NEVER_SETTLES, collection);
+
+        assertNull("a started EDT project must not be refused: " + collection.error, //$NON-NLS-1$
+            collection.error);
+        assertEquals("the project must be queued for cleaning", 1, //$NON-NLS-1$
+            collection.projectsToClean.size());
+        assertEquals("and reported under its own name", Collections.singletonList("Demo"), //$NON-NLS-1$ //$NON-NLS-2$
+            collection.projectNamesList);
+    }
+
+    @Test
+    public void testAPlainEclipseProjectIsNotRefusedByTheUnstartedGuard()
+    {
+        // Out of scope exactly as before: a project with no BM-model nature never had a DtProject,
+        // so its absence says nothing.
+        assertNull("a project without a BM-model nature must not be refused", //$NON-NLS-1$
+            CleanProjectTool.unstartedProjectRefusalOrNull("Plain", true, false, Boolean.FALSE)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnavailableDtProjectManagerIsNotEvidenceOfAnUnstartedProject()
+    {
+        // "We could not ask" is not "the answer was no": refusing here would turn a missing
+        // service into a permanent refusal for every project.
+        assertNull("a manager that could not be asked must not produce the refusal", //$NON-NLS-1$
+            CleanProjectTool.unstartedProjectRefusalOrNull("Demo", false, false, Boolean.TRUE)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCleanAllSkipsTheUnstartedProjectInsteadOfCountingIt()
+    {
+        // projectsCleaned used to count the REQUESTED list. A project EDT never started is not in
+        // the DT-project enumeration at all, so 'clean all' answered "completed" over a workspace
+        // it had not touched in full and never said which project it left out.
+        List<String> cleaned = new ArrayList<>(Arrays.asList("Alpha", "Beta")); //$NON-NLS-1$ //$NON-NLS-2$
+        List<String> skipped = CleanProjectTool.unstartedProjectNames(cleaned,
+            Arrays.asList("Alpha", "Beta", "Gamma")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("only the project without a DT project may be skipped", //$NON-NLS-1$
+            Collections.singletonList("Gamma"), skipped); //$NON-NLS-1$
+
+        String result = CleanProjectTool.cleanCompletedResult(cleaned, skipped);
+        assertTrue("projectsCleaned must count the two that were cleaned: " + result, //$NON-NLS-1$
+            result.contains("\"projectsCleaned\": 2") || result.contains("\"projectsCleaned\":2")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the message must name the skipped project: " + result, //$NON-NLS-1$
+            result.contains("Gamma")); //$NON-NLS-1$
+        assertTrue("and say EDT has not started it: " + result, //$NON-NLS-1$
+            result.contains("EDT has not started")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCleanAllWithNothingSkippedKeepsTheOriginalMessage()
+    {
+        String result = CleanProjectTool.cleanCompletedResult(
+            Collections.singletonList("Alpha"), Collections.emptyList()); //$NON-NLS-1$
+        assertTrue("a run with nothing skipped keeps the plain completion message: " + result, //$NON-NLS-1$
+            result.contains("Clean and revalidation completed.")); //$NON-NLS-1$
+        assertFalse("and must not invent a skipped-projects clause: " + result, //$NON-NLS-1$
+            result.contains("Skipped")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideDocumentsTheUnstartedProjectRefusal()
+    {
+        String guide = new CleanProjectTool().getGuide();
+        assertTrue("the guide must document the un-started refusal: " + guide, //$NON-NLS-1$
+            guide.contains("has never STARTED")); //$NON-NLS-1$
+        assertTrue("and say a clean-all skips such a project: " + guide, //$NON-NLS-1$
+            guide.contains("left out of `projectsCleaned`")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testARestartingContextIsSettledBeforeTheProjectIsRefused()
+    {
+        // DtProjectManager REMOVES its entry while a context is disposed, so a project whose
+        // context is restarting - the state clean_project itself leaves projects in - answers
+        // null for a moment. Refusing on that instant turns a transient into a hard
+        // "Not an EDT project".
+        IDtProject appearing = dtProjectStub();
+        CleanCollection collection = new CleanCollection();
+        CleanProjectTool.collectNamedObservation("Demo", null, null, true, Boolean.TRUE, //$NON-NLS-1$
+            project -> appearing, collection);
+
+        assertNull("a DT project that appears during the settle must not be refused: " //$NON-NLS-1$
+            + collection.error, collection.error);
+        assertEquals("the settled project must be queued for cleaning", 1, //$NON-NLS-1$
+            collection.projectsToClean.size());
+    }
+
+    @Test
+    public void testAPlainProjectWithoutADtProjectNeverPaysTheSettle()
+    {
+        // The settle exists for the path that would otherwise REFUSE. A plain Eclipse project is
+        // never refused (no BM-model nature, so no DtProject was ever expected), and paying ten
+        // seconds before cleaning it anyway is a wait for a verdict that cannot come.
+        AtomicInteger settles = new AtomicInteger();
+        IDtProjectSettle counting = project -> {
+            settles.incrementAndGet();
+            return null;
+        };
+        CleanCollection collection = new CleanCollection();
+        CleanProjectTool.collectNamedObservation("Plain", null, null, true, Boolean.FALSE, //$NON-NLS-1$
+            counting, collection);
+
+        assertEquals("a plain project must never invoke the settle", 0, settles.get()); //$NON-NLS-1$
+        assertNull("and must not be refused: " + collection.error, collection.error); //$NON-NLS-1$
+        assertEquals("it is cleaned as before", 1, collection.projectsToClean.size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAProjectWhoseNaturesCouldNotBeReadNeverPaysTheSettle()
+    {
+        // Unreadable natures are 'unknown', and unknown is not refused either (see
+        // unstartedProjectRefusalOrNull) - so the settle has nothing to buy here.
+        AtomicInteger settles = new AtomicInteger();
+        IDtProjectSettle counting = project -> {
+            settles.incrementAndGet();
+            return null;
+        };
+        CleanCollection collection = new CleanCollection();
+        CleanProjectTool.collectNamedObservation("Unknown", null, null, true, null, //$NON-NLS-1$
+            counting, collection);
+
+        assertEquals("a project with unreadable natures must never invoke the settle", 0, //$NON-NLS-1$
+            settles.get());
+        assertNull("and must not be refused: " + collection.error, collection.error); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnstartedV8ProjectPaysTheSettleExactlyOnce()
+    {
+        // The positive control for the two pins above: the settle IS still paid on the one path
+        // it exists for, and exactly once.
+        AtomicInteger settles = new AtomicInteger();
+        IDtProjectSettle counting = project -> {
+            settles.incrementAndGet();
+            return null;
+        };
+        CleanCollection collection = new CleanCollection();
+        CleanProjectTool.collectNamedObservation("Demo", null, null, true, Boolean.TRUE, //$NON-NLS-1$
+            counting, collection);
+
+        assertEquals("an un-started V8 project must be settled once before the refusal", 1, //$NON-NLS-1$
+            settles.get());
+        assertNotNull("and refused when the settle finds nothing", collection.error); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolvedNamedProjectReachesTheUnstartedRefusal()
+    {
+        // The wiring pin for the named branch: the nature read and the refusal are reached from
+        // the same entry point production uses once ProjectContext has turned a NAME into a
+        // handle. Reverting the call below leaves this red.
+        IProject project = projectStub("Demo", true, //$NON-NLS-1$
+            "com._1c.g5.v8.dt.core.V8ConfigurationNature"); //$NON-NLS-1$
+        CleanCollection collection = new CleanCollection();
+        CleanProjectTool.collectResolvedNamedProject("Demo", project, true, true, //$NON-NLS-1$
+            managerStub(project, null), NEVER_SETTLES, collection);
+
+        assertNotNull("an open V8 project without a DT project must be refused", //$NON-NLS-1$
+            collection.error);
+        assertTrue("the refusal must name the project: " + collection.error, //$NON-NLS-1$
+            collection.error.contains("Demo")); //$NON-NLS-1$
+        assertTrue("nothing may be queued for cleaning", collection.projectsToClean.isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolvedNamedProjectWithoutAV8NatureIsStillCleaned()
+    {
+        // The mirror that keeps the refusal from swallowing every project: a plain Eclipse
+        // project never had a DT project and is out of scope exactly as before.
+        IProject project = projectStub("Plain", true); //$NON-NLS-1$
+        CleanCollection collection = new CleanCollection();
+        CleanProjectTool.collectResolvedNamedProject("Plain", project, true, true, //$NON-NLS-1$
+            managerStub(project, null), NEVER_SETTLES, collection);
+
+        assertNull("a project with no BM-model nature must not be refused: " + collection.error, //$NON-NLS-1$
+            collection.error);
+        assertEquals("it must still be queued", 1, collection.projectsToClean.size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCleanAllScanNamesTheOpenV8ProjectEdtNeverStarted()
+    {
+        // The wiring pin for the clean-all branch. The enumeration production works from is over
+        // DT PROJECTS, so a project EDT never started is not in it at all: without the workspace
+        // scan, clean-all answers "completed" without ever mentioning it.
+        IProject started = projectStub("Alpha", true, //$NON-NLS-1$
+            "com._1c.g5.v8.dt.core.V8ConfigurationNature"); //$NON-NLS-1$
+        IProject unstarted = projectStub("Gamma", true, //$NON-NLS-1$
+            "com._1c.g5.v8.dt.core.V8ConfigurationNature"); //$NON-NLS-1$
+        CleanCollection collection = new CleanCollection();
+        CleanProjectTool.collectAllEdtProjects(managerStub(started, dtProjectStub(started)),
+            collection, () -> new IProject[] { started, unstarted });
+
+        assertEquals("only the DT project may be queued for cleaning", //$NON-NLS-1$
+            Collections.singletonList("Alpha"), collection.projectNamesList); //$NON-NLS-1$
+        assertEquals("the open V8 project EDT never started must be reported as skipped", //$NON-NLS-1$
+            Collections.singletonList("Gamma"), collection.skippedUnstarted); //$NON-NLS-1$
+    }
+
+    /** A settle that never finds a DT project, so a pin measures the decision and not a sleep. */
+    private static final IDtProjectSettle NEVER_SETTLES = project -> null;
+
+    /**
+     * A workspace project handle that answers only what the decisions under test read: its name,
+     * whether it is open, and the natures its description carries.
+     *
+     * @param name     the project name
+     * @param open     whether it reports itself open
+     * @param natures  the nature ids its description carries
+     * @return the stub
+     */
+    private static IProject projectStub(String name, boolean open, String... natures)
+    {
+        IProjectDescription description = (IProjectDescription)Proxy.newProxyInstance(
+            IProjectDescription.class.getClassLoader(), new Class<?>[] { IProjectDescription.class },
+            (proxy, method, args) -> "getNatureIds".equals(method.getName()) //$NON-NLS-1$
+                ? natures : defaultAnswer(proxy, method, args));
+        return (IProject)Proxy.newProxyInstance(IProject.class.getClassLoader(),
+            new Class<?>[] { IProject.class }, (proxy, method, args) -> {
+                switch (method.getName())
+                {
+                case "getName": //$NON-NLS-1$
+                    return name;
+                case "isOpen": //$NON-NLS-1$
+                    return Boolean.valueOf(open);
+                case "getDescription": //$NON-NLS-1$
+                    return description;
+                default:
+                    return defaultAnswer(proxy, method, args);
+                }
+            });
+    }
+
+    /**
+     * A DT project manager that knows at most one project.
+     *
+     * @param project   the workspace project it is asked about
+     * @param dtProject what it answers for that project ({@code null} = EDT never started it)
+     * @return the stub
+     */
+    private static IDtProjectManager managerStub(IProject project, IDtProject dtProject)
+    {
+        return (IDtProjectManager)Proxy.newProxyInstance(IDtProjectManager.class.getClassLoader(),
+            new Class<?>[] { IDtProjectManager.class }, (proxy, method, args) -> {
+                if ("getDtProject".equals(method.getName()) && args != null && args.length == 1) //$NON-NLS-1$
+                {
+                    return args[0] == project ? dtProject : null;
+                }
+                if ("getDtProjects".equals(method.getName())) //$NON-NLS-1$
+                {
+                    return dtProject == null ? Collections.emptyList()
+                        : Collections.singletonList(dtProject);
+                }
+                return defaultAnswer(proxy, method, args);
+            });
+    }
+
+    /**
+     * A DT project that only has to be non-null: the decision under test is "did EDT report one",
+     * nothing about the object itself.
+     *
+     * @return a do-nothing {@link IDtProject}
+     */
+    private static IDtProject dtProjectStub()
+    {
+        return dtProjectStub(null);
+    }
+
+    /**
+     * A DT project that reports {@code workspaceProject} as its workspace project.
+     *
+     * @param workspaceProject the workspace project it belongs to (may be {@code null})
+     * @return the stub
+     */
+    private static IDtProject dtProjectStub(IProject workspaceProject)
+    {
+        return (IDtProject)Proxy.newProxyInstance(IDtProject.class.getClassLoader(),
+            new Class<?>[] { IDtProject.class },
+            (proxy, method, args) -> "getWorkspaceProject".equals(method.getName()) //$NON-NLS-1$
+                ? workspaceProject : defaultAnswer(proxy, method, args));
+    }
+
+    /**
+     * The answer a stub gives for everything the decision under test does not read: a benign
+     * zero/null, with the three {@link Object} methods a proxy must implement itself.
+     *
+     * @param proxy  the proxy instance
+     * @param method the invoked method
+     * @param args   its arguments (may be {@code null})
+     * @return the benign answer
+     */
+    private static Object defaultAnswer(Object proxy, java.lang.reflect.Method method, Object[] args)
+    {
+        switch (method.getName())
+        {
+        case "toString": //$NON-NLS-1$
+            return "stub(" + method.getDeclaringClass().getSimpleName() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+        case "hashCode": //$NON-NLS-1$
+            return Integer.valueOf(System.identityHashCode(proxy));
+        case "equals": //$NON-NLS-1$
+            return Boolean.valueOf(proxy == args[0]);
+        default:
+            break;
+        }
+        Class<?> returnType = method.getReturnType();
+        if (returnType == boolean.class)
+        {
+            return Boolean.FALSE;
+        }
+        if (returnType == int.class)
+        {
+            return Integer.valueOf(0);
+        }
+        return null;
     }
 }

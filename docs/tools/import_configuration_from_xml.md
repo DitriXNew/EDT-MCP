@@ -1,6 +1,6 @@
 # import_configuration_from_xml
 
-Import a configuration from a directory of XML files into a NEW EDT project (EDT menu: Import); the reverse of export_configuration_to_xml. The projectName must not already exist in the workspace. Full parameters and examples: call get_tool_guide('import_configuration_from_xml').
+Create an EDT project from exported 1C configuration XML files. Parameters and examples: get_tool_guide('import_configuration_from_xml').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -41,14 +41,21 @@ Explicit nature and XML version:
 
 ## Notes
 
-- On success the tool returns MARKDOWN with the created project name and the (normalized) import path; when importPath is outside the workspace the response carries an `outsideWorkspace` flag and a trust note.
-- After import the tool forces a close/open/refresh of the new project, because the underlying CLI API imports with refresh disabled and the project would otherwise stay un-scanned (DtProject not ready) until something triggers EDT's project lifecycle.
+- On success the tool returns MARKDOWN with the created project name, the (normalized) import path and the state EDT left the project in; when importPath is outside the workspace the response carries an `outsideWorkspace` flag and a trust note.
+- **The import alone does not give you a usable project, so the tool starts it.** EDT's CLI import API parks a blocked start latch on the new project and never releases it, so nothing in the platform would ever start the project's context: it would sit at `not_available` in `list_projects` forever (and, while that latch is in place, EDT does not auto-start any OTHER project in the workspace either). After the import returns, the tool therefore refreshes the new project from disk, asks EDT to start the project, and waits for it. Releasing the latch is NOT part of that: it would let EDT's watchdog schedule a second, competing start for the same project. The tool releases it only if that post-import step itself fails - the workspace refresh or the start request - so EDT's own watchdog is left able to recover.
+- **Two possible states, and the front matter says which one you got.** `state: ready` with `projectReady: true` means EDT started the project's context and registered it. `state: importing` with `projectReady: false` and `startWaitSeconds: 300` means the import finished and the files are on disk, but EDT had not finished starting the project within the 300-second wait; the work keeps running inside EDT. Poll `list_projects` until the project reports `ready` before calling model tools on it, and do NOT repeat the import - the project name is already taken.
+- **`state: ready` is about the CONTEXT, not about indexing.** It means the project context is started; `list_projects` can still report the project `building` for a short while after that, until EDT has finished computing its derived data. Wait for `ready` there before relying on the model.
+- **The `state: importing` body says which half is still running**, because the recovery differs: either the workspace refresh of the imported files is still going (the start request has not been issued yet and will be issued when the refresh finishes), or the start request was issued and EDT is still starting the project. Both keep running in EDT after the call returns.
+- **An import whose start fails outright is an error, not a success**, and it carries `mutationCommitted` - the project exists, so retry the import only after removing it with `delete_project`.
+- **One import per project name at a time.** A second call for a name whose import is still running is refused up front ("An import into project `<name>` is already in progress"). This matters: the "project already exists" guard cannot see a project the first call has not created yet, so two concurrent imports both pass it and then destroy each other's work inside EDT. Wait for the first one, then poll `list_projects`.
 
 ## Gotchas
 
 - **Project must be new.** If a workspace project with `projectName` already exists, the call is rejected early; pick a fresh name.
 - **Directory, not a file.** `importPath` must point at the directory of XML files, not at a single `.xml` file.
 - **Requires the CLI API plugin.** Needs the EDT plugin `com._1c.g5.v8.dt.cli.api`; if it is not installed the tool returns an error instead of importing.
+- **A big configuration takes minutes to start.** The 300-second wait is not a bound on the import (that has already finished when the wait starts) - it is only how long this one call watches EDT start the project before answering `state: importing`.
+- **Budget the client-side call timeout.** The import itself is unbounded on the platform side (the CLI API offers no cancellation), and the post-import start wait adds up to 300 seconds on top of it. On a large dump one call can therefore run for many minutes; a client with a shorter transport timeout will drop the answer while the import keeps going.
 
 ---
 *Generated from the live MCP server (`get_tool_guide`) by `docs/generate_tool_docs.py`. Do not edit this file. Edit the tool's description/schema in its Java source and its guide body in `mcp/bundles/com.ditrix.edt.mcp.server/guides/<tool>.md`.*

@@ -17,6 +17,7 @@ import org.osgi.framework.ServiceRegistration;
 
 import com._1c.g5.v8.dt.bm.xtext.BmAwareResourceSetProvider;
 import com._1c.g5.v8.dt.core.event.IEventBroker;
+import com._1c.g5.v8.dt.core.lifecycle.IDtProjectResourceLifecycleBootstrap;
 import com._1c.g5.v8.dt.core.model.IModelObjectCollectionRuntimeOrderSorter;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
@@ -28,6 +29,7 @@ import com._1c.g5.v8.dt.core.platform.IConfigurationProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExternalObjectProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExtensionProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.core.platform.IWorkspaceOrchestrator;
 import com._1c.g5.v8.dt.form.refactoring.IFormRefactoringService;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
@@ -211,6 +213,28 @@ public class Activator extends AbstractUIPlugin
     public IDtProjectManager getDtProjectManager()
     {
         return services.getDtProjectManager();
+    }
+
+    /**
+     * Returns the IWorkspaceOrchestrator service - the entry point that starts a project's
+     * context and answers whether it is started.
+     *
+     * @return workspace orchestrator or null if not available
+     */
+    public IWorkspaceOrchestrator getWorkspaceOrchestrator()
+    {
+        return services.getWorkspaceOrchestrator();
+    }
+
+    /**
+     * Returns the IDtProjectResourceLifecycleBootstrap service - the owner of the project start
+     * latches, whose {@code permitImport} releases the one the CLI import API parks.
+     *
+     * @return the project resource lifecycle bootstrap or null if not available
+     */
+    public IDtProjectResourceLifecycleBootstrap getDtProjectLifecycleBootstrap()
+    {
+        return services.getDtProjectLifecycleBootstrap();
     }
 
     /**
