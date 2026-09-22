@@ -131,13 +131,29 @@ public final class StandaloneServerStateRecovery
     private static final long MIN_RESTORATION_START_WAIT_MS = 5_000L;
 
     /**
+     * Hard cap on how long one application's {@link StopInFlight} record survives without the
+     * Job manager's terminal notification. It exists only so a broken Job lifecycle cannot refuse
+     * every later start of that application until EDT restarts - the same bound, for the same
+     * reason, as {@link StandaloneServerSupport#INCONCLUSIVE_START_GUARD_CAP_MS}.
+     *
+     * <p>Mutable only so tests can shrink it; production code never reassigns it.
+     */
+    static volatile long stopInFlightCapMs =
+        StandaloneServerSupport.INCONCLUSIVE_START_GUARD_CAP_MS;
+
+    /**
      * Guards that serialize stale-server recovery actions, one per project+application.
      *
      * <p>Deliberately NOT {@link LaunchLifecycleUtils#lockFor}: that lock is held across a whole
      * {@code update_database} publish, so a bounded caller (the {@code build_external_objects} job
      * has a deadline) waiting on it would spend its whole budget there. That lock is itself
-     * acquired with a deadline, but a publish-sized one, not this caller's. This lock is held only
-     * across "re-read the state, then stop or restore"; both actions are bounded.
+     * acquired with a deadline, but a publish-sized one, not this caller's. This lock is acquired
+     * with this caller's deadline and held only across "re-read the state, then stop or restore".
+     *
+     * <p>Only the WAIT for those actions is bounded. {@link BoundedJob} cancels its job but cannot
+     * preempt it, so a cleanup the guarded stop dispatched can still be running when the lock is
+     * released; the guard therefore also carries a {@link StopInFlight} record of it, which
+     * outlives the unlock and is what a later start consults.
      *
      * <p>What the long lock would have bought is bought by the RE-READ instead: an operation that
      * holds the application (an update publishing through the server, a launch that owns it)
@@ -555,6 +571,13 @@ public final class StandaloneServerStateRecovery
             {
                 return Recovery.failed("another standalone start currently claims the server"); //$NON-NLS-1$
             }
+            StopInFlight running = guard.stopInFlight.get();
+            if (running != null)
+            {
+                // A cleanup dispatched earlier has not reported finishing. A second one would
+                // race it, and neither could then say which server the later one stopped.
+                return Recovery.failedInFlight(stopInFlightDetail(running));
+            }
             IApplication resolvedApplication = application;
             if (resolvedApplication == null)
             {
@@ -598,7 +621,12 @@ public final class StandaloneServerStateRecovery
             {
                 return Recovery.failed("the operation deadline elapsed before the stop began"); //$NON-NLS-1$
             }
-            return runStop(manager, resolvedApplication, applicationId, remainingMs);
+            // The cleanup runs on its own job and can outlive the unlock below, so the guard takes
+            // ownership of it BEFORE it is dispatched. Every non-null write happens under this
+            // lock; the release is identity-scoped and needs none.
+            StopInFlight stop = new StopInFlight(guard);
+            guard.stopInFlight.set(stop);
+            return runStop(manager, resolvedApplication, applicationId, remainingMs, stop);
         }
         finally
         {
@@ -606,7 +634,14 @@ public final class StandaloneServerStateRecovery
         }
     }
 
-    /** Same locked recheck, with cleanup executed by the caller's enclosing bounded Job. */
+    /**
+     * Same locked recheck, with cleanup executed by the caller's enclosing bounded Job.
+     *
+     * <p>This one registers no {@link StopInFlight} record and needs none: its cleanup runs
+     * between the lock and the unlock below, on this very thread, so the lock itself is already
+     * the record. Even when the caller's own bounded wait abandons the enclosing Job, that Job
+     * keeps the lock until {@code cleanup} returns, and a later start is refused by the lock.
+     */
     private static Recovery stopStaleServerGuardedWithinBound(IProject project,
         IApplication application, String applicationId, IApplicationManager manager,
         IProgressMonitor monitor, Runnable stopStarting, Runnable stopCompleted)
@@ -625,6 +660,11 @@ public final class StandaloneServerStateRecovery
             if (guard.startClaim.get() != null)
             {
                 return Recovery.failed("another standalone start currently claims the server"); //$NON-NLS-1$
+            }
+            StopInFlight running = guard.stopInFlight.get();
+            if (running != null)
+            {
+                return Recovery.failedInFlight(stopInFlightDetail(running));
             }
             Object server = resolveServer(application);
             if (server == null)
@@ -673,10 +713,69 @@ public final class StandaloneServerStateRecovery
      */
     private static RecoveryGuard stopLockFor(IProject project, String applicationId)
     {
-        // NUL separator for the same reason LaunchLifecycleUtils.lockFor uses one: project names
-        // and application ids both contain spaces, so any printable separator can collide.
-        return STOP_LOCKS.computeIfAbsent(project.getName() + "\u0000" + applicationId, //$NON-NLS-1$
+        return STOP_LOCKS.computeIfAbsent(stopLockKey(project, applicationId),
             k -> new RecoveryGuard());
+    }
+
+    /**
+     * The guard key for one application. NUL separator for the same reason
+     * {@code LaunchLifecycleUtils.lockFor} uses one: project names and application ids both
+     * contain spaces, so any printable separator can collide.
+     *
+     * @param project the project owning the application (never {@code null})
+     * @param applicationId the application id (never {@code null})
+     * @return the key, never {@code null}
+     */
+    private static String stopLockKey(IProject project, String applicationId)
+    {
+        return project.getName() + "\u0000" + applicationId; //$NON-NLS-1$
+    }
+
+    /**
+     * The stop of this application whose cleanup has not reported finishing, read without
+     * creating a guard for an application that never had one.
+     *
+     * @param project the project owning the application (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @return the record, or {@code null} when no dispatched cleanup is outstanding
+     */
+    private static StopInFlight stopInFlightFor(IProject project, String applicationId)
+    {
+        if (project == null || applicationId == null)
+        {
+            return null;
+        }
+        RecoveryGuard guard = STOP_LOCKS.get(stopLockKey(project, applicationId));
+        return guard == null ? null : guard.stopInFlight.get();
+    }
+
+    /** Shared diagnosis for an application whose dispatched stop has not reported finishing. */
+    private static String stopInFlightDetail(StopInFlight stop)
+    {
+        return "an earlier stop of it started " + stop.elapsedSeconds() //$NON-NLS-1$
+            + "s ago and has not reported finishing"; //$NON-NLS-1$
+    }
+
+    /**
+     * Refuses a start while a stop of the same application may still be running.
+     *
+     * <p>Consulted BEFORE the server state is read, because that state cannot answer the
+     * question: a cleanup that got as far as STOPPED and then wedged leaves a state every start
+     * reads as perfectly startable, and the server it brings up is the one the belatedly
+     * finishing cleanup takes down.
+     *
+     * @param project the project owning the application (may be {@code null})
+     * @param applicationId the application id (may be {@code null})
+     * @throws ApplicationException when a dispatched cleanup has not reported finishing
+     */
+    private static void refuseWhileStopInFlight(IProject project, String applicationId)
+    {
+        StopInFlight stop = stopInFlightFor(project, applicationId);
+        if (stop != null)
+        {
+            throw new ApplicationException(
+                preflightStopInFlightFailure(applicationId, stopInFlightDetail(stop)));
+        }
     }
 
     /** Acquires one recovery lock without allowing platform work to block the caller forever. */
@@ -757,6 +856,12 @@ public final class StandaloneServerStateRecovery
             {
                 return null;
             }
+            if (guard.stopInFlight.get() != null)
+            {
+                // A dispatched cleanup owns this server in the same sense a claim does: it, not
+                // this start, decides what state the server ends in.
+                return null;
+            }
             StartClaim claim = new StartClaim(guard);
             guard.startClaim.set(claim);
             return claim;
@@ -792,6 +897,10 @@ public final class StandaloneServerStateRecovery
      *
      * <p>Bounded by a background job: a platform stop that never returns must not hold an
      * unattended MCP request open.
+     *
+     * <p>It takes no recovery guard and records no {@link StopInFlight}, so it claims no
+     * ownership of the server: a caller that goes on to START one must use the guarded pre-flight
+     * ({@link #ensureStartable}) instead.
      *
      * @param project the project owning the application (may be {@code null})
      * @param applicationId the application id, e.g. {@code ServerApplication.<name>} (may be
@@ -844,6 +953,55 @@ public final class StandaloneServerStateRecovery
     private static Recovery runStop(IApplicationManager manager, IApplication application,
         String applicationId, long timeoutMs)
     {
+        return runStop(manager, application, applicationId, timeoutMs, null);
+    }
+
+    /**
+     * Same bounded cleanup while a guard owns the fact that it can outlive the wait for it.
+     *
+     * <p>{@code stopInFlight} is released the moment the work has DEFINITELY ended, and not
+     * before: immediately for a conclusive bounded wait, on the Job manager's terminal
+     * notification after a timeout or an interruption, and by {@link #stopInFlightCapMs} if that
+     * notification never arrives. The three converge on one exactly-once release.
+     *
+     * @param manager the application manager
+     * @param application the application whose server is stopped
+     * @param applicationId the application id (for the job name and the log)
+     * @param timeoutMs the caller's remaining deadline
+     * @param stopInFlight the guard's record of this cleanup, or {@code null} for a stop no guard
+     *     owns
+     * @return the outcome, never {@code null}
+     */
+    private static Recovery runStop(IApplicationManager manager, IApplication application,
+        String applicationId, long timeoutMs, StopInFlight stopInFlight)
+    {
+        BoundedJob.DeferredCleanup ownership = stopInFlight == null ? null
+            : new BoundedJob.DeferredCleanup(stopInFlight::release, stopInFlightCapMs,
+                "Standalone server stop ownership safety cap: " + applicationId); //$NON-NLS-1$
+        BoundedJob.Result result = null;
+        try
+        {
+            result = runStopBounded(manager, application, applicationId, timeoutMs, ownership);
+            return classifyStop(result, applicationId, timeoutMs);
+        }
+        finally
+        {
+            // The concrete outcome is the sole authority on whether ownership may be released
+            // now; a null result means BoundedJob rethrew an Error, which it does only after its
+            // Job has already terminated.
+            if (ownership != null)
+            {
+                ownership.afterBoundedWait(result == null
+                    || !BoundedJob.isInconclusive(result.getOutcome()));
+            }
+        }
+    }
+
+    /** Dispatches EDT's cleanup on its own job under the caller's deadline. */
+    private static BoundedJob.Result runStopBounded(IApplicationManager manager,
+        IApplication application, String applicationId, long timeoutMs,
+        BoundedJob.DeferredCleanup ownership)
+    {
         ExecutionContext context = new ExecutionContext();
         Shell shell = LaunchLifecycleUtils.grabActiveShell();
         if (shell != null)
@@ -852,8 +1010,15 @@ public final class StandaloneServerStateRecovery
         }
         Activator.logInfo("Stale standalone server: stopping it so the operation can proceed: " //$NON-NLS-1$
             + applicationId);
-        BoundedJob.Result result = BoundedJob.run("Stopping standalone server: " + applicationId, //$NON-NLS-1$
-            timeoutMs, monitor -> manager.cleanup(application, context, monitor));
+        return BoundedJob.run("Stopping standalone server: " + applicationId, //$NON-NLS-1$
+            timeoutMs, monitor -> manager.cleanup(application, context, monitor),
+            ownership == null ? null : ownership::jobFinished);
+    }
+
+    /** Turns one bounded stop outcome into the recovery contract its callers act on. */
+    private static Recovery classifyStop(BoundedJob.Result result, String applicationId,
+        long timeoutMs)
+    {
         if (result.isSuccess())
         {
             recordStoppedServer(applicationId);
@@ -1277,6 +1442,12 @@ public final class StandaloneServerStateRecovery
                     "is claimed by another launch that has not started it yet, so restoration " //$NON-NLS-1$
                         + "was skipped."); //$NON-NLS-1$
             }
+            StopInFlight stopping = guard.stopInFlight.get();
+            if (stopping != null)
+            {
+                return RestorationStartOutcome.skipped("was not restored because " //$NON-NLS-1$
+                    + stopInFlightDetail(stopping) + "."); //$NON-NLS-1$
+            }
             Integer state = serverState(server);
             Boolean liveLaunch = hasLiveLaunch(server);
             if (Boolean.TRUE.equals(liveLaunch))
@@ -1443,11 +1614,58 @@ public final class StandaloneServerStateRecovery
         }
     }
 
-    /** One application's bounded recovery lock and its current ordinary-start claim. */
+    /**
+     * One application's bounded recovery lock, its current ordinary-start claim, and the stop
+     * whose cleanup may still be running.
+     *
+     * <p>The last two exist for the same reason: the lock is released long before the work it
+     * serialized has necessarily ended, so what outlives the unlock has to be recorded on the
+     * guard itself rather than inferred from the server's state.
+     */
     private static final class RecoveryGuard
     {
         private final ReentrantLock lock = new ReentrantLock();
         private final AtomicReference<StartClaim> startClaim = new AtomicReference<>();
+        private final AtomicReference<StopInFlight> stopInFlight = new AtomicReference<>();
+    }
+
+    /**
+     * A stale-server stop dispatched to a job that can outlive the bounded wait for it.
+     *
+     * <p>{@link BoundedJob} cancels its job but cannot preempt it, so {@code cleanup} keeps
+     * running after the guard is unlocked. Without this record an unrelated later start finds a
+     * neutral guard, brings a server up, and the belatedly finishing cleanup stops THAT one.
+     *
+     * <p>It cannot become immortal: {@link BoundedJob.DeferredCleanup} releases it as soon as the
+     * work has definitely ended, on the Job manager's terminal notification (which the platform
+     * also fires for a job cancelled before it ever ran), and in any case at
+     * {@link #stopInFlightCapMs}.
+     */
+    private static final class StopInFlight
+    {
+        private final RecoveryGuard guard;
+        private final long startedAtMs = System.currentTimeMillis();
+        private final AtomicBoolean released = new AtomicBoolean();
+
+        private StopInFlight(RecoveryGuard guard)
+        {
+            this.guard = guard;
+        }
+
+        /** Whole seconds since the cleanup was dispatched. */
+        long elapsedSeconds()
+        {
+            return (System.currentTimeMillis() - startedAtMs) / 1000L;
+        }
+
+        /** Releases this exact record without consuming a newer stop's. */
+        void release()
+        {
+            if (released.compareAndSet(false, true))
+            {
+                guard.stopInFlight.compareAndSet(this, null);
+            }
+        }
     }
 
     /** Exclusive intention to start a server whose WST state may still read as STOPPED. */
@@ -1705,8 +1923,9 @@ public final class StandaloneServerStateRecovery
      *     it is then resolved from {@code applicationId})
      * @param applicationId the application id; anything but a standalone-server id
      *     ({@code ServerApplication.<name>}) is a no-op
-     * @throws ApplicationException when a stale server had to be stopped and that stop did not
-     *     finish - it may still be running, so the operation must not start the server now
+     * @throws ApplicationException when a stop of that server did not finish - this call's own,
+     *     or one an earlier operation dispatched and the guard still owns. Either may still be
+     *     running, so the operation must not start the server now
      */
     public static void ensureStartable(IProject project, IApplication application,
         String applicationId)
@@ -1722,6 +1941,9 @@ public final class StandaloneServerStateRecovery
         {
             return;
         }
+        // Before the state read, not after it: a foreign cleanup that already reached STOPPED
+        // leaves a state this pre-flight would happily proceed on.
+        refuseWhileStopInFlight(project, applicationId);
         try
         {
             IApplication resolvedApplication = application;
@@ -1782,6 +2004,7 @@ public final class StandaloneServerStateRecovery
         {
             return;
         }
+        refuseWhileStopInFlight(project, applicationId);
         try
         {
             if (server == null)
@@ -1988,7 +2211,8 @@ public final class StandaloneServerStateRecovery
             // The stop was neither completed nor abandoned: BoundedJob cancels the job but cannot
             // preempt it, so it may finish later - and stop whatever server is running by then,
             // including the one this operation is about to start. Refusing here costs the caller a
-            // retry; proceeding would cost them a server that dies under them.
+            // retry; proceeding would cost them a server that dies under them. The guard keeps
+            // refusing on the same grounds until that cleanup reports finishing.
             throw new ApplicationException(preflightStopInFlightFailure(applicationId,
                 recovery.detail()));
         }

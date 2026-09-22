@@ -53,6 +53,9 @@ public class StandaloneServerStateRecoveryTest
 {
     private static final String PLUGIN = "com.ditrix.edt.mcp.server";
 
+    /** The standalone-server application every recovery test addresses. */
+    private static final String APPLICATION_ID = "ServerApplication.Test";
+
     private static final String HEADLINE =
         "An internal error occurred during: \"Starting Standalone server for TestBase\".";
 
@@ -974,6 +977,308 @@ public class StandaloneServerStateRecoveryTest
             assertTrue(failure.getMessage().contains("launch was abandoned")); //$NON-NLS-1$
             assertTrue(failure.getMessage().contains(
                 "was stopped for this operation and could NOT be started again")); //$NON-NLS-1$
+        }
+    }
+
+    // ==================== a stop that outlives the wait for it (#623) ====================
+
+    @Test
+    public void testAStopStillInFlightRefusesAnUnrelatedLaterStart() throws Exception
+    {
+        WedgedStop wedged = new WedgedStop("InFlightStopProject"); //$NON-NLS-1$
+        try
+        {
+            wedged.dispatchAndAbandon();
+            assertEquals("the wedged cleanup reached STOPPED before it stopped answering", //$NON-NLS-1$
+                4, wedged.server.getServerState());
+
+            // The unrelated later operation. It knows nothing about the wedged cleanup, and the
+            // state it reads is a perfectly startable one - so only the guard can refuse it.
+            assertRefusedWhileStopping(wedged);
+
+            assertEquals("the refusal must come from the guard, not from a second cleanup", //$NON-NLS-1$
+                1, wedged.cleanups.get());
+        }
+        finally
+        {
+            wedged.close();
+        }
+    }
+
+    @Test
+    public void testTheBoundedPreflightAlsoRefusesWhileAStopMayStillBeRunning() throws Exception
+    {
+        WedgedStop wedged = new WedgedStop("InFlightStopBoundedProject"); //$NON-NLS-1$
+        try
+        {
+            wedged.dispatchAndAbandon();
+            try
+            {
+                StandaloneServerStateRecovery.ensureStartableWithinBound(wedged.project,
+                    wedged.application, wedged.server, APPLICATION_ID, wedged.manager, null, null,
+                    null);
+                throw new AssertionError("the bounded pre-flight must refuse a start while a " //$NON-NLS-1$
+                    + "dispatched stop of the same server may still be running"); //$NON-NLS-1$
+            }
+            catch (ApplicationException refused)
+            {
+                assertTrue(refused.getMessage(),
+                    refused.getMessage().contains("an earlier stop of it started")); //$NON-NLS-1$
+            }
+            assertEquals(1, wedged.cleanups.get());
+        }
+        finally
+        {
+            wedged.close();
+        }
+    }
+
+    @Test
+    public void testAStopStillInFlightRefusesTheBoundedStartClaim() throws Exception
+    {
+        WedgedStop wedged = new WedgedStop("InFlightStopClaimProject"); //$NON-NLS-1$
+        try
+        {
+            wedged.dispatchAndAbandon();
+            assertNull("a start claim is ownership, and the wedged cleanup still holds it", //$NON-NLS-1$
+                StandaloneServerStateRecovery.claimStartWithinBound(wedged.project,
+                    APPLICATION_ID, 1_000L, null));
+
+            wedged.finishCleanup();
+            assertTrue("the claim must be grantable again once the cleanup finished", //$NON-NLS-1$
+                wedged.awaitOwnershipReleased(10_000L));
+        }
+        finally
+        {
+            wedged.close();
+        }
+    }
+
+    @Test
+    public void testRestorationSkipsAServerWhoseStopMayStillBeRunning() throws Exception
+    {
+        WedgedStop wedged = new WedgedStop("InFlightStopRestorationProject"); //$NON-NLS-1$
+        try
+        {
+            wedged.dispatchAndAbandon();
+            AtomicInteger restores = new AtomicInteger();
+            String message;
+            StandaloneServerStateRecovery.beginOperation();
+            try
+            {
+                StandaloneServerStateRecovery.recordStoppedServer(APPLICATION_ID);
+                StandaloneServerStateRecovery.RestorationStartOutcome outcome =
+                    StandaloneServerStateRecovery.restoreIfStillUnowned(wedged.project,
+                        new FakeServer(4, null), APPLICATION_ID, () -> {
+                            restores.incrementAndGet();
+                            return new StandaloneServerStateRecovery.RestorationStartOutcome(null,
+                                true);
+                        });
+                message = StandaloneServerStateRecovery.appendRestorationOutcome(
+                    "operation failed.", "Standalone", applicationId -> outcome); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            finally
+            {
+                StandaloneServerStateRecovery.endOperation();
+            }
+
+            assertEquals("restoring would start the very server the wedged cleanup takes down", //$NON-NLS-1$
+                0, restores.get());
+            assertTrue(message, message.contains("an earlier stop of it started")); //$NON-NLS-1$
+        }
+        finally
+        {
+            wedged.close();
+        }
+    }
+
+    @Test
+    public void testTheStopRecordIsReleasedWhenTheWedgedCleanupFinishes() throws Exception
+    {
+        WedgedStop wedged = new WedgedStop("InFlightStopReleaseProject"); //$NON-NLS-1$
+        try
+        {
+            wedged.dispatchAndAbandon();
+            // Proves the release below is not vacuous: without this, a guard that never took
+            // ownership at all would pass the rest of this test.
+            assertRefusedWhileStopping(wedged);
+
+            wedged.finishCleanup();
+            // Stale again, so a guard that HAS handed ownership back has visible work to do.
+            wedged.server.setState(2);
+
+            long deadline = System.currentTimeMillis() + 10_000L;
+            String lastRefusal = null;
+            boolean proceeded = false;
+            while (System.currentTimeMillis() < deadline)
+            {
+                try
+                {
+                    StandaloneServerStateRecovery.ensureStartable(wedged.project,
+                        wedged.application, APPLICATION_ID, wedged.manager);
+                    proceeded = true;
+                    break;
+                }
+                catch (ApplicationException stillRefused)
+                {
+                    lastRefusal = stillRefused.getMessage();
+                    Thread.sleep(20L);
+                }
+            }
+
+            assertTrue("a finished cleanup must stop refusing later starts, or one hung stop " //$NON-NLS-1$
+                + "refuses this application until EDT restarts: " + lastRefusal, proceeded); //$NON-NLS-1$
+            assertEquals("the released guard must let the later start run its own stale stop", //$NON-NLS-1$
+                2, wedged.cleanups.get());
+            assertEquals(4, wedged.server.getServerState());
+        }
+        finally
+        {
+            wedged.close();
+        }
+    }
+
+    @Test
+    public void testTheStopRecordCannotOutliveItsHardCap() throws Exception
+    {
+        long originalCap = StandaloneServerStateRecovery.stopInFlightCapMs;
+        StandaloneServerStateRecovery.stopInFlightCapMs = 150L;
+        WedgedStop wedged = new WedgedStop("InFlightStopCapProject"); //$NON-NLS-1$
+        try
+        {
+            wedged.dispatchAndAbandon();
+            // The cleanup is still wedged and nothing will ever report it finished. A record that
+            // waited only for that report would refuse every start of this application until EDT
+            // restarts - worse than the defect it closes.
+            assertTrue("the hard cap must hand ownership back with the cleanup still wedged", //$NON-NLS-1$
+                wedged.awaitOwnershipReleased(10_000L));
+        }
+        finally
+        {
+            StandaloneServerStateRecovery.stopInFlightCapMs = originalCap;
+            wedged.close();
+        }
+    }
+
+    /** Asserts the pre-flight refuses an unrelated start, and says why and what to do. */
+    private static void assertRefusedWhileStopping(WedgedStop wedged)
+    {
+        try
+        {
+            StandaloneServerStateRecovery.ensureStartable(wedged.project, wedged.application,
+                APPLICATION_ID, wedged.manager);
+            throw new AssertionError("a start must not proceed while a dispatched stop of the " //$NON-NLS-1$
+                + "same server may still be running"); //$NON-NLS-1$
+        }
+        catch (ApplicationException refused)
+        {
+            assertTrue(refused.getMessage(),
+                refused.getMessage().contains("an earlier stop of it started")); //$NON-NLS-1$
+            assertTrue("the refusal must name the way out", //$NON-NLS-1$
+                refused.getMessage().contains("Wait for it to finish")); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The #623 fixture: a stale server whose stop is dispatched, gets as far as {@code STOPPED},
+     * and then stops answering - so the bounded wait for it returns while the cleanup runs on.
+     */
+    private static final class WedgedStop implements AutoCloseable
+    {
+        final IProject project;
+        final IApplication application;
+        final FakeServer server = new FakeServer(2, null);
+        final IApplicationManager manager = Mockito.mock(IApplicationManager.class);
+        final AtomicInteger cleanups = new AtomicInteger();
+        private final CountDownLatch dispatched = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
+
+        WedgedStop(String projectName)
+        {
+            project = Mockito.mock(IProject.class);
+            Mockito.when(project.getName()).thenReturn(projectName);
+            IApplicationType type = Mockito.mock(IApplicationType.class);
+            Mockito.when(type.getId()).thenReturn(StandaloneServerSupport.WST_SERVER_APP_TYPE);
+            application = Mockito.mock(IApplication.class,
+                Mockito.withSettings().extraInterfaces(ServerBackedApplication.class));
+            Mockito.when(application.getType()).thenReturn(type);
+            Mockito.when(((ServerBackedApplication)application).getServer()).thenReturn(server);
+            Mockito.doAnswer(invocation -> {
+                server.setState(4);
+                if (cleanups.incrementAndGet() == 1)
+                {
+                    dispatched.countDown();
+                    release.await(30, TimeUnit.SECONDS);
+                }
+                return null;
+            }).when(manager).cleanup(Mockito.same(application), Mockito.any(ExecutionContext.class),
+                Mockito.any(IProgressMonitor.class));
+        }
+
+        /**
+         * Runs the real guarded stop and makes its bounded wait give up while the cleanup runs on.
+         *
+         * <p>The wait is ABANDONED rather than timed out, and on its own thread: a short deadline
+         * would race the Job scheduler, and a job the deadline caught before it started is a
+         * conclusive outcome that reproduces nothing. Waiting for the cleanup to enter and then
+         * interrupting the waiter reproduces the same in-flight outcome with no timing assumption,
+         * and leaves no interrupt flag on the thread running the test.
+         */
+        void dispatchAndAbandon() throws InterruptedException
+        {
+            Thread dispatcher = new Thread(
+                () -> StandaloneServerStateRecovery.restoreIfStillUnowned(project, application,
+                    server, APPLICATION_ID, manager, 30_000L, () -> {
+                        throw new AssertionError(
+                            "an unfinished stop must not reach the restoration start"); //$NON-NLS-1$
+                    }),
+                "test: abandoned standalone-server stop"); //$NON-NLS-1$
+            dispatcher.setDaemon(true);
+            dispatcher.start();
+            assertTrue("the wedged cleanup must be running by now", //$NON-NLS-1$
+                dispatched.await(10, TimeUnit.SECONDS));
+            // Re-interrupted until it lands: an interrupt raised in a window where the waiter is
+            // not blocked yet only sets a flag the platform's join may clear again.
+            long deadline = System.currentTimeMillis() + 30_000L;
+            while (dispatcher.isAlive() && System.currentTimeMillis() < deadline)
+            {
+                dispatcher.interrupt();
+                dispatcher.join(200L);
+            }
+            assertFalse("the bounded caller must have given up on the wedged cleanup", //$NON-NLS-1$
+                dispatcher.isAlive());
+        }
+
+        /** Lets EDT's cleanup return at last. */
+        void finishCleanup()
+        {
+            release.countDown();
+        }
+
+        /** Whether the guard hands a start claim out again within {@code timeoutMs}. */
+        boolean awaitOwnershipReleased(long timeoutMs) throws InterruptedException
+        {
+            long deadline = System.currentTimeMillis() + timeoutMs;
+            while (System.currentTimeMillis() < deadline)
+            {
+                StandaloneServerStateRecovery.StartClaim claim =
+                    StandaloneServerStateRecovery.claimStartWithinBound(project, APPLICATION_ID,
+                        200L, null);
+                if (claim != null)
+                {
+                    claim.close();
+                    return true;
+                }
+                Thread.sleep(20L);
+            }
+            return false;
+        }
+
+        @Override
+        public void close() throws InterruptedException
+        {
+            finishCleanup();
+            awaitOwnershipReleased(10_000L);
         }
     }
 

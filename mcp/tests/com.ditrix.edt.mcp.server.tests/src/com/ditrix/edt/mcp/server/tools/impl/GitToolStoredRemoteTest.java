@@ -53,7 +53,9 @@ import com.google.gson.JsonParser;
  * whitespace - or a {@code ?} / {@code #} in front of the {@code @} - ends the output redaction's
  * scan before that {@code @}, so what precedes it could not be masked at all. A control character is
  * refused alongside them for a different reason: it ends none of those scans, but it can never be
- * legitimate in an authority and must not travel verbatim into the response.
+ * legitimate in an authority. (It does not reach the caller raw either way - {@link
+ * GitTool#escapeControlBytes} spells such a byte {@code \xNN} - but that renders the output safely,
+ * it does not make the stored entry one this tool will use.)
  *
  * <p>The last section covers {@link GitTool#preflightRefusal}, the entry point {@code execute()}
  * actually calls: the predicate can be right and still be wired to nothing, so the refusal is also
