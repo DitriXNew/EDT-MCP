@@ -333,7 +333,8 @@ public class GitToolTest
      * at all (the per-URL bound it also computes scans on past whitespace, but it only says where a
      * URL ends, it never locates a secret); DEL and the non-whitespace C0 controls end none of those
      * scans and ARE masked today, and are refused because they can never occur in a legitimate
-     * authority and must not travel verbatim into the response.
+     * authority. ({@link GitTool#escapeControlBytes} spells such a byte {@code \xNN} on the way out,
+     * which renders the output safely; the refusal is about the stored entry, not about rendering.)
      * <p>
      * Built from code points instead of being written into a literal - a raw VT/FF/DEL in the source
      * would be invisible and encoding-fragile, and a newline cannot be spelled as a unicode escape
@@ -823,9 +824,11 @@ public class GitToolTest
     public void testStoredTextFlawRefusesARawControlCharacterOnItsOwn()
     {
         // The second thing the redaction cannot do: it masks credentials, it never REMOVES a byte.
-        // So a C0/DEL character reaches the caller verbatim whatever else is in the text - here with
-        // no credential anywhere, which is why the credential rule alone would let it through.
-        assertEquals("a control byte in a URL is copied into the response verbatim", //$NON-NLS-1$
+        // The OUTPUT escaping does spell such a byte '\xNN' rather than passing it through, but that
+        // only makes it safe to RENDER; what is judged here is the stored entry - here with no
+        // credential anywhere, which is why the credential rule alone would let it through.
+        assertEquals("a control byte in a stored URL is refused whatever the output escaping later " //$NON-NLS-1$
+            + "does with it", //$NON-NLS-1$
             GitTool.StoredRemoteFlaw.CONTROL_CHARACTER,
             GitTool.storedTextFlaw("https://exa\u001bmple.com/r.git")); //$NON-NLS-1$
         assertEquals("...and one in a remote NAME just as much - 'remote -v' prints that too", //$NON-NLS-1$
@@ -1769,6 +1772,210 @@ public class GitToolTest
         // only; the bytecode ratchet is what proves the order actually compiled that way.
         assertTrue("the read-only pre-flight must run BEFORE the consent gate, otherwise a human " //$NON-NLS-1$
             + "is prompted for a command that can never run", preflight < consent); //$NON-NLS-1$
+    }
+
+    // ---- control bytes in git's output ----
+
+    /**
+     * The table: every C0 control character and DEL is escaped as {@code \xNN}, EXCEPT tab, LF and
+     * CR - those three ARE the structure of {@code status --short}, {@code diff} and {@code log},
+     * and escaping them would destroy the output instead of protecting it.
+     */
+    @Test
+    public void testEveryControlByteIsEscapedExceptTabNewlineAndCarriageReturn()
+    {
+        for (int code = 0x00; code <= 0x7F; code++)
+        {
+            if (code > 0x1F && code != 0x7F)
+            {
+                continue; // printable ASCII has its own test
+            }
+            String input = "a" + (char)code + "b"; //$NON-NLS-1$ //$NON-NLS-2$
+            String escaped = GitTool.escapeControlBytes(input);
+            if (code == 0x09 || code == 0x0A || code == 0x0D)
+            {
+                assertEquals("0x" + Integer.toHexString(code) + " is structure and must survive", //$NON-NLS-1$ //$NON-NLS-2$
+                    input, escaped);
+                assertSame("text that needs no escaping must not be copied", input, escaped); //$NON-NLS-1$
+            }
+            else
+            {
+                assertEquals("0x" + Integer.toHexString(code) + " must be escaped", //$NON-NLS-1$ //$NON-NLS-2$
+                    "a\\x" + String.format("%02x", code) + "b", escaped); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            }
+        }
+    }
+
+    /** The three that matter most, spelled out so a failure names them rather than a loop index. */
+    @Test
+    public void testNulEscapeAndDelAreEscapedInLowercaseHex()
+    {
+        assertEquals("\\x00", GitTool.escapeControlBytes(String.valueOf((char)0x00))); //$NON-NLS-1$
+        assertEquals("\\x1b", GitTool.escapeControlBytes(String.valueOf((char)0x1B))); //$NON-NLS-1$
+        assertEquals("\\x7f", GitTool.escapeControlBytes(String.valueOf((char)0x7F))); //$NON-NLS-1$
+    }
+
+    /**
+     * Everything a control byte is not passes through byte for byte, and without a copy: printable
+     * ASCII, a Latin-1 letter, an astral emoji (a surrogate PAIR - a split one serializes as a
+     * replacement character) and a ZWJ sequence.
+     */
+    @Test
+    public void testPrintableAndNonAsciiTextIsReturnedUnchangedAndUncopied()
+    {
+        StringBuilder printable = new StringBuilder();
+        for (int code = 0x20; code <= 0x7E; code++)
+        {
+            printable.append((char)code);
+        }
+        // Non-ASCII spelled as unicode escapes on purpose: a raw literal risks corruption under a
+        // non-UTF-8 build, which is this bundle's standing rule for non-ASCII in source. (The
+        // escape's own spelling cannot be written out here - the lexer expands it inside comments.)
+        String text = printable + "\u00e9\ud83d\ude00\ud83d\udc69\u200d\ud83d\udcbb"; //$NON-NLS-1$
+
+        assertEquals(text, GitTool.escapeControlBytes(text));
+        assertSame("nothing needed escaping, so the same instance must come back", //$NON-NLS-1$
+            text, GitTool.escapeControlBytes(text));
+    }
+
+    /**
+     * The documented ambiguity. The backslash is NOT escaped, so output that literally spells the
+     * four characters {@code \x01} is indistinguishable from output that carried the byte. This pins
+     * the documented behaviour, not a wish: escaping the backslash would rewrite every Windows path
+     * and every literal {@code \n} in every commit message.
+     */
+    @Test
+    public void testALiteralEscapeSpellingIsIndistinguishableFromAnEscapedByte()
+    {
+        String spelledOut = "msg\\x01end"; //$NON-NLS-1$
+        String withTheByte = "msg" + (char)0x01 + "end"; //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("the backslash itself is not escaped", //$NON-NLS-1$
+            spelledOut, GitTool.escapeControlBytes(spelledOut));
+        assertEquals(spelledOut, GitTool.escapeControlBytes(withTheByte));
+        assertEquals("the two are the same text on the wire - that is the stated boundary", //$NON-NLS-1$
+            GitTool.escapeControlBytes(spelledOut), GitTool.escapeControlBytes(withTheByte));
+    }
+
+    /**
+     * The ORDER is LOAD-BEARING: redaction first, escaping second, or a credential is handed back.
+     * <p>
+     * {@code urlLimit} decides where one URL ends by finding the next {@code ://}, walking BACK over
+     * its scheme characters and asking whether what stands in front of them separates two URLs. A VT
+     * (0x0B) does; the backslash that {@link GitTool#escapeControlBytes} puts in its place does not -
+     * and {@code x} plus the two hex digits are all scheme characters, so the walk back runs into
+     * that backslash and the boundary is lost. Escape first and the second URL is swallowed into the
+     * first one's span, the first one's own scan stops at its {@code /} having found no {@code @},
+     * and the second URL is never examined at all - its credential comes back verbatim.
+     */
+    @Test
+    public void testEscapingRunsAfterRedactionSoASecondUrlsCredentialIsStillMasked()
+    {
+        StringBuilder out = new StringBuilder();
+        // Built from the code point: a raw VT in the source would be invisible on review.
+        out.append("https://public/path").append((char)0x0B) //$NON-NLS-1$
+            .append("https://secret@host/repo"); //$NON-NLS-1$
+
+        GitTool.Capture captured = GitTool.capture(out, new boolean[1], true);
+
+        assertFalse("the SECOND url's credential must still be masked - escaping before the " //$NON-NLS-1$
+            + "redaction erases the boundary between the two urls and hides it from the scan. Got: " //$NON-NLS-1$
+            + captured.text, captured.text.contains("secret")); //$NON-NLS-1$
+        // Positive controls: the redaction really ran, and the byte really was there to be escaped.
+        assertTrue("the redaction must have masked it rather than dropped the url: " + captured.text, //$NON-NLS-1$
+            captured.text.contains("***")); //$NON-NLS-1$
+        assertTrue("the control byte must still leave escaped: " + captured.text, //$NON-NLS-1$
+            captured.text.contains("\\x0b")); //$NON-NLS-1$
+    }
+
+    /**
+     * The same order seen from the other side, where the wrong one costs readability rather than a
+     * secret: a VT ends the redaction's userinfo scan, so the host in front of it survives. Escape
+     * first and the scan runs past the four characters {@code \x0b} to the {@code @} further along,
+     * and the whole readable prefix - host included - is replaced by {@code ***@}.
+     */
+    @Test
+    public void testEscapingRunsAfterRedactionSoAControlByteDoesNotWidenTheCredentialScan()
+    {
+        StringBuilder out = new StringBuilder();
+        out.append("https://plain.example").append((char)0x0B).append("user@else.com"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        GitTool.Capture captured = GitTool.capture(out, new boolean[1], true);
+
+        assertTrue("the readable host must survive: the redaction's scan ends at the VT, and the " //$NON-NLS-1$
+            + "escaping must not remove that boundary before the redaction has looked at it. Got: " //$NON-NLS-1$
+            + captured.text, captured.text.contains("plain.example")); //$NON-NLS-1$
+        assertTrue("the control byte itself must still leave escaped: " + captured.text, //$NON-NLS-1$
+            captured.text.contains("\\x0b")); //$NON-NLS-1$
+        assertEquals("no raw VT may reach the caller: " + captured.text, //$NON-NLS-1$
+            -1, captured.text.indexOf(0x0B));
+    }
+
+    /**
+     * The cap bounds what is SENT. It is enforced by the drain on what git PRINTED, and one byte
+     * becomes four characters, so text that fitted as git printed it can cross the cap once escaped:
+     * it is cut back, and the result says it was truncated.
+     */
+    @Test
+    public void testEscapedOutputIsCutBackToTheBudgetAndFlagged()
+    {
+        StringBuilder out = new StringBuilder();
+        while (out.length() < GitTool.MAX_OUTPUT_CHARS)
+        {
+            out.append("ab").append((char)0x01); //$NON-NLS-1$
+        }
+        out.setLength(GitTool.MAX_OUTPUT_CHARS);
+        // Positive control: without growth past the cap this test would pass on any implementation.
+        assertTrue("escaping must grow this text past the cap, or the assertions below prove nothing", //$NON-NLS-1$
+            GitTool.escapeControlBytes(out.toString()).length() > GitTool.MAX_OUTPUT_CHARS);
+
+        GitTool.Capture captured = GitTool.capture(out, new boolean[]{false}, true);
+
+        assertTrue("the cap bounds what is sent, but " + captured.text.length() + " was returned", //$NON-NLS-1$ //$NON-NLS-2$
+            captured.text.length() <= GitTool.MAX_OUTPUT_CHARS);
+        assertTrue("an output cut by the escaping must still be reported as truncated", //$NON-NLS-1$
+            captured.truncated);
+        assertNoDanglingEscape(captured.text);
+    }
+
+    /**
+     * The cut never leaves half an escape behind at any budget: not a lone backslash, not
+     * {@code \x}, not {@code \x} plus one hex digit.
+     */
+    @Test
+    public void testTheBudgetCutNeverSplitsAnEscapeSequence()
+    {
+        String text = "ab\\x1bcd"; //$NON-NLS-1$
+        for (int budget = 0; budget <= text.length(); budget++)
+        {
+            String cut = GitTool.cutToEscapeBoundary(text, budget);
+
+            assertTrue("budget " + budget + " returned " + cut.length() + " characters", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                cut.length() <= budget);
+            assertTrue("the cut must be a prefix of the text, but was '" + cut + "'", //$NON-NLS-1$ //$NON-NLS-2$
+                text.startsWith(cut));
+            assertNoDanglingEscape(cut);
+        }
+        // A budget past the end changes nothing, instance included.
+        assertSame(text, GitTool.cutToEscapeBoundary(text, text.length()));
+    }
+
+    /** Fails when {@code text} ends in half of a {@code \xNN} escape. */
+    private static void assertNoDanglingEscape(String text)
+    {
+        int length = text.length();
+        assertFalse("ends in a lone backslash: '" + lastCharacters(text) + "'", //$NON-NLS-1$ //$NON-NLS-2$
+            text.endsWith("\\")); //$NON-NLS-1$
+        assertFalse("ends in a half escape: '" + lastCharacters(text) + "'", //$NON-NLS-1$ //$NON-NLS-2$
+            text.endsWith("\\x")); //$NON-NLS-1$
+        assertFalse("ends in a one-digit escape: '" + lastCharacters(text) + "'", //$NON-NLS-1$ //$NON-NLS-2$
+            length >= 3 && text.charAt(length - 3) == '\\' && text.charAt(length - 2) == 'x'
+                && Character.digit(text.charAt(length - 1), 16) >= 0);
+    }
+
+    private static String lastCharacters(String text)
+    {
+        return text.substring(Math.max(0, text.length() - 8));
     }
 
     /**
