@@ -234,11 +234,14 @@ public final class MetadataTypeBuilder
         public final TypeDescription typeDescription;
         /** The error message, or {@code null} on success. */
         public final String error;
+        /** {@code true} when {@link #error} is a platform/server failure, not a problem with the spec. */
+        public final boolean platformFailure;
 
-        private Result(TypeDescription typeDescription, String error)
+        private Result(TypeDescription typeDescription, String error, boolean platformFailure)
         {
             this.typeDescription = typeDescription;
             this.error = error;
+            this.platformFailure = platformFailure;
         }
     }
 
@@ -249,7 +252,12 @@ public final class MetadataTypeBuilder
 
     private static Result error(String message)
     {
-        return new Result(null, message);
+        return new Result(null, message, false);
+    }
+
+    private static Result platformError(String message)
+    {
+        return new Result(null, message, true);
     }
 
     /**
@@ -637,7 +645,7 @@ public final class MetadataTypeBuilder
             McorePackage.Literals.TYPE_ITEM, version);
         if (provider == null)
         {
-            return error("Platform type provider is not available for this configuration version."); //$NON-NLS-1$
+            return platformError("Platform type provider is not available for this configuration version."); //$NON-NLS-1$
         }
 
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
@@ -654,7 +662,7 @@ public final class MetadataTypeBuilder
                 return error(err);
             }
         }
-        return new Result(td, null);
+        return new Result(td, null, false);
     }
 
     /** The platform pseudo-type a form list attribute carries as its value type. */

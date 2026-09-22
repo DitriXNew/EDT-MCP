@@ -15,10 +15,14 @@ import static org.junit.Assert.assertTrue;
 import java.math.BigDecimal;
 import java.util.List;
 
+import org.junit.Assume;
 import org.junit.Test;
 import org.mockito.Mockito;
 
 import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.platform.IEObjectProvider;
+import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
@@ -1291,20 +1295,83 @@ public class PredefinedWriterTest
     }
 
     @Test
-    public void testValueTypeMissingContextRejected()
+    public void testValueTypeMissingVersionIsRaisedUnmarked()
     {
-        // config/version deliberately left unset - exactly what every EXISTING caller of create()/
-        // modify() (none of which touch valueType) leaves them at; PredefinedWriter must still fail
-        // ACTIONABLY (not NPE) when a caller DOES set valueTypeSet without supplying the context.
+        // A missing platform version is a SERVER failure, not caller input: it must be RAISED
+        // unmarked (so it keeps its ERROR and stack), never returned as a refusal string that the
+        // calling tool would mark and demote. Still actionable, and still not an NPE.
         ChartOfCharacteristicTypes types = newCharacteristicTypes("Properties", 5); //$NON-NLS-1$
         PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
         props.valueType = typeSpec("String"); //$NON-NLS-1$
         props.valueTypeSet = true;
 
+        IllegalStateException raised = raisedBy(() -> PredefinedWriter.create(types, "Weight", props, false)); //$NON-NLS-1$
+        assertTrue(raised.getMessage(), raised.getMessage().contains("platform version")); //$NON-NLS-1$
+        assertFalse("a platform failure must not be marked as a refusal", raised instanceof Refusals.Marker); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testValueTypeMissingConfigurationIsRaisedUnmarked()
+    {
+        ChartOfCharacteristicTypes types = newCharacteristicTypes("Properties", 5); //$NON-NLS-1$
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.valueType = typeSpec("String"); //$NON-NLS-1$
+        props.valueTypeSet = true;
+        props.version = Version.LATEST;
+
+        IllegalStateException raised = raisedBy(() -> PredefinedWriter.create(types, "Weight", props, false)); //$NON-NLS-1$
+        assertTrue(raised.getMessage(), raised.getMessage().contains("configuration context")); //$NON-NLS-1$
+        assertFalse(raised instanceof Refusals.Marker);
+    }
+
+    @Test
+    public void testValueTypeUnavailableTypeProviderIsRaisedUnmarked()
+    {
+        // Headlessly the platform type provider is not registered, which is exactly the platform
+        // failure under test. Skip, never fake-pass, on a runtime that does register one.
+        Assume.assumeTrue("the platform type provider is registered in this runtime", //$NON-NLS-1$
+            IEObjectProvider.Registry.INSTANCE.get(McorePackage.Literals.TYPE_ITEM, Version.LATEST) == null);
+        ChartOfCharacteristicTypes types = newCharacteristicTypes("Properties", 5); //$NON-NLS-1$
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.valueType = typeSpec("String"); //$NON-NLS-1$
+        props.valueTypeSet = true;
+        props.version = Version.LATEST;
+        props.config = MdClassFactory.eINSTANCE.createConfiguration();
+
+        IllegalStateException raised = raisedBy(() -> PredefinedWriter.create(types, "Weight", props, false)); //$NON-NLS-1$
+        assertTrue(raised.getMessage(), raised.getMessage().contains("type provider")); //$NON-NLS-1$
+        assertFalse(raised instanceof Refusals.Marker);
+    }
+
+    @Test
+    public void testValueTypeBadSpecIsStillAReturnedRefusal()
+    {
+        // The other edge: a malformed spec IS the caller's mistake and must stay a returned refusal.
+        ChartOfCharacteristicTypes types = newCharacteristicTypes("Properties", 5); //$NON-NLS-1$
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        JsonObject badSpec = new JsonObject();
+        badSpec.addProperty("types", "not-an-array"); //$NON-NLS-1$ //$NON-NLS-2$
+        props.valueType = badSpec;
+        props.valueTypeSet = true;
+        props.version = Version.LATEST;
+        props.config = MdClassFactory.eINSTANCE.createConfiguration();
+
         PredefinedWriter.WriteResult result = PredefinedWriter.create(types, "Weight", props, false); //$NON-NLS-1$
         assertTrue(result.isError());
-        assertTrue("a missing platform-version context must fail actionably, not NPE", //$NON-NLS-1$
-            result.error.contains("platform version")); //$NON-NLS-1$
+        assertTrue(result.error, result.error.startsWith("Invalid 'valueType': ")); //$NON-NLS-1$
+    }
+
+    private static IllegalStateException raisedBy(Runnable call)
+    {
+        try
+        {
+            call.run();
+        }
+        catch (IllegalStateException e)
+        {
+            return e;
+        }
+        throw new AssertionError("expected an IllegalStateException"); //$NON-NLS-1$
     }
 
     @Test

@@ -14,6 +14,7 @@ import java.io.InputStreamReader;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -316,11 +317,39 @@ public final class BslModuleUtils
         }
         catch (Exception e)
         {
-            Log.log(moduleLoadStatus(
-                !isDemotableAbsence(modulePath, uriExists(resourceSet, uri)), uri, e));
+            Log.log(moduleLoadStatus(!isDemotableAbsence(modulePath,
+                moduleExists(uriExists(resourceSet, uri), () -> resolveModuleFile(project, modulePath))),
+                uri, e));
         }
 
         return null;
+    }
+
+    /**
+     * Whether the module exists at all: at the URI the load asked for, OR where
+     * {@link #resolveModuleFile} finds it. The load always addresses {@code src/}, while the
+     * resolver also searches the other top-level folders - a module found there but not loaded is
+     * OUR addressing failure, and must not pass as "does not exist".
+     *
+     * @param uriExists what the probe of the loaded URI answered
+     * @param resolved yields the resolver's file for the same module path (may yield {@code null})
+     * @return {@code true} when either location holds the module, or when the resolver cannot answer
+     */
+    static boolean moduleExists(boolean uriExists, Supplier<IFile> resolved)
+    {
+        if (uriExists)
+        {
+            return true;
+        }
+        try
+        {
+            IFile file = resolved.get();
+            return file != null && file.exists();
+        }
+        catch (RuntimeException probeFailed) // NOSONAR an unanswerable probe must not silence the error
+        {
+            return true;
+        }
     }
 
     /**

@@ -1288,4 +1288,43 @@ public class BslModuleUtilsTest
         assertFalse("a module that EXISTS is never an absence, whatever its path shape", //$NON-NLS-1$
             BslModuleUtils.isDemotableAbsence("CommonModules/Real/Module.bsl", true)); //$NON-NLS-1$
     }
+
+    @Test
+    public void testAModuleTheResolverFindsOutsideSrcIsNotAnAbsence()
+    {
+        // loadModule addresses <project>/src/<path>, but resolveModuleFile also searches the other
+        // top-level folders. The src URI is absent while the resolver finds the file: a failed load
+        // there is OUR addressing defect and must keep its ERROR, not pass as "does not exist".
+        IFile elsewhere = mock(IFile.class);
+        when(elsewhere.exists()).thenReturn(true);
+
+        boolean exists = BslModuleUtils.moduleExists(false, () -> elsewhere);
+
+        assertTrue("the resolver found the module, so it exists", exists); //$NON-NLS-1$
+        assertFalse("and its failed load must not be demoted", //$NON-NLS-1$
+            BslModuleUtils.isDemotableAbsence("CommonModules/Elsewhere/Module.bsl", exists)); //$NON-NLS-1$
+        assertEquals(IStatus.ERROR, BslModuleUtils.moduleLoadStatus(!BslModuleUtils.isDemotableAbsence(
+            "CommonModules/Elsewhere/Module.bsl", exists), MODULE_URI, new RuntimeException("load")).getSeverity()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAModuleAbsentEverywhereIsStillAnAbsence()
+    {
+        IFile nowhere = mock(IFile.class);
+        when(nowhere.exists()).thenReturn(false);
+
+        assertFalse(BslModuleUtils.moduleExists(false, () -> nowhere));
+        assertFalse("no resolver file at all", BslModuleUtils.moduleExists(false, () -> null)); //$NON-NLS-1$
+        assertTrue("the loaded URI existing is enough on its own", //$NON-NLS-1$
+            BslModuleUtils.moduleExists(true, () -> nowhere));
+    }
+
+    @Test
+    public void testAResolverThatCannotAnswerStaysLoud()
+    {
+        // An unknown state must never silence an error: a throwing resolver counts as "exists".
+        assertTrue(BslModuleUtils.moduleExists(false, () -> {
+            throw new IllegalStateException("workspace tree locked"); //$NON-NLS-1$
+        }));
+    }
 }
