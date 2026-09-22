@@ -83,17 +83,41 @@ read_versions() {
   printf '%s' "$out"
 }
 
+# Every artifact an index names, as "classifier|id|version" lines. In content.xml.xz each unit
+# names the jar it needs; in artifacts.xml.xz each entry is a jar that is stored.
+artifact_keys() {
+  xz -dc "$1" 2>/dev/null \
+    | grep -oE "<artifact classifier='[^']+' id='[^']+' version='[^']+'" \
+    | sed -E "s/<artifact classifier='([^']+)' id='([^']+)' version='([^']+)'/\1|\2|\3/"
+}
+
 # The served build is the HIGHEST version the metadata lists - the one p2 resolves.
 EDT_ACTUAL="$(read_versions content.xml.xz 'metadata index' | tail -n 1)"
 EDT_ARTIFACTS="$(read_versions artifacts.xml.xz 'artifact index')"
 
-# ── GUARD 1: the build the metadata resolves must be STORED ──────────────────────────
+# ── GUARD 1: every jar the metadata resolves must be STORED ──────────────────────────
 # Only decidable when BOTH were read; one missing is a flake, not a verdict. Resolution follows
-# content.xml.xz and downloads per artifacts.xml.xz, so a resolved build with no stored jars means
-# every EDT bundle 404s. Other stored versions alongside it are harmless.
-if [ -n "$EDT_ACTUAL" ] && [ -n "$EDT_ARTIFACTS" ] && ! printf '%s\n' "$EDT_ARTIFACTS" | grep -qxF "$EDT_ACTUAL"; then
-  log "::error::EDT $CHANNEL channel is INCONSISTENT: its metadata index (content.xml.xz) resolves $EDT_ACTUAL, but its artifact index (artifacts.xml.xz) stores only: $(printf '%s' "$EDT_ARTIFACTS" | tr '\n' ' '). Resolution follows the metadata and downloads per the artifacts, so every EDT bundle will 404 and Tycho will report it only as \"bundleLocation can't be null for artifact ...\". Nothing in this repository can fix that, and purging the Tycho p2 cache does NOT help - the inconsistent view is upstream (1C mid-publish, or a CDN edge serving one index stale). Re-run once ${EDT_P2}artifacts.xml.xz stores $EDT_ACTUAL."
-  exit 1
+# content.xml.xz and downloads per artifacts.xml.xz, so any resolved artifact with no stored jar
+# 404s. Checking one sentinel bundle is not enough: a partial publish can store it and still miss
+# another. For each artifact the HIGHEST referenced version is the one p2 resolves; older versions
+# still listed, and extra stored ones, are harmless.
+if [ -n "$EDT_ACTUAL" ] && [ -n "$EDT_ARTIFACTS" ]; then
+  RESOLVED="$(artifact_keys "$WORK/content.xml.xz" | sort -t'|' -k1,1 -k2,2 -k3,3V \
+    | awk -F'|' '{ last[$1 "|" $2] = $0 } END { for (k in last) print last[k] }' | sort)"
+  STORED="$(artifact_keys "$WORK/artifacts.xml.xz" | sort -u)"
+  MISSING="$(comm -23 <(printf '%s\n' "$RESOLVED") <(printf '%s\n' "$STORED") | sed '/^$/d')"
+  # The sentinel stays as a floor, so an index whose artifact lines no longer parse cannot turn
+  # this guard into a silent pass.
+  if ! printf '%s\n' "$EDT_ARTIFACTS" | grep -qxF "$EDT_ACTUAL"; then
+    MISSING="$(printf '%s\n%s\n' "osgi.bundle|com._1c.g5.v8.dt.core|$EDT_ACTUAL" "$MISSING" | sed '/^$/d' | sort -u)"
+  fi
+  if [ -z "$RESOLVED" ]; then
+    log "::warning::edt-pin.sh: no artifact references parsed from ${EDT_P2}content.xml.xz; only the com._1c.g5.v8.dt.core sentinel was checked."
+  fi
+  if [ -n "$MISSING" ]; then
+    log "::error::EDT $CHANNEL channel is INCONSISTENT: its metadata index (content.xml.xz) resolves $(printf '%s\n' "$MISSING" | wc -l | tr -d ' ') artifact(s) that its artifact index (artifacts.xml.xz) does not store, e.g. $(printf '%s\n' "$MISSING" | head -n 5 | tr '\n' ' '). Resolution follows the metadata and downloads per the artifacts, so those bundles will 404 and Tycho will report it only as \"bundleLocation can't be null for artifact ...\". Nothing in this repository can fix that, and purging the Tycho p2 cache does NOT help - the inconsistent view is upstream (1C mid-publish, or a CDN edge serving one index stale). Re-run once ${EDT_P2}artifacts.xml.xz stores them."
+    exit 1
+  fi
 fi
 
 if [ -z "$EDT_ACTUAL" ]; then
