@@ -111,6 +111,12 @@ public class GitTool implements IMcpTool
     /** Upper bound on the returned combined stdout+stderr, so a huge log/diff cannot flood the wire. */
     static final int MAX_OUTPUT_CHARS = 100_000;
 
+    /** What {@link #escapeControlBytes} writes in front of the two hex digits. */
+    private static final String ESCAPE_PREFIX = "\\x"; //$NON-NLS-1$
+
+    /** Spare capacity for the first escapes, so the common case does not reallocate immediately. */
+    private static final int ESCAPE_HEADROOM_CHARS = 16;
+
     /**
      * Upper bound on the command STRING. Everything reflected back - the rejection text, the echoed
      * {@code command}, the consent preview - is derived from it, so an unbounded one would let a
@@ -629,7 +635,10 @@ public class GitTool implements IMcpTool
                 + "command or a run/timeout failure") //$NON-NLS-1$
             .stringProperty(KEY_COMMAND, "Display form of the command that was run ('git ...', arguments " //$NON-NLS-1$
                 + "joined by spaces - not an exact re-quoting)") //$NON-NLS-1$
-            .stringProperty(KEY_OUTPUT, "Combined stdout+stderr from git (bounded); also present on timeout") //$NON-NLS-1$
+            .stringProperty(KEY_OUTPUT, "Combined stdout+stderr from git (bounded); also present on " //$NON-NLS-1$
+                + "timeout. C0 control bytes (0x00-0x1F) and DEL (0x7F) arrive escaped as \\xNN; tab, LF " //$NON-NLS-1$
+                + "and CR are kept as-is, and C1 (0x80-0x9F) is not touched; text that literally spells " //$NON-NLS-1$
+                + "\\x01 is indistinguishable from the byte") //$NON-NLS-1$
             .booleanProperty(KEY_TRUNCATED, "Present and true when 'output' was truncated to the size cap") //$NON-NLS-1$
             .build();
     }
@@ -757,7 +766,12 @@ public class GitTool implements IMcpTool
      * first three and never looks at the fourth; {@link #urlLimit} does not stop, but it only bounds
      * where one URL ends), so {@code remote -v} / {@code push} would print such a stored remote
      * verbatim; a raw control character is refused alongside them because the redaction masks
-     * credentials and never removes a byte. The remotes are read from the {@link Repository} this
+     * credentials and never removes a byte. {@link #escapeControlBytes} spells MOST such bytes
+     * {@code \xNN} on the way out - but NOT tab, LF or CR, which it deliberately keeps, and a stored
+     * remote carrying one of those three is refused here all the same. Either way that escaping is a
+     * safeguard on how the output RENDERS and does not lift this refusal: what is judged here is the
+     * stored entry, and a control character can never occur in a legitimate remote address. The
+     * remotes are read from the {@link Repository} this
      * call already holds - no extra git process is started for it.
      * <p>
      * {@link #requireConsentFor} deliberately stays OUT of this seam: it may block on a human, which
@@ -3155,6 +3169,11 @@ public class GitTool implements IMcpTool
      * capping the output and killing the process on a {@link #TIMEOUT_SECONDS} timeout. Never prompts
      * (auth failures fail fast). The output stream is drained on a separate thread so a large output can
      * never deadlock the wait.
+     * <p>
+     * Every exit path below - success, non-zero, timeout, interrupt - takes its text from
+     * {@link #capture}, so what leaves here is credential-redacted and has its control bytes escaped
+     * as {@code \xNN}. What that does and does not promise is stated at
+     * {@link #escapeControlBytes}.
      */
     String runGit(List<String> argv, File workTree)
     {
@@ -3815,7 +3834,8 @@ public class GitTool implements IMcpTool
      * input guard in {@link #parseCommand}, because no free-text predicate can fail closed on git's
      * output without also refusing ordinary text. A control character that is not whitespace ends none of these
      * scans and IS masked here; it is refused upstream for a different reason - it cannot occur in a
-     * legitimate authority and must not travel verbatim into the response.
+     * legitimate authority. It does not reach the caller raw in any case: {@link #escapeControlBytes}
+     * spells every such byte {@code \xNN} AFTER this walk has run.
      *
      * Scanned by hand rather than with {@link #CREDENTIAL_URL}: a regex is restarted at every
      * position, so output that merely LOOKS like a scheme ("aaa...a:@") costs O(n^2) - measured at
@@ -4121,13 +4141,33 @@ public class GitTool implements IMcpTool
      * Reading the flag separately after the snapshot has no happens-before edge to the drain thread
      * that sets it, so a late flip could report {@code truncated} for text the snapshot did not treat
      * as truncated.
+     * <p>
+     * This is also the ONE place where git's output is made safe to hand on, in this order: the
+     * dangling-URL cut, the credential redaction, then {@link #escapeControlBytes}, then the budget.
+     * <p>
+     * <b>The escaping runs AFTER the redaction because that order is LOAD-BEARING</b>, not because it
+     * is tidier. Escaping replaces a control byte with a backslash and three more characters, and
+     * {@link #urlLimit} decides where one URL ends by finding the next {@code ://}, walking BACK over
+     * its scheme characters and asking whether what stands in front of them separates two URLs. The
+     * byte being replaced - VT, say - does separate them ({@link #isUrlSeparator}); the backslash put
+     * in its place does not, and {@code x} plus the two hex digits are all scheme characters, so the
+     * walk back runs into that backslash and the boundary is LOST. Escape first and
+     * {@code https://public/path<VT>https://secret@host/repo} comes back with {@code secret} intact:
+     * the second URL is swallowed into the first one's span, the first one's own scan stops at its
+     * {@code /} having found no {@code @}, and the second URL is never examined at all. Pinned by
+     * {@code GitToolTest.testEscapingRunsAfterRedactionSoASecondUrlsCredentialIsStillMasked}.
+     * <p>
+     * The budget is re-checked AFTER escaping because {@link #MAX_OUTPUT_CHARS} is enforced by the
+     * drain on what git PRINTED, and one byte becomes four characters. The cap exists to bound the
+     * caller's context, so it bounds what is SENT: text that crosses it only once escaped is cut
+     * back by {@link #cutToEscapeBoundary} and reported as truncated.
      *
      * @param out the shared output buffer
      * @param truncated the drain thread's truncation flag
      * @param complete whether the drain finished, i.e. the buffer cannot be mid-write
      * @return both values, consistent with each other
      */
-    private static Capture capture(StringBuilder out, boolean[] truncated, boolean complete)
+    static Capture capture(StringBuilder out, boolean[] truncated, boolean complete)
     {
         synchronized (out)
         {
@@ -4139,13 +4179,21 @@ public class GitTool implements IMcpTool
             // The dangling tail is dropped for an INCOMPLETE drain too, not only for cap-truncated
             // output: a background child can be mid-write when we capture, and a half-written
             // 'https://<secret' carries no '@' for the redaction to recognise.
-            return new Capture(redactCredentialUrls(cut || !complete ? dropTruncatedUrlTail(text) : text),
-                cut);
+            String safe = escapeControlBytes(
+                redactCredentialUrls(cut || !complete ? dropTruncatedUrlTail(text) : text));
+            if (safe.length() > MAX_OUTPUT_CHARS)
+            {
+                // The escaping turned bytes into four characters each and pushed the text past the
+                // cap the drain enforced on git's own output; the cap bounds what is SENT.
+                safe = cutToEscapeBoundary(safe, MAX_OUTPUT_CHARS);
+                cut = true;
+            }
+            return new Capture(safe, cut);
         }
     }
 
     /** An output snapshot together with the truncation flag it was taken with. */
-    private static final class Capture
+    static final class Capture
     {
         final String text;
         final boolean truncated;
@@ -4155,6 +4203,128 @@ public class GitTool implements IMcpTool
             this.text = text;
             this.truncated = truncated;
         }
+    }
+
+    /**
+     * Escapes the control bytes git prints verbatim, as {@code \xNN} with two lowercase hex digits.
+     * <p>
+     * Git hands a commit message, an annotated-tag body, a diff hunk or a log line back BYTE FOR
+     * BYTE - measured on git 2.35.1 - so an {@code ESC[31m} somebody committed is an ANSI command to
+     * any client that renders this output in a terminal, and a {@code 0x01} is invisible to whatever
+     * reads it. Every C0 character (0x00-0x1F) and DEL (0x7F) is escaped here EXCEPT tab, LF and CR:
+     * those three ARE the structure of {@code status --short}, {@code diff} and {@code log}, and
+     * escaping them would destroy the output instead of protecting it. Everything from 0x20 up
+     * passes through untouched EXCEPT DEL: non-ASCII letters, emoji and surrogate pairs all survive
+     * as they stand, and so do the C1 controls (0x80-0x9F), which this deliberately does not touch.
+     * <p>
+     * <b>The boundary</b>, stated the way {@code MarkdownUtils.inlineCode} states its own: the
+     * backslash is NOT escaped. Output that literally spells the four characters {@code \x01} is
+     * therefore indistinguishable from output that carried the byte, and no reader can tell them
+     * apart. That ambiguity is accepted deliberately - escaping the backslash would rewrite every
+     * Windows path and every literal {@code \n} in every commit message, which is far more invasive
+     * than the ambiguity it would remove. This is a safeguard on how the output RENDERS, not a
+     * reversible encoding: nothing here can be decoded back to the exact bytes git printed.
+     *
+     * @param text git's captured output, never {@code null}
+     * @return the text with its control bytes escaped, or the SAME instance when none needed it
+     */
+    static String escapeControlBytes(String text)
+    {
+        int first = -1;
+        for (int i = 0; i < text.length(); i++)
+        {
+            if (mustEscape(text.charAt(i)))
+            {
+                first = i;
+                break;
+            }
+        }
+        if (first < 0)
+        {
+            return text; // the ordinary case: no copy at all
+        }
+        StringBuilder escaped = new StringBuilder(text.length() + ESCAPE_HEADROOM_CHARS);
+        escaped.append(text, 0, first);
+        for (int i = first; i < text.length(); i++)
+        {
+            char c = text.charAt(i);
+            if (mustEscape(c))
+            {
+                escaped.append(ESCAPE_PREFIX)
+                    .append(Character.forDigit((c >> 4) & 0x0F, 16))
+                    .append(Character.forDigit(c & 0x0F, 16));
+            }
+            else
+            {
+                escaped.append(c);
+            }
+        }
+        return escaped.toString();
+    }
+
+    /**
+     * @param c a character of git's output
+     * @return whether it is a control byte that must not travel to the caller as it stands
+     */
+    private static boolean mustEscape(char c)
+    {
+        // Tab, LF and CR are git's own structure and are deliberately exempt - see
+        // escapeControlBytes.
+        return (c < 0x20 || c == 0x7F) && c != '\t' && c != '\n' && c != '\r';
+    }
+
+    /**
+     * Cuts escaped output back to {@code budget} characters without ever splitting a {@code \xNN}
+     * escape.
+     * <p>
+     * The walk back skips anything that could be HALF an escape - a trailing backslash, a trailing
+     * {@code \x}, a trailing {@code \x} plus one hex digit - so a reader never has to guess whether
+     * the tail is data or a cut-off escape. A run of trailing backslashes is walked off entirely: at
+     * a cut boundary a backslash cannot be told from the start of an escape this class produced, and
+     * the invariant is worth more than those few characters of an output that was being truncated
+     * anyway. A trailing high surrogate goes the same way, for the reason
+     * {@link #dropTruncatedUrlTail} gives: a lone one serializes as a replacement character.
+     *
+     * @param text the already-escaped output
+     * @param budget the maximum number of characters that may be returned
+     * @return {@code text} cut to at most {@code budget} characters at a safe boundary, or the SAME
+     *         instance when it already fits
+     */
+    static String cutToEscapeBoundary(String text, int budget)
+    {
+        if (text.length() <= budget)
+        {
+            return text;
+        }
+        int cut = budget;
+        while (cut > 0
+            && (endsInHalfAnEscape(text, cut) || Character.isHighSurrogate(text.charAt(cut - 1))))
+        {
+            cut--;
+        }
+        return text.substring(0, cut);
+    }
+
+    /**
+     * @param text the already-escaped output
+     * @param end the exclusive end of the candidate cut, at least 1
+     * @return whether {@code text[0, end)} ends in a prefix of a {@code \xNN} escape
+     */
+    private static boolean endsInHalfAnEscape(String text, int end)
+    {
+        char last = text.charAt(end - 1);
+        if (last == '\\')
+        {
+            return true;
+        }
+        if (end >= 2 && last == 'x' && text.charAt(end - 2) == '\\')
+        {
+            return true;
+        }
+        // A hex digit of EITHER case ends the candidate: this class writes lowercase, so answering
+        // conservatively here can only ever cost one character of a text that was being cut anyway.
+        return end >= 3 && Character.digit(last, 16) >= 0 && text.charAt(end - 2) == 'x'
+            && text.charAt(end - 3) == '\\';
     }
 
     /**
