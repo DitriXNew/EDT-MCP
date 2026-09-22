@@ -83,27 +83,31 @@ read_versions() {
   printf '%s' "$out"
 }
 
-# Every artifact an index names, as "classifier|id|version" lines. In content.xml.xz each unit
-# names the jar it needs; in artifacts.xml.xz each entry is a jar that is stored.
+# Every artifact a DECODED index names, as "classifier|id|version" lines. Attributes are read by
+# name, in any order and either quote style. In content.xml each unit names the jar it needs; in
+# artifacts.xml each entry is a jar that is stored.
 artifact_keys() {
-  xz -dc "$1" 2>/dev/null \
-    | grep -oE "<artifact classifier='[^']+' id='[^']+' version='[^']+'" \
-    | sed -E "s/<artifact classifier='([^']+)' id='([^']+)' version='([^']+)'/\1|\2|\3/"
+  grep -oE '<artifact[ 	][^>]*>' "$1" 2>/dev/null | awk -v q="'" '
+    function attr(s, name,   r) {
+      if (!match(s, "[ \t]" name "=(\"[^\"]*\"|" q "[^" q "]*" q ")")) return ""
+      r = substr(s, RSTART, RLENGTH); sub(/^[^=]*=/, "", r)
+      return substr(r, 2, length(r) - 2)
+    }
+    { c = attr($0, "classifier"); i = attr($0, "id"); v = attr($0, "version")
+      if (c != "" && i != "" && v != "") print c "|" i "|" v }'
 }
 
 # The served build is the HIGHEST version the metadata lists - the one p2 resolves.
 EDT_ACTUAL="$(read_versions content.xml.xz 'metadata index' | tail -n 1)"
+xz -dc "$WORK/content.xml.xz" > "$WORK/content.xml" 2>/dev/null || : > "$WORK/content.xml"
 
-# The artifact index is judged READABLE on its own, so a readable index that lacks the sentinel
-# is an inconsistency, not a flake. (grep -c, not -q: -q would SIGPIPE xz under pipefail.)
+# The artifact index is READABLE when it decodes and carries its <artifacts> element, an empty one
+# included, so a readable index missing a resolved jar is an inconsistency, not a flake.
 ARTIFACTS_READ=0
-EDT_ARTIFACTS=""
 if curl -fsSL --retry 3 --retry-delay 10 "${EDT_P2}artifacts.xml.xz" -o "$WORK/artifacts.xml.xz" 2>/dev/null \
-  && [ "$(xz -dc "$WORK/artifacts.xml.xz" 2>/dev/null | grep -c '<artifact ')" -gt 0 ]; then
+  && xz -dc "$WORK/artifacts.xml.xz" > "$WORK/artifacts.xml" 2>/dev/null \
+  && [ "$(grep -cE '<artifacts[ 	/>]' "$WORK/artifacts.xml")" -gt 0 ]; then
   ARTIFACTS_READ=1
-  EDT_ARTIFACTS="$(xz -dc "$WORK/artifacts.xml.xz" 2>/dev/null \
-    | grep -oE "id='com\._1c\.g5\.v8\.dt\.core' version='[^']+'" \
-    | sed -E "s/.*version='([^']+)'.*/\1/" | sort -uV)"
 else
   log "::warning::edt-pin.sh: could not read ${EDT_P2}artifacts.xml.xz (network flake?); skipping the artifact-index check."
 fi
@@ -115,13 +119,14 @@ fi
 # another. For each artifact the HIGHEST referenced version is the one p2 resolves; older versions
 # still listed, and extra stored ones, are harmless.
 if [ -n "$EDT_ACTUAL" ] && [ "$ARTIFACTS_READ" = 1 ]; then
-  RESOLVED="$(artifact_keys "$WORK/content.xml.xz" | sort -t'|' -k1,1 -k2,2 -k3,3V \
+  RESOLVED="$(artifact_keys "$WORK/content.xml" | sort -t'|' -k1,1 -k2,2 -k3,3V \
     | awk -F'|' '{ last[$1 "|" $2] = $0 } END { for (k in last) print last[k] }' | sort)"
-  STORED="$(artifact_keys "$WORK/artifacts.xml.xz" | sort -u)"
+  STORED="$(artifact_keys "$WORK/artifacts.xml" | sort -u)"
   MISSING="$(comm -23 <(printf '%s\n' "$RESOLVED") <(printf '%s\n' "$STORED") | sed '/^$/d')"
-  # The sentinel stays as a floor, so an index whose artifact lines no longer parse cannot turn
+  # The sentinel stays as a floor, so content artifact lines that no longer parse cannot turn
   # this guard into a silent pass.
-  if ! printf '%s\n' "$EDT_ARTIFACTS" | grep -qxF "$EDT_ACTUAL"; then
+  # A here-string, not a pipe: grep -q exits early and pipefail would report printf's SIGPIPE.
+  if ! grep -qxF "osgi.bundle|com._1c.g5.v8.dt.core|$EDT_ACTUAL" <<< "$STORED"; then
     MISSING="$(printf '%s\n%s\n' "osgi.bundle|com._1c.g5.v8.dt.core|$EDT_ACTUAL" "$MISSING" | sed '/^$/d' | sort -u)"
   fi
   if [ -z "$RESOLVED" ]; then
