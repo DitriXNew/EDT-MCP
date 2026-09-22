@@ -67,14 +67,15 @@ esac
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# Reads the com._1c.g5.v8.dt.core version out of an xz-compressed p2 index at the channel root.
-# $1 = index file name, $2 = a label for the warning. Prints the qualifier, or nothing.
-read_qualifier() {
+# Reads EVERY com._1c.g5.v8.dt.core version out of an xz-compressed p2 index at the channel root:
+# a repository may list several at once (old and new coexist mid-publish). $1 = index file name,
+# $2 = a label for the warning. Prints the versions ascending, one per line, or nothing.
+read_versions() {
   local name="$1" label="$2" out=""
   if curl -fsSL --retry 3 --retry-delay 10 "${EDT_P2}${name}" -o "$WORK/$name" 2>/dev/null; then
     out="$(xz -dc "$WORK/$name" 2>/dev/null \
-      | grep -oE "id='com\._1c\.g5\.v8\.dt\.core' version='[^']+'" | head -1 \
-      | sed -E "s/.*version='([^']+)'.*/\1/")"
+      | grep -oE "id='com\._1c\.g5\.v8\.dt\.core' version='[^']+'" \
+      | sed -E "s/.*version='([^']+)'.*/\1/" | sort -uV)"
   fi
   if [ -z "$out" ]; then
     log "::warning::edt-pin.sh: could not read the served EDT build from ${EDT_P2}${name} (${label}; network flake?)."
@@ -82,15 +83,16 @@ read_qualifier() {
   printf '%s' "$out"
 }
 
-EDT_ACTUAL="$(read_qualifier content.xml.xz 'metadata index')"
-EDT_ARTIFACTS="$(read_qualifier artifacts.xml.xz 'artifact index')"
+# The served build is the HIGHEST version the metadata lists - the one p2 resolves.
+EDT_ACTUAL="$(read_versions content.xml.xz 'metadata index' | tail -n 1)"
+EDT_ARTIFACTS="$(read_versions artifacts.xml.xz 'artifact index')"
 
-# ── GUARD 1: the two indexes must describe the SAME build ────────────────────────────
-# Only decidable when BOTH were read; one missing is a flake, not a verdict. A disagreement means
-# the channel cannot be built from at all: resolution follows content.xml.xz and then asks for a
-# jar that artifacts.xml.xz does not list, so every EDT bundle 404s.
-if [ -n "$EDT_ACTUAL" ] && [ -n "$EDT_ARTIFACTS" ] && [ "$EDT_ACTUAL" != "$EDT_ARTIFACTS" ]; then
-  log "::error::EDT $CHANNEL channel is INCONSISTENT: its metadata index (content.xml.xz) describes $EDT_ACTUAL while its artifact index (artifacts.xml.xz) stores $EDT_ARTIFACTS. Resolution follows the metadata and downloads per the artifacts, so every EDT bundle will 404 and Tycho will report it only as \"bundleLocation can't be null for artifact ...\". Nothing in this repository can fix that, and purging the Tycho p2 cache does NOT help - the inconsistent view is upstream (1C mid-publish, or a CDN edge serving one index stale). Re-run once ${EDT_P2}content.xml.xz and ${EDT_P2}artifacts.xml.xz report the same build."
+# ── GUARD 1: the build the metadata resolves must be STORED ──────────────────────────
+# Only decidable when BOTH were read; one missing is a flake, not a verdict. Resolution follows
+# content.xml.xz and downloads per artifacts.xml.xz, so a resolved build with no stored jars means
+# every EDT bundle 404s. Other stored versions alongside it are harmless.
+if [ -n "$EDT_ACTUAL" ] && [ -n "$EDT_ARTIFACTS" ] && ! printf '%s\n' "$EDT_ARTIFACTS" | grep -qxF "$EDT_ACTUAL"; then
+  log "::error::EDT $CHANNEL channel is INCONSISTENT: its metadata index (content.xml.xz) resolves $EDT_ACTUAL, but its artifact index (artifacts.xml.xz) stores only: $(printf '%s' "$EDT_ARTIFACTS" | tr '\n' ' '). Resolution follows the metadata and downloads per the artifacts, so every EDT bundle will 404 and Tycho will report it only as \"bundleLocation can't be null for artifact ...\". Nothing in this repository can fix that, and purging the Tycho p2 cache does NOT help - the inconsistent view is upstream (1C mid-publish, or a CDN edge serving one index stale). Re-run once ${EDT_P2}artifacts.xml.xz stores $EDT_ACTUAL."
   exit 1
 fi
 
@@ -108,5 +110,5 @@ if [ "$EDT_ACTUAL" != "$EDT_EXPECTED" ]; then
   exit 1
 fi
 
-log "[edt-pin] OK: channel $CHANNEL matches the pinned EDT build, and both indexes agree."
+log "[edt-pin] OK: channel $CHANNEL matches the pinned EDT build, and the artifact index stores it."
 echo "$EDT_ACTUAL"

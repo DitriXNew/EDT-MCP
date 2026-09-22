@@ -1254,8 +1254,8 @@ bash source/compile.sh
 
 - A full first build pulls the EDT 2026.2 p2 repository (`mcp/targets/default/default.target`) and the Eclipse 2025-12 release — expect several minutes. Subsequent builds run in ~1 minute thanks to the local p2 cache.
 - `bash source/verify-oldest-platform.sh <edt-install-dir>` compiles the same sources against an installed older EDT instead, which is what keeps the single-build claim honest: the manifest cannot express "references no API that only the newest release has", but a compile against the older one proves it. Run it when the target platform or a call into an EDT API changes. It needs a **local** EDT installation, because 1C publishes only the current service release of each major online and deletes the previous one. Two installations are worth keeping:
-  - **2026.1** — the oldest supported major.
-  - **2026.2.0** — the previous service release of the current major. CI cannot cover it: the `ruby/2026.2/` channel now serves 2026.2.1 and 2026.2.0's jars are gone from it, so a local install is the only place it still exists. Re-pinning CI forward (`.github/scripts/edt-pin.sh`) is a one-way door, which is why this check is the thing that keeps the claim "still loads on 2026.2.0" honest.
+  - **2026.1** — the oldest supported major: `bash source/verify-oldest-platform.sh <2026.1-install-dir>` (the defaults).
+  - **2026.2.0** — the previous service release of the current major: `bash source/verify-oldest-platform.sh <2026.2.0-install-dir> --ee JavaSE-25 --keep-svg` (its bundles require Java 25, so without the flags platform resolution fails before any API is tested). CI cannot cover it: the `ruby/2026.2/` channel now serves 2026.2.1 and 2026.2.0's jars are gone from it, so a local install is the only place it still exists. Re-pinning CI forward (`.github/scripts/edt-pin.sh`) is a one-way door, which is why this check is the thing that keeps the claim "still loads on 2026.2.0" honest.
 - The output zip uses forward-slash entries (produced by `jar` when `zip` is unavailable) so it installs cleanly on both Windows and Linux EDT instances.
 - `source/dist/` is gitignored; only the script itself is tracked.
 
