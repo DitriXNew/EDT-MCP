@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.eclipse.emf.common.util.Enumerator;
+import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EDataType;
@@ -34,7 +35,11 @@ import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.EcorePackage;
+import org.eclipse.emf.ecore.InternalEObject;
 import org.eclipse.emf.ecore.impl.DynamicEObjectImpl;
+import org.eclipse.emf.ecore.util.EcoreUtil;
+import org.eclipse.xtext.naming.QualifiedName;
+import org.eclipse.xtext.resource.IEObjectDescription;
 import org.junit.Test;
 import org.mockito.Mockito;
 
@@ -62,6 +67,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
+import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool.FormHolder;
@@ -71,6 +77,8 @@ import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.McoreValueListBuilder;
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
@@ -89,6 +97,27 @@ import com.google.gson.JsonPrimitive;
  */
 public class ModifyMetadataToolTest
 {
+    /**
+     * The Russian {@code nameRu} identifier of the ActionsPanelTools standard command group - the
+     * platform's own token, not the localized UI string. Spelled in code points: raw Cyrillic
+     * literals are banned in this code base.
+     */
+    /**
+     * The affirmative half of the merged refusal - the clause the RETIRED wording could not contain,
+     * because it said the opposite. Pinning "STANDARD command group" alone proves nothing: the old
+     * "...STANDARD command groups are a different, enum-addressed value space and are not supported
+     * here" carries that substring too, and named the FQN form as well.
+     */
+    private static final String ACCEPTS_A_BARE_STANDARD_GROUP =
+        "the bare name of a platform built-in STANDARD command group"; //$NON-NLS-1$
+
+    /** The retired claim; its absence is half of what tells the new refusal from the old one. */
+    private static final String RETIRED_CLAIM = "not supported here"; //$NON-NLS-1$
+
+    private static final String ACTIONS_PANEL_TOOLS_RU = // PanelDeystviyServis
+        "\u041F\u0430\u043D\u0435\u043B\u044C\u0414\u0435\u0439\u0441\u0442\u0432\u0438\u0439" //$NON-NLS-1$
+            + "\u0421\u0435\u0440\u0432\u0438\u0441"; //$NON-NLS-1$
+
     @Test
     public void testNameConstant()
     {
@@ -1008,26 +1037,230 @@ public class ModifyMetadataToolTest
         assertSame(group, resolved);
     }
 
-    // ===== validateReferenceTarget: not-found hint (issue #262 P3, "do not fake support") ==========
+    // ===== validateReferenceTarget: the not-found hint (issues #262 P3, #508) =====================
     //
     // target==null never touches IBmObject (bmGetId/bmIsTop), so this branch is testable headlessly.
 
     @Test
-    public void testValidateReferenceTargetNotFoundHintIsCommandGroupSpecific()
+    public void testValidateReferenceTargetNotFoundHintNamesBothCommandGroupForms()
     {
-        // A command's 'group' feature (declared against the mcore CommandGroup interface) gets a hint
-        // naming the supported 'CommandGroup.<Name>' shape AND explicitly calling out that the
-        // platform's STANDARD command groups are a different, unsupported value space.
+        // A command's 'group' feature (declared against the mcore CommandGroup interface) gets ONE
+        // merged refusal naming BOTH addressable forms - the 'CommandGroup.<Name>' FQN of a
+        // configuration group, and the bare name of a platform STANDARD group - plus the catalogue
+        // of standard names in both identifiers, so the caller can copy one out (issue #508).
+        String err = ModifyMetadataTool.validateReferenceTarget("group", commandGroupFeature(), //$NON-NLS-1$
+            null, "NotAGroupAtAll", commandGroupCatalogue()); //$NON-NLS-1$
+        assertNotNull(err);
+        assertTrue(err, err.contains("NotAGroupAtAll")); //$NON-NLS-1$
+        assertTrue("the FQN form stays named", err.contains("CommandGroup.<Name>")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the standard-group form is OFFERED, not called out as unsupported: " + err, //$NON-NLS-1$
+            err.contains(ACCEPTS_A_BARE_STANDARD_GROUP));
+        assertTrue("at least one standard name, so the caller can copy one out", //$NON-NLS-1$
+            err.contains("ActionsPanelTools")); //$NON-NLS-1$
+        assertTrue("...and its Russian identifier, which is discoverable nowhere else", //$NON-NLS-1$
+            err.contains(ACTIONS_PANEL_TOOLS_RU));
+        assertFalse("the retired claim must be gone: " + err, err.contains(RETIRED_CLAIM)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCommandGroupNotFoundHintStillNamesBothFormsWithoutTheCatalogue()
+    {
+        // The catalogue is a platform service and can be unreachable; the refusal degrades to OFFERING
+        // both forms rather than losing the standard-group half altogether. It must not degrade back
+        // into the retired "...are not supported here", which also named the FQN form and also carried
+        // the words "STANDARD command group" - which is why the affirmative clause is what is pinned.
+        String err = ModifyMetadataTool.validateReferenceTarget("group", commandGroupFeature(), //$NON-NLS-1$
+            null, "CommandGroup.Bogus", null); //$NON-NLS-1$
+        assertNotNull(err);
+        assertTrue(err, err.contains("CommandGroup.<Name>")); //$NON-NLS-1$
+        assertTrue(err, err.contains(ACCEPTS_A_BARE_STANDARD_GROUP));
+        assertFalse("the retired claim must be gone: " + err, err.contains(RETIRED_CLAIM)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheFourArgumentValidateOverloadAlsoGetsTheMergedCommandGroupHint()
+    {
+        // The overload every OTHER caller uses (a MANY_REFERENCE never carries a catalogue) must not
+        // be left behind on the retired wording.
+        String err = ModifyMetadataTool.validateReferenceTarget("group", commandGroupFeature(), //$NON-NLS-1$
+            null, "CommandGroup.Bogus"); //$NON-NLS-1$
+        assertNotNull(err);
+        assertTrue(err, err.contains("CommandGroup.<Name>")); //$NON-NLS-1$
+        assertTrue(err, err.contains(ACCEPTS_A_BARE_STANDARD_GROUP));
+        assertFalse("the retired claim must be gone: " + err, err.contains(RETIRED_CLAIM)); //$NON-NLS-1$
+    }
+
+    // ===== issue #508: a platform STANDARD command group is settable by its bare name =============
+    //
+    // A StandardCommandGroup is not an MdObject and carries no BM id, so it can never travel as a
+    // PreparedChange.reference: it is written as the platform's own UNRESOLVED proxy in a SCALAR set,
+    // which is the only shape the transaction's ReferenceValueFactory can persist.
+
+    @Test
+    public void testTheReferencePathItselfWritesAStandardGroupInsteadOfRefusingIt()
+    {
+        // The wiring pin: the whole single-reference path - not just the helper - must reach the
+        // standard-group catalogue, and must reach it BEFORE FQN resolution. Without the branch in
+        // that path 'ActionsPanelTools' falls through to the FQN resolver and comes back refused.
+        EObject command = MdClassFactory.eINSTANCE.createDataProcessorCommand();
+        PropertyInfo info = MetadataPropertyIntrospector.find(command, "group"); //$NON-NLS-1$
+        assertNotNull("precondition: 'group' must be an addressable property", info); //$NON-NLS-1$
+        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+
+        String err = ModifyMetadataTool.prepareReferenceWith(commandGroupCatalogue(),
+            MetadataScope.ofConfiguration(MdClassFactory.eINSTANCE.createConfiguration()), command,
+            "group", "ActionsPanelTools", info, out); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNull("the reference path must accept a standard group name, got: " + err, err); //$NON-NLS-1$
+        assertEquals(1, out.size());
+        assertTrue("...and write it as the platform's unresolved proxy", //$NON-NLS-1$
+            ((EObject)out.get(0).value()).eIsProxy());
+    }
+
+    @Test
+    public void testTheReferencePathRefusesAnUnknownBareNameWithBothForms()
+    {
+        EObject command = MdClassFactory.eINSTANCE.createDataProcessorCommand();
+        PropertyInfo info = MetadataPropertyIntrospector.find(command, "group"); //$NON-NLS-1$
+        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+
+        String err = ModifyMetadataTool.prepareReferenceWith(commandGroupCatalogue(),
+            MetadataScope.ofConfiguration(MdClassFactory.eINSTANCE.createConfiguration()), command,
+            "group", "NotAGroupAtAll", info, out); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull("an unknown bare name must be refused, not silently dropped", err); //$NON-NLS-1$
+        assertTrue(err, err.contains("NotAGroupAtAll")); //$NON-NLS-1$
+        assertTrue("the refusal carries the merged hint the catalogue feeds", //$NON-NLS-1$
+            err.contains("ActionsPanelTools")); //$NON-NLS-1$
+        assertTrue("nothing may be queued for a refused value", out.isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAStandardCommandGroupNameQueuesAScalarProxySet()
+    {
+        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+
+        assertTrue("a bare standard-group name must be queued by the standard-group branch", //$NON-NLS-1$
+            ModifyMetadataTool.queueStandardCommandGroup(commandGroupFeature(),
+                "ActionsPanelTools", commandGroupCatalogue(), out)); //$NON-NLS-1$
+
+        assertEquals(1, out.size());
+        ModifyMetadataTool.PreparedChange change = out.get(0);
+        assertEquals("group", change.featureName()); //$NON-NLS-1$
+        Object value = change.value();
+        assertTrue("a standard group travels as a value, not as a BM id: " + value, //$NON-NLS-1$
+            value instanceof EObject);
+        assertTrue("...and that value is the platform's UNRESOLVED proxy", //$NON-NLS-1$
+            ((EObject)value).eIsProxy());
+    }
+
+    @Test
+    public void testTheRussianStandardCommandGroupIdentifierQueuesTheSameSet()
+    {
+        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+
+        assertTrue("the Russian nameRu identifier addresses the same group", //$NON-NLS-1$
+            ModifyMetadataTool.queueStandardCommandGroup(commandGroupFeature(),
+                ACTIONS_PANEL_TOOLS_RU, commandGroupCatalogue(), out));
+
+        assertEquals(1, out.size());
+        assertTrue(((EObject)out.get(0).value()).eIsProxy());
+    }
+
+    @Test
+    public void testAnUnknownBareNameFallsThroughToTheSharedRefusal()
+    {
+        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+
+        assertFalse("an unknown token must not be queued", //$NON-NLS-1$
+            ModifyMetadataTool.queueStandardCommandGroup(commandGroupFeature(),
+                "NotAGroupAtAll", commandGroupCatalogue(), out)); //$NON-NLS-1$
+        assertTrue("nothing may be queued when nothing resolved", out.isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnFqnShapedValueNeverEntersTheStandardGroupBranch()
+    {
+        // The catalogue here deliberately holds a dot-bearing name (the platform's own names never
+        // do) so the "no dot" gate is OBSERVABLE: without it an FQN-shaped value would be answered
+        // from the standard-group catalogue instead of going to FQN resolution.
+        IEObjectProvider trap = catalogueOf("CommandGroup.MyGroup"); //$NON-NLS-1$
+        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+
+        assertFalse("a dotted value belongs to the FQN address space", //$NON-NLS-1$
+            ModifyMetadataTool.queueStandardCommandGroup(commandGroupFeature(),
+                "CommandGroup.MyGroup", trap, out)); //$NON-NLS-1$
+        assertTrue(out.isEmpty());
+    }
+
+    @Test
+    public void testTheStandardGroupBranchDoesNotFireForOtherReferences()
+    {
+        EStructuralFeature parentFeature = MdClassFactory.eINSTANCE.createSubsystem()
+            .eClass().getEStructuralFeature("parentSubsystem"); //$NON-NLS-1$
+        assertNotNull("precondition: Subsystem must declare 'parentSubsystem'", parentFeature); //$NON-NLS-1$
+        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+
+        assertFalse("a dotless value on a NON-command-group reference keeps the FQN path", //$NON-NLS-1$
+            ModifyMetadataTool.queueStandardCommandGroup(parentFeature, "ActionsPanelTools", //$NON-NLS-1$
+                commandGroupCatalogue(), out));
+        assertTrue(out.isEmpty());
+    }
+
+    @Test
+    public void testWithoutTheCatalogueAStandardGroupNameIsRefusedRatherThanGuessed()
+    {
+        List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
+
+        assertFalse("no catalogue means no value to write - never a fabricated one", //$NON-NLS-1$
+            ModifyMetadataTool.queueStandardCommandGroup(commandGroupFeature(),
+                "ActionsPanelTools", null, out)); //$NON-NLS-1$
+        assertTrue(out.isEmpty());
+    }
+
+    /** The {@code group} feature of a command - the one declared against mcore's CommandGroup. */
+    private static EStructuralFeature commandGroupFeature()
+    {
         EStructuralFeature groupFeature = MdClassFactory.eINSTANCE.createDataProcessorCommand()
             .eClass().getEStructuralFeature("group"); //$NON-NLS-1$
         assertNotNull("precondition: DataProcessorCommand must declare 'group'", groupFeature); //$NON-NLS-1$
-        String err = ModifyMetadataTool.validateReferenceTarget("group", groupFeature, null, //$NON-NLS-1$
-            "CommandGroup.Bogus"); //$NON-NLS-1$
-        assertNotNull(err);
-        assertTrue("the hint must name the CommandGroup.<Name> shape", //$NON-NLS-1$
-            err.contains("CommandGroup.<Name>")); //$NON-NLS-1$
-        assertTrue("the hint must call out standard groups as unsupported", //$NON-NLS-1$
-            err.contains("STANDARD command groups")); //$NON-NLS-1$
+        return groupFeature;
+    }
+
+    /** A stub platform catalogue holding ActionsPanelTools under both of its identifiers. */
+    private static IEObjectProvider commandGroupCatalogue()
+    {
+        return catalogueOf("ActionsPanelTools", ACTIONS_PANEL_TOOLS_RU); //$NON-NLS-1$
+    }
+
+    /**
+     * A stub of the platform's command-group catalogue: every supplied identifier is an index key of
+     * the SAME group, and every description hands back a fresh unresolved proxy on that group's URI -
+     * the shape {@code AbstractEObjectProvider} has.
+     */
+    private static IEObjectProvider catalogueOf(String... identifiers)
+    {
+        URI uri = URI.createURI("v8:/CommandGroups").appendFragment(identifiers[0]); //$NON-NLS-1$
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+        List<IEObjectDescription> descriptions = new ArrayList<>();
+        for (String identifier : identifiers)
+        {
+            IEObjectDescription desc = Mockito.mock(IEObjectDescription.class);
+            Mockito.doReturn(QualifiedName.create(identifier)).when(desc).getName();
+            Mockito.doReturn(uri).when(desc).getEObjectURI();
+            Mockito.doAnswer(invocation -> standardGroupProxy(uri)).when(desc).getEObjectOrProxy();
+            descriptions.add(desc);
+            Mockito.doReturn(standardGroupProxy(uri)).when(provider).getProxy(identifier);
+        }
+        Mockito.doReturn(descriptions).when(provider).getEObjectDescriptions(Mockito.any());
+        return provider;
+    }
+
+    private static EObject standardGroupProxy(URI uri)
+    {
+        EObject group = EcoreUtil.create(McorePackage.Literals.STANDARD_COMMAND_GROUP);
+        ((InternalEObject)group).eSetProxyURI(uri);
+        return group;
     }
 
     @Test
