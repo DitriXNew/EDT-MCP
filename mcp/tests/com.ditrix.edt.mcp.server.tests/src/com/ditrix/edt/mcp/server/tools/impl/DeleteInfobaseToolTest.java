@@ -418,12 +418,12 @@ public class DeleteInfobaseToolTest
                     try
                     {
                         release.await(30, TimeUnit.SECONDS);
-                        return Boolean.FALSE;
+                        return DeleteInfobaseTool.SharedDatabase.NOT_SHARED;
                     }
                     catch (InterruptedException e)
                     {
                         Thread.currentThread().interrupt();
-                        return Boolean.FALSE;
+                        return DeleteInfobaseTool.SharedDatabase.NOT_SHARED;
                     }
                     finally
                     {
@@ -445,13 +445,66 @@ public class DeleteInfobaseToolTest
     public void testAConcludedSharedCheckKeepsBothMeasuredAnswers()
     {
         assertEquals("a concluded 'yes' is SHARED", DeleteInfobaseTool.SharedDatabase.SHARED, //$NON-NLS-1$
-            DeleteInfobaseTool.sharedCheckBounded(30_000L, () -> Boolean.TRUE));
+            DeleteInfobaseTool.sharedCheckBounded(30_000L, () -> DeleteInfobaseTool.SharedDatabase.SHARED));
         assertEquals("a concluded 'no' is NOT_SHARED", //$NON-NLS-1$
             DeleteInfobaseTool.SharedDatabase.NOT_SHARED,
-            DeleteInfobaseTool.sharedCheckBounded(30_000L, () -> Boolean.FALSE));
+            DeleteInfobaseTool.sharedCheckBounded(30_000L, () -> DeleteInfobaseTool.SharedDatabase.NOT_SHARED));
         assertFalse("only a measured 'no' may delete the files", //$NON-NLS-1$
             DeleteInfobaseTool.SharedDatabase.NOT_SHARED.keepsFiles());
         assertTrue(DeleteInfobaseTool.SharedDatabase.SHARED.keepsFiles());
+    }
+
+    @Test
+    public void testARaisedSharedCheckIsUnknownNotShared()
+    {
+        // A raised enumeration established nothing: the files stay, but no co-owner is claimed.
+        DeleteInfobaseTool.SharedDatabase shared = DeleteInfobaseTool.sharedCheckBounded(30_000L, () -> {
+            throw new IllegalStateException("workspace enumeration failed"); //$NON-NLS-1$
+        });
+        assertEquals(DeleteInfobaseTool.SharedDatabase.UNKNOWN, shared);
+        assertTrue(shared.keepsFiles());
+    }
+
+    @Test
+    public void testAnUnreadableProjectDoesNotStopTheScanForARealCoOwner()
+    {
+        // The unreadable project comes first; the co-owner behind it must still be found.
+        assertEquals(DeleteInfobaseTool.SharedDatabase.SHARED,
+            DeleteInfobaseTool.combineProjectAnswers(List.of(
+                () -> DeleteInfobaseTool.SharedDatabase.UNKNOWN,
+                () -> DeleteInfobaseTool.SharedDatabase.NOT_SHARED,
+                () -> DeleteInfobaseTool.SharedDatabase.SHARED)));
+    }
+
+    @Test
+    public void testAnUnreadableProjectWithNoCoOwnerIsUnknownNotShared()
+    {
+        assertEquals(DeleteInfobaseTool.SharedDatabase.UNKNOWN,
+            DeleteInfobaseTool.combineProjectAnswers(List.of(
+                () -> DeleteInfobaseTool.SharedDatabase.NOT_SHARED,
+                () -> DeleteInfobaseTool.SharedDatabase.UNKNOWN,
+                () -> DeleteInfobaseTool.SharedDatabase.NOT_SHARED)));
+    }
+
+    @Test
+    public void testCombiningProjectAnswersIsMeasuredOnlyWhenEveryProjectAnswered()
+    {
+        assertEquals("every project read, none serves the directory", //$NON-NLS-1$
+            DeleteInfobaseTool.SharedDatabase.NOT_SHARED,
+            DeleteInfobaseTool.combineProjectAnswers(List.of(
+                () -> DeleteInfobaseTool.SharedDatabase.NOT_SHARED,
+                () -> DeleteInfobaseTool.SharedDatabase.NOT_SHARED)));
+        assertEquals("no other project at all", DeleteInfobaseTool.SharedDatabase.NOT_SHARED, //$NON-NLS-1$
+            DeleteInfobaseTool.combineProjectAnswers(List.of()));
+        // A found co-owner ends the scan: projects after it are never read.
+        java.util.concurrent.atomic.AtomicInteger readsAfter = new java.util.concurrent.atomic.AtomicInteger();
+        DeleteInfobaseTool.combineProjectAnswers(List.of(
+            () -> DeleteInfobaseTool.SharedDatabase.SHARED,
+            () -> {
+                readsAfter.incrementAndGet();
+                return DeleteInfobaseTool.SharedDatabase.NOT_SHARED;
+            }));
+        assertEquals(0, readsAfter.get());
     }
 
     @Test

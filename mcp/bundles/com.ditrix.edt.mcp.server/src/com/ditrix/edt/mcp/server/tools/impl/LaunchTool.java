@@ -2181,19 +2181,16 @@ public class LaunchTool implements IMcpTool
             {
                 return LaunchLifecycleUtils.attributionNames(null, null, null);
             }
-            // The DELEGATE id, the same one standaloneServerPortPolicy resolves: a runtime
-            // configuration without a stored ATTR_APPLICATION_ID launches the default application,
-            // while getApplicationIdFor yields a synthetic "launch:<name>" that no
-            // IApplicationManager knows - so attribution came back null and the arm, though
-            // created, could never authorise the re-address the caller asked for.
-            String applicationId = LaunchLifecycleUtils.resolveDelegateApplicationId(config,
-                ctx.project(), Activator.getDefault().getApplicationManager());
-            return LaunchLifecycleUtils.attributionNames(
-                Activator.getDefault().getApplicationManager(), ctx.project(), applicationId);
+            // The DELEGATE application, the same one standaloneServerPortPolicy resolves (a
+            // synthetic "launch:<name>" id is known to no IApplicationManager). An unanswered
+            // default lookup stays inconclusive rather than becoming a definitive "no name".
+            return LaunchLifecycleUtils.delegateAttributionNames(config, ctx.project(),
+                Activator.getDefault().getApplicationManager());
         }
         catch (Exception e) // NOSONAR a best-effort hint must never break the launch
         {
-            return LaunchLifecycleUtils.attributionNames(null, null, null);
+            // A raised read answered nothing: unknown, not absent.
+            return LaunchLifecycleUtils.attributionUnanswered();
         }
     }
 

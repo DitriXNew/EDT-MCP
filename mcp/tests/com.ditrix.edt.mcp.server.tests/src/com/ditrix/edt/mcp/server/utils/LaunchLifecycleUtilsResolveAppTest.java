@@ -24,6 +24,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.debug.core.ILaunchConfiguration;
 import org.junit.Test;
 
 import com.e1c.g5.dt.applications.ApplicationException;
@@ -319,6 +320,73 @@ public class LaunchLifecycleUtilsResolveAppTest
         assertNull(names.serverName());
         assertTrue("a raised attribution read must say the names are UNKNOWN",
             names.inconclusive());
+    }
+
+    // ====== an unanswered DEFAULT lookup must keep the delegate's attribution unknown ======
+
+    @Test
+    public void testAnUnansweredDefaultLookupKeepsTheDelegateAttributionInconclusive() throws Exception
+    {
+        // No persisted application id, and the default lookup RAISES. Resolving the delegate id
+        // first threw that away: the id came back null and the names said "definitively none",
+        // which attaches the permanent "retrying will not help" advice to a transient failure.
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("Raising");
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        when(mgr.getDefaultApplication(project))
+            .thenThrow(new ApplicationException("the registered default no longer resolves"));
+
+        LaunchLifecycleUtils.AttributionNames names =
+            LaunchLifecycleUtils.delegateAttributionNames(config, project, mgr);
+
+        assertTrue("an unanswered default lookup leaves the names UNKNOWN", names.inconclusive());
+        assertNull(names.infobaseName());
+        verify(mgr, never()).getApplication(any(), any());
+    }
+
+    @Test
+    public void testAMeasuredAbsenceOfADefaultIsADefinitiveNoName() throws Exception
+    {
+        // The other edge: the lookup ANSWERED "no default", so the names really are absent.
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        when(mgr.getDefaultApplication(project)).thenReturn(Optional.empty());
+
+        LaunchLifecycleUtils.AttributionNames names =
+            LaunchLifecycleUtils.delegateAttributionNames(config, project, mgr);
+
+        assertFalse("a measured absence is a conclusion", names.inconclusive());
+        assertNull(names.infobaseName());
+    }
+
+    @Test
+    public void testAPersistedApplicationIdIsAttributedWithoutTheDefaultLookup() throws Exception
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        when(config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, "")).thenReturn("Infobase.Agent");
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        IApplication app = mock(IApplication.class);
+        when(app.getName()).thenReturn("Agent Base");
+        when(mgr.getApplication(project, "Infobase.Agent")).thenReturn(Optional.of(app));
+
+        LaunchLifecycleUtils.AttributionNames names =
+            LaunchLifecycleUtils.delegateAttributionNames(config, project, mgr);
+
+        assertEquals("Agent Base", names.infobaseName());
+        assertFalse(names.inconclusive());
+        verify(mgr, never()).getDefaultApplication(any());
+    }
+
+    @Test
+    public void testAnUnansweredLookupFactoryIsInconclusive()
+    {
+        LaunchLifecycleUtils.AttributionNames names = LaunchLifecycleUtils.attributionUnanswered();
+        assertTrue(names.inconclusive());
+        assertNull(names.infobaseName());
+        assertNull(names.serverName());
     }
 
     @Test

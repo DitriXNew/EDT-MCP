@@ -2180,6 +2180,52 @@ public final class LaunchLifecycleUtils
     }
 
     /**
+     * Attribution names for the application a launch configuration's DELEGATE starts: its persisted
+     * {@code ATTR_APPLICATION_ID}, else the project's default. Unlike feeding
+     * {@link #resolveDelegateApplicationId} into {@link #attributionNames}, a default lookup that
+     * did not answer stays INCONCLUSIVE instead of collapsing into a definitive "no name".
+     *
+     * @param config the launch configuration (may be {@code null})
+     * @param project the resolved project (may be {@code null})
+     * @param appManager the application manager (may be {@code null})
+     * @return the names, never {@code null}
+     */
+    public static AttributionNames delegateAttributionNames(ILaunchConfiguration config,
+        IProject project, IApplicationManager appManager)
+    {
+        String realId = config == null ? null
+            : LaunchConfigUtils.readAttribute(config, LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
+        if (realId != null && !realId.isEmpty())
+        {
+            return attributionNames(appManager, project, realId);
+        }
+        if (project == null || appManager == null)
+        {
+            return attributionNames(null, null, null);
+        }
+        DefaultApplicationLookup lookup = resolveDefaultApplication(project, null, appManager,
+            ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (lookup.inconclusive())
+        {
+            return attributionUnanswered();
+        }
+        String defaultId = lookup.id();
+        return attributionNames(appManager, project,
+            defaultId != null && !defaultId.isEmpty() ? defaultId : null);
+    }
+
+    /**
+     * The names for a lookup that did not ANSWER (deadline or raise): unknown, not absent, so the
+     * caller does not attach the permanent "retrying will not help" advice to it.
+     *
+     * @return inconclusive names, never {@code null}
+     */
+    public static AttributionNames attributionUnanswered()
+    {
+        return new AttributionNames(null, null, true);
+    }
+
+    /**
      * Same lookup with the deadline explicit, so a test can drive the non-concluded branch without
      * waiting out {@link #ATTRIBUTION_LOOKUP_TIMEOUT_MS}. Production always calls the overload
      * above.

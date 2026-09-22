@@ -9,11 +9,13 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -1515,13 +1517,13 @@ public class DeleteInfobaseTool implements IMcpTool
      * measured.
      *
      * @param timeoutMs the bound on the whole enumeration
-     * @param enumeration answers whether any OTHER project uses the same on-disk database
+     * @param enumeration answers what the OTHER projects establish about the same on-disk database
      * @return what the check established, never {@code null}
      */
     static SharedDatabase sharedCheckBounded(long timeoutMs,
-        ApplicationSupport.IApplicationRead<Boolean> enumeration)
+        ApplicationSupport.IApplicationRead<SharedDatabase> enumeration)
     {
-        ApplicationSupport.BoundedRead<Boolean> read = ApplicationSupport.readBounded(
+        ApplicationSupport.BoundedRead<SharedDatabase> read = ApplicationSupport.readBounded(
             "Check shared infobases", //$NON-NLS-1$
             "the shared-infobase check across the workspace's projects", //$NON-NLS-1$
             timeoutMs, enumeration);
@@ -1531,8 +1533,38 @@ public class DeleteInfobaseTool implements IMcpTool
                 + "the files without establishing co-ownership: " + read.deadlineFailure(), null); //$NON-NLS-1$
             return SharedDatabase.UNKNOWN;
         }
-        return Boolean.TRUE.equals(read.valueOrRethrow())
-            ? SharedDatabase.SHARED : SharedDatabase.NOT_SHARED;
+        if (read.failure() != null)
+        {
+            // A raised enumeration answered nothing either: keep the files, claim no co-owner.
+            Activator.logError("delete_infobase: shared-infobase check failed — keeping the files " //$NON-NLS-1$
+                + "without establishing co-ownership", read.failure()); //$NON-NLS-1$
+            return SharedDatabase.UNKNOWN;
+        }
+        SharedDatabase answer = read.valueOrRethrow();
+        return answer != null ? answer : SharedDatabase.UNKNOWN;
+    }
+
+    /**
+     * Folds the per-project answers into one, in order and lazily: a measured co-owner wins at
+     * once; otherwise any project that could not be read leaves the whole answer UNKNOWN. An
+     * unreadable project must not stop the scan, since a later one may still establish SHARED.
+     *
+     * @param perProject one answer per OTHER project, each computed only when reached
+     * @return the combined answer, never {@code null}
+     */
+    static SharedDatabase combineProjectAnswers(Iterable<Supplier<SharedDatabase>> perProject)
+    {
+        boolean unanswered = false;
+        for (Supplier<SharedDatabase> answer : perProject)
+        {
+            SharedDatabase one = answer.get();
+            if (one == SharedDatabase.SHARED)
+            {
+                return SharedDatabase.SHARED;
+            }
+            unanswered |= one != SharedDatabase.NOT_SHARED;
+        }
+        return unanswered ? SharedDatabase.UNKNOWN : SharedDatabase.NOT_SHARED;
     }
 
     /**
@@ -1559,46 +1591,53 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /** The enumeration {@link #isSharedWithOtherProjects} runs under one deadline. */
-    private static boolean enumerateSharedWithOtherProjects(IApplicationManager appManager,
+    private static SharedDatabase enumerateSharedWithOtherProjects(IApplicationManager appManager,
             IProject currentProject, Path target, Path dbDir)
     {
         try
         {
-            for (IProject other : ProjectContext.allProjects()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
+            List<Supplier<SharedDatabase>> answers = new ArrayList<>();
+            for (IProject other : ProjectContext.allProjects())
             {
-                if (other == null || other.equals(currentProject))
+                if (other != null && !other.equals(currentProject))
                 {
-                    continue;
-                }
-                List<IApplication> apps;
-                try // NOSONAR nested try is intentional (distinct resource/exception scopes)
-                {
-                    apps = appManager.getApplications(other);
-                }
-                catch (Exception e)
-                {
-                    // A project that cannot be queried might still share the infobase — be safe.
-                    Activator.logError("delete_infobase: could not list applications of project '" //$NON-NLS-1$
-                        + other.getName() + "' while checking for shared infobases", e); //$NON-NLS-1$
-                    return true;
-                }
-                if (apps == null)
-                {
-                    continue;
-                }
-                if (anyApplicationServesDir(apps, target, other, dbDir))
-                {
-                    return true;
+                    answers.add(() -> projectShares(appManager, other, target, dbDir));
                 }
             }
+            return combineProjectAnswers(answers);
         }
         catch (Exception e)
         {
-            // Enumeration itself failed — keep the files (the safe choice).
-            Activator.logError("delete_infobase: shared-infobase check failed — keeping the files", e); //$NON-NLS-1$
-            return true;
+            // Enumeration itself failed: nothing established, so the files stay without a co-owner claim.
+            Activator.logError("delete_infobase: shared-infobase check failed — keeping the files " //$NON-NLS-1$
+                + "without establishing co-ownership", e); //$NON-NLS-1$
+            return SharedDatabase.UNKNOWN;
         }
-        return false;
+    }
+
+    /**
+     * What one OTHER project establishes: it serves {@code target}, it does not, or it cannot be
+     * read. A failure anywhere in judging this project is ITS answer, so the scan goes on.
+     */
+    private static SharedDatabase projectShares(IApplicationManager appManager, IProject other,
+            Path target, Path dbDir)
+    {
+        try
+        {
+            List<IApplication> apps = appManager.getApplications(other);
+            if (apps == null)
+            {
+                return SharedDatabase.NOT_SHARED;
+            }
+            return anyApplicationServesDir(apps, target, other, dbDir)
+                ? SharedDatabase.SHARED : SharedDatabase.NOT_SHARED;
+        }
+        catch (Exception e)
+        {
+            Activator.logError("delete_infobase: could not check the applications of project '" //$NON-NLS-1$
+                + other.getName() + "' for a shared infobase", e); //$NON-NLS-1$
+            return SharedDatabase.UNKNOWN;
+        }
     }
 
     /**
