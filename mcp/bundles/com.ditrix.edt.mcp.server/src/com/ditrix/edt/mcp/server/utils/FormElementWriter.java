@@ -4015,7 +4015,9 @@ public final class FormElementWriter
         if (!(feature instanceof EAttribute)
             || !(((EAttribute)feature).getEAttributeType() instanceof EEnum))
         {
-            return null;
+            // The platform model's shape, not the caller's literal: raise it, never refuse it.
+            throw modelLacks("The form model's " + owner.eClass().getName() + "." + featureName //$NON-NLS-1$ //$NON-NLS-2$
+                + " is not an enum attribute."); //$NON-NLS-1$
         }
         for (EEnumLiteral literal : ((EEnum)((EAttribute)feature).getEAttributeType()).getELiterals())
         {
@@ -5492,14 +5494,12 @@ public final class FormElementWriter
     static EEnumLiteral resolveEventCallType(EClass eventHandlerExtType, String token)
     {
         EStructuralFeature feature = eventHandlerExtType.getEStructuralFeature(FEATURE_CALL_TYPE);
-        if (!(feature instanceof EAttribute))
-        {
-            return null;
-        }
-        EClassifier type = ((EAttribute)feature).getEAttributeType();
+        EClassifier type = feature instanceof EAttribute ? ((EAttribute)feature).getEAttributeType() : null;
         if (!(type instanceof EEnum))
         {
-            return null;
+            // The platform model's shape, not the caller's token: raise it, never refuse it.
+            throw modelLacks("The form model's " + eventHandlerExtType.getName() + "." + FEATURE_CALL_TYPE //$NON-NLS-1$ //$NON-NLS-2$
+                + " is not an enum attribute."); //$NON-NLS-1$
         }
         String want = token.trim();
         if (CALL_TYPE_UI_INSTEAD.equalsIgnoreCase(want))

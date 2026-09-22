@@ -955,6 +955,19 @@ public class PredefinedWriterTest
         }
     }
 
+    /** An exponent past BigDecimal's int scale is valid JSON, so it is the caller's refusal, not a crash. */
+    @Test
+    public void testNumericCodeExponentOutOfBigDecimalRangeIsARefusal()
+    {
+        Catalog catalog = newNumberCodeCatalog("Codes", 5); //$NON-NLS-1$
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.code = com.google.gson.JsonParser.parseString("1e2147483648"); //$NON-NLS-1$
+        props.codeSet = true;
+        PredefinedWriter.WriteResult result = PredefinedWriter.create(catalog, "Overflow", props, false); //$NON-NLS-1$
+        assertTrue(result.isError());
+        assertTrue(result.error, result.error.contains("out of range")); //$NON-NLS-1$
+    }
+
     /** A fractional numeric code is rejected - a catalog code is an integer. */
     @Test
     public void testNumericCodeFractionalRejected()

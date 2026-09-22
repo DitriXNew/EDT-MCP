@@ -377,6 +377,8 @@ public class MetadataTypeBuilderTest
         assertTrue("the error must name every tried candidate", //$NON-NLS-1$
             err.contains("UUID") && err.contains("UniqueIdentifier")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(td.getTypes().isEmpty());
+        // A KNOWN kind the present provider could not build is the platform's failure, not the spec's.
+        assertTrue(MetadataTypeBuilder.typeError(err).platformFailure);
     }
 
     @Test
@@ -405,6 +407,8 @@ public class MetadataTypeBuilderTest
         assertTrue(err.contains("nonsense")); //$NON-NLS-1$
         assertTrue(err.contains("ValueStorage")); //$NON-NLS-1$
         assertTrue(err.contains("UUID")); //$NON-NLS-1$
+        assertFalse("an unknown kind is the caller's refusal", //$NON-NLS-1$
+            MetadataTypeBuilder.typeError(err).platformFailure);
     }
 
     // ---- ValueTable / ValueTree in-memory collections (issue #295) --------------------------------

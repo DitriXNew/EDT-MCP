@@ -260,6 +260,12 @@ public final class MetadataTypeBuilder
         return new Result(null, message, true);
     }
 
+    /** Classifies an {@link #addType} error: the provider failing a known kind is the platform's. */
+    static Result typeError(String message)
+    {
+        return message.startsWith(PLATFORM_TYPE_NOT_CREATED) ? platformError(message) : error(message);
+    }
+
     /**
      * Validates the spec SHAPE without touching the platform (so a malformed spec is rejectable in a
      * unit test); returns an error message, or {@code null} when the shape is acceptable.
@@ -659,7 +665,7 @@ public final class MetadataTypeBuilder
                 isExtensionProject, typeTarget);
             if (err != null)
             {
-                return error(err);
+                return typeError(err);
             }
         }
         return new Result(td, null, false);
@@ -1502,8 +1508,14 @@ public final class MetadataTypeBuilder
                 return null;
             }
         }
-        return "Could not create the platform type. Tried: " + String.join(", ", candidates) + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return PLATFORM_TYPE_NOT_CREATED + " Tried: " + String.join(", ", candidates) + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
+
+    /**
+     * Opens the error for a KNOWN kind the present provider built under none of its names - a
+     * platform failure, not the spec's, so {@link #build} marks it {@code platformFailure}.
+     */
+    private static final String PLATFORM_TYPE_NOT_CREATED = "Could not create the platform type."; //$NON-NLS-1$
 
     /**
      * Creates the proxy for {@code name} and returns it as a {@link TypeItem}, or {@code null} on any

@@ -1183,6 +1183,23 @@ public class FormElementWriterTest
         assertNull(FormElementWriter.resolveEventCallType(ehExt, "")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testResolveEventCallTypeRaisesOnAModelWithoutAnEnumCallType()
+    {
+        // A model without the enum is the platform's shape, never a bad token, so it must not be refused.
+        EClass bare = EcoreFactory.eINSTANCE.createEClass();
+        bare.setName("EventHandlerExtension"); //$NON-NLS-1$
+        try
+        {
+            FormElementWriter.resolveEventCallType(bare, "Before"); //$NON-NLS-1$
+            fail("a model lacking callType must raise, not answer null"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("callType")); //$NON-NLS-1$
+        }
+    }
+
     /**
      * A self-contained dynamic EMF model shaped like the form metamodel's handler containment: a
      * {@code FormField} container with a {@code handlers} containment list typed to base

@@ -1987,7 +1987,17 @@ public final class PredefinedWriter
                 return "'code' must be a JSON number for " + ownerKind + " '" + ownerName //$NON-NLS-1$ //$NON-NLS-2$
                     + "' (codeType=Number); got '" + code + "'."; //$NON-NLS-1$ //$NON-NLS-2$
             }
-            BigDecimal bd = code.getAsBigDecimal();
+            BigDecimal bd;
+            try
+            {
+                bd = code.getAsBigDecimal();
+            }
+            catch (NumberFormatException e)
+            {
+                // Valid JSON, but its exponent is outside BigDecimal's int scale (e.g. 1e2147483648).
+                return "'code' " + code + " is out of range; a numeric " + ownerKind + " code must be a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "non-negative integer."; //$NON-NLS-1$
+            }
             if (bd.signum() < 0)
             {
                 return "'code' " + bd + " is negative; a numeric " + ownerKind + " code must be a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
