@@ -80,7 +80,8 @@ import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
  * API ({@code ImportConfigurationFilesCmd}) does it: refresh the workspace tree and - only when
  * the project is not already started - ask
  * {@link IWorkspaceOrchestrator#startWorkspaceProjects} for a {@link ProjectStartType#CLEAN_IMPORT}
- * start, then wait for {@code isStarted} within a bounded budget. The answer states what was
+ * start, then wait - within a bounded budget - until EDT reports the project started AND knows
+ * its DtProject. The answer states what was
  * observed: {@code state: ready} when EDT started the project, {@code state: importing} when the
  * budget ran out first (a success, because the files ARE imported and the project name IS taken -
  * an error would push the caller into a re-import that can only fail).
@@ -92,10 +93,12 @@ import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
  * the same project - which the {@code !isStarted} gate cannot see, because it has already
  * answered. It is therefore called only as a RECOVERY, when no start of ours is coming: after the
  * post-import step itself threw - the workspace refresh, or the start request (the
- * {@code isStarted} gate or {@code startWorkspaceProjects}) - or when the bounded job that runs
- * the step never entered it at all. The watchdog is then the only
- * remaining route to a started project, and the release also un-freezes context startup for every
- * OTHER project in the workspace.
+ * {@code isStarted} gate or {@code startWorkspaceProjects}) - or when the step is abandoned before
+ * it started (the bounded job never entered it, or could not be scheduled at all). An abandoned
+ * step is claimed by the caller through an ownership token the job body must claim first, so a
+ * job that runs late does nothing and our own start cannot follow the release. The watchdog is
+ * then the only remaining route to a started project, and the release also un-freezes context
+ * startup for every OTHER project in the workspace.
  */
 public class ImportConfigurationFromXmlTool implements IMcpTool
 {
@@ -120,7 +123,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
      */
     static final long PROJECT_START_BUDGET_MS = TimeUnit.SECONDS.toMillis(300);
 
-    /** How often {@code isStarted} is polled while waiting for the project start. */
+    /** How often readiness ({@code isStarted} and the DtProject) is polled during the wait. */
     private static final long START_POLL_PERIOD_MS = 250L;
 
     /**
@@ -427,7 +430,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
         if (outcome.phase == StartPhase.NOT_SCHEDULED)
         {
             // No start was ever requested here either, and the latch WAS released (see
-            // releaseLatchAfterAStartThatNeverRan): the same shape as REFRESH_FAILED - the manual
+            // abandonTheStep): the same shape as REFRESH_FAILED - the manual
             // recovery first, the watchdog as the secondary possibility.
             return ToolResult.markErrorAfterMutation(ToolResult.error(
                 "The XML files were imported into project '" + projectName //$NON-NLS-1$
@@ -530,8 +533,8 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
      * {@code startWorkspaceProjects} begins by STOPPING the contexts of dependent projects.
      * {@code permitImport} is deliberately absent from this path - see the class javadoc - and is
      * called only when no start of ours is coming: the refresh or the start request itself threw,
-     * or the bounded job never entered the step at all
-     * ({@link #releaseLatchAfterAStartThatNeverRan}).
+     * or the step was abandoned before it started ({@link #abandonTheStep}: the bounded job never
+     * entered it, or scheduling it threw).
      *
      * <p>All of it runs inside a {@link BoundedJob}, because
      * {@code refreshLocal(DEPTH_INFINITE)} over a large configuration and
@@ -574,50 +577,60 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
         // Set the moment the refresh returned: a failure raised while it is still false came from
         // the refresh, so no start request was ever issued (see REFRESH_FAILED).
         AtomicBoolean refreshDone = new AtomicBoolean();
-        BoundedJob.Result result = BoundedJob.run(NAME + ": start " + projectName, budgetMs, //$NON-NLS-1$
-            monitor -> {
-                try
-                {
-                    IProgressMonitor platformMonitor = new UncancellableMonitor(monitor);
-                    refresh(project, lifecycle, platformMonitor);
-                    refreshDone.set(true);
-                    // Advanced BEFORE the start request is handed to EDT, not when it returns:
-                    // startWorkspaceProjects can outlive the budget on its own, and the answer
-                    // composed at the deadline must not then blame a refresh that has finished.
-                    phase.set(StartPhase.START_REQUESTED);
-                    issueStart(project, lifecycle, platformMonitor);
-                    phase.set(StartPhase.START_ISSUED);
-                    while (!monitor.isCanceled() && !lifecycle.isStarted(project))
-                    {
-                        Thread.sleep(START_POLL_PERIOD_MS);
-                    }
-                }
-                catch (Throwable t) // NOSONAR rethrown unchanged; caught only to log the late case
-                {
-                    // The job's own monitor is cancelled by BoundedJob exactly when the deadline
-                    // elapses (or the wait is interrupted), and not before. A failure raised while
-                    // it is cancelled is one the caller will never hear about otherwise.
-                    if (monitor.isCanceled())
-                    {
-                        Activator.logError(
-                            lateFailureMessage(projectName, refreshDone.get(), phase.get(), budgetMs), t);
-                    }
-                    throw t;
-                }
-            }, null, scheduler);
+        // Who owns the post-import step: the job body, or the caller abandoning it. Claimed ONCE,
+        // by whichever gets there first - see abandonTheStep.
+        AtomicBoolean stepClaimed = new AtomicBoolean();
+        // Set the moment this call stops waiting, however it stops: from then on a failure the
+        // body raises reaches nobody unless the body logs it.
+        AtomicBoolean callerStoppedWaiting = new AtomicBoolean();
+        BoundedJob.Result result;
+        try
+        {
+            result = BoundedJob.run(NAME + ": start " + projectName, budgetMs, //$NON-NLS-1$
+                monitor -> runTheStep(project, projectName, lifecycle, budgetMs, monitor, phase,
+                    refreshDone, stepClaimed, callerStoppedWaiting),
+                null, scheduler);
+        }
+        catch (RuntimeException e)
+        {
+            callerStoppedWaiting.set(true);
+            // BoundedJob rethrows a scheduling failure without a Result. The import has already
+            // happened, so leaving here would leave the latch blocked for the whole workspace.
+            StartOutcome abandoned = abandonTheStep(project, projectName, lifecycle, stepClaimed);
+            if (abandoned == null)
+            {
+                // The body claimed the step after all: it is running and owns the latch.
+                throw e;
+            }
+            Activator.logError(NAME + ": the post-import start of project '" + projectName //$NON-NLS-1$
+                + "' could not be scheduled; the step was abandoned and releasing the import " //$NON-NLS-1$
+                + "latch was attempted.", e); //$NON-NLS-1$
+            return abandoned;
+        }
+        callerStoppedWaiting.set(true);
 
-        // A timed-out run may still be writing the failure holder, so BoundedJob reports none for
-        // it - which is right here: a start that is still running is not a start that failed.
-        Throwable failure = result.getFailure();
+        BoundedJob.Outcome runOutcome = result.getOutcome();
+        if (mayNotHaveEnteredTheWork(runOutcome))
+        {
+            // Every outcome but COMPLETED may have left the body unentered - NOT_RUN from a
+            // suspended job manager, TIMED_OUT_BEFORE_START, a TIMED_OUT whose cancelled job the
+            // worker still held past BoundedJob's grace, an INTERRUPTED wait - and none of them
+            // proves it will stay so. The claim decides: won, the body can never act and the
+            // latch is released; lost, the body is running and owns the step.
+            StartOutcome abandoned = abandonTheStep(project, projectName, lifecycle, stepClaimed);
+            if (abandoned != null)
+            {
+                return abandoned;
+            }
+        }
+        // Only a COMPLETED run hands over the body's own failure. An INTERRUPTED one carries the
+        // interruption of THIS wait, not a failure of the step - which is still running and owns
+        // the latch - so it must not be rendered as a failed refresh whose latch "was released".
+        Throwable failure = runOutcome == BoundedJob.Outcome.COMPLETED ? result.getFailure() : null;
         if (failure != null)
         {
             return new StartOutcome(
                 refreshDone.get() ? StartPhase.FAILED : StartPhase.REFRESH_FAILED, failure);
-        }
-        if (startNeverRan(result.getOutcome()))
-        {
-            releaseLatchAfterAStartThatNeverRan(project, projectName, lifecycle);
-            return new StartOutcome(StartPhase.NOT_SCHEDULED, null);
         }
         // Asked again on the calling thread: whether the project is usable is a fact about EDT
         // now, not about how this wait ended.
@@ -629,13 +642,113 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
     }
 
     /**
-     * Releases the import latch after a bounded run that never entered its work.
+     * The body of the bounded post-import job: refresh, start request, poll.
      *
-     * <p>{@link BoundedJob.Outcome#NOT_RUN} and {@link BoundedJob.Outcome#TIMED_OUT_BEFORE_START}
-     * both guarantee that the job body did not run and will not: no refresh, no start request -
-     * and no release of the latch either, which only the two failure paths ({@link #refresh},
-     * {@link #issueStart}) perform. Left alone, the MANUAL latch the CLI import parked would stand
-     * for the rest of the EDT session, and while it stands EDT's watchdog schedules
+     * <p>The poll carries its OWN deadline, {@code budgetMs} from the moment the body began, as
+     * well as the monitor: a body that runs late - queued behind a suspended job manager while
+     * the caller gave up waiting, then claiming the step first on resume - has a monitor that
+     * {@link BoundedJob} never cancels, and would otherwise poll for ever.
+     *
+     * @param project the imported project
+     * @param projectName the imported project name, for the late-failure log line
+     * @param lifecycle the platform lifecycle to drive
+     * @param budgetMs the wait the caller was given; also the poll's own bound
+     * @param monitor the job's own monitor, cancelled by {@link BoundedJob} at the deadline
+     * @param phase how far the step has got, advanced here
+     * @param refreshDone set once the workspace refresh has returned
+     * @param stepClaimed the ownership token shared with the caller
+     * @param callerStoppedWaiting set once the caller has stopped waiting: a failure raised after
+     *     that is logged here, because nobody else will ever see it
+     * @throws Exception whatever the platform raised, rethrown unchanged
+     */
+    static void runTheStep(IProject project, String projectName, IImportLifecycle lifecycle,
+        long budgetMs, IProgressMonitor monitor, AtomicReference<StartPhase> phase,
+        AtomicBoolean refreshDone, AtomicBoolean stepClaimed, AtomicBoolean callerStoppedWaiting)
+        throws Exception
+    {
+        if (!stepClaimed.compareAndSet(false, true))
+        {
+            // The caller gave up on this job before it ran and released the latch: a start
+            // issued now would compete with the one EDT's watchdog may already be making.
+            return;
+        }
+        long pollDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budgetMs);
+        try
+        {
+            IProgressMonitor platformMonitor = new UncancellableMonitor(monitor);
+            refresh(project, lifecycle, platformMonitor);
+            refreshDone.set(true);
+            // Advanced BEFORE the start request is handed to EDT, not when it returns:
+            // startWorkspaceProjects can outlive the budget on its own, and the answer
+            // composed at the deadline must not then blame a refresh that has finished.
+            phase.set(StartPhase.START_REQUESTED);
+            issueStart(project, lifecycle, platformMonitor);
+            phase.set(StartPhase.START_ISSUED);
+            // Until the project is READY, not merely started: STARTED needs the DtProject too,
+            // and a loop that stopped at isStarted would answer 'importing' milliseconds later
+            // while claiming the whole budget ran out.
+            while (!monitor.isCanceled() && System.nanoTime() - pollDeadline < 0
+                && !(lifecycle.isStarted(project) && lifecycle.hasDtProject(project)))
+            {
+                Thread.sleep(START_POLL_PERIOD_MS);
+            }
+        }
+        catch (Throwable t) // NOSONAR rethrown unchanged; caught only to log the late case
+        {
+            // BoundedJob cancels the job's monitor exactly when the deadline elapses (or the
+            // wait is interrupted); the caller marks when it stopped waiting, which also covers a
+            // body that runs after a wait BoundedJob never cancelled. Either way, a failure
+            // raised now is one the caller will never hear about otherwise.
+            if (monitor.isCanceled() || callerStoppedWaiting.get())
+            {
+                Activator.logError(
+                    lateFailureMessage(projectName, refreshDone.get(), phase.get(), budgetMs), t);
+            }
+            throw t;
+        }
+    }
+
+    /**
+     * Abandons a post-import step that has not started: claims the step for the caller and, only
+     * if that claim succeeds, releases the import latch.
+     *
+     * <p>Neither {@link BoundedJob.Outcome#NOT_RUN} nor a scheduling failure proves on its own
+     * that the job body will never run: with a SUSPENDED job manager {@code join} on a queued job
+     * returns at once, the outcome reads {@code NOT_RUN}, and the job still runs on resume. A
+     * release made then, followed by our own refresh and start, is exactly the competing start
+     * the latch exists to prevent. So the guarantee comes from the ownership token instead: the
+     * body claims it as its first statement and does nothing without it, and this claim takes
+     * it away. Whoever claims first owns the step; the loser does nothing.
+     *
+     * @param project the imported project
+     * @param projectName the imported project name, for the log line
+     * @param lifecycle the platform lifecycle to drive
+     * @param stepClaimed the ownership token shared with the job body
+     * @return {@link StartPhase#NOT_SCHEDULED} when the caller now owns the step (the body can
+     *     never run it, and the latch has been released), or {@code null} when the body claimed
+     *     it first - it is running, and the caller must treat the step as still in progress
+     */
+    static StartOutcome abandonTheStep(IProject project, String projectName,
+        IImportLifecycle lifecycle, AtomicBoolean stepClaimed)
+    {
+        if (!stepClaimed.compareAndSet(false, true))
+        {
+            return null;
+        }
+        releaseLatchAfterAStartThatNeverRan(project, projectName, lifecycle);
+        return new StartOutcome(StartPhase.NOT_SCHEDULED, null);
+    }
+
+    /**
+     * Releases the import latch for a post-import step the caller has abandoned before it started.
+     *
+     * <p>Called only by {@link #abandonTheStep}, after the caller has claimed the step: the job
+     * body then never runs its work - no refresh, no start request - and so never releases the
+     * latch either, which only the two failure paths ({@link #refresh}, {@link #issueStart})
+     * perform. That guarantee is the claim's, not {@link BoundedJob}'s: its {@code NOT_RUN} can
+     * be reported for a job that is merely held by a suspended job manager and runs later, and a
+     * scheduling failure carries no outcome at all. Left alone, the MANUAL latch the CLI import
+     * parked would stand for the rest of the EDT session, and while it stands EDT's watchdog schedules
      * {@code DefaultContextsStartJob} for NO project in the workspace. So this is the third and
      * last release site, and the same class as the other two: no start of ours is coming, the
      * watchdog is the only route left, and the release cannot arm a start that competes with ours
@@ -671,7 +784,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
      *
      * <p>A refresh that fails leaves the project with NO start request issued, and the caller is
      * told exactly that ({@link StartPhase#REFRESH_FAILED}). Releasing the latch here is the same
-     * recovery as in {@link #issueStart} and {@link #releaseLatchAfterAStartThatNeverRan}: EDT's
+     * recovery as in {@link #issueStart} and {@link #abandonTheStep}: EDT's
      * own watchdog is then the only route to a started project, and it cannot take it while the
      * latch is blocked.
      *
@@ -703,7 +816,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
      * as a start request that throws, and it must release the latch just the same.
      *
      * <p>{@code permitImport} here, in {@link #refresh}'s failure path and in
-     * {@link #releaseLatchAfterAStartThatNeverRan} - the three cases in which no start of ours is
+     * {@link #abandonTheStep} - the three cases in which no start of ours is
      * coming - and nowhere else: EDT's own watchdog is then the only remaining route to a started
      * project, and it cannot take that route while the latch the CLI import parked is still
      * blocked - which also keeps context startup frozen for every OTHER project in the workspace.
@@ -775,18 +888,23 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
     }
 
     /**
-     * Whether a bounded run never entered its work at all.
+     * Whether a bounded run may have ended with its work not entered - every outcome but
+     * {@link BoundedJob.Outcome#COMPLETED}.
      *
-     * <p>The one case that must NOT be reported as "EDT is still starting it": nothing asked EDT
-     * to start anything, so no amount of polling will ever make the project ready.
+     * <p>The gate for TRYING to abandon the step, not the proof that it is safe to. Besides the
+     * two outcomes that name it ({@code NOT_RUN}, {@code TIMED_OUT_BEFORE_START}), a
+     * {@code TIMED_OUT} can hide a cancelled job the worker still held past BoundedJob's grace,
+     * and an {@code INTERRUPTED} wait says nothing about the job at all; conversely a
+     * {@code NOT_RUN} job may still be queued behind a suspended job manager and run later. So
+     * the answer is decided by the ownership claim in {@link #abandonTheStep}, which the body
+     * also takes: only {@code COMPLETED} proves the body ran - and it cannot then be claimed.
      *
      * @param outcome how the bounded run ended
-     * @return {@code true} when the job never ran and will not run
+     * @return {@code true} for every outcome except {@code COMPLETED}
      */
-    static boolean startNeverRan(BoundedJob.Outcome outcome)
+    static boolean mayNotHaveEnteredTheWork(BoundedJob.Outcome outcome)
     {
-        return outcome == BoundedJob.Outcome.NOT_RUN
-            || outcome == BoundedJob.Outcome.TIMED_OUT_BEFORE_START;
+        return outcome != BoundedJob.Outcome.COMPLETED;
     }
 
     /**
@@ -919,10 +1037,12 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
         REFRESH_FAILED,
 
         /**
-         * The bounded job never entered its work, so nothing asked EDT to start anything. The
+         * The step was abandoned before it started - the bounded job never entered its work, or
+         * could not be scheduled - and the caller holds the ownership token, so the job body can
+         * never run it later: nothing asked EDT to start anything, and nothing of ours will. The
          * one outcome that must not be reported as "still starting". The import latch is
-         * released on this path ({@code releaseLatchAfterAStartThatNeverRan}), exactly as after
-         * a failed refresh: with no start of ours coming, the watchdog is the only route left.
+         * released on this path ({@code abandonTheStep}), exactly as after a failed refresh: with
+         * no start of ours coming, the watchdog is the only route left.
          */
         NOT_SCHEDULED
     }

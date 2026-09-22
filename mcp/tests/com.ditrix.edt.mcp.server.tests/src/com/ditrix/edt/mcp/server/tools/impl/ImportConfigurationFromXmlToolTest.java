@@ -31,9 +31,14 @@ import org.eclipse.core.runtime.ILog;
 import org.eclipse.core.runtime.ILogListener;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.OperationCanceledException;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.IJobChangeEvent;
+import org.eclipse.core.runtime.jobs.IJobChangeListener;
+import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.core.runtime.jobs.JobChangeAdapter;
 import org.junit.Test;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.FrameworkUtil;
@@ -508,6 +513,341 @@ public class ImportConfigurationFromXmlToolTest
     }
 
     @Test
+    public void testABodyThatWakesUpAfterTheNeverRanReleaseDoesNothing() throws Exception
+    {
+        // NOT_RUN is not proof the body will never run: with a suspended job manager join returns
+        // at once while the job stays queued, and it runs on resume. The scheduler here holds the
+        // job back exactly like that - BoundedJob sees NOT_RUN, the caller releases the latch -
+        // and the test then runs the SAME job late. A body that refreshed and started now would
+        // be the competing start the latch exists to prevent.
+        RecordingLifecycle lifecycle = new RecordingLifecycle();
+        lifecycle.startsOnRequest = true;
+        AtomicReference<Job> held = new AtomicReference<>();
+        StartOutcome outcome = ImportConfigurationFromXmlTool.startImportedProject(projectHandle(),
+            "Imported", lifecycle, SHORT_START_BUDGET_MS, held::set); //$NON-NLS-1$
+
+        assertEquals("the caller gave the step up", StartPhase.NOT_SCHEDULED, outcome.phase); //$NON-NLS-1$
+        assertEquals("and released the latch once, got " + lifecycle.calls, 1, //$NON-NLS-1$
+            Collections.frequency(lifecycle.calls, RecordingLifecycle.PERMIT));
+
+        Job late = held.get();
+        assertNotNull("the scheduler must have been handed the job", late); //$NON-NLS-1$
+        late.schedule();
+        assertTrue("the late job must finish", late.join(SANE_WAIT_MS, new NullProgressMonitor())); //$NON-NLS-1$
+        // Positive control: the job really ran (its run() set a result), so the absence below is
+        // the body refusing the step, not a job that never executed.
+        assertNotNull("the late job must actually have run", late.getResult()); //$NON-NLS-1$
+        assertFalse("a body that wakes up after the release must not refresh, got " //$NON-NLS-1$
+            + lifecycle.calls, lifecycle.calls.contains(RecordingLifecycle.REFRESH));
+        assertFalse("nor request a start, got " + lifecycle.calls, //$NON-NLS-1$
+            lifecycle.calls.contains(RecordingLifecycle.START));
+        assertEquals("nor release the latch a second time, got " + lifecycle.calls, 1, //$NON-NLS-1$
+            Collections.frequency(lifecycle.calls, RecordingLifecycle.PERMIT));
+    }
+
+    @Test
+    public void testABodyThatClaimedTheStepFirstIsNotReleasedUnderIt()
+    {
+        // The other side of the claim. The race - the body starts between BoundedJob reading
+        // NOT_RUN and the caller's claim - is not reachable deterministically through the
+        // scheduler seam (BoundedJob marks the work entered before our body runs), so the claim
+        // decision itself is pinned: a step the body already owns is NOT abandoned, the latch is
+        // NOT released under a running start, and the caller is told to treat it as running.
+        RecordingLifecycle lifecycle = new RecordingLifecycle();
+        AtomicBoolean claimedByTheBody = new AtomicBoolean(true);
+        StartOutcome abandoned = ImportConfigurationFromXmlTool.abandonTheStep(projectHandle(),
+            "Imported", lifecycle, claimedByTheBody); //$NON-NLS-1$
+
+        assertNull("a step the body owns must not be abandoned (NOT_SCHEDULED would be a lie)", //$NON-NLS-1$
+            abandoned);
+        assertFalse("and the latch must not be released under a running start, got " //$NON-NLS-1$
+            + lifecycle.calls, lifecycle.calls.contains(RecordingLifecycle.PERMIT));
+
+        // Positive control: an unclaimed step IS abandoned, and exactly once.
+        AtomicBoolean unclaimed = new AtomicBoolean(false);
+        StartOutcome first = ImportConfigurationFromXmlTool.abandonTheStep(projectHandle(),
+            "Imported", lifecycle, unclaimed); //$NON-NLS-1$
+        assertNotNull("an unclaimed step must be abandoned", first); //$NON-NLS-1$
+        assertEquals(StartPhase.NOT_SCHEDULED, first.phase);
+        assertNull("a second abandon of the same step must be refused", //$NON-NLS-1$
+            ImportConfigurationFromXmlTool.abandonTheStep(projectHandle(), "Imported", lifecycle, //$NON-NLS-1$
+                unclaimed));
+        assertEquals("the latch is released once, got " + lifecycle.calls, 1, //$NON-NLS-1$
+            Collections.frequency(lifecycle.calls, RecordingLifecycle.PERMIT));
+    }
+
+    @Test
+    public void testASchedulingFailureReleasesTheLatch() throws Exception
+    {
+        // BoundedJob rethrows a scheduling failure without a Result. The import has already
+        // happened, so an exception escaping here would leave the latch blocked - and EDT would
+        // start no project in the workspace until this one is closed and reopened.
+        RecordingLifecycle lifecycle = new RecordingLifecycle();
+        IllegalStateException refused = new IllegalStateException("job manager shut down"); //$NON-NLS-1$
+        String projectName = uniqueProjectName();
+        LogRecorder log = LogRecorder.start();
+        try
+        {
+            StartOutcome outcome = ImportConfigurationFromXmlTool.startImportedProject(
+                ResourcesPlugin.getWorkspace().getRoot().getProject(projectName), projectName,
+                lifecycle, SHORT_START_BUDGET_MS, job -> {
+                    throw refused;
+                });
+
+            assertEquals("a start that could not be scheduled is NOT_SCHEDULED", //$NON-NLS-1$
+                StartPhase.NOT_SCHEDULED, outcome.phase);
+            assertEquals("the latch must be released exactly once, got " + lifecycle.calls, 1, //$NON-NLS-1$
+                Collections.frequency(lifecycle.calls, RecordingLifecycle.PERMIT));
+            assertFalse("nothing may have refreshed, got " + lifecycle.calls, //$NON-NLS-1$
+                lifecycle.calls.contains(RecordingLifecycle.REFRESH));
+            assertFalse("nor requested a start, got " + lifecycle.calls, //$NON-NLS-1$
+                lifecycle.calls.contains(RecordingLifecycle.START));
+            IStatus entry = log.awaitEntryNaming(projectName, SANE_WAIT_MS);
+            assertNotNull("the swallowed scheduling failure must be logged", entry); //$NON-NLS-1$
+            assertEquals("as an ERROR", IStatus.ERROR, entry.getSeverity()); //$NON-NLS-1$
+            assertSame("with the scheduling failure attached", refused, entry.getException()); //$NON-NLS-1$
+            // True whether or not permitImport itself then threw (which logs its own entry):
+            // the release was ATTEMPTED, not necessarily done.
+            assertTrue("the log line must say the release was attempted: " + entry.getMessage(), //$NON-NLS-1$
+                entry.getMessage().contains(
+                    "could not be scheduled; the step was abandoned and releasing the import " //$NON-NLS-1$
+                    + "latch was attempted")); //$NON-NLS-1$
+            assertFalse("and must not claim the latch was released: " + entry.getMessage(), //$NON-NLS-1$
+                entry.getMessage().contains("was released instead")); //$NON-NLS-1$
+        }
+        finally
+        {
+            log.stop();
+        }
+    }
+
+    @Test
+    public void testThePollWaitsForTheDtProjectNotJustTheStart()
+    {
+        // STARTED needs isStarted AND a DtProject. A poll that stopped at isStarted would leave
+        // a DtProject registered a moment later unseen, and answer 'importing' after
+        // milliseconds while claiming the whole budget ran out.
+        RecordingLifecycle lifecycle = new RecordingLifecycle();
+        lifecycle.startsOnRequest = true;
+        lifecycle.dtProjectAppearsAfterChecks = 3;
+        StartOutcome outcome = ImportConfigurationFromXmlTool.startImportedProject(projectHandle(),
+            "Imported", lifecycle, AMPLE_START_BUDGET_MS); //$NON-NLS-1$
+
+        assertEquals("a DtProject that registers a moment after the start must be waited for, " //$NON-NLS-1$
+            + "got " + lifecycle.calls, StartPhase.STARTED, outcome.phase); //$NON-NLS-1$
+        assertTrue("the scenario: the DtProject was absent at first, got " + lifecycle.calls, //$NON-NLS-1$
+            lifecycle.dtProjectChecks.get() > lifecycle.dtProjectAppearsAfterChecks);
+    }
+
+    @Test
+    public void testATimedOutRunWhoseBodyNeverEnteredStillReleasesTheLatch() throws Exception
+    {
+        // TIMED_OUT does not prove the body is running. A worker that holds the cancelled job in
+        // ABOUT_TO_RUN past BoundedJob's grace makes the wait report TIMED_OUT although the body
+        // never entered - and will not, cancelled as it is. Nobody would then release the latch,
+        // and the answer would say the refresh is still running. Held here by a listener on THIS
+        // job only, released by the test once the call has answered.
+        RecordingLifecycle lifecycle = new RecordingLifecycle();
+        lifecycle.startsOnRequest = true;
+        CountDownLatch holding = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicReference<Job> scheduled = new AtomicReference<>();
+        IJobChangeListener holder = new JobChangeAdapter()
+        {
+            @Override
+            public void aboutToRun(IJobChangeEvent event)
+            {
+                holding.countDown();
+                try
+                {
+                    release.await(SANE_WAIT_MS, TimeUnit.MILLISECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        };
+        StartOutcome outcome;
+        try
+        {
+            outcome = ImportConfigurationFromXmlTool.startImportedProject(projectHandle(),
+                "Imported", lifecycle, SHORT_START_BUDGET_MS, job -> { //$NON-NLS-1$
+                    scheduled.set(job);
+                    job.addJobChangeListener(holder);
+                    job.schedule();
+                });
+            // The scenario, asserted rather than assumed: the worker really held the job.
+            assertTrue("the worker must have held the job before its body", //$NON-NLS-1$
+                holding.await(0, TimeUnit.MILLISECONDS));
+        }
+        finally
+        {
+            release.countDown();
+        }
+        assertTrue("the held job must leave the scheduler once released", //$NON-NLS-1$
+            scheduled.get().join(SANE_WAIT_MS, new NullProgressMonitor()));
+
+        assertEquals("a body that never entered is abandoned, not reported as refreshing", //$NON-NLS-1$
+            StartPhase.NOT_SCHEDULED, outcome.phase);
+        assertEquals("and the latch is released once, got " + lifecycle.calls, 1, //$NON-NLS-1$
+            Collections.frequency(lifecycle.calls, RecordingLifecycle.PERMIT));
+        assertFalse("nothing may have refreshed, got " + lifecycle.calls, //$NON-NLS-1$
+            lifecycle.calls.contains(RecordingLifecycle.REFRESH));
+        assertFalse("nor requested a start, got " + lifecycle.calls, //$NON-NLS-1$
+            lifecycle.calls.contains(RecordingLifecycle.START));
+    }
+
+    @Test
+    public void testAnInterruptedWaitBeforeTheBodyRanReleasesTheLatch() throws Exception
+    {
+        // An INTERRUPTED wait says nothing about the job; here it is still SLEEPING, and
+        // BoundedJob's cancel keeps it from ever running. The claim wins, so the latch must be
+        // released - not left blocked behind a 'refresh failed' verdict nobody acted on.
+        RecordingLifecycle lifecycle = new RecordingLifecycle();
+        AtomicReference<StartOutcome> outcome = new AtomicReference<>();
+        Thread caller = new Thread(() -> outcome.set(ImportConfigurationFromXmlTool
+            .startImportedProject(projectHandle(), "Imported", lifecycle, AMPLE_START_BUDGET_MS, //$NON-NLS-1$
+                job -> job.schedule(60_000L))), "import-647-interrupted-queued"); //$NON-NLS-1$
+        caller.setDaemon(true);
+        caller.start();
+        Thread.sleep(300);
+        caller.interrupt();
+        caller.join(SANE_WAIT_MS);
+
+        assertFalse("the interrupted wait must return", caller.isAlive()); //$NON-NLS-1$
+        assertNotNull("and produce an outcome", outcome.get()); //$NON-NLS-1$
+        assertEquals("a body that never ran is abandoned", StartPhase.NOT_SCHEDULED, //$NON-NLS-1$
+            outcome.get().phase);
+        assertEquals("and the latch is released once, got " + lifecycle.calls, 1, //$NON-NLS-1$
+            Collections.frequency(lifecycle.calls, RecordingLifecycle.PERMIT));
+        assertFalse("nothing may have refreshed, got " + lifecycle.calls, //$NON-NLS-1$
+            lifecycle.calls.contains(RecordingLifecycle.REFRESH));
+    }
+
+    @Test
+    public void testAnInterruptedWaitWhileTheBodyRunsIsNotAFailedRefresh() throws Exception
+    {
+        // The other INTERRUPTED case: the body is inside the refresh and owns the step. The
+        // interruption belongs to THIS wait, not to the step - reporting REFRESH_FAILED would tell
+        // the caller the latch "has been released" while nobody released it.
+        RecordingLifecycle lifecycle = new RecordingLifecycle();
+        lifecycle.startsOnRequest = true;
+        lifecycle.blockRefreshUntilReleased();
+        AtomicReference<StartOutcome> outcome = new AtomicReference<>();
+        Thread caller = new Thread(() -> outcome.set(ImportConfigurationFromXmlTool
+            .startImportedProject(projectHandle(), "Imported", lifecycle, AMPLE_START_BUDGET_MS)), //$NON-NLS-1$
+            "import-647-interrupted-running"); //$NON-NLS-1$
+        caller.setDaemon(true);
+        caller.start();
+        try
+        {
+            assertTrue("the body must be inside the refresh before the interrupt", //$NON-NLS-1$
+                lifecycle.awaitRefreshPolls(1, SANE_WAIT_MS));
+            caller.interrupt();
+            caller.join(SANE_WAIT_MS);
+
+            assertFalse("the interrupted wait must return", caller.isAlive()); //$NON-NLS-1$
+            StartOutcome observed = outcome.get();
+            assertNotNull("and produce an outcome", observed); //$NON-NLS-1$
+            assertEquals("the step is still refreshing, not a failed refresh", //$NON-NLS-1$
+                StartPhase.REFRESHING, observed.phase);
+            assertNull("the interruption is not the step's failure", observed.failure); //$NON-NLS-1$
+            assertFalse("and the latch was NOT released under the running body, got " //$NON-NLS-1$
+                + lifecycle.calls, lifecycle.calls.contains(RecordingLifecycle.PERMIT));
+            String answer = ImportConfigurationFromXmlTool.renderImportAnswer("Imported", //$NON-NLS-1$
+                java.nio.file.Paths.get("C:/dump"), false, observed, AMPLE_START_BUDGET_MS); //$NON-NLS-1$
+            assertFalse("so the answer must not claim it was: " + answer, //$NON-NLS-1$
+                answer.contains("The import latch has been released")); //$NON-NLS-1$
+        }
+        finally
+        {
+            lifecycle.releaseRefresh();
+        }
+        assertTrue("the body carries on after the interrupted wait", //$NON-NLS-1$
+            lifecycle.awaitStartIssued(SANE_WAIT_MS));
+    }
+
+    @Test
+    public void testALateBodyPollHasItsOwnDeadline() throws Exception
+    {
+        // A body that runs late - NOT_RUN from a suspended job manager, then first to the claim
+        // on resume - has a monitor BoundedJob never cancels. Its poll must still end after the
+        // budget, or it spins for ever on a project that never becomes ready. Driven directly:
+        // that ordering is not reachable through the scheduler seam.
+        RecordingLifecycle lifecycle = new RecordingLifecycle();
+        lifecycle.startsOnRequest = false;
+        AtomicReference<StartPhase> phase = new AtomicReference<>(StartPhase.REFRESHING);
+        AtomicReference<Throwable> thrown = new AtomicReference<>();
+        Thread body = new Thread(() -> {
+            try
+            {
+                ImportConfigurationFromXmlTool.runTheStep(projectHandle(), "Imported", lifecycle, //$NON-NLS-1$
+                    SHORT_START_BUDGET_MS, new NullProgressMonitor(), phase, new AtomicBoolean(),
+                    new AtomicBoolean(), new AtomicBoolean(true));
+            }
+            catch (Throwable t) // NOSONAR recorded for the assertion below
+            {
+                thrown.set(t);
+            }
+        }, "import-647-late-body"); //$NON-NLS-1$
+        body.setDaemon(true);
+        long startedAt = System.nanoTime();
+        body.start();
+        try
+        {
+            body.join(SANE_WAIT_MS);
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+            assertFalse("a poll whose monitor is never cancelled must still end", body.isAlive()); //$NON-NLS-1$
+            assertNull("and end normally: " + thrown.get(), thrown.get()); //$NON-NLS-1$
+            assertTrue("after about the budget, not at once (took " + elapsedMs + " ms)", //$NON-NLS-1$ //$NON-NLS-2$
+                elapsedMs >= SHORT_START_BUDGET_MS - 300);
+            assertEquals("having issued the start", StartPhase.START_ISSUED, phase.get()); //$NON-NLS-1$
+        }
+        finally
+        {
+            // Lets a spinning poll (a regression) end instead of outliving the test.
+            lifecycle.started = true;
+        }
+    }
+
+    @Test
+    public void testALateBodyFailureIsLoggedWhenTheCallerStoppedWaiting() throws Exception
+    {
+        // The same late body: its monitor is never cancelled, so "the monitor is cancelled" is no
+        // longer the sign that nobody will hear about a failure. The caller having stopped
+        // waiting is.
+        RecordingLifecycle lifecycle = new RecordingLifecycle();
+        lifecycle.startFailure = new IllegalStateException("orchestrator refused"); //$NON-NLS-1$
+        String projectName = uniqueProjectName();
+        LogRecorder log = LogRecorder.start();
+        try
+        {
+            try
+            {
+                ImportConfigurationFromXmlTool.runTheStep(
+                    ResourcesPlugin.getWorkspace().getRoot().getProject(projectName), projectName,
+                    lifecycle, SHORT_START_BUDGET_MS, new NullProgressMonitor(),
+                    new AtomicReference<>(StartPhase.REFRESHING), new AtomicBoolean(),
+                    new AtomicBoolean(), new AtomicBoolean(true));
+                fail("the start failure must be rethrown"); //$NON-NLS-1$
+            }
+            catch (IllegalStateException expected)
+            {
+                assertSame(lifecycle.startFailure, expected);
+            }
+            IStatus entry = log.awaitEntryNaming(projectName, SANE_WAIT_MS);
+            assertNotNull("a failure nobody will hear about must be logged", entry); //$NON-NLS-1$
+            assertTrue("naming the step: " + entry.getMessage(), //$NON-NLS-1$
+                entry.getMessage().contains("while asking EDT to start it")); //$NON-NLS-1$
+        }
+        finally
+        {
+            log.stop();
+        }
+    }
+
+    @Test
     public void testALatchReleaseThatFailsDoesNotHideTheNeverRanVerdict() throws Exception
     {
         // The release is a courtesy to the watchdog; the verdict is the caller's. A release that
@@ -565,16 +905,17 @@ public class ImportConfigurationFromXmlToolTest
     }
 
     @Test
-    public void testOnlyTheOutcomesThatNeverEnteredTheWorkCountAsNeverRan()
+    public void testEveryOutcomeButCompletedTriesTheClaim()
     {
-        assertTrue("NOT_RUN never entered the work", //$NON-NLS-1$
-            ImportConfigurationFromXmlTool.startNeverRan(BoundedJob.Outcome.NOT_RUN));
-        assertTrue("TIMED_OUT_BEFORE_START never entered the work", //$NON-NLS-1$
-            ImportConfigurationFromXmlTool.startNeverRan(BoundedJob.Outcome.TIMED_OUT_BEFORE_START));
-        assertFalse("TIMED_OUT means the work IS running - it must stay 'importing'", //$NON-NLS-1$
-            ImportConfigurationFromXmlTool.startNeverRan(BoundedJob.Outcome.TIMED_OUT));
-        assertFalse("COMPLETED ran the work", //$NON-NLS-1$
-            ImportConfigurationFromXmlTool.startNeverRan(BoundedJob.Outcome.COMPLETED));
+        // Trying the claim is always safe (the body takes the same token), and only COMPLETED
+        // proves the body ran. A TIMED_OUT can hide a job the worker held past BoundedJob's
+        // grace without entering it, and an INTERRUPTED wait says nothing about the job.
+        for (BoundedJob.Outcome outcome : BoundedJob.Outcome.values())
+        {
+            assertEquals(outcome + ": only COMPLETED skips the claim", //$NON-NLS-1$
+                outcome != BoundedJob.Outcome.COMPLETED,
+                ImportConfigurationFromXmlTool.mayNotHaveEnteredTheWork(outcome));
+        }
     }
 
     @Test
@@ -1329,6 +1670,12 @@ public class ImportConfigurationFromXmlToolTest
         /** Thrown by {@code isStarted}, after the call has been recorded. */
         volatile RuntimeException isStartedFailure;
 
+        /** How many {@code hasDtProject} calls answer {@code false} before the DtProject exists. */
+        volatile int dtProjectAppearsAfterChecks;
+
+        /** How many times {@code hasDtProject} has been asked. */
+        final AtomicInteger dtProjectChecks = new AtomicInteger();
+
         /** Thrown by the refresh once it is done waiting (at once, when nothing blocks it). */
         volatile CoreException refreshFailure;
 
@@ -1529,7 +1876,8 @@ public class ImportConfigurationFromXmlToolTest
         public boolean hasDtProject(IProject project)
         {
             calls.add(HAS_DT);
-            return dtProject;
+            int checks = dtProjectChecks.incrementAndGet();
+            return dtProject && checks > dtProjectAppearsAfterChecks;
         }
     }
 }
