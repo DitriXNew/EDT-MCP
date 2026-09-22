@@ -67,49 +67,50 @@ esac
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# Reads EVERY com._1c.g5.v8.dt.core version out of an xz-compressed p2 index at the channel root:
-# a repository may list several at once (old and new coexist mid-publish). $1 = index file name,
-# $2 = a label for the warning. Prints the versions ascending, one per line, or nothing.
-read_versions() {
-  local name="$1" label="$2" out=""
-  if curl -fsSL --retry 3 --retry-delay 10 "${EDT_P2}${name}" -o "$WORK/$name" 2>/dev/null; then
-    out="$(xz -dc "$WORK/$name" 2>/dev/null \
-      | grep -oE "id='com\._1c\.g5\.v8\.dt\.core' version='[^']+'" \
-      | sed -E "s/.*version='([^']+)'.*/\1/" | sort -uV)"
-  fi
-  if [ -z "$out" ]; then
-    log "::warning::edt-pin.sh: could not read the served EDT build from ${EDT_P2}${name} (${label}; network flake?)."
-  fi
-  printf '%s' "$out"
-}
-
-# Every artifact a DECODED index names, as "classifier|id|version" lines. Attributes are read by
-# name, in any order and either quote style. In content.xml each unit names the jar it needs; in
-# artifacts.xml each entry is a jar that is stored.
-artifact_keys() {
-  grep -oE '<artifact[ 	][^>]*>' "$1" 2>/dev/null | awk -v q="'" '
+# Prints "a1|a2|..." for every <$1 ...> element of the DECODED file $2 carrying ALL the attributes
+# named after it. Attributes are read by name: any order, either quote style, spaces around '='.
+element_attrs() {
+  local element="$1" file="$2"; shift 2
+  grep -oE "<${element}[ 	][^>]*>" "$file" 2>/dev/null | awk -v q="'" -v names="$*" '
     function attr(s, name,   r) {
       if (!match(s, "[ \t]" name "[ \t]*=[ \t]*(\"[^\"]*\"|" q "[^" q "]*" q ")")) return ""
       r = substr(s, RSTART, RLENGTH); sub(/^[^=]*=[ \t]*/, "", r)
       return substr(r, 2, length(r) - 2)
     }
-    { c = attr($0, "classifier"); i = attr($0, "id"); v = attr($0, "version")
-      if (c != "" && i != "" && v != "") print c "|" i "|" v }'
+    BEGIN { n = split(names, want, " ") }
+    { out = ""
+      for (k = 1; k <= n; k++) { v = attr($0, want[k]); if (v == "") next; out = out (k > 1 ? "|" : "") v }
+      print out }'
 }
 
-# The served build is the HIGHEST version the metadata lists - the one p2 resolves.
-EDT_ACTUAL="$(read_versions content.xml.xz 'metadata index' | tail -n 1)"
-xz -dc "$WORK/content.xml.xz" > "$WORK/content.xml" 2>/dev/null || : > "$WORK/content.xml"
+# Every artifact an index names, as "classifier|id|version" lines. In content.xml each unit names
+# the jar it needs; in artifacts.xml each entry is a jar that is stored.
+artifact_keys() { element_attrs artifact "$1" classifier id version; }
 
-# The artifact index is READABLE when it decodes and carries its <artifacts> element, an empty one
-# included, so a readable index missing a resolved jar is an inconsistency, not a flake.
-ARTIFACTS_READ=0
-if curl -fsSL --retry 3 --retry-delay 10 "${EDT_P2}artifacts.xml.xz" -o "$WORK/artifacts.xml.xz" 2>/dev/null \
-  && xz -dc "$WORK/artifacts.xml.xz" > "$WORK/artifacts.xml" 2>/dev/null \
-  && [ "$(grep -cE '<artifacts[ 	/>]' "$WORK/artifacts.xml")" -gt 0 ]; then
-  ARTIFACTS_READ=1
-else
-  log "::warning::edt-pin.sh: could not read ${EDT_P2}artifacts.xml.xz (network flake?); skipping the artifact-index check."
+# Fetches and decodes one index; READABLE means it decodes and carries its root collection
+# (<units> / <artifacts>, an empty one included). Unreadable is a flake: warn, never a verdict.
+fetch_index() {
+  local name="$1" collection="$2"
+  curl -fsSL --retry 3 --retry-delay 10 "${EDT_P2}${name}.xz" -o "$WORK/${name}.xz" 2>/dev/null \
+    && xz -dc "$WORK/${name}.xz" > "$WORK/${name}" 2>/dev/null \
+    && [ "$(grep -cE "<${collection}[ 	/>]" "$WORK/${name}")" -gt 0 ]
+}
+
+CONTENT_READ=0; ARTIFACTS_READ=0
+fetch_index content.xml units && CONTENT_READ=1
+fetch_index artifacts.xml artifacts && ARTIFACTS_READ=1
+[ "$CONTENT_READ" = 1 ] || log "::warning::edt-pin.sh: could not read ${EDT_P2}content.xml.xz (network flake?)."
+[ "$ARTIFACTS_READ" = 1 ] || log "::warning::edt-pin.sh: could not read ${EDT_P2}artifacts.xml.xz (network flake?); skipping the artifact-index check."
+
+# The served build is the HIGHEST version the metadata lists - the one p2 resolves.
+EDT_ACTUAL=""
+if [ "$CONTENT_READ" = 1 ]; then
+  EDT_ACTUAL="$(element_attrs unit "$WORK/content.xml" id version \
+    | awk -F'|' '$1 == "com._1c.g5.v8.dt.core" { print $2 }' | sort -uV | tail -n 1)"
+  if [ -z "$EDT_ACTUAL" ]; then
+    log "::error::EDT $CHANNEL channel's metadata index (${EDT_P2}content.xml.xz) is readable but lists no com._1c.g5.v8.dt.core unit, so it does not serve EDT at all right now. Re-run once it does."
+    exit 1
+  fi
 fi
 
 # ── GUARD 1: every jar the metadata resolves must be STORED ──────────────────────────
