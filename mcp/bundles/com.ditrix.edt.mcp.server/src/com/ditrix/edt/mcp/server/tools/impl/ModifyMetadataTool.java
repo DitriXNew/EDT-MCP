@@ -353,7 +353,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "'columnWidths' [{col, width?, autoWidthCalculation?, widthWeightFactor? - the share " //$NON-NLS-1$
                 + "of the free width, only alongside autoWidthCalculation:true}] and 'rowHeights' " //$NON-NLS-1$
                 + "[{row, height}] column / row sizes. An omitted formatting key leaves that property " //$NON-NLS-1$
-                + "UNSET (the cell inherits it); an explicit 0 / false overrides that inheritance. " //$NON-NLS-1$
+                + "UNSET (the cell inherits it). For textOrientation / autoIndent / autoMarkIncomplete / " //$NON-NLS-1$
+                + "autoWidthCalculation / widthWeightFactor an explicit 0 / false overrides that " //$NON-NLS-1$
+                + "inheritance and null counts as omitted; bold:false alone and wrap:false are the same as " //$NON-NLS-1$
+                + "omitting them. " //$NON-NLS-1$
                 + "Setting a cell overwrites that (row, col); the rest of the content is kept. Valid " //$NON-NLS-1$
                 + "only for a SpreadsheetDocument template FQN; cannot be combined with 'properties' / " //$NON-NLS-1$
                 + "'content' / a Role payload.") //$NON-NLS-1$
