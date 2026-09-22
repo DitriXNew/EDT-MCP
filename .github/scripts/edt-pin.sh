@@ -89,8 +89,8 @@ read_versions() {
 artifact_keys() {
   grep -oE '<artifact[ 	][^>]*>' "$1" 2>/dev/null | awk -v q="'" '
     function attr(s, name,   r) {
-      if (!match(s, "[ \t]" name "=(\"[^\"]*\"|" q "[^" q "]*" q ")")) return ""
-      r = substr(s, RSTART, RLENGTH); sub(/^[^=]*=/, "", r)
+      if (!match(s, "[ \t]" name "[ \t]*=[ \t]*(\"[^\"]*\"|" q "[^" q "]*" q ")")) return ""
+      r = substr(s, RSTART, RLENGTH); sub(/^[^=]*=[ \t]*/, "", r)
       return substr(r, 2, length(r) - 2)
     }
     { c = attr($0, "classifier"); i = attr($0, "id"); v = attr($0, "version")
