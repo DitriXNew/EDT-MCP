@@ -485,6 +485,45 @@ def test_form_corpus_a_kind_change_keeps_what_the_new_kind_still_publishes():
         "while the dropped subscription is gone from the file, procedure and all"
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_corpus_a_kind_round_trip_in_one_batch_keeps_the_bound_handler():
+    """A batch is judged by its END state, so `Pages -> ContextMenu -> Pages` in ONE call ends where
+    it started and may destroy nothing. Applied entry by entry, the ContextMenu step (a kind that
+    pairs with no ext-info) dropped the Pages node and its bindings, and the final Pages could only
+    build an empty one. The binding must survive, and nothing may be reported as removed.
+
+    The event is asked of the platform (the refusal that lists what the kind publishes), never
+    assumed - see _available_events.
+    """
+    base, form, form_file = _seed_form("KindTrip")
+    group = form + ".Group.Probe"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": group}), "seed the group")
+    assert_ok(_set_item_type(group, "Pages"), "make it a Pages group")
+    pages_events = [e for e in _available_events(group) if e != "OnChange"]
+    assert pages_events, "a Pages group must publish at least one event of its own node"
+    event = pages_events[0]
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "%s.Handler.%s" % (group, event),
+        "properties": [{"name": "procedure", "value": "ProbeRoundTrip"}]}), "bind " + event)
+    wait_for_project_ready()
+    poll_disk_contains(form_file, "<event>%s</event>" % event,
+                       ctx="the binding must reach disk before the batch")
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": group,
+        "properties": [{"name": "type", "value": "ContextMenu"},
+                       {"name": "type", "value": "Pages"}]})
+    assert_ok(r, "a kind round trip in one batch")
+    removed = (r.structured or {}).get("removedEventHandlers")
+    assert not removed, "a batch that ends where it started removes nothing: %r" % (removed,)
+
+    wait_for_project_ready()
+    xml = read_disk(form_file)
+    assert "<event>%s</event>" % event in xml, (
+        "the binding must survive a round trip that never left Pages in the end state: %r" % event)
+    assert "ProbeRoundTrip" in xml, "...with its procedure"
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_form_corpus_every_group_type_is_settable():
     base, form, form_file = _seed_form("Group")
     group = form + ".Group.Probe"

@@ -3928,7 +3928,59 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
             changes.add(prepareFormMemberChange(scope, version, member, prop, normReport));
         }
-        return changes;
+        // Every entry is validated above; only the survivors of the fold are applied.
+        return foldClassifierWrites(changes);
+    }
+
+    /**
+     * Keeps only the LAST write of each classifier feature - an attribute's value type and an item's
+     * {@code type} kind, the two {@link #syncExtInfoAfter} rebuilds the ext-info for - and every
+     * other change in its original order. The gate judges the batch's end state; applying an
+     * intermediate classifier would drop the ext-info (a ValueList's item type, a Pages item's
+     * handlers) that the final one keeps.
+     *
+     * @param changes the prepared batch, in request order
+     * @return the batch the apply loop runs, never {@code null}
+     */
+    static List<HolderChange> foldClassifierWrites(List<HolderChange> changes)
+    {
+        Map<String, Integer> lastWrite = new LinkedHashMap<>();
+        for (int i = 0; i < changes.size(); i++)
+        {
+            String key = classifierKey(changes.get(i));
+            if (key != null)
+            {
+                lastWrite.put(key, i);
+            }
+        }
+        if (lastWrite.isEmpty())
+        {
+            return changes;
+        }
+        List<HolderChange> folded = new ArrayList<>(changes.size());
+        for (int i = 0; i < changes.size(); i++)
+        {
+            String key = classifierKey(changes.get(i));
+            if (key == null || lastWrite.get(key).intValue() == i)
+            {
+                folded.add(changes.get(i));
+            }
+        }
+        return folded;
+    }
+
+    /** The classifier feature {@code hc} writes, or {@code null} for any other change. */
+    private static String classifierKey(HolderChange hc)
+    {
+        if (hc.onExtInfo)
+        {
+            return null;
+        }
+        if (hc.change.isTypeChange())
+        {
+            return "valueType"; //$NON-NLS-1$
+        }
+        return "type".equalsIgnoreCase(hc.change.featureName()) ? "type" : null; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**

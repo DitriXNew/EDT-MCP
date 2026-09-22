@@ -2771,6 +2771,74 @@ public class ModifyMetadataToolTest
     }
 
     /**
+     * The gate judges a batch's END state, so the apply must not act on an intermediate classifier:
+     * {@code [valueType=String, valueType=ValueList]} would drop a ValueList's item type at the
+     * first write and rebuild it empty at the second. Only the last value-type write survives,
+     * and the unrelated change keeps its place.
+     */
+    @Test
+    public void testFoldKeepsOnlyTheLastValueTypeWrite()
+    {
+        EAttribute valueTypeFeature = EcoreFactory.eINSTANCE.createEAttribute();
+        valueTypeFeature.setName("valueType"); //$NON-NLS-1$
+        EAttribute titleFeature = EcoreFactory.eINSTANCE.createEAttribute();
+        titleFeature.setName("toolTip"); //$NON-NLS-1$
+        ModifyMetadataTool.HolderChange toString = new ModifyMetadataTool.HolderChange(false,
+            ModifyMetadataTool.PreparedChange.typeDescription(valueTypeFeature, singleType("String"))); //$NON-NLS-1$
+        ModifyMetadataTool.HolderChange other = new ModifyMetadataTool.HolderChange(false,
+            ModifyMetadataTool.PreparedChange.scalar(titleFeature, "hint")); //$NON-NLS-1$
+        ModifyMetadataTool.HolderChange backToValueList = new ModifyMetadataTool.HolderChange(false,
+            ModifyMetadataTool.PreparedChange.typeDescription(valueTypeFeature, singleType("ValueList"))); //$NON-NLS-1$
+
+        List<ModifyMetadataTool.HolderChange> folded =
+            ModifyMetadataTool.foldClassifierWrites(List.of(toString, other, backToValueList));
+
+        assertEquals(List.of(other, backToValueList), folded);
+    }
+
+    /** The item-kind twin: {@code Pages -> ContextMenu -> Pages} must not pass through ContextMenu. */
+    @Test
+    public void testFoldKeepsOnlyTheLastItemKindWrite()
+    {
+        EAttribute typeFeature = EcoreFactory.eINSTANCE.createEAttribute();
+        typeFeature.setName("type"); //$NON-NLS-1$
+        ModifyMetadataTool.HolderChange pages = new ModifyMetadataTool.HolderChange(false,
+            ModifyMetadataTool.PreparedChange.scalar(typeFeature, "Pages")); //$NON-NLS-1$
+        ModifyMetadataTool.HolderChange contextMenu = new ModifyMetadataTool.HolderChange(false,
+            ModifyMetadataTool.PreparedChange.scalar(typeFeature, "ContextMenu")); //$NON-NLS-1$
+        ModifyMetadataTool.HolderChange pagesAgain = new ModifyMetadataTool.HolderChange(false,
+            ModifyMetadataTool.PreparedChange.scalar(typeFeature, "Pages")); //$NON-NLS-1$
+
+        assertEquals(List.of(pagesAgain),
+            ModifyMetadataTool.foldClassifierWrites(List.of(pages, contextMenu, pagesAgain)));
+    }
+
+    /** What the fold must leave alone: a batch without repeats, and changes landing on the ext-info. */
+    @Test
+    public void testFoldLeavesNonRepeatedAndExtInfoChangesAlone()
+    {
+        EAttribute valueTypeFeature = EcoreFactory.eINSTANCE.createEAttribute();
+        valueTypeFeature.setName("valueType"); //$NON-NLS-1$
+        EAttribute typeFeature = EcoreFactory.eINSTANCE.createEAttribute();
+        typeFeature.setName("type"); //$NON-NLS-1$
+        ModifyMetadataTool.HolderChange retype = new ModifyMetadataTool.HolderChange(false,
+            ModifyMetadataTool.PreparedChange.typeDescription(valueTypeFeature, singleType("String"))); //$NON-NLS-1$
+        ModifyMetadataTool.HolderChange kind = new ModifyMetadataTool.HolderChange(false,
+            ModifyMetadataTool.PreparedChange.scalar(typeFeature, "Pages")); //$NON-NLS-1$
+        assertEquals("one write per classifier is kept as is", List.of(retype, kind), //$NON-NLS-1$
+            ModifyMetadataTool.foldClassifierWrites(List.of(retype, kind)));
+
+        // A 'type' INSIDE the ext-info is a property of the holder, not the member's classifier.
+        ModifyMetadataTool.HolderChange onExtInfo1 = new ModifyMetadataTool.HolderChange(true,
+            ModifyMetadataTool.PreparedChange.scalar(typeFeature, "A")); //$NON-NLS-1$
+        ModifyMetadataTool.HolderChange onExtInfo2 = new ModifyMetadataTool.HolderChange(true,
+            ModifyMetadataTool.PreparedChange.scalar(typeFeature, "B")); //$NON-NLS-1$
+        assertEquals(List.of(onExtInfo1, onExtInfo2),
+            ModifyMetadataTool.foldClassifierWrites(List.of(onExtInfo1, onExtInfo2)));
+        assertEquals(List.of(), ModifyMetadataTool.foldClassifierWrites(List.of()));
+    }
+
+    /**
      * The same ordering rule as {@code mainFlagIn}, on the other property the ext-info decision
      * keys on: a batch is applied in order, so a repeated {@code valueType} leaves the LAST one.
      * Judged by the first, {@code [valueType=CatalogObject, valueType=String, main=true]} would
