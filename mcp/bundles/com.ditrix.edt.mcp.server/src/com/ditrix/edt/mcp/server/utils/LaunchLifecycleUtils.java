@@ -26,6 +26,7 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.jobs.Job;
@@ -2193,8 +2194,20 @@ public final class LaunchLifecycleUtils
     public static AttributionNames delegateAttributionNames(ILaunchConfiguration config,
         IProject project, IApplicationManager appManager)
     {
-        String realId = config == null ? null
-            : LaunchConfigUtils.readAttribute(config, LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
+        String realId = null;
+        if (config != null)
+        {
+            try
+            {
+                realId = config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, ""); //$NON-NLS-1$
+            }
+            catch (CoreException e)
+            {
+                // The persisted id was never read, so a default lookup would answer a different question.
+                Activator.logError("Attribution: could not read the launch configuration's application id", e); //$NON-NLS-1$
+                return attributionUnanswered();
+            }
+        }
         if (realId != null && !realId.isEmpty())
         {
             return attributionNames(appManager, project, realId);

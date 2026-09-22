@@ -24,6 +24,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Status;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.junit.Test;
 
@@ -343,6 +346,24 @@ public class LaunchLifecycleUtilsResolveAppTest
         assertTrue("an unanswered default lookup leaves the names UNKNOWN", names.inconclusive());
         assertNull(names.infobaseName());
         verify(mgr, never()).getApplication(any(), any());
+    }
+
+    @Test
+    public void testAnUnreadableApplicationIdAttributeKeepsTheAttributionInconclusive() throws Exception
+    {
+        // The persisted id was never read, so answering from the DEFAULT would be a different question.
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        when(config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, "")) //$NON-NLS-1$
+            .thenThrow(new CoreException(new Status(IStatus.ERROR, "test", "unreadable"))); //$NON-NLS-1$ //$NON-NLS-2$
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        when(mgr.getDefaultApplication(project)).thenReturn(Optional.empty());
+
+        LaunchLifecycleUtils.AttributionNames names =
+            LaunchLifecycleUtils.delegateAttributionNames(config, project, mgr);
+
+        assertTrue(names.inconclusive());
+        verify(mgr, never()).getDefaultApplication(any());
     }
 
     @Test

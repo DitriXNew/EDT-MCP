@@ -1457,19 +1457,26 @@ public class DeleteInfobaseTool implements IMcpTool
     {
         try
         {
-            IConnectionString cs = (ibRef != null) ? ibRef.getConnectionString() : null;
-            if (cs instanceof FileConnectionString)
-            {
-                String path = ((FileConnectionString)cs).getFile();
-                if (path != null && !path.trim().isEmpty())
-                {
-                    return Paths.get(path.trim());
-                }
-            }
+            return fileInfobaseDirOrThrow(ibRef);
         }
         catch (Exception e)
         {
             Activator.logError("delete_infobase: could not resolve the file-infobase directory", e); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /** {@link #resolveFileInfobaseDir}, but an unreadable reference RAISES instead of answering {@code null}. */
+    private static Path fileInfobaseDirOrThrow(InfobaseReference ibRef)
+    {
+        IConnectionString cs = (ibRef != null) ? ibRef.getConnectionString() : null;
+        if (cs instanceof FileConnectionString)
+        {
+            String path = ((FileConnectionString)cs).getFile();
+            if (path != null && !path.trim().isEmpty())
+            {
+                return Paths.get(path.trim());
+            }
         }
         return null;
     }
@@ -1545,11 +1552,11 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /**
-     * Folds the per-project answers into one, in order and lazily: a measured co-owner wins at
-     * once; otherwise any project that could not be read leaves the whole answer UNKNOWN. An
-     * unreadable project must not stop the scan, since a later one may still establish SHARED.
+     * Folds per-project (or per-application) answers into one, in order and lazily: a measured
+     * co-owner wins at once; otherwise any one that could not be read leaves the whole answer
+     * UNKNOWN. An unreadable one must not stop the scan, since a later one may establish SHARED.
      *
-     * @param perProject one answer per OTHER project, each computed only when reached
+     * @param perProject one answer per OTHER project or application, each computed only when reached
      * @return the combined answer, never {@code null}
      */
     static SharedDatabase combineProjectAnswers(Iterable<Supplier<SharedDatabase>> perProject)
@@ -1629,8 +1636,7 @@ public class DeleteInfobaseTool implements IMcpTool
             {
                 return SharedDatabase.NOT_SHARED;
             }
-            return anyApplicationServesDir(apps, target, other, dbDir)
-                ? SharedDatabase.SHARED : SharedDatabase.NOT_SHARED;
+            return applicationsServeDir(apps, target, other, dbDir);
         }
         catch (Exception e)
         {
@@ -1641,57 +1647,68 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /**
-     * Returns {@code true} when ANY application of {@code other} resolves to the same on-disk database
-     * {@code target} (absolute, normalized) — the per-project arm of {@link #isSharedWithOtherProjects}.
-     * Resolves EVERY co-owner kind: a FILE infobase OR a standalone (wst) server that serves the same
-     * on-disk database — not just file infobases. {@code other} / {@code dbDir} are used only for the
-     * "kept on disk" log line.
+     * What the applications of {@code other} establish about the on-disk database {@code target}
+     * (absolute, normalized) — the per-project arm of {@link #isSharedWithOtherProjects}. Covers
+     * EVERY co-owner kind: a FILE infobase OR a standalone (wst) server serving the same database.
+     *
+     * <p>An application whose path cannot be READ is UNKNOWN, not "serves something else": it may
+     * be the very co-owner. The scan still goes on, so a later readable match wins as SHARED.
+     * {@code other} / {@code dbDir} are used only for the log lines.
      */
-    private static boolean anyApplicationServesDir(List<IApplication> apps, Path target, IProject other,
+    static SharedDatabase applicationsServeDir(List<IApplication> apps, Path target, IProject other,
             Path dbDir)
     {
+        List<Supplier<SharedDatabase>> answers = new ArrayList<>();
         for (IApplication app : apps)
         {
-            Path otherDir = resolveApplicationDbDir(app);
-            if (otherDir != null && target.equals(otherDir.toAbsolutePath().normalize()))
-            {
-                Activator.logInfo("delete_infobase: database '" + dbDir //$NON-NLS-1$
-                    + "' is also used by project '" + other.getName() //$NON-NLS-1$
-                    + "' — keeping the files on disk"); //$NON-NLS-1$
-                return true;
-            }
+            answers.add(() -> applicationServesDir(app, target, other, dbDir));
         }
-        return false;
+        return combineProjectAnswers(answers);
+    }
+
+    private static SharedDatabase applicationServesDir(IApplication app, Path target, IProject other,
+            Path dbDir)
+    {
+        Path otherDir;
+        try
+        {
+            otherDir = applicationDbDirOrThrow(app);
+        }
+        catch (Exception | LinkageError e)
+        {
+            Activator.logError("delete_infobase: could not read the database path of an application of " //$NON-NLS-1$
+                + "project '" + other.getName() + "' — it may share '" + dbDir + "'", e); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return SharedDatabase.UNKNOWN;
+        }
+        if (otherDir != null && target.equals(otherDir.toAbsolutePath().normalize()))
+        {
+            Activator.logInfo("delete_infobase: database '" + dbDir //$NON-NLS-1$
+                + "' is also used by project '" + other.getName() //$NON-NLS-1$
+                + "' — keeping the files on disk"); //$NON-NLS-1$
+            return SharedDatabase.SHARED;
+        }
+        return SharedDatabase.NOT_SHARED;
     }
 
     /**
-     * Resolves an application's on-disk database directory for the shared-files guard: a FILE infobase
-     * via its connection string, OR a standalone (wst) server via its served-database path
-     * ({@link StandaloneServerSupport#databaseDirOf}). Returns {@code null} for any other application kind
-     * or when the path cannot be resolved.
+     * An application's on-disk database directory for the shared-files guard: a FILE infobase via
+     * its connection string, OR a standalone (wst) server via its served-database path. Answers
+     * {@code null} only for a kind with no local directory; a read that fails RAISES.
      */
-    private static Path resolveApplicationDbDir(IApplication app)
+    private static Path applicationDbDirOrThrow(IApplication app) throws ReflectiveOperationException
     {
         if (app instanceof IInfobaseApplication)
         {
-            return resolveFileInfobaseDir(((IInfobaseApplication)app).getInfobase());
+            return fileInfobaseDirOrThrow(((IInfobaseApplication)app).getInfobase());
         }
         String typeId = (app != null && app.getType() != null) ? app.getType().getId() : null;
         if (StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId))
         {
-            Object module = StandaloneServerSupport.moduleOfApplication(app);
-            String dir = module != null ? StandaloneServerSupport.databaseDirOf(module) : null;
+            Object module = StandaloneServerSupport.moduleOrThrow(app);
+            String dir = module != null ? StandaloneServerSupport.databaseDirOrThrow(module) : null;
             if (dir != null && !dir.isEmpty())
             {
-                try
-                {
-                    return Paths.get(dir);
-                }
-                catch (RuntimeException e)
-                {
-                    Activator.logError("delete_infobase: could not parse served-DB path '" + dir //$NON-NLS-1$
-                        + "' of a standalone server while checking shared infobases", e); //$NON-NLS-1$
-                }
+                return Paths.get(dir);
             }
         }
         return null;

@@ -585,18 +585,35 @@ public final class StandaloneServerSupport
     {
         try
         {
-            Method m = app.getClass().getMethod("getModule"); //$NON-NLS-1$
-            return m.invoke(app);
-        }
-        catch (NoSuchMethodException e) // NOSONAR not a server application - an expected answer, not a failure
-        {
-            return null;
+            return moduleOrThrow(app);
         }
         catch (Throwable t)
         {
             Activator.logError("standalone-server: IServerApplication.getModule() refl failed", t); //$NON-NLS-1$
             return null;
         }
+    }
+
+    /**
+     * {@link #moduleOfApplication}, but a failed read RAISES; only an application with no
+     * {@code getModule()} at all answers {@code null}.
+     *
+     * @param app the application (never {@code null})
+     * @return the module, or {@code null} when the application has none
+     * @throws ReflectiveOperationException when {@code getModule()} exists but could not be invoked
+     */
+    public static Object moduleOrThrow(IApplication app) throws ReflectiveOperationException
+    {
+        Method m;
+        try
+        {
+            m = app.getClass().getMethod("getModule"); //$NON-NLS-1$
+        }
+        catch (NoSuchMethodException e) // NOSONAR not a server application - an expected answer, not a failure
+        {
+            return null;
+        }
+        return m.invoke(app);
     }
 
     /**
@@ -685,41 +702,55 @@ public final class StandaloneServerSupport
     {
         try
         {
-            Object cfg = standaloneServerInfobaseModule.getClass()
-                .getMethod("getStandaloneServerConfiguration").invoke(standaloneServerInfobaseModule); //$NON-NLS-1$
-            if (cfg == null)
-            {
-                return null;
-            }
-            Object db = cfg.getClass().getMethod("getDatabase").invoke(cfg); //$NON-NLS-1$
-            if (db == null)
-            {
-                return null;
-            }
-            // A FILE database (and its create-template subclass FileCreateTemplateDatabase) carries the
-            // on-disk directory in getConfigDirectory() (2025.2), renamed to getPath() on 2026.1; an
-            // RDBMS database has neither accessor nor a local directory. Detect the file kind by the
-            // PRESENCE of either accessor rather than by the class name: the type is platform-internal
-            // and intentionally not imported (no Require-Bundle), so instanceof is impossible, and a
-            // name match would be fragile.
-            Method dirGetter = findMethod(db.getClass(), "getConfigDirectory", 0); //$NON-NLS-1$
-            if (dirGetter == null)
-            {
-                dirGetter = findMethod(db.getClass(), "getPath", 0); //$NON-NLS-1$
-            }
-            if (dirGetter == null)
-            {
-                // Not a file-backed database — nothing on the local disk to resolve.
-                return null;
-            }
-            Object dir = dirGetter.invoke(db);
-            return (dir instanceof String) ? (String)dir : null;
+            return databaseDirOrThrow(standaloneServerInfobaseModule);
         }
         catch (Throwable t) // NOSONAR deliberate catch-all at a reflective/best-effort boundary
         {
             Activator.logError("standalone-server: could not read standalone-server database directory", t); //$NON-NLS-1$
             return null;
         }
+    }
+
+    /**
+     * {@link #databaseDirOf}, but a failed read RAISES instead of answering {@code null}, so a caller
+     * that must not read "unreadable" as "no local directory" can tell the two apart.
+     *
+     * @param standaloneServerInfobaseModule the server's infobase module (never {@code null})
+     * @return the served database directory, or {@code null} for an RDBMS-backed server
+     * @throws ReflectiveOperationException when the platform accessors could not be invoked
+     */
+    public static String databaseDirOrThrow(Object standaloneServerInfobaseModule)
+        throws ReflectiveOperationException
+    {
+        Object cfg = standaloneServerInfobaseModule.getClass()
+            .getMethod("getStandaloneServerConfiguration").invoke(standaloneServerInfobaseModule); //$NON-NLS-1$
+        if (cfg == null)
+        {
+            return null;
+        }
+        Object db = cfg.getClass().getMethod("getDatabase").invoke(cfg); //$NON-NLS-1$
+        if (db == null)
+        {
+            return null;
+        }
+        // A FILE database (and its create-template subclass FileCreateTemplateDatabase) carries the
+        // on-disk directory in getConfigDirectory() (2025.2), renamed to getPath() on 2026.1; an
+        // RDBMS database has neither accessor nor a local directory. Detect the file kind by the
+        // PRESENCE of either accessor rather than by the class name: the type is platform-internal
+        // and intentionally not imported (no Require-Bundle), so instanceof is impossible, and a
+        // name match would be fragile.
+        Method dirGetter = findMethod(db.getClass(), "getConfigDirectory", 0); //$NON-NLS-1$
+        if (dirGetter == null)
+        {
+            dirGetter = findMethod(db.getClass(), "getPath", 0); //$NON-NLS-1$
+        }
+        if (dirGetter == null)
+        {
+            // Not a file-backed database — nothing on the local disk to resolve.
+            return null;
+        }
+        Object dir = dirGetter.invoke(db);
+        return (dir instanceof String) ? (String)dir : null;
     }
 
     /**

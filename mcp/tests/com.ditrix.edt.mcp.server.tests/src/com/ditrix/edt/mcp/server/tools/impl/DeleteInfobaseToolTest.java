@@ -27,11 +27,14 @@ import java.util.concurrent.TimeUnit;
 import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.platform.services.model.FileConnectionString;
+import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
+import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -463,6 +466,45 @@ public class DeleteInfobaseToolTest
         });
         assertEquals(DeleteInfobaseTool.SharedDatabase.UNKNOWN, shared);
         assertTrue(shared.keepsFiles());
+    }
+
+    @Test
+    public void testAnApplicationWhosePathCannotBeReadIsUnknownNotNotShared()
+    {
+        Path target = Paths.get("C:/ib/Shared").toAbsolutePath().normalize(); //$NON-NLS-1$
+        IProject other = mock(IProject.class);
+        when(other.getName()).thenReturn("Other"); //$NON-NLS-1$
+
+        assertEquals("an unreadable application may be the co-owner", //$NON-NLS-1$
+            DeleteInfobaseTool.SharedDatabase.UNKNOWN,
+            DeleteInfobaseTool.applicationsServeDir(List.of(unreadableFileApp()), target, other, target));
+        // A readable match after it still wins: the scan goes on past the unreadable one.
+        assertEquals(DeleteInfobaseTool.SharedDatabase.SHARED,
+            DeleteInfobaseTool.applicationsServeDir(List.of(unreadableFileApp(), fileApp(target.toString())),
+                target, other, target));
+        assertEquals("a readable application elsewhere is a measured no", //$NON-NLS-1$
+            DeleteInfobaseTool.SharedDatabase.NOT_SHARED,
+            DeleteInfobaseTool.applicationsServeDir(List.of(fileApp("C:/ib/Elsewhere")), target, other, target)); //$NON-NLS-1$
+    }
+
+    private static IInfobaseApplication unreadableFileApp()
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        when(ref.getConnectionString()).thenThrow(new IllegalStateException("unresolvable")); //$NON-NLS-1$
+        IInfobaseApplication app = mock(IInfobaseApplication.class);
+        when(app.getInfobase()).thenReturn(ref);
+        return app;
+    }
+
+    private static IInfobaseApplication fileApp(String dir)
+    {
+        FileConnectionString connection = mock(FileConnectionString.class);
+        when(connection.getFile()).thenReturn(dir);
+        InfobaseReference ref = mock(InfobaseReference.class);
+        when(ref.getConnectionString()).thenReturn(connection);
+        IInfobaseApplication app = mock(IInfobaseApplication.class);
+        when(app.getInfobase()).thenReturn(ref);
+        return app;
     }
 
     @Test
