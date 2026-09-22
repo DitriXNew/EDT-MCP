@@ -1224,7 +1224,7 @@ public final class SpreadsheetTemplateWriter
     {
         for (String key : CELL_ONLY_KEYS)
         {
-            if (entry != null && entry.has(key))
+            if (has(entry, key))
             {
                 return "A '" + where + "' entry sets '" + key + "', which is a CELL format property: " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                     + "put it on a 'cells' entry, e.g. cells:[{row:0,col:0,text:'Total'," + key //$NON-NLS-1$
@@ -1243,7 +1243,7 @@ public final class SpreadsheetTemplateWriter
     {
         for (String key : COLUMN_ONLY_KEYS)
         {
-            if (entry != null && entry.has(key))
+            if (has(entry, key))
             {
                 return "A '" + where + "' entry sets '" + key + "', which is a COLUMN property the " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                     + "platform reads only from a column's format: put it on a 'columnWidths' entry, " //$NON-NLS-1$

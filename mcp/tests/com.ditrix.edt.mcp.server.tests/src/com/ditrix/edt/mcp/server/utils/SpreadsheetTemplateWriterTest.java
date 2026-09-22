@@ -457,6 +457,44 @@ public class SpreadsheetTemplateWriterTest
         assertFalse(fmt.isSetWidthWeightFactor());
     }
 
+    @Test
+    public void testNullCellOnlyKeyOnAColumnEntryCountsAsOmitted()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"columnWidths\":[{\"col\":0,\"width\":40,\"textOrientation\":null}]}")); //$NON-NLS-1$
+        assertFalse("an explicit null is omitted, not misplaced: " + r.error, r.hasError()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNullColumnOnlyKeyOnACellEntryCountsAsOmitted()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc, json(
+            "{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"autoWidthCalculation\":null,\"widthWeightFactor\":null}]}")); //$NON-NLS-1$
+        assertFalse("an explicit null is omitted, not misplaced: " + r.error, r.hasError()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCellOnlyKeyOnAColumnEntryIsRefused()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"columnWidths\":[{\"col\":0,\"width\":40,\"textOrientation\":900}]}")); //$NON-NLS-1$
+        assertTrue(r.hasError());
+        assertTrue(r.error, r.error.contains("'textOrientation', which is a CELL format property")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testColumnOnlyKeyOnACellEntryIsRefused()
+    {
+        SpreadsheetDocument doc = newDocument();
+        Result r = SpreadsheetTemplateWriter.apply(doc,
+            json("{\"cells\":[{\"row\":0,\"col\":0,\"text\":\"A\",\"autoWidthCalculation\":false}]}")); //$NON-NLS-1$
+        assertTrue(r.hasError());
+        assertTrue(r.error, r.error.contains("'autoWidthCalculation', which is a COLUMN property")); //$NON-NLS-1$
+    }
+
     // ==================== grid extent (declared sheet bounds) ====================
 
     @Test
