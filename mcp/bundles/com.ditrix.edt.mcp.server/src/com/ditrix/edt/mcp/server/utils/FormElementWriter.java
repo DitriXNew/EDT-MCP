@@ -5351,9 +5351,16 @@ public final class FormElementWriter
         }
         EventUnion union = availableEvents(container, version);
         List<AvailableEvent> events = union.events();
+        // A negative answer is the caller's only when the union is whole: every mapped type resolved
+        // and the element carries the ext-info its kind requires (an unreadable requirement is no proof).
+        ExtInfoRequirement required = extInfoRequirement(container);
+        EObject ext = singleReference(container, FEATURE_EXT_INFO);
+        boolean extInfoMismatch = required.readable()
+            && !Objects.equals(required.classifier(), ext == null ? null : ext.eClass().getName());
+        boolean wholeUnion = union.complete() && !extInfoMismatch;
         if (events.isEmpty())
         {
-            if (!union.complete())
+            if (!wholeUnion)
             {
                 throw modelLacks("Could not resolve the available events for this form element."); //$NON-NLS-1$
             }
@@ -5373,6 +5380,12 @@ public final class FormElementWriter
         }
         if (matched == null)
         {
+            if (!wholeUnion)
+            {
+                // The event may be published by the half that did not resolve: not the caller's fault.
+                throw modelLacks("Could not resolve every available event for this form element, so '" //$NON-NLS-1$
+                    + eventName + "' cannot be judged."); //$NON-NLS-1$
+            }
             boolean ru = "ru".equals(langCode); //$NON-NLS-1$
             StringBuilder sb = new StringBuilder();
             for (AvailableEvent candidate : events)
@@ -5921,10 +5934,11 @@ public final class FormElementWriter
         }
         EStructuralFeature eventsFeat = type.eClass().getEStructuralFeature("events"); //$NON-NLS-1$
         Object value = eventsFeat != null ? type.eGet(eventsFeat) : null;
-        if (value instanceof List<?>)
+        if (!(value instanceof List<?>))
         {
-            accumulator.addAll((List<EObject>)value);
+            return false; // a resolved type without an events list is the model's shape, not "none"
         }
+        accumulator.addAll((List<EObject>)value);
         return true;
     }
 

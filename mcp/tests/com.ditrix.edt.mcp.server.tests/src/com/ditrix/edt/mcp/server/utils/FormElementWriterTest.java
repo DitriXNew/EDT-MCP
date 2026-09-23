@@ -1232,6 +1232,26 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testCreateHandlerOnAStaleExtInfoNeverRefusesTheCaller()
+    {
+        // A Pages group missing its required node publishes an unknown share of its events, so
+        // neither "no events" nor "not valid" may be put on the caller.
+        for (String ext : new String[] { null, "UsualGroupExtInfo" }) //$NON-NLS-1$
+        {
+            try
+            {
+                String err = FormElementWriter.createHandler(typedElement("FormGroup", "Pages", ext, true), //$NON-NLS-1$ //$NON-NLS-2$
+                    "NoSuchEvent", "Proc", Version.LATEST, "en", null, null); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                fail("a stale ext-info (" + ext + ") must raise, not refuse: " + err); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            catch (IllegalStateException expected)
+            {
+                // the model's state, logged as a failure
+            }
+        }
+    }
+
+    @Test
     public void testCreateHandlerOnAFormRootWithoutAHandlerListRaises()
     {
         // A form ROOT always holds handlers, so a missing list is the model's shape, not a refusal.
@@ -1707,6 +1727,12 @@ public class FormElementWriterTest
      */
     private static EObject typedElement(String eClassName, String typeLiteral, String extClassName)
     {
+        return typedElement(eClassName, typeLiteral, extClassName, false);
+    }
+
+    private static EObject typedElement(String eClassName, String typeLiteral, String extClassName,
+        boolean withHandlers)
+    {
         EPackage pack = EcoreFactory.eINSTANCE.createEPackage();
         pack.setName("probe"); //$NON-NLS-1$
         EEnum typeEnum = EcoreFactory.eINSTANCE.createEEnum();
@@ -1736,6 +1762,15 @@ public class FormElementWriterTest
         extInfo.setEType(extClass != null ? extClass : EcorePackage.Literals.EOBJECT);
         extInfo.setContainment(true);
         eClass.getEStructuralFeatures().add(extInfo);
+        if (withHandlers)
+        {
+            EReference handlers = EcoreFactory.eINSTANCE.createEReference();
+            handlers.setName("handlers"); //$NON-NLS-1$
+            handlers.setEType(EcorePackage.Literals.EOBJECT);
+            handlers.setContainment(true);
+            handlers.setUpperBound(-1);
+            eClass.getEStructuralFeatures().add(handlers);
+        }
         EObject element = pack.getEFactoryInstance().create(eClass);
         element.eSet(type, literal.getInstance());
         if (extClass != null)
