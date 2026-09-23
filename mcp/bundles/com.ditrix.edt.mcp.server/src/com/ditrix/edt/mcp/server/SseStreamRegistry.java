@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>
  * Thread-safe: streams are added/removed from a concurrent set, and each stream's
  * writes (heartbeat from its own SSE thread, broadcasts from a request thread or the
- * UI thread that applied the preferences) are serialized by the per-stream lock in
+ * preferences' own sender thread) are serialized by the per-stream lock in
  * {@link SseStream}.
  */
 public final class SseStreamRegistry // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design

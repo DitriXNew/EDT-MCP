@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.preferences;
 import static org.junit.Assert.*;
 
 import java.io.ByteArrayOutputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -18,6 +19,8 @@ import java.util.HexFormat;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jface.preference.PreferenceStore;
 import org.junit.Test;
@@ -797,6 +800,44 @@ public class ToolSettingsServiceTest
 
         assertEquals("re-applying the same set must stay silent", //$NON-NLS-1$
             "", applyAndCapture(store, Set.of("ask_workmate", "git"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testAStalledClientDoesNotBlockTheApplyingThread() throws Exception
+    {
+        // A client that stopped draining blocks the socket write; Apply (the UI thread) must not.
+        CountDownLatch release = new CountDownLatch(1);
+        OutputStream stalled = new OutputStream()
+        {
+            @Override
+            public void write(int b) throws java.io.IOException
+            {
+                try
+                {
+                    release.await(30, TimeUnit.SECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        };
+        SseStreamRegistry.SseStream stream = SseStreamRegistry.getInstance().register(stalled);
+        try
+        {
+            PreferenceStore store = storedDisabledTools(Set.of("git"), //$NON-NLS-1$
+                PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+            long start = System.nanoTime();
+            assertTrue(ToolSettingsService.getInstance().applyDisabledTools(store, Set.of()));
+            long waitedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+            assertTrue("the apply must return after the bounded wait, took " + waitedMs + " ms", //$NON-NLS-1$ //$NON-NLS-2$
+                waitedMs < ToolSettingsService.NOTIFY_WAIT_MS + 5_000);
+        }
+        finally
+        {
+            release.countDown();
+            SseStreamRegistry.getInstance().unregister(stream);
+        }
     }
 
     /**

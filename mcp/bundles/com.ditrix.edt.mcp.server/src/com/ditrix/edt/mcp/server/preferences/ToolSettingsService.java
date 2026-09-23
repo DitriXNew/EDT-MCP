@@ -533,12 +533,37 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, value);
         if (changed)
         {
-            // Synchronous, like the enable_toolset push: a frame of tens of bytes, written to
-            // already-open streams. It runs BEFORE the preference page's server restart, which is
-            // the only order in which an open stream can still receive it.
-            SseStreamRegistry.getInstance().notifyToolsListChanged();
+            // Before the preference page's server restart, the only order in which an open stream
+            // can still receive it - but bounded, since this may be the UI thread.
+            notifyToolsListChangedBounded(NOTIFY_WAIT_MS);
         }
         return changed;
+    }
+
+    /** How long a caller (possibly the UI thread) waits for the tools/list_changed broadcast. */
+    static final long NOTIFY_WAIT_MS = 1000;
+
+    /**
+     * Broadcasts {@code notifications/tools/list_changed} from its own thread and waits at most
+     * {@code waitMs}: a client that stopped draining its socket blocks the write, and that must
+     * not freeze the caller.
+     *
+     * @param waitMs the longest the caller waits for the broadcast to finish
+     */
+    static void notifyToolsListChangedBounded(long waitMs)
+    {
+        Thread sender = new Thread(() -> SseStreamRegistry.getInstance().notifyToolsListChanged(),
+            "MCP tools/list_changed"); //$NON-NLS-1$
+        sender.setDaemon(true);
+        sender.start();
+        try
+        {
+            sender.join(waitMs);
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
