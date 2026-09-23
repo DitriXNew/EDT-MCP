@@ -28,6 +28,7 @@ import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.platform.services.model.FileConnectionString;
+import com._1c.g5.v8.dt.platform.services.model.IConnectionString;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport;
@@ -485,6 +486,21 @@ public class DeleteInfobaseToolTest
         assertEquals("a readable application elsewhere is a measured no", //$NON-NLS-1$
             DeleteInfobaseTool.SharedDatabase.NOT_SHARED,
             DeleteInfobaseTool.applicationsServeDir(List.of(fileApp("C:/ib/Elsewhere")), target, other, target)); //$NON-NLS-1$
+
+        // A FILE application that names no directory, or has no infobase, is unreadable too.
+        IInfobaseApplication noInfobase = mock(IInfobaseApplication.class);
+        for (IInfobaseApplication app : List.of(fileApp(null), fileApp("  "), noInfobase)) //$NON-NLS-1$
+        {
+            assertEquals(DeleteInfobaseTool.SharedDatabase.UNKNOWN,
+                DeleteInfobaseTool.applicationsServeDir(List.of(app), target, other, target));
+        }
+        // The other edge: a SERVER infobase really has no local directory, so it is a measured no.
+        InfobaseReference serverRef = mock(InfobaseReference.class);
+        when(serverRef.getConnectionString()).thenReturn(mock(IConnectionString.class));
+        IInfobaseApplication serverApp = mock(IInfobaseApplication.class);
+        when(serverApp.getInfobase()).thenReturn(serverRef);
+        assertEquals(DeleteInfobaseTool.SharedDatabase.NOT_SHARED,
+            DeleteInfobaseTool.applicationsServeDir(List.of(serverApp), target, other, target));
     }
 
     private static IInfobaseApplication unreadableFileApp()

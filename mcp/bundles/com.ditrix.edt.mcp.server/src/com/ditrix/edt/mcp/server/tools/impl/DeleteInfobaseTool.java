@@ -1697,19 +1697,45 @@ public class DeleteInfobaseTool implements IMcpTool
      */
     private static Path applicationDbDirOrThrow(IApplication app) throws ReflectiveOperationException
     {
+        // Once the kind is known, missing data is UNREADABLE, never "no local directory": only a
+        // server connection string or an RDBMS database really has none.
         if (app instanceof IInfobaseApplication)
         {
-            return fileInfobaseDirOrThrow(((IInfobaseApplication)app).getInfobase());
+            InfobaseReference ref = ((IInfobaseApplication)app).getInfobase();
+            IConnectionString cs = ref != null ? ref.getConnectionString() : null;
+            if (cs == null)
+            {
+                throw new IllegalStateException("the infobase connection string is unreadable"); //$NON-NLS-1$
+            }
+            if (!(cs instanceof FileConnectionString))
+            {
+                return null;
+            }
+            String path = ((FileConnectionString)cs).getFile();
+            if (path == null || path.isBlank())
+            {
+                throw new IllegalStateException("the file connection names no directory"); //$NON-NLS-1$
+            }
+            return Paths.get(path.trim());
         }
         String typeId = (app != null && app.getType() != null) ? app.getType().getId() : null;
         if (StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId))
         {
             Object module = StandaloneServerSupport.moduleOrThrow(app);
-            String dir = module != null ? StandaloneServerSupport.databaseDirOrThrow(module) : null;
-            if (dir != null && !dir.isEmpty())
+            if (module == null)
             {
-                return Paths.get(dir);
+                throw new IllegalStateException("the standalone server exposes no module"); //$NON-NLS-1$
             }
+            String dir = StandaloneServerSupport.databaseDirOrThrow(module);
+            if (dir == null)
+            {
+                return null;
+            }
+            if (dir.isBlank())
+            {
+                throw new IllegalStateException("the file-backed server names no directory"); //$NON-NLS-1$
+            }
+            return Paths.get(dir);
         }
         return null;
     }

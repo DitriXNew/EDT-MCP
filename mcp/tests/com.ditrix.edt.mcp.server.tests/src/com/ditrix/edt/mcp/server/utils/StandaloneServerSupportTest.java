@@ -204,6 +204,28 @@ public class StandaloneServerSupportTest
     }
 
     @Test
+    public void testDatabaseDirOrThrowAnswersNullOnlyForRdbms() throws Exception
+    {
+        // The strict read: only an RDBMS database has no local directory; missing data is unreadable.
+        assertNull(StandaloneServerSupport.databaseDirOrThrow(
+            new FakeServerInfobaseModule(new FakeConfiguration(new FakeRdbmsDatabase()))));
+        for (Object module : new Object[] { new FakeServerInfobaseModule(null),
+            new FakeServerInfobaseModule(new FakeConfiguration(null)),
+            new FakeServerInfobaseModule(new FakeConfiguration(new FakeNonStringDirDatabase())) })
+        {
+            try
+            {
+                StandaloneServerSupport.databaseDirOrThrow(module);
+                fail("missing server data must raise, not read as 'no local directory'"); //$NON-NLS-1$
+            }
+            catch (IllegalStateException expected)
+            {
+                // unreadable, as required
+            }
+        }
+    }
+
+    @Test
     public void testDatabaseDirOfReturnsNullWhenConfigDirectoryIsNotAString()
     {
         // getConfigDirectory() exists but returns a non-String -> null (instanceof guard).

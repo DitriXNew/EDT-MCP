@@ -716,8 +716,9 @@ public final class StandaloneServerSupport
      * that must not read "unreadable" as "no local directory" can tell the two apart.
      *
      * @param standaloneServerInfobaseModule the server's infobase module (never {@code null})
-     * @return the served database directory, or {@code null} for an RDBMS-backed server
+     * @return the served database directory, or {@code null} ONLY for an RDBMS-backed server
      * @throws ReflectiveOperationException when the platform accessors could not be invoked
+     * @throws IllegalStateException when the configuration or its database is missing
      */
     public static String databaseDirOrThrow(Object standaloneServerInfobaseModule)
         throws ReflectiveOperationException
@@ -726,12 +727,12 @@ public final class StandaloneServerSupport
             .getMethod("getStandaloneServerConfiguration").invoke(standaloneServerInfobaseModule); //$NON-NLS-1$
         if (cfg == null)
         {
-            return null;
+            throw new IllegalStateException("the standalone server has no configuration"); //$NON-NLS-1$
         }
         Object db = cfg.getClass().getMethod("getDatabase").invoke(cfg); //$NON-NLS-1$
         if (db == null)
         {
-            return null;
+            throw new IllegalStateException("the standalone server configuration names no database"); //$NON-NLS-1$
         }
         // A FILE database (and its create-template subclass FileCreateTemplateDatabase) carries the
         // on-disk directory in getConfigDirectory() (2025.2), renamed to getPath() on 2026.1; an
@@ -750,7 +751,11 @@ public final class StandaloneServerSupport
             return null;
         }
         Object dir = dirGetter.invoke(db);
-        return (dir instanceof String) ? (String)dir : null;
+        if (!(dir instanceof String))
+        {
+            throw new IllegalStateException("the file-backed server's directory is unreadable: " + dir); //$NON-NLS-1$
+        }
+        return (String)dir;
     }
 
     /**
