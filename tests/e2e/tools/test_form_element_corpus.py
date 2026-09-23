@@ -30,6 +30,8 @@ landed ahead of resync_to_disk's full-export test, which then re-exported a Conf
 that no longer matched the committed one.)
 """
 
+import re
+
 from harness import (
     call,
     assert_ok,
@@ -40,6 +42,7 @@ from harness import (
     assert_no_diff,
     poll_disk_contains,
     poll_disk_lacks,
+    read_disk,
     wait_for_project_ready,
     e2e_test,
     PROJECT,
@@ -161,6 +164,33 @@ def _set_attribute_type(attr_fqn, kind):
         "projectName": PROJECT, "fqn": attr_fqn,
         "properties": [{"name": "type", "value": {"types": [{"kind": kind}]}}],
     })
+
+
+def _set_item_type(item_fqn, kind):
+    return call("modify_metadata", {
+        "projectName": PROJECT, "fqn": item_fqn,
+        "properties": [{"name": "type", "value": kind}],
+    })
+
+
+# An event name as the refusal lists them: an English identifier, nothing else on the line.
+_EVENT_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
+
+
+def _available_events(item_fqn):
+    """The events the item's CURRENT kind publishes, read off the refusal that lists them.
+
+    The published-event set per kind is the platform's, not a table kept here - asking for it this
+    way keeps the test honest when the platform's own list changes.
+    """
+    err = assert_error(call("create_metadata", {
+        "projectName": PROJECT, "fqn": item_fqn + ".Handler.NotARealEvent_zz",
+        "properties": [{"name": "procedure", "value": "NeverBound"}]}),
+        "a bogus event must be refused with the list of the real ones")
+    marker = "Available events:"
+    assert marker in err, "the refusal must list the events the kind publishes: %r" % (err,)
+    listed = err.split(marker, 1)[1].splitlines()[0]
+    return [e for e in (t.strip().rstrip(".") for t in listed.split(",")) if _EVENT_NAME.match(e)]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -384,6 +414,115 @@ def test_form_corpus_every_field_type_is_settable():
     assert_ok(d, "read back the form")
     assert_contains(d.text, FIELD_TYPES[-1][0],
                     "the field must actually carry the last type that was set")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_corpus_a_kind_change_keeps_what_the_new_kind_still_publishes():
+    """Issue #601. An item's `<extInfo>` IS an event-handler container: everything its ext-info TYPE
+    publishes is bound INSIDE the node, and only the base-type events sit on the item itself.
+
+    So a kind change has two duties. It must CARRY the node's bindings over to the new node - a bare
+    replacement destroyed every one of them, including the ones the new kind still publishes - and
+    it must then drop only the subscriptions the new kind publishes no event for. Both are asserted
+    on the FILE, and the kept one is deliberately an event that lives in the node, not the item's
+    own OnChange, or the carry-over would not be exercised at all.
+
+    Which events each kind publishes is asked of the platform (the refusal that lists them), never
+    assumed - see _available_events.
+    """
+    base, form, form_file = _seed_form("Handlers")
+    attr = form + ".Attribute.Data"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": attr}),
+              "seed the bound attribute")
+    field = form + ".Field.Probe"
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": field,
+        "properties": [{"name": "dataPath", "value": "Data"}]}), "seed the field")
+    assert_ok(_set_item_type(field, "InputField"), "start from an InputField")
+    input_events = _available_events(field)
+
+    # A target kind that both KEEPS one of the input field's non-base events and LOSES another.
+    # OnChange is excluded from the kept side on purpose: it is the one event that lives on the
+    # item's own list, so keeping it would prove nothing about the node's contents.
+    target, kept_event, lost_event = None, None, None
+    for candidate in (t for t, _ in FIELD_TYPES if t != "InputField"):
+        assert_ok(_set_item_type(field, candidate), "probe the events of " + candidate)
+        its_events = _available_events(field)
+        migrating = [e for e in input_events if e in its_events and e != "OnChange"]
+        losing = [e for e in input_events if e not in its_events]
+        if migrating and losing:
+            target, kept_event, lost_event = candidate, migrating[0], losing[0]
+            break
+    assert target, (
+        "no candidate kind both keeps a non-base InputField event and loses one; the corpus this "
+        "test needs has changed, so it must be re-aimed rather than left proving less. "
+        "InputField publishes %r" % (input_events,))
+    assert_ok(_set_item_type(field, "InputField"), "back to the kind the handlers are bound on")
+
+    for event, procedure in ((kept_event, "ProbeKept"), (lost_event, "ProbeLost")):
+        assert_ok(call("create_metadata", {
+            "projectName": PROJECT, "fqn": "%s.Handler.%s" % (field, event),
+            "properties": [{"name": "procedure", "value": procedure}]}), "bind " + event)
+    wait_for_project_ready()
+    poll_disk_contains(form_file, "<event>%s</event>" % lost_event,
+                       ctx="both bindings must reach disk before the kind changes")
+
+    r = _set_item_type(field, target)
+    assert_ok(r, "change the field's kind to " + target)
+    removed = (r.structured or {}).get("removedEventHandlers")
+    assert removed == ["%s (ProbeLost)" % lost_event], (
+        "the caller addressed the TYPE, not the subscriptions, so exactly the dropped one must be "
+        "named back (kept=%r lost=%r target=%r): %r" % (kept_event, lost_event, target, removed))
+
+    poll_disk_lacks(form_file, "<event>%s</event>" % lost_event,
+                    ctx="an event the new kind does not publish may not stay bound in the file")
+    xml = read_disk(form_file)
+    assert "<event>%s</event>" % kept_event in xml, (
+        "the binding for an event the new kind STILL publishes must have been carried over to the "
+        "new node, not destroyed with the old one: %r" % (kept_event,))
+    assert "ProbeKept" in xml, "...with its procedure"
+    assert "ProbeLost" not in xml, \
+        "while the dropped subscription is gone from the file, procedure and all"
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_corpus_a_repeated_kind_in_one_batch_is_refused_and_keeps_the_handler():
+    """Every `type` write rebuilds the ext-info, so `LabelField -> InputField` in ONE call would
+    drop the input node's bindings at the intermediate step. Such a batch is refused before
+    anything is applied, and the binding stays on disk.
+
+    The event is asked of the platform (the refusal that lists what the kind publishes), never
+    assumed - see _available_events.
+    """
+    base, form, form_file = _seed_form("KindTrip")
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": form + ".Attribute.Data"}),
+              "seed the bound attribute")
+    field = form + ".Field.Probe"
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": field,
+        "properties": [{"name": "dataPath", "value": "Data"}]}), "seed the field")
+    assert_ok(_set_item_type(field, "InputField"), "make it an InputField")
+    node_events = [e for e in _available_events(field) if e != "OnChange"]
+    assert node_events, "an InputField must publish at least one event of its own node"
+    event = node_events[0]
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "%s.Handler.%s" % (field, event),
+        "properties": [{"name": "procedure", "value": "ProbeRoundTrip"}]}), "bind " + event)
+    wait_for_project_ready()
+    poll_disk_contains(form_file, "<event>%s</event>" % event,
+                       ctx="the binding must reach disk before the batch")
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": field,
+        "properties": [{"name": "type", "value": "LabelField"},
+                       {"name": "type", "value": "InputField"}]})
+    err = assert_error(r, "a batch setting the kind twice must be refused")
+    assert_error_quality(err, suggests=["only ONCE per call"], ctx="the repeated-kind refusal")
+
+    wait_for_project_ready()
+    xml = read_disk(form_file)
+    assert "<event>%s</event>" % event in xml, (
+        "the refused batch must not have touched the binding: %r" % event)
+    assert "ProbeRoundTrip" in xml, "...nor its procedure"
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

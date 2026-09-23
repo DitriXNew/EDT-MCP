@@ -17,21 +17,28 @@ import static org.junit.Assert.assertTrue;
 import java.util.Collections;
 import java.util.Set;
 
+import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.EcoreFactory;
+import org.eclipse.emf.ecore.InternalEObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.Test;
 import org.mockito.Mockito;
 
 import com._1c.g5.v8.dt.core.platform.IExternalObjectProject;
+import com._1c.g5.v8.dt.mcore.BinaryQualifiers;
 import com._1c.g5.v8.dt.mcore.DateFractions;
+import com._1c.g5.v8.dt.mcore.DateQualifiers;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.NumberQualifiers;
+import com._1c.g5.v8.dt.mcore.StringQualifiers;
 import com._1c.g5.v8.dt.mcore.Type;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
+import com._1c.g5.v8.dt.mcore.TypeSet;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
@@ -1922,5 +1929,214 @@ public class MetadataTypeBuilderTest
         EObject value = EcoreUtil.create(reference.getEReferenceType());
         owner.eSet(reference, value);
         return value;
+    }
+
+    // ---- describesSameType (issue #599) ---------------------------------------------------------
+    //
+    // These tests exist for ONE direction. Answering "different" for equal types costs a dialog
+    // nobody needed; answering "SAME" for different types silences the destructive-consent gate and
+    // loses stored data with no question asked. So all but the first two attack the second.
+
+    @Test
+    public void testTheSameSingleTypeComparesEqual()
+    {
+        assertTrue("a valueType write that lands the very same type is not a retype", //$NON-NLS-1$
+            MetadataTypeBuilder.describesSameType(describing("CatalogObject.Goods"), //$NON-NLS-1$
+                describing("CatalogObject.Goods"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testADifferentTypeNameComparesDifferent()
+    {
+        assertFalse(MetadataTypeBuilder.describesSameType(describing("CatalogObject.Goods"), //$NON-NLS-1$
+            describing("String"))); //$NON-NLS-1$
+        assertFalse("the head matching is not enough - the object is part of the name", //$NON-NLS-1$
+            MetadataTypeBuilder.describesSameType(describing("CatalogRef.Goods"), //$NON-NLS-1$
+                describing("CatalogRef.Partners"))); //$NON-NLS-1$
+    }
+
+    /** A String(10) and a String(20) are the same type NAME and a different type. */
+    @Test
+    public void testStringQualifiersAreCompared()
+    {
+        assertFalse("a shorter string truncates stored values", //$NON-NLS-1$
+            MetadataTypeBuilder.describesSameType(string(10, false), string(9, false)));
+        assertFalse("variable vs fixed length is a different type", //$NON-NLS-1$
+            MetadataTypeBuilder.describesSameType(string(10, false), string(10, true)));
+        assertFalse("a String written with NO length is not a stored String(10)", //$NON-NLS-1$
+            MetadataTypeBuilder.describesSameType(string(10, false), describing("String"))); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.describesSameType(string(10, true), string(10, true)));
+    }
+
+    @Test
+    public void testNumberQualifiersAreCompared()
+    {
+        assertFalse("precision decides how much fits", //$NON-NLS-1$
+            MetadataTypeBuilder.describesSameType(number(10, 2, false), number(8, 2, false)));
+        assertFalse("scale decides the fractional digits", //$NON-NLS-1$
+            MetadataTypeBuilder.describesSameType(number(10, 2, false), number(10, 0, false)));
+        assertFalse("non-negative refuses half the range", //$NON-NLS-1$
+            MetadataTypeBuilder.describesSameType(number(10, 2, false), number(10, 2, true)));
+        assertTrue(MetadataTypeBuilder.describesSameType(number(10, 2, true), number(10, 2, true)));
+    }
+
+    @Test
+    public void testDateCompositionIsCompared()
+    {
+        assertFalse("a Date drops the time part of a DateTime", //$NON-NLS-1$
+            MetadataTypeBuilder.describesSameType(date(DateFractions.DATE_TIME),
+                date(DateFractions.DATE)));
+        assertFalse(MetadataTypeBuilder.describesSameType(date(DateFractions.DATE),
+            date(DateFractions.TIME)));
+        assertTrue(MetadataTypeBuilder.describesSameType(date(DateFractions.DATE_TIME),
+            date(DateFractions.DATE_TIME)));
+    }
+
+    /**
+     * The qualifier our own builder never writes. A stored binary-qualified type must still compare
+     * different from a rebuilt one that carries no binary qualifier at all.
+     */
+    @Test
+    public void testBinaryQualifiersAreCompared()
+    {
+        TypeDescription stored = describing("ValueStorage"); //$NON-NLS-1$
+        BinaryQualifiers binary = McoreFactory.eINSTANCE.createBinaryQualifiers();
+        binary.setLength(1024);
+        stored.setBinaryQualifiers(binary);
+        assertFalse(MetadataTypeBuilder.describesSameType(stored, describing("ValueStorage"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testACompositeTypeIsComparedMemberByMemberAndInORDER()
+    {
+        assertTrue(MetadataTypeBuilder.describesSameType(describing("String", "Number"), //$NON-NLS-1$ //$NON-NLS-2$
+            describing("String", "Number"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("the ORDER of the types is part of the description", //$NON-NLS-1$
+            MetadataTypeBuilder.describesSameType(describing("String", "Number"), //$NON-NLS-1$ //$NON-NLS-2$
+                describing("Number", "String"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("dropping one member of a composite drops its values", //$NON-NLS-1$
+            MetadataTypeBuilder.describesSameType(describing("String", "Number"), //$NON-NLS-1$ //$NON-NLS-2$
+                describing("String"))); //$NON-NLS-1$
+        assertFalse("and adding one is a retype too", //$NON-NLS-1$
+            MetadataTypeBuilder.describesSameType(describing("String"), //$NON-NLS-1$
+                describing("String", "Number"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A DefinedType is a TypeSet, and two different ones expand to different type sets. */
+    @Test
+    public void testDefinedTypesAreComparedByName()
+    {
+        assertTrue(MetadataTypeBuilder.describesSameType(definedType("MoneyAmount"), //$NON-NLS-1$
+            definedType("MoneyAmount"))); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.describesSameType(definedType("MoneyAmount"), //$NON-NLS-1$
+            definedType("Quantity"))); //$NON-NLS-1$
+    }
+
+    /**
+     * An unresolved proxy names nothing this process can read - and something that names nothing may
+     * not compare equal to anything, not even to another copy of itself. Whether the platform's
+     * type-name resolver is up in this JVM or not, the answer must be the same: ask.
+     */
+    @Test
+    public void testAnUnresolvedProxyNeverComparesEqual()
+    {
+        assertFalse("two unreadable proxies are not evidence of an unchanged type", //$NON-NLS-1$
+            MetadataTypeBuilder.describesSameType(unresolvedProxy(), unresolvedProxy()));
+        assertFalse(MetadataTypeBuilder.describesSameType(unresolvedProxy(),
+            describing("CatalogRef.Goods"))); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.describesSameType(describing("CatalogRef.Goods"), //$NON-NLS-1$
+            unresolvedProxy()));
+    }
+
+    /** A type item with no name at all is the same non-evidence as a proxy. */
+    @Test
+    public void testANamelessTypeNeverComparesEqual()
+    {
+        TypeDescription nameless = McoreFactory.eINSTANCE.createTypeDescription();
+        nameless.getTypes().add(McoreFactory.eINSTANCE.createType());
+        TypeDescription other = McoreFactory.eINSTANCE.createTypeDescription();
+        other.getTypes().add(McoreFactory.eINSTANCE.createType());
+        assertFalse(MetadataTypeBuilder.describesSameType(nameless, other));
+    }
+
+    /**
+     * Nothing is equal by DEFAULT. An empty type list would leave the whole verdict to the
+     * qualifiers, and two descriptions carrying neither types nor qualifiers would then compare
+     * equal on no evidence at all.
+     */
+    @Test
+    public void testNothingIsEqualByDefault()
+    {
+        assertFalse("two empty descriptions say nothing about each other", //$NON-NLS-1$
+            MetadataTypeBuilder.describesSameType(McoreFactory.eINSTANCE.createTypeDescription(),
+                McoreFactory.eINSTANCE.createTypeDescription()));
+        assertFalse("an attribute with no stored type is not the type about to be written", //$NON-NLS-1$
+            MetadataTypeBuilder.describesSameType(null, describing("String"))); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.describesSameType(describing("String"), null)); //$NON-NLS-1$
+        assertFalse("and neither is something that is not a TypeDescription at all", //$NON-NLS-1$
+            MetadataTypeBuilder.describesSameType("String", describing("String"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A {@code TypeDescription} naming each of {@code typeNames}, in order. */
+    private static TypeDescription describing(String... typeNames)
+    {
+        TypeDescription description = McoreFactory.eINSTANCE.createTypeDescription();
+        for (String typeName : typeNames)
+        {
+            Type type = McoreFactory.eINSTANCE.createType();
+            type.setName(typeName);
+            description.getTypes().add(type);
+        }
+        return description;
+    }
+
+    private static TypeDescription string(int length, boolean fixed)
+    {
+        TypeDescription description = describing("String"); //$NON-NLS-1$
+        StringQualifiers qualifiers = McoreFactory.eINSTANCE.createStringQualifiers();
+        qualifiers.setLength(length);
+        qualifiers.setFixed(fixed);
+        description.setStringQualifiers(qualifiers);
+        return description;
+    }
+
+    private static TypeDescription number(int precision, int scale, boolean nonNegative)
+    {
+        TypeDescription description = describing("Number"); //$NON-NLS-1$
+        NumberQualifiers qualifiers = McoreFactory.eINSTANCE.createNumberQualifiers();
+        qualifiers.setPrecision(precision);
+        qualifiers.setScale(scale);
+        qualifiers.setNonNegative(nonNegative);
+        description.setNumberQualifiers(qualifiers);
+        return description;
+    }
+
+    private static TypeDescription date(DateFractions fractions)
+    {
+        TypeDescription description = describing("Date"); //$NON-NLS-1$
+        DateQualifiers qualifiers = McoreFactory.eINSTANCE.createDateQualifiers();
+        qualifiers.setDateFractions(fractions);
+        description.setDateQualifiers(qualifiers);
+        return description;
+    }
+
+    private static TypeDescription definedType(String name)
+    {
+        TypeDescription description = McoreFactory.eINSTANCE.createTypeDescription();
+        TypeSet typeSet = McoreFactory.eINSTANCE.createTypeSet();
+        typeSet.setName("DefinedType." + name); //$NON-NLS-1$
+        description.getTypes().add(typeSet);
+        return description;
+    }
+
+    /** A description whose single type is an EMF proxy no type-name resolver in this JVM knows. */
+    private static TypeDescription unresolvedProxy()
+    {
+        TypeDescription description = McoreFactory.eINSTANCE.createTypeDescription();
+        Type type = McoreFactory.eINSTANCE.createType();
+        ((InternalEObject)type).eSetProxyURI(
+            URI.createURI("http://ditrix.com/test/no-such-type#//NoSuchType")); //$NON-NLS-1$
+        description.getTypes().add(type);
+        return description;
     }
 }
