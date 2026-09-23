@@ -366,10 +366,10 @@ public class DeleteInfobaseTool implements IMcpTool
         // Resolve the on-disk infobase directory now (for deleteDatabaseFiles), before dissociation.
         final Path dbDir = resolveFileInfobaseDir(ibRef);
         // A file infobase can be bound to SEVERAL projects; wiping the shared data would break the
-        // others. If asked to delete files, check (before dissociating) whether any OTHER project still
-        // uses this infobase — if so we keep the files.
+        // others. If asked to delete files, check (before dissociating) whether any OTHER application
+        // still uses this infobase — if so we keep the files.
         final SharedDatabase dbShared = deleteDatabaseFiles && dbDir != null
-            ? isSharedWithOtherProjects(appManager, project, dbDir) : SharedDatabase.NOT_SHARED;
+            ? isSharedWithOtherApplications(appManager, project, resolvedId, dbDir) : SharedDatabase.NOT_SHARED;
         return FileDeletionPlan.of(ibRef, resolvedName, resolvedId, dbDir, dbShared,
             deleteRegistration);
     }
@@ -1187,7 +1187,7 @@ public class DeleteInfobaseTool implements IMcpTool
         // A server's served DB is normally dedicated, but EDT does not forbid another project from
         // registering the same directory as a FILE infobase — so apply the same shared-files guard.
         final SharedDatabase dbShared = deleteDatabaseFiles && dbDir != null
-            ? isSharedWithOtherProjects(appManager, project, dbDir) : SharedDatabase.NOT_SHARED;
+            ? isSharedWithOtherApplications(appManager, project, resolvedId, dbDir) : SharedDatabase.NOT_SHARED;
 
         ctx.service = service;
         ctx.server = server;
@@ -1415,7 +1415,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * the same {@link #COUNT_UNKNOWN}; the caller's poll loop stops at the first one, so at most one
      * deadline is paid.
      */
-    private static int countAppsWithId(IApplicationManager appManager, IProject project, String appId)
+    static int countAppsWithId(IApplicationManager appManager, IProject project, String appId)
     {
         ApplicationSupport.BoundedRead<List<IApplication>> read =
             ApplicationSupport.getApplicationsBounded(appManager, project,
@@ -1429,15 +1429,16 @@ public class DeleteInfobaseTool implements IMcpTool
         try
         {
             List<IApplication> apps = read.valueOrRethrow();
-            int count = 0;
-            if (apps != null)
+            if (apps == null)
             {
-                for (IApplication a : apps)
+                return COUNT_UNKNOWN;
+            }
+            int count = 0;
+            for (IApplication a : apps)
+            {
+                if (appId.equals(a.getId()))
                 {
-                    if (appId.equals(a.getId()))
-                    {
-                        count++;
-                    }
+                    count++;
                 }
             }
             return count;
@@ -1504,8 +1505,8 @@ public class DeleteInfobaseTool implements IMcpTool
      * big workspace from running past it. Either way it is re-run per CALL, so a preview and its
      * confirm can reach different answers — which is why an UNKNOWN preview says so.
      */
-    static SharedDatabase isSharedWithOtherProjects(IApplicationManager appManager,
-            IProject currentProject, Path dbDir)
+    static SharedDatabase isSharedWithOtherApplications(IApplicationManager appManager,
+            IProject currentProject, String targetAppId, Path dbDir)
     {
         if (appManager == null || dbDir == null)
         {
@@ -1513,7 +1514,7 @@ public class DeleteInfobaseTool implements IMcpTool
         }
         Path target = dbDir.toAbsolutePath().normalize();
         return sharedCheckBounded(SHARED_INFOBASE_CHECK_TIMEOUT_MS,
-            () -> enumerateSharedWithOtherProjects(appManager, currentProject, target, dbDir));
+            () -> enumerateSharedWithOtherApplications(appManager, currentProject, targetAppId, target, dbDir));
     }
 
     /**
@@ -1597,18 +1598,22 @@ public class DeleteInfobaseTool implements IMcpTool
         }
     }
 
-    /** The enumeration {@link #isSharedWithOtherProjects} runs under one deadline. */
-    private static SharedDatabase enumerateSharedWithOtherProjects(IApplicationManager appManager,
-            IProject currentProject, Path target, Path dbDir)
+    /**
+     * The enumeration {@link #isSharedWithOtherApplications} runs under one deadline. The current
+     * project is scanned too: only the application being deleted is left out, not its siblings.
+     */
+    private static SharedDatabase enumerateSharedWithOtherApplications(IApplicationManager appManager,
+            IProject currentProject, String targetAppId, Path target, Path dbDir)
     {
         try
         {
             List<Supplier<SharedDatabase>> answers = new ArrayList<>();
             for (IProject other : ProjectContext.allProjects())
             {
-                if (other != null && !other.equals(currentProject))
+                if (other != null)
                 {
-                    answers.add(() -> projectShares(appManager, other, target, dbDir));
+                    String excluded = other.equals(currentProject) ? targetAppId : null;
+                    answers.add(() -> projectShares(appManager, other, excluded, target, dbDir));
                 }
             }
             return combineProjectAnswers(answers);
@@ -1623,20 +1628,31 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /**
-     * What one OTHER project establishes: it serves {@code target}, it does not, or it cannot be
-     * read. A failure anywhere in judging this project is ITS answer, so the scan goes on.
+     * What one project establishes: it serves {@code target}, it does not, or it cannot be read.
+     * The application {@code excludedAppId} (the deletion target) is skipped; a null list is
+     * unread, not empty. A failure anywhere in judging this project is ITS answer.
      */
-    private static SharedDatabase projectShares(IApplicationManager appManager, IProject other,
-            Path target, Path dbDir)
+    static SharedDatabase projectShares(IApplicationManager appManager, IProject other,
+            String excludedAppId, Path target, Path dbDir)
     {
         try
         {
             List<IApplication> apps = appManager.getApplications(other);
             if (apps == null)
             {
-                return SharedDatabase.NOT_SHARED;
+                Activator.logError("delete_infobase: project '" + other.getName() //$NON-NLS-1$
+                    + "' returned no application list — it may share '" + dbDir + "'", null); //$NON-NLS-1$ //$NON-NLS-2$
+                return SharedDatabase.UNKNOWN;
             }
-            return applicationsServeDir(apps, target, other, dbDir);
+            List<IApplication> candidates = new ArrayList<>();
+            for (IApplication app : apps)
+            {
+                if (excludedAppId == null || app == null || !excludedAppId.equals(app.getId()))
+                {
+                    candidates.add(app);
+                }
+            }
+            return applicationsServeDir(candidates, target, other, dbDir);
         }
         catch (Exception e)
         {
@@ -1648,7 +1664,7 @@ public class DeleteInfobaseTool implements IMcpTool
 
     /**
      * What the applications of {@code other} establish about the on-disk database {@code target}
-     * (absolute, normalized) — the per-project arm of {@link #isSharedWithOtherProjects}. Covers
+     * (absolute, normalized) — the per-project arm of {@link #isSharedWithOtherApplications}. Covers
      * EVERY co-owner kind: a FILE infobase OR a standalone (wst) server serving the same database.
      *
      * <p>An application whose path cannot be READ is UNKNOWN, not "serves something else": it may
@@ -1719,6 +1735,10 @@ public class DeleteInfobaseTool implements IMcpTool
             return Paths.get(path.trim());
         }
         String typeId = (app != null && app.getType() != null) ? app.getType().getId() : null;
+        if (INFOBASE_APP_TYPE.equals(typeId))
+        {
+            throw new IllegalStateException("an infobase-type application exposes no infobase"); //$NON-NLS-1$
+        }
         if (StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId))
         {
             Object module = StandaloneServerSupport.moduleOrThrow(app);

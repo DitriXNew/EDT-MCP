@@ -35,6 +35,7 @@ import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
+import com.e1c.g5.dt.applications.IApplicationType;
 import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -501,6 +502,64 @@ public class DeleteInfobaseToolTest
         when(serverApp.getInfobase()).thenReturn(serverRef);
         assertEquals(DeleteInfobaseTool.SharedDatabase.NOT_SHARED,
             DeleteInfobaseTool.applicationsServeDir(List.of(serverApp), target, other, target));
+    }
+
+    @Test
+    public void testAnInfobaseTypedApplicationWithoutTheInterfaceIsUnknown()
+    {
+        // The kind is known, so its missing infobase is unreadable, not "no local directory".
+        Path target = Paths.get("C:/ib/Shared").toAbsolutePath().normalize(); //$NON-NLS-1$
+        IProject other = mock(IProject.class);
+        IApplicationType type = mock(IApplicationType.class);
+        when(type.getId()).thenReturn("com.e1c.g5.dt.applications.type.infobase"); //$NON-NLS-1$
+        IApplication app = mock(IApplication.class);
+        when(app.getType()).thenReturn(type);
+        assertEquals(DeleteInfobaseTool.SharedDatabase.UNKNOWN,
+            DeleteInfobaseTool.applicationsServeDir(List.of(app), target, other, target));
+        // The other edge: an application of an unrelated kind really has no directory.
+        IApplicationType otherType = mock(IApplicationType.class);
+        when(otherType.getId()).thenReturn("some.other.type"); //$NON-NLS-1$
+        IApplication unrelated = mock(IApplication.class);
+        when(unrelated.getType()).thenReturn(otherType);
+        assertEquals(DeleteInfobaseTool.SharedDatabase.NOT_SHARED,
+            DeleteInfobaseTool.applicationsServeDir(List.of(unrelated), target, other, target));
+    }
+
+    @Test
+    public void testASiblingInTheSameProjectIsACoOwnerButTheTargetIsNot() throws Exception
+    {
+        Path target = Paths.get("C:/ib/Shared").toAbsolutePath().normalize(); //$NON-NLS-1$
+        IProject project = mock(IProject.class);
+        IInfobaseApplication doomed = fileApp(target.toString());
+        when(doomed.getId()).thenReturn("doomed"); //$NON-NLS-1$
+        IInfobaseApplication sibling = fileApp(target.toString());
+        when(sibling.getId()).thenReturn("sibling"); //$NON-NLS-1$
+        IApplicationManager mgr = mock(IApplicationManager.class);
+
+        when(mgr.getApplications(project)).thenReturn(List.of(doomed, sibling));
+        assertEquals("a sibling serving the same directory keeps the files", //$NON-NLS-1$
+            DeleteInfobaseTool.SharedDatabase.SHARED,
+            DeleteInfobaseTool.projectShares(mgr, project, "doomed", target, target)); //$NON-NLS-1$
+        when(mgr.getApplications(project)).thenReturn(List.of(doomed));
+        assertEquals("the deletion target alone is not its own co-owner", //$NON-NLS-1$
+            DeleteInfobaseTool.SharedDatabase.NOT_SHARED,
+            DeleteInfobaseTool.projectShares(mgr, project, "doomed", target, target)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testANullApplicationListIsUnreadNotEmpty() throws Exception
+    {
+        Path target = Paths.get("C:/ib/Shared").toAbsolutePath().normalize(); //$NON-NLS-1$
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        when(mgr.getApplications(project)).thenReturn(null);
+        assertEquals(DeleteInfobaseTool.SharedDatabase.UNKNOWN,
+            DeleteInfobaseTool.projectShares(mgr, project, null, target, target));
+        assertEquals("a null read-back must not confirm the removal", //$NON-NLS-1$
+            DeleteInfobaseTool.COUNT_UNKNOWN, DeleteInfobaseTool.countAppsWithId(mgr, project, "doomed")); //$NON-NLS-1$
+        when(mgr.getApplications(project)).thenReturn(Collections.emptyList());
+        assertEquals("an empty list is a measured zero", //$NON-NLS-1$
+            0, DeleteInfobaseTool.countAppsWithId(mgr, project, "doomed")); //$NON-NLS-1$
     }
 
     private static IInfobaseApplication unreadableFileApp()
