@@ -446,6 +446,24 @@ public final class ProjectStateChecker
     }
 
     /**
+     * Whether {@code project} carries a nature of a project that can own a BM model.
+     *
+     * <p>The permanent, description-level answer to "is this an EDT project at all?", as opposed to
+     * {@link IDtProjectManager#getDtProject(IProject)}, which additionally requires EDT to have
+     * STARTED the project's context. The two together separate an un-started EDT project (nature
+     * yes, DtProject no - recoverable, and worth saying so) from a plain Eclipse project (nature
+     * no - not this plugin's business).
+     *
+     * @param project the project to inspect (may be {@code null})
+     * @return {@code TRUE}/{@code FALSE} when the natures could be read, and {@code null} when they
+     *     could NOT be determined at all - which is never the same statement as "no"
+     */
+    public static Boolean hasBmModelProjectNature(IProject project)
+    {
+        return ProjectContext.hasAnyNature(project, BM_MODEL_PROJECT_NATURES);
+    }
+
+    /**
      * The pre-flight for a CASCADE operation (a rename / delete refactoring): actively waits for the
      * project's derived-data pipeline to drain and for EDT to register every BM model the refactoring
      * will use, then returns an actionable error when either condition did not settle in time.
@@ -1352,7 +1370,7 @@ public final class ProjectStateChecker
             @Override
             public Boolean hasBmModelProjectNature(IProject project)
             {
-                return ProjectContext.hasAnyNature(project, BM_MODEL_PROJECT_NATURES);
+                return ProjectStateChecker.hasBmModelProjectNature(project);
             }
 
             @Override

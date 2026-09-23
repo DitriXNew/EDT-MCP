@@ -90,9 +90,21 @@ public final class BoundedJob
         void run(IProgressMonitor monitor) throws Exception; // NOSONAR the work is arbitrary platform code
     }
 
+    /**
+     * Hands a prepared job to the job manager. Production is {@link McpJobs#schedule(Job)}; a
+     * test substitutes a scheduler that never schedules the job, or schedules it with a delay the
+     * deadline cannot outlast, and so produces the two never-ran outcomes
+     * ({@link Outcome#NOT_RUN}, {@link Outcome#TIMED_OUT_BEFORE_START}) on demand - the only
+     * deterministic way to reach a branch a caller keeps for them.
+     */
     @FunctionalInterface
-    interface IJobScheduler
+    public interface IJobScheduler
     {
+        /**
+         * Schedules {@code job} - or, in a test, deliberately holds it back.
+         *
+         * @param job the job to schedule
+         */
         void schedule(Job job);
     }
 
@@ -393,7 +405,21 @@ public final class BoundedJob
         return run(jobName, timeoutMs, work, completion, McpJobs::schedule);
     }
 
-    static Result run(String jobName, long timeoutMs, IBoundedWork work, Runnable completion,
+    /**
+     * {@link #run(String, long, IBoundedWork, Runnable)} with the scheduler injected.
+     *
+     * <p>A seam, not a policy: production callers pass {@link McpJobs#schedule(Job)} - which is
+     * what the four-argument overload does - and a caller whose own handling of a job that never
+     * ran needs a test passes a scheduler that keeps the job from running.
+     *
+     * @param jobName the job name shown in EDT's progress UI
+     * @param timeoutMs the caller's deadline in milliseconds
+     * @param work the work to run
+     * @param completion optional callback invoked after the operation ends, or {@code null}
+     * @param scheduler what hands the job to the job manager
+     * @return the bounded outcome
+     */
+    public static Result run(String jobName, long timeoutMs, IBoundedWork work, Runnable completion,
         IJobScheduler scheduler)
     {
         long startMs = System.currentTimeMillis();
