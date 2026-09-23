@@ -6920,10 +6920,7 @@ public class FormElementWriterTest
         assertEquals(List.of("Click (LabelClick)"), lost); //$NON-NLS-1$
     }
 
-    /**
-     * An empty published set means "publishes nothing", "cannot tell" and "the union did not fully
-     * resolve" all at once, and none of the three is grounds for deleting a user's binding.
-     */
+    /** A set that cannot be established ("cannot tell", an unresolved union) deletes no binding. */
     @Test
     public void testAnUnestablishedEventSetRemovesNothing()
     {
@@ -6932,9 +6929,22 @@ public class FormElementWriterTest
         FormElementWriter.syncItemExtInfo(model.form, model.item, null);
         model.bindOn(model.extInfo(), "Clearing", null, "GoodsClearing"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        assertEquals(List.of(), FormElementWriter.removeHandlersForUnpublishedEvents(model.item,
-            Collections.emptySet()));
+        assertEquals(List.of(), FormElementWriter.removeHandlersForUnpublishedEvents(model.item, null));
         assertEquals(List.of("GoodsClearing"), model.proceduresIn(model.extInfo())); //$NON-NLS-1$
+    }
+
+    /** A set established as EMPTY is a kind publishing nothing: every named binding goes, and is named. */
+    @Test
+    public void testAKnownEmptyEventSetRemovesEveryNamedBinding()
+    {
+        ItemModel model = new ItemModel("FormField", FIELD_EXT_INFO_MATRIX); //$NON-NLS-1$
+        model.setType("InputField"); //$NON-NLS-1$
+        FormElementWriter.syncItemExtInfo(model.form, model.item, null);
+        model.bindOn(model.extInfo(), "Clearing", null, "GoodsClearing"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(List.of("Clearing (GoodsClearing)"), //$NON-NLS-1$
+            FormElementWriter.removeHandlersForUnpublishedEvents(model.item, Collections.emptySet()));
+        assertEquals(List.of(), model.proceduresIn(model.extInfo()));
     }
 
     /** A binding whose event names nothing readable is not evidence of an un-published event. */

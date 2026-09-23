@@ -5248,10 +5248,9 @@ public final class FormElementWriter
      * Drops the item's handlers for events its kind does not publish, reading the published set off
      * the item as it stands NOW - so the caller runs this once, after the whole batch.
      *
-     * <p>An empty published set is never read as "publishes nothing": {@link #availableEventNames}
-     * already documents that empty also means "cannot tell" and "the union did not fully resolve",
-     * and none of the three may delete a user's handler. So an unresolvable set removes nothing -
-     * the carry-over above has already kept every binding, which is the half that matters.</p>
+     * <p>A set that cannot be established ("cannot tell", or a union that did not fully resolve)
+     * removes nothing - the carry-over above has already kept every binding. A set established as
+     * EMPTY is the new kind publishing nothing, so every named binding goes.</p>
      *
      * @param item the form item whose kind the batch has finished writing
      * @param version the platform version the published events are resolved for
@@ -5270,17 +5269,18 @@ public final class FormElementWriter
      *
      * <p>Two things are deliberately KEPT, because neither is evidence that the new kind stopped
      * publishing the event: a binding whose event names nothing readable, and every binding at all
-     * when the published set is empty (see {@link #dropUnpublishedItemHandlers}).</p>
+     * when the published set is unknown ({@code null}; see {@link #dropUnpublishedItemHandlers}).</p>
      *
      * @param item the form item, after its ext-info was re-paired
-     * @param publishedSpellings every spelling the new kind publishes, lower-cased
+     * @param publishedSpellings every spelling the new kind publishes, lower-cased; {@code null}
+     *            when it cannot be established, empty when the kind publishes nothing
      * @return the dropped bindings, in the order they were bound
      */
     static List<String> removeHandlersForUnpublishedEvents(EObject item,
         Set<String> publishedSpellings)
     {
         List<String> removed = new ArrayList<>();
-        if (publishedSpellings.isEmpty())
+        if (publishedSpellings == null)
         {
             return removed;
         }
@@ -5369,7 +5369,7 @@ public final class FormElementWriter
 
     /**
      * Every spelling - English and Russian, lower-cased - of the events {@code container} publishes,
-     * or an EMPTY set when the set cannot be established. Both spellings are collected because the
+     * or {@code null} when the set cannot be established. Both spellings are collected because the
      * bound event carries both and a handler written in either language is the same subscription.
      *
      * <p>Same guards as {@link #availableEventNames}, for the same reason: an element whose ext-info
@@ -5379,12 +5379,12 @@ public final class FormElementWriter
     {
         if (!publishesKnownEventSet(container))
         {
-            return Collections.emptySet();
+            return null;
         }
         EventUnion union = availableEvents(container, version);
         if (!union.complete())
         {
-            return Collections.emptySet();
+            return null;
         }
         Set<String> spellings = new HashSet<>();
         for (AvailableEvent available : union.events())
