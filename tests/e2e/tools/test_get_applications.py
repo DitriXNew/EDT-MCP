@@ -18,10 +18,19 @@ placeholder). The success envelope is:
     {"success": true,
      "project": "<name>",
      "applications": [ {"id","name","type","updateState","updateStateDescription",
+                        # updateState is "UNKNOWN" + updateStateError when that
+                        # read did not conclude - never read it as "up to date"
                         ["requiredVersion"]}, ... ],
      "count": <int>,                       # == len(applications)
-     ["defaultApplicationId": "<id>"],     # only when a default exists
-     ["message": "No applications found for project"]}  # only on the empty branch
+     "defaultApplication": "resolved"|"none"|"unknown",
+                                           # ALWAYS present on success; the declared
+                                           # discriminator - "unknown" = the lookup did
+                                           # not conclude, never "there is none"
+     ["defaultApplicationId": "<id>"],     # present only with "resolved"; absent BOTH
+                                           # for "none" and for "unknown"
+     ["message": "..."]}                   # "No applications found for project" on the
+                                           # empty branch; "The default application is
+                                           # UNKNOWN: ..." when that lookup expired
 On error the envelope is {"success": false, "error": "<message>"} and the protocol
 layer marks the result isError; assert_error returns that error string.
 
@@ -191,6 +200,19 @@ def test_returns_consistent_envelope_and_does_not_mutate():
     sc = r.structured
     apps, count = _envelope(r, "fixture project envelope")
 
+    # The declared discriminator is what a programmatic client branches on, so it must be
+    # on EVERY success payload and must agree with the id it explains. "unknown" here is
+    # a live lookup that did not conclude - possible, but it must never come with an id.
+    default_state = sc.get("defaultApplication")
+    if default_state not in ("resolved", "none", "unknown"):
+        raise AssertionError(
+            "every success payload must declare defaultApplication as one of "
+            "resolved/none/unknown: %r" % default_state)
+    if (default_state == "resolved") != ("defaultApplicationId" in sc):
+        raise AssertionError(
+            "defaultApplication=%r and defaultApplicationId presence must agree: %r"
+            % (default_state, sc.get("defaultApplicationId")))
+
     if count == 0:
         # Empty branch is a real, distinct code path: the tool sets count=0, an
         # empty list, AND a specific human message. Assert all three so a tool that
@@ -201,6 +223,12 @@ def test_returns_consistent_envelope_and_does_not_mutate():
             raise AssertionError(
                 "empty branch must carry the explicit 'No applications found' message: %r"
                 % sc.get("message"))
+        # A listing that CONCLUDED and found nothing is a measured "no default", not an
+        # unmeasured one - the empty branch never runs the lookup and must still say so.
+        if default_state != "none":
+            raise AssertionError(
+                "a concluded empty listing must declare defaultApplication='none': %r"
+                % default_state)
     else:
         # Non-empty: every entry must carry the round-trip identifiers the sibling
         # tools require. Missing 'id' would break update_database / launch.
@@ -211,6 +239,25 @@ def test_returns_consistent_envelope_and_does_not_mutate():
                 raise AssertionError("every application entry must carry a non-empty 'id': %r" % entry)
             if "name" not in entry:
                 raise AssertionError("every application entry must carry a 'name': %r" % entry)
+            # updateState is what a caller branches on to decide whether to run
+            # update_database, and it is never OMITTED: a read that did not answer -
+            # expired, raised, or a manager reporting nothing - says UNKNOWN out loud,
+            # because an absent field reads as "nothing to say" about a question that was
+            # never answered.
+            if "updateState" not in entry:
+                raise AssertionError(
+                    "every application entry must declare an updateState (UNKNOWN when it "
+                    "could not be read): %r" % entry)
+            # UNKNOWN is also a state EDT itself reports (not connected), so its presence
+            # alone proves nothing. What must hold either way: a state carrying a failure
+            # reason must never also read as "up to date".
+            if entry.get("updateStateError") is not None:
+                if entry["updateState"] not in ("UNKNOWN", "ERROR"):
+                    raise AssertionError(
+                        "a state with an error must be UNKNOWN or ERROR: %r" % entry)
+                if "up to date" in (entry.get("updateStateDescription") or "").lower():
+                    raise AssertionError(
+                        "an unread updateState must not read as up to date: %r" % entry)
         # When entries exist the tool also computes a default application id; if it
         # reported one, it MUST be one of the listed application ids (it is derived
         # from getDefaultApplication on the same project). This catches a default

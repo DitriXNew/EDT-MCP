@@ -40,6 +40,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
@@ -967,6 +968,15 @@ public class CreateInfobaseTool implements IMcpTool
      *
      * <p>Every note here is about {@code setDefault} ONLY. The reason there is no application to set —
      * and whether that is even established — is reported by the caller, not blamed on this flag.
+     *
+     * <p><b>This write has a racing partner (#622).</b> {@code setDefaultApplication} is an
+     * unconditional store, and EDT's own default-application RESOLUTION clears a default it finds
+     * stale with an equally unconditional {@code setDefaultApplication(project, null)} remove — no
+     * compare-and-set on either side. A bounded default-application read that somebody else
+     * abandoned at its deadline keeps running and can land that clear AFTER this store, erasing
+     * the default just set. So a caller that reported a default as "unknown" and then set one must
+     * RE-READ it before trusting it; the window used to be microseconds inside a synchronous call
+     * and now outlives the call that opened it.
      */
     private static String applySetDefault(IApplicationManager appManager, IProject project,
             ApplicationReadBack readBack)
@@ -2662,6 +2672,11 @@ public class CreateInfobaseTool implements IMcpTool
         String[] newAppIdHolder = new String[1];
         boolean readCompleted = false;
         boolean cutShort = false;
+        // The DEADLINE reason, when a bounded read expired: that story is not the FAILED one. An
+        // abandoned listing keeps running, and this listing initialises every application it
+        // reaches - which for one with no port yet means binding sockets and PERSISTING a debug
+        // port. So it cannot be reported as "nothing happened".
+        String[] deadlineFailure = new String[1];
 
         // Short bounded re-poll: the provision-delegate listener fires asynchronously after
         // associate(), so the new application may not be visible on the first read.
@@ -2672,8 +2687,15 @@ public class CreateInfobaseTool implements IMcpTool
             newAppIdHolder[0] = null;
 
             undecidable[0] = false;
-            readCompleted = readBackApplications(appManager, project, matcher, attempt, newAppHolder,
-                newAppIdHolder, undecidable);
+            ReadBackAttempt attemptOutcome = readBackApplications(appManager, project, matcher,
+                attempt, newAppHolder, newAppIdHolder, undecidable, deadlineFailure);
+            readCompleted = attemptOutcome == ReadBackAttempt.COMPLETED;
+            if (attemptOutcome == ReadBackAttempt.INTERRUPTED)
+            {
+                // The bounded read's WAIT was cut short (#622): the budget was not spent and
+                // nothing failed, so this is the same story the sleep below tells.
+                cutShort = true;
+            }
             if (readCompleted || newAppHolder[0] != null)
             {
                 // Keep the snapshot the answer actually came from. A listing that failed AFTER
@@ -2702,18 +2724,25 @@ public class CreateInfobaseTool implements IMcpTool
             return new ApplicationReadBack(appsArray, newAppHolder[0], newAppIdHolder[0],
                 BindingOutcome.BOUND, null);
         }
-        if (!readCompleted)
-        {
-            return new ApplicationReadBack(appsArray, null, null, BindingOutcome.UNVERIFIED,
-                "the application read-back could not be completed - the failure is in the EDT " //$NON-NLS-1$
-                    + "error log"); //$NON-NLS-1$
-        }
         if (cutShort)
         {
             // Interrupted: the reads that DID run saw no application, but the budget that absorbs the
             // listener race was not spent — and nothing failed, so there is no log entry to point at.
+            // Checked BEFORE the read-failure branch: an interrupted read is also an incomplete one,
+            // and pointing at a log entry nobody wrote would be the wrong story.
             return new ApplicationReadBack(appsArray, null, null, BindingOutcome.UNVERIFIED,
                 "the read-back was interrupted before its budget was spent"); //$NON-NLS-1$
+        }
+        if (!readCompleted)
+        {
+            if (deadlineFailure[0] != null)
+            {
+                return new ApplicationReadBack(appsArray, null, null, BindingOutcome.UNVERIFIED,
+                    readBackDeadlineReason(deadlineFailure[0]));
+            }
+            return new ApplicationReadBack(appsArray, null, null, BindingOutcome.UNVERIFIED,
+                "the application read-back could not be completed - the failure is in the EDT " //$NON-NLS-1$
+                    + "error log"); //$NON-NLS-1$
         }
         if (undecidable[0])
         {
@@ -2724,6 +2753,25 @@ public class CreateInfobaseTool implements IMcpTool
                     + "(an identity could not be read)"); //$NON-NLS-1$
         }
         return new ApplicationReadBack(appsArray, null, null, BindingOutcome.NOT_BOUND, null);
+    }
+
+    /**
+     * The UNVERIFIED reason for a read-back whose bounded listing expired.
+     *
+     * <p>Kept apart from the plain read-failure sentence for one reason: this listing is not a
+     * passive read. {@code getApplications} initialises every application it reaches, and one with
+     * no debug port yet gets a port ASSIGNED and PERSISTED — so an abandoned poll can still change
+     * this project's applications after {@code create_infobase} has answered. Saying only "could
+     * not be completed" would let the caller believe nothing happened.
+     *
+     * @param deadlineFailure the bounded read's own diagnosis
+     * @return the reason sentence, never {@code null}
+     */
+    static String readBackDeadlineReason(String deadlineFailure)
+    {
+        return deadlineFailure + " - the listing may still be running, and EDT assigns a debug " //$NON-NLS-1$
+            + "port while it lists, so the project's applications MAY STILL BE CHANGED after this " //$NON-NLS-1$
+            + "answer; re-read them with get_applications"; //$NON-NLS-1$
     }
 
     /**
@@ -2821,23 +2869,47 @@ public class CreateInfobaseTool implements IMcpTool
      * application the {@code matcher} accepts in {@code newAppHolder[0]}, with its echoed id in
      * {@code newAppIdHolder[0]} (both left {@code null} when not yet visible). Read-only.
      *
-     * @return {@code true} if the read produced a snapshot to inspect (whether or not the new
-     *         application was in it), {@code false} if reading the applications failed or produced no
-     *         snapshot at all (already logged) so the caller stops re-polling and reports UNVERIFIED
+     * @return {@link ReadBackAttempt#COMPLETED} if the read produced a snapshot to inspect (whether
+     *         or not the new application was in it); {@link ReadBackAttempt#FAILED} if reading the
+     *         applications failed or produced no snapshot at all (already logged);
+     *         {@link ReadBackAttempt#INTERRUPTED} if the WAIT was interrupted, which failed nothing.
+     *         The caller stops re-polling on anything but COMPLETED and reports UNVERIFIED.
      */
-    private static boolean readBackApplications(IApplicationManager appManager, IProject project,
+    private static ReadBackAttempt readBackApplications(IApplicationManager appManager, IProject project, // NOSONAR parameter list is the existing out-holder shape; a parameter object would rename it, not shorten it
             ApplicationMatcher matcher, JsonArray appsArray, IApplication[] newAppHolder,
-            String[] newAppIdHolder, boolean[] undecidable)
+            String[] newAppIdHolder, boolean[] undecidable, String[] deadlineFailure)
     {
+        // Bounded (#622). An expired deadline is one more read that established nothing, so it takes
+        // the existing "read failed" path — logged, then reported as UNVERIFIED, never as a MEASURED
+        // absence. The re-poll stops on anything but COMPLETED, so at most one deadline is paid.
+        // The reason is carried out because THIS listing is the one that mutates: it initialises
+        // every application it reaches, and an application with no port yet gets one assigned by a
+        // scan that binds sockets and then flushes the preference store. An abandoned poll can do
+        // all of that after create_infobase has already answered UNVERIFIED.
+        ApplicationSupport.BoundedRead<List<IApplication>> read =
+            ApplicationSupport.getApplicationsBounded(appManager, project,
+                ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (!read.concluded())
+        {
+            if (read.interrupted())
+            {
+                // The caller's own wait was cut short; nothing failed, so nothing is logged.
+                return ReadBackAttempt.INTERRUPTED;
+            }
+            Activator.logError("create_infobase: application read-back did not conclude — " //$NON-NLS-1$
+                + read.deadlineFailure(), null);
+            deadlineFailure[0] = read.deadlineFailure();
+            return ReadBackAttempt.FAILED;
+        }
         try
         {
-            List<IApplication> applications = appManager.getApplications(project);
+            List<IApplication> applications = read.valueOrRethrow();
             if (applications == null)
             {
                 // No snapshot at all is not the same as an empty one: it establishes nothing, so it
                 // must not be counted as a read that MEASURED the application to be absent.
                 Activator.logError("create_infobase: application read-back returned no list", null); //$NON-NLS-1$
-                return false;
+                return ReadBackAttempt.FAILED;
             }
             for (IApplication app : applications)
             {
@@ -2847,7 +2919,7 @@ public class CreateInfobaseTool implements IMcpTool
                     undecidable[0] = true;
                 }
             }
-            return true;
+            return ReadBackAttempt.COMPLETED;
         }
         catch (Exception e)
         {
@@ -2857,8 +2929,23 @@ public class CreateInfobaseTool implements IMcpTool
             // a completed read. A single unreadable application does NOT come through here - it is
             // confined by readOneApplication, which keeps the rest of the snapshot.
             Activator.logError("create_infobase: error reading back applications", e); //$NON-NLS-1$
-            return false;
+            return ReadBackAttempt.FAILED;
         }
+    }
+
+    /**
+     * How ONE application read-back attempt ended. {@link #FAILED} and {@link #INTERRUPTED} both
+     * stop the re-poll, but only FAILED has an EDT log entry behind it — an interrupted WAIT is
+     * the caller's own doing and failed nothing, so the two must not share a message.
+     */
+    private enum ReadBackAttempt
+    {
+        /** The read produced a snapshot to inspect. */
+        COMPLETED,
+        /** The read failed or produced no snapshot at all; already logged. */
+        FAILED,
+        /** The caller's wait was interrupted before the read concluded; nothing failed. */
+        INTERRUPTED
     }
 
     /**

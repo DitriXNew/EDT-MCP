@@ -35,6 +35,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.AsyncLaunchOutcomes;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
@@ -1608,29 +1609,58 @@ public class LaunchTool implements IMcpTool
 
     /**
      * Resolves the application by id and its display name for the legacy
-     * project+applicationId path. Mirrors the original inline guard: when {@code appManager}
-     * is null the application stays unresolved (name defaults to the id); a present manager
-     * that cannot find the id yields an {@code error} payload, while an
-     * {@link ApplicationException} is logged and swallowed so the caller still tries to
-     * find a launch configuration.
+     * project+applicationId path. When {@code appManager} is null the application stays unresolved
+     * (name defaults to the id); a present manager that cannot find the id yields an {@code error}
+     * payload.
+     *
+     * <p>BOUNDED (#622), and a lookup that did not ANSWER REFUSES rather than degrading — both
+     * ways of not answering, the expired deadline and the raised {@link ApplicationException}.
+     * Degrading looked harmless — log it, leave {@code application} null, fall through — but that
+     * null is exactly what gates {@link #runPreLaunchUpdateStep} off, so the call returned
+     * {@code success:true, status:"launching"} having silently skipped the database update
+     * {@code updateBeforeLaunch} (default true) asked for. The by-NAME route already hard-errors on
+     * the identical wedge ("the configuration's application could not be resolved"); the same tool
+     * must not answer the same condition two opposite ways. On a healthy EDT neither branch is
+     * reachable, and on a wedged one the pre-change code hung here.
      *
      * @param project the project to look the application up in
      * @param applicationId the application id to resolve
      * @param appManager the application manager (may be null)
-     * @return an {@link ApplicationResolution}; its {@code error} is non-null only when the
-     *     id was definitively not found
+     * @return an {@link ApplicationResolution}; its {@code error} is non-null when the id was
+     *     definitively not found OR when the lookup did not answer — the three say so differently
      */
-    private static ApplicationResolution resolveApplication(IProject project, String applicationId,
+    static ApplicationResolution resolveApplication(IProject project, String applicationId,
         IApplicationManager appManager)
+    {
+        return resolveApplication(project, applicationId, appManager,
+            ApplicationSupport.LOOKUP_TIMEOUT_MS);
+    }
+
+    /** Same resolution with an explicit deadline for the bounded application read. */
+    static ApplicationResolution resolveApplication(IProject project, String applicationId,
+        IApplicationManager appManager, long timeoutMs)
     {
         ApplicationResolution resolution = new ApplicationResolution();
         resolution.applicationName = applicationId; // Default to ID if can't get name
 
         if (appManager != null)
         {
+            ApplicationSupport.BoundedRead<Optional<IApplication>> read =
+                ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
+                    timeoutMs);
+            if (!read.concluded())
+            {
+                Activator.logError("Error checking application: " + read.deadlineFailure(), null); //$NON-NLS-1$
+                resolution.error = ToolResult.error("Could not resolve application '" //$NON-NLS-1$
+                    + applicationId + "': " + read.deadlineFailure() //$NON-NLS-1$
+                    + ". Nothing was launched, and this is NOT a not-found - whether that " //$NON-NLS-1$
+                    + "application exists was never established. Retry once EDT is responsive.") //$NON-NLS-1$
+                    .toJson();
+                return resolution;
+            }
             try
             {
-                Optional<IApplication> appOpt = appManager.getApplication(project, applicationId);
+                Optional<IApplication> appOpt = read.valueOrRethrow();
                 if (!appOpt.isPresent())
                 {
                     resolution.error = ToolResult.error("Application not found: " + applicationId + //$NON-NLS-1$
@@ -1642,8 +1672,18 @@ public class LaunchTool implements IMcpTool
             }
             catch (ApplicationException e)
             {
+                // Same refusal as the expired deadline above, for the same reason: a RAISED lookup
+                // establishes nothing either, and leaving `application` null is what gates
+                // runPreLaunchUpdateStep off - so "continue and find a launch config" returned
+                // success:true, status:"launching" with updateBeforeLaunch silently skipped.
                 Activator.logError("Error checking application", e); //$NON-NLS-1$
-                // Continue - we'll try to find launch config anyway
+                resolution.error = ToolResult.error("Could not resolve application '" //$NON-NLS-1$
+                    + applicationId + "': the EDT application lookup failed (" //$NON-NLS-1$
+                    + PlatformFailures.describe(e)
+                    + "). Nothing was launched, and this is NOT a not-found - whether that " //$NON-NLS-1$
+                    + "application exists was never established. Retry once EDT is responsive.") //$NON-NLS-1$
+                    .toJson();
+                return resolution;
             }
         }
         return resolution;
@@ -1696,7 +1736,7 @@ public class LaunchTool implements IMcpTool
      * Holder for {@link #resolveApplication}: the resolved {@link IApplication} (may stay
      * null) and its display name, or an {@code error} payload the caller returns as-is.
      */
-    private static class ApplicationResolution
+    static class ApplicationResolution
     {
         IApplication application;
         String applicationName;
@@ -2102,74 +2142,55 @@ public class LaunchTool implements IMcpTool
     }
 
     /**
-     * Resolves the infobase name EDT states in its "Infobase \"<name>\" configuration was
-     * changed…" conflict modal for the application this launch configuration targets, so the
-     * launch-time auto-confirmer window can be armed with an ATTRIBUTABLE name. Best-effort:
-     * {@code null} when the config carries no resolvable project/application.
+     * Resolves BOTH attribution names for the application this launch configuration targets — the
+     * infobase name EDT states in its "Infobase \"<name>\" configuration was changed…" conflict
+     * modal, and the WST server name its port-conflict modal quotes — so the launch-time
+     * auto-confirmer window can be armed with ATTRIBUTABLE names. Best-effort: absent names simply
+     * refuse the writing answer.
+     *
+     * <p>HALF the bounded reads (#622). Each name previously cost a delegate-id resolution PLUS an
+     * application read, and a launch needs both — four wedge-prone reads for two strings taken off
+     * ONE application. Here the delegate id is resolved once and one application read serves both
+     * names.
+     *
+     * <p><b>The two steps keep INDEPENDENT bounds, each the one it already had</b> — the
+     * delegate-id step {@link ApplicationSupport#LOOKUP_TIMEOUT_MS}, the attribution read
+     * {@link LaunchLifecycleUtils#ATTRIBUTION_LOOKUP_TIMEOUT_MS}. Sharing one budget was tried and
+     * reverted: a slow first step left the second with milliseconds, so the name came back
+     * {@code null} and {@code LaunchUpdateDialogAutoConfirmer.attributableAnswer} silently
+     * downgraded the caller's {@code externalInfobaseChanges} policy to {@code cancel}. Halving
+     * the read COUNT is the win here; squeezing each read's deadline only re-creates the failure
+     * the names exist to prevent.
      *
      * @param config the launch configuration about to be started (may be {@code null})
-     * @return the application display name, or {@code null}
+     * @return the names, never {@code null}; {@code inconclusive()} separates "no such name" from
+     *     "the read did not answer"
      */
-    private static String launchInfobaseName(ILaunchConfiguration config)
+    private static LaunchLifecycleUtils.AttributionNames launchAttributionNames(
+        ILaunchConfiguration config)
     {
         if (config == null)
         {
-            return null;
+            return LaunchLifecycleUtils.attributionNames(null, null, null);
         }
         try
         {
             String projectName = config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-            // The DELEGATE id, the same one standaloneServerPortPolicy resolves: a runtime
-            // configuration without a stored ATTR_APPLICATION_ID launches the default application
-            // application, while getApplicationIdFor yields a synthetic "launch:<name>" that no
-            // IApplicationManager knows - so attribution came back null and the arm, though
-            // created, could never authorise the re-address the caller asked for.
-            String applicationId = LaunchLifecycleUtils.resolveDelegateApplicationId(config,
-                projectName);
             ProjectContext ctx = ProjectContext.of(projectName);
             if (!ctx.isOpen())
             {
-                return null;
+                return LaunchLifecycleUtils.attributionNames(null, null, null);
             }
-            return LaunchLifecycleUtils.attributionInfobaseName(
-                Activator.getDefault().getApplicationManager(), ctx.project(), applicationId);
+            // The DELEGATE application, the same one standaloneServerPortPolicy resolves (a
+            // synthetic "launch:<name>" id is known to no IApplicationManager). An unanswered
+            // default lookup stays inconclusive rather than becoming a definitive "no name".
+            return LaunchLifecycleUtils.delegateAttributionNames(config, ctx.project(),
+                Activator.getDefault().getApplicationManager());
         }
         catch (Exception e) // NOSONAR a best-effort hint must never break the launch
         {
-            return null;
-        }
-    }
-
-    /**
-     * The WST server name behind a launch configuration - what the port-conflict dialog quotes.
-     * Best-effort: {@code null} simply refuses the writing answer.
-     *
-     * @param config the launch configuration
-     * @return the server name, or {@code null}
-     */
-    private static String launchServerName(ILaunchConfiguration config)
-    {
-        try
-        {
-            String projectName = config.getAttribute(LaunchConfigUtils.ATTR_PROJECT_NAME, ""); //$NON-NLS-1$
-            // The DELEGATE id, the same one standaloneServerPortPolicy resolves: a runtime
-            // configuration without a stored ATTR_APPLICATION_ID launches the default application
-            // application, while getApplicationIdFor yields a synthetic "launch:<name>" that no
-            // IApplicationManager knows - so attribution came back null and the arm, though
-            // created, could never authorise the re-address the caller asked for.
-            String applicationId = LaunchLifecycleUtils.resolveDelegateApplicationId(config,
-                projectName);
-            ProjectContext ctx = ProjectContext.of(projectName);
-            if (!ctx.isOpen())
-            {
-                return null;
-            }
-            return LaunchLifecycleUtils.attributionServerName(
-                Activator.getDefault().getApplicationManager(), ctx.project(), applicationId);
-        }
-        catch (Exception e) // NOSONAR a best-effort hint must never break the launch
-        {
-            return null;
+            // A raised read answered nothing: unknown, not absent.
+            return LaunchLifecycleUtils.attributionUnanswered();
         }
     }
 
@@ -2308,14 +2329,15 @@ public class LaunchTool implements IMcpTool
         // The conflict matcher follows the same opt-out as the update matcher. It matters
         // most for a STANDALONE-SERVER application: there the pre-launch update is deferred to
         // EDT's launch delegate, so this window is the ONLY one covering that update.
-        String launchInfobase = launchInfobaseName(config);
+        // Resolved ONCE, both names together, and reused for the disarm: reading again later could
+        // return a different server if the configuration was rebound meanwhile, and the arm would
+        // then never be released by the value it was taken with.
+        LaunchLifecycleUtils.AttributionNames names = launchAttributionNames(config);
+        String launchInfobase = names.infobaseName();
+        String launchServer = names.serverName();
         ExternalInfobaseChangesPolicy launchPolicy = autoConfirmUpdateDialog ? policy : null;
         StandaloneServerPortConflictPolicy launchPortPolicy = standaloneServerPortPolicy(config,
             portPolicy);
-        // Resolved ONCE and reused for the disarm: reading it again later could return a
-        // different server if the configuration was rebound meanwhile, and the arm would then
-        // never be released by the value it was taken with.
-        String launchServer = launchServerName(config);
         boolean debugMode = ILaunchManager.DEBUG_MODE.equals(launchMode);
         boolean autoConfirmerArmed = LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog,
             debugMode, autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy,
@@ -2400,7 +2422,12 @@ public class LaunchTool implements IMcpTool
         // code-1003 "debug session already exists" modal is auto-confirmed only
         // in debug mode (it is independent of the update opt-out). Manual EDT
         // launches outside this window still prompt.
-        String launchInfobase = launchInfobaseName(config);
+        // Resolved ONCE, both names together, before anything uses them: the window, the arm and
+        // its release must all carry the SAME name. Read twice, a rebound configuration (or one
+        // best-effort lookup that momentarily fails) would address the window to one server and
+        // the arm to another, and the arm would never be released by the value it was taken with.
+        LaunchLifecycleUtils.AttributionNames names = launchAttributionNames(config);
+        String launchInfobase = names.infobaseName();
         // The window lasts as long as the launch - minutes for a standalone-server mode switch -
         // so it must never answer a dialog blind. That is handled where the arm is recorded: an arm
         // whose infobase name could not be resolved (a by-name config with no persisted application
@@ -2421,15 +2448,15 @@ public class LaunchTool implements IMcpTool
         // port-conflict matcher is armed and can refuse the launch - without a window that refusal
         // reached nobody. "policy != null" is the non-Attach signal (the caller passes null for an
         // Attach, which attaches to a running server and never starts one).
-        // Resolved ONCE, before anything uses it: the window, the arm and its release must all
-        // carry the SAME name. Read twice, a rebound configuration (or one best-effort lookup
-        // that momentarily fails) would address the window to one server and the arm to another,
-        // and the arm would never be released by the value it was taken with.
-        String launchServer = launchServerName(config);
+        String launchServer = names.serverName();
         boolean debugMode = ILaunchManager.DEBUG_MODE.equals(launchMode);
+        // The window is told whether the names are null because there are none or because the
+        // lookup expired: a cancel caused by the second is worth retrying, one caused by the
+        // first is not, and only the window can still tell them apart.
         LaunchUpdateDialogAutoConfirmer.ConflictWatch conflicts = policy == null
             ? null
-            : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase, launchServer);
+            : LaunchUpdateDialogAutoConfirmer.beginConflictWatch(launchInfobase, launchServer,
+                names.inconclusive());
         LaunchAbortReason abortReason = LaunchAbortReason.open(launchInfobase);
         boolean autoConfirmerArmed = LaunchUpdateDialogAutoConfirmer.arm(autoConfirmUpdateDialog,
             debugMode, autoConfirmUpdateDialog, launchPolicy, launchInfobase, launchPortPolicy,

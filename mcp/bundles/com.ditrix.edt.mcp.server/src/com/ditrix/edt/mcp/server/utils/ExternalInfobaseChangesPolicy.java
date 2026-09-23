@@ -116,6 +116,21 @@ public enum ExternalInfobaseChangesPolicy
             "The infobase configuration was changed outside EDT (Designer, ibcmd or another CLI) since " //$NON-NLS-1$
                 + "the last EDT interaction. The dialog that offers to resolve it was cancelled while this " //$NON-NLS-1$
                 + "update ran, so nothing was written and the infobase is still out of sync. "); //$NON-NLS-1$
+        if (LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_ATTRIBUTION_UNAVAILABLE.equals(reason))
+        {
+            // The OPPOSITE advice to NOT_ATTRIBUTED below, which is why the two are separate
+            // tokens: nothing is wrong with the target - EDT simply did not answer the name lookup
+            // in time, and that silently degraded the requested policy to 'cancel'.
+            sb.append("Cause: this call could not read the NAME of the infobase it targets - EDT's " //$NON-NLS-1$
+                + "application manager did not answer within the attribution deadline - so the " //$NON-NLS-1$
+                + "dialog could not be proven to belong to this call and was cancelled instead of " //$NON-NLS-1$
+                + "being answered with externalInfobaseChanges=") //$NON-NLS-1$
+                .append(policy == null ? "<none>" : policy.wireValue()) //$NON-NLS-1$
+                .append(". The target itself is fine: retry once EDT is responsive (the EDT log " //$NON-NLS-1$
+                    + "names the read that expired). If every attempt expires the same way, EDT's " //$NON-NLS-1$
+                    + "application registry is wedged and EDT has to be restarted."); //$NON-NLS-1$
+            return sb.toString();
+        }
         if (LaunchUpdateDialogAutoConfirmer.CANCEL_REASON_NOT_ATTRIBUTED.equals(reason))
         {
             sb.append("Cause: the dialog could not be attributed to this operation - it named a " //$NON-NLS-1$

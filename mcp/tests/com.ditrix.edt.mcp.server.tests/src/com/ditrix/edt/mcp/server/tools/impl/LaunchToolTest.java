@@ -2272,4 +2272,95 @@ public class LaunchToolTest
             throw new AssertionError(e);
         }
     }
+
+    // ============ #622: a wedged lookup REFUSES, and says so differently from not-found ============
+
+    @Test
+    public void testAWedgedApplicationLookupRefusesInsteadOfLaunchingWithoutTheUpdate()
+        throws Exception
+    {
+        // Falling through here looked like a harmless degradation and was not: a null application
+        // gates runPreLaunchUpdateStep off, so the call answered success/launching having skipped
+        // the database update updateBeforeLaunch asked for - while the by-NAME route hard-errors on
+        // the identical wedge. The refusal must also NOT read as a not-found.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        when(manager.getApplication(project, "Infobase.Wedged")).thenAnswer(invocation -> { //$NON-NLS-1$
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return Optional.empty();
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+
+        try
+        {
+            LaunchTool.ApplicationResolution resolution = LaunchTool.resolveApplication(project,
+                "Infobase.Wedged", manager, 250L); //$NON-NLS-1$
+
+            assertNotNull("a wedged lookup must refuse, not launch without the update", //$NON-NLS-1$
+                resolution.error);
+            assertNull("nothing was resolved", resolution.application); //$NON-NLS-1$
+            assertTrue("the refusal names the deadline", //$NON-NLS-1$
+                resolution.error.contains("did not finish within 250ms")); //$NON-NLS-1$
+            assertTrue("the refusal must say nothing was launched", //$NON-NLS-1$
+                resolution.error.contains("Nothing was launched")); //$NON-NLS-1$
+            assertFalse("a deadline is NOT a not-found", //$NON-NLS-1$
+                resolution.error.contains("Application not found")); //$NON-NLS-1$
+            assertEquals("the id stays the display name when nothing resolved", //$NON-NLS-1$
+                "Infobase.Wedged", resolution.applicationName); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testAConcludedEmptyLookupStillRefusesWithNotFound() throws Exception
+    {
+        // The other edge of the same branch: only a read that CONCLUDED empty is a definitive
+        // not-found, and bounding the read must not have weakened that.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        when(manager.getApplication(project, "Infobase.Missing")).thenReturn(Optional.empty()); //$NON-NLS-1$
+
+        LaunchTool.ApplicationResolution resolution = LaunchTool.resolveApplication(project,
+            "Infobase.Missing", manager, 60_000L); //$NON-NLS-1$
+
+        assertNotNull("a measured absence must still refuse", resolution.error); //$NON-NLS-1$
+        assertTrue(resolution.error.contains("Application not found: Infobase.Missing")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testARaisedApplicationLookupRefusesTheSameWayAsAnExpiredOne() throws Exception
+    {
+        // The door the deadline fix left open: the catch below it logged and CONTINUED, leaving
+        // `application` null - the very thing that gates runPreLaunchUpdateStep off. So a raising
+        // manager still produced success:true, status:"launching" with updateBeforeLaunch (default
+        // true) silently skipped, while the deadline three lines above refused.
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        when(manager.getApplication(project, "Infobase.Raising")) //$NON-NLS-1$
+            .thenThrow(new ApplicationException("the provision delegate is unavailable")); //$NON-NLS-1$
+
+        LaunchTool.ApplicationResolution resolution = LaunchTool.resolveApplication(project,
+            "Infobase.Raising", manager, 60_000L); //$NON-NLS-1$
+
+        assertNotNull("a raised lookup must refuse, not fall through", resolution.error); //$NON-NLS-1$
+        assertTrue("the refusal names the raise: " + resolution.error, //$NON-NLS-1$
+            resolution.error.contains("the provision delegate is unavailable")); //$NON-NLS-1$
+        assertTrue("the refusal must say nothing was launched", //$NON-NLS-1$
+            resolution.error.contains("Nothing was launched")); //$NON-NLS-1$
+        assertFalse("a raise is NOT a not-found", //$NON-NLS-1$
+            resolution.error.contains("Application not found")); //$NON-NLS-1$
+        assertNull("and it must not hand on a resolved application", resolution.application); //$NON-NLS-1$
+    }
 }

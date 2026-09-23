@@ -9,11 +9,13 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -32,6 +34,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
@@ -67,6 +70,37 @@ public class DeleteInfobaseTool implements IMcpTool
     /** Output key: whether the database files on disk were deleted. */
     private static final String KEY_DATABASE_FILES_DELETED = "databaseFilesDeleted"; //$NON-NLS-1$
 
+    /**
+     * Output key: the DECLARED reason the database files were (or, on a preview, would be) KEPT.
+     *
+     * <p>{@code databaseFilesDeleted=false} has six causes and only the prose told them apart, so
+     * a programmatic client could not distinguish a MEASURED co-owner from a shared-infobase check
+     * that never concluded — the one distinction #622 exists to keep.
+     */
+    private static final String KEY_DATABASE_FILES_KEPT = "databaseFilesKept"; //$NON-NLS-1$
+
+    /** {@link #KEY_DATABASE_FILES_KEPT}: deleteDatabaseFiles was not requested. */
+    static final String KEPT_NOT_REQUESTED = "notRequested"; //$NON-NLS-1$
+
+    /** {@link #KEY_DATABASE_FILES_KEPT}: no on-disk database directory could be resolved. */
+    static final String KEPT_NO_DIRECTORY = "noDirectory"; //$NON-NLS-1$
+
+    /** {@link #KEY_DATABASE_FILES_KEPT}: another workspace project was FOUND using the same database. */
+    static final String KEPT_SHARED = "shared"; //$NON-NLS-1$
+
+    /** {@link #KEY_DATABASE_FILES_KEPT}: the shared-infobase check did not conclude — nothing measured. */
+    static final String KEPT_UNKNOWN = "unknown"; //$NON-NLS-1$
+
+    /** {@link #KEY_DATABASE_FILES_KEPT}: the removal ran or was refused and the directory is not gone. */
+    static final String KEPT_DELETE_FAILED = "deleteFailed"; //$NON-NLS-1$
+
+    /**
+     * {@link #KEY_DATABASE_FILES_KEPT}: deregistration failed, so the deletion was not attempted —
+     * and nothing measured earlier already explained the keep. It is the LAST reason, never one
+     * that overwrites a co-ownership answer the same call had already established.
+     */
+    static final String KEPT_DEREGISTRATION_FAILED = "deregistrationFailed"; //$NON-NLS-1$
+
     /** Output value for {@link McpKeys#ACTION}: the infobase was removed. */
     private static final String VAL_DELETED = "deleted"; //$NON-NLS-1$
 
@@ -94,6 +128,18 @@ public class DeleteInfobaseTool implements IMcpTool
 
     /** Delay between read-back re-poll attempts (ms). */
     private static final long READ_BACK_POLL_DELAY_MS = 300;
+
+    /**
+     * Bound on the WHOLE shared-infobase enumeration (#622), not on one project's listing.
+     *
+     * <p>One bound, two different reasons it is the right shape. On a WEDGED EDT the per-project
+     * reads all queue behind the same platform monitor, so a per-project deadline would multiply
+     * by the workspace size for no extra information. On a healthy but large workspace they do not
+     * queue — they SUM — and a single bound is then the only thing that keeps a big workspace from
+     * running past it. Twice {@link ApplicationSupport#LOOKUP_TIMEOUT_MS} because it is one wait
+     * covering many reads, and expiry keeps the database files rather than deleting them.
+     */
+    private static final long SHARED_INFOBASE_CHECK_TIMEOUT_MS = 2 * ApplicationSupport.LOOKUP_TIMEOUT_MS;
 
     @Override
     public String getName()
@@ -156,6 +202,23 @@ public class DeleteInfobaseTool implements IMcpTool
             .booleanProperty(KEY_DATABASE_FILES_DELETED,
                 "Whether the database files on disk were actually deleted (only when " //$NON-NLS-1$
                 + "deleteDatabaseFiles=true; false otherwise or if the directory could not be removed).") //$NON-NLS-1$
+            .enumProperty(KEY_DATABASE_FILES_KEPT,
+                "WHY the database files were kept; absent exactly when they were (or, on a " //$NON-NLS-1$
+                    + "preview, would be) deleted. 'notRequested' = deleteDatabaseFiles was not " //$NON-NLS-1$
+                    + "asked for. 'noDirectory' = no on-disk database directory could be resolved. " //$NON-NLS-1$
+                    + "'shared' = another workspace project was FOUND using the same database. " //$NON-NLS-1$
+                    + "'unknown' = the shared-infobase check did not conclude, so co-ownership was " //$NON-NLS-1$
+                    + "never measured - do NOT read it as 'shared'; the next call re-runs the " //$NON-NLS-1$
+                    + "check. 'deleteFailed' = the removal did not leave the directory gone: it " //$NON-NLS-1$
+                    + "was refused (a filesystem root, or no 1Cv8.1CD - which is also how a " //$NON-NLS-1$
+                    + "directory that was already gone looks) or the delete itself failed " //$NON-NLS-1$
+                    + "(locked) - check the EDT log and remove it manually if it is still there. " //$NON-NLS-1$
+                    + "'deregistrationFailed' = deregistration failed, so the deletion was " //$NON-NLS-1$
+                    + "deliberately not attempted, AND no earlier reason applied - a measured " //$NON-NLS-1$
+                    + "'shared'/'unknown'/'noDirectory' still wins, so confirm never contradicts " //$NON-NLS-1$
+                    + "the preview. The last two arise only on a deletion, never on a preview.", //$NON-NLS-1$
+                KEPT_NOT_REQUESTED, KEPT_NO_DIRECTORY, KEPT_SHARED, KEPT_UNKNOWN, KEPT_DELETE_FAILED,
+                KEPT_DEREGISTRATION_FAILED)
             .stringProperty(McpKeys.MESSAGE, "Human-readable status message.") //$NON-NLS-1$
             .build();
     }
@@ -257,7 +320,7 @@ public class DeleteInfobaseTool implements IMcpTool
         {
             return buildPreviewResult(
                 new IbIdentity(projectName, ibPlan.resolvedId, ibPlan.resolvedName),
-                deleteRegistration, deleteDatabaseFiles, ibPlan.dbDir, ibPlan.dbSharedWithOthers);
+                deleteRegistration, deleteDatabaseFiles, ibPlan.dbDir, ibPlan.dbShared);
         }
 
         // Destructive-operation consent gate: the LAST check before the infobase is dissociated /
@@ -303,11 +366,11 @@ public class DeleteInfobaseTool implements IMcpTool
         // Resolve the on-disk infobase directory now (for deleteDatabaseFiles), before dissociation.
         final Path dbDir = resolveFileInfobaseDir(ibRef);
         // A file infobase can be bound to SEVERAL projects; wiping the shared data would break the
-        // others. If asked to delete files, check (before dissociating) whether any OTHER project still
-        // uses this infobase — if so we keep the files.
-        final boolean dbSharedWithOthers = deleteDatabaseFiles && dbDir != null
-            && isSharedWithOtherProjects(appManager, project, dbDir);
-        return FileDeletionPlan.of(ibRef, resolvedName, resolvedId, dbDir, dbSharedWithOthers,
+        // others. If asked to delete files, check (before dissociating) whether any OTHER application
+        // still uses this infobase — if so we keep the files.
+        final SharedDatabase dbShared = deleteDatabaseFiles && dbDir != null
+            ? isSharedWithOtherApplications(appManager, project, targetApp, dbDir) : SharedDatabase.NOT_SHARED;
+        return FileDeletionPlan.of(ibRef, resolvedName, resolvedId, dbDir, dbShared,
             deleteRegistration);
     }
 
@@ -324,7 +387,7 @@ public class DeleteInfobaseTool implements IMcpTool
         final InfobaseReference ibRef = plan.ibRef;
         final IbIdentity id = new IbIdentity(projectName, plan.resolvedId, plan.resolvedName);
         final Path dbDir = plan.dbDir;
-        final boolean dbSharedWithOthers = plan.dbSharedWithOthers;
+        final SharedDatabase dbShared = plan.dbShared;
 
         // --- Perform deletion ---
         Activator.logInfo("delete_infobase: dissociating '" + id.resolvedName //$NON-NLS-1$
@@ -345,8 +408,8 @@ public class DeleteInfobaseTool implements IMcpTool
 
         // Step 2: optionally deregister from the global EDT infobases list. A non-null result is the
         // partial-failure JSON returned as-is (the database files are then KEPT); null = continue.
-        String deregisterFailed = deregisterFileInfobase(ibManager, ibRef, id, deleteDatabaseFiles,
-            plan.deleteRegistration);
+        String deregisterFailed = deregisterFileInfobase(ibManager, ibRef, id,
+            new DbFileOutcome(deleteDatabaseFiles, dbDir, false, dbShared), plan.deleteRegistration);
         if (deregisterFailed != null)
         {
             return deregisterFailed;
@@ -356,7 +419,7 @@ public class DeleteInfobaseTool implements IMcpTool
         // Skip when the same on-disk database is still referenced by other workspace projects —
         // deleting it would break those projects (a file infobase can be shared).
         boolean dbFilesDeleted = false;
-        if (deleteDatabaseFiles && dbDir != null && !dbSharedWithOthers)
+        if (deleteDatabaseFiles && dbDir != null && !dbShared.keepsFiles())
         {
             dbFilesDeleted = deleteDatabaseDirBestEffort(dbDir);
         }
@@ -365,7 +428,7 @@ public class DeleteInfobaseTool implements IMcpTool
             + " (dbFilesDeleted=" + dbFilesDeleted + ")"); //$NON-NLS-1$ //$NON-NLS-2$
 
         return buildDeleteSuccessResult(id, plan.deleteRegistration,
-            new DbFileOutcome(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbSharedWithOthers));
+            new DbFileOutcome(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbShared));
     }
 
     /**
@@ -374,10 +437,14 @@ public class DeleteInfobaseTool implements IMcpTool
      * {@code deleteRegistration && ibRef != null} guard. A missing {@code IInfobaseManager} is logged
      * and treated as non-fatal (the dissociation already succeeded). Returns the partial-failure JSON
      * (which the caller returns as-is — the database files are then KEPT) when the delete throws, or
-     * {@code null} to continue. Extracted verbatim from {@link #deleteInfobase}.
+     * {@code null} to continue.
+     *
+     * <p>Takes the whole {@link DbFileOutcome} rather than the {@code deleteDatabaseFiles} flag
+     * alone: the shared-database check has already run by this point, and the partial-failure
+     * payload must report what it MEASURED rather than overwrite it with its own branch.
      */
     private String deregisterFileInfobase(IInfobaseManager ibManager, InfobaseReference ibRef,
-            IbIdentity id, boolean deleteDatabaseFiles, boolean deleteRegistration)
+            IbIdentity id, DbFileOutcome db, boolean deleteRegistration)
     {
         if (deleteRegistration && ibRef != null)
         {
@@ -400,7 +467,7 @@ public class DeleteInfobaseTool implements IMcpTool
                     // Non-fatal: return success but note the partial deletion. We deliberately do NOT
                     // delete the database files here even if requested — deregistration failed, so the
                     // safe choice is to leave the data and say so explicitly (schema-consistent).
-                    return buildDeregisterFailedResult(id, deleteDatabaseFiles, e);
+                    return buildDeregisterFailedResult(id, db, e);
                 }
             }
         }
@@ -483,13 +550,35 @@ public class DeleteInfobaseTool implements IMcpTool
      * carries the tool-result JSON for the SAME early-return cases the inline code produced
      * (application id not found, error listing applications, name not found); otherwise {@code error}
      * is {@code null} and {@code app} is the resolved application.
+     *
+     * <p>Both reads are BOUNDED (#622). This resolution names what a DESTRUCTIVE call is about to
+     * delete, so an expired deadline refuses with its own wording rather than fall into either
+     * not-found branch.
      */
-    private static TargetApplication resolveTargetApplication(IApplicationManager appManager, // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
+    static TargetApplication resolveTargetApplication(IApplicationManager appManager,
             IProject project, String projectName, String applicationId, String infobaseName)
+    {
+        return resolveTargetApplication(appManager, project, projectName, applicationId,
+            infobaseName, ApplicationSupport.LOOKUP_TIMEOUT_MS);
+    }
+
+    /** Same resolution with an explicit deadline for the two bounded application reads. */
+    static TargetApplication resolveTargetApplication(IApplicationManager appManager, // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
+            IProject project, String projectName, String applicationId, String infobaseName,
+            long timeoutMs)
     {
         if (applicationId != null && !applicationId.isEmpty())
         {
-            Optional<IApplication> found = appManager.getApplication(project, applicationId);
+            ApplicationSupport.BoundedRead<Optional<IApplication>> read =
+                ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
+                    timeoutMs);
+            if (!read.concluded())
+            {
+                return TargetApplication.failed(ToolResult.error("Could not resolve application '" //$NON-NLS-1$
+                    + applicationId + "' for project '" + projectName + "': " //$NON-NLS-1$ //$NON-NLS-2$
+                    + read.deadlineFailure() + ". Nothing was deleted.").toJson()); //$NON-NLS-1$
+            }
+            Optional<IApplication> found = read.valueOrRethrow();
             if (!found.isPresent())
             {
                 return TargetApplication.failed(ToolResult.error("Application not found: '" //$NON-NLS-1$
@@ -501,9 +590,16 @@ public class DeleteInfobaseTool implements IMcpTool
 
         // Find by display name among the project's infobase-type OR standalone-server applications.
         IApplication targetApp = null;
+        ApplicationSupport.BoundedRead<List<IApplication>> listRead =
+            ApplicationSupport.getApplicationsBounded(appManager, project, timeoutMs);
+        if (!listRead.concluded())
+        {
+            return TargetApplication.failed(ToolResult.error("Error listing applications: " //$NON-NLS-1$
+                + listRead.deadlineFailure() + ". Nothing was deleted.").toJson()); //$NON-NLS-1$
+        }
         try
         {
-            List<IApplication> apps = appManager.getApplications(project);
+            List<IApplication> apps = listRead.valueOrRethrow();
             if (apps != null)
             {
                 for (IApplication app : apps)
@@ -538,7 +634,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * id / name (and, for the success builders, the deleteRegistration flag is passed alongside). A
      * parameter-object that keeps the builders below the 7-parameter bar; carries no behaviour.
      */
-    private static final class IbIdentity
+    static final class IbIdentity
     {
         final String projectName;
         final String resolvedId;
@@ -558,56 +654,163 @@ public class DeleteInfobaseTool implements IMcpTool
      * {@code null}), whether it was actually deleted and whether it was kept because shared. A
      * parameter-object that keeps the builders below the 7-parameter bar; carries no behaviour.
      */
-    private static final class DbFileOutcome
+    static final class DbFileOutcome
     {
         final boolean deleteDatabaseFiles;
         final Path dbDir;
         final boolean dbFilesDeleted;
-        final boolean dbSharedWithOthers;
+        final SharedDatabase dbShared;
 
         DbFileOutcome(boolean deleteDatabaseFiles, Path dbDir, boolean dbFilesDeleted,
-                boolean dbSharedWithOthers)
+                SharedDatabase dbShared)
         {
             this.deleteDatabaseFiles = deleteDatabaseFiles;
             this.dbDir = dbDir;
             this.dbFilesDeleted = dbFilesDeleted;
-            this.dbSharedWithOthers = dbSharedWithOthers;
+            this.dbShared = dbShared;
         }
     }
 
     /**
-     * Builds the confirm-preview tool-result JSON for a file infobase (no change is made). Byte-for-byte
-     * identical to the inline preview the {@code !confirm} gate produced.
+     * The reason the database files are kept that is already known BEFORE any deletion is
+     * attempted — the only reasons a preview can report.
+     *
+     * <p>Ordered exactly like {@link #databasePreviewNote}, so the declared value and the prose
+     * cannot drift apart. {@link SharedDatabase#SHARED} and {@link SharedDatabase#UNKNOWN} keep the
+     * files for OPPOSITE reasons and get their own values.
+     *
+     * @param deleteDatabaseFiles whether the caller asked for the files to be deleted
+     * @param dbDir the resolved on-disk database directory, or {@code null}
+     * @param shared what the shared-infobase check established
+     * @return the keep reason, or {@code null} when the files are (or would be) deleted
      */
-    private static String buildPreviewResult(IbIdentity id, boolean deleteRegistration,
-            boolean deleteDatabaseFiles, Path dbDir, boolean dbSharedWithOthers)
+    static String prospectiveDatabaseFilesKept(boolean deleteDatabaseFiles, Path dbDir,
+            SharedDatabase shared)
     {
-        return ToolResult.success()
+        if (!deleteDatabaseFiles)
+        {
+            return KEPT_NOT_REQUESTED;
+        }
+        if (dbDir == null)
+        {
+            return KEPT_NO_DIRECTORY;
+        }
+        if (shared == SharedDatabase.SHARED)
+        {
+            return KEPT_SHARED;
+        }
+        if (shared == SharedDatabase.UNKNOWN)
+        {
+            return KEPT_UNKNOWN;
+        }
+        return null;
+    }
+
+    /**
+     * The reason the database files were kept after the deletion step ran.
+     *
+     * @param db the on-disk outcome cluster
+     * @return the keep reason, or {@code null} exactly when the files were deleted
+     */
+    static String databaseFilesKept(DbFileOutcome db)
+    {
+        if (db.dbFilesDeleted)
+        {
+            return null;
+        }
+        String prospective =
+            prospectiveDatabaseFilesKept(db.deleteDatabaseFiles, db.dbDir, db.dbShared);
+        return prospective != null ? prospective : KEPT_DELETE_FAILED;
+    }
+
+    /**
+     * Writes the on-disk outcome into a result: whether the files went, and — whenever they did
+     * not — the DECLARED reason. Both keys are written HERE, so a payload cannot report
+     * {@code databaseFilesDeleted=false} without naming why.
+     *
+     * @param result the payload being built
+     * @param db the on-disk outcome cluster
+     * @return the same {@code result}, for chaining
+     */
+    static ToolResult applyDatabaseFilesOutcome(ToolResult result, DbFileOutcome db)
+    {
+        result.put(KEY_DATABASE_FILES_DELETED, db.dbFilesDeleted);
+        String kept = databaseFilesKept(db);
+        if (kept != null)
+        {
+            result.put(KEY_DATABASE_FILES_KEPT, kept);
+        }
+        return result;
+    }
+
+    /**
+     * Writes a preview's prospective keep reason. A preview makes no change, so it carries the
+     * reason WITHOUT {@code databaseFilesDeleted}; an absent key means the files would go.
+     *
+     * @param result the payload being built
+     * @param deleteDatabaseFiles whether the caller asked for the files to be deleted
+     * @param dbDir the resolved on-disk database directory, or {@code null}
+     * @param shared what the shared-infobase check established
+     * @return the same {@code result}, for chaining
+     */
+    static ToolResult applyProspectiveDatabaseFilesKept(ToolResult result,
+            boolean deleteDatabaseFiles, Path dbDir, SharedDatabase shared)
+    {
+        String kept = prospectiveDatabaseFilesKept(deleteDatabaseFiles, dbDir, shared);
+        if (kept != null)
+        {
+            result.put(KEY_DATABASE_FILES_KEPT, kept);
+        }
+        return result;
+    }
+
+    /**
+     * Builds the confirm-preview tool-result JSON for a file infobase (no change is made).
+     */
+    static String buildPreviewResult(IbIdentity id, boolean deleteRegistration,
+            boolean deleteDatabaseFiles, Path dbDir, SharedDatabase dbShared)
+    {
+        return applyProspectiveDatabaseFilesKept(ToolResult.success()
             .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
             .put(KEY_CONFIRMATION_REQUIRED, true)
             .put(McpKeys.PROJECT, id.projectName)
             .put(McpKeys.APPLICATION_ID, id.resolvedId)
             .put(KEY_INFOBASE_NAME, id.resolvedName)
-            .put(KEY_DELETE_REGISTRATION, deleteRegistration)
+            .put(KEY_DELETE_REGISTRATION, deleteRegistration), deleteDatabaseFiles, dbDir, dbShared)
             .put(McpKeys.MESSAGE, "PREVIEW: this would dissociate infobase '" + id.resolvedName //$NON-NLS-1$
                 + MSG_FROM_PROJECT + id.projectName + "'" //$NON-NLS-1$
                 + (deleteRegistration
                     ? " AND deregister it from the EDT infobases list" //$NON-NLS-1$
                     : " (EDT infobases list entry kept)") //$NON-NLS-1$
-                + databasePreviewNote(deleteDatabaseFiles, dbDir, dbSharedWithOthers)
+                + databasePreviewNote(deleteDatabaseFiles, dbDir, dbShared)
                 + ". Re-call with confirm=true to apply.") //$NON-NLS-1$
             .toJson();
     }
 
     /**
      * Builds the tool-result JSON for the partial-success case where the infobase was dissociated but
-     * could NOT be deregistered from the EDT list. Byte-for-byte identical to the inline result the
-     * deregister-failure catch produced; the database files are reported as KEPT (the safe choice when
-     * deregistration failed). Read-only — the dissociation has already happened at the call site.
+     * could NOT be deregistered from the EDT list. The database files are reported as KEPT (the safe
+     * choice when deregistration failed). Read-only — the dissociation has already happened at the
+     * call site.
+     *
+     * <p>The keep REASON is the one {@link #prospectiveDatabaseFilesKept} already established,
+     * and only when that has nothing to say does the deregistration failure name itself. This
+     * branch is reached AFTER the shared-database check has run, so answering
+     * {@code deregistrationFailed} unconditionally overwrote a MEASURED co-ownership: a database
+     * this very call had found shared with another project came back as
+     * "remove the directory manually if intended", and the preview of the same input said
+     * {@code shared}. Preview and confirm must not disagree about a fact neither of them changed.
+     *
+     * @param id the resolved infobase identity
+     * @param db the on-disk outcome cluster as measured BEFORE the deletion step (never deleted:
+     *     this branch returns before it)
+     * @param e what {@code IInfobaseManager.delete} raised
+     * @return the serialized partial-success payload
      */
-    private static String buildDeregisterFailedResult(IbIdentity id, boolean deleteDatabaseFiles,
-            Exception e)
+    static String buildDeregisterFailedResult(IbIdentity id, DbFileOutcome db, Exception e)
     {
+        String measured = prospectiveDatabaseFilesKept(db.deleteDatabaseFiles, db.dbDir, db.dbShared);
+        boolean deregistrationIsTheReason = measured == null;
         return ToolResult.success()
             .put(McpKeys.ACTION, VAL_DELETED)
             .put(McpKeys.PROJECT, id.projectName)
@@ -615,16 +818,41 @@ public class DeleteInfobaseTool implements IMcpTool
             .put(KEY_INFOBASE_NAME, id.resolvedName)
             .put(KEY_DELETE_REGISTRATION, false)
             .put(KEY_DATABASE_FILES_DELETED, false)
+            .put(KEY_DATABASE_FILES_KEPT,
+                deregistrationIsTheReason ? KEPT_DEREGISTRATION_FAILED : measured)
             .put(McpKeys.MESSAGE, "Infobase '" + id.resolvedName //$NON-NLS-1$
                 + "' was dissociated from project '" + id.projectName //$NON-NLS-1$
                 + "' but could not be deregistered from the EDT list: " //$NON-NLS-1$
                 + e.getMessage()
                 + ". You can remove it manually from the Infobases view in EDT." //$NON-NLS-1$
-                + (deleteDatabaseFiles
-                    ? " The database files on disk were KEPT (deregistration failed); " //$NON-NLS-1$
-                        + "remove the directory manually if intended." //$NON-NLS-1$
-                    : "")) //$NON-NLS-1$
+                + deregisterFailedDatabaseNote(db, deregistrationIsTheReason))
             .toJson();
+    }
+
+    /**
+     * The database sentence of {@link #buildDeregisterFailedResult}: it says the same thing as the
+     * declared keep reason, so the prose cannot tell the user to delete a directory the
+     * machine-readable field says belongs to another project (or says does not exist).
+     *
+     * @param db the measured on-disk outcome cluster
+     * @param deregistrationIsTheReason whether the deregistration failure is what kept the files
+     * @return the sentence to append, possibly empty
+     */
+    private static String deregisterFailedDatabaseNote(DbFileOutcome db,
+            boolean deregistrationIsTheReason)
+    {
+        if (!db.deleteDatabaseFiles)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        if (deregistrationIsTheReason)
+        {
+            return " The database files on disk were KEPT (deregistration failed); " //$NON-NLS-1$
+                + "remove the directory manually if intended."; //$NON-NLS-1$
+        }
+        // A measured reason: the SAME sentence the completed deletion would have produced, so the
+        // two paths cannot describe one unchanged fact differently.
+        return databaseResultNote(db);
     }
 
     /**
@@ -632,16 +860,15 @@ public class DeleteInfobaseTool implements IMcpTool
      * identical to the inline result the success path produced. Read-only — all mutations
      * (dissociate / deregister / file deletion) have already happened at the call site.
      */
-    private static String buildDeleteSuccessResult(IbIdentity id, boolean deleteRegistration,
+    static String buildDeleteSuccessResult(IbIdentity id, boolean deleteRegistration,
             DbFileOutcome db)
     {
-        return ToolResult.success()
+        return applyDatabaseFilesOutcome(ToolResult.success()
             .put(McpKeys.ACTION, VAL_DELETED)
             .put(McpKeys.PROJECT, id.projectName)
             .put(McpKeys.APPLICATION_ID, id.resolvedId)
             .put(KEY_INFOBASE_NAME, id.resolvedName)
-            .put(KEY_DELETE_REGISTRATION, deleteRegistration)
-            .put(KEY_DATABASE_FILES_DELETED, db.dbFilesDeleted)
+            .put(KEY_DELETE_REGISTRATION, deleteRegistration), db)
             .put(McpKeys.MESSAGE, "Infobase '" + id.resolvedName //$NON-NLS-1$
                 + "' removed from project '" + id.projectName + "'" //$NON-NLS-1$ //$NON-NLS-2$
                 + (deleteRegistration ? " and deregistered from the EDT infobases list." //$NON-NLS-1$
@@ -691,7 +918,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * {@code error} is non-null it carries a ready tool-result JSON and {@code app} is {@code null};
      * otherwise {@code error} is {@code null} and {@code app} is the resolved application.
      */
-    private static final class TargetApplication
+    static final class TargetApplication
     {
         final String error;
         final IApplication app;
@@ -729,31 +956,32 @@ public class DeleteInfobaseTool implements IMcpTool
         final String resolvedName;
         final String resolvedId;
         final Path dbDir;
-        final boolean dbSharedWithOthers;
+        final SharedDatabase dbShared;
         final boolean deleteRegistration;
 
         private FileDeletionPlan(String error, InfobaseReference ibRef, String resolvedName,
-                String resolvedId, Path dbDir, boolean dbSharedWithOthers, boolean deleteRegistration)
+                String resolvedId, Path dbDir, SharedDatabase dbShared, boolean deleteRegistration)
         {
             this.error = error;
             this.ibRef = ibRef;
             this.resolvedName = resolvedName;
             this.resolvedId = resolvedId;
             this.dbDir = dbDir;
-            this.dbSharedWithOthers = dbSharedWithOthers;
+            this.dbShared = dbShared;
             this.deleteRegistration = deleteRegistration;
         }
 
         static FileDeletionPlan failed(String error)
         {
-            return new FileDeletionPlan(error, null, null, null, null, false, false);
+            return new FileDeletionPlan(error, null, null, null, null, SharedDatabase.NOT_SHARED,
+                false);
         }
 
         static FileDeletionPlan of(InfobaseReference ibRef, String resolvedName, String resolvedId,
-                Path dbDir, boolean dbSharedWithOthers, boolean deleteRegistration)
+                Path dbDir, SharedDatabase dbShared, boolean deleteRegistration)
         {
             return new FileDeletionPlan(null, ibRef, resolvedName, resolvedId, dbDir,
-                dbSharedWithOthers, deleteRegistration);
+                dbShared, deleteRegistration);
         }
     }
 
@@ -789,11 +1017,11 @@ public class DeleteInfobaseTool implements IMcpTool
         Object server = deletionCtx.server;
         final String infobaseId = deletionCtx.infobaseId;
         final Path dbDir = deletionCtx.dbDir;
-        final boolean dbSharedWithOthers = deletionCtx.dbSharedWithOthers;
+        final SharedDatabase dbShared = deletionCtx.dbShared;
 
         // --- Confirm-preview gate ---
         String preview = buildStandaloneServerPreview(confirm, id,
-            deleteRegistration, deleteDatabaseFiles, dbDir, dbSharedWithOthers);
+            deleteRegistration, deleteDatabaseFiles, dbDir, dbShared);
         if (preview != null)
         {
             return preview;
@@ -888,16 +1116,16 @@ public class DeleteInfobaseTool implements IMcpTool
         // Optionally delete the served-DB files from disk (deleteServer removes only the SERVER config
         // folder, never the served database at database.path — so this is what makes "delete everything").
         boolean dbFilesDeleted = false;
-        if (deleteDatabaseFiles && dbDir != null && !dbSharedWithOthers)
+        if (deleteDatabaseFiles && dbDir != null && !dbShared.keepsFiles())
         {
             dbFilesDeleted = deleteDatabaseDirBestEffort(dbDir);
         }
 
         // Read-back: confirm THIS deletion via a count decrease (tolerant of same-id twins).
-        boolean removed = confirmApplicationRemoved(appManager, project, resolvedId, beforeCount);
+        ReadBack removed = confirmApplicationRemoved(appManager, project, resolvedId, beforeCount);
 
         return buildDeletedResult(id, deleteRegistration,
-            new DbFileOutcome(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbSharedWithOthers),
+            new DbFileOutcome(deleteDatabaseFiles, dbDir, dbFilesDeleted, dbShared),
             cleanup, removed);
     }
 
@@ -958,15 +1186,15 @@ public class DeleteInfobaseTool implements IMcpTool
         final Path dbDir = (dbDirStr != null && !dbDirStr.isEmpty()) ? Paths.get(dbDirStr) : null;
         // A server's served DB is normally dedicated, but EDT does not forbid another project from
         // registering the same directory as a FILE infobase — so apply the same shared-files guard.
-        final boolean dbSharedWithOthers = deleteDatabaseFiles && dbDir != null
-            && isSharedWithOtherProjects(appManager, project, dbDir);
+        final SharedDatabase dbShared = deleteDatabaseFiles && dbDir != null
+            ? isSharedWithOtherApplications(appManager, project, targetApp, dbDir) : SharedDatabase.NOT_SHARED;
 
         ctx.service = service;
         ctx.server = server;
         ctx.module = module;
         ctx.infobaseId = infobaseId;
         ctx.dbDir = dbDir;
-        ctx.dbSharedWithOthers = dbSharedWithOthers;
+        ctx.dbShared = dbShared;
         return ctx;
     }
 
@@ -977,27 +1205,27 @@ public class DeleteInfobaseTool implements IMcpTool
      *
      * @return the preview JSON payload, or {@code null} when {@code confirm} is true
      */
-    private String buildStandaloneServerPreview(boolean confirm, IbIdentity id,
+    static String buildStandaloneServerPreview(boolean confirm, IbIdentity id,
         boolean deleteRegistration, boolean deleteDatabaseFiles, Path dbDir,
-        boolean dbSharedWithOthers)
+        SharedDatabase dbShared)
     {
         if (confirm)
         {
             return null;
         }
-        return ToolResult.success()
+        return applyProspectiveDatabaseFilesKept(ToolResult.success()
             .put(McpKeys.ACTION, "preview") //$NON-NLS-1$
             .put(KEY_CONFIRMATION_REQUIRED, true)
             .put(KEY_APPLICATION_KIND, "standaloneServer") //$NON-NLS-1$
             .put(McpKeys.PROJECT, id.projectName)
             .put(McpKeys.APPLICATION_ID, id.resolvedId)
             .put(KEY_INFOBASE_NAME, id.resolvedName)
-            .put(KEY_DELETE_REGISTRATION, deleteRegistration)
+            .put(KEY_DELETE_REGISTRATION, deleteRegistration), deleteDatabaseFiles, dbDir, dbShared)
             .put(McpKeys.MESSAGE, "PREVIEW: this would delete standalone server '" + id.resolvedName //$NON-NLS-1$
                 + "' (stop it, remove the WST server and its server config folder)" //$NON-NLS-1$
                 + (deleteRegistration ? " AND clean its infobases.yaml registry entry" //$NON-NLS-1$
                     : " (infobases.yaml entry kept)") //$NON-NLS-1$
-                + databasePreviewNote(deleteDatabaseFiles, dbDir, dbSharedWithOthers)
+                + databasePreviewNote(deleteDatabaseFiles, dbDir, dbShared)
                 + " for project '" + id.projectName //$NON-NLS-1$
                 + "'. This is irreversible. Re-call with confirm=true to apply.") //$NON-NLS-1$
             .toJson();
@@ -1041,25 +1269,44 @@ public class DeleteInfobaseTool implements IMcpTool
      *
      * @return the success JSON payload
      */
-    private String buildDeletedResult(IbIdentity id, boolean deleteRegistration, DbFileOutcome db,
-        StandaloneServerSupport.RegistryCleanup cleanup, boolean removed)
+    static String buildDeletedResult(IbIdentity id, boolean deleteRegistration, DbFileOutcome db,
+        StandaloneServerSupport.RegistryCleanup cleanup, ReadBack removed)
     {
-        return ToolResult.success()
+        return applyDatabaseFilesOutcome(ToolResult.success()
             .put(McpKeys.ACTION, VAL_DELETED)
             .put(KEY_APPLICATION_KIND, "standaloneServer") //$NON-NLS-1$
             .put(McpKeys.PROJECT, id.projectName)
             .put(McpKeys.APPLICATION_ID, id.resolvedId)
             .put(KEY_INFOBASE_NAME, id.resolvedName)
-            .put(KEY_DELETE_REGISTRATION, deleteRegistration)
-            .put(KEY_DATABASE_FILES_DELETED, db.dbFilesDeleted)
+            .put(KEY_DELETE_REGISTRATION, deleteRegistration), db)
             .put(McpKeys.MESSAGE, "Standalone server '" + id.resolvedName //$NON-NLS-1$
                 + "' deleted from project '" + id.projectName //$NON-NLS-1$
                 + "' (server stopped, WST server and its server config folder removed)" //$NON-NLS-1$
                 + (deleteRegistration ? registryNote(cleanup)
                     : " (infobases.yaml registry entry kept).") //$NON-NLS-1$
                 + databaseResultNote(db)
-                + (removed ? "" : " NOTE: it may still appear in get_applications briefly.")) //$NON-NLS-1$ //$NON-NLS-2$
+                + readBackNote(removed))
             .toJson();
+    }
+
+    /**
+     * The tail naming what the post-deletion read-back established. An {@link ReadBack#UNREADABLE}
+     * read-back gets its own sentence: it is not a confirmation, and it is not evidence that the
+     * application is still there either.
+     */
+    static String readBackNote(ReadBack readBack)
+    {
+        switch (readBack)
+        {
+            case STILL_LISTED:
+                return " NOTE: it may still appear in get_applications briefly."; //$NON-NLS-1$
+            case UNREADABLE:
+                return " NOTE: the removal could not be CONFIRMED — the application list could not " //$NON-NLS-1$
+                    + "be read back (see the EDT log). The deletion itself reported success; check " //$NON-NLS-1$
+                    + "with get_applications."; //$NON-NLS-1$
+            default:
+                return ""; //$NON-NLS-1$
+        }
     }
 
     /**
@@ -1075,7 +1322,7 @@ public class DeleteInfobaseTool implements IMcpTool
         Object module;
         String infobaseId;
         Path dbDir;
-        boolean dbSharedWithOthers;
+        SharedDatabase dbShared;
         String error;
     }
 
@@ -1095,26 +1342,51 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /**
+     * What the post-deletion read-back established. Three states, not two: a read that could not be
+     * performed says NOTHING about the application, and reporting it as a confirmation is how a
+     * destructive tool comes to claim an outcome nobody measured.
+     */
+    enum ReadBack
+    {
+        /** The application is gone (or one of several same-id twins is). */
+        CONFIRMED,
+        /** The count was read every time and never dropped — it is still listed. */
+        STILL_LISTED,
+        /** The list could not be read (deadline or platform failure), so nothing was established. */
+        UNREADABLE
+    }
+
+    /** The count of a list that could not be read — never a measured zero. */
+    static final int COUNT_UNKNOWN = -1;
+
+    /**
      * Bounded re-poll that confirms THIS standalone-server deletion took effect, by waiting until the
      * number of applications carrying {@code appId} drops below {@code beforeCount} (absorbs the
      * provision-delegate listener race). Counting (rather than presence) makes it correct even when a
      * same-named twin server shares the id: deleting one of two twins is confirmed when the count goes
-     * 2 -> 1. Returns true once the count decreased (or reached zero), false if it never did.
+     * 2 -> 1.
+     *
+     * <p>An unreadable count is {@link ReadBack#UNREADABLE}, never a confirmation — #622 gave the
+     * read a 30 s deadline on exactly the wedge it exists for, so "could not read" is now a likely
+     * outcome and answering it with "removed" would be a claim about an unasked question.
+     *
+     * <p>A {@code beforeCount} of {@link #COUNT_UNKNOWN} is likewise not a baseline: a twin going
+     * 2 -> 1 cannot be recognised against it, so anything other than a measured zero is
+     * {@link ReadBack#UNREADABLE} rather than a false "still listed".
      */
-    private static boolean confirmApplicationRemoved(IApplicationManager appManager, IProject project,
-            String appId, int beforeCount)
+    static ReadBack confirmApplicationRemoved(IApplicationManager appManager,
+            IProject project, String appId, int beforeCount)
     {
         for (int poll = 0; poll < READ_BACK_MAX_POLLS; poll++)
         {
             int now = countAppsWithId(appManager, project, appId);
-            if (now < 0)
+            if (now == COUNT_UNKNOWN)
             {
-                // Cannot read back — do not block the (already successful) deletion result.
-                return true;
+                return ReadBack.UNREADABLE;
             }
-            if (now == 0 || now < beforeCount)
+            if (now == 0 || (beforeCount != COUNT_UNKNOWN && now < beforeCount))
             {
-                return true;
+                return ReadBack.CONFIRMED;
             }
 
             if (poll < READ_BACK_MAX_POLLS - 1)
@@ -1126,38 +1398,54 @@ public class DeleteInfobaseTool implements IMcpTool
                 catch (InterruptedException ie)
                 {
                     Thread.currentThread().interrupt();
-                    break;
+                    return ReadBack.UNREADABLE;
                 }
             }
         }
-        return false;
+        // Every poll read a count, and it never dropped. With no baseline to compare against, a
+        // non-zero count is not evidence that the deletion failed either.
+        return beforeCount == COUNT_UNKNOWN ? ReadBack.UNREADABLE : ReadBack.STILL_LISTED;
     }
 
     /**
-     * Counts the project's applications whose id equals {@code appId}. Returns -1 if the application list
-     * could not be read (the caller treats that as "cannot confirm" rather than a failure).
+     * Counts the project's applications whose id equals {@code appId}. Returns {@link #COUNT_UNKNOWN}
+     * if the application list could not be read.
+     *
+     * <p>BOUNDED (#622). An expired deadline is one more way of not being able to read, so it takes
+     * the same {@link #COUNT_UNKNOWN}; the caller's poll loop stops at the first one, so at most one
+     * deadline is paid.
      */
-    private static int countAppsWithId(IApplicationManager appManager, IProject project, String appId)
+    static int countAppsWithId(IApplicationManager appManager, IProject project, String appId)
     {
+        ApplicationSupport.BoundedRead<List<IApplication>> read =
+            ApplicationSupport.getApplicationsBounded(appManager, project,
+                ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (!read.concluded())
+        {
+            Activator.logError("delete_infobase: read-back could not be completed — " //$NON-NLS-1$
+                + read.deadlineFailure(), null);
+            return COUNT_UNKNOWN;
+        }
         try
         {
-            List<IApplication> apps = appManager.getApplications(project);
-            int count = 0;
-            if (apps != null)
+            List<IApplication> apps = read.valueOrRethrow();
+            if (apps == null)
             {
-                for (IApplication a : apps)
+                return COUNT_UNKNOWN;
+            }
+            int count = 0;
+            for (IApplication a : apps)
+            {
+                if (appId.equals(a.getId()))
                 {
-                    if (appId.equals(a.getId()))
-                    {
-                        count++;
-                    }
+                    count++;
                 }
             }
             return count;
         }
         catch (Exception e)
         {
-            return -1;
+            return COUNT_UNKNOWN;
         }
     }
 
@@ -1170,15 +1458,7 @@ public class DeleteInfobaseTool implements IMcpTool
     {
         try
         {
-            IConnectionString cs = (ibRef != null) ? ibRef.getConnectionString() : null;
-            if (cs instanceof FileConnectionString)
-            {
-                String path = ((FileConnectionString)cs).getFile();
-                if (path != null && !path.trim().isEmpty())
-                {
-                    return Paths.get(path.trim());
-                }
-            }
+            return fileInfobaseDirOrThrow(ibRef);
         }
         catch (Exception e)
         {
@@ -1187,118 +1467,314 @@ public class DeleteInfobaseTool implements IMcpTool
         return null;
     }
 
+    /** {@link #resolveFileInfobaseDir}, but an unreadable reference RAISES instead of answering {@code null}. */
+    private static Path fileInfobaseDirOrThrow(InfobaseReference ibRef)
+    {
+        IConnectionString cs = (ibRef != null) ? ibRef.getConnectionString() : null;
+        if (cs instanceof FileConnectionString)
+        {
+            String path = ((FileConnectionString)cs).getFile();
+            if (path != null && !path.trim().isEmpty())
+            {
+                return Paths.get(path.trim());
+            }
+        }
+        return null;
+    }
+
     /**
      * The same on-disk database can be used by SEVERAL projects at once — as a FILE infobase OR as a
-     * standalone (wst) server's served database. Returns {@code true} when ANY project OTHER than
-     * {@code currentProject} still has an application backed by the SAME on-disk directory
-     * ({@code dbDir}) — in which case wiping the files would break those projects, so the caller keeps
-     * the data. Conservative: any failure to enumerate is treated as "shared" (keep).
+     * standalone (wst) server's served database. Returns {@link SharedDatabase#SHARED} when ANY
+     * project OTHER than {@code currentProject} still has an application backed by the SAME on-disk
+     * directory ({@code dbDir}) — in which case wiping the files would break those projects, so the
+     * caller keeps the data.
+     * <p>
+     * A failure to enumerate is {@link SharedDatabase#UNKNOWN}, which keeps the files exactly as
+     * SHARED does. The two are separated only so that the result never STATES co-ownership it did
+     * not measure: "another project uses this database" and "we could not find out" lead a reader
+     * to completely different next steps.
      * <p>
      * CLOSED projects are intentionally NOT skipped: {@code IApplicationManager.getApplications} resolves
      * a project's infobases/servers from WORKSPACE-level stores (the infobase association manager and the
      * standalone-server registry), NOT from the project's open resources (bytecode-verified on 2025.2), so
      * a closed project that still references the same database is visible here and must be honoured.
+     * <p>
+     * BOUNDED (#622) as ONE wait around the WHOLE enumeration, not per project. On a WEDGED EDT the
+     * per-project reads queue behind the same platform monitor, so one bound covers them all; on a
+     * healthy but large workspace they do not queue, they SUM, so the bound is also what stops a
+     * big workspace from running past it. Either way it is re-run per CALL, so a preview and its
+     * confirm can reach different answers — which is why an UNKNOWN preview says so.
      */
-    private static boolean isSharedWithOtherProjects(IApplicationManager appManager, IProject currentProject,
-            Path dbDir)
+    static SharedDatabase isSharedWithOtherApplications(IApplicationManager appManager,
+            IProject currentProject, IApplication targetApp, Path dbDir)
     {
         if (appManager == null || dbDir == null)
         {
-            return false;
+            return SharedDatabase.NOT_SHARED;
         }
         Path target = dbDir.toAbsolutePath().normalize();
+        return sharedCheckBounded(SHARED_INFOBASE_CHECK_TIMEOUT_MS,
+            () -> enumerateSharedWithOtherApplications(appManager, currentProject, targetApp, target, dbDir));
+    }
+
+    /**
+     * Runs one shared-infobase enumeration under a deadline and maps it onto the three states.
+     *
+     * <p>Split out so the mapping — and above all the UNKNOWN arm — can be driven without a
+     * workspace: it is the arm that decides whether a DESTRUCTIVE tool states co-ownership it never
+     * measured.
+     *
+     * @param timeoutMs the bound on the whole enumeration
+     * @param enumeration answers what the OTHER projects establish about the same on-disk database
+     * @return what the check established, never {@code null}
+     */
+    static SharedDatabase sharedCheckBounded(long timeoutMs,
+        ApplicationSupport.IApplicationRead<SharedDatabase> enumeration)
+    {
+        ApplicationSupport.BoundedRead<SharedDatabase> read = ApplicationSupport.readBounded(
+            "Check shared infobases", //$NON-NLS-1$
+            "the shared-infobase check across the workspace's projects", //$NON-NLS-1$
+            timeoutMs, enumeration);
+        if (!read.concluded())
+        {
+            Activator.logError("delete_infobase: shared-infobase check did not conclude — keeping " //$NON-NLS-1$
+                + "the files without establishing co-ownership: " + read.deadlineFailure(), null); //$NON-NLS-1$
+            return SharedDatabase.UNKNOWN;
+        }
+        if (read.failure() != null)
+        {
+            // A raised enumeration answered nothing either: keep the files, claim no co-owner.
+            Activator.logError("delete_infobase: shared-infobase check failed — keeping the files " //$NON-NLS-1$
+                + "without establishing co-ownership", read.failure()); //$NON-NLS-1$
+            return SharedDatabase.UNKNOWN;
+        }
+        SharedDatabase answer = read.valueOrRethrow();
+        return answer != null ? answer : SharedDatabase.UNKNOWN;
+    }
+
+    /**
+     * Folds per-project (or per-application) answers into one, in order and lazily: a measured
+     * co-owner wins at once; otherwise any one that could not be read leaves the whole answer
+     * UNKNOWN. An unreadable one must not stop the scan, since a later one may establish SHARED.
+     *
+     * @param perProject one answer per OTHER project or application, each computed only when reached
+     * @return the combined answer, never {@code null}
+     */
+    static SharedDatabase combineProjectAnswers(Iterable<Supplier<SharedDatabase>> perProject)
+    {
+        boolean unanswered = false;
+        for (Supplier<SharedDatabase> answer : perProject)
+        {
+            SharedDatabase one = answer.get();
+            if (one == SharedDatabase.SHARED)
+            {
+                return SharedDatabase.SHARED;
+            }
+            unanswered |= one != SharedDatabase.NOT_SHARED;
+        }
+        return unanswered ? SharedDatabase.UNKNOWN : SharedDatabase.NOT_SHARED;
+    }
+
+    /**
+     * What the shared-infobase check established about the on-disk database.
+     *
+     * <p>Three states, because {@link #SHARED} and {@link #UNKNOWN} keep the files for OPPOSITE
+     * reasons: one is a measured co-owner, the other is a question that was never answered. A
+     * destructive tool that reports the second as the first claims an outcome nobody measured.
+     */
+    enum SharedDatabase
+    {
+        /** Another workspace project was found using the same on-disk database. */
+        SHARED,
+        /** The enumeration ran and found no other project using it. */
+        NOT_SHARED,
+        /** The enumeration did not conclude (deadline or platform failure) — nothing established. */
+        UNKNOWN;
+
+        /** @return whether this state means the database files must be kept */
+        boolean keepsFiles()
+        {
+            return this != NOT_SHARED;
+        }
+    }
+
+    /**
+     * The enumeration {@link #isSharedWithOtherApplications} runs under one deadline. The current
+     * project is scanned too: only the application being deleted is left out, not its siblings.
+     */
+    private static SharedDatabase enumerateSharedWithOtherApplications(IApplicationManager appManager,
+            IProject currentProject, IApplication targetApp, Path target, Path dbDir)
+    {
         try
         {
-            for (IProject other : ProjectContext.allProjects()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
+            List<Supplier<SharedDatabase>> answers = new ArrayList<>();
+            for (IProject other : ProjectContext.allProjects())
             {
-                if (other == null || other.equals(currentProject))
+                if (other != null)
                 {
-                    continue;
-                }
-                List<IApplication> apps;
-                try // NOSONAR nested try is intentional (distinct resource/exception scopes)
-                {
-                    apps = appManager.getApplications(other);
-                }
-                catch (Exception e)
-                {
-                    // A project that cannot be queried might still share the infobase — be safe.
-                    Activator.logError("delete_infobase: could not list applications of project '" //$NON-NLS-1$
-                        + other.getName() + "' while checking for shared infobases", e); //$NON-NLS-1$
-                    return true;
-                }
-                if (apps == null)
-                {
-                    continue;
-                }
-                if (anyApplicationServesDir(apps, target, other, dbDir))
-                {
-                    return true;
+                    IApplication excluded = other.equals(currentProject) ? targetApp : null;
+                    answers.add(() -> projectShares(appManager, other, excluded, target, dbDir));
                 }
             }
+            return combineProjectAnswers(answers);
         }
         catch (Exception e)
         {
-            // Enumeration itself failed — keep the files (the safe choice).
-            Activator.logError("delete_infobase: shared-infobase check failed — keeping the files", e); //$NON-NLS-1$
-            return true;
+            // Enumeration itself failed: nothing established, so the files stay without a co-owner claim.
+            Activator.logError("delete_infobase: shared-infobase check failed — keeping the files " //$NON-NLS-1$
+                + "without establishing co-ownership", e); //$NON-NLS-1$
+            return SharedDatabase.UNKNOWN;
         }
-        return false;
     }
 
     /**
-     * Returns {@code true} when ANY application of {@code other} resolves to the same on-disk database
-     * {@code target} (absolute, normalized) — the per-project arm of {@link #isSharedWithOtherProjects}.
-     * Resolves EVERY co-owner kind: a FILE infobase OR a standalone (wst) server that serves the same
-     * on-disk database — not just file infobases. {@code other} / {@code dbDir} are used only for the
-     * "kept on disk" log line.
+     * What one project establishes: it serves {@code target}, it does not, or it cannot be read.
+     * ONE application equal to the deletion target {@code excludedApp} is skipped (see
+     * {@link #withoutOneEqual}). A null list is unread, not empty. A failure anywhere in judging
+     * this project is ITS answer.
      */
-    private static boolean anyApplicationServesDir(List<IApplication> apps, Path target, IProject other,
+    static SharedDatabase projectShares(IApplicationManager appManager, IProject other,
+            IApplication excludedApp, Path target, Path dbDir)
+    {
+        try
+        {
+            List<IApplication> apps = appManager.getApplications(other);
+            if (apps == null)
+            {
+                Activator.logError("delete_infobase: project '" + other.getName() //$NON-NLS-1$
+                    + "' returned no application list — it may share '" + dbDir + "'", null); //$NON-NLS-1$ //$NON-NLS-2$
+                return SharedDatabase.UNKNOWN;
+            }
+            return applicationsServeDir(withoutOneEqual(apps, excludedApp), target, other, dbDir);
+        }
+        catch (Exception e)
+        {
+            Activator.logError("delete_infobase: could not check the applications of project '" //$NON-NLS-1$
+                + other.getName() + "' for a shared infobase", e); //$NON-NLS-1$
+            return SharedDatabase.UNKNOWN;
+        }
+    }
+
+    /**
+     * {@code items} without the FIRST element equal to {@code excluded}, every later equal one kept.
+     * EDT's application equality is by value - server + module, or the infobase reference without
+     * the name - so a same-named twin never matches, while a second association of the same
+     * infobase does and must still be judged. A target absent from the snapshot removes nothing.
+     *
+     * @param items the snapshot to filter
+     * @param excluded the element to drop once, or {@code null} for none
+     * @return a new list
+     */
+    static <T> List<T> withoutOneEqual(List<T> items, Object excluded)
+    {
+        List<T> kept = new ArrayList<>();
+        boolean skipped = excluded == null;
+        for (T item : items)
+        {
+            if (!skipped && excluded.equals(item))
+            {
+                skipped = true;
+                continue;
+            }
+            kept.add(item);
+        }
+        return kept;
+    }
+
+    /**
+     * What the applications of {@code other} establish about the on-disk database {@code target}
+     * (absolute, normalized) — the per-project arm of {@link #isSharedWithOtherApplications}. Covers
+     * EVERY co-owner kind: a FILE infobase OR a standalone (wst) server serving the same database.
+     *
+     * <p>An application whose path cannot be READ is UNKNOWN, not "serves something else": it may
+     * be the very co-owner. The scan still goes on, so a later readable match wins as SHARED.
+     * {@code other} / {@code dbDir} are used only for the log lines.
+     */
+    static SharedDatabase applicationsServeDir(List<IApplication> apps, Path target, IProject other,
             Path dbDir)
     {
+        List<Supplier<SharedDatabase>> answers = new ArrayList<>();
         for (IApplication app : apps)
         {
-            Path otherDir = resolveApplicationDbDir(app);
-            if (otherDir != null && target.equals(otherDir.toAbsolutePath().normalize()))
-            {
-                Activator.logInfo("delete_infobase: database '" + dbDir //$NON-NLS-1$
-                    + "' is also used by project '" + other.getName() //$NON-NLS-1$
-                    + "' — keeping the files on disk"); //$NON-NLS-1$
-                return true;
-            }
+            answers.add(() -> applicationServesDir(app, target, other, dbDir));
         }
-        return false;
+        return combineProjectAnswers(answers);
+    }
+
+    private static SharedDatabase applicationServesDir(IApplication app, Path target, IProject other,
+            Path dbDir)
+    {
+        Path otherDir;
+        try
+        {
+            otherDir = applicationDbDirOrThrow(app);
+        }
+        catch (Exception | LinkageError e)
+        {
+            Activator.logError("delete_infobase: could not read the database path of an application of " //$NON-NLS-1$
+                + "project '" + other.getName() + "' — it may share '" + dbDir + "'", e); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return SharedDatabase.UNKNOWN;
+        }
+        if (otherDir != null && target.equals(otherDir.toAbsolutePath().normalize()))
+        {
+            Activator.logInfo("delete_infobase: database '" + dbDir //$NON-NLS-1$
+                + "' is also used by project '" + other.getName() //$NON-NLS-1$
+                + "' — keeping the files on disk"); //$NON-NLS-1$
+            return SharedDatabase.SHARED;
+        }
+        return SharedDatabase.NOT_SHARED;
     }
 
     /**
-     * Resolves an application's on-disk database directory for the shared-files guard: a FILE infobase
-     * via its connection string, OR a standalone (wst) server via its served-database path
-     * ({@link StandaloneServerSupport#databaseDirOf}). Returns {@code null} for any other application kind
-     * or when the path cannot be resolved.
+     * An application's on-disk database directory for the shared-files guard: a FILE infobase via
+     * its connection string, OR a standalone (wst) server via its served-database path. Answers
+     * {@code null} only for a kind with no local directory; a read that fails RAISES.
      */
-    private static Path resolveApplicationDbDir(IApplication app)
+    private static Path applicationDbDirOrThrow(IApplication app) throws ReflectiveOperationException
     {
+        // Once the kind is known, missing data is UNREADABLE, never "no local directory": only a
+        // server connection string or an RDBMS database really has none.
         if (app instanceof IInfobaseApplication)
         {
-            return resolveFileInfobaseDir(((IInfobaseApplication)app).getInfobase());
+            InfobaseReference ref = ((IInfobaseApplication)app).getInfobase();
+            IConnectionString cs = ref != null ? ref.getConnectionString() : null;
+            if (cs == null)
+            {
+                throw new IllegalStateException("the infobase connection string is unreadable"); //$NON-NLS-1$
+            }
+            if (!(cs instanceof FileConnectionString))
+            {
+                return null;
+            }
+            String path = ((FileConnectionString)cs).getFile();
+            if (path == null || path.isBlank())
+            {
+                throw new IllegalStateException("the file connection names no directory"); //$NON-NLS-1$
+            }
+            return Paths.get(path.trim());
         }
         String typeId = (app != null && app.getType() != null) ? app.getType().getId() : null;
+        if (INFOBASE_APP_TYPE.equals(typeId))
+        {
+            throw new IllegalStateException("an infobase-type application exposes no infobase"); //$NON-NLS-1$
+        }
         if (StandaloneServerSupport.WST_SERVER_APP_TYPE.equals(typeId))
         {
-            Object module = StandaloneServerSupport.moduleOfApplication(app);
-            String dir = module != null ? StandaloneServerSupport.databaseDirOf(module) : null;
-            if (dir != null && !dir.isEmpty())
+            Object module = StandaloneServerSupport.moduleOrThrow(app);
+            if (module == null)
             {
-                try
-                {
-                    return Paths.get(dir);
-                }
-                catch (RuntimeException e)
-                {
-                    Activator.logError("delete_infobase: could not parse served-DB path '" + dir //$NON-NLS-1$
-                        + "' of a standalone server while checking shared infobases", e); //$NON-NLS-1$
-                }
+                throw new IllegalStateException("the standalone server exposes no module"); //$NON-NLS-1$
             }
+            String dir = StandaloneServerSupport.databaseDirOrThrow(module);
+            if (dir == null)
+            {
+                return null;
+            }
+            if (dir.isBlank())
+            {
+                throw new IllegalStateException("the file-backed server names no directory"); //$NON-NLS-1$
+            }
+            return Paths.get(dir);
         }
         return null;
     }
@@ -1349,9 +1825,14 @@ public class DeleteInfobaseTool implements IMcpTool
         }
     }
 
-    /** Preview-message fragment describing what deleteDatabaseFiles will (or will not) do to disk. */
-    private static String databasePreviewNote(boolean deleteDatabaseFiles, Path dbDir,
-            boolean sharedWithOthers)
+    /**
+     * Preview-message fragment describing what deleteDatabaseFiles will (or will not) do to disk.
+     * Its branches are ordered exactly like
+     * {@link #prospectiveDatabaseFilesKept(boolean, Path, SharedDatabase)}, which declares the same
+     * answer as a machine-readable value — keep the two in step.
+     */
+    static String databasePreviewNote(boolean deleteDatabaseFiles, Path dbDir,
+            SharedDatabase shared)
     {
         if (!deleteDatabaseFiles)
         {
@@ -1361,15 +1842,25 @@ public class DeleteInfobaseTool implements IMcpTool
         {
             return " (deleteDatabaseFiles was requested but no database directory could be resolved)"; //$NON-NLS-1$
         }
-        if (sharedWithOthers)
+        if (shared == SharedDatabase.SHARED)
         {
             return " (the database files would be KEPT — this infobase is still used by other projects)"; //$NON-NLS-1$
+        }
+        if (shared == SharedDatabase.UNKNOWN)
+        {
+            // Two facts the caller needs and one guess it must not be given: the files would be
+            // kept, WHY they would be kept is unproven, and the confirm call runs this check AGAIN
+            // — so a preview built on an unconcluded check does not bind the deletion.
+            return " (the database files would be KEPT, but NOT because co-ownership was " //$NON-NLS-1$
+                + "established: the shared-infobase check did not complete, so whether another " //$NON-NLS-1$
+                + "project uses this database is UNKNOWN. confirm=true re-runs that check, and if " //$NON-NLS-1$
+                + "it concludes then, the files may be DELETED after all — see the EDT log)"; //$NON-NLS-1$
         }
         return " AND DELETE its database files at '" + dbDir + "' from disk (IRREVERSIBLE)"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** Result-message fragment describing the actual outcome of the database-files deletion. */
-    private static String databaseResultNote(DbFileOutcome db)
+    static String databaseResultNote(DbFileOutcome db)
     {
         if (!db.deleteDatabaseFiles)
         {
@@ -1379,10 +1870,21 @@ public class DeleteInfobaseTool implements IMcpTool
         {
             return " No database directory could be resolved, so nothing was deleted from disk."; //$NON-NLS-1$
         }
-        if (db.dbSharedWithOthers)
+        if (db.dbShared == SharedDatabase.SHARED)
         {
             return " The database files were KEPT: this infobase is still used by other project(s) in " //$NON-NLS-1$
                 + "the workspace; deleting them would break those projects."; //$NON-NLS-1$
+        }
+        if (db.dbShared == SharedDatabase.UNKNOWN)
+        {
+            // The claim this branch exists to avoid making: co-ownership as a MEASURED fact. The
+            // files are kept for the same conservative reason either way, but the reader acts very
+            // differently on "another project uses it" than on "we could not find out".
+            return " The database files at '" + db.dbDir //$NON-NLS-1$
+                + "' were KEPT because the shared-infobase check could not be completed (see the " //$NON-NLS-1$
+                + "EDT log) — NOT because another project was found using them. Whether this " //$NON-NLS-1$
+                + "database is shared is UNKNOWN; re-run delete_infobase once EDT is responsive, " //$NON-NLS-1$
+                + "or remove the directory manually after checking it yourself."; //$NON-NLS-1$
         }
         return db.dbFilesDeleted
             ? " The database files at '" + db.dbDir + "' were deleted from disk." //$NON-NLS-1$ //$NON-NLS-2$

@@ -28,6 +28,7 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
 import com.e1c.g5.dt.applications.IApplication;
@@ -342,10 +343,21 @@ public class SetBranchInfobaseTool implements IMcpTool
                 "IApplicationManager service is not available. EDT may still be starting up — retry " //$NON-NLS-1$
                 + "in a moment.").toJson()); //$NON-NLS-1$
         }
+        // Bounded (#622): an unbounded lookup would hold this call open with nothing bound.
+        ApplicationSupport.BoundedRead<Optional<IApplication>> read =
+            ApplicationSupport.getApplicationBounded(appManager, project, applicationId,
+                ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (!read.concluded())
+        {
+            Activator.logError("set_branch_infobase: " + read.deadlineFailure(), null); //$NON-NLS-1$
+            return ApplicationReferenceResolution.error(ToolResult.error("Could not resolve application '" //$NON-NLS-1$
+                + applicationId + "': " + read.deadlineFailure() //$NON-NLS-1$
+                + ". Nothing was bound.").toJson()); //$NON-NLS-1$
+        }
         Optional<IApplication> appOpt;
         try
         {
-            appOpt = appManager.getApplication(project, applicationId);
+            appOpt = read.valueOrRethrow();
         }
         catch (Exception e) // NOSONAR EDT application lookup — surface as an actionable error
         {

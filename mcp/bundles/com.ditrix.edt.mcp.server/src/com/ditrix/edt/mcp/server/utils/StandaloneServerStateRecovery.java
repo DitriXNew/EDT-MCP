@@ -144,11 +144,11 @@ public final class StandaloneServerStateRecovery
     /**
      * Guards that serialize stale-server recovery actions, one per project+application.
      *
-     * <p>Deliberately NOT {@link LaunchLifecycleUtils#lockFor}: that monitor is held across a
-     * whole {@code update_database} publish, and waiting on it inside a bounded caller (the
-     * {@code build_external_objects} job has a deadline, and a thread parked in
-     * {@code synchronized} cannot be cancelled) would trade one hang for another. This lock is
-     * acquired with a deadline and held only across "re-read the state, then stop or restore".
+     * <p>Deliberately NOT {@link LaunchLifecycleUtils#lockFor}: that lock is held across a whole
+     * {@code update_database} publish, so a bounded caller (the {@code build_external_objects} job
+     * has a deadline) waiting on it would spend its whole budget there. That lock is itself
+     * acquired with a deadline, but a publish-sized one, not this caller's. This lock is acquired
+     * with this caller's deadline and held only across "re-read the state, then stop or restore".
      *
      * <p>Only the WAIT for those actions is bounded. {@link BoundedJob} cancels its job but cannot
      * preempt it, so a cleanup the guarded stop dispatched can still be running when the lock is
@@ -2059,8 +2059,21 @@ public final class StandaloneServerStateRecovery
         {
             return;
         }
-        ensureStartable(project, null,
-            LaunchLifecycleUtils.resolveDefaultApplicationId(project, null, manager), manager);
+        LaunchLifecycleUtils.DefaultApplicationLookup defaultApp = LaunchLifecycleUtils
+            .resolveDefaultApplication(project, null, manager, ApplicationSupport.LOOKUP_TIMEOUT_MS);
+        if (defaultApp.inconclusive())
+        {
+            // The pre-flight is skipped, and that must not be silent (#622). This method has no
+            // channel back to the tool, so the skip otherwise surfaces only much later as EDT's own
+            // "can only start a stopped server" refusal — the very refusal the pre-flight exists to
+            // prevent — with nothing anywhere saying why the check did not run.
+            Activator.logError("Standalone-server pre-flight skipped for project " //$NON-NLS-1$
+                + project.getName() + ": the project's default application could not be resolved (" //$NON-NLS-1$
+                + defaultApp.failure()
+                + "). A stale STARTED server will not be settled before the next start.", null); //$NON-NLS-1$
+            return;
+        }
+        ensureStartable(project, null, defaultApp.id(), manager);
     }
 
     /** What the pre-flight decided to do about the server's current state. */

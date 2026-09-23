@@ -10,12 +10,17 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertTrue;
 
 import static org.mockito.Mockito.mock;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -30,8 +35,10 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IStatus;
+import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchManager;
 import org.junit.Test;
+import org.mockito.Mockito;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
@@ -45,6 +52,7 @@ import com.ditrix.edt.mcp.server.utils.InfobaseAuthDialogSuppressor;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PreLaunchResult;
 import com.ditrix.edt.mcp.server.utils.LaunchLifecycleUtils.PrepInFlight;
+import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplicationManager;
 
 /**
@@ -56,6 +64,443 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  */
 public class RunYaxunitTestsToolTest
 {
+    /**
+     * The bound the BROKEN revision of this read gave up at ({@code REPORT_LOCK_TIMEOUT_MS}).
+     * The contended-read test must out-wait it, or it passes on the very revision it exists to
+     * catch: with a 400 ms hold the broken read acquired at 400 ms and every assertion held.
+     */
+    private static final long BROKEN_REPORT_LOCK_BOUND_MS = 5_000L;
+
+    /**
+     * A contended read of a FINISHED run's report must wait for the lock and then read — not
+     * return early. Returning early destroys the report: the caller retries, the launch listener
+     * has meanwhile evicted the terminated launch from ACTIVE_LAUNCHES, so the retry takes the
+     * spawn path, which cleanupTempDir's the report directory.
+     * <p>
+     * The hold deliberately OUT-LASTS {@link #BROKEN_REPORT_LOCK_BOUND_MS}, which costs this test
+     * its wall clock and buys the only thing that matters: a read that gives up at the old short
+     * bound fails here. Both the production entry point (no explicit bound) and the elapsed-time
+     * assertion are load-bearing — the first proves the SITE's bound, the second the wait.
+     */
+    @Test
+    public void testContendedReportReadWaitsForTheLockAndStillReadsTheReport() throws Exception
+    {
+        String projectName = "ContendedReadProject";
+        String applicationId = "app-contended-read";
+        Path reportDir = Files.createTempDirectory("edt-mcp-yaxunit-contended");
+        Path junitXml = reportDir.resolve("junit.xml");
+        // A FAILING case on purpose: the formatter renders per-test names only for failures, so a
+        // passing fixture would give the assertion below nothing of the report to recognise.
+        Files.write(junitXml, ("<?xml version=\"1.0\"?>"
+            + "<testsuite name=\"All\" tests=\"1\" failures=\"1\" errors=\"0\" skipped=\"0\">"
+            + "<testcase classname=\"OM_a\" name=\"ContendedMarkerTest\">"
+            + "<failure message=\"marker\">at line 1</failure>"
+            + "</testcase></testsuite>").getBytes(StandardCharsets.UTF_8));
+
+        ILaunch finished = mock(ILaunch.class);
+        Mockito.when(finished.isTerminated()).thenReturn(true);
+
+        // The holder takes the PRODUCTION lock for longer than the broken bound, then releases it.
+        long holdMs = BROKEN_REPORT_LOCK_BOUND_MS + 500L;
+        CountDownLatch held = new CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            LaunchLifecycleUtils.LaunchLock lock =
+                LaunchLifecycleUtils.lockFor(projectName, applicationId);
+            if (!lock.tryAcquire(5_000L, null).acquired())
+            {
+                return;
+            }
+            try
+            {
+                held.countDown();
+                Thread.sleep(holdMs);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            finally
+            {
+                lock.unlock();
+            }
+        }, "test: held launch lock (report read)");
+        holder.start();
+        assertTrue("the holder must be provably holding the lock", held.await(5, TimeUnit.SECONDS));
+
+        long startedAt = System.nanoTime();
+        // The PRODUCTION overload on purpose: the bound under test is the one this call site
+        // chooses, so a test that passed its own would pin nothing. The CALLER's deadline is
+        // generous here, because the site takes the SMALLER of it and the publish-sized ceiling —
+        // a short one would cap the wait and this test would stop measuring the ceiling.
+        String result = new RunYaxunitTestsTool().handleExistingLaunch(finished, reportDir,
+            System.currentTimeMillis() + 120_000L, "contended-run-key", projectName, applicationId);
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+        holder.join(10_000L);
+
+        assertTrue("the read must out-wait the broken bound, not give up at it: " + elapsedMs
+            + " ms", elapsedMs > BROKEN_REPORT_LOCK_BOUND_MS);
+        assertTrue("the read must wait for the holder, not give up: " + elapsedMs + " ms",
+            elapsedMs >= holdMs - 50L);
+        assertTrue("the read must return the parsed report", result.contains("ContendedMarkerTest")
+            && result.contains("YAXUnit Test Results"));
+        assertTrue("the report must NOT have been wiped", Files.exists(junitXml));
+        // The wrong outcomes this replaced. A "**Pending:**" sends the owning job's loop back
+        // through runTests, which is the path that wipes reportDir; "no JUnit XML found" is what a
+        // read that lost the race to a cleanupTempDir would report; the lock refusal is what a
+        // short bound answers with.
+        assertFalse("a finished run's report must not be answered with a Pending",
+            result.startsWith("**Pending:**"));
+        assertFalse("the report must not be reported as missing",
+            result.contains("no JUnit XML found"));
+        assertFalse("the read must not have been refused on the lock",
+            result.contains("The launch lock for application"));
+    }
+
+    /**
+     * A RULE, not shipped behaviour. The production caller passes {@code Long.MAX_VALUE} — the run
+     * is owned by a background job with no deadline — so no live call reaches a bound below the
+     * 15-minute ceiling. What this pins is that the production overload computes its bound from the
+     * deadline it was GIVEN, so a future caller with a real budget is honoured instead of being
+     * held for fifteen minutes with its job slot.
+     */
+    @Test
+    public void testAShortCallerDeadlineCapsTheReportLockWait() throws Exception
+    {
+        String projectName = "CappedReadProject";
+        String applicationId = "app-capped-read";
+        Path reportDir = Files.createTempDirectory("edt-mcp-yaxunit-capped");
+        Files.write(reportDir.resolve("junit.xml"), ("<?xml version=\"1.0\"?>"
+            + "<testsuite name=\"All\" tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\">"
+            + "<testcase classname=\"OM_a\" name=\"CappedMarkerTest\"/>"
+            + "</testsuite>").getBytes(StandardCharsets.UTF_8));
+
+        ILaunch finished = mock(ILaunch.class);
+        Mockito.when(finished.isTerminated()).thenReturn(true);
+
+        // Held for far longer than the caller's deadline and far less than the 15-minute ceiling,
+        // so the elapsed time tells the two bounds apart.
+        long holdMs = 6_000L;
+        CountDownLatch held = new CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            LaunchLifecycleUtils.LaunchLock lock =
+                LaunchLifecycleUtils.lockFor(projectName, applicationId);
+            if (!lock.tryAcquire(5_000L, null).acquired())
+            {
+                return;
+            }
+            try
+            {
+                held.countDown();
+                Thread.sleep(holdMs);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            finally
+            {
+                lock.unlock();
+            }
+        }, "test: held launch lock (capped report read)");
+        holder.start();
+        assertTrue("the holder must be provably holding the lock", held.await(5, TimeUnit.SECONDS));
+
+        long startedAt = System.nanoTime();
+        // The PRODUCTION overload, driven with a deadline production never passes: what is proven
+        // is that this call site derives its bound from the deadline, not that any shipped caller
+        // supplies a short one.
+        String result = new RunYaxunitTestsTool().handleExistingLaunch(finished, reportDir,
+            System.currentTimeMillis() + 400L, "capped-run-key", projectName, applicationId);
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+        holder.join(15_000L);
+
+        assertTrue("the caller's 400 ms deadline must cap the wait, not the 15-minute ceiling: "
+            + elapsedMs + " ms", elapsedMs < 3_000L);
+        assertTrue("giving up must be a terminal refusal naming the lock",
+            result.contains("The launch lock for application"));
+        // And it must report the bound it actually used, not the constant it no longer passes.
+        assertFalse("the 15-minute ceiling must not be reported as this call's bound",
+            result.contains("15 minutes"));
+    }
+
+    /**
+     * The rule itself, in isolation: a caller's remaining budget is an upper bound on everything
+     * this call does, and the publish-sized constant is only the ceiling. Production always lands
+     * on the ceiling branch ({@code Long.MAX_VALUE}); the other two branches are for a caller that
+     * one day has a deadline of its own.
+     */
+    @Test
+    public void testReportLockBoundIsTheSmallerOfTheDeadlineAndTheCeiling()
+    {
+        long generous = RunYaxunitTestsTool.reportLockTimeoutMs(
+            System.currentTimeMillis() + LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS + 60_000L);
+        assertEquals("a caller with more time than the ceiling still stops at the ceiling",
+            LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS, generous);
+
+        long short_ = RunYaxunitTestsTool.reportLockTimeoutMs(System.currentTimeMillis() + 30_000L);
+        assertTrue("a 30 s caller must not be given the 15-minute bound: " + short_,
+            short_ <= 30_000L);
+        assertTrue("and it must keep most of its own budget: " + short_, short_ > 25_000L);
+
+        assertEquals("an expired deadline leaves no budget at all", 0L,
+            RunYaxunitTestsTool.reportLockTimeoutMs(System.currentTimeMillis() - 5_000L));
+    }
+
+    /**
+     * #622/C: a launch configuration with no persisted applicationId whose project default cannot
+     * be READ must refuse. The degradation it replaced handed the EMPTY id on, which keys a
+     * DIFFERENT {@code lockFor} mutex than the real application's — so the run stopped serialising
+     * against update_database and the other launches of that infobase.
+     */
+    @Test
+    public void testAnUnresolvedDefaultApplicationRefusesInsteadOfRunningUnserialised()
+    {
+        String message = RunYaxunitTestsTool.unresolvedDefaultApplicationError("P1",
+            "the EDT default-application lookup for project 'P1' did not finish within 30s");
+
+        assertTrue("it must be a structured error", message.contains("\"success\": false")
+            || message.contains("\"success\":false"));
+        assertTrue("it must name the project", message.contains("project 'P1'"));
+        assertTrue("it must carry the read's own diagnosis",
+            message.contains("did not finish within 30s"));
+        assertTrue("it must say no run was started", message.contains("No test run was started"));
+        assertTrue("it must name the cheap way round the wedge",
+            message.contains("Pass applicationId explicitly"));
+        // And the empty id it replaced really is a different mutex - that is what the refusal buys.
+        assertNotSame("an empty application id keys a different lock than the real one",
+            LaunchLifecycleUtils.lockFor("P1", ""),
+            LaunchLifecycleUtils.lockFor("P1", "Infobase.Real"));
+    }
+
+    /**
+     * The same refusal reached through the OTHER way the lookup fails to answer: the manager
+     * raised. {@code deriveLaunchContext} branches on {@code inconclusive()} alone, so a raise that
+     * left it {@code false} ran the whole suite under {@code lockFor(project, "")} — a different
+     * mutex from the one a concurrent {@code update_database} holds. This composes the two halves
+     * exactly as that method does, without needing a workspace.
+     */
+    @Test
+    public void testARaisedDefaultApplicationReachesTheSameRefusal() throws Exception
+    {
+        IProject project = mock(IProject.class);
+        Mockito.when(project.getName()).thenReturn("P1");
+        IApplicationManager manager = mock(IApplicationManager.class);
+        Mockito.when(manager.getDefaultApplication(project))
+            .thenThrow(new ApplicationException("the registered default no longer resolves"));
+
+        LaunchLifecycleUtils.DefaultApplicationLookup lookup =
+            LaunchLifecycleUtils.resolveDefaultApplication(project, "", manager, 30_000L);
+
+        assertTrue("the gate deriveLaunchContext branches on must fire", lookup.inconclusive());
+        String message =
+            RunYaxunitTestsTool.unresolvedDefaultApplicationError("P1", lookup.failure());
+        assertTrue("the refusal must carry what the manager raised: " + message,
+            message.contains("the registered default no longer resolves"));
+        assertTrue("it must say no run was started", message.contains("No test run was started"));
+    }
+
+    /**
+     * An ALREADY-interrupted caller must still take the lock and do the guarded work. The
+     * regression: {@code ReentrantLock.tryLock(long, TimeUnit)} raises on a pending interrupt
+     * before it looks at the lock, so the read returned a fabricated "another operation is holding
+     * the lock" in ~0 ms and skipped both the ACTIVE_LAUNCHES eviction and the report read — on a
+     * FREE lock, with nobody contending. On master these sites were {@code synchronized}, which
+     * ignores the flag entirely.
+     */
+    @Test
+    public void testAnInterruptedCallerStillReadsTheReportOfAFinishedRun() throws Exception
+    {
+        String projectName = "InterruptedReadProject";
+        String applicationId = "app-interrupted-read";
+        Path reportDir = Files.createTempDirectory("edt-mcp-yaxunit-interrupted");
+        Path junitXml = reportDir.resolve("junit.xml");
+        Files.write(junitXml, ("<?xml version=\"1.0\"?>"
+            + "<testsuite name=\"All\" tests=\"1\" failures=\"1\" errors=\"0\" skipped=\"0\">"
+            + "<testcase classname=\"OM_a\" name=\"InterruptedMarkerTest\">"
+            + "<failure message=\"marker\">at line 1</failure>"
+            + "</testcase></testsuite>").getBytes(StandardCharsets.UTF_8));
+
+        ILaunch finished = mock(ILaunch.class);
+        Mockito.when(finished.isTerminated()).thenReturn(true);
+
+        String result;
+        boolean stillInterrupted;
+        // Exactly what BackgroundJobs.cancelWork -> future.cancel(true) leaves on this thread.
+        Thread.currentThread().interrupt();
+        try
+        {
+            result = new RunYaxunitTestsTool().handleExistingLaunch(finished, reportDir,
+                System.currentTimeMillis() + 1_000L, "interrupted-run-key", projectName,
+                applicationId);
+            stillInterrupted = Thread.currentThread().isInterrupted();
+        }
+        finally
+        {
+            Thread.interrupted(); // clear it so later tests are unaffected
+        }
+
+        assertTrue("an interrupted caller must still read the report",
+            result.contains("InterruptedMarkerTest") && result.contains("YAXUnit Test Results"));
+        // The fabricated diagnosis this replaced: a free lock reported as held by somebody else.
+        assertFalse("a free lock must not be reported as contended",
+            result.contains("The launch lock for application"));
+        assertTrue("the caller's interrupt flag must survive the guarded work", stillInterrupted);
+    }
+
+    /**
+     * The refusal path end to end, driven with a short bound so it does not wait out the
+     * production one: a read that really cannot take the lock returns the structured error, leaves
+     * the report on disk, and does not pretend the run is still pending.
+     */
+    @Test
+    public void testAReportReadThatCannotTakeTheLockRefusesAndLeavesTheReport() throws Exception
+    {
+        String projectName = "RefusedReadProject";
+        String applicationId = "app-refused-read";
+        Path reportDir = Files.createTempDirectory("edt-mcp-yaxunit-refused");
+        Path junitXml = reportDir.resolve("junit.xml");
+        Files.write(junitXml, "<testsuite name=\"All\" tests=\"0\"/>".getBytes(
+            StandardCharsets.UTF_8));
+
+        ILaunch finished = mock(ILaunch.class);
+        Mockito.when(finished.isTerminated()).thenReturn(true);
+
+        CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            LaunchLifecycleUtils.LaunchLock lock =
+                LaunchLifecycleUtils.lockFor(projectName, applicationId);
+            if (!lock.tryAcquire(5_000L, null).acquired())
+            {
+                return;
+            }
+            try
+            {
+                held.countDown();
+                release.await(10, TimeUnit.SECONDS);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            finally
+            {
+                lock.unlock();
+            }
+        }, "test: held launch lock (refused read)");
+        holder.start();
+        String result;
+        try
+        {
+            assertTrue("the holder must be provably holding the lock",
+                held.await(5, TimeUnit.SECONDS));
+            result = new RunYaxunitTestsTool().handleExistingLaunch(finished, reportDir,
+                System.currentTimeMillis() + 1_000L, "refused-run-key", projectName, applicationId,
+                200L);
+        }
+        finally
+        {
+            release.countDown();
+            holder.join(10_000L);
+        }
+
+        assertTrue("it must be a structured error", result.contains("\"success\": false")
+            || result.contains("\"success\":false"));
+        assertTrue("it must name the bound the call site gave", result.contains("within 200 ms"));
+        assertFalse("it must not be retryable by the owning job's loop",
+            result.startsWith("**Pending:**"));
+        assertTrue("the report must still be on disk", Files.exists(junitXml));
+    }
+
+    /**
+     * The whole-bound expiry is a terminal error, never a Pending: a Pending would re-enter
+     * runTests and could reach the spawn path that wipes the report.
+     */
+    @Test
+    public void testContendedReportExpiryIsATerminalErrorNamingTheReport()
+    {
+        String message = RunYaxunitTestsTool.reportReadLockRefusal(
+            LaunchLifecycleUtils.Acquisition.CONTENDED,
+            Paths.get("C:", "tmp", "edt-mcp-yaxunit"), "P1", "app-x",
+            LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS);
+
+        assertTrue("it must be a structured error", message.contains("\"success\": false")
+            || message.contains("\"success\":false"));
+        assertTrue("it must name the lock and the bound",
+            message.contains("The launch lock for application 'app-x' in project 'P1' did not "
+                + "become available within 15 minutes"));
+        assertTrue("it must say the run itself finished",
+            message.contains("The run itself finished"));
+        assertTrue("it must name where the report still is",
+            message.contains("The JUnit XML is still on disk at"));
+        // The wrong shape: anything the job loop's isPendingResult would retry on.
+        assertFalse("the expiry must not be retryable by the owning job's loop",
+            message.startsWith("**Pending:**"));
+    }
+
+    /**
+     * The refusal named two ways out as if they were equivalent. They are not: the second
+     * (re-running) reaches the spawn path, whose cleanupTempDir wipes exactly the directory the
+     * first sentence points the reader at.
+     */
+    @Test
+    public void testReportRefusalDoesNotOfferARerunAsAnAlternativeToReadingTheFile()
+    {
+        String message = RunYaxunitTestsTool.reportReadLockRefusal(
+            LaunchLifecycleUtils.Acquisition.CONTENDED,
+            Paths.get("C:", "tmp", "edt-mcp-yaxunit"), "P1", "app-x",
+            LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS);
+
+        assertTrue("the surviving report must be located for the reader",
+            message.contains("The JUnit XML is still on disk at"));
+        assertTrue("a re-run must be named as destructive to this report",
+            message.contains("Do NOT call run_yaxunit_tests again first"));
+        // The wording this replaced, which offered the report-wiping branch as an equal option.
+        assertFalse("a re-run must not be offered as an alternative",
+            message.contains("read it there, or call run_yaxunit_tests again"));
+        // Nor may the file be offered as an MCP recovery: no tool in this surface reads an
+        // arbitrary path, so an unqualified "read it" names a step the caller cannot take.
+        assertTrue("the message must say the file is not reachable through MCP",
+            message.contains("no EDT-MCP tool reads an arbitrary file"));
+    }
+
+    /**
+     * The bound must come from the CALL SITE, not from a constant the message assumes: they agree
+     * today, and nothing enforced that.
+     */
+    @Test
+    public void testReportRefusalReportsTheBoundItWasGivenNotAConstant()
+    {
+        String message = RunYaxunitTestsTool.reportReadLockRefusal(
+            LaunchLifecycleUtils.Acquisition.CONTENDED,
+            Paths.get("C:", "tmp", "edt-mcp-yaxunit"), "P1", "app-x", 250L);
+
+        assertTrue("the supplied bound must be reported", message.contains("within 250 ms"));
+        assertFalse("the production constant must not leak in",
+            message.contains("15 minutes"));
+    }
+
+    /**
+     * An interrupted report read must not blame a rival operation. The contended sentence names
+     * "another operation on that infobase", which nothing established.
+     */
+    @Test
+    public void testAnInterruptedReportReadIsNotReportedAsContention()
+    {
+        String message = RunYaxunitTestsTool.reportReadLockRefusal(
+            LaunchLifecycleUtils.Acquisition.INTERRUPTED,
+            Paths.get("C:", "tmp", "edt-mcp-yaxunit"), "P1", "app-x",
+            LaunchLifecycleUtils.OPERATION_LOCK_TIMEOUT_MS);
+
+        assertTrue("it must say it was interrupted", message.contains("was interrupted"));
+        assertFalse("it must not invent a holder",
+            message.contains("is still holding it"));
+        assertFalse("it must not report a deadline that never elapsed",
+            message.contains("did not become available within"));
+        assertTrue("it must still name where the report is",
+            message.contains("The JUnit XML is still on disk at"));
+    }
+
     @Test
     public void testToolName()
     {
@@ -1875,5 +2320,64 @@ public class RunYaxunitTestsToolTest
             }
         }
         return changed.size() == 1 ? changed.get(0) : changed.toString();
+    }
+
+    // ==================== #622: a wedged validation refuses, it does not hang ==================
+
+    @Test
+    public void testAWedgedApplicationValidationRefusesWithoutStartingARun() throws Exception
+    {
+        IApplicationManager manager = Mockito.mock(IApplicationManager.class);
+        IProject project = Mockito.mock(IProject.class);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        Mockito.when(manager.getApplication(project, "Infobase.Wedged")).thenAnswer(inv -> { //$NON-NLS-1$
+            try
+            {
+                release.await(30, TimeUnit.SECONDS);
+                return java.util.Optional.empty();
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+
+        try
+        {
+            String error = new RunYaxunitTestsTool().validateApplicationExists(manager, project,
+                "Infobase.Wedged", 250L); //$NON-NLS-1$
+
+            assertNotNull("a wedged validation must refuse", error); //$NON-NLS-1$
+            assertTrue("the refusal must carry the deadline diagnosis", //$NON-NLS-1$
+                error.contains("the EDT application lookup for application 'Infobase.Wedged'")); //$NON-NLS-1$
+            assertTrue("the refusal must say no run was started", //$NON-NLS-1$
+                error.contains("No test run was started")); //$NON-NLS-1$
+            assertFalse("an unread lookup must not be reported as a measured not-found", //$NON-NLS-1$
+                error.contains("Application not found")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testAConcludedEmptyValidationKeepsTheNotFoundWording() throws Exception
+    {
+        IApplicationManager manager = Mockito.mock(IApplicationManager.class);
+        IProject project = Mockito.mock(IProject.class);
+        Mockito.when(manager.getApplication(project, "Infobase.Missing")) //$NON-NLS-1$
+            .thenReturn(java.util.Optional.empty());
+
+        String error = new RunYaxunitTestsTool().validateApplicationExists(manager, project,
+            "Infobase.Missing", 60_000L); //$NON-NLS-1$
+
+        assertNotNull(error);
+        assertTrue("a measured absence must keep the not-found wording", //$NON-NLS-1$
+            error.contains("Application not found: Infobase.Missing")); //$NON-NLS-1$
+        assertFalse("a measured absence must not be dressed up as a deadline", //$NON-NLS-1$
+            error.contains("did not finish within")); //$NON-NLS-1$
     }
 }

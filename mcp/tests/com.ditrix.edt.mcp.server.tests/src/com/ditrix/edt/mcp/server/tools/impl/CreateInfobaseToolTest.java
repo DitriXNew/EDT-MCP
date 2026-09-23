@@ -1066,6 +1066,93 @@ public class CreateInfobaseToolTest
             message.contains("EDT error log")); //$NON-NLS-1$
     }
 
+    /**
+     * #622/M: the read-back's listing is NOT a passive read. {@code getApplications} initialises
+     * every application it reaches, and one with no debug port yet gets a port assigned by a scan
+     * that binds sockets and then flushes the preference store — which is exactly the state a
+     * freshly created application is in. So an ABANDONED poll can still change this project's
+     * applications after {@code create_infobase} has answered, and the message must not let the
+     * caller believe nothing happened.
+     */
+    @Test
+    public void testAnExpiredReadBackSaysTheStateMayStillChange()
+    {
+        String reason = CreateInfobaseTool.readBackDeadlineReason(
+            "the EDT application list for project 'P' did not finish within 30s"); //$NON-NLS-1$
+
+        assertTrue("it must carry the read's own diagnosis", //$NON-NLS-1$
+            reason.contains("did not finish within 30s")); //$NON-NLS-1$
+        assertTrue("it must say the applications may still be changed", //$NON-NLS-1$
+            reason.contains("MAY STILL BE CHANGED")); //$NON-NLS-1$
+        assertTrue("it must name the mutation, not just the possibility of one", //$NON-NLS-1$
+            reason.contains("assigns a debug port")); //$NON-NLS-1$
+        assertTrue("it must name the re-read", reason.contains("get_applications")); //$NON-NLS-1$
+        // The claim this replaced: a deadline reported as one more read that established nothing,
+        // which reads as "and therefore changed nothing".
+        assertFalse("an expired listing must not promise an EDT log entry instead", //$NON-NLS-1$
+            reason.contains("the failure is in the EDT error log")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAReadBackInterruptedMidFlightIsNotBlamedOnAReadFailure() throws Exception
+    {
+        // #622 bounded the read-back, and a bounded wait has an outcome the unbounded call did not:
+        // the WAIT was interrupted. Nothing failed and nothing was logged, so it must produce the
+        // "budget not spent" message, not the one that sends the reader to the EDT error log.
+        IProject project = mock(IProject.class);
+        IApplicationManager mgr = mock(IApplicationManager.class);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        when(mgr.getApplications(project)).thenAnswer(invocation -> {
+            entered.countDown();
+            try
+            {
+                release.await(60, TimeUnit.SECONDS);
+                return Collections.emptyList();
+            }
+            finally
+            {
+                finished.countDown();
+            }
+        });
+        Thread waiter = Thread.currentThread();
+        Thread interrupter = new Thread(() -> {
+            try
+            {
+                entered.await(5, TimeUnit.SECONDS);
+                waiter.interrupt();
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+        }, "read-back-interrupter"); //$NON-NLS-1$
+
+        JsonObject json;
+        try
+        {
+            interrupter.start();
+            json = readBackResult(mgr, project, false, false, null);
+        }
+        finally
+        {
+            Thread.interrupted(); // clear the flag so later tests are unaffected
+            release.countDown();
+            interrupter.join(5_000L);
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+        }
+
+        assertTrue("an interrupted read-back establishes no absence", //$NON-NLS-1$
+            json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(json.has("boundToProject")); //$NON-NLS-1$
+        String message = json.get("message").getAsString(); //$NON-NLS-1$
+        assertTrue("an interrupted WAIT must name the real reason", //$NON-NLS-1$
+            message.contains("interrupted before its budget was spent")); //$NON-NLS-1$
+        assertFalse("nothing failed, so do not promise an EDT log entry", //$NON-NLS-1$
+            message.contains("EDT error log")); //$NON-NLS-1$
+    }
+
     @Test
     public void testUnreadableApplicationIdentityIsUnverifiedNotAbsence() throws Exception
     {

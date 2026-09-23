@@ -227,6 +227,19 @@ public final class InfobaseAuthDialogSuppressor
         lastActivityEndMillis = System.currentTimeMillis();
     }
 
+    /**
+     * How many operations currently hold the suppression armed — the {@link #IN_FLIGHT} counter.
+     *
+     * <p>Readable so a guard that must OUTLIVE its caller's bounded wait (a bounded read whose job
+     * keeps running past the deadline) can be pinned by a test rather than asserted in prose.
+     *
+     * @return the current in-flight count, never negative
+     */
+    public static int inFlightCount()
+    {
+        return IN_FLIGHT.get();
+    }
+
     /** Returns the number of access-settings dialogs this process has auto-cancelled. */
     public static long accessSettingsAutoCancelCount()
     {
