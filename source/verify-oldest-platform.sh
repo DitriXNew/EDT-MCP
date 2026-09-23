@@ -15,7 +15,19 @@
 # reproducible from an installation on disk, not from a URL.
 #
 # Usage:
-#   bash source/verify-oldest-platform.sh /path/to/1c-edt-<oldest>-x86_64 [--java-home DIR] [--maven-home DIR]
+#   bash source/verify-oldest-platform.sh /path/to/1c-edt-<older>-x86_64 \
+#        [--java-home DIR] [--maven-home DIR] [--ee JavaSE-XX] [--keep-svg]
+#
+# TWO GENERATIONS need different settings, because "older" is not one platform:
+#   2026.1.x  (Eclipse 4.30 / Java 17) -> the defaults: resolve at JavaSE-17 and DROP the
+#             org.eclipse.swt.svg requirement, which that install does not have.
+#   2026.2.0  (Eclipse 4.38 / Java 25) -> `--ee JavaSE-25 --keep-svg`. Its bundles REQUIRE
+#             osgi.ee 25, so resolving at 17 fails with "Missing requirement ... osgi.ee ...
+#             version=25" - a convincing failure that says nothing about our linkage. And it
+#             ships swt.svg, so there is nothing to drop.
+# 2026.2.0 matters even though it is not the oldest: 1C deletes the previous service release
+# from its channel, so once CI is re-pinned forward this script is the only thing that can still
+# prove the single artifact loads there.
 #
 # The working tree is restored on every exit path; the script fails loudly if it cannot restore.
 
@@ -24,18 +36,22 @@ set -u
 INSTALL=""
 JAVA_HOME_ARG=""
 MAVEN_HOME_ARG=""
+EE_TARGET="JavaSE-17"
+DROP_SVG=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --java-home) JAVA_HOME_ARG="$2"; shift 2 ;;
     --maven-home) MAVEN_HOME_ARG="$2"; shift 2 ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    --ee) EE_TARGET="$2"; shift 2 ;;
+    --keep-svg) DROP_SVG=0; shift ;;
+    -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
     *) INSTALL="$1"; shift ;;
   esac
 done
 
 if [ -z "$INSTALL" ]; then
-  echo "usage: $0 <edt-install-dir> [--java-home DIR] [--maven-home DIR]" >&2
+  echo "usage: $0 <edt-install-dir> [--java-home DIR] [--maven-home DIR] [--ee JavaSE-XX] [--keep-svg]" >&2
   exit 2
 fi
 if [ ! -d "$INSTALL/plugins" ]; then
@@ -87,28 +103,37 @@ cat > "$TARGET" <<XML
 </target>
 XML
 
-# Two things in the BOM belong to the NEWER platform and must not decide this compile:
-#   - org.eclipse.swt.svg is an Eclipse 4.38 bundle, pulled in only to assemble the test runtime;
-#   - the resolution execution environment is the newer platform's JavaSE-25.
-awk '
+# Two things in the BOM describe the NEWEST platform and must not decide this compile:
+#   - org.eclipse.swt.svg, an Eclipse 4.38 bundle pulled in only to assemble the test runtime.
+#     An install that predates 4.38 does not have it, so the requirement is dropped; a 2026.2.x
+#     install DOES have it, so --keep-svg keeps it and the compile stays honest.
+#   - the resolution execution environment. Resolving at the WRONG EE does not produce a weaker
+#     check, it produces a meaningless one: too low and the install's own bundles fail to
+#     resolve on osgi.ee, which reads exactly like a linkage failure of ours.
+awk -v ee="$EE_TARGET" -v dropsvg="$DROP_SVG" '
   /<requirement>/ { buffering = 1; buffer = ""; }
   buffering { buffer = buffer $0 "\n";
               if ($0 ~ /<\/requirement>/)
               {
                   buffering = 0;
-                  if (buffer !~ /org\.eclipse\.swt\.svg/) { printf "%s", buffer; }
+                  if (dropsvg == 0 || buffer !~ /org\.eclipse\.swt\.svg/) { printf "%s", buffer; }
               }
               next; }
   { sub(/<executionEnvironment>JavaSE-25<\/executionEnvironment>/,
-        "<executionEnvironment>JavaSE-17</executionEnvironment>"); print; }
+        "<executionEnvironment>" ee "</executionEnvironment>"); print; }
 ' "$BACKUP/pom.xml" > "$BOM"
 
-grep -q "<executionEnvironment>JavaSE-17</executionEnvironment>" "$BOM" \
-  || { echo "the BOM patch did not replace the execution environment" >&2; exit 3; }
-if grep -q "org.eclipse.swt.svg" "$BOM"; then
+grep -q "<executionEnvironment>$EE_TARGET</executionEnvironment>" "$BOM" \
+  || { echo "the BOM patch did not set the execution environment to $EE_TARGET" >&2; exit 3; }
+if [ "$DROP_SVG" -eq 1 ] && grep -q "org.eclipse.swt.svg" "$BOM"; then
   echo "the BOM patch did not drop the newer platform's SVG requirement" >&2
   exit 3
 fi
+if [ "$DROP_SVG" -eq 0 ] && ! grep -q "org.eclipse.swt.svg" "$BOM"; then
+  echo "--keep-svg was asked for but the BOM carries no SVG requirement to keep" >&2
+  exit 3
+fi
+echo "-- resolving at $EE_TARGET; SVG requirement $([ "$DROP_SVG" -eq 1 ] && echo dropped || echo kept)"
 
 [ -n "$JAVA_HOME_ARG" ] && export JAVA_HOME="$JAVA_HOME_ARG"
 MVN="mvn"
