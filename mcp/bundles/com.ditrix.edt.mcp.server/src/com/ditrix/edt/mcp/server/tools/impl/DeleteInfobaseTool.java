@@ -1629,10 +1629,9 @@ public class DeleteInfobaseTool implements IMcpTool
 
     /**
      * What one project establishes: it serves {@code target}, it does not, or it cannot be read.
-     * The deletion target {@code excludedApp} is skipped by EQUALITY, which EDT implements by value
-     * (server + module, or the infobase reference) - a same-named twin shares only the id and is
-     * still judged, and a target missing from this snapshot excludes nothing. A null list is
-     * unread, not empty. A failure anywhere in judging this project is ITS answer.
+     * ONE application equal to the deletion target {@code excludedApp} is skipped (see
+     * {@link #withoutOneEqual}). A null list is unread, not empty. A failure anywhere in judging
+     * this project is ITS answer.
      */
     static SharedDatabase projectShares(IApplicationManager appManager, IProject other,
             IApplication excludedApp, Path target, Path dbDir)
@@ -1646,15 +1645,7 @@ public class DeleteInfobaseTool implements IMcpTool
                     + "' returned no application list — it may share '" + dbDir + "'", null); //$NON-NLS-1$ //$NON-NLS-2$
                 return SharedDatabase.UNKNOWN;
             }
-            List<IApplication> candidates = new ArrayList<>();
-            for (IApplication app : apps)
-            {
-                if (excludedApp == null || !excludedApp.equals(app))
-                {
-                    candidates.add(app);
-                }
-            }
-            return applicationsServeDir(candidates, target, other, dbDir);
+            return applicationsServeDir(withoutOneEqual(apps, excludedApp), target, other, dbDir);
         }
         catch (Exception e)
         {
@@ -1662,6 +1653,32 @@ public class DeleteInfobaseTool implements IMcpTool
                 + other.getName() + "' for a shared infobase", e); //$NON-NLS-1$
             return SharedDatabase.UNKNOWN;
         }
+    }
+
+    /**
+     * {@code items} without the FIRST element equal to {@code excluded}, every later equal one kept.
+     * EDT's application equality is by value - server + module, or the infobase reference without
+     * the name - so a same-named twin never matches, while a second association of the same
+     * infobase does and must still be judged. A target absent from the snapshot removes nothing.
+     *
+     * @param items the snapshot to filter
+     * @param excluded the element to drop once, or {@code null} for none
+     * @return a new list
+     */
+    static <T> List<T> withoutOneEqual(List<T> items, Object excluded)
+    {
+        List<T> kept = new ArrayList<>();
+        boolean skipped = excluded == null;
+        for (T item : items)
+        {
+            if (!skipped && excluded.equals(item))
+            {
+                skipped = true;
+                continue;
+            }
+            kept.add(item);
+        }
+        return kept;
     }
 
     /**

@@ -560,6 +560,16 @@ public class DeleteInfobaseToolTest
     }
 
     @Test
+    public void testOnlyOneEqualApplicationIsExcluded()
+    {
+        // Value equality, as EDT's applications have: two associations of one infobase are equal.
+        assertEquals(List.of("b", "a"), DeleteInfobaseTool.withoutOneEqual(List.of("a", "b", "a"), "a")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        assertEquals("a target absent from the snapshot removes nothing", //$NON-NLS-1$
+            List.of("b"), DeleteInfobaseTool.withoutOneEqual(List.of("b"), "a")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(List.of("a"), DeleteInfobaseTool.withoutOneEqual(List.of("a"), null)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testANullApplicationListIsUnreadNotEmpty() throws Exception
     {
         Path target = Paths.get("C:/ib/Shared").toAbsolutePath().normalize(); //$NON-NLS-1$
