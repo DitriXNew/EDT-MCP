@@ -1987,7 +1987,17 @@ public final class PredefinedWriter
                 return "'code' must be a JSON number for " + ownerKind + " '" + ownerName //$NON-NLS-1$ //$NON-NLS-2$
                     + "' (codeType=Number); got '" + code + "'."; //$NON-NLS-1$ //$NON-NLS-2$
             }
-            BigDecimal bd = code.getAsBigDecimal();
+            BigDecimal bd;
+            try
+            {
+                bd = code.getAsBigDecimal();
+            }
+            catch (NumberFormatException e)
+            {
+                // Valid JSON, but its exponent is outside BigDecimal's int scale (e.g. 1e2147483648).
+                return "'code' " + code + " is out of range; a numeric " + ownerKind + " code must be a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "non-negative integer."; //$NON-NLS-1$
+            }
             if (bd.signum() < 0)
             {
                 return "'code' " + bd + " is negative; a numeric " + ownerKind + " code must be a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -2151,9 +2161,13 @@ public final class PredefinedWriter
      * (create_metadata / modify_metadata) supplies it - mirroring how the generic attribute-type path
      * (e.g. {@code ModifyMetadataTool#prepareTypeDescription}) resolves the same context.
      *
+     * <p>A caller REFUSAL is returned; a missing platform context is RAISED unmarked, because the
+     * calling tool marks every returned string as a refusal and a server failure must keep its ERROR.
+     *
      * @return {@code null} on success, or a ready, actionable error message
+     * @throws IllegalStateException when the platform context needed to build the type is missing
      */
-    private static String applyValueType(EObject owner, PredefinedItem item, ItemProps props)
+    static String applyValueType(EObject owner, PredefinedItem item, ItemProps props)
     {
         if (!(owner instanceof ChartOfCharacteristicTypes)
             || !(item instanceof ChartOfCharacteristicTypesPredefinedItem cctItem))
@@ -2170,14 +2184,20 @@ public final class PredefinedWriter
         }
         if (props.version == null)
         {
-            return "Cannot resolve the platform version needed to build 'valueType'."; //$NON-NLS-1$
+            throw new IllegalStateException(
+                "Cannot resolve the platform version needed to build 'valueType'."); //$NON-NLS-1$
         }
         if (props.config == null)
         {
-            return "Cannot build 'valueType': the configuration context is unavailable."; //$NON-NLS-1$
+            throw new IllegalStateException(
+                "Cannot build 'valueType': the configuration context is unavailable."); //$NON-NLS-1$
         }
         MetadataTypeBuilder.Result result =
             MetadataTypeBuilder.build(valueType, props.config, props.version, props.isExtensionProject);
+        if (result.platformFailure)
+        {
+            throw new IllegalStateException("Cannot build 'valueType': " + result.error); //$NON-NLS-1$
+        }
         if (result.error != null)
         {
             return "Invalid 'valueType': " + result.error; //$NON-NLS-1$

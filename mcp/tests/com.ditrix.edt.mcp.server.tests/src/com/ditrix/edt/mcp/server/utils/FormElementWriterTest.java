@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.eclipse.core.runtime.IStatus;
 import org.eclipse.emf.common.notify.Notification;
 import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.common.util.TreeIterator;
@@ -644,6 +645,10 @@ public class FormElementWriterTest
             assertNotNull(e.getMessage());
             assertTrue("message should mention '" + fragment + "' but was: " + e.getMessage(), //$NON-NLS-1$ //$NON-NLS-2$
                 e.getMessage().contains(fragment));
+            // A malformed 'position' is the CALLER's input being rejected, so it must be MARKED:
+            // unmarked, an ordinary bad argument keeps logging ERROR with a stack (issue #593).
+            assertEquals("a position refusal must be marked, or it logs as a server error", //$NON-NLS-1$
+                e.getMessage(), Refusals.messageOf(e));
         }
     }
 
@@ -1178,6 +1183,93 @@ public class FormElementWriterTest
         assertNull(FormElementWriter.resolveEventCallType(ehExt, "")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testResolveEventCallTypeRaisesOnAModelWithoutAnEnumCallType()
+    {
+        // A model without the enum is the platform's shape, never a bad token, so it must not be refused.
+        EClass bare = EcoreFactory.eINSTANCE.createEClass();
+        bare.setName("EventHandlerExtension"); //$NON-NLS-1$
+        try
+        {
+            FormElementWriter.resolveEventCallType(bare, "Before"); //$NON-NLS-1$
+            fail("a model lacking callType must raise, not answer null"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("callType")); //$NON-NLS-1$
+        }
+    }
+
+    /** A synthetic element class named {@code name}, optionally carrying a many-valued handlers list. */
+    private static EObject syntheticElement(String name, boolean withHandlers)
+    {
+        EPackage pkg = EcoreFactory.eINSTANCE.createEPackage();
+        pkg.setName("synthetic"); //$NON-NLS-1$
+        pkg.setNsURI("http://synthetic/" + name); //$NON-NLS-1$
+        EClass cls = EcoreFactory.eINSTANCE.createEClass();
+        cls.setName(name);
+        if (withHandlers)
+        {
+            EReference handlers = EcoreFactory.eINSTANCE.createEReference();
+            handlers.setName("handlers"); //$NON-NLS-1$
+            handlers.setEType(EcorePackage.Literals.EOBJECT);
+            handlers.setContainment(true);
+            handlers.setUpperBound(-1);
+            cls.getEStructuralFeatures().add(handlers);
+        }
+        pkg.getEClassifiers().add(cls);
+        return pkg.getEFactoryInstance().create(cls);
+    }
+
+    @Test
+    public void testCreateHandlerOnAnElementPublishingNoEventsIsARefusal()
+    {
+        // Every mapped type resolved (there is none) and none publishes an event: the caller's choice.
+        String err = FormElementWriter.createHandler(syntheticElement("NoEventsItem", true), "OnClick", //$NON-NLS-1$ //$NON-NLS-2$
+            "Proc", Version.LATEST, "en", null, null); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull(err);
+        assertTrue(err, err.contains("publishes no events")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateHandlerOnAStaleExtInfoNeverRefusesTheCaller()
+    {
+        // A Pages group missing its required node publishes an unknown share of its events, so
+        // neither "no events" nor "not valid" may be put on the caller.
+        for (String ext : new String[] { null, "UsualGroupExtInfo" }) //$NON-NLS-1$
+        {
+            try
+            {
+                String err = FormElementWriter.createHandler(typedElement("FormGroup", "Pages", ext, true), //$NON-NLS-1$ //$NON-NLS-2$
+                    "NoSuchEvent", "Proc", Version.LATEST, "en", null, null); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                fail("a stale ext-info (" + ext + ") must raise, not refuse: " + err); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            catch (IllegalStateException expected)
+            {
+                // the model's state, logged as a failure
+            }
+        }
+    }
+
+    @Test
+    public void testCreateHandlerOnAFormRootWithoutAHandlerListRaises()
+    {
+        // A form ROOT always holds handlers, so a missing list is the model's shape, not a refusal.
+        try
+        {
+            FormElementWriter.createHandler(syntheticElement("Form", false), "OnOpen", "Proc", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                Version.LATEST, "en", null, null); //$NON-NLS-1$
+            fail("a form root without handlers must raise"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("Form.handlers")); //$NON-NLS-1$
+        }
+        // An ITEM without handlers is still the caller's refusal.
+        assertTrue(FormElementWriter.createHandler(syntheticElement("SomeDecoration", false), "OnClick", //$NON-NLS-1$ //$NON-NLS-2$
+            "Proc", Version.LATEST, "en", null, null).contains("cannot hold event handlers")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     /**
      * A self-contained dynamic EMF model shaped like the form metamodel's handler containment: a
      * {@code FormField} container with a {@code handlers} containment list typed to base
@@ -1375,14 +1467,30 @@ public class FormElementWriterTest
     }
 
     @Test
-    public void testBindEventHandlerWithoutExtensionTypeErrors()
+    public void testBindEventHandlerWithoutExtensionTypeRaisesAnUnmarkedModelFailure()
     {
         // A form model lacking the EventHandlerExtension type cannot host extension interception.
+        // That is one of OUR constants failing to resolve - PLATFORM DRIFT, not caller input - so it
+        // is RAISED, not returned: returning it would send it down the same string channel as the
+        // caller refusals, where the calling tool marks everything it gets back and the drift would
+        // be logged at INFO with no stack. Issue #593; this is the TextSearcher failure class.
         HandlerModel m = newHandlerModel(false);
-        String err = FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
-            "OnChange", "x", "After", new String[1]); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        assertNotNull(err);
-        assertTrue(err.contains("EventHandlerExtension")); //$NON-NLS-1$
+        try
+        {
+            FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+                "OnChange", "x", "After", new String[1]); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            fail("a model that cannot represent an extension handler must raise, not answer"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertTrue("the caller's message is unchanged", //$NON-NLS-1$
+                e.getMessage().contains("EventHandlerExtension")); //$NON-NLS-1$
+            assertNull("a MODEL failure must NOT be marked as a refusal, or it goes quiet", //$NON-NLS-1$
+                Refusals.messageOf(e));
+            assertEquals("...so it keeps ERROR", //$NON-NLS-1$
+                IStatus.ERROR, Refusals.statusFor("ctx", e).getSeverity()); //$NON-NLS-1$
+            assertSame("...and its stack", e, Refusals.statusFor("ctx", e).getException()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
         // The base path still works on the same model.
         assertNull(FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
             "OnChange", "x", null, new String[1])); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1619,6 +1727,12 @@ public class FormElementWriterTest
      */
     private static EObject typedElement(String eClassName, String typeLiteral, String extClassName)
     {
+        return typedElement(eClassName, typeLiteral, extClassName, false);
+    }
+
+    private static EObject typedElement(String eClassName, String typeLiteral, String extClassName,
+        boolean withHandlers)
+    {
         EPackage pack = EcoreFactory.eINSTANCE.createEPackage();
         pack.setName("probe"); //$NON-NLS-1$
         EEnum typeEnum = EcoreFactory.eINSTANCE.createEEnum();
@@ -1648,6 +1762,15 @@ public class FormElementWriterTest
         extInfo.setEType(extClass != null ? extClass : EcorePackage.Literals.EOBJECT);
         extInfo.setContainment(true);
         eClass.getEStructuralFeatures().add(extInfo);
+        if (withHandlers)
+        {
+            EReference handlers = EcoreFactory.eINSTANCE.createEReference();
+            handlers.setName("handlers"); //$NON-NLS-1$
+            handlers.setEType(EcorePackage.Literals.EOBJECT);
+            handlers.setContainment(true);
+            handlers.setUpperBound(-1);
+            eClass.getEStructuralFeatures().add(handlers);
+        }
         EObject element = pack.getEFactoryInstance().create(eClass);
         element.eSet(type, literal.getInstance());
         if (extClass != null)

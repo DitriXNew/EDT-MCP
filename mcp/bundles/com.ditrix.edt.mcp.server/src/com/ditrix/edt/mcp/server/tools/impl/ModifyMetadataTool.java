@@ -81,6 +81,7 @@ import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.McoreValueListBuilder;
@@ -868,14 +869,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 PredefinedWriter.WriteResult result = PredefinedWriter.modify(txOwner, itemName, props);
                 if (result.isError())
                 {
-                    throw new IllegalStateException(result.error);
+                    // A refusal: the message is OUR validation's, so mark it and keep the log quiet.
+                    throw Refusals.state(result.error);
                 }
                 return null;
             });
         }
         catch (Exception e)
         {
-            Activator.logError("Error modifying predefined item", e); //$NON-NLS-1$
+            Refusals.log("Error modifying predefined item", e); //$NON-NLS-1$
             return ToolResult.error("Failed to modify: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
@@ -4659,7 +4661,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return validationJson;
         }
-        Activator.logError("Error moving form item", e); //$NON-NLS-1$
+        Refusals.log("Error moving form item", e); //$NON-NLS-1$
         return ToolResult.error("Failed to move form item: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
     }
 

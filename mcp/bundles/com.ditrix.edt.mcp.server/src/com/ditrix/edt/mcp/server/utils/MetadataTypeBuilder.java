@@ -13,6 +13,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
@@ -234,11 +235,14 @@ public final class MetadataTypeBuilder
         public final TypeDescription typeDescription;
         /** The error message, or {@code null} on success. */
         public final String error;
+        /** {@code true} when {@link #error} is a platform/server failure, not a problem with the spec. */
+        public final boolean platformFailure;
 
-        private Result(TypeDescription typeDescription, String error)
+        private Result(TypeDescription typeDescription, String error, boolean platformFailure)
         {
             this.typeDescription = typeDescription;
             this.error = error;
+            this.platformFailure = platformFailure;
         }
     }
 
@@ -249,7 +253,19 @@ public final class MetadataTypeBuilder
 
     private static Result error(String message)
     {
-        return new Result(null, message);
+        return new Result(null, message, false);
+    }
+
+    private static Result platformError(String message)
+    {
+        return new Result(null, message, true);
+    }
+
+    /** Classifies an {@link #addType} error: the provider failing a known kind is the platform's. */
+    static Result typeError(String message)
+    {
+        return message.startsWith(PLATFORM_TYPE_NOT_CREATED) || PLATFORM_CHAIN_FAILURE.matcher(message).lookingAt()
+            ? platformError(message) : error(message);
     }
 
     /**
@@ -637,7 +653,7 @@ public final class MetadataTypeBuilder
             McorePackage.Literals.TYPE_ITEM, version);
         if (provider == null)
         {
-            return error("Platform type provider is not available for this configuration version."); //$NON-NLS-1$
+            return platformError("Platform type provider is not available for this configuration version."); //$NON-NLS-1$
         }
 
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
@@ -651,10 +667,10 @@ public final class MetadataTypeBuilder
                 isExtensionProject, typeTarget);
             if (err != null)
             {
-                return error(err);
+                return typeError(err);
             }
         }
-        return new Result(td, null);
+        return new Result(td, null, false);
     }
 
     /** The platform pseudo-type a form list attribute carries as its value type. */
@@ -1056,7 +1072,7 @@ public final class MetadataTypeBuilder
             EObject proxy = provider.createProxy(primitive);
             if (!(proxy instanceof TypeItem))
             {
-                return "Could not create the platform type '" + primitive + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+                return primitiveNotCreated(primitive);
             }
             td.getTypes().add((TypeItem)proxy);
             applyQualifiers(td, item, primitive);
@@ -1212,8 +1228,8 @@ public final class MetadataTypeBuilder
         String objectFqn = producedKind.englishMetadataType + "." + target.getName(); //$NON-NLS-1$
         if (producedTypes == null || producedTypes.eClass() == null)
         {
-            return "Object '" + objectFqn + "' resolved, but its produced types are not available " //$NON-NLS-1$ //$NON-NLS-2$
-                + "yet. Wait for project indexing to finish, run revalidate_objects for the object " //$NON-NLS-1$
+            return "Object '" + objectFqn + "' " + PRODUCED_TYPES_UNAVAILABLE //$NON-NLS-1$ //$NON-NLS-2$
+                + " Wait for project indexing to finish, run revalidate_objects for the object " //$NON-NLS-1$
                 + "if needed, and retry."; //$NON-NLS-1$
         }
 
@@ -1240,7 +1256,7 @@ public final class MetadataTypeBuilder
         {
             return "Object '" + objectFqn + "' offers produced type '" //$NON-NLS-1$ //$NON-NLS-2$
                 + producedKind.englishMetadataType + producedKind.producedSuffix + "', but its " //$NON-NLS-1$
-                + "producedTypes/" + producedKind.featureName + "/type chain is not available yet. " //$NON-NLS-1$ //$NON-NLS-2$
+                + "producedTypes/" + producedKind.featureName + PRODUCED_TYPE_CHAIN_UNAVAILABLE + " " //$NON-NLS-1$ //$NON-NLS-2$
                 + "Wait for project indexing to finish, run revalidate_objects for the object if " //$NON-NLS-1$
                 + "needed, and retry. Available produced types: " //$NON-NLS-1$
                 + availableProducedTypeKinds(producedTypes, producedKind.englishMetadataType) + "."; //$NON-NLS-1$
@@ -1339,8 +1355,7 @@ public final class MetadataTypeBuilder
 
     private static String unavailableDefinedTypeChain(String requested)
     {
-        return "DefinedType '" + requested //$NON-NLS-1$
-            + "' resolved, but its producedTypes/containerType/typeSet chain is not available yet. " //$NON-NLS-1$
+        return "DefinedType '" + requested + "' resolved, but " + DEFINED_TYPE_CHAIN_UNAVAILABLE + " " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + "Wait for project indexing to finish, run revalidate_objects for the DefinedType if " //$NON-NLS-1$
             + "needed, and retry."; //$NON-NLS-1$
     }
@@ -1494,8 +1509,41 @@ public final class MetadataTypeBuilder
                 return null;
             }
         }
-        return "Could not create the platform type. Tried: " + String.join(", ", candidates) + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return PLATFORM_TYPE_NOT_CREATED + " Tried: " + String.join(", ", candidates) + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
+
+    /**
+     * Opens the error for a KNOWN kind the present provider built under none of its names - a
+     * platform failure, not the spec's, so {@link #build} marks it {@code platformFailure}.
+     */
+    private static final String PLATFORM_TYPE_NOT_CREATED = "Could not create the platform type."; //$NON-NLS-1$
+
+    /** A known primitive the provider did not build - opened like every other platform-type failure. */
+    static String primitiveNotCreated(String primitive)
+    {
+        return PLATFORM_TYPE_NOT_CREATED + " Tried: " + primitive + "."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Marks a resolved object whose produced types the platform did not yield - not the spec's fault. */
+    private static final String PRODUCED_TYPES_UNAVAILABLE =
+        "resolved, but its produced types are not available yet."; //$NON-NLS-1$
+
+    /** Marks a produced type whose model type chain the platform did not yield - not the spec's fault. */
+    private static final String PRODUCED_TYPE_CHAIN_UNAVAILABLE = "/type chain is not available yet."; //$NON-NLS-1$
+
+    /** Marks an existing DefinedType whose produced-type chain the platform did not yield - not the spec's fault. */
+    private static final String DEFINED_TYPE_CHAIN_UNAVAILABLE =
+        "its producedTypes/containerType/typeSet chain is not available yet."; //$NON-NLS-1$
+
+    /**
+     * The three chain failures, anchored at the START of the whole template: a caller's kind echoed
+     * inside a refusal must not read as a platform failure. The quoted names are model-derived.
+     */
+    private static final Pattern PLATFORM_CHAIN_FAILURE = Pattern.compile("^(?:" //$NON-NLS-1$
+        + "Object '[^']*' " + Pattern.quote(PRODUCED_TYPES_UNAVAILABLE) //$NON-NLS-1$
+        + "|Object '[^']*' offers produced type '[^']*', but its producedTypes/[A-Za-z]+" //$NON-NLS-1$
+        + Pattern.quote(PRODUCED_TYPE_CHAIN_UNAVAILABLE)
+        + "|DefinedType '[^']*' resolved, but " + Pattern.quote(DEFINED_TYPE_CHAIN_UNAVAILABLE) + ")"); //$NON-NLS-1$ //$NON-NLS-2$
 
     /**
      * Creates the proxy for {@code name} and returns it as a {@link TypeItem}, or {@code null} on any
