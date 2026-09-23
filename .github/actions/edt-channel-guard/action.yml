@@ -1,0 +1,27 @@
+name: EDT channel guard
+description: >
+  Runs edt-pin.sh for the EDT p2 channel the target platform resolves from, BEFORE Maven does, so an
+  inconsistent or drifted channel fails with its real reason instead of an opaque Tycho error. Exposes
+  the served build so the Tycho cache key tracks it.
+
+outputs:
+  edt-build:
+    description: The com._1c.g5.v8.dt.core build qualifier the channel serves (fold it into cache keys).
+    value: ${{ steps.guard.outputs.edt-build }}
+
+runs:
+  using: composite
+  steps:
+    - id: guard
+      shell: bash
+      run: |
+        # The channel is whatever the target platform points at, so the two cannot disagree.
+        TARGET="$GITHUB_WORKSPACE/mcp/targets/default/default.target"
+        EDT_P2="$(grep -oE 'https://edt\.1c\.ru/downloads/releases/ruby/[^/"]+/' "$TARGET" | head -n 1)"
+        if [ -z "$EDT_P2" ]; then
+          echo "::error::edt-channel-guard: no EDT p2 location found in $TARGET"
+          exit 1
+        fi
+        CHANNEL="$(basename "$EDT_P2")"
+        EDT_BUILD="$(bash "$GITHUB_WORKSPACE/.github/scripts/edt-pin.sh" "$CHANNEL" "$EDT_P2")"
+        echo "edt-build=$EDT_BUILD" >> "$GITHUB_OUTPUT"
