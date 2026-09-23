@@ -167,7 +167,7 @@ Adding is IDEMPOTENT: attaching a member already listed does not duplicate it. F
 A **SpreadsheetDocument** template (a "Табличный документ" / print form / макет - the layout used for invoices, acts and printed reports) has its cell content authored through the `template` payload instead of `properties`, on a template FQN. Create the empty template OBJECT first with `create_metadata` (`CommonTemplate.<Name>` for a shared template, or `<Type>.<Owner>.Template.<Name>` for an object-owned one - e.g. `DataProcessor.Invoices.Template.Printout`); it is a SpreadsheetDocument template by default. Then fill its content here. Only a SpreadsheetDocument-typed template can be authored (a text / binary-data / DCS / graphical template is refused with its actual type). A `template` payload cannot be combined with `properties`, a membership `content` payload or a Role payload in the same call; a `template` payload on a non-template FQN is a clean, actionable error. The change goes through a BM write transaction and force-exports the template's `.mxlx` content to disk once (no manual `clean_project`). Render the result to a PNG with `get_template_screenshot` to visually verify it.
 
 The `template` object takes any of these arrays (all optional; omit an array to leave that aspect untouched):
-- `cells` - `[{row, col, text?, parameter?, bold?, fontSize?, hAlign?, vAlign?, wrap?}]`:
+- `cells` - `[{row, col, text?, parameter?, bold?, fontSize?, hAlign?, vAlign?, wrap?, textOrientation?, autoIndent?, autoMarkIncomplete?}]`:
   - `row`, `col` (required) - the 0-based row and column index of the cell.
   - `text` - a static text value shown in the cell. A cell is either `text` OR a `parameter`, not both.
   - `parameter` - the name of a print-time PARAMETER (filled by BSL at output, e.g. via `ОбластьМакета.Параметры.<Name>`); the cell shows the parameter's value when the template is printed.
@@ -176,13 +176,24 @@ The `template` object takes any of these arrays (all optional; omit an array to 
   - `hAlign` - horizontal alignment: `Left` / `Center` / `Right` / `Auto` / `Width`.
   - `vAlign` - vertical alignment: `Top` / `Center` / `Bottom`.
   - `wrap` - `true` to word-wrap the cell text (otherwise a single line).
+  - `textOrientation` - text rotation, in the PLATFORM's own unit: **tenths of a degree**, `0..3600`. `900` is 90 degrees (vertical text in a narrow column header); `0` is explicitly horizontal. The value is passed through unscaled - EDT's own cell-property editor shows 0..360 degrees and multiplies by ten before storing it.
+  - `autoIndent` - automatic indent, `0..100` (EDT's cell-property spinner range). EDT greys the indent fields out while the cell is rotated.
+  - `autoMarkIncomplete` - `true` to auto-mark the cell as incomplete when it is empty (an input-field behaviour).
   - Setting a cell OVERWRITES that `(row, col)` cell; the rest of the content is kept (authoring is additive per cell, not a whole-content replace).
 - `merges` - `[{fromRow, fromCol, toRow, toCol}]`: a merged rectangular cell range (0-based, inclusive).
 - `areas` - `[{name, fromRow, fromCol, toRow, toCol}]`: a NAMED area over a cell range, for programmatic `ПолучитьОбласть("<name>")` / `Вывести` output from BSL.
-- `columnWidths` - `[{col, width}]`: the width of a column (0-based index).
+- `columnWidths` - `[{col, width?, autoWidthCalculation?, widthWeightFactor?}]`: the sizing of a column (0-based index). At least one of the three sizing members is required.
+  - `width` - a fixed width, a positive integer.
+  - `autoWidthCalculation` - `true` to let the platform compute the column's width; a `width` set alongside it acts as the minimum.
+  - `widthWeightFactor` - this column's share of the free width, a non-negative integer. Only meaningful WITH `autoWidthCalculation: true` - the platform distributes the free width by weight across auto-width columns only - so it is REFUSED on its own rather than written where nothing reads it.
+  - Both need a project on 1C:Enterprise **8.3.10 or later** (the project's `Runtime-Version`): the `.mxlx` writer stores neither below that, so on an older project they are refused rather than accepted and silently dropped. A fixed `width` has no such floor.
 - `rowHeights` - `[{row, height}]`: the height of a row (0-based index).
 
-A malformed entry (a bad alignment / placement token, a missing `row` / `col`, a non-positive size) is a clean error and nothing is written. The result carries a `template` counts object `{cells, merges, areas, columnWidths, rowHeights}` (how many of each were applied).
+An omitted formatting key leaves that property UNSET, so the cell keeps inheriting it from the row / column / document format; an explicit `0` / `false` is a real value that overrides the inheritance. An explicit `null` counts as omitted.
+
+The cell-only keys (`textOrientation`, `autoIndent`, `autoMarkIncomplete`) and the column-only keys (`autoWidthCalculation`, `widthWeightFactor`) are each refused in the other's array instead of being silently ignored.
+
+A malformed entry (a bad alignment / placement token, a missing `row` / `col`, a non-positive size, an out-of-range rotation / indent) is a clean error and nothing is written. The result carries a `template` counts object `{cells, merges, areas, columnWidths, rowHeights}` (how many of each were applied).
 
 ## Examples
 - Move a field into a group: `{projectName:'P', fqn:'Catalog.Products.Form.ItemForm.Field.Price', properties:[{name:'parent', value:'PriceGroup'}]}`
@@ -232,6 +243,8 @@ A malformed entry (a bad alignment / placement token, a missing `row` / `col`, a
 - Author a title cell in a common template: `{projectName:'P', fqn:'CommonTemplate.InvoiceForm', template:{cells:[{row:0, col:0, text:'INVOICE', bold:true, fontSize:14, hAlign:'Center'}], merges:[{fromRow:0, fromCol:0, toRow:0, toCol:3}]}}`
 - Add a print-time parameter cell and a named area to an object-owned template: `{projectName:'P', fqn:'DataProcessor.Invoices.Template.Printout', template:{cells:[{row:2, col:1, parameter:'CustomerName', wrap:true, vAlign:'Center'}], areas:[{name:'Header', fromRow:0, fromCol:0, toRow:1, toCol:3}]}}`
 - Set column widths and a row height: `{projectName:'P', fqn:'CommonTemplate.InvoiceForm', template:{columnWidths:[{col:0, width:30}, {col:1, width:60}], rowHeights:[{row:0, height:24}]}}`
+- Rotate a narrow column header 90 degrees (900 tenths) and word-wrap it: `{projectName:'P', fqn:'CommonTemplate.InvoiceForm', template:{cells:[{row:0, col:5, text:'Quantity', textOrientation:900, wrap:true}]}}`
+- Let two columns share the free width 1:2: `{projectName:'P', fqn:'CommonTemplate.InvoiceForm', template:{columnWidths:[{col:0, autoWidthCalculation:true, widthWeightFactor:1}, {col:1, autoWidthCalculation:true, widthWeightFactor:2}]}}`
 - Set a predefined account's type and off-balance flag: `{projectName:'P', fqn:'ChartOfAccounts.Main.Predefined.Cash', properties:[{name:'accountType', value:'Active'}, {name:'offBalance', value:false}]}`
 - Full-replace a calc type's base list (empty array clears it): `{projectName:'P', fqn:'ChartOfCalculationTypes.Accruals.Predefined.Bonus', properties:[{name:'base', value:['Salary', 'Overtime']}]}`
 - Replace a predefined account's ext-dimension rows as a whole: `{projectName:'P', fqn:'ChartOfAccounts.Main.Predefined.Settlements', properties:[{name:'extDimensionTypes', value:[{characteristicType:'Counterparties', turnover:false}]}]}`
