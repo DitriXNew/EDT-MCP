@@ -24,6 +24,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+from collections import Counter
 
 
 HARNESS_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "harness.py")
@@ -206,8 +207,9 @@ class FixtureHygieneTest(unittest.TestCase):
             expected = [line for line in pinned.read().splitlines()
                         if not line.startswith("#")]
 
-        added = [line for line in actual if line not in expected]
-        removed = [line for line in expected if line not in actual]
+        # A multiset difference, so a gained or lost DUPLICATE declaration is named too.
+        added = sorted((Counter(actual) - Counter(expected)).elements())
+        removed = sorted((Counter(expected) - Counter(actual)).elements())
         # Our own message IS the whole diff, and unittest's truncated list dump in front of it
         # ("Diff is 8101 characters long") only buries the two lines a contributor needs.
         self.longMessage = False

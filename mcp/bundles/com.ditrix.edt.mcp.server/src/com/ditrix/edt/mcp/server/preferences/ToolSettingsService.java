@@ -525,7 +525,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * @param disabledTools the tool names to disable
      * @return {@code true} when the stored set changed and clients were notified
      */
-    boolean applyDisabledTools(IPreferenceStore store, Set<String> disabledTools)
+    // Synchronized: the compare and the write must not interleave with another caller's write.
+    synchronized boolean applyDisabledTools(IPreferenceStore store, Set<String> disabledTools)
     {
         String value = serializeDisabledTools(disabledTools);
         boolean changed = !parseDisabledTools(store.getString(PreferenceConstants.PREF_DISABLED_TOOLS))
