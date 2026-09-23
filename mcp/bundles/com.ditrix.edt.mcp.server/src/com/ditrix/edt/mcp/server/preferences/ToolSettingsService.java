@@ -525,13 +525,17 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
      * @param disabledTools the tool names to disable
      * @return {@code true} when the stored set changed and clients were notified
      */
-    // Synchronized: the compare and the write must not interleave with another caller's write.
-    synchronized boolean applyDisabledTools(IPreferenceStore store, Set<String> disabledTools)
+    boolean applyDisabledTools(IPreferenceStore store, Set<String> disabledTools)
     {
         String value = serializeDisabledTools(disabledTools);
-        boolean changed = !parseDisabledTools(store.getString(PreferenceConstants.PREF_DISABLED_TOOLS))
-            .equals(parseDisabledTools(value));
-        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, value);
+        boolean changed;
+        // Only the compare-and-write is locked; the notification wait below runs outside it.
+        synchronized (this)
+        {
+            changed = !parseDisabledTools(store.getString(PreferenceConstants.PREF_DISABLED_TOOLS))
+                .equals(parseDisabledTools(value));
+            store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, value);
+        }
         if (changed)
         {
             // Before the preference page's server restart, the only order in which an open stream
