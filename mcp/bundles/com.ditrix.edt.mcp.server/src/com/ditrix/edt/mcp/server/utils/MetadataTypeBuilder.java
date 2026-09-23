@@ -13,6 +13,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
@@ -263,8 +264,7 @@ public final class MetadataTypeBuilder
     /** Classifies an {@link #addType} error: the provider failing a known kind is the platform's. */
     static Result typeError(String message)
     {
-        return message.startsWith(PLATFORM_TYPE_NOT_CREATED) || message.contains(DEFINED_TYPE_CHAIN_UNAVAILABLE)
-            || message.contains(PRODUCED_TYPES_UNAVAILABLE) || message.contains(PRODUCED_TYPE_CHAIN_UNAVAILABLE)
+        return message.startsWith(PLATFORM_TYPE_NOT_CREATED) || PLATFORM_CHAIN_FAILURE.matcher(message).lookingAt()
             ? platformError(message) : error(message);
     }
 
@@ -1528,6 +1528,16 @@ public final class MetadataTypeBuilder
     /** Marks an existing DefinedType whose produced-type chain the platform did not yield - not the spec's fault. */
     private static final String DEFINED_TYPE_CHAIN_UNAVAILABLE =
         "its producedTypes/containerType/typeSet chain is not available yet."; //$NON-NLS-1$
+
+    /**
+     * The three chain failures, anchored at the START of the whole template: a caller's kind echoed
+     * inside a refusal must not read as a platform failure. The quoted names are model-derived.
+     */
+    private static final Pattern PLATFORM_CHAIN_FAILURE = Pattern.compile("^(?:" //$NON-NLS-1$
+        + "Object '[^']*' " + Pattern.quote(PRODUCED_TYPES_UNAVAILABLE) //$NON-NLS-1$
+        + "|Object '[^']*' offers produced type '[^']*', but its producedTypes/[A-Za-z]+" //$NON-NLS-1$
+        + Pattern.quote(PRODUCED_TYPE_CHAIN_UNAVAILABLE)
+        + "|DefinedType '[^']*' resolved, but " + Pattern.quote(DEFINED_TYPE_CHAIN_UNAVAILABLE) + ")"); //$NON-NLS-1$ //$NON-NLS-2$
 
     /**
      * Creates the proxy for {@code name} and returns it as a {@link TypeItem}, or {@code null} on any
