@@ -412,6 +412,12 @@ public class MetadataTypeBuilderTest
         // An EXISTING DefinedType whose produced-type chain the platform did not yield is not the spec's fault.
         assertTrue(MetadataTypeBuilder.typeError("DefinedType 'Money' resolved, but its " //$NON-NLS-1$
             + "producedTypes/containerType/typeSet chain is not available yet. Wait ...").platformFailure); //$NON-NLS-1$
+        // So is a resolved object whose produced types, or one produced type's chain, did not come back.
+        assertTrue(MetadataTypeBuilder.typeError("Object 'Document.Invoice' resolved, but its produced " //$NON-NLS-1$
+            + "types are not available yet. Wait ...").platformFailure); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.typeError("Object 'Document.Invoice' offers produced type " //$NON-NLS-1$
+            + "'DocumentObject', but its producedTypes/object/type chain is not available yet. Wait ...") //$NON-NLS-1$
+            .platformFailure);
     }
 
     // ---- ValueTable / ValueTree in-memory collections (issue #295) --------------------------------

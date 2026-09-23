@@ -264,6 +264,7 @@ public final class MetadataTypeBuilder
     static Result typeError(String message)
     {
         return message.startsWith(PLATFORM_TYPE_NOT_CREATED) || message.contains(DEFINED_TYPE_CHAIN_UNAVAILABLE)
+            || message.contains(PRODUCED_TYPES_UNAVAILABLE) || message.contains(PRODUCED_TYPE_CHAIN_UNAVAILABLE)
             ? platformError(message) : error(message);
     }
 
@@ -1227,8 +1228,8 @@ public final class MetadataTypeBuilder
         String objectFqn = producedKind.englishMetadataType + "." + target.getName(); //$NON-NLS-1$
         if (producedTypes == null || producedTypes.eClass() == null)
         {
-            return "Object '" + objectFqn + "' resolved, but its produced types are not available " //$NON-NLS-1$ //$NON-NLS-2$
-                + "yet. Wait for project indexing to finish, run revalidate_objects for the object " //$NON-NLS-1$
+            return "Object '" + objectFqn + "' " + PRODUCED_TYPES_UNAVAILABLE //$NON-NLS-1$ //$NON-NLS-2$
+                + " Wait for project indexing to finish, run revalidate_objects for the object " //$NON-NLS-1$
                 + "if needed, and retry."; //$NON-NLS-1$
         }
 
@@ -1255,7 +1256,7 @@ public final class MetadataTypeBuilder
         {
             return "Object '" + objectFqn + "' offers produced type '" //$NON-NLS-1$ //$NON-NLS-2$
                 + producedKind.englishMetadataType + producedKind.producedSuffix + "', but its " //$NON-NLS-1$
-                + "producedTypes/" + producedKind.featureName + "/type chain is not available yet. " //$NON-NLS-1$ //$NON-NLS-2$
+                + "producedTypes/" + producedKind.featureName + PRODUCED_TYPE_CHAIN_UNAVAILABLE + " " //$NON-NLS-1$ //$NON-NLS-2$
                 + "Wait for project indexing to finish, run revalidate_objects for the object if " //$NON-NLS-1$
                 + "needed, and retry. Available produced types: " //$NON-NLS-1$
                 + availableProducedTypeKinds(producedTypes, producedKind.englishMetadataType) + "."; //$NON-NLS-1$
@@ -1516,6 +1517,13 @@ public final class MetadataTypeBuilder
      * platform failure, not the spec's, so {@link #build} marks it {@code platformFailure}.
      */
     private static final String PLATFORM_TYPE_NOT_CREATED = "Could not create the platform type."; //$NON-NLS-1$
+
+    /** Marks a resolved object whose produced types the platform did not yield - not the spec's fault. */
+    private static final String PRODUCED_TYPES_UNAVAILABLE =
+        "resolved, but its produced types are not available yet."; //$NON-NLS-1$
+
+    /** Marks a produced type whose model type chain the platform did not yield - not the spec's fault. */
+    private static final String PRODUCED_TYPE_CHAIN_UNAVAILABLE = "/type chain is not available yet."; //$NON-NLS-1$
 
     /** Marks an existing DefinedType whose produced-type chain the platform did not yield - not the spec's fault. */
     private static final String DEFINED_TYPE_CHAIN_UNAVAILABLE =
