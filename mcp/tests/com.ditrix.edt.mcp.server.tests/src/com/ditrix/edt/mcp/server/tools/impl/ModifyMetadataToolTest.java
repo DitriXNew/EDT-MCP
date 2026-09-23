@@ -3026,6 +3026,40 @@ public class ModifyMetadataToolTest
 
     /** The item-kind twin: {@code ContextMenu -> Pages} in one call is refused, not applied twice. */
     @Test
+    public void testRewritingTheSameKindIsNotAKindChange()
+    {
+        EEnum kinds = EcoreFactory.eINSTANCE.createEEnum();
+        kinds.setName("ManagedFormFieldType"); //$NON-NLS-1$
+        for (String name : new String[] { "InputField", "LabelField" }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            EEnumLiteral literal = EcoreFactory.eINSTANCE.createEEnumLiteral();
+            literal.setName(name);
+            literal.setValue(kinds.getELiterals().size());
+            kinds.getELiterals().add(literal);
+        }
+        EAttribute type = EcoreFactory.eINSTANCE.createEAttribute();
+        type.setName("type"); //$NON-NLS-1$
+        type.setEType(kinds);
+        EClass field = EcoreFactory.eINSTANCE.createEClass();
+        field.setName("FormField"); //$NON-NLS-1$
+        field.getEStructuralFeatures().add(type);
+        EPackage pkg = EcoreFactory.eINSTANCE.createEPackage();
+        pkg.setName("kindprobe"); //$NON-NLS-1$
+        pkg.setNsURI("http://kindprobe"); //$NON-NLS-1$
+        pkg.getEClassifiers().add(kinds);
+        pkg.getEClassifiers().add(field);
+        EObject item = EcoreUtil.create(field);
+        item.eSet(type, kinds.getEEnumLiteral("InputField").getInstance()); //$NON-NLS-1$
+
+        Object before = ModifyMetadataTool.itemKindOf(item);
+        assertFalse("rewriting the same kind must prune nothing", //$NON-NLS-1$
+            ModifyMetadataTool.kindTransitioned(true, before, item));
+        item.eSet(type, kinds.getEEnumLiteral("LabelField").getInstance()); //$NON-NLS-1$
+        assertTrue(ModifyMetadataTool.kindTransitioned(true, before, item));
+        assertFalse("no kind write, no pruning", ModifyMetadataTool.kindTransitioned(false, before, item)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testComboRejectsARepeatedItemKind()
     {
         EPackage pkg = buildFormLikePackage();

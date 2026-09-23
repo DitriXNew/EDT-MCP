@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
@@ -21,6 +22,7 @@ import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EEnumLiteral;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
+import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
@@ -3443,6 +3445,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 List<PreparedChange> localizedChanges = new ArrayList<>();
                 boolean mainFlagWritten = false;
                 boolean itemKindWritten = false;
+                final Object kindBefore = itemKindOf(target);
                 for (HolderChange hc : changes)
                 {
                     // A direct feature lands on the target; a property on the nested <extInfo> lands
@@ -3474,7 +3477,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // [type=LabelField, type=InputField] would drop, at the LabelField step, the very
                 // subscriptions InputField publishes. Same last-write-wins rule the retype verdict
                 // and the main flag follow.
-                if (itemKindWritten)
+                if (kindTransitioned(itemKindWritten, kindBefore, target))
                 {
                     removedHandlers.addAll(
                         FormElementWriter.dropUnpublishedItemHandlers(target, version));
@@ -3972,6 +3975,19 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return FormElementWriter.syncItemExtInfo(formModel, member, lostHandlers) != null;
         }
         return false;
+    }
+
+    /** The item's display kind (its {@code type} enum value), or {@code null} when it has none. */
+    static Object itemKindOf(EObject item)
+    {
+        EStructuralFeature feature = item == null ? null : item.eClass().getEStructuralFeature("type"); //$NON-NLS-1$
+        return feature instanceof EAttribute && !feature.isMany() ? item.eGet(feature) : null;
+    }
+
+    /** Whether the batch really changed the kind: rewriting the same value prunes no binding. */
+    static boolean kindTransitioned(boolean kindWritten, Object kindBefore, EObject item)
+    {
+        return kindWritten && !Objects.equals(kindBefore, itemKindOf(item));
     }
 
     /** Whether this change writes a form ITEM's display KIND - the {@code type} enum on the item. */
