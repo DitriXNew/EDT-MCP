@@ -369,7 +369,7 @@ public class DeleteInfobaseTool implements IMcpTool
         // others. If asked to delete files, check (before dissociating) whether any OTHER application
         // still uses this infobase — if so we keep the files.
         final SharedDatabase dbShared = deleteDatabaseFiles && dbDir != null
-            ? isSharedWithOtherApplications(appManager, project, resolvedId, dbDir) : SharedDatabase.NOT_SHARED;
+            ? isSharedWithOtherApplications(appManager, project, targetApp, dbDir) : SharedDatabase.NOT_SHARED;
         return FileDeletionPlan.of(ibRef, resolvedName, resolvedId, dbDir, dbShared,
             deleteRegistration);
     }
@@ -1187,7 +1187,7 @@ public class DeleteInfobaseTool implements IMcpTool
         // A server's served DB is normally dedicated, but EDT does not forbid another project from
         // registering the same directory as a FILE infobase — so apply the same shared-files guard.
         final SharedDatabase dbShared = deleteDatabaseFiles && dbDir != null
-            ? isSharedWithOtherApplications(appManager, project, resolvedId, dbDir) : SharedDatabase.NOT_SHARED;
+            ? isSharedWithOtherApplications(appManager, project, targetApp, dbDir) : SharedDatabase.NOT_SHARED;
 
         ctx.service = service;
         ctx.server = server;
@@ -1506,7 +1506,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * confirm can reach different answers — which is why an UNKNOWN preview says so.
      */
     static SharedDatabase isSharedWithOtherApplications(IApplicationManager appManager,
-            IProject currentProject, String targetAppId, Path dbDir)
+            IProject currentProject, IApplication targetApp, Path dbDir)
     {
         if (appManager == null || dbDir == null)
         {
@@ -1514,7 +1514,7 @@ public class DeleteInfobaseTool implements IMcpTool
         }
         Path target = dbDir.toAbsolutePath().normalize();
         return sharedCheckBounded(SHARED_INFOBASE_CHECK_TIMEOUT_MS,
-            () -> enumerateSharedWithOtherApplications(appManager, currentProject, targetAppId, target, dbDir));
+            () -> enumerateSharedWithOtherApplications(appManager, currentProject, targetApp, target, dbDir));
     }
 
     /**
@@ -1603,7 +1603,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * project is scanned too: only the application being deleted is left out, not its siblings.
      */
     private static SharedDatabase enumerateSharedWithOtherApplications(IApplicationManager appManager,
-            IProject currentProject, String targetAppId, Path target, Path dbDir)
+            IProject currentProject, IApplication targetApp, Path target, Path dbDir)
     {
         try
         {
@@ -1612,7 +1612,7 @@ public class DeleteInfobaseTool implements IMcpTool
             {
                 if (other != null)
                 {
-                    String excluded = other.equals(currentProject) ? targetAppId : null;
+                    IApplication excluded = other.equals(currentProject) ? targetApp : null;
                     answers.add(() -> projectShares(appManager, other, excluded, target, dbDir));
                 }
             }
@@ -1629,12 +1629,13 @@ public class DeleteInfobaseTool implements IMcpTool
 
     /**
      * What one project establishes: it serves {@code target}, it does not, or it cannot be read.
-     * ONE application with id {@code excludedAppId} (the deletion target) is skipped - a same-named
-     * twin shares the id and must still be judged; a null list is unread, not empty. A failure
-     * anywhere in judging this project is ITS answer.
+     * The deletion target {@code excludedApp} is skipped by EQUALITY, which EDT implements by value
+     * (server + module, or the infobase reference) - a same-named twin shares only the id and is
+     * still judged, and a target missing from this snapshot excludes nothing. A null list is
+     * unread, not empty. A failure anywhere in judging this project is ITS answer.
      */
     static SharedDatabase projectShares(IApplicationManager appManager, IProject other,
-            String excludedAppId, Path target, Path dbDir)
+            IApplication excludedApp, Path target, Path dbDir)
     {
         try
         {
@@ -1646,15 +1647,12 @@ public class DeleteInfobaseTool implements IMcpTool
                 return SharedDatabase.UNKNOWN;
             }
             List<IApplication> candidates = new ArrayList<>();
-            boolean excluded = excludedAppId == null;
             for (IApplication app : apps)
             {
-                if (!excluded && app != null && excludedAppId.equals(app.getId()))
+                if (excludedApp == null || !excludedApp.equals(app))
                 {
-                    excluded = true;
-                    continue;
+                    candidates.add(app);
                 }
-                candidates.add(app);
             }
             return applicationsServeDir(candidates, target, other, dbDir);
         }

@@ -539,19 +539,24 @@ public class DeleteInfobaseToolTest
         when(mgr.getApplications(project)).thenReturn(List.of(doomed, sibling));
         assertEquals("a sibling serving the same directory keeps the files", //$NON-NLS-1$
             DeleteInfobaseTool.SharedDatabase.SHARED,
-            DeleteInfobaseTool.projectShares(mgr, project, "doomed", target, target)); //$NON-NLS-1$
+            DeleteInfobaseTool.projectShares(mgr, project, doomed, target, target));
         when(mgr.getApplications(project)).thenReturn(List.of(doomed));
         assertEquals("the deletion target alone is not its own co-owner", //$NON-NLS-1$
             DeleteInfobaseTool.SharedDatabase.NOT_SHARED,
-            DeleteInfobaseTool.projectShares(mgr, project, "doomed", target, target)); //$NON-NLS-1$
+            DeleteInfobaseTool.projectShares(mgr, project, doomed, target, target));
 
-        // A same-named twin shares the target's id; only ONE of the two is the target.
+        // A same-named twin shares the target's id but is a different application.
         IInfobaseApplication twin = fileApp(target.toString());
         when(twin.getId()).thenReturn("doomed"); //$NON-NLS-1$
         when(mgr.getApplications(project)).thenReturn(List.of(doomed, twin));
         assertEquals("a twin with the same id is still a co-owner", //$NON-NLS-1$
             DeleteInfobaseTool.SharedDatabase.SHARED,
-            DeleteInfobaseTool.projectShares(mgr, project, "doomed", target, target)); //$NON-NLS-1$
+            DeleteInfobaseTool.projectShares(mgr, project, doomed, target, target));
+        // The target gone from a later snapshot: the twin alone must not be taken for it.
+        when(mgr.getApplications(project)).thenReturn(List.of(twin));
+        assertEquals("a twin left alone is still a co-owner", //$NON-NLS-1$
+            DeleteInfobaseTool.SharedDatabase.SHARED,
+            DeleteInfobaseTool.projectShares(mgr, project, doomed, target, target));
     }
 
     @Test
