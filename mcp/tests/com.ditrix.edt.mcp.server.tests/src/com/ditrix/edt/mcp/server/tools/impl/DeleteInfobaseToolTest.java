@@ -544,6 +544,14 @@ public class DeleteInfobaseToolTest
         assertEquals("the deletion target alone is not its own co-owner", //$NON-NLS-1$
             DeleteInfobaseTool.SharedDatabase.NOT_SHARED,
             DeleteInfobaseTool.projectShares(mgr, project, "doomed", target, target)); //$NON-NLS-1$
+
+        // A same-named twin shares the target's id; only ONE of the two is the target.
+        IInfobaseApplication twin = fileApp(target.toString());
+        when(twin.getId()).thenReturn("doomed"); //$NON-NLS-1$
+        when(mgr.getApplications(project)).thenReturn(List.of(doomed, twin));
+        assertEquals("a twin with the same id is still a co-owner", //$NON-NLS-1$
+            DeleteInfobaseTool.SharedDatabase.SHARED,
+            DeleteInfobaseTool.projectShares(mgr, project, "doomed", target, target)); //$NON-NLS-1$
     }
 
     @Test

@@ -1629,8 +1629,9 @@ public class DeleteInfobaseTool implements IMcpTool
 
     /**
      * What one project establishes: it serves {@code target}, it does not, or it cannot be read.
-     * The application {@code excludedAppId} (the deletion target) is skipped; a null list is
-     * unread, not empty. A failure anywhere in judging this project is ITS answer.
+     * ONE application with id {@code excludedAppId} (the deletion target) is skipped - a same-named
+     * twin shares the id and must still be judged; a null list is unread, not empty. A failure
+     * anywhere in judging this project is ITS answer.
      */
     static SharedDatabase projectShares(IApplicationManager appManager, IProject other,
             String excludedAppId, Path target, Path dbDir)
@@ -1645,12 +1646,15 @@ public class DeleteInfobaseTool implements IMcpTool
                 return SharedDatabase.UNKNOWN;
             }
             List<IApplication> candidates = new ArrayList<>();
+            boolean excluded = excludedAppId == null;
             for (IApplication app : apps)
             {
-                if (excludedAppId == null || app == null || !excludedAppId.equals(app.getId()))
+                if (!excluded && app != null && excludedAppId.equals(app.getId()))
                 {
-                    candidates.add(app);
+                    excluded = true;
+                    continue;
                 }
+                candidates.add(app);
             }
             return applicationsServeDir(candidates, target, other, dbDir);
         }
