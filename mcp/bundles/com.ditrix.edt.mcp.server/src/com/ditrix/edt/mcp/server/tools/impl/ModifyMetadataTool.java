@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -3445,7 +3446,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 List<PreparedChange> localizedChanges = new ArrayList<>();
                 boolean mainFlagWritten = false;
                 boolean itemKindWritten = false;
-                final Object kindBefore = itemKindOf(target);
+                final List<Object> pairingBefore = itemPairingOf(target);
                 for (HolderChange hc : changes)
                 {
                     // A direct feature lands on the target; a property on the nested <extInfo> lands
@@ -3477,7 +3478,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 // [type=LabelField, type=InputField] would drop, at the LabelField step, the very
                 // subscriptions InputField publishes. Same last-write-wins rule the retype verdict
                 // and the main flag follow.
-                if (kindTransitioned(itemKindWritten, kindBefore, target))
+                if (pairingChanged(itemKindWritten, pairingBefore, target))
                 {
                     removedHandlers.addAll(
                         FormElementWriter.dropUnpublishedItemHandlers(target, version));
@@ -3984,10 +3985,21 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return feature instanceof EAttribute && !feature.isMany() ? item.eGet(feature) : null;
     }
 
-    /** Whether the batch really changed the kind: rewriting the same value prunes no binding. */
-    static boolean kindTransitioned(boolean kindWritten, Object kindBefore, EObject item)
+    /** The item's kind and its ext-info class together: the two decide which events it publishes. */
+    static List<Object> itemPairingOf(EObject item)
     {
-        return kindWritten && !Objects.equals(kindBefore, itemKindOf(item));
+        EStructuralFeature extFeature = item == null ? null : item.eClass().getEStructuralFeature("extInfo"); //$NON-NLS-1$
+        Object ext = extFeature instanceof EReference && !extFeature.isMany() ? item.eGet(extFeature) : null;
+        return Arrays.asList(itemKindOf(item), ext instanceof EObject ? ((EObject)ext).eClass().getName() : null);
+    }
+
+    /**
+     * Whether a kind write really changed what the item publishes: a new kind, or the same kind whose
+     * stale ext-info was repaired. Rewriting an already-consistent pairing prunes no binding.
+     */
+    static boolean pairingChanged(boolean kindWritten, List<Object> pairingBefore, EObject item)
+    {
+        return kindWritten && !Objects.equals(pairingBefore, itemPairingOf(item));
     }
 
     /** Whether this change writes a form ITEM's display KIND - the {@code type} enum on the item. */

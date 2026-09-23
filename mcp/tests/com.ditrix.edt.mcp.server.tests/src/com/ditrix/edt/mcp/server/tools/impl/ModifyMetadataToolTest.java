@@ -3040,23 +3040,43 @@ public class ModifyMetadataToolTest
         EAttribute type = EcoreFactory.eINSTANCE.createEAttribute();
         type.setName("type"); //$NON-NLS-1$
         type.setEType(kinds);
+        EClass inputExt = EcoreFactory.eINSTANCE.createEClass();
+        inputExt.setName("InputFieldExtInfo"); //$NON-NLS-1$
+        EClass labelExt = EcoreFactory.eINSTANCE.createEClass();
+        labelExt.setName("LabelFieldExtInfo"); //$NON-NLS-1$
+        EReference extInfo = EcoreFactory.eINSTANCE.createEReference();
+        extInfo.setName("extInfo"); //$NON-NLS-1$
+        extInfo.setEType(EcorePackage.Literals.EOBJECT);
+        extInfo.setContainment(true);
         EClass field = EcoreFactory.eINSTANCE.createEClass();
         field.setName("FormField"); //$NON-NLS-1$
         field.getEStructuralFeatures().add(type);
+        field.getEStructuralFeatures().add(extInfo);
         EPackage pkg = EcoreFactory.eINSTANCE.createEPackage();
         pkg.setName("kindprobe"); //$NON-NLS-1$
         pkg.setNsURI("http://kindprobe"); //$NON-NLS-1$
         pkg.getEClassifiers().add(kinds);
         pkg.getEClassifiers().add(field);
+        pkg.getEClassifiers().add(inputExt);
+        pkg.getEClassifiers().add(labelExt);
         EObject item = EcoreUtil.create(field);
-        item.eSet(type, kinds.getEEnumLiteral("InputField").getInstance()); //$NON-NLS-1$
-
-        Object before = ModifyMetadataTool.itemKindOf(item);
-        assertFalse("rewriting the same kind must prune nothing", //$NON-NLS-1$
-            ModifyMetadataTool.kindTransitioned(true, before, item));
         item.eSet(type, kinds.getEEnumLiteral("LabelField").getInstance()); //$NON-NLS-1$
-        assertTrue(ModifyMetadataTool.kindTransitioned(true, before, item));
-        assertFalse("no kind write, no pruning", ModifyMetadataTool.kindTransitioned(false, before, item)); //$NON-NLS-1$
+        item.eSet(extInfo, EcoreUtil.create(labelExt));
+
+        List<Object> before = ModifyMetadataTool.itemPairingOf(item);
+        assertFalse("rewriting a consistent pairing must prune nothing", //$NON-NLS-1$
+            ModifyMetadataTool.pairingChanged(true, before, item));
+        assertFalse("no kind write, no pruning", ModifyMetadataTool.pairingChanged(false, before, item)); //$NON-NLS-1$
+
+        // The same kind whose STALE ext-info the write repaired: the published events changed.
+        item.eSet(extInfo, EcoreUtil.create(inputExt));
+        List<Object> stale = ModifyMetadataTool.itemPairingOf(item);
+        item.eSet(extInfo, EcoreUtil.create(labelExt));
+        assertTrue(ModifyMetadataTool.pairingChanged(true, stale, item));
+
+        // A real kind change.
+        item.eSet(type, kinds.getEEnumLiteral("InputField").getInstance()); //$NON-NLS-1$
+        assertTrue(ModifyMetadataTool.pairingChanged(true, before, item));
     }
 
     @Test
