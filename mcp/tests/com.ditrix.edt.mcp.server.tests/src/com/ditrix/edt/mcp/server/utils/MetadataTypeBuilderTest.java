@@ -409,6 +409,9 @@ public class MetadataTypeBuilderTest
         assertTrue(err.contains("UUID")); //$NON-NLS-1$
         assertFalse("an unknown kind is the caller's refusal", //$NON-NLS-1$
             MetadataTypeBuilder.typeError(err).platformFailure);
+        // An EXISTING DefinedType whose produced-type chain the platform did not yield is not the spec's fault.
+        assertTrue(MetadataTypeBuilder.typeError("DefinedType 'Money' resolved, but its " //$NON-NLS-1$
+            + "producedTypes/containerType/typeSet chain is not available yet. Wait ...").platformFailure); //$NON-NLS-1$
     }
 
     // ---- ValueTable / ValueTree in-memory collections (issue #295) --------------------------------

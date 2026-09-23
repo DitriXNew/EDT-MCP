@@ -5341,13 +5341,25 @@ public final class FormElementWriter
         EStructuralFeature handlersFeat = container.eClass().getEStructuralFeature(KEY_HANDLERS);
         if (!(handlersFeat instanceof EReference) || !handlersFeat.isMany())
         {
+            // A form ROOT always holds handlers, so there the missing list is the model's shape.
+            if ("Form".equals(container.eClass().getName())) //$NON-NLS-1$
+            {
+                throw modelLacks("The form model's Form." + KEY_HANDLERS + " is not a handler list."); //$NON-NLS-1$ //$NON-NLS-2$
+            }
             return "The form element '" + container.eClass().getName() //$NON-NLS-1$
                 + "' cannot hold event handlers."; //$NON-NLS-1$
         }
-        List<AvailableEvent> events = availableEvents(container, version).events();
+        EventUnion union = availableEvents(container, version);
+        List<AvailableEvent> events = union.events();
         if (events.isEmpty())
         {
-            throw modelLacks("Could not resolve the available events for this form element."); //$NON-NLS-1$
+            if (!union.complete())
+            {
+                throw modelLacks("Could not resolve the available events for this form element."); //$NON-NLS-1$
+            }
+            // Every type resolved and none publishes an event: the caller picked an element without any.
+            return "The form element '" + container.eClass().getName() //$NON-NLS-1$
+                + "' publishes no events, so no handler can be bound to it."; //$NON-NLS-1$
         }
         AvailableEvent matched = null;
         for (AvailableEvent candidate : events)

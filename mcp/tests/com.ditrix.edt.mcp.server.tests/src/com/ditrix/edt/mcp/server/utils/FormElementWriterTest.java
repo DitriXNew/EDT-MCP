@@ -1200,6 +1200,56 @@ public class FormElementWriterTest
         }
     }
 
+    /** A synthetic element class named {@code name}, optionally carrying a many-valued handlers list. */
+    private static EObject syntheticElement(String name, boolean withHandlers)
+    {
+        EPackage pkg = EcoreFactory.eINSTANCE.createEPackage();
+        pkg.setName("synthetic"); //$NON-NLS-1$
+        pkg.setNsURI("http://synthetic/" + name); //$NON-NLS-1$
+        EClass cls = EcoreFactory.eINSTANCE.createEClass();
+        cls.setName(name);
+        if (withHandlers)
+        {
+            EReference handlers = EcoreFactory.eINSTANCE.createEReference();
+            handlers.setName("handlers"); //$NON-NLS-1$
+            handlers.setEType(EcorePackage.Literals.EOBJECT);
+            handlers.setContainment(true);
+            handlers.setUpperBound(-1);
+            cls.getEStructuralFeatures().add(handlers);
+        }
+        pkg.getEClassifiers().add(cls);
+        return pkg.getEFactoryInstance().create(cls);
+    }
+
+    @Test
+    public void testCreateHandlerOnAnElementPublishingNoEventsIsARefusal()
+    {
+        // Every mapped type resolved (there is none) and none publishes an event: the caller's choice.
+        String err = FormElementWriter.createHandler(syntheticElement("NoEventsItem", true), "OnClick", //$NON-NLS-1$ //$NON-NLS-2$
+            "Proc", Version.LATEST, "en", null, null); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull(err);
+        assertTrue(err, err.contains("publishes no events")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCreateHandlerOnAFormRootWithoutAHandlerListRaises()
+    {
+        // A form ROOT always holds handlers, so a missing list is the model's shape, not a refusal.
+        try
+        {
+            FormElementWriter.createHandler(syntheticElement("Form", false), "OnOpen", "Proc", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                Version.LATEST, "en", null, null); //$NON-NLS-1$
+            fail("a form root without handlers must raise"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("Form.handlers")); //$NON-NLS-1$
+        }
+        // An ITEM without handlers is still the caller's refusal.
+        assertTrue(FormElementWriter.createHandler(syntheticElement("SomeDecoration", false), "OnClick", //$NON-NLS-1$ //$NON-NLS-2$
+            "Proc", Version.LATEST, "en", null, null).contains("cannot hold event handlers")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     /**
      * A self-contained dynamic EMF model shaped like the form metamodel's handler containment: a
      * {@code FormField} container with a {@code handlers} containment list typed to base

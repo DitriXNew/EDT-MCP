@@ -263,7 +263,8 @@ public final class MetadataTypeBuilder
     /** Classifies an {@link #addType} error: the provider failing a known kind is the platform's. */
     static Result typeError(String message)
     {
-        return message.startsWith(PLATFORM_TYPE_NOT_CREATED) ? platformError(message) : error(message);
+        return message.startsWith(PLATFORM_TYPE_NOT_CREATED) || message.contains(DEFINED_TYPE_CHAIN_UNAVAILABLE)
+            ? platformError(message) : error(message);
     }
 
     /**
@@ -1353,8 +1354,7 @@ public final class MetadataTypeBuilder
 
     private static String unavailableDefinedTypeChain(String requested)
     {
-        return "DefinedType '" + requested //$NON-NLS-1$
-            + "' resolved, but its producedTypes/containerType/typeSet chain is not available yet. " //$NON-NLS-1$
+        return "DefinedType '" + requested + "' resolved, but " + DEFINED_TYPE_CHAIN_UNAVAILABLE + " " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + "Wait for project indexing to finish, run revalidate_objects for the DefinedType if " //$NON-NLS-1$
             + "needed, and retry."; //$NON-NLS-1$
     }
@@ -1516,6 +1516,10 @@ public final class MetadataTypeBuilder
      * platform failure, not the spec's, so {@link #build} marks it {@code platformFailure}.
      */
     private static final String PLATFORM_TYPE_NOT_CREATED = "Could not create the platform type."; //$NON-NLS-1$
+
+    /** Marks an existing DefinedType whose produced-type chain the platform did not yield - not the spec's fault. */
+    private static final String DEFINED_TYPE_CHAIN_UNAVAILABLE =
+        "its producedTypes/containerType/typeSet chain is not available yet."; //$NON-NLS-1$
 
     /**
      * Creates the proxy for {@code name} and returns it as a {@link TypeItem}, or {@code null} on any
