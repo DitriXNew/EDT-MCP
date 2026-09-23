@@ -445,7 +445,7 @@ def test_form_corpus_a_kind_change_keeps_what_the_new_kind_still_publishes():
     # OnChange is excluded from the kept side on purpose: it is the one event that lives on the
     # item's own list, so keeping it would prove nothing about the node's contents.
     target, kept_event, lost_event = None, None, None
-    for candidate in ("TextDocumentField", "LabelField", "HTMLDocumentField", "CheckBoxField"):
+    for candidate in (t for t, _ in FIELD_TYPES if t != "InputField"):
         assert_ok(_set_item_type(field, candidate), "probe the events of " + candidate)
         its_events = _available_events(field)
         migrating = [e for e in input_events if e in its_events and e != "OnChange"]
@@ -486,31 +486,35 @@ def test_form_corpus_a_kind_change_keeps_what_the_new_kind_still_publishes():
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_form_corpus_a_repeated_kind_in_one_batch_is_refused_and_keeps_the_handler():
-    """Every `type` write rebuilds the ext-info, so `ContextMenu -> Pages` in ONE call would drop
-    the Pages node's bindings at the intermediate step. Such a batch is refused before anything is
-    applied, and the binding stays on disk.
+    """Every `type` write rebuilds the ext-info, so `LabelField -> InputField` in ONE call would
+    drop the input node's bindings at the intermediate step. Such a batch is refused before
+    anything is applied, and the binding stays on disk.
 
     The event is asked of the platform (the refusal that lists what the kind publishes), never
     assumed - see _available_events.
     """
     base, form, form_file = _seed_form("KindTrip")
-    group = form + ".Group.Probe"
-    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": group}), "seed the group")
-    assert_ok(_set_item_type(group, "Pages"), "make it a Pages group")
-    pages_events = [e for e in _available_events(group) if e != "OnChange"]
-    assert pages_events, "a Pages group must publish at least one event of its own node"
-    event = pages_events[0]
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": form + ".Attribute.Data"}),
+              "seed the bound attribute")
+    field = form + ".Field.Probe"
     assert_ok(call("create_metadata", {
-        "projectName": PROJECT, "fqn": "%s.Handler.%s" % (group, event),
+        "projectName": PROJECT, "fqn": field,
+        "properties": [{"name": "dataPath", "value": "Data"}]}), "seed the field")
+    assert_ok(_set_item_type(field, "InputField"), "make it an InputField")
+    node_events = [e for e in _available_events(field) if e != "OnChange"]
+    assert node_events, "an InputField must publish at least one event of its own node"
+    event = node_events[0]
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "%s.Handler.%s" % (field, event),
         "properties": [{"name": "procedure", "value": "ProbeRoundTrip"}]}), "bind " + event)
     wait_for_project_ready()
     poll_disk_contains(form_file, "<event>%s</event>" % event,
                        ctx="the binding must reach disk before the batch")
 
     r = call("modify_metadata", {
-        "projectName": PROJECT, "fqn": group,
-        "properties": [{"name": "type", "value": "ContextMenu"},
-                       {"name": "type", "value": "Pages"}]})
+        "projectName": PROJECT, "fqn": field,
+        "properties": [{"name": "type", "value": "LabelField"},
+                       {"name": "type", "value": "InputField"}]})
     err = assert_error(r, "a batch setting the kind twice must be refused")
     assert_error_quality(err, suggests=["only ONCE per call"], ctx="the repeated-kind refusal")
 
