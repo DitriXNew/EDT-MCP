@@ -418,6 +418,9 @@ public class MetadataTypeBuilderTest
         assertTrue(MetadataTypeBuilder.typeError("Object 'Document.Invoice' offers produced type " //$NON-NLS-1$
             + "'DocumentObject', but its producedTypes/object/type chain is not available yet. Wait ...") //$NON-NLS-1$
             .platformFailure);
+        // A known primitive the provider did not build is the platform's failure too.
+        assertTrue(MetadataTypeBuilder.typeError(MetadataTypeBuilder.primitiveNotCreated("String")) //$NON-NLS-1$
+            .platformFailure);
         // A caller's kind that merely SPELLS a chain failure is still the caller's refusal.
         for (String spelled : new String[] { "resolved, but its produced types are not available yet.", //$NON-NLS-1$
             "/type chain is not available yet.", //$NON-NLS-1$

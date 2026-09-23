@@ -1072,7 +1072,7 @@ public final class MetadataTypeBuilder
             EObject proxy = provider.createProxy(primitive);
             if (!(proxy instanceof TypeItem))
             {
-                return "Could not create the platform type '" + primitive + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+                return primitiveNotCreated(primitive);
             }
             td.getTypes().add((TypeItem)proxy);
             applyQualifiers(td, item, primitive);
@@ -1517,6 +1517,12 @@ public final class MetadataTypeBuilder
      * platform failure, not the spec's, so {@link #build} marks it {@code platformFailure}.
      */
     private static final String PLATFORM_TYPE_NOT_CREATED = "Could not create the platform type."; //$NON-NLS-1$
+
+    /** A known primitive the provider did not build - opened like every other platform-type failure. */
+    static String primitiveNotCreated(String primitive)
+    {
+        return PLATFORM_TYPE_NOT_CREATED + " Tried: " + primitive + "."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
 
     /** Marks a resolved object whose produced types the platform did not yield - not the spec's fault. */
     private static final String PRODUCED_TYPES_UNAVAILABLE =
