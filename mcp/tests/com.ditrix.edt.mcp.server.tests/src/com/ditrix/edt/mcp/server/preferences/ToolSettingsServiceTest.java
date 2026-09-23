@@ -8,6 +8,8 @@ package com.ditrix.edt.mcp.server.preferences;
 
 import static org.junit.Assert.*;
 
+import java.io.ByteArrayOutputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -17,13 +19,18 @@ import java.util.HexFormat;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jface.preference.PreferenceStore;
 import org.junit.Test;
 
+import com.ditrix.edt.mcp.server.SseStreamRegistry;
+
 /**
  * Tests for {@link ToolSettingsService} static utility methods.
- * Tests the parse/serialize logic without requiring Eclipse runtime.
+ * Tests the parse/serialize logic, the stored-profile migrations and the tools/list_changed push
+ * on a supplied store, without requiring an Eclipse runtime.
  */
 public class ToolSettingsServiceTest
 {
@@ -746,6 +753,118 @@ public class ToolSettingsServiceTest
 
         assertEquals(Set.of("unique_to_nine"), //$NON-NLS-1$
             additionsUniqueToVersion(Set.of("already_frozen"), migrations, 9)); //$NON-NLS-1$
+    }
+
+    /**
+     * Disabling a tool removes it from {@code tools/list}, and the server advertises
+     * {@code tools.listChanged}, so it must say so on the open SSE streams (#576).
+     */
+    @Test
+    public void testDisablingAToolNotifiesClientsThatToolsListChanged()
+    {
+        PreferenceStore store = storedDisabledTools(Set.of("git"), //$NON-NLS-1$
+            PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+
+        assertTrue("a widened disabled set must report the change", //$NON-NLS-1$
+            applyAndCapture(store, Set.of("git", "ask_workmate")) //$NON-NLS-1$ //$NON-NLS-2$
+                .contains("notifications/tools/list_changed")); //$NON-NLS-1$
+        assertEquals("the new set must be the one persisted", //$NON-NLS-1$
+            Set.of("git", "ask_workmate"), disabledTools(store)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The other edge of the same rule: RE-ENABLING adds a tool to {@code tools/list}, and a client
+     * that is not told keeps hiding a tool that is available again.
+     */
+    @Test
+    public void testReEnablingAToolNotifiesClientsToo()
+    {
+        PreferenceStore store = storedDisabledTools(Set.of("git"), //$NON-NLS-1$
+            PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+
+        assertTrue("a narrowed disabled set must report the change", //$NON-NLS-1$
+            applyAndCapture(store, Set.of()).contains("notifications/tools/list_changed")); //$NON-NLS-1$
+        assertEquals("the emptied set must be the one persisted", //$NON-NLS-1$
+            Set.of(), disabledTools(store));
+    }
+
+    /**
+     * Apply with nothing edited re-writes the same value; waking every connected client for it
+     * would make the notification noise, so only a real change notifies.
+     */
+    @Test
+    public void testApplyingAnUnchangedSetNotifiesNobody()
+    {
+        PreferenceStore store = storedDisabledTools(Set.of("git", "ask_workmate"), //$NON-NLS-1$ //$NON-NLS-2$
+            PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+
+        assertEquals("re-applying the same set must stay silent", //$NON-NLS-1$
+            "", applyAndCapture(store, Set.of("ask_workmate", "git"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testAStalledClientDoesNotBlockTheApplyingThread() throws Exception
+    {
+        // A client that stopped draining blocks the socket write; Apply (the UI thread) must not.
+        CountDownLatch release = new CountDownLatch(1);
+        OutputStream stalled = new OutputStream()
+        {
+            @Override
+            public void write(int b) throws java.io.IOException
+            {
+                try
+                {
+                    release.await(30, TimeUnit.SECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        };
+        SseStreamRegistry.SseStream stream = SseStreamRegistry.getInstance().register(stalled);
+        try
+        {
+            PreferenceStore store = storedDisabledTools(Set.of("git"), //$NON-NLS-1$
+                PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION);
+            long start = System.nanoTime();
+            assertTrue(ToolSettingsService.getInstance().applyDisabledTools(store, Set.of()));
+            long waitedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+            assertTrue("the apply must return after the bounded wait, took " + waitedMs + " ms", //$NON-NLS-1$ //$NON-NLS-2$
+                waitedMs < ToolSettingsService.NOTIFY_WAIT_MS + 5_000);
+        }
+        finally
+        {
+            release.countDown();
+            SseStreamRegistry.getInstance().unregister(stream);
+        }
+    }
+
+    /**
+     * Writes {@code disabled} into {@code store} through the production write path with one SSE
+     * stream registered, and returns everything that stream received - empty when nothing was
+     * pushed.
+     *
+     * @param store the store to write
+     * @param disabled the disabled set to apply
+     * @return the SSE bytes the registered stream received, as text
+     */
+    private static String applyAndCapture(PreferenceStore store, Set<String> disabled)
+    {
+        ByteArrayOutputStream sink = new ByteArrayOutputStream();
+        SseStreamRegistry.SseStream stream = SseStreamRegistry.getInstance().register(sink);
+        try
+        {
+            boolean changed = ToolSettingsService.getInstance().applyDisabledTools(store, disabled);
+            String received = sink.toString(StandardCharsets.UTF_8);
+            assertEquals("the reported change and the pushed notification must agree", //$NON-NLS-1$
+                changed, received.contains("notifications/tools/list_changed")); //$NON-NLS-1$
+            return received;
+        }
+        finally
+        {
+            SseStreamRegistry.getInstance().unregister(stream);
+        }
     }
 
     private static void assertVersion4RestoresCurrentPreset(ToolPreset preset,

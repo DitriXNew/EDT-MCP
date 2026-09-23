@@ -19,14 +19,17 @@ import java.util.concurrent.atomic.AtomicLong;
  * plus a {@link #broadcast} that pushes a JSON-RPC message to all of them.
  * <p>
  * This is how the server delivers notifications it originates — currently
- * {@code notifications/tools/list_changed} when {@code enable_toolset} changes the
- * visible toolset under progressive disclosure. A client only receives it if it
- * keeps a GET SSE stream open; clients that don't fall back to re-requesting
- * {@code tools/list} (the pull path that {@code enable_toolset} points them to).
+ * {@code notifications/tools/list_changed}, from the two things that change the
+ * {@code tools/list} surface: {@code enable_toolset} revealing a toolset under
+ * progressive disclosure, and the Tools preference tab enabling/disabling tools. A
+ * client only receives it if it keeps a GET SSE stream open; clients that don't fall
+ * back to re-requesting {@code tools/list} (the pull path that {@code enable_toolset}
+ * points them to).
  * <p>
  * Thread-safe: streams are added/removed from a concurrent set, and each stream's
- * writes (heartbeat from its own SSE thread, broadcasts from a request thread) are
- * serialized by the per-stream lock in {@link SseStream}.
+ * writes (heartbeat from its own SSE thread, broadcasts from a request thread or the
+ * preferences' own sender thread) are serialized by the per-stream lock in
+ * {@link SseStream}.
  */
 public final class SseStreamRegistry // NOSONAR intentional singleton (Eclipse service / getInstance); a single instance is by design
 {

@@ -759,6 +759,35 @@ public class McpProtocolHandlerTest
             r.getContent().get(0).getText().contains("disabled by the user"));
     }
 
+    @Test
+    public void testADisabledToolIsRefusedOnTheWireAndNeverRuns()
+    {
+        // The shape above, asserted where a client actually sees it: the serialized tools/call
+        // response. "git" ships DISABLED (DEFAULT_DISABLED_TOOLS) and the store-less fallback keeps
+        // it that way, so the handler's disabled branch is reachable without an Eclipse runtime.
+        RecordingTool tool = new RecordingTool("git");
+        registry.register(tool);
+        assertFalse("git must ship disabled, or this asserts nothing",
+            registry.isToolEnabled("git"));
+
+        JsonObject result = parseResponse(handler.processRequest(
+            buildToolCallRequest(1, "git", "{\"projectName\":\"X\"}"))).getAsJsonObject("result");
+
+        assertNull("a refused tool must not have run", tool.params);
+        assertTrue("a refusal must be machine-distinguishable from a result",
+            result.has("isError") && result.get("isError").getAsBoolean());
+        assertFalse("no structuredContent on a refusal: a tool switched off between tools/list and "
+            + "this call would otherwise answer against its advertised outputSchema",
+            result.has("structuredContent"));
+        // The text channel is the ONLY channel a refusal has, so both the reason and the fix live
+        // there - the machine half of the contract is carried by isError, not by a payload.
+        String text = result.getAsJsonArray("content").get(0).getAsJsonObject()
+            .get("text").getAsString();
+        assertTrue(text, text.contains("Tool 'git' is disabled by the user"));
+        assertTrue("the refusal must name where to switch it back on: " + text,
+            text.contains("Tools tab"));
+    }
+
     /**
      * The single tool entry of a tools/list response, so a test can assert what was advertised
      * for it without restating the envelope.

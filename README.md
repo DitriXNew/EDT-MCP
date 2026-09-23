@@ -273,9 +273,11 @@ two management tools) appears in `tools/list`. To use more tools:
 2. Call **`enable_toolset`** with `toolsets=[ids]` (e.g. `["code","debug"]`).
 3. **Re-request `tools/list`** — the revealed tools now appear.
 
-This server does not push `notifications/tools/list_changed`, so the client must
-re-list after enabling (the `enable_toolset` response says so). A hidden tool is only
-hidden from `tools/list`; it remains callable by name. These progressive-disclosure
+The server pushes `notifications/tools/list_changed` whenever that surface changes —
+after `enable_toolset` reveals a toolset, and after the **Tools** tab enables or
+disables tools — but only to a client holding an open SSE stream. A client without one
+must re-list after enabling (the `enable_toolset` response says so). A hidden tool is
+only hidden from `tools/list`; it remains callable by name. These progressive-disclosure
 toolsets are distinct from the **Tool Groups** above (which the Tools tab uses to
 enable/disable tools persistently).
 

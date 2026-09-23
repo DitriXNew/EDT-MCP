@@ -17,6 +17,7 @@ import java.util.stream.Collectors;
 import org.eclipse.jface.preference.IPreferenceStore;
 
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.SseStreamRegistry;
 
 /**
  * Service managing tool enablement state.
@@ -486,7 +487,10 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     }
 
     /**
-     * Saves the set of disabled tool names to preferences.
+     * Saves the set of disabled tool names to preferences and, when the set actually changed,
+     * tells connected clients that {@code tools/list} changed with it.
+     *
+     * @param disabledTools the tool names to disable
      */
     public void setDisabledTools(Set<String> disabledTools)
     {
@@ -495,8 +499,76 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         {
             return;
         }
+        applyDisabledTools(store, disabledTools);
+    }
+
+    /**
+     * Writes the disabled set into {@code store} and pushes {@code notifications/tools/list_changed}
+     * when that write CHANGED the set.
+     * <p>
+     * Enablement is a {@code tools/list} input: {@code getVisibleTools()} drops a disabled tool, so a
+     * tick on the Tools tab removes a tool from the list a connected client already holds. The server
+     * advertises {@code tools.listChanged: true} in {@code initialize}, so staying silent breaks a
+     * capability it promised and leaves that client calling a tool that now refuses (#576). This is
+     * the single write path - the Tools tab, {@link #setToolEnabled} and {@link #applyPreset} all
+     * funnel through it - so the notification cannot be lost by adding another caller.
+     * </p>
+     * <p>
+     * Only a real change notifies: Apply with nothing edited must not wake every client. The
+     * comparison is on the parsed SETS, so a reordered or differently-spaced stored value reads as
+     * unchanged. Under progressive disclosure a disabled tool may already be hidden by its toolset,
+     * which makes the notification redundant rather than wrong - over-notifying costs one
+     * {@code tools/list}, under-notifying is the bug.
+     * </p>
+     *
+     * @param store the preference store to write (never {@code null})
+     * @param disabledTools the tool names to disable
+     * @return {@code true} when the stored set changed and clients were notified
+     */
+    boolean applyDisabledTools(IPreferenceStore store, Set<String> disabledTools)
+    {
         String value = serializeDisabledTools(disabledTools);
-        store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, value);
+        boolean changed;
+        // Only the compare-and-write is locked; the notification wait below runs outside it.
+        synchronized (this)
+        {
+            changed = !parseDisabledTools(store.getString(PreferenceConstants.PREF_DISABLED_TOOLS))
+                .equals(parseDisabledTools(value));
+            store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, value);
+        }
+        if (changed)
+        {
+            // Before the preference page's server restart, the only order in which an open stream
+            // can still receive it - but bounded, since this may be the UI thread.
+            notifyToolsListChangedBounded(NOTIFY_WAIT_MS);
+        }
+        return changed;
+    }
+
+    /** How long a caller (possibly the UI thread) waits for the tools/list_changed broadcast. */
+    static final long NOTIFY_WAIT_MS = 1000;
+
+    /**
+     * Broadcasts {@code notifications/tools/list_changed} from its own thread and waits at most
+     * {@code waitMs}: a client that stopped draining its socket blocks the write, and that must
+     * not freeze the caller.
+     *
+     * @param waitMs the longest the caller waits for the broadcast to finish
+     */
+    static void notifyToolsListChangedBounded(long waitMs)
+    {
+        Thread sender = new Thread(() -> SseStreamRegistry.getInstance().notifyToolsListChanged(),
+            "MCP tools/list_changed"); //$NON-NLS-1$
+        sender.setDaemon(true);
+        sender.start();
+        try
+        {
+            sender.join(waitMs);
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
