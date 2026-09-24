@@ -7,12 +7,16 @@ import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Base64;
+import java.util.Iterator;
 import java.util.function.BooleanSupplier;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Path;
+import org.eclipse.emf.ecore.EObject;
+import org.eclipse.jface.viewers.IStructuredSelection;
+import org.eclipse.jface.viewers.StructuredSelection;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
@@ -29,6 +33,8 @@ import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.ide.IDE;
 import org.eclipse.ui.part.FileEditorInput;
 
+import com._1c.g5.v8.dt.form.model.Form;
+import com._1c.g5.v8.dt.form.model.FormItem;
 import com._1c.g5.v8.dt.ui.util.ContentUtil;
 
 import com.ditrix.edt.mcp.server.Activator;
@@ -55,6 +61,8 @@ public final class EditorScreenshotHelper
     private static final String REBUILD_INTERNAL_METHOD = "rebuildInternal"; //$NON-NLS-1$
     private static final String GET_MAPPING_ROOT_METHOD = "getMappingRoot"; //$NON-NLS-1$
     private static final String BUILD_UPDATE_EVENT_METHOD = "buildUpdateEvent"; //$NON-NLS-1$
+    private static final String BUILD_SELECT_BY_ID_EVENT_METHOD = "buildSelectByIdEvent"; //$NON-NLS-1$
+    private static final String SET_SELECTION_METHOD = "setSelection"; //$NON-NLS-1$
     private static final String GET_CONTROL_METHOD = "getControl"; //$NON-NLS-1$
     private static final String REFRESH_METHOD = "refresh"; //$NON-NLS-1$
     private static final String REBUILD_METHOD = "rebuild"; //$NON-NLS-1$
@@ -728,6 +736,78 @@ public final class EditorScreenshotHelper
     }
 
     /**
+     * Brings a form element into view: every Pages group that encloses the element switches to the
+     * page holding it (nested groups included), the same way selecting the element in the form editor
+     * does. The selection is then cleared so no selection frame is painted into the captured image. A
+     * later full re-render shows the designer's default pages again. Must be called on the UI thread.
+     *
+     * @param representation the {@code FormWysiwygRepresentation} instance
+     * @param elementName the element's programmatic name (case-insensitive, as in 1C)
+     * @return {@code null} on success, otherwise a message describing why the element was not shown
+     */
+    public static String showFormElement(Object representation, String elementName)
+    {
+        if (!(getRepresentationForm(representation) instanceof Form form))
+        {
+            return "The form model of the WYSIWYG editor is not available"; //$NON-NLS-1$
+        }
+        FormItem item = findFormItem(form, elementName);
+        if (item == null)
+        {
+            return "Form element '" + elementName + "' was not found in the form. " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Pass the element's programmatic name (e.g. a page name); " //$NON-NLS-1$
+                + "get_metadata_details with the form FQN lists the elements."; //$NON-NLS-1$
+        }
+        // The Java-side selection switches the pages of the non-native render; the synchronous
+        // select-by-id render switches them in the native render that produces the image.
+        setRepresentationSelection(representation, item);
+        if (renderRequestedFormSynchronously(representation, new int[] { item.getId() }) != RenderOutcome.RENDERED)
+        {
+            return "The form could not be re-rendered to show element '" + elementName //$NON-NLS-1$
+                + "'. Ensure EDT runs with buffered native render " //$NON-NLS-1$
+                + "(VM option -DnativeFormBufferedLayoutRender=true) and try again."; //$NON-NLS-1$
+        }
+        // An update-only render with an empty selection keeps the switched pages but drops the
+        // selection frame; a full render would bring back the default pages.
+        renderRequestedFormSynchronously(representation, new int[0], true);
+        return null;
+    }
+
+    /**
+     * Finds a form item by programmatic name anywhere in the form's element tree.
+     *
+     * @param form the form model
+     * @param name the item name, compared case-insensitively
+     * @return the item, or {@code null} if the form has no item with that name
+     */
+    static FormItem findFormItem(Form form, String name)
+    {
+        for (Iterator<EObject> iter = form.eAllContents(); iter.hasNext();)
+        {
+            if (iter.next() instanceof FormItem item && name.equalsIgnoreCase(item.getName()))
+            {
+                return item;
+            }
+        }
+        return null;
+    }
+
+    private static void setRepresentationSelection(Object representation, Object selected)
+    {
+        try
+        {
+            Method setSelection = representation.getClass()
+                .getMethod(SET_SELECTION_METHOD, IStructuredSelection.class, boolean.class);
+            setSelection.invoke(representation, new StructuredSelection(selected), Boolean.FALSE);
+        }
+        catch (Exception e)
+        {
+            // Only the non-native render depends on it; the native render is driven by the event.
+            Activator.logWarning("Could not set the form editor selection: " + e.getMessage()); //$NON-NLS-1$
+        }
+    }
+
+    /**
      * Reads the raw {@code formImageData} field of the representation <i>by reference</i>, including
      * an empty/zero-size placeholder. Unlike {@link #readFormImageData(Object)} this does not filter
      * out empty images and does not trigger a rebuild; it is used to detect when a render pass has
@@ -1034,6 +1114,28 @@ public final class EditorScreenshotHelper
      */
     private static RenderOutcome renderRequestedFormSynchronously(Object representation)
     {
+        return renderRequestedFormSynchronously(representation, null);
+    }
+
+    /**
+     * Same as {@link #renderRequestedFormSynchronously(Object)}, but when {@code selectedIds} is given
+     * the render is driven by a select-by-id event instead of an update event. The native renderer
+     * switches every Pages group that encloses a selected element to the page holding it, exactly as
+     * selecting the element in the form editor does.
+     *
+     * @param representation the {@code FormWysiwygRepresentation} instance
+     * @param selectedIds form item ids to select ({@code 0} is the form itself), or {@code null} for a
+     *            plain update render
+     * @return the render outcome, see {@link #renderRequestedFormSynchronously(Object)}
+     */
+    private static RenderOutcome renderRequestedFormSynchronously(Object representation, int[] selectedIds)
+    {
+        return renderRequestedFormSynchronously(representation, selectedIds, false);
+    }
+
+    private static RenderOutcome renderRequestedFormSynchronously(Object representation, int[] selectedIds,
+        boolean updateOnly)
+    {
         try
         {
             // The form model the representation renders (the same field rebuildInternal would read).
@@ -1078,15 +1180,18 @@ public final class EditorScreenshotHelper
                 return RenderOutcome.NOT_READY;
             }
 
-            // NativeRenderEvent.buildUpdateEvent() — the same event rebuild(boolean) constructs.
-            Method buildUpdateEvent = nativeRenderEventClass.getMethod(BUILD_UPDATE_EVENT_METHOD);
-            Object event = buildUpdateEvent.invoke(null);
+            // NativeRenderEvent.buildUpdateEvent() — the same event rebuild(boolean) constructs — or the
+            // select-by-id event the editor sends when an element is selected.
+            Object event = selectedIds == null
+                ? nativeRenderEventClass.getMethod(BUILD_UPDATE_EVENT_METHOD).invoke(null)
+                : nativeRenderEventClass.getMethod(BUILD_SELECT_BY_ID_EVENT_METHOD, long.class, int[].class)
+                    .invoke(null, 0L, selectedIds);
 
             // Invoke the private rebuildInternal(Form, CommandInterfaceMapping, NativeRenderEvent,
             // boolean) directly: this is the synchronous body the async handler would have run.
             rebuildInternal.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
             // updateOnly=false → force a full layout/render pass for this form.
-            rebuildInternal.invoke(representation, form, cmiMapping, event, Boolean.FALSE);
+            rebuildInternal.invoke(representation, form, cmiMapping, event, Boolean.valueOf(updateOnly));
 
             // Drain the redraw the render task scheduled so the offscreen buffer is settled.
             processEvents(Display.getCurrent());

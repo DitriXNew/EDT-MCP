@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
@@ -16,6 +17,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.PaletteData;
 import org.junit.Test;
+
+import com._1c.g5.v8.dt.form.model.Form;
+import com._1c.g5.v8.dt.form.model.FormFactory;
+import com._1c.g5.v8.dt.form.model.FormField;
+import com._1c.g5.v8.dt.form.model.FormGroup;
 
 /**
  * Unit tests for the render-readiness polling and the screenshot identity guard in
@@ -553,5 +559,28 @@ public class EditorScreenshotHelperTest
             EditorScreenshotHelper.ensureRenderedFormImage(rep, SHORT_TIMEOUT_MS, false));
         assertTrue("a rebuildInternal of a foreign shape must route to the async fallback", //$NON-NLS-1$
             rep.asyncRebuilds.get() >= 1);
+    }
+
+    // ==================== showElement: form item lookup ====================
+
+    @Test
+    public void testFindFormItemInNestedPages()
+    {
+        Form form = FormFactory.eINSTANCE.createForm();
+        FormGroup pages = FormFactory.eINSTANCE.createFormGroup();
+        pages.setName("Pages"); //$NON-NLS-1$
+        FormGroup page = FormFactory.eINSTANCE.createFormGroup();
+        page.setName("СтраницаДоставка"); //$NON-NLS-1$
+        FormField field = FormFactory.eINSTANCE.createFormField();
+        field.setName("DeliveryAddress"); //$NON-NLS-1$
+        page.getItems().add(field);
+        pages.getItems().add(page);
+        form.getItems().add(pages);
+
+        // 1C names are case-insensitive, Russian names included.
+        assertSame(page, EditorScreenshotHelper.findFormItem(form,
+            "страницадоставка")); //$NON-NLS-1$
+        assertSame(field, EditorScreenshotHelper.findFormItem(form, "deliveryaddress")); //$NON-NLS-1$
+        assertNull(EditorScreenshotHelper.findFormItem(form, "Missing")); //$NON-NLS-1$
     }
 }
