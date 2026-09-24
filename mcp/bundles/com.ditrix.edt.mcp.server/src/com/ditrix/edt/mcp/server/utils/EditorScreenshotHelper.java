@@ -15,8 +15,6 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.ecore.EObject;
-import org.eclipse.jface.viewers.IStructuredSelection;
-import org.eclipse.jface.viewers.StructuredSelection;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
@@ -62,7 +60,6 @@ public final class EditorScreenshotHelper
     private static final String GET_MAPPING_ROOT_METHOD = "getMappingRoot"; //$NON-NLS-1$
     private static final String BUILD_UPDATE_EVENT_METHOD = "buildUpdateEvent"; //$NON-NLS-1$
     private static final String BUILD_SELECT_BY_ID_EVENT_METHOD = "buildSelectByIdEvent"; //$NON-NLS-1$
-    private static final String SET_SELECTION_METHOD = "setSelection"; //$NON-NLS-1$
     private static final String GET_CONTROL_METHOD = "getControl"; //$NON-NLS-1$
     private static final String REFRESH_METHOD = "refresh"; //$NON-NLS-1$
     private static final String REBUILD_METHOD = "rebuild"; //$NON-NLS-1$
@@ -758,9 +755,9 @@ public final class EditorScreenshotHelper
                 + "Pass the element's programmatic name (e.g. a page name); " //$NON-NLS-1$
                 + "get_metadata_details with the form FQN lists the elements."; //$NON-NLS-1$
         }
-        // The Java-side selection switches the pages of the non-native render; the synchronous
-        // select-by-id render switches them in the native render that produces the image.
-        setRepresentationSelection(representation, item);
+        // Only the synchronous native render is driven here. The editor's own setSelection would also
+        // switch the pages, but in native mode it schedules an asynchronous select-by-id rebuild that can
+        // land after the frame-clearing render below and paint the selection frame back.
         if (renderRequestedFormSynchronously(representation, new int[] { item.getId() }) != RenderOutcome.RENDERED)
         {
             return "The form could not be re-rendered to show element '" + elementName //$NON-NLS-1$
@@ -769,7 +766,11 @@ public final class EditorScreenshotHelper
         }
         // An update-only render with an empty selection keeps the switched pages but drops the
         // selection frame; a full render would bring back the default pages.
-        renderRequestedFormSynchronously(representation, new int[0], true);
+        if (renderRequestedFormSynchronously(representation, new int[0], true) != RenderOutcome.RENDERED)
+        {
+            return "Element '" + elementName + "' was shown, but the selection frame could not be " //$NON-NLS-1$ //$NON-NLS-2$
+                + "cleared from the image. Try again."; //$NON-NLS-1$
+        }
         return null;
     }
 
@@ -790,21 +791,6 @@ public final class EditorScreenshotHelper
             }
         }
         return null;
-    }
-
-    private static void setRepresentationSelection(Object representation, Object selected)
-    {
-        try
-        {
-            Method setSelection = representation.getClass()
-                .getMethod(SET_SELECTION_METHOD, IStructuredSelection.class, boolean.class);
-            setSelection.invoke(representation, new StructuredSelection(selected), Boolean.FALSE);
-        }
-        catch (Exception e)
-        {
-            // Only the non-native render depends on it; the native render is driven by the event.
-            Activator.logWarning("Could not set the form editor selection: " + e.getMessage()); //$NON-NLS-1$
-        }
     }
 
     /**
