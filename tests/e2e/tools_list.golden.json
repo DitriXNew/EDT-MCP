@@ -966,9 +966,9 @@
   },
   {
     "annotations": {
-      "destructiveHint": false,
+      "idempotentHint": true,
       "openWorldHint": false,
-      "readOnlyHint": false
+      "readOnlyHint": true
     },
     "description": "Check which EDT debug sessions are running or paused. Parameters and examples: get_tool_guide('debug_status').",
     "inputSchema": {
@@ -2941,9 +2941,9 @@
   },
   {
     "annotations": {
-      "destructiveHint": false,
+      "idempotentHint": true,
       "openWorldHint": false,
-      "readOnlyHint": false
+      "readOnlyHint": true
     },
     "description": "Locate the source definition of a BSL symbol or metadata object. Parameters and examples: get_tool_guide('go_to_definition').",
     "inputSchema": {
@@ -5071,9 +5071,9 @@
   },
   {
     "annotations": {
-      "destructiveHint": false,
+      "idempotentHint": true,
       "openWorldHint": false,
-      "readOnlyHint": false
+      "readOnlyHint": true
     },
     "description": "Wait until a running 1C debug session reaches a breakpoint or other suspend event. Parameters and examples: get_tool_guide('wait_for_break').",
     "inputSchema": {
