@@ -106,7 +106,7 @@ public final class Toolsets
         define(CODE, "Code",
             "BSL code: write/read methods, call hierarchy, go-to-definition, references, content assist, queries."); //$NON-NLS-1$
         define(DEBUG, "Debug",
-            "Runtime debugging: launch/attach, breakpoints, step/resume, variables, expression evaluation."); //$NON-NLS-1$
+            "Runtime debugging: launch/attach, breakpoints, step/resume/pause, variables, expression evaluation."); //$NON-NLS-1$
         define(TESTING, "Testing",
             "YAXUnit unit testing, 1C:Workmate assistance, and shared background-job polling."); //$NON-NLS-1$
         define(PROFILING, "Profiling",
@@ -155,7 +155,8 @@ public final class Toolsets
             "launch", "debug_status", "set_breakpoint", "set_error_breakpoint", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "remove_breakpoint", "list_breakpoints", "wait_for_break", "get_variables", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "set_variable", //$NON-NLS-1$
-            "step", "resume", "evaluate_expression", "get_applications", "terminate_launch"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "step", "resume", "debug_pause", "evaluate_expression", "get_applications", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "terminate_launch"); //$NON-NLS-1$
 
         assign(TESTING,
             "run_yaxunit_tests", "debug_yaxunit_tests", "ask_workmate", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$

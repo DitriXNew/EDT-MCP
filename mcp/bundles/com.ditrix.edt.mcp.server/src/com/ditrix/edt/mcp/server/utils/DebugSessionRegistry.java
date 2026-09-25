@@ -601,6 +601,35 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
     }
 
     /**
+     * Returns a TERMINATED launch still registered in the launch manager whose launch
+     * resolves to the given applicationId, or {@code null}. Lets a debug tool report
+     * "that session ended" instead of "no such session" when the evidence is still there.
+     *
+     * @param applicationId the application id (real or synthetic)
+     * @return a terminated launch for that id, or {@code null}
+     */
+    public static ILaunch findTerminatedLaunch(String applicationId)
+    {
+        if (applicationId == null)
+        {
+            return null;
+        }
+        DebugPlugin debugPlugin = DebugPlugin.getDefault();
+        if (debugPlugin == null)
+        {
+            return null;
+        }
+        for (ILaunch launch : debugPlugin.getLaunchManager().getLaunches())
+        {
+            if (launch.isTerminated() && applicationId.equals(findApplicationIdFor(launch)))
+            {
+                return launch;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Convenience: returns the applicationId of the single active, non-terminated
      * debug launch, or {@code null} if there is none or more than one.
      */

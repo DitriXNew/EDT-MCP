@@ -12,8 +12,8 @@ validation, error quality, and the no-session branches.
 
 What they CANNOT cover is a real END-TO-END round-trip against a live infobase:
   1. a real YAXUnit run -> real junit.xml -> parsed Markdown counts;
-  2. a real breakpoint SUSPEND -> inspect (get_variables / evaluate_expression)
-     -> RESUME;
+  2. a real breakpoint SUSPEND, or a debug_pause of running code -> inspect
+     (get_variables / evaluate_expression) -> RESUME;
   3. a launch/session id MINTED by one tool and CONSUMED by its siblings
      (debug_status / terminate_launch; start_profiling -> get_profiling_results
      -> stop_profiling).
@@ -436,6 +436,91 @@ def test_live_debug_breakpoint_suspend_inspect_resume():
                 pass
         _quiet_infobase()
     assert_no_substantive_diff("a debug round-trip must not touch the project on disk")
+
+
+@e2e_test(tool="debug_pause", kind="read")
+def test_live_debug_pause_running_session_inspect_resume():
+    """Pausing running code with NO breakpoint set:
+
+        run_yaxunit_tests(debug=true)             [DEBUG launch, no breakpoint]
+          -> debug_pause(applicationId)           [suspend requested AND observed]
+          -> wait_for_break                       [the same stop, already suspended]
+          -> evaluate_expression / get_variables  [the returned frame is live]
+          -> debug_pause again                    [answers from the existing stop]
+          -> resume                               [released]
+
+    1C pauses at the next BSL statement the session runs; a client that has just started
+    runs its startup handlers at once, so the pause lands well inside the window.
+    """
+    requires_live_infobase("pauses a real running debug session")
+    try:
+        _ready_for_launch()
+        launch = _finish_named_yaxunit_start(call("run_yaxunit_tests", {
+            "launchConfigurationName": LIVE_LAUNCH_CONFIG,
+            "tests": SAMPLE_TEST,
+            "debug": "true",
+        }))
+        assert_ok(launch, "debug-mode YAXUnit launch to pause")
+        app_id = extract_application_id(launch.text)
+        if not app_id:
+            _fail("debug launch handle carried no applicationId:\n%s" % ((launch.text or "")[:400]))
+
+        # The launch registers its debug target asynchronously; until it does, debug_pause
+        # refuses with "still starting" and sends no request.
+        deadline = time.time() + 90
+        while True:
+            p = call("debug_pause", {"applicationId": app_id, "timeout": 60})
+            if (p.is_error and "still starting" in (p.error_text() or "")
+                    and time.time() < deadline):
+                time.sleep(0.5)
+                continue
+            break
+        assert_ok(p, "pause the running debug session")
+        sc = p.structured or {}
+        if sc.get("paused") is not True or sc.get("state") != "suspended":
+            _fail("expected paused:true, state:'suspended', got %r" % (sc,))
+        if sc.get("alreadySuspended") is not False:
+            _fail("nothing was suspended before the call, so this pause must be fresh: %r" % (sc,))
+        frames = sc.get("frames") or []
+        frame_ref = sc.get("topFrameRef")
+        if not frames or not frame_ref or frames[0].get("frameRef") != frame_ref:
+            _fail("the pause must return the stack with topFrameRef = frames[0]: %r" % (sc,))
+        if not frames[0].get("modulePath") or not frames[0].get("line"):
+            _fail("the top frame must locate the BSL line it paused on: %r" % (frames[0],))
+
+        # wait_for_break reads the same stop: the snapshot is shared, not a private copy.
+        w = call("wait_for_break", {"applicationId": app_id, "timeout": 5})
+        ws = w.structured or {}
+        if ws.get("hit") is not True or ws.get("threadId") != sc.get("threadId"):
+            _fail("wait_for_break must report the paused thread %r, got %r"
+                  % (sc.get("threadId"), ws))
+
+        ev = call("evaluate_expression", {"frameRef": frame_ref, "expression": "2 + 2"})
+        assert_ok(ev, "evaluate in the paused frame")
+        val = str((ev.structured or {}).get("value", "")).strip()
+        if val != "4":
+            _fail("evaluate_expression('2 + 2') must be 4 in the paused frame, got %r (%r)"
+                  % (val, ev.structured))
+        gv = call("get_variables", {"frameRef": frame_ref})
+        assert_ok(gv, "read variables from the paused frame")
+
+        # A second pause of a paused session sends nothing and returns the same stop.
+        p2 = call("debug_pause", {"applicationId": app_id, "timeout": 5})
+        s2 = p2.structured or {}
+        top2 = (s2.get("frames") or [{}])[0]
+        if (s2.get("paused") is not True or s2.get("alreadySuspended") is not True
+                or s2.get("threadId") != sc.get("threadId")
+                or top2.get("name") != frames[0].get("name")):
+            _fail("a second pause must return the existing stop (alreadySuspended:true, "
+                  "same thread and frame); first %r, second %r" % (sc, s2))
+
+        rz = call("resume", {"applicationId": app_id})
+        assert_ok(rz, "resume the paused session")
+        if (rz.structured or {}).get("resumed") is not True:
+            _fail("resume must report resumed:true, got %r" % (rz.structured,))
+    finally:
+        _quiet_infobase()
+    assert_no_substantive_diff("a pause round-trip must not touch the project on disk")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

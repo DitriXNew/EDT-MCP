@@ -1055,6 +1055,50 @@ public class ToolSettingsServiceTest
     }
 
     @Test
+    public void testVersion10AddsDebugPauseToAStoredNoDebugPreset()
+    {
+        // Stored at 9 by a build that had no debug_pause: the denylist cannot name it, so
+        // without this step the upgrade would hand a no-debug profile a way to suspend a session.
+        Set<String> stored = new HashSet<>(ToolPreset.DEVELOPMENT.getDisabledTools());
+        stored.remove("debug_pause"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(stored, 9);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertEquals("version 10 must restore the current Development preset", //$NON-NLS-1$
+            ToolPreset.DEVELOPMENT.getDisabledTools(), disabled);
+        assertEquals(ToolPreset.DEVELOPMENT, ToolPreset.matchPreset(disabled));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+    }
+
+    @Test
+    public void testVersion10LeavesAnAllToolsStoreAlone()
+    {
+        PreferenceStore store = storedDisabledTools(Set.of("git", "ask_workmate"), 9); //$NON-NLS-1$ //$NON-NLS-2$
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(Set.of("git", "ask_workmate"), disabledTools(store)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testVersion10LeavesAProfileThatReenabledADebugToolAlone()
+    {
+        // Containment tolerates tightening only: a profile that turned resume back on is its
+        // author's own selection and must not gain a disable it never chose.
+        Set<String> custom = new HashSet<>(ToolPreset.DEVELOPMENT.getDisabledTools());
+        custom.remove("debug_pause"); //$NON-NLS-1$
+        custom.remove("resume"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(custom, 9);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(custom, disabledTools(store));
+    }
+
+    @Test
     public void testVersion5DoesNotDisableLaunchForAStoreThatNeverDisabledIt()
     {
         PreferenceStore store = storedDisabledTools(Set.of("git", "ask_workmate"), 4); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1376,7 +1420,8 @@ public class ToolSettingsServiceTest
             preset.getDisabledTools(), disabled);
         assertEquals("the restored set must match " + preset, //$NON-NLS-1$
             preset, ToolPreset.matchPreset(disabled));
-        assertEquals(9, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
     }
 
     private static void assertVersion9LeavesCustomizedProfileAlone(String enabledPriorTool)

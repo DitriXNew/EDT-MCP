@@ -6,26 +6,20 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 import org.eclipse.debug.core.model.IDebugTarget;
-import org.eclipse.debug.core.model.IStackFrame;
 import org.eclipse.debug.core.model.IThread;
-import org.eclipse.emf.common.util.URI;
 
-import com._1c.g5.v8.dt.debug.core.model.IBslStackFrame;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
-import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.DebugSessionRegistry;
+import com.ditrix.edt.mcp.server.utils.DebugSnapshotResponse;
 import com.ditrix.edt.mcp.server.utils.DebugTargetResolver;
 import com.ditrix.edt.mcp.server.utils.LaunchConfigUtils;
 
@@ -300,112 +294,16 @@ public class WaitForBreakTool implements IMcpTool
     }
 
     /**
-     * Builds the JSON response for a suspend snapshot. Walks the thread stack
-     * and registers each frame with a stable id so that follow-up tools
-     * (get_variables, evaluate_expression, step) can refer back to it.
-     * {@code serverTarget} marks a suspend resolved via the 1C debug-server
-     * target bridge; as on the timeout path, the flag is emitted only when
-     * {@code true} and omitted for ordinary launch threads.
+     * Builds the JSON response for a suspend snapshot: {@code hit:true} plus the shared
+     * snapshot ({@link DebugSnapshotResponse}). {@code serverTarget} marks a suspend resolved
+     * via the 1C debug-server target bridge; as on the timeout path, the flag is emitted only
+     * when {@code true} and omitted for ordinary launch threads.
      */
     static String buildSnapshotResponse(DebugSessionRegistry.SuspendSnapshot snapshot,
             DebugSessionRegistry registry, String applicationId, boolean autoResolved,
             boolean serverTarget) throws Exception
     {
-        IThread thread = snapshot.thread;
-        List<Map<String, Object>> frames = new ArrayList<>();
-        IStackFrame[] stackFrames = thread.getStackFrames();
-        for (int i = 0; i < stackFrames.length; i++)
-        {
-            IStackFrame f = stackFrames[i];
-            long frameRef = registry.registerFrame(f);
-            Map<String, Object> dto = new LinkedHashMap<>();
-            dto.put("frameIndex", i); //$NON-NLS-1$
-            dto.put("frameRef", frameRef); //$NON-NLS-1$
-            dto.put("name", f.getName()); //$NON-NLS-1$
-            try
-            {
-                dto.put("line", f.getLineNumber()); //$NON-NLS-1$
-            }
-            catch (Exception ex)
-            {
-                // ignore
-            }
-            putSourceLocation(dto, f);
-            frames.add(dto);
-        }
-        ToolResult result = ToolResult.success()
-            .put("hit", true) //$NON-NLS-1$
-            .put("threadId", snapshot.threadId) //$NON-NLS-1$
-            .put("threadName", thread.getName()) //$NON-NLS-1$
-            .put(McpKeys.APPLICATION_ID, applicationId)
-            .put("frames", frames); //$NON-NLS-1$
-        if (autoResolved)
-        {
-            result.put(KEY_AUTO_RESOLVED, true);
-        }
-        if (serverTarget)
-        {
-            result.put(KEY_SERVER_TARGET, true);
-        }
-        if (!frames.isEmpty())
-        {
-            result.put("topFrameRef", frames.get(0).get("frameRef")); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        return result.toJson();
-    }
-
-    /**
-     * Best-effort: resolves a BSL frame's source file and adds {@code modulePath}
-     * (relative to {@code src/}) and {@code project} to the DTO so the caller can
-     * chain straight into {@code set_breakpoint} / {@code read_module_source}. A
-     * non-BSL frame, a null source or a source outside {@code src/} is silently
-     * skipped — the {@code line}/{@code name} fields still describe the frame.
-     */
-    private static void putSourceLocation(Map<String, Object> dto, IStackFrame f)
-    {
-        if (!(f instanceof IBslStackFrame))
-        {
-            return;
-        }
-        URI source;
-        try
-        {
-            source = ((IBslStackFrame) f).getSource();
-        }
-        catch (Exception ex)
-        {
-            return;
-        }
-        if (source == null || !source.isPlatformResource())
-        {
-            return;
-        }
-        // EDT module sources are platform-resource URIs laid out as
-        // /<project>/src/<modulePath>. Decode via toPlatformString(true): a plain
-        // URI.toString() leaves segments percent-encoded, which would corrupt the
-        // Cyrillic project/module names that set_breakpoint / read_module_source
-        // expect decoded.
-        String platformPath = source.toPlatformString(true);
-        if (platformPath == null)
-        {
-            return;
-        }
-        String marker = "/" + BslModuleUtils.SOURCE_FOLDER + "/"; //$NON-NLS-1$ //$NON-NLS-2$
-        int idx = platformPath.indexOf(marker);
-        if (idx <= 0)
-        {
-            // No project segment before /src/ — not a resolvable workspace module.
-            return;
-        }
-        dto.put("modulePath", platformPath.substring(idx + marker.length())); //$NON-NLS-1$
-        String project = platformPath.substring(0, idx);
-        if (project.startsWith("/")) //$NON-NLS-1$
-        {
-            project = project.substring(1);
-        }
-        if (!project.isEmpty())
-        {
-            dto.put("project", project); //$NON-NLS-1$
-        }
+        return DebugSnapshotResponse.appendSnapshot(ToolResult.success().put("hit", true), //$NON-NLS-1$
+            snapshot, registry, applicationId, autoResolved, serverTarget).toJson();
     }
 }
