@@ -1721,6 +1721,91 @@ public class FormElementWriterTest
             FormElementWriter.publishesKnownEventSet(tooltip));
     }
 
+    @Test
+    public void testAGroupBindsHandlersThroughItsExtInfo()
+    {
+        // #651: FormGroup holds no handler list; its GroupExtInfo does, and that is where EDT binds.
+        EObject group = groupWithHandlerExtInfo("OnCurrentPageChange", "PagesOnChange"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("a group whose ext-info holds a handler list binds handlers", //$NON-NLS-1$
+            FormElementWriter.bindsHandlers(group));
+        EObject found = FormElementWriter.findFormHandler(group, "oncurrentpagechange"); //$NON-NLS-1$
+        assertNotNull("a binding inside the ext-info must be addressable from the group", found); //$NON-NLS-1$
+        assertEquals("PagesOnChange", found.eGet(found.eClass().getEStructuralFeature("name"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(FormElementWriter.findFormHandler(group, "OnCollapse")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnElementWithNoHandlerListAnywhereBindsNone()
+    {
+        assertFalse("no list on the element and none on its ext-info", //$NON-NLS-1$
+            FormElementWriter.bindsHandlers(typedElement("FormGroup", "Pages", "PagesGroupExtInfo"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("no ext-info at all", //$NON-NLS-1$
+            FormElementWriter.bindsHandlers(typedElement("FormGroup", "Pages", null))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("an element holding its own list still binds", //$NON-NLS-1$
+            FormElementWriter.bindsHandlers(typedElement("FormField", "InputField", null, true))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * A {@code FormGroup} with no handler list of its own, whose {@code PagesGroupExtInfo} holds one
+     * binding of {@code eventName} to {@code procedure}.
+     */
+    private static EObject groupWithHandlerExtInfo(String eventName, String procedure)
+    {
+        EPackage pack = EcoreFactory.eINSTANCE.createEPackage();
+        pack.setName("probe"); //$NON-NLS-1$
+        EClass event = namedClass(pack, "Event"); //$NON-NLS-1$
+        EClass handler = namedClass(pack, "EventHandler"); //$NON-NLS-1$
+        EReference eventRef = EcoreFactory.eINSTANCE.createEReference();
+        eventRef.setName("event"); //$NON-NLS-1$
+        eventRef.setEType(event);
+        eventRef.setContainment(true);
+        handler.getEStructuralFeatures().add(eventRef);
+        EClass ext = EcoreFactory.eINSTANCE.createEClass();
+        ext.setName("PagesGroupExtInfo"); //$NON-NLS-1$
+        pack.getEClassifiers().add(ext);
+        EReference handlers = EcoreFactory.eINSTANCE.createEReference();
+        handlers.setName("handlers"); //$NON-NLS-1$
+        handlers.setEType(handler);
+        handlers.setContainment(true);
+        handlers.setUpperBound(-1);
+        ext.getEStructuralFeatures().add(handlers);
+        EClass groupClass = EcoreFactory.eINSTANCE.createEClass();
+        groupClass.setName("FormGroup"); //$NON-NLS-1$
+        pack.getEClassifiers().add(groupClass);
+        EReference extInfo = EcoreFactory.eINSTANCE.createEReference();
+        extInfo.setName("extInfo"); //$NON-NLS-1$
+        extInfo.setEType(ext);
+        extInfo.setContainment(true);
+        groupClass.getEStructuralFeatures().add(extInfo);
+
+        EObject eventObject = pack.getEFactoryInstance().create(event);
+        eventObject.eSet(event.getEStructuralFeature("name"), eventName); //$NON-NLS-1$
+        EObject handlerObject = pack.getEFactoryInstance().create(handler);
+        handlerObject.eSet(handler.getEStructuralFeature("name"), procedure); //$NON-NLS-1$
+        handlerObject.eSet(eventRef, eventObject);
+        EObject extObject = pack.getEFactoryInstance().create(ext);
+        @SuppressWarnings("unchecked")
+        List<EObject> list = (List<EObject>)extObject.eGet(handlers);
+        list.add(handlerObject);
+        EObject group = pack.getEFactoryInstance().create(groupClass);
+        group.eSet(extInfo, extObject);
+        return group;
+    }
+
+    /** An EClass in {@code pack} carrying a single String {@code name} attribute. */
+    private static EClass namedClass(EPackage pack, String className)
+    {
+        EClass eClass = EcoreFactory.eINSTANCE.createEClass();
+        eClass.setName(className);
+        EAttribute name = EcoreFactory.eINSTANCE.createEAttribute();
+        name.setName("name"); //$NON-NLS-1$
+        name.setEType(EcorePackage.Literals.ESTRING);
+        eClass.getEStructuralFeatures().add(name);
+        pack.getEClassifiers().add(eClass);
+        return eClass;
+    }
+
     /**
      * A dynamic element of {@code eClassName} whose {@code type} reads {@code typeLiteral}, carrying
      * an {@code extInfo} of {@code extClassName} - or none when that is {@code null}. The type

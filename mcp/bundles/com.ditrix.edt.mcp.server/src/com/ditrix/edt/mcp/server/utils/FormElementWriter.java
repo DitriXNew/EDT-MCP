@@ -5539,14 +5539,13 @@ public final class FormElementWriter
             }
             return createCommandAction(container, eventName, procName, createdKind);
         }
-        EStructuralFeature handlersFeat = container.eClass().getEStructuralFeature(KEY_HANDLERS);
-        if (!(handlersFeat instanceof EReference) || !handlersFeat.isMany())
+        // A form ROOT always holds handlers, so there the missing list is the model's shape.
+        if ("Form".equals(container.eClass().getName()) && !holdsHandlerList(container)) //$NON-NLS-1$
         {
-            // A form ROOT always holds handlers, so there the missing list is the model's shape.
-            if ("Form".equals(container.eClass().getName())) //$NON-NLS-1$
-            {
-                throw modelLacks("The form model's Form." + KEY_HANDLERS + " is not a handler list."); //$NON-NLS-1$ //$NON-NLS-2$
-            }
+            throw modelLacks("The form model's Form." + KEY_HANDLERS + " is not a handler list."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (!bindsHandlers(container))
+        {
             return "The form element '" + container.eClass().getName() //$NON-NLS-1$
                 + "' cannot hold event handlers."; //$NON-NLS-1$
         }
@@ -6017,7 +6016,8 @@ public final class FormElementWriter
      * item itself, but a form root's {@code extInfo} is an {@code EventHandlerContainer} of its own
      * and the events it publishes bind INSIDE it - that is where EDT puts a record form's
      * {@code BeforeWriteAtServer} (issue #592, and {@code EventHandlerCollectionModel} does the same
-     * split). Item ext-infos hold no handler list, so they keep answering with the item.</p>
+     * split). Item ext-infos hold handler lists too, so an ext-info event binds inside the ext-info -
+     * for a Group or a Decoration, which hold no list of their own, that is the only place.</p>
      *
      * <p>The union is incomplete when a non-null mapped type cannot be resolved. Validators then
      * receive no union, while writer callers retain the successfully resolved events.</p>
@@ -6034,8 +6034,10 @@ public final class FormElementWriter
         {
             return new EventUnion(Collections.emptyList(), false);
         }
+        // Like EDT's EventHandlerCollectionModel, the element's own type offers events only when the
+        // element can hold their bindings; a Group's or a Decoration's events come from its ext-info.
         List<EObject> base = new ArrayList<>();
-        boolean complete = addTypeEvents(provider, element,
+        boolean complete = !holdsHandlerList(element) || addTypeEvents(provider, element,
             PLATFORM_TYPE_BY_ECLASS.get(element.eClass().getName()), base);
         List<AvailableEvent> events = new ArrayList<>();
         for (EObject event : base)
@@ -6081,6 +6083,20 @@ public final class FormElementWriter
     {
         EStructuralFeature feature = object.eClass().getEStructuralFeature(KEY_HANDLERS);
         return feature instanceof EReference && feature.isMany();
+    }
+
+    /**
+     * Whether handlers can be bound around {@code element}: in its own list, or in its ext-info's. A
+     * Group or a Decoration holds none itself; its events bind inside its ext-info (issue #651).
+     */
+    static boolean bindsHandlers(EObject element)
+    {
+        if (holdsHandlerList(element))
+        {
+            return true;
+        }
+        EObject ext = singleReference(element, FEATURE_EXT_INFO);
+        return ext != null && holdsHandlerList(ext);
     }
 
     /**
@@ -7478,8 +7494,7 @@ public final class FormElementWriter
      */
     private static boolean ownerAcceptsHandlerLeaf(EObject owner, String leaf, Version version)
     {
-        EStructuralFeature handlersFeat = owner.eClass().getEStructuralFeature(KEY_HANDLERS);
-        if (!(handlersFeat instanceof EReference) || !handlersFeat.isMany())
+        if (!bindsHandlers(owner))
         {
             return owner.eClass().getEStructuralFeature(FEATURE_ACTION) != null && isActionToken(leaf);
         }
@@ -7650,11 +7665,13 @@ public final class FormElementWriter
             }
             return singleReference(container, FEATURE_ACTION);
         }
-        EStructuralFeature handlersFeat = container.eClass().getEStructuralFeature(KEY_HANDLERS);
-        if (!(handlersFeat instanceof EReference) || !handlersFeat.isMany())
+        if (!bindsHandlers(container))
         {
             return null;
         }
+        EObject listOwner = holdsHandlerList(container) ? container
+            : singleReference(container, FEATURE_EXT_INFO);
+        EStructuralFeature handlersFeat = listOwner.eClass().getEStructuralFeature(KEY_HANDLERS);
         EClass ehType = ((EReference)handlersFeat).getEReferenceType();
         EStructuralFeature evFeat = ehType != null ? ehType.getEStructuralFeature(FEATURE_EVENT) : null;
         for (EObject handler : handlersAroundContainer(container))
@@ -7822,8 +7839,7 @@ public final class FormElementWriter
             setStringFeature(handler, FEATURE_NAME, procName);
             return null;
         }
-        EStructuralFeature handlersFeat = container.eClass().getEStructuralFeature(KEY_HANDLERS);
-        if (!(handlersFeat instanceof EReference) || !handlersFeat.isMany())
+        if (!bindsHandlers(container))
         {
             return "The form element '" + container.eClass().getName() //$NON-NLS-1$
                 + "' cannot hold event handlers."; //$NON-NLS-1$
