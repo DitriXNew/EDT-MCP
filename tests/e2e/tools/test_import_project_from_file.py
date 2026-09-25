@@ -75,6 +75,8 @@ _REFUSED_PROJECT = "ZZImportFileRefused"
 
 # How long one import may take end to end on the stand, polling included.
 _JOB_BUDGET_S = 900
+# How long a started project may stay `building` in list_projects before it counts as broken.
+_READY_BUDGET_S = 180
 
 
 def _ensure_absent(project_name):
@@ -122,12 +124,21 @@ def _import_to_completion(arguments):
 
 
 def _assert_ready_in_list_projects(project_name):
-    """Ground truth independent of the tool's own answer: EDT really started the project."""
+    """Ground truth independent of the tool's own answer: EDT really started the project.
+
+    Polled, not read once: the answer itself allows a short `building` after the start, and the
+    suite settle skips a row list_projects marks as no EDT project - external objects are one."""
     settle_or_fail("the list_projects check of imported project " + project_name)
-    lp = call("list_projects", {})
-    state = _project_state(lp.text, project_name)
+    deadline = time.time() + _READY_BUDGET_S
+    while True:
+        text = call("list_projects", {}).text or ""
+        state = _project_state(text, project_name)
+        if state == "ready" or time.time() >= deadline:
+            break
+        time.sleep(2)
     assert state == "ready", \
-        "imported project %s must reach state 'ready', got %r:\n%s" % (project_name, state, lp.text)
+        "imported project %s must reach state 'ready' within %ss, got %r:\n%s" % (
+            project_name, _READY_BUDGET_S, state, text)
 
 
 def _assert_fixtures_untouched(ctx):
