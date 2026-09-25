@@ -25,7 +25,8 @@ import com.ditrix.edt.mcp.server.protocol.jsonrpc.ToolAnnotations;
  * <li><b>Destructive</b> (an explicit allow-list of irreversible / cascading
  * operations): {@code destructiveHint=true}, {@code readOnlyHint=false}.</li>
  * <li><b>Read-only</b> (names prefixed {@code get_}/{@code list_}/{@code read_}/
- * {@code search_}/{@code find_}/{@code validate_}): {@code readOnlyHint=true},
+ * {@code search_}/{@code find_}/{@code validate_}, plus the named reads that lack such a
+ * prefix): {@code readOnlyHint=true},
  * {@code idempotentHint=true} (re-reading the same state has no side effect).</li>
  * <li><b>Other writes</b> (everything else): {@code readOnlyHint=false},
  * {@code destructiveHint=false} (a non-destructive mutation).</li>
@@ -65,6 +66,17 @@ public final class ToolAnnotationClassifier
         "merge_rules" //$NON-NLS-1$
     );
 
+    /**
+     * Pure reads whose names carry no read prefix: without this list they fall through to the
+     * "other writes" bucket and are published to clients as mutations.
+     */
+    private static final Set<String> READ_ONLY_TOOLS = Set.of(
+        "go_to_definition", //$NON-NLS-1$
+        "debug_status", //$NON-NLS-1$
+        // observes a debug session; the snapshot it records is our own registry, not the debuggee
+        "wait_for_break" //$NON-NLS-1$
+    );
+
     private ToolAnnotationClassifier()
     {
         // utility class
@@ -102,14 +114,16 @@ public final class ToolAnnotationClassifier
     }
 
     /**
-     * A tool is read-only when its name uses one of the read-oriented prefixes.
+     * A tool is read-only when it is listed in {@link #READ_ONLY_TOOLS} or its name uses one of
+     * the read-oriented prefixes.
      *
      * @param toolName the tool name (non-null)
      * @return {@code true} if the tool only reads state
      */
     private static boolean isReadOnly(String toolName)
     {
-        return toolName.startsWith("get_") //$NON-NLS-1$
+        return READ_ONLY_TOOLS.contains(toolName)
+            || toolName.startsWith("get_") //$NON-NLS-1$
             || toolName.startsWith("list_") //$NON-NLS-1$
             || toolName.startsWith("read_") //$NON-NLS-1$
             || toolName.startsWith("search_") //$NON-NLS-1$

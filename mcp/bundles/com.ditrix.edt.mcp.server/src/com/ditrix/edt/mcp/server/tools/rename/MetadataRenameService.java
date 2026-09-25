@@ -1328,8 +1328,7 @@ public class MetadataRenameService
                     List<TextEdit> leafEdits = getLeafEdits(edit);
                     if (!leafEdits.isEmpty())
                     {
-                        Module module = BslModuleUtils.loadModule(file.getProject(),
-                            BslModuleUtils.extractModulePath(file.getFullPath().toString()));
+                        Module module = BslModuleUtils.loadModule(file);
                         addLeafEditChangePoints(change, leafIndex, scan, leafEdits, content, module, ctx);
                         scan.addedFallbackChange = true;
                     }
@@ -1632,7 +1631,7 @@ public class MetadataRenameService
             int columnNumber = computeColumnNumber(content, fileOffset);
             String codeContext = extractContext(content, lineNumber);
             String methodName = null;
-            Module module = BslModuleUtils.loadModule(file.getProject(), BslModuleUtils.extractModulePath(file.getFullPath().toString()));
+            Module module = BslModuleUtils.loadModule(file);
             if (module != null)
             {
                 methodName = findContainingMethodAst(module, lineNumber);

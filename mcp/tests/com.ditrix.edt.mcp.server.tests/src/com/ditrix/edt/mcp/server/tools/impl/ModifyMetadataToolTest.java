@@ -65,6 +65,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
+import com._1c.g5.v8.dt.metadata.mdclass.SessionParameter;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
@@ -150,6 +151,19 @@ public class ModifyMetadataToolTest
         assertSame(MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
             ModifyMetadataTool.typeTargetForFeature(
                 MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE, source));
+    }
+
+    @Test
+    public void testSessionParameterTypeSelectsItsOwnTypeTarget()
+    {
+        SessionParameter parameter = MdClassFactory.eINSTANCE.createSessionParameter();
+        EStructuralFeature type = parameter.eClass().getEStructuralFeature("type"); //$NON-NLS-1$
+        assertSame("modify_metadata resolves 'type' to this literal", //$NON-NLS-1$
+            MdClassPackage.Literals.SESSION_PARAMETER__TYPE, type);
+        assertSame(MetadataTypeBuilder.TypeTarget.SESSION_PARAMETER,
+            ModifyMetadataTool.typeTargetForFeature(MetadataTypeBuilder.TypeTarget.METADATA, type));
+        assertSame(MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE,
+            ModifyMetadataTool.typeTargetForFeature(MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE, type));
     }
 
     @Test

@@ -23,6 +23,7 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.resource.ResourceSet;
 import org.eclipse.emf.ecore.resource.URIConverter;
@@ -1270,61 +1271,46 @@ public class BslModuleUtilsTest
     }
 
     @Test
-    public void testAPathWeDerivedWronglyIsNotTreatedAsAnAbsentModule()
+    public void testModuleUriAddressesAFileOutsideSrc()
     {
-        // loadModule builds its URI as <project>/src/<modulePath>, so an ABSOLUTE modulePath makes
-        // an address that cannot exist. extractModulePath returns its input UNCHANGED when it finds
-        // no /src/ marker, so such a path is one WE derived wrongly (MetadataRenameService feeds it
-        // file.getFullPath()), not a module the caller asked for. Demoting it would turn our own
-        // derivation defect into a routine "not found" that the ERROR-severity ratchet never reads.
-        String fabricated = "/TestConfiguration/ext/Module.bsl"; //$NON-NLS-1$
-        assertEquals("extractModulePath returns a non-src path unchanged - the fabrication source", //$NON-NLS-1$
-            fabricated, BslModuleUtils.extractModulePath(fabricated));
-
-        assertFalse("a path WE derived wrongly must not pass as a routine absence", //$NON-NLS-1$
-            BslModuleUtils.isDemotableAbsence(fabricated, false));
-        assertTrue("a module the caller named and that is not there IS a routine absence", //$NON-NLS-1$
-            BslModuleUtils.isDemotableAbsence("CommonModules/NoSuchModule_e2e/Module.bsl", false)); //$NON-NLS-1$
-        assertFalse("a module that EXISTS is never an absence, whatever its path shape", //$NON-NLS-1$
-            BslModuleUtils.isDemotableAbsence("CommonModules/Real/Module.bsl", true)); //$NON-NLS-1$
-    }
-
-    @Test
-    public void testAModuleTheResolverFindsOutsideSrcIsNotAnAbsence()
-    {
-        // loadModule addresses <project>/src/<path>, but resolveModuleFile also searches the other
-        // top-level folders. The src URI is absent while the resolver finds the file: a failed load
-        // there is OUR addressing defect and must keep its ERROR, not pass as "does not exist".
+        // resolveModuleFile also finds a module in a non-src top-level folder; the load must
+        // address THAT file, not re-derive <project>/src/<path>.
         IFile elsewhere = mock(IFile.class);
-        when(elsewhere.exists()).thenReturn(true);
+        when(elsewhere.getFullPath()).thenReturn(new Path("/P/source/CommonModules/M/Module.bsl")); //$NON-NLS-1$
 
-        boolean exists = BslModuleUtils.moduleExists(false, () -> elsewhere);
-
-        assertTrue("the resolver found the module, so it exists", exists); //$NON-NLS-1$
-        assertFalse("and its failed load must not be demoted", //$NON-NLS-1$
-            BslModuleUtils.isDemotableAbsence("CommonModules/Elsewhere/Module.bsl", exists)); //$NON-NLS-1$
-        assertEquals(IStatus.ERROR, BslModuleUtils.moduleLoadStatus(!BslModuleUtils.isDemotableAbsence(
-            "CommonModules/Elsewhere/Module.bsl", exists), MODULE_URI, new RuntimeException("load")).getSeverity()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("platform:/resource/P/source/CommonModules/M/Module.bsl", //$NON-NLS-1$
+            BslModuleUtils.moduleUri(elsewhere).toString());
     }
 
     @Test
-    public void testAModuleAbsentEverywhereIsStillAnAbsence()
+    public void testModuleUriOfASrcFileIsTheConventionalAddress()
     {
-        IFile nowhere = mock(IFile.class);
-        when(nowhere.exists()).thenReturn(false);
+        IFile inSrc = mock(IFile.class);
+        when(inSrc.getFullPath()).thenReturn(new Path("/P/src/CommonModules/M/Module.bsl")); //$NON-NLS-1$
 
-        assertFalse(BslModuleUtils.moduleExists(false, () -> nowhere));
-        assertFalse("no resolver file at all", BslModuleUtils.moduleExists(false, () -> null)); //$NON-NLS-1$
-        assertTrue("the loaded URI existing is enough on its own", //$NON-NLS-1$
-            BslModuleUtils.moduleExists(true, () -> nowhere));
+        assertEquals("an ordinary src/ module keeps the address it always had", //$NON-NLS-1$
+            MODULE_URI, BslModuleUtils.moduleUri(inSrc));
     }
 
     @Test
-    public void testAResolverThatCannotAnswerStaysLoud()
+    public void testModuleUriOfACyrillicPathInASpacedProjectMatchesTheOldAddress()
     {
-        // An unknown state must never silence an error: a throwing resolver counts as "exists".
-        assertTrue(BslModuleUtils.moduleExists(false, () -> {
-            throw new IllegalStateException("workspace tree locked"); //$NON-NLS-1$
-        }));
+        // The old construction encoded the joined string; the file's full path must encode the same.
+        String path = "My Project/src/CommonModules/\u041E\u0431\u0449\u0438\u0439/Module.bsl"; //$NON-NLS-1$
+        IFile file = mock(IFile.class);
+        when(file.getFullPath()).thenReturn(new Path("/" + path)); //$NON-NLS-1$
+
+        URI uri = BslModuleUtils.moduleUri(file);
+
+        assertEquals(URI.createPlatformResourceURI(path, true), uri);
+        assertTrue("the space must be escaped: " + uri, uri.toString().contains("My%20Project")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testLoadModuleOfAnAbsolutePathOutsideTheWorkspaceIsNull()
+    {
+        // The resolver finds nothing for this absolute path, so there is no file to load - the
+        // load answers null instead of fabricating <project>/src/<absolute path>.
+        assertNull(BslModuleUtils.loadModule((IProject) null, "C:\\nonexistent\\path\\Module.bsl")); //$NON-NLS-1$
     }
 }

@@ -834,7 +834,7 @@ Every tool in the `tools/list` response carries an `annotations` object with the
 
 | Hint | Meaning | When set |
 |------|---------|----------|
-| `readOnlyHint` | The tool does not modify the workspace | `true` for `get_*` / `list_*` / `read_*` / `search_*` / `find_*` / `validate_*`; `false` for write and destructive tools |
+| `readOnlyHint` | The tool does not modify the workspace | `true` for `get_*` / `list_*` / `read_*` / `search_*` / `find_*` / `validate_*` and for `go_to_definition`, `debug_status`, `wait_for_break`; `false` for write and destructive tools |
 | `idempotentHint` | Repeating the call has no additional effect | `true` for the read-only tools above |
 | `destructiveHint` | The tool may perform a destructive or irreversible update | `true` for tools such as `delete_metadata`, `update_database`, `infobase_sessions`, `rename_metadata_object`, `delete_project`, and `cancel_job` |
 | `openWorldHint` | The tool interacts with an external/open world | `false` for every tool but `git`, which sets it `true`: `push` / `pull` / `fetch` reach a remote |

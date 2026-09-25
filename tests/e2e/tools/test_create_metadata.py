@@ -1634,6 +1634,47 @@ def test_create_form_item_level_handler():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_group_handler_binds_inside_the_group_ext_info():
+    # #651: a FormGroup holds no handler list; a Pages group's OnCurrentPageChange is published by
+    # its PagesGroupExtInfo and must bind INSIDE that node, as EDT itself binds it.
+    grp, proc = "GHPages", "GHPagesOnCurrentPageChange"
+    form_file = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Group." + grp,
+        "properties": [{"name": "type", "value": "Pages"}]})
+    assert_ok(r, "seed a Pages group")
+    wait_for_project_ready()
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Group.%s.Handler.OnCurrentPageChange" % grp,
+        "properties": [{"name": "procedure", "value": proc}]})
+    assert_ok(r, "bind OnCurrentPageChange to the Pages group")
+    assert r.structured.get("action") == "created", "must report created: %r" % (r.structured,)
+
+    root = ET.fromstring(poll_disk_contains(form_file, proc,
+                                            ctx="the group handler must land in the .form"))
+    local = lambda element: element.tag.rsplit("}", 1)[-1]
+    group = next((element for element in root.iter() if local(element) == "items"
+                  and any(local(c) == "name" and c.text == grp for c in element)), None)
+    assert group is not None, "the Pages group must be on disk"
+    ext_info = next((c for c in group if local(c) == "extInfo"), None)
+    assert ext_info is not None, "the Pages group must carry its extInfo"
+    bound = [h for h in ext_info.iter() if local(h) == "handlers"
+             and any(local(c) == "name" and c.text == proc for c in h)]
+    assert len(bound) == 1, "the handler must bind exactly once inside the group's extInfo: %s" % \
+        ET.tostring(ext_info, encoding="unicode")[:800]
+
+    # Unknown group event: the refusal lists what the group's ext-info publishes.
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        "fqn": "Catalog.Catalog.Form.ItemForm.Group.%s.Handler.NotARealEvent_zz" % grp})
+    e = assert_error(r, "unknown group event")
+    assert_error_quality(e, names=["NotARealEvent_zz"],
+                         suggests=["Available events", "OnCurrentPageChange"],
+                         ctx="an unknown group event must list the group's available events")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_form_item_level_handler_unknown_event_lists_available():
     # An item-level handler with an unknown event must list the item's available events (which include
     # the extInfo sub-type's events, e.g. OnChange for an input field).

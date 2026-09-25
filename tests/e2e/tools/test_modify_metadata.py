@@ -727,6 +727,49 @@ def test_set_typed_ref_shorthand():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_session_parameter_accepts_fixed_collections():
+    # #646: a session parameter holds FixedArray / FixedStructure / FixedMap; the stored-feature
+    # refusal used to reject them. The Russian spelling must resolve to the same platform type.
+    name = "E2EFixedCollectionParam"
+    fqn = "SessionParameter." + name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+              "seed the SessionParameter")
+    wait_for_project_ready()
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": fqn,
+        "properties": [{"name": "type", "value": {"types": [
+            {"kind": "FixedArray"},
+            {"kind": "Фиксированное"
+                     "Соответствие"},
+        ]}}],
+    })
+    assert_ok(r, "set a session parameter's type to FixedArray + FixedMap")
+    assert "type" in (r.structured.get("applied") or []), \
+        "type must be reported as applied: %r" % (r.structured,)
+    path = "src/SessionParameters/%s/%s.mdo" % (name, name)
+    poll_disk_contains(path, "<types>FixedArray</types>",
+                       ctx="FixedArray must land in the session parameter .mdo")
+    poll_disk_contains(path, "<types>FixedMap</types>",
+                       ctx="the Russian FixedMap spelling must serialize as FixedMap")
+    row = _assignable_row(fqn, "type")
+    assert row is not None, "the session parameter type must be readable through assignable:true"
+    assert_contains(row, "FixedArray", "MODEL read-back must expose the FixedArray type")
+
+    # A mutable Array stays refused, in words that do not call a session parameter a stored feature.
+    r = call("modify_metadata", {
+        "projectName": PROJECT,
+        "fqn": fqn,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "Array"}]}}],
+    })
+    e = assert_error(r, "a mutable Array on a session parameter")
+    assert_error_quality(e, names=["Array", "session parameter"], suggests=["FixedArray"],
+                         ctx="session parameter Array refusal")
+    assert_not_contains(e, "stored metadata feature", "a session parameter is not a stored feature")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_event_subscription_source_accepts_concrete_document_object():
     document_name = "E2EProducedSourceDocument"
     subscription_name = "E2EProducedSourceSubscription"

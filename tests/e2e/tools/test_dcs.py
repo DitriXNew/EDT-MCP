@@ -25,6 +25,7 @@ from harness import (
     e2e_test,
     poll_diff_contains,
     poll_disk_contains,
+    poll_disk_contains_all,
     poll_disk_lacks,
     read_disk,
     wait_for_project_ready,
@@ -1025,16 +1026,12 @@ def test_schema_member_bodies_persist_typed_default_field_type_appearance_and_at
     assert_ok(patched_field, "patch one field appearance key without dropping its sibling")
 
     dcs_rel = _poll_report_dcs(report_name, ctx="the extended schema-member write")
-    for needle, why in (
-            (parameter, "the parameter default"),
-            ("2026-08-24", "the parameter default value"),
-            ("BackColor", "the field appearance"),
-            ("TextColor", "the omitted field appearance key retained by merge-on-update"),
-            ("valueType", "the field String value type"),
-            ("attributeUseRestriction", "the field attribute-use restriction")):
-        poll_disk_contains(dcs_rel, needle, ctx=why + " must reach Template.dcs")
-
-    on_disk = read_disk(dcs_rel)
+    # ONE read that holds every needle: re-reading after the poll can land mid-rewrite (#652).
+    on_disk = poll_disk_contains_all(
+        dcs_rel, [parameter, "2026-08-24", "BackColor", "TextColor", "valueType",
+                  "attributeUseRestriction"],
+        ctx="the parameter default and the field appearance / value type / restriction "
+            "(TextColor retained by merge-on-update) must reach Template.dcs")
     parameter_start = on_disk.index(parameter)
     parameter_window = on_disk[parameter_start:parameter_start + 3000]
     assert re.search(r'<(?:\w+:)?values?\s+xsi:type="[^"]*[Dd]ate[^"]*"',
@@ -1073,9 +1070,8 @@ def test_number_value_type_qualifiers_round_trip_through_typed_calls():
     assert_ok(authored, "author Number precision/scale through the typed DCS body")
 
     dcs_rel = _poll_report_dcs(report_name, ctx="the qualified Number parameter write")
-    poll_disk_contains(dcs_rel, parameter,
-                       ctx="the qualified parameter must reach Template.dcs")
-    on_disk = read_disk(dcs_rel)
+    on_disk = poll_disk_contains(dcs_rel, parameter,
+                                 ctx="the qualified parameter must reach Template.dcs")
     assert "Digits>%d</" % precision in on_disk, \
         "Number precision must persist as the 1C XML Digits qualifier in %s" % dcs_rel
     assert "FractionDigits>%d</" % scale in on_disk, \
@@ -1146,9 +1142,8 @@ def test_calculated_field_empty_expression_survives_write_export_and_read():
     assert_ok(written, "author a deliberately empty calculated-field expression")
 
     dcs_rel = _poll_report_dcs(report_name, ctx="the empty calculated-field write")
-    poll_disk_contains(dcs_rel, data_path,
-                       ctx="the empty-expression field must reach Template.dcs")
-    on_disk = read_disk(dcs_rel)
+    on_disk = poll_disk_contains(dcs_rel, data_path,
+                                 ctx="the empty-expression field must reach Template.dcs")
     assert re.search(r"<expression\s*/>", on_disk), \
         "the deliberate empty expression must serialize as an empty XML element in %s" % dcs_rel
 
@@ -1339,9 +1334,8 @@ def test_localized_title_uses_the_declared_language_code_spelling():
     dcs_rel = _poll_report_dcs(report_name, ctx="the localized parameter write")
     # _poll_report_dcs only waits for the FILE, and seeding the report already created it,
     # so it can release before this write's export lands. Wait for the write's own mark.
-    poll_disk_contains(dcs_rel, ">en<",
-                       ctx="the canonicalized language key must reach Template.dcs")
-    on_disk = read_disk(dcs_rel)
+    on_disk = poll_disk_contains(dcs_rel, ">en<",
+                                 ctx="the canonicalized language key must reach Template.dcs")
     assert ">en<" in on_disk, \
         "the title must use the configuration's declared spelling 'en': %s" % on_disk[:700]
     assert ">EN<" not in on_disk, \
@@ -1925,9 +1919,8 @@ def test_variant_output_parameters_use_declared_xml_types_and_refuse_unknown_nam
     # variant's marker releases as soon as ITS export lands, and on a loaded machine the
     # second variant can still be in flight - the parse below then finds one variant and
     # blames the writer for a race that lives in this test.
-    poll_disk_contains(dcs_rel, "Russian-call output title",
-                       ctx="the Russian-call output parameters must reach Template.dcs")
-    on_disk = read_disk(dcs_rel)
+    on_disk = poll_disk_contains(dcs_rel, "Russian-call output title",
+                                 ctx="the Russian-call output parameters must reach Template.dcs")
 
     namespaces = {
         "dcs": "http://v8.1c.ru/8.1/data-composition-system/schema",
@@ -2045,9 +2038,8 @@ def test_typed_conditional_appearance_resolves_named_style_color_to_style_litera
     assert_ok(authored, "author a typed conditional-appearance style color")
 
     dcs_rel = _poll_report_dcs(report_name, ctx="the named style-color DCS fixture")
-    poll_disk_contains(dcs_rel, "style:" + style_name,
-                       ctx="the named style color must reach Template.dcs")
-    on_disk = read_disk(dcs_rel)
+    on_disk = poll_disk_contains(dcs_rel, "style:" + style_name,
+                                 ctx="the named style color must reach Template.dcs")
     assert re.search(
         r'<dcscor:value xsi:type="v8ui:Color">style:%s</dcscor:value>'
         % re.escape(style_name), on_disk), \
@@ -2421,9 +2413,8 @@ def test_table_axis_holder_address_copied_from_read_writes_to_disk():
     assert new_id in after.text and old_id not in after.text
 
     dcs_rel = _poll_report_dcs(report_name, ctx="the table-axis holder fixture")
-    poll_disk_contains(dcs_rel, new_id,
-                       ctx="the row-axis holder replacement must reach Template.dcs")
-    on_disk = read_disk(dcs_rel)
+    on_disk = poll_disk_contains(dcs_rel, new_id,
+                                 ctx="the row-axis holder replacement must reach Template.dcs")
     assert new_id in on_disk and old_id not in on_disk
 
 

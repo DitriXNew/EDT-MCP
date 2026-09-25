@@ -14,7 +14,6 @@ import java.io.InputStreamReader;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -246,15 +245,35 @@ public final class BslModuleUtils
     }
 
     /**
-     * Loads BSL Module EMF model via BmAwareResourceSetProvider.
-     * Tries ServiceTracker first, falls back to IResourceServiceProvider (Guice injector).
+     * Loads the BSL Module EMF model of the file {@link #resolveModuleFile} finds for
+     * {@code modulePath}, so "where is the module" has one answer for both.
      *
      * @param project the EDT project
-     * @param modulePath path from src/, e.g. "CommonModules/MyModule/Module.bsl"
+     * @param modulePath path from the source folder, e.g. "CommonModules/MyModule/Module.bsl",
+     *                   or an absolute filesystem path of a workspace file
      * @return loaded Module or null if not found
      */
     public static Module loadModule(IProject project, String modulePath)
     {
+        IFile file = resolveModuleFile(project, modulePath);
+        if (file == null)
+        {
+            Activator.logWarning("BSL module not found in the workspace: " + modulePath); //$NON-NLS-1$
+            return null;
+        }
+        return loadModule(file);
+    }
+
+    /**
+     * Loads the BSL Module EMF model of a workspace file via BmAwareResourceSetProvider.
+     * Tries ServiceTracker first, falls back to IResourceServiceProvider (Guice injector).
+     *
+     * @param file the module file
+     * @return loaded Module or null if not found
+     */
+    public static Module loadModule(IFile file)
+    {
+        IProject project = file.getProject();
         // Try to obtain BmAwareResourceSetProvider
         BmAwareResourceSetProvider resourceSetProvider = Activator.getDefault().getResourceSetProvider();
 
@@ -291,8 +310,7 @@ public final class BslModuleUtils
             return null;
         }
 
-        // Use createPlatformResourceURI for proper encoding (handles Cyrillic paths)
-        URI uri = URI.createPlatformResourceURI(project.getName() + "/" + SOURCE_FOLDER + "/" + modulePath, true); //$NON-NLS-1$ //$NON-NLS-2$
+        URI uri = moduleUri(file);
         Activator.logInfo("Loading BSL module: " + uri.toString()); //$NON-NLS-1$
 
         try
@@ -317,39 +335,22 @@ public final class BslModuleUtils
         }
         catch (Exception e)
         {
-            Log.log(moduleLoadStatus(!isDemotableAbsence(modulePath,
-                moduleExists(uriExists(resourceSet, uri), () -> resolveModuleFile(project, modulePath))),
-                uri, e));
+            Log.log(moduleLoadStatus(uriExists(resourceSet, uri), uri, e));
         }
 
         return null;
     }
 
     /**
-     * Whether the module exists at all: at the URI the load asked for, OR where
-     * {@link #resolveModuleFile} finds it. The load always addresses {@code src/}, while the
-     * resolver also searches the other top-level folders - a module found there but not loaded is
-     * OUR addressing failure, and must not pass as "does not exist".
+     * The URI of a module file, built from the file's own full path (encoded, so Cyrillic paths
+     * load), whichever top-level folder it lives in.
      *
-     * @param uriExists what the probe of the loaded URI answered
-     * @param resolved yields the resolver's file for the same module path (may yield {@code null})
-     * @return {@code true} when either location holds the module, or when the resolver cannot answer
+     * @param file the module file
+     * @return its platform resource URI
      */
-    static boolean moduleExists(boolean uriExists, Supplier<IFile> resolved)
+    static URI moduleUri(IFile file)
     {
-        if (uriExists)
-        {
-            return true;
-        }
-        try
-        {
-            IFile file = resolved.get();
-            return file != null && file.exists();
-        }
-        catch (RuntimeException probeFailed) // NOSONAR an unanswerable probe must not silence the error
-        {
-            return true;
-        }
+        return URI.createPlatformResourceURI(file.getFullPath().toString(), true);
     }
 
     /**
@@ -358,8 +359,6 @@ public final class BslModuleUtils
      * contract is to answer {@code null}), so it logs at WARNING with no stack. A load that failed
      * for any OTHER reason keeps its ERROR and its stack - the demotion is decided by whether the
      * resource EXISTS, never by the exception's class.
-     * <p>
-     * See {@link #isDemotableAbsence} for the one absence that is NOT demotable.
      *
      * @param resourceExists whether the URI names a resource that is actually there
      * @param uri the module URI the load was attempted for
@@ -373,26 +372,6 @@ public final class BslModuleUtils
             return new Status(IStatus.ERROR, Log.pluginId(), "Failed to load BSL module: " + uri, e); //$NON-NLS-1$
         }
         return new Status(IStatus.WARNING, Log.pluginId(), "BSL module does not exist: " + uri, null); //$NON-NLS-1$
-    }
-
-    /**
-     * Whether a failed load may be treated as a plain ABSENCE (the caller named a module that is not
-     * there) rather than a failure worth an ERROR.
-     * <p>
-     * An absolute {@code modulePath} disqualifies it. The URI is always built as
-     * {@code <project>/src/<modulePath>}, so an absolute path yields an address that cannot exist -
-     * and {@link #extractModulePath} returns its input UNCHANGED when it finds no {@code /src/}
-     * marker, which is how such a path arises ({@code MetadataRenameService} feeds it
-     * {@code file.getFullPath()}). A miss there is OUR derivation defect, not a module anybody
-     * asked for, so it keeps its ERROR and its stack instead of passing as routine.
-     *
-     * @param modulePath the path the load was asked for
-     * @param resourceExists what the existence probe answered
-     * @return {@code true} when the miss is an ordinary absence
-     */
-    static boolean isDemotableAbsence(String modulePath, boolean resourceExists)
-    {
-        return !resourceExists && !looksLikeAbsolutePath(modulePath);
     }
 
     /**
