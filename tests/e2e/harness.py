@@ -2706,7 +2706,17 @@ def poll_disk_contains(rel_path, substr, timeout=10, ctx=""):
     file: poll_diff_contains is satisfied by the substring appearing in ANY changed file, so when a
     write touches several files (an object plus the ones it cascades into) it can release while the
     file about to be read is still being exported - a race that only shows up on a fast machine.
-    A missing file just keeps polling: the export may not have created it yet."""
+    A missing file just keeps polling: the export may not have created it yet.
+
+    Returns the text of the read that matched. Assert on THAT text rather than reading the file
+    again: a later export pass may be rewriting it, and a second read can land mid-rewrite."""
+    return poll_disk_contains_all(rel_path, [substr], timeout=timeout, ctx=ctx)
+
+
+def poll_disk_contains_all(rel_path, substrs, timeout=10, ctx=""):
+    """Poll until ONE read of a named fixture file contains every substring in substrs, and return
+    that read. Polling each needle separately proves each was present at SOME moment, not that one
+    snapshot of the file holds them all."""
     full = os.path.join(PROJECT_DIR, rel_path)
     deadline = time.time() + timeout
     last = ""
@@ -2714,13 +2724,14 @@ def poll_disk_contains(rel_path, substr, timeout=10, ctx=""):
         try:
             with open(full, encoding="utf-8", errors="replace") as f:
                 last = f.read()
-            if substr in last:
-                return
+            if all(s in last for s in substrs):
+                return last
         except FileNotFoundError:
             last = "(file does not exist yet)"
         time.sleep(0.5)
+    missing = [s for s in substrs if s not in last]
     _fail("expected %s to contain %r [%s]; it holds:\n%s"
-          % (rel_path, substr, ctx, last[:700]))
+          % (rel_path, missing[0] if len(missing) == 1 else missing, ctx, last[:700]))
 
 
 def assert_disk_path_gone(rel_path, ctx=""):
