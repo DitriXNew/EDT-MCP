@@ -537,6 +537,87 @@ public class MetadataTypeBuilderTest
     }
 
     @Test
+    public void testSessionParameterAcceptsTheFixedCollectionsInBothLanguages()
+    {
+        for (String kind : new String[] { "FixedArray", "ФиксированныйМассив", "FixedStructure", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "ФиксированнаяСтруктура", "FixedMap", "ФиксированноеСоответствие" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+            Type fixedType = McoreFactory.eINSTANCE.createType();
+            Mockito.doReturn(fixedType).when(provider).createProxy(kind);
+
+            TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+            String err = MetadataTypeBuilder.addType(td, json("{\"kind\":\"" + kind + "\"}").getAsJsonObject(), //$NON-NLS-1$ //$NON-NLS-2$
+                kind, provider, MdClassFactory.eINSTANCE.createConfiguration(), false,
+                MetadataTypeBuilder.TypeTarget.SESSION_PARAMETER);
+
+            assertNull(kind + " must be accepted on a session parameter: " + err, err); //$NON-NLS-1$
+            assertEquals(1, td.getTypes().size());
+            assertSame(fixedType, td.getTypes().get(0));
+        }
+    }
+
+    @Test
+    public void testStoredMetadataStillRefusesAFixedCollection()
+    {
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+        Mockito.doReturn(McoreFactory.eINSTANCE.createType()).when(provider).createProxy("FixedArray"); //$NON-NLS-1$
+
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        String err = MetadataTypeBuilder.addType(td, json("{\"kind\":\"FixedArray\"}").getAsJsonObject(), //$NON-NLS-1$
+            "FixedArray", provider, MdClassFactory.eINSTANCE.createConfiguration(), false, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.METADATA);
+
+        assertNotNull("the carve-out belongs to the session parameter only", err); //$NON-NLS-1$
+        assertTrue(err.contains("stored metadata feature")); //$NON-NLS-1$
+        assertTrue(td.getTypes().isEmpty());
+    }
+
+    @Test
+    public void testSessionParameterRefusesAMutableCollectionInItsOwnWords()
+    {
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+        Mockito.doReturn(McoreFactory.eINSTANCE.createType()).when(provider).createProxy("Array"); //$NON-NLS-1$
+
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        String err = MetadataTypeBuilder.addType(td, json("{\"kind\":\"Array\"}").getAsJsonObject(), //$NON-NLS-1$
+            "Array", provider, MdClassFactory.eINSTANCE.createConfiguration(), false, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.SESSION_PARAMETER);
+
+        assertNotNull(err);
+        assertTrue("the refusal must name its target: " + err, err.contains("session parameter")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("and point at the fixed counterpart: " + err, err.contains("FixedArray")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a session parameter is not a stored feature: " + err, //$NON-NLS-1$
+            err.contains("stored metadata feature")); //$NON-NLS-1$
+        assertTrue(td.getTypes().isEmpty());
+    }
+
+    @Test
+    public void testSessionParameterRefusesValueTableInItsOwnWords()
+    {
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        String err = MetadataTypeBuilder.addType(td, json("{\"kind\":\"ValueTable\"}").getAsJsonObject(), //$NON-NLS-1$
+            "ValueTable", Mockito.mock(IEObjectProvider.class), //$NON-NLS-1$
+            MdClassFactory.eINSTANCE.createConfiguration(), false,
+            MetadataTypeBuilder.TypeTarget.SESSION_PARAMETER);
+
+        assertNotNull(err);
+        assertTrue(err.contains("session parameter")); //$NON-NLS-1$
+        assertFalse(err.contains("stored metadata feature")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testIsFixedCollectionKind()
+    {
+        assertTrue(MetadataTypeBuilder.isFixedCollectionKind("fixedarray")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.isFixedCollectionKind(" FixedMap ")); //$NON-NLS-1$
+        assertTrue(MetadataTypeBuilder.isFixedCollectionKind("ФиксированнаяСтруктура")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.isFixedCollectionKind("Array")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.isFixedCollectionKind("ValueTable")); //$NON-NLS-1$
+        assertFalse(MetadataTypeBuilder.isFixedCollectionKind(null));
+    }
+
+    @Test
     public void testUnknownKindErrorListsCollectionKinds()
     {
         // The unknown-kind message is the ONLY inventory an agent has - it must advertise the

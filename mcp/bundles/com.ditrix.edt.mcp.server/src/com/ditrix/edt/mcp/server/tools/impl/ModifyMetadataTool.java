@@ -5553,7 +5553,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * MetadataTypeBuilder.TypeTarget)} so an unresolved reference target's error can append the
      * extension-adopt hint (issue #262); {@code ctx.typeTarget} rides along so the in-memory collection
      * kinds are admitted on a form attribute and refused on a stored metadata feature (issue #295),
-     * with the one feature-level exception for an event subscription's runtime-object source (#543).
+     * with the feature-level exceptions of {@link #typeTargetForFeature}.
      */
     private String prepareTypeDescription(PrepareContext ctx, String name,
         JsonObject prop, PropertyInfo info, List<PreparedChange> out, boolean isExtensionProject)
@@ -5574,13 +5574,26 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return null;
     }
 
-    /** Adds the sole feature-level exception on top of the call site's form-vs-mdclass target. */
+    /**
+     * Adds the feature-level exceptions on top of the call site's form-vs-mdclass target: an event
+     * subscription's source (#543) and a session parameter's type (#646).
+     */
     static MetadataTypeBuilder.TypeTarget typeTargetForFeature(
         MetadataTypeBuilder.TypeTarget contextTarget, EStructuralFeature feature)
     {
-        return contextTarget == MetadataTypeBuilder.TypeTarget.METADATA
-            && feature == MdClassPackage.Literals.EVENT_SUBSCRIPTION__SOURCE
-                ? MetadataTypeBuilder.TypeTarget.EVENT_SOURCE : contextTarget;
+        if (contextTarget != MetadataTypeBuilder.TypeTarget.METADATA)
+        {
+            return contextTarget;
+        }
+        if (feature == MdClassPackage.Literals.EVENT_SUBSCRIPTION__SOURCE)
+        {
+            return MetadataTypeBuilder.TypeTarget.EVENT_SOURCE;
+        }
+        if (feature == MdClassPackage.Literals.SESSION_PARAMETER__TYPE)
+        {
+            return MetadataTypeBuilder.TypeTarget.SESSION_PARAMETER;
+        }
+        return contextTarget;
     }
 
     /**

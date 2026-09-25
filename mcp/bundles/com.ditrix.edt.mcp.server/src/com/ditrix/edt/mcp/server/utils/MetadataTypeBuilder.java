@@ -329,9 +329,7 @@ public final class MetadataTypeBuilder
         TypeTarget typeTarget)
     {
         String primitive = normalizePrimitive(kind);
-        ProducedTypeKind producedKind = typeTarget == TypeTarget.METADATA
-            || typeTarget == TypeTarget.EVENT_SOURCE
-            || typeTarget == TypeTarget.FORM_ATTRIBUTE
+        ProducedTypeKind producedKind = typeTarget != TypeTarget.DCS_PARAMETER
             ? splitProducedTypeKind(kind) : null;
         String[] accepted;
         if ("String".equals(primitive)) //$NON-NLS-1$
@@ -571,7 +569,14 @@ public final class MetadataTypeBuilder
          * actually does - it does not build the collection kinds for a DCS parameter (issue #295
          * review).
          */
-        DCS_PARAMETER
+        DCS_PARAMETER,
+        /**
+         * A session parameter's {@code type}: an in-memory value held for the session, not a stored
+         * feature. Accepts the METADATA vocabulary plus the fixed collections (FixedArray /
+         * FixedStructure / FixedMap), and owns its refusal wording for the same reason DCS_PARAMETER
+         * does.
+         */
+        SESSION_PARAMETER
     }
 
     /**
@@ -997,9 +1002,7 @@ public final class MetadataTypeBuilder
         boolean isExtensionProject, TypeTarget typeTarget)
     {
         MetadataScope effectiveScope = scope == null ? MetadataScope.ofConfiguration(config) : scope;
-        ProducedTypeKind producedKind = typeTarget == TypeTarget.METADATA
-            || typeTarget == TypeTarget.EVENT_SOURCE
-            || typeTarget == TypeTarget.FORM_ATTRIBUTE
+        ProducedTypeKind producedKind = typeTarget != TypeTarget.DCS_PARAMETER
             ? splitProducedTypeKind(kind) : null;
         if (typeTarget == TypeTarget.EVENT_SOURCE && producedKind != null
             && producedKind.hasKnownMetadataType() && !isEventSourceProducedType(producedKind))
@@ -1102,14 +1105,15 @@ public final class MetadataTypeBuilder
             }
             if (typeTarget != TypeTarget.FORM_ATTRIBUTE)
             {
-                if (typeTarget == TypeTarget.EVENT_SOURCE && producedKind != null
+                if ((typeTarget == TypeTarget.EVENT_SOURCE && producedKind != null
                     && producedKind.hasKnownMetadataType())
+                    || (typeTarget == TypeTarget.SESSION_PARAMETER && isFixedCollectionKind(kind)))
                 {
                     td.getTypes().add(platformType);
                     return null;
                 }
-                if (typeTarget == TypeTarget.METADATA && producedKind != null
-                    && producedKind.hasKnownMetadataType())
+                if ((typeTarget == TypeTarget.METADATA || typeTarget == TypeTarget.SESSION_PARAMETER)
+                    && producedKind != null && producedKind.hasKnownMetadataType())
                 {
                     return producedTypeRefusal(kind);
                 }
@@ -1444,6 +1448,11 @@ public final class MetadataTypeBuilder
                 + "'Type.Object.Form.FormName.Attribute.Name') is the only target that accepts it. Give " //$NON-NLS-1$
                 + "the parameter a primitive or a reference type instead."; //$NON-NLS-1$
         }
+        if (typeTarget == TypeTarget.SESSION_PARAMETER)
+        {
+            return "Type kind '" + kind + "' is a platform value this tool does not build for a " //$NON-NLS-1$ //$NON-NLS-2$
+                + "session parameter. " + SESSION_PARAMETER_VOCABULARY; //$NON-NLS-1$
+        }
         return "Type kind '" + kind + "' is a platform value this tool builds only for a FORM attribute " //$NON-NLS-1$ //$NON-NLS-2$
             + "(fqn 'Type.Object.Form.FormName.Attribute.Name'), not for a stored metadata feature. Set " //$NON-NLS-1$
             + "it on a form attribute; a stored feature takes String / Number / Boolean / Date / " //$NON-NLS-1$
@@ -1479,6 +1488,11 @@ public final class MetadataTypeBuilder
                 + "one for a data-composition parameter: a FORM attribute (fqn " //$NON-NLS-1$
                 + "'Type.Object.Form.FormName.Attribute.Name') is the only target that accepts the " //$NON-NLS-1$
                 + "collection kinds. Give the parameter a primitive or a reference type instead."; //$NON-NLS-1$
+        }
+        if (typeTarget == TypeTarget.SESSION_PARAMETER)
+        {
+            return "Type kind '" + kind + "' is a collection this tool does not build for a session " //$NON-NLS-1$ //$NON-NLS-2$
+                + "parameter. " + SESSION_PARAMETER_VOCABULARY; //$NON-NLS-1$
         }
         return "Type kind '" + kind + "' is an IN-MEMORY collection: the platform holds it " //$NON-NLS-1$ //$NON-NLS-2$
             + "only in a FORM attribute (fqn 'Type.Object.Form.FormName.Attribute.Name'), " //$NON-NLS-1$
@@ -1759,6 +1773,39 @@ public final class MetadataTypeBuilder
         String[] candidates = platformSimpleTypeCandidates(kind);
         return candidates.length > 0
             && ("ValueTable".equals(candidates[0]) || "ValueTree".equals(candidates[0])); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** What a session parameter's type accepts, appended to each of its refusals. */
+    private static final String SESSION_PARAMETER_VOCABULARY = "A session parameter takes FixedArray / " //$NON-NLS-1$
+        + "FixedStructure / FixedMap, String / Number / Boolean / Date / ValueStorage / UUID or a " //$NON-NLS-1$
+        + "reference ({kind:'Ref', ref:'Type.Name'}); for Array / Structure / Map use the Fixed " //$NON-NLS-1$
+        + "counterpart."; //$NON-NLS-1$
+
+    /**
+     * Whether {@code kind} names a fixed collection (FixedArray / FixedStructure / FixedMap, English or
+     * Russian) - the platform values a session parameter holds on top of the METADATA vocabulary.
+     *
+     * @param kind the raw {@code kind} token from the spec
+     * @return {@code true} for a fixed collection kind
+     */
+    static boolean isFixedCollectionKind(String kind)
+    {
+        if (kind == null)
+        {
+            return false;
+        }
+        switch (kind.trim().toLowerCase())
+        {
+            case "fixedarray": //$NON-NLS-1$
+            case "фиксированныймассив": //$NON-NLS-1$
+            case "fixedstructure": //$NON-NLS-1$
+            case "фиксированнаяструктура": //$NON-NLS-1$
+            case "fixedmap": //$NON-NLS-1$
+            case "фиксированноесоответствие": //$NON-NLS-1$
+                return true;
+            default:
+                return false;
+        }
     }
 
     /**
