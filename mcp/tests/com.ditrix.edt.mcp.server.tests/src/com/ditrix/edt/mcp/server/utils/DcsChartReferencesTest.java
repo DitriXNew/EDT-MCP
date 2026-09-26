@@ -28,6 +28,7 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaFieldUseRestrictio
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalField;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFieldExpression;
@@ -402,6 +403,60 @@ public class DcsChartReferencesTest
         String error = after(before, schema);
         assertNotNull("only disabled measures", error); //$NON-NLS-1$
         assertTrue(error, error.contains("the chart has no measure")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testASwitchedOffPointIsNotJudged()
+    {
+        DataCompositionSchema schema = schema();
+        DcsChartReferences.Census before = DcsChartReferences.census(schema, ROOT);
+        schema.setDefaultSettings(settings(chart(points("Missing"), "", measures("Amount")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        DataCompositionChart chart = (DataCompositionChart)schema.getDefaultSettings().getItems().get(0);
+        ((DataCompositionGroupField)chart.getPoints().get(0).getGroupFields().getItems().get(0)).setUse(false);
+        assertNull("a disabled point field", after(before, schema)); //$NON-NLS-1$
+
+        ((DataCompositionGroupField)chart.getPoints().get(0).getGroupFields().getItems().get(0)).setUse(true);
+        chart.getPoints().get(0).setUse(false);
+        assertNull("a point field under a disabled chart group", after(before, schema)); //$NON-NLS-1$
+    }
+
+    /** An unnamed variant and one named like its index are separate trees, whatever moves. */
+    @Test
+    public void testAnUnnamedVariantAndANumericNameStayApartWhenVariantsShift()
+    {
+        DataCompositionSchema schema = schema();
+        for (String name : new String[] {"Foo", null, "1"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            SettingsVariant variant =
+                com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE.createSettingsVariant();
+            variant.setName(name);
+            variant.setSettings("1".equals(name) //$NON-NLS-1$
+                ? settings(chart(points("Customer"), "", measures("Missing"))) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                : settings());
+            schema.getSettingsVariants().add(variant);
+        }
+        DcsChartReferences.Census before = DcsChartReferences.census(schema, ROOT);
+        assertEquals(1, before.size());
+
+        schema.getSettingsVariants().remove(0);
+        assertNull("removing an unrelated variant", after(before, schema)); //$NON-NLS-1$
+    }
+
+    /** A field literally named like an internal marker is still a field. */
+    @Test
+    public void testAFieldNamedLikeAMarkerIsNotTheMissingMeasure()
+    {
+        DataCompositionSchema schema = schema();
+        schema.setDefaultSettings(settings(chart(points("Customer"), "", ""), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            chart(points("Customer"), "", measures("Amount")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        DcsChartReferences.Census before = DcsChartReferences.census(schema, ROOT);
+        assertEquals("the measureless chart", 1, before.size()); //$NON-NLS-1$
+
+        schema.setDefaultSettings(settings(chart(points("Customer"), "", measures("Amount")), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            chart(points("Customer"), "", measures("#none")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String error = after(before, schema);
+        assertNotNull("a missing field named '#none' is a new break", error); //$NON-NLS-1$
+        assertTrue(error, error.contains("measure '#none'")); //$NON-NLS-1$
     }
 
     private static DataCompositionSelectedField selected(DataCompositionSchema schema, int index)

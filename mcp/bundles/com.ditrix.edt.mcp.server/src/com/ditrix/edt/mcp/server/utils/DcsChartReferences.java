@@ -58,7 +58,7 @@ import com._1c.g5.v8.dt.dcs.util.DcsTerms;
  * refuses a write after which some kind of broken reference (settings tree, role and field) is
  * more frequent than before it. A write that breaks an unchanged chart by changing the schema is
  * refused like one that adds a broken chart, and a problem that was already there in the same
- * tree never blocks an unrelated edit. Switched-off measures are not judged.</p>
+ * tree never blocks an unrelated edit. Switched-off points, series and measures are not judged.</p>
  *
  * <p>Resolution mirrors EDT's available-fields rules on the schema model: data-set and calculated
  * fields group unless their use restriction forbids it, a resource is a {@code totalFields}
@@ -209,23 +209,28 @@ public final class DcsChartReferences
         Resolver schemaLevel = null;
         // Parallel lists, not a map: two variants may share a name and both must be counted.
         List<String> addresses = new ArrayList<>();
+        // The census identity of each tree: named variants by name (and rank among same-named
+        // ones), unnamed ones by index, so neither kind can collide with the other.
+        List<String> identities = new ArrayList<>();
         List<DataCompositionSettings> trees = new ArrayList<>();
         addresses.add(DcsAddress.render(rootFqn, Collections.singletonList("defaultSettings"))); //$NON-NLS-1$
+        identities.add("d"); //$NON-NLS-1$
         trees.add(schema.getDefaultSettings());
         List<SettingsVariant> variants = schema.getSettingsVariants();
+        Map<String, Integer> sameName = new HashMap<>();
         for (int i = 0; i < variants.size(); i++)
         {
             String name = variants.get(i).getName();
-            String selector = name == null || name.isEmpty() ? Integer.toString(i) : name;
+            boolean unnamed = name == null || name.isEmpty();
+            String selector = unnamed ? Integer.toString(i) : name;
             addresses.add(DcsAddress.render(rootFqn, Arrays.asList("variants", selector, "settings"))); //$NON-NLS-1$ //$NON-NLS-2$
+            identities.add(unnamed ? "i" + i //$NON-NLS-1$
+                : "n" + name + '\u0000' + sameName.merge(name, Integer.valueOf(1), Integer::sum)); //$NON-NLS-1$
             trees.add(variants.get(i).getSettings());
         }
-        Map<String, Integer> sameAddress = new HashMap<>();
         for (int t = 0; t < trees.size(); t++)
         {
-            // Same-named variants keep apart: each has its own user fields.
-            int seen = sameAddress.merge(addresses.get(t), Integer.valueOf(1), Integer::sum).intValue();
-            String tree = seen == 1 ? addresses.get(t) : addresses.get(t) + '\u0000' + seen;
+            String tree = identities.get(t);
             Map<String, DataCompositionChart> charts = charts(trees.get(t));
             if (charts.isEmpty()) continue;
             if (schemaLevel == null) schemaLevel = new Resolver(schema);
@@ -370,10 +375,17 @@ public final class DcsChartReferences
     private static void collectGroups(List<DataCompositionChartGroup> groups, String role,
         String where, List<Reference> result)
     {
+        collectGroups(groups, role, where, true, result);
+    }
+
+    private static void collectGroups(List<DataCompositionChartGroup> groups, String role,
+        String where, boolean used, List<Reference> result)
+    {
         for (int i = 0; i < groups.size(); i++)
         {
             DataCompositionChartGroup group = groups.get(i);
             String address = where + "/" + i; //$NON-NLS-1$
+            boolean groupUsed = used && group.isUse();
             if (group.getGroupFields() != null)
             {
                 List<GroupItem> fields = group.getGroupFields().getItems();
@@ -381,13 +393,13 @@ public final class DcsChartReferences
                 {
                     if (fields.get(j) instanceof DataCompositionGroupField)
                     {
-                        result.add(new Reference(role,
-                            path(((DataCompositionGroupField)fields.get(j)).getField()),
-                            address + "/groupFields/items/" + j)); //$NON-NLS-1$
+                        DataCompositionGroupField field = (DataCompositionGroupField)fields.get(j);
+                        result.add(new Reference(role, path(field.getField()),
+                            address + "/groupFields/items/" + j, groupUsed && field.isUse())); //$NON-NLS-1$
                     }
                 }
             }
-            collectGroups(group.getItems(), role, address + "/items", result); //$NON-NLS-1$
+            collectGroups(group.getItems(), role, address + "/items", groupUsed, result); //$NON-NLS-1$
         }
     }
 
@@ -492,7 +504,9 @@ public final class DcsChartReferences
             this.reason = reason;
             this.chartAddress = chartAddress;
             this.resolver = resolver;
-            this.key = reference.role + '\n' + (reference.field == null ? marker : canonical(reference.field));
+            // A NUL-led marker cannot collide with a field path such as a literal '#none'.
+            this.key = reference.role + '\n'
+                + (reference.field == null ? '\u0000' + marker : canonical(reference.field));
         }
     }
 
@@ -640,7 +654,7 @@ public final class DcsChartReferences
             {
                 if (!reference.use)
                 {
-                    // A switched-off measure is not drawn: it neither breaks nor measures the chart.
+                    // A switched-off item is not drawn: it neither breaks nor measures the chart.
                     continue;
                 }
                 String reason;
