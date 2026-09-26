@@ -181,14 +181,36 @@ public class DebugPauseTest
     }
 
     @Test
+    public void testALeftStopIsForgottenEvenWhenNothingStopsInTheWindow() throws Exception
+    {
+        IThread released = thread(new AtomicBoolean(false));
+        registry.injectSuspend(APP_ID, released);
+        long staleThreadId = registry.getSnapshot(APP_ID).threadId;
+        long staleFrameRef = registry.registerFrame(mock(IStackFrame.class), APP_ID);
+        IDebugTarget target = target(released);
+        when(target.canSuspend()).thenReturn(true);
+
+        DebugPause.Outcome outcome = DebugPause.pause(target, APP_ID, registry, 50, 10);
+
+        assertEquals(DebugPause.State.RUNNING, outcome.state);
+        assertNull("wait_for_break must not return the left stop as the pause", registry.getSnapshot(APP_ID));
+        assertNull(registry.getThread(staleThreadId));
+        assertNull(registry.getFrame(staleFrameRef));
+    }
+
+    @Test
     public void testALiveStopKeepsTheReferencesAlreadyHandedOut() throws Exception
     {
+        // Also the mid-evaluation case: EDT's 1C thread stays SUSPENDED while an expression evaluates.
         IThread thread = thread(new AtomicBoolean(true));
         registry.injectSuspend(APP_ID, thread);
+        long threadId = registry.getSnapshot(APP_ID).threadId;
         long frameRef = registry.registerFrame(mock(IStackFrame.class), APP_ID);
 
-        DebugPause.pause(target(thread), APP_ID, registry, 10_000, 10);
+        DebugPause.Outcome outcome = DebugPause.pause(target(thread), APP_ID, registry, 10_000, 10);
 
+        assertEquals(threadId, outcome.snapshot.threadId);
+        assertSame(thread, registry.getThread(threadId));
         assertNotNull("a stop that is still live must keep its frameRefs", registry.getFrame(frameRef));
     }
 

@@ -254,15 +254,13 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
         {
             return;
         }
-        SuspendSnapshot current = snapshots.get(appId);
-        // A poller may have registered this stop before its event arrived: keep the id it handed out.
-        if (current == null || current.thread != thread)
-        {
-            long threadId = idGenerator.getAndIncrement();
-            threadsById.put(threadId, thread);
-            threadAppId.put(threadId, appId);
-            snapshots.put(appId, new SuspendSnapshot(threadId, thread));
-        }
+        // Always a new stop: a 1C step fires its RESUME on the target, so one thread can suspend
+        // twice with no thread RESUME between. Ids handed out earlier keep resolving.
+        long threadId = idGenerator.getAndIncrement();
+        threadsById.put(threadId, thread);
+        threadAppId.put(threadId, appId);
+        SuspendSnapshot snapshot = new SuspendSnapshot(threadId, thread);
+        snapshots.put(appId, snapshot);
         // notify any waiters
         notifyAll();
     }

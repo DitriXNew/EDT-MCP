@@ -488,12 +488,19 @@ def test_live_debug_pause_running_session_inspect_resume():
         if not frames[0].get("modulePath") or not frames[0].get("line"):
             _fail("the top frame must locate the BSL line it paused on: %r" % (frames[0],))
 
-        # wait_for_break reads the same stop: the snapshot is shared, not a private copy.
+        # wait_for_break reads the same stop. Compare the stop, not the id: a SUSPEND event
+        # dispatched after the poll mints a second threadId for it, and both must address it.
+        def _stop(s):
+            top = (s.get("frames") or [{}])[0]
+            return (s.get("threadName"), top.get("modulePath"), top.get("name"), top.get("line"))
+
         w = call("wait_for_break", {"applicationId": app_id, "timeout": 5})
         ws = w.structured or {}
-        if ws.get("hit") is not True or ws.get("threadId") != sc.get("threadId"):
-            _fail("wait_for_break must report the paused thread %r, got %r"
-                  % (sc.get("threadId"), ws))
+        if ws.get("hit") is not True or _stop(ws) != _stop(sc):
+            _fail("wait_for_break must report the paused stop %r, got %r" % (_stop(sc), ws))
+        for tid in (sc.get("threadId"), ws.get("threadId")):
+            assert_ok(call("get_variables", {"threadId": tid, "frameIndex": 0}),
+                      "threadId %r handed out for this stop must still address it" % (tid,))
 
         ev = call("evaluate_expression", {"frameRef": frame_ref, "expression": "2 + 2"})
         assert_ok(ev, "evaluate in the paused frame")
@@ -507,10 +514,8 @@ def test_live_debug_pause_running_session_inspect_resume():
         # A second pause of a paused session sends nothing and returns the same stop.
         p2 = call("debug_pause", {"applicationId": app_id, "timeout": 5})
         s2 = p2.structured or {}
-        top2 = (s2.get("frames") or [{}])[0]
         if (s2.get("paused") is not True or s2.get("alreadySuspended") is not True
-                or s2.get("threadId") != sc.get("threadId")
-                or top2.get("name") != frames[0].get("name")):
+                or _stop(s2) != _stop(sc)):
             _fail("a second pause must return the existing stop (alreadySuspended:true, "
                   "same thread and frame); first %r, second %r" % (sc, s2))
 

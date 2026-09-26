@@ -273,18 +273,57 @@ public class DebugSessionRegistryTest
     }
 
     @Test
-    public void testSuspendEventForAnAlreadyRegisteredStopKeepsItsThreadId() throws Exception
+    public void testALateSuspendEventKeepsTheHandedOutThreadIdValid() throws Exception
     {
         DebugSessionRegistry registry = DebugSessionRegistry.get();
         IThread thread = launchThread(LAUNCH_APP);
         // A poller (debug_pause / wait_for_break) saw the stop before Eclipse dispatched its event.
         registry.injectSuspend(LAUNCH_APP, thread);
-        DebugSessionRegistry.SuspendSnapshot handedOut = registry.getSnapshot(LAUNCH_APP);
+        long handedOut = registry.getSnapshot(LAUNCH_APP).threadId;
 
         registry.handleEvent(new DebugEvent(thread, DebugEvent.SUSPEND));
 
-        assertSame("the late event must not re-mint the stop", handedOut, registry.getSnapshot(LAUNCH_APP)); //$NON-NLS-1$
-        assertSame(thread, registry.getThread(handedOut.threadId));
+        // The event records its own stop; the id already handed out still addresses the thread.
+        DebugSessionRegistry.SuspendSnapshot current = registry.getSnapshot(LAUNCH_APP);
+        assertSame(thread, current.thread);
+        assertFalse("the event cannot tell this stop from a later one, so it mints its own id", //$NON-NLS-1$
+            handedOut == current.threadId);
+        assertSame(thread, registry.getThread(handedOut));
+        assertEquals(LAUNCH_APP, registry.getThreadApplicationId(handedOut));
+    }
+
+    @Test
+    public void testASecondStopOfTheSameThreadAfterAStepIsANewSnapshot() throws Exception
+    {
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        IThread thread = launchThread(LAUNCH_APP);
+        registry.handleEvent(new DebugEvent(thread, DebugEvent.SUSPEND));
+        long firstStop = registry.getSnapshot(LAUNCH_APP).threadId;
+
+        // A 1C step fires its RESUME on the debug target, never on the thread.
+        registry.handleEvent(new DebugEvent(thread.getDebugTarget(), DebugEvent.RESUME, DebugEvent.STEP_OVER));
+        registry.handleEvent(new DebugEvent(thread, DebugEvent.SUSPEND));
+
+        assertFalse("the stop after the step must not be taken for the first one", //$NON-NLS-1$
+            firstStop == registry.getSnapshot(LAUNCH_APP).threadId);
+    }
+
+    @Test
+    public void testAnEvaluationResumeKeepsMintedKeyFrames()
+    {
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        IThread thread = mock(IThread.class);
+        // The generic Eclipse model runs the thread while an expression evaluates.
+        when(thread.isSuspended()).thenReturn(false);
+        IStackFrame frame = mock(IStackFrame.class);
+        when(frame.getThread()).thenReturn(thread);
+        registry.injectSuspend(MINTED_APP, thread);
+        long frameRef = registry.registerFrame(frame, MINTED_APP);
+
+        registry.handleEvent(new DebugEvent(thread, DebugEvent.RESUME, DebugEvent.EVALUATION_IMPLICIT));
+
+        assertSame("an evaluation returns to the same stop, so its frameRef must survive", //$NON-NLS-1$
+            frame, registry.getFrame(frameRef));
     }
 
     @Test

@@ -155,7 +155,8 @@ public final class DebugPause
             {
                 return existing;
             }
-            // That stop was released unseen: its threadId and frameRefs are stale along with it.
+            // The thread has left that stop (a 1C thread stays SUSPENDED while an expression
+            // evaluates), so the stop's threadId and frameRefs go with it.
             registry.forgetApplication(applicationId);
         }
         IThread suspended = DebugServerTargetSupport.findSuspendedThread(target);
