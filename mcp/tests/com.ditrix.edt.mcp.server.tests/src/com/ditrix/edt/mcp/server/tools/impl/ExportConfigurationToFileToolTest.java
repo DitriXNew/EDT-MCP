@@ -270,6 +270,8 @@ public class ExportConfigurationToFileToolTest
         assertTrue(refusal.contains("Nothing was exported")); //$NON-NLS-1$
         assertTrue(refusal.contains("update_database (projectName='Config', applicationId='App.1')")); //$NON-NLS-1$
         assertTrue(refusal.contains("allowOutOfDate=true")); //$NON-NLS-1$
+        assertTrue("NOT_EQUAL gives no direction", refusal.contains("Which side is newer is unknown")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(refusal.contains("older content")); //$NON-NLS-1$
     }
 
     @Test
@@ -363,6 +365,16 @@ public class ExportConfigurationToFileToolTest
         ExportConfigurationToFileTool.Target target = ExportConfigurationToFileTool.matchExtension(config,
             List.of(candidate(ext, name)), "\u0442\u0415\u0421\u0422\u042B"); //$NON-NLS-1$ тЕСТЫ
         assertTarget(target, config, name, ext);
+    }
+
+    @Test
+    public void testAnUnloadedExtensionNamedByItsProjectIsRefusedNotSentAsGiven()
+    {
+        IProject config = project("Config"); //$NON-NLS-1$
+        IProject tests = project("Config.tests"); //$NON-NLS-1$
+        ExportConfigurationToFileTool.Target target = ExportConfigurationToFileTool.matchExtension(config,
+            List.of(candidate(tests, null)), "Config.tests"); //$NON-NLS-1$
+        assertTrue(target.error, target.error != null && target.error.contains("wait_for_project_ready")); //$NON-NLS-1$
     }
 
     @Test

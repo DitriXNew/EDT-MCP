@@ -335,11 +335,16 @@ public class ExportConfigurationToFileTool implements IMcpTool
         String requested)
     {
         ExtensionCandidate byProjectName = null;
+        ExtensionCandidate unresolvedByProjectName = null;
         for (ExtensionCandidate candidate : candidates)
         {
             String name = candidate.configurationName();
             if (name == null)
             {
+                if (candidate.project().getName().equalsIgnoreCase(requested))
+                {
+                    unresolvedByProjectName = candidate;
+                }
                 continue;
             }
             if (name.equalsIgnoreCase(requested))
@@ -355,6 +360,12 @@ public class ExportConfigurationToFileTool implements IMcpTool
         {
             return new Target(configurationProject, byProjectName.configurationName(),
                 byProjectName.project(), null);
+        }
+        if (unresolvedByProjectName != null)
+        {
+            return Target.error("Extension project '" + unresolvedByProjectName.project().getName() //$NON-NLS-1$
+                + "' is not loaded yet, so the configuration name the infobase knows it by is unknown. " //$NON-NLS-1$
+                + "Nothing was exported. Wait for the project with wait_for_project_ready, then retry."); //$NON-NLS-1$
         }
         return new Target(configurationProject, requested, null, null);
     }
@@ -461,6 +472,12 @@ public class ExportConfigurationToFileTool implements IMcpTool
         }
         try
         {
+            // Prepare and the dump run on in EDT after a cancel, so cancel_job must not call the
+            // job cancelled cleanly once they start.
+            if (!progress.tryCommit())
+            {
+                throw new InterruptedException("cancelled before the export was handed to EDT"); //$NON-NLS-1$
+            }
             prepare(project, application, applicationId, manager, progress);
             SyncReading sync = readSync(request, infobase);
             progress.add("Infobase vs project: " + sync.state().wire() + " - " + sync.detail() + '.'); //$NON-NLS-1$ //$NON-NLS-2$
@@ -685,10 +702,12 @@ public class ExportConfigurationToFileTool implements IMcpTool
     {
         String what = request.target.extensionName == null ? "configuration" //$NON-NLS-1$
             : "extension '" + request.target.extensionName + "'"; //$NON-NLS-1$ //$NON-NLS-2$
-        return "The infobase of application '" + applicationId + "' is out of date: " //$NON-NLS-1$ //$NON-NLS-2$
-            + sync.detail() + ", so the " + what + " dump would hold the infobase's older content, " //$NON-NLS-1$ //$NON-NLS-2$
-            + "not the project's. Nothing was exported. Apply the project first with " //$NON-NLS-1$
-            + "update_database (projectName='" + request.target.configurationProject.getName() //$NON-NLS-1$
+        return "The infobase of application '" + applicationId + "' is out of date (" //$NON-NLS-1$ //$NON-NLS-2$
+            + sync.detail() + "), so the " + what + " dump would hold the infobase's content, " //$NON-NLS-1$ //$NON-NLS-2$
+            + "not the project's. Nothing was exported. Which side is newer is unknown: if the " //$NON-NLS-1$
+            + "infobase was changed in the Designer, update_database would overwrite that change. " //$NON-NLS-1$
+            + "To export the project, apply it first with update_database (projectName='" //$NON-NLS-1$
+            + request.target.configurationProject.getName()
             + "', applicationId='" + applicationId + "'), then call " + NAME + " again - or pass " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + KEY_ALLOW_OUT_OF_DATE + "=true to export what the infobase holds now."; //$NON-NLS-1$
     }
@@ -776,12 +795,7 @@ public class ExportConfigurationToFileTool implements IMcpTool
                 request.target.configurationProject.getName())
                 + " Nothing was written to " + request.outputFile + '.', result.getFailure()); //$NON-NLS-1$
         }
-        // Past this point cancel_job no longer interrupts; publish() judges success by the file.
-        if (!progress.tryCommit())
-        {
-            ConfigurationFileExportSupport.deleteQuietly(partial);
-            throw new InterruptedException("cancelled before the file was published"); //$NON-NLS-1$
-        }
+        // publish() judges success by the file.
         PublishedFile published;
         try
         {

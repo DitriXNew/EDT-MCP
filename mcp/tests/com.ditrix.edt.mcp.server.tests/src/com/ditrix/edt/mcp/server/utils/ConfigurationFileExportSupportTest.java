@@ -300,7 +300,7 @@ public class ConfigurationFileExportSupportTest
     }
 
     @Test
-    public void testAMovedFileThatFailsTheReadBackIsRemovedAndSaysSo() throws Exception
+    public void testAMovedFileThatFailsTheReadBackIsLeftInPlaceAndSaysSo() throws Exception
     {
         Path destination = dir.resolve("moved.cf"); //$NON-NLS-1$
         Files.write(destination, new byte[] {1, 2, 3});
@@ -311,13 +311,12 @@ public class ConfigurationFileExportSupportTest
         }
         catch (IOException e)
         {
-            assertFalse("the file was removed, so the caller may say nothing was written", //$NON-NLS-1$
+            assertTrue("the file may remain, so the caller must not say nothing was written", //$NON-NLS-1$
                 e instanceof ConfigurationFileExportSupport.LeftAtDestinationException);
-            assertTrue(e.getMessage(), e.getMessage().endsWith("does not match what the platform wrote; it was removed")); //$NON-NLS-1$
+            assertTrue(e.getMessage(), e.getMessage().contains("does not match what the platform wrote; it was left in place")); //$NON-NLS-1$
         }
-        assertFalse(Files.exists(destination));
+        assertTrue("a file this call cannot prove it owns is not deleted", Files.exists(destination)); //$NON-NLS-1$
 
-        Files.write(destination, new byte[] {1, 2, 3});
         assertEquals(3L, ConfigurationFileExportSupport.verifyMoved(destination, 3).sizeBytes());
         assertTrue(Files.exists(destination));
     }

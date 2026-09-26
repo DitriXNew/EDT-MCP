@@ -43,7 +43,7 @@ Success is reported only after the file was seen on disk: the Designer writes to
 ## Background job
 The dump can take minutes on a large configuration. When it does not finish within `waitSeconds`, the call returns a `jobId`: poll `get_job_status` with it, and do not start the same export again. The phases are bounded: waiting for another operation on the same infobase (5 min), preparing the application (5 min), the dump itself (30 min).
 
-`cancel_job`, or the 30-minute bound, abandons a dump that has not finished. EDT kills a Designer process it started, but does NOT stop a dump running in its Designer-agent session. The tool removes the temporary file when it abandons the dump, so a Designer that finishes later can still leave `<name>.partial-<id>.cf(e)` beside `outputFile` (the job's progress names it): delete it.
+The 30-minute bound abandons a dump that has not finished. `cancel_job` stops the export only while it still waits for the infobase: once preparing the application starts, the work is handed to EDT and `cancel_job` says so instead of cancelling. EDT kills a Designer process it started, but does NOT stop a dump running in its Designer-agent session. The tool removes the temporary file when it abandons the dump, so a Designer that finishes later can still leave `<name>.partial-<id>.cf(e)` beside `outputFile` (the job's progress names it): delete it.
 
 ## Errors
 - **No platform with a thick client** - EDT found no locally installed 1C:Enterprise version matching the project and infobase. Install it (with the thick client) and register it in EDT's installed platforms.

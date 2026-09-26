@@ -278,8 +278,8 @@ public final class ConfigurationFileExportSupport
     }
 
     /**
-     * Reads back a file this call has just moved to {@code destination}; on any mismatch removes it,
-     * or says it may remain.
+     * Reads back a file this call has just moved to {@code destination}. On a mismatch it is left in
+     * place: after the move nothing proves the file there is still the one this call moved.
      */
     static PublishedFile verifyMoved(Path destination, long expectedSize) throws IOException
     {
@@ -299,13 +299,8 @@ public final class ConfigurationFileExportSupport
         {
             problem = "the file moved to '" + destination + "' could not be read back (" + e.getMessage() + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         }
-        // The move already happened: remove what this call put there, or say it may remain.
-        if (deleteQuietly(destination))
-        {
-            throw new IOException(problem + "; it was removed"); //$NON-NLS-1$
-        }
-        throw new LeftAtDestinationException(problem + "; it could not be removed, so '" + destination //$NON-NLS-1$
-            + "' may hold an unverified dump - delete it before retrying"); //$NON-NLS-1$
+        throw new LeftAtDestinationException(problem + "; it was left in place, since another " //$NON-NLS-1$
+            + "process may own it now - inspect or delete '" + destination + "' before retrying"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** A publish failure after which the destination file may still exist. */
