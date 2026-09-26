@@ -25,6 +25,7 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameter;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterValue;
+import com._1c.g5.v8.dt.dcs.model.core.InputParameters;
 import com._1c.g5.v8.dt.dcs.model.core.DesignTimeValueValue;
 import com._1c.g5.v8.dt.dcs.model.core.LocalString;
 import com._1c.g5.v8.dt.dcs.model.core.Presentation;
@@ -38,6 +39,7 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
 import com._1c.g5.v8.dt.dcs.model.schema.DataSet;
 import com._1c.g5.v8.dt.dcs.model.schema.DataSetField;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionDataParameterValues;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
@@ -45,7 +47,10 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
 import com._1c.g5.v8.dt.dcs.model.settings.StructureItem;
 import com._1c.g5.v8.dt.mcore.BooleanValue;
+import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.DateValue;
+import com._1c.g5.v8.dt.mcore.EnumValue;
+import com._1c.g5.v8.dt.mcore.FontValue;
 import com._1c.g5.v8.dt.mcore.NullValue;
 import com._1c.g5.v8.dt.mcore.NumberValue;
 import com._1c.g5.v8.dt.mcore.StringValue;
@@ -358,10 +363,8 @@ public final class DcsReadProjection
         {
             unsupported = true;
         }
-        // The typed body carries a single 'value'; the writer keeps only that one entry.
         if (object instanceof DataCompositionParameterValue
-            && (!((DataCompositionParameterValue)object).getNestedParameterValues().isEmpty()
-                || ((DataCompositionParameterValue)object).getValues().size() > 1))
+            && !isAuthorableParameterValue((DataCompositionParameterValue)object))
         {
             unsupported = true;
         }
@@ -401,6 +404,31 @@ public final class DcsReadProjection
                     additionalProperties, result);
             }
         }
+    }
+
+    /**
+     * Output-parameter and appearance items are rebuilt from a single typed 'value'; schema input
+     * parameters keep a full values array, and data parameters stay with their untyped writer.
+     */
+    private static boolean isAuthorableParameterValue(DataCompositionParameterValue item)
+    {
+        if (!item.getNestedParameterValues().isEmpty()) return false;
+        EObject holder = item.eContainer();
+        if (holder instanceof InputParameters || holder instanceof DataCompositionDataParameterValues)
+        {
+            return true;
+        }
+        if (item.getValues().size() > 1) return false;
+        for (Value value : item.getValues())
+        {
+            if (!isAuthorableUntypedValue(value) && !(value instanceof LocalString)
+                && !(value instanceof EnumValue) && !(value instanceof ColorValue)
+                && !(value instanceof FontValue))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean isAuthorableUntypedValue(Value value)

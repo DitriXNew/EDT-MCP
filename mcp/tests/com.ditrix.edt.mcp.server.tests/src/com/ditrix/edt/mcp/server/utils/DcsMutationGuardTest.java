@@ -192,6 +192,54 @@ public class DcsMutationGuardTest
             + "/items/0/outputParameters/items/0")); //$NON-NLS-1$
     }
 
+    /** The typed parameter writer builds enums but no references or types. */
+    @Test
+    public void testSingleUnbuildableChartOutputParameterValueBlocksReplace()
+    {
+        com._1c.g5.v8.dt.dcs.model.settings.DcsFactory factory =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE;
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        DataCompositionSettings settings = factory.createDataCompositionSettings();
+        DataCompositionChart chart = factory.createDataCompositionChart();
+        DataCompositionChartOutputParameterValues output =
+            factory.createDataCompositionChartOutputParameterValues();
+        SettingsParameterValue parameter = factory.createSettingsParameterValue();
+        parameter.getValues().add(McoreFactory.eINSTANCE.createEnumValue());
+        output.getItems().add(parameter);
+        chart.setOutputParameters(output);
+        settings.getItems().add(chart);
+        schema.setDefaultSettings(settings);
+        DcsAddress target = address(ROOT + "#/defaultSettings/items/0"); //$NON-NLS-1$
+        assertNull("an enum is authorable", DcsMutationGuard.replaceError(schema, target)); //$NON-NLS-1$
+
+        parameter.getValues().set(0, McoreFactory.eINSTANCE.createTypeValue());
+        assertNotNull("a TypeValue is not", DcsMutationGuard.replaceError(schema, target)); //$NON-NLS-1$
+        parameter.getValues().set(0, McoreFactory.eINSTANCE.createReferenceValue());
+        assertNotNull("a ReferenceValue is not", DcsMutationGuard.replaceError(schema, target)); //$NON-NLS-1$
+    }
+
+    /** Schema input parameters are written from a full values array, so a list is authorable. */
+    @Test
+    public void testMultiValuedInputParameterDoesNotBlockSchemaReplace()
+    {
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        DataCompositionSchemaParameter parameter = DcsFactory.eINSTANCE
+            .createDataCompositionSchemaParameter();
+        parameter.setName("P"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.dcs.model.core.InputParameters inputs =
+            com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE.createInputParameters();
+        com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterValue item =
+            com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+                .createDataCompositionParameterValue();
+        item.getValues().add(McoreFactory.eINSTANCE.createStringValue());
+        item.getValues().add(McoreFactory.eINSTANCE.createStringValue());
+        inputs.getItems().add(item);
+        parameter.setInputParameters(inputs);
+        schema.getParameters().add(parameter);
+
+        assertNull(DcsMutationGuard.replaceError(schema, address(ROOT)));
+    }
+
     @Test
     public void testNestedInputParameterValuesDeclareTheUnsupportedReadWriteLimit()
     {
