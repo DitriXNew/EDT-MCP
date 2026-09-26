@@ -40,6 +40,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFieldGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettingsItemState;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFieldExpression;
 import com._1c.g5.v8.dt.dcs.model.settings.GroupItem;
 import com._1c.g5.v8.dt.dcs.model.settings.SelectedItem;
@@ -288,6 +289,11 @@ public final class DcsChartReferences
         return result;
     }
 
+    private static boolean drawn(DataCompositionGroup group)
+    {
+        return group.isUse() && group.getGroupState() == DataCompositionSettingsItemState.ENABLED;
+    }
+
     /** Charts of a settings tree that are drawn: neither they nor a structure group above is off. */
     static Map<String, DataCompositionChart> drawnCharts(DataCompositionSettings settings)
     {
@@ -351,8 +357,7 @@ public final class DcsChartReferences
                     result.put(address, (DataCompositionChart)item);
                 }
             }
-            else if (item instanceof DataCompositionGroup
-                && (!drawnOnly || ((DataCompositionGroup)item).isUse()))
+            else if (item instanceof DataCompositionGroup && (!drawnOnly || drawn((DataCompositionGroup)item)))
             {
                 collectCharts(((DataCompositionGroup)item).getItems(), address + "/items", drawnOnly, //$NON-NLS-1$
                     result);
@@ -401,7 +406,8 @@ public final class DcsChartReferences
         {
             DataCompositionChartGroup group = groups.get(i);
             String address = where + "/" + i; //$NON-NLS-1$
-            boolean groupUsed = used && group.isUse();
+            boolean groupUsed = used && group.isUse()
+                && group.getGroupState() == DataCompositionSettingsItemState.ENABLED;
             if (group.getGroupFields() != null)
             {
                 List<GroupItem> fields = group.getGroupFields().getItems();
@@ -596,7 +602,8 @@ public final class DcsChartReferences
             for (UserField field : settings.getUserFields().getItems())
             {
                 String dataPath = field.getDataPath();
-                if (dataPath == null || dataPath.isEmpty()) continue;
+                // A switched-off user field is not available to a chart.
+                if (!field.isUse() || dataPath == null || dataPath.isEmpty()) continue;
                 String key = userFieldKey(dataPath);
                 key = key == null ? lower(dataPath) : key;
                 result.userFields.putIfAbsent(key, dataPath);

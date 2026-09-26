@@ -32,6 +32,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettingsItemState;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFieldExpression;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com._1c.g5.v8.dt.dcs.util.DcsTerms;
@@ -450,6 +451,23 @@ public class DcsChartReferencesTest
 
         group.setUse(true);
         assertNotNull("switching the group on draws the broken chart", after(before, schema)); //$NON-NLS-1$
+
+        group.setGroupState(DataCompositionSettingsItemState.DISABLED);
+        DcsChartReferences.Census disabledState = DcsChartReferences.census(schema, ROOT);
+        assertEquals("a group in the Disabled state is not drawn either", 0, disabledState.size()); //$NON-NLS-1$
+        group.setGroupState(DataCompositionSettingsItemState.ENABLED);
+        assertNotNull("enabling the group state draws the broken chart", after(disabledState, schema)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAPointInADisabledAxisGroupStateIsNotJudged()
+    {
+        DataCompositionSchema schema = schema();
+        DcsChartReferences.Census before = DcsChartReferences.census(schema, ROOT);
+        schema.setDefaultSettings(settings(chart(points("Missing"), "", measures("Amount")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        DataCompositionChart chart = (DataCompositionChart)schema.getDefaultSettings().getItems().get(0);
+        chart.getPoints().get(0).setGroupState(DataCompositionSettingsItemState.DISABLED);
+        assertNull("a point group in the Disabled state", after(before, schema)); //$NON-NLS-1$
     }
 
     /** An unnamed variant and one named like its index are separate trees, whatever moves. */
@@ -570,6 +588,23 @@ public class DcsChartReferencesTest
             .setTotalExpression(""); //$NON-NLS-1$
         String error = after(before, schema);
         assertNotNull("the measured user field stops being a resource", error); //$NON-NLS-1$
+        assertTrue(error, error.contains("measure '" + en + ".Margin'")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testSwitchingOffAMeasuredUserFieldIsRefused()
+    {
+        String en = DcsTerms.kDCSSUserFieldsTerm[0];
+        DataCompositionSchema schema = schema();
+        schema.setDefaultSettings(plan(json("{\"userFields\":{\"items\":[" //$NON-NLS-1$
+            + "{\"kind\":\"expression\",\"dataPath\":\"" + en + ".Margin\",\"totalExpression\":\"Sum(Amount)\"}]}," //$NON-NLS-1$ //$NON-NLS-2$
+            + "\"items\":[" + chart(points("Customer"), "", measures(en + ".Margin")) + "]}"))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        DcsChartReferences.Census before = DcsChartReferences.census(schema, ROOT);
+        assertEquals(0, before.size());
+
+        schema.getDefaultSettings().getUserFields().getItems().get(0).setUse(false);
+        String error = after(before, schema);
+        assertNotNull("a switched-off user field is not available to the chart", error); //$NON-NLS-1$
         assertTrue(error, error.contains("measure '" + en + ".Margin'")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
