@@ -2234,7 +2234,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Inspect metadata objects and members, including managed-form root properties and structure. Parameters and examples: get_tool_guide('get_metadata_details').",
+    "description": "Inspect metadata objects and members, including managed-form root properties and structure, and a section's command interface. Parameters and examples: get_tool_guide('get_metadata_details').",
     "inputSchema": {
       "properties": {
         "assignable": {
@@ -3560,9 +3560,16 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Set properties of any metadata node, including managed-form roots, items, attributes, commands, and handlers. Parameters and examples: get_tool_guide('modify_metadata').",
+    "description": "Set properties of any metadata node, including managed-form roots, items, attributes, commands, and handlers, and edit a section's command interface. Parameters and examples: get_tool_guide('modify_metadata').",
     "inputSchema": {
       "properties": {
+        "commands": {
+          "description": "COMMAND INTERFACE FQN only ('Subsystem.<Name>.CommandInterface' or 'Configuration.MainSectionCommandInterface'): section commands to change, as [{command, visible?, roles?, group?, after? | before?}], applied in order and validated as one batch. 'command' is the command FQN, e.g. 'Report.Sales.StandardCommand.Open' or 'CommonCommand.Print'; 'visible' the common visibility; 'roles' [{role: 'Role.<Name>', visible: true | false | 'default' (drops the override)}]; 'group' the panel group to move it to, e.g. 'NavigationPanelImportant', 'ActionsPanelReports' or 'CommandGroup.<Name>'; 'after' / 'before' another command of that group to order it by. get_metadata_details on the same FQN lists the section's commands and groups. Cannot be combined with other payloads.",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
         "content": {
           "description": "Members to attach / detach in a structured membership list, dispatched by the FQN's kind (a COMMON ATTRIBUTE's owners, an EXCHANGE PLAN's content objects, a CATALOG's owners, a DOCUMENT's register records, a SUBSYSTEM's content objects), as [{op?, metadata, use?, autoRecord?}]. 'op' is 'add' (default) / 'remove'; 'metadata' is the member object FQN (e.g. 'Catalog.Products' or the Russian 'Справочник.Товары' - only the type token is bilingual). 'use' (CommonAttribute only, add only, default 'Use') is 'Use' / 'DontUse' / 'Auto'; 'autoRecord' (ExchangePlan only, add only) is 'Allow' / 'Deny' (omit to keep the platform default). A Catalog owner, a Document register record and a Subsystem content object are plain references (no flag). Adding is idempotent (a re-added CommonAttribute owner has its 'use' updated, a re-added ExchangePlan object its 'autoRecord'; a re-added plain reference is a no-op). Valid only for a CommonAttribute / ExchangePlan / Catalog / Document / Subsystem FQN (a Subsystem FQN may be nested); cannot be combined with 'properties'.",
           "items": {
@@ -3628,6 +3635,9 @@
           },
           "type": "array"
         },
+        "commands": {
+          "type": "object"
+        },
         "content": {
           "type": "object"
         },
@@ -3667,11 +3677,20 @@
         "persisted": {
           "type": "boolean"
         },
+        "stored": {
+          "type": "object"
+        },
         "success": {
           "type": "boolean"
         },
         "template": {
           "type": "object"
+        },
+        "unchanged": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "writtenProjects": {
           "items": {
