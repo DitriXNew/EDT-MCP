@@ -212,6 +212,10 @@ public final class CommandInterfaceSection
         final Map<Group, List<Item>> order = new LinkedHashMap<>();
         final List<String> unchanged = new ArrayList<>();
         final List<String> touched = new ArrayList<>();
+        /** Commands an entry set visible/roles for. */
+        final Set<Item> visibilityAsked = new LinkedHashSet<>();
+        /** Commands an entry set group/after/before for, with the group they end in. */
+        final Map<Item, Group> layoutAsked = new LinkedHashMap<>();
         /** The section this plan was computed from. */
         CommandInterfaceSection section;
 
@@ -458,11 +462,13 @@ public final class CommandInterfaceSection
         }
         Set<Group> ordered = new LinkedHashSet<>();
         Set<Item> touched = new LinkedHashSet<>();
+        Set<Item> visibilityAsked = new LinkedHashSet<>();
+        Set<Item> layoutAsked = new LinkedHashSet<>();
 
         for (int i = 0; i < entries.size(); i++)
         {
             String err = applyEntry(i, entries.get(i), roleResolver, groupOf, orderOf, visibilityOf, ordered,
-                touched);
+                touched, visibilityAsked, layoutAsked);
             if (err != null)
             {
                 return error(err);
@@ -497,6 +503,11 @@ public final class CommandInterfaceSection
                 plan.order.put(group, new ArrayList<>(finalOrder));
             }
         }
+        plan.visibilityAsked.addAll(visibilityAsked);
+        for (Item item : layoutAsked)
+        {
+            plan.layoutAsked.put(item, groupOf.get(item));
+        }
         for (Item item : touched)
         {
             plan.touched.add(item.fqn);
@@ -517,7 +528,7 @@ public final class CommandInterfaceSection
 
     private String applyEntry(int index, JsonObject entry, UnaryOperator<String> roleResolver, // NOSONAR one simulation step
         Map<Item, Group> groupOf, Map<Group, List<Item>> orderOf, Map<Item, Visibility> visibilityOf,
-        Set<Group> ordered, Set<Item> touched)
+        Set<Group> ordered, Set<Item> touched, Set<Item> visibilityAsked, Set<Item> layoutAsked)
     {
         String at = "commands[" + index + "]"; //$NON-NLS-1$ //$NON-NLS-2$
         if (entry == null)
@@ -569,6 +580,14 @@ public final class CommandInterfaceSection
             return at + " sets both 'after' and 'before': pass only one anchor command."; //$NON-NLS-1$
         }
         touched.add(item);
+        if (hasVisible || hasRoles)
+        {
+            visibilityAsked.add(item);
+        }
+        if (groupRef != null || after != null || before != null)
+        {
+            layoutAsked.add(item);
+        }
 
         if (hasVisible || hasRoles)
         {

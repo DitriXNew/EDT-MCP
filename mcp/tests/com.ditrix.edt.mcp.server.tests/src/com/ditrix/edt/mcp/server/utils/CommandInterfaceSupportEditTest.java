@@ -19,12 +19,15 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+import org.eclipse.emf.common.util.URI;
+import org.eclipse.emf.ecore.InternalEObject;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -34,6 +37,15 @@ import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.bm.integration.IBmTask;
 import com._1c.g5.v8.dt.cmi.model.CmiFactory;
 import com._1c.g5.v8.dt.cmi.model.CommandInterface;
+import com._1c.g5.v8.dt.cmi.model.CommandsPlacementFragment;
+import com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean;
+import com._1c.g5.v8.dt.metadata.mdclass.CommandGroup;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonCommand;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.ForRoleType;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
+import com._1c.g5.v8.dt.metadata.mdclass.Role;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSection.Group;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSection.Item;
@@ -228,6 +240,70 @@ public class CommandInterfaceSupportEditTest
         assertEquals(JsonParser.parseString("{'CommonCommand.Archive':{visible:'default',group:'default'}," //$NON-NLS-1$
             + "'CommonCommand.Export':{visible:'default',group:'default'}}"), stored.get("commands")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(stored.getAsJsonObject("order").has(ORDINARY)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheReadBackReportsTheLastPlacementFragmentListingACommand()
+    {
+        CommonCommand print = mock(CommonCommand.class, withSettings().extraInterfaces(IBmObject.class));
+        when(print.eClass()).thenReturn(MdClassPackage.Literals.COMMON_COMMAND);
+        when(((IBmObject)print).bmIsTop()).thenReturn(true);
+        when(((IBmObject)print).bmGetFqn()).thenReturn(PRINT);
+        CommandInterface stored = CmiFactory.eINSTANCE.createCommandInterface();
+        stored.setCommandsPlacement(CmiFactory.eINSTANCE.createCommandsPlacement());
+        for (String name : new String[] { "Tools", "Other" }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            CommandGroup group = MdClassFactory.eINSTANCE.createCommandGroup();
+            group.setName(name);
+            CommandsPlacementFragment fragment = CmiFactory.eINSTANCE.createCommandsPlacementFragment();
+            fragment.setGroup(group);
+            fragment.getCommands().add(print);
+            stored.getCommandsPlacement().getPlacementFragments().add(fragment);
+        }
+        IBmTransaction tx = mock(IBmTransaction.class);
+        when(tx.getTopObjectByFqn(SECTION_FQN)).thenReturn((IBmObject)stored);
+        Plan plan = section(PRINT, EXPORT).plan(entries("[{command:'CommonCommand.Print', visible:false}]"), //$NON-NLS-1$
+            ref -> null).plan;
+
+        JsonObject readBack = CommandInterfaceSupport.storedState(tx, SECTION_FQN, plan);
+
+        assertEquals("CommandGroup.Other", //$NON-NLS-1$
+            readBack.getAsJsonObject("commands").getAsJsonObject(PRINT).get("group").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAVisibilityWriteKeepsStoredOverridesOfUnresolvedRoles()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Role manager = MdClassFactory.eINSTANCE.createRole();
+        manager.setName("Manager"); //$NON-NLS-1$
+        config.getRoles().add(manager);
+        Role missing = MdClassFactory.eINSTANCE.createRole();
+        ((InternalEObject)missing).eSetProxyURI(URI.createURI("bm://TestConfiguration/Role.Missing")); //$NON-NLS-1$
+        AdjustableBoolean stored = MdClassFactory.eINSTANCE.createAdjustableBoolean();
+        stored.setCommon(true);
+        stored.getFor().add(forRole(manager, false));
+        stored.getFor().add(forRole(missing, true));
+
+        AdjustableBoolean written = CommandInterfaceSupport.toAdjustableBoolean(config,
+            new Visibility(false, Collections.singletonMap("Role.Manager", true)), stored); //$NON-NLS-1$
+
+        assertFalse(written.isCommon());
+        assertEquals(2, written.getFor().size());
+        assertSame(manager, written.getFor().get(0).getRole());
+        assertTrue(written.getFor().get(0).isValue());
+        assertSame("the unresolved override is carried over as stored", missing, written.getFor().get(1).getRole()); //$NON-NLS-1$
+        assertTrue(written.getFor().get(1).isValue());
+        assertTrue(CommandInterfaceSupport.toAdjustableBoolean(config,
+            new Visibility(false, Collections.emptyMap()), null).getFor().isEmpty());
+    }
+
+    private static ForRoleType forRole(Role role, boolean value)
+    {
+        ForRoleType forRole = MdClassFactory.eINSTANCE.createForRoleType();
+        forRole.setRole(role);
+        forRole.setValue(value);
+        return forRole;
     }
 
     @Test

@@ -649,7 +649,8 @@ public final class CommandInterfaceSupport
         for (Map.Entry<Item, Visibility> e : plan.visibility().entrySet())
         {
             SetCommandVisibilityTask.create(commandInterface, (Command)e.getKey().handle(),
-                toAdjustableBoolean(config, e.getValue())).execute(tx, pm);
+                toAdjustableBoolean(config, e.getValue(),
+                    storedVisible(commandInterface, (Command)e.getKey().handle()))).execute(tx, pm);
         }
         for (Map.Entry<Item, Group> e : plan.placement().entrySet())
         {
@@ -748,7 +749,8 @@ public final class CommandInterfaceSupport
      * copies of the stored fragments it was computed from, so a copy that differs from the stored
      * fragment in the same transaction proves the view lags. Checked for everything the plan writes:
      * the order of each reordered group and the placement of its commands, each placed command, and
-     * each command whose visibility changes. Package-visible for tests.
+     * each command whose visibility changes; and whatever an entry asked for even when it changes
+     * nothing. Package-visible for tests.
      *
      * @param stored the section's stored command interface, or {@code null} when it stores nothing
      * @param plan the plan built in the same transaction
@@ -778,37 +780,26 @@ public final class CommandInterfaceSupport
                 return staleView("the visibility of " + item.fqn()); //$NON-NLS-1$
             }
         }
-        // Every command an entry named, so a lagging view cannot pass a request off as already done.
-        for (String fqn : plan.touched())
+        // What an entry asked for is checked even when it changes nothing, so a lagging view cannot pass
+        // a request off as already done: a visibility entry by that command's visibility, a group or
+        // anchor entry by the group it lands in.
+        for (Item item : plan.visibilityAsked)
         {
-            String reason = staleTouched(stored, plan, fqn);
+            if (!visibilityAgrees(stored, item.derived))
+            {
+                return staleView("the visibility of " + item.fqn()); //$NON-NLS-1$
+            }
+        }
+        for (Map.Entry<Item, Group> e : plan.layoutAsked.entrySet())
+        {
+            String reason = plan.order().containsKey(e.getValue()) ? null : staleOrder(stored, plan, e.getValue());
+            if (reason == null && !placementAgrees(stored, e.getKey().derived))
+            {
+                reason = staleView("the group of " + e.getKey().fqn()); //$NON-NLS-1$
+            }
             if (reason != null)
             {
                 return reason;
-            }
-        }
-        return null;
-    }
-
-    private static String staleTouched(CommandInterface stored, Plan plan, String fqn)
-    {
-        if (plan.section == null)
-        {
-            return null;
-        }
-        for (Group group : plan.section.groups())
-        {
-            for (Item item : group.items)
-            {
-                if (!item.fqn().equals(fqn))
-                {
-                    continue;
-                }
-                if (!visibilityAgrees(stored, item.derived))
-                {
-                    return staleView("the visibility of " + fqn); //$NON-NLS-1$
-                }
-                return staleOrder(stored, plan, group);
             }
         }
         return null;
@@ -1084,7 +1075,30 @@ public final class CommandInterfaceSupport
             + ((IBmObject)owner).bmGetFqn() + ": the FQN generator is unavailable"); //$NON-NLS-1$
     }
 
-    private static AdjustableBoolean toAdjustableBoolean(Configuration config, Visibility visibility)
+    /** The visibility the section stores for a command, or {@code null}. */
+    private static AdjustableBoolean storedVisible(CommandInterface commandInterface, Command command)
+    {
+        if (commandInterface != null && commandInterface.getCommandsVisibility() != null)
+        {
+            for (CommandsVisibilityFragment fragment : commandInterface.getCommandsVisibility()
+                .getVisibilityFragments())
+            {
+                if (sameObject(fragment.getCommand(), command))
+                {
+                    return fragment.getVisible();
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The value to store: the planned common value and resolved role overrides, plus every stored
+     * override whose role does not resolve, which the plan cannot name and the editor carries over.
+     * Package-visible for tests.
+     */
+    static AdjustableBoolean toAdjustableBoolean(Configuration config, Visibility visibility,
+        AdjustableBoolean stored)
     {
         AdjustableBoolean value = MdClassFactory.eINSTANCE.createAdjustableBoolean();
         value.setCommon(visibility.common());
@@ -1099,6 +1113,20 @@ public final class CommandInterfaceSupport
             forRole.setRole(role);
             forRole.setValue(Boolean.TRUE.equals(e.getValue()));
             value.getFor().add(forRole);
+        }
+        if (stored != null)
+        {
+            for (ForRoleType original : stored.getFor())
+            {
+                Role role = original.getRole();
+                if (role == null || role.eIsProxy() || role.getName() == null)
+                {
+                    ForRoleType kept = MdClassFactory.eINSTANCE.createForRoleType();
+                    kept.setRole(role);
+                    kept.setValue(original.isValue());
+                    value.getFor().add(kept);
+                }
+            }
         }
         return value;
     }
@@ -1166,7 +1194,8 @@ public final class CommandInterfaceSupport
                 {
                     if (command.equals(nameOf(c)))
                     {
-                        return groupName(fragment.getGroup());
+                        // The last fragment listing it decides, as in the staleness check.
+                        return groupName(effectivePlacement(commandInterface, c).getGroup());
                     }
                 }
             }

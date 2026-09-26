@@ -232,6 +232,32 @@ public class CommandInterfaceStaleViewTest
     }
 
     @Test
+    public void testAVisibilityEntryIsNotRefusedForItsGroupsOrder()
+    {
+        // The view lags a stored order of Tools, which a visibility write does not touch.
+        items(derivedTools, print, export, archive);
+        CommandInterface stored = CmiFactory.eINSTANCE.createCommandInterface();
+        storeOrder(stored, toolsGroup, archive, print, export);
+
+        assertNull(CommandInterfaceSupport.staleReason(stored,
+            plan("[{command:'CommonCommand.Print', visible:false}]"))); //$NON-NLS-1$
+        assertNull(CommandInterfaceSupport.staleReason(stored,
+            plan("[{command:'CommonCommand.Print', visible:true}]"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnAnchorNoOpIsStillCheckedAgainstItsGroupsOrder()
+    {
+        items(derivedTools, print, export, archive);
+        CommandInterface stored = CmiFactory.eINSTANCE.createCommandInterface();
+        storeOrder(stored, toolsGroup, archive, print, export);
+
+        Plan plan = plan("[{command:'CommonCommand.Export', after:'CommonCommand.Print'}]"); //$NON-NLS-1$
+        assertEquals(true, plan.isEmpty());
+        assertEquals(staleView("the order of " + TOOLS), CommandInterfaceSupport.staleReason(stored, plan)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testAPlacementTheViewAlreadyShowsIsWritten()
     {
         items(derivedTools, print, export, archive).get(2).setGroupCustomized(true);
