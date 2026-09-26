@@ -50,7 +50,8 @@ public enum ToolGroup
         "delete_launch_config", //$NON-NLS-1$
         "create_infobase", "delete_infobase", "update_database", "launch", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         "terminate_launch", "run_yaxunit_tests", "ask_workmate", "get_job_status", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        "cancel_job", "build_external_objects", "set_infobase_credentials"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "cancel_job", "build_external_objects", "set_infobase_credentials", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        "export_configuration_to_file"), //$NON-NLS-1$
 
     DEBUG("debug", "Debugging", //$NON-NLS-1$ //$NON-NLS-2$
         "Breakpoints, stepping, variables, expression evaluation, and profiling", //$NON-NLS-1$

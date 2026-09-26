@@ -34,6 +34,7 @@ import com.ditrix.edt.mcp.server.tools.impl.DcsTool;
 import com.ditrix.edt.mcp.server.tools.impl.EnableToolsetTool;
 import com.ditrix.edt.mcp.server.tools.impl.EvaluateExpressionTool;
 import com.ditrix.edt.mcp.server.tools.impl.ExportCommonPictureTool;
+import com.ditrix.edt.mcp.server.tools.impl.ExportConfigurationToFileTool;
 import com.ditrix.edt.mcp.server.tools.impl.ExportConfigurationToXmlTool;
 import com.ditrix.edt.mcp.server.tools.impl.FindReferencesTool;
 import com.ditrix.edt.mcp.server.tools.impl.GenerateTranslationStringsTool;
@@ -155,6 +156,7 @@ public final class BuiltInToolRegistrar
         catalogue.add(new ImportConfigurationFromXmlTool());
         catalogue.add(new ImportProjectFromFileTool());
         catalogue.add(new BuildExternalObjectsTool());
+        catalogue.add(new ExportConfigurationToFileTool());
         catalogue.add(new DeleteProjectTool());
         catalogue.add(new CreateProjectTool());
         catalogue.add(new GetProblemSummaryTool());
