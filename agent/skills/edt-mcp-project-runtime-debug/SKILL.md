@@ -36,7 +36,9 @@ evidence alone answers the question.
    existing session directly only when it is the exact authorized target and no
    fresh-start effect is required; install the breakpoint and continue without
    `launch`, or stop. For a fresh launch or Attach, set the breakpoint
-   before starting it and retain task-owned identifiers.
+   before starting it and retain task-owned identifiers. When that exact
+   session is already running and no breakpoint line is known, `debug_pause`
+   stops it at the next BSL statement it runs instead.
 4. If a preflight race makes `launch` report `alreadyRunning=true`, do not
    claim that launch, update, restart, or startup options ran. Refresh the
    uniquely identified target, resume only a suspension caused by the task's
@@ -45,16 +47,18 @@ evidence alone answers the question.
    suspension.
 5. Settle any in-progress or unknown launch outcome under current help and a
    bounded caller-approved deadline before removing a task-owned breakpoint,
-   treating the launch as absent, or completing. Before `wait_for_break`,
-   `get_variables`, `evaluate_expression`, `set_variable`, `step`, or
-   `resume`, require current help and status to identify one unambiguous
-   intended debug target.
+   treating the launch as absent, or completing. Before `debug_pause`,
+   `wait_for_break`, `get_variables`, `evaluate_expression`, `set_variable`,
+   `step`, or `resume`, require current help and status to identify one
+   unambiguous intended debug target.
    Otherwise remove only task-owned temporary state and stop.
 6. Collect only the bounded evidence needed. Treat expression evaluation and
    variable mutation as potentially state-changing.
-7. Resume execution if this task suspended it, call `remove_breakpoint`, and
-   use `terminate_launch` only for a uniquely identified, task-owned launch
-   whose termination is authorized.
+7. Resume execution if this task suspended it. A `debug_pause` that returned
+   `paused: false` stays armed: catch it with `wait_for_break` and resume it,
+   or report the armed request. Call `remove_breakpoint`, and use
+   `terminate_launch` only for a uniquely identified, task-owned launch whose
+   termination is authorized.
 
 ## Authority rule
 

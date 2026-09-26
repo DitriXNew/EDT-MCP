@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.tools.impl.SetInfobaseCredentialsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateLaunchConfigTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateProjectTool;
+import com.ditrix.edt.mcp.server.tools.impl.DebugPauseTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugStatusTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugYaxunitTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteInfobaseTool;
@@ -210,6 +211,7 @@ public final class BuiltInToolRegistrar
         catalogue.add(new SetVariableTool());
         catalogue.add(new StepTool());
         catalogue.add(new ResumeTool());
+        catalogue.add(new DebugPauseTool());
         catalogue.add(new EvaluateExpressionTool());
         catalogue.add(new DebugYaxunitTestsTool()); // NOSONAR deprecated EDT API used intentionally (no non-deprecated equivalent here)
         catalogue.add(new DebugStatusTool());

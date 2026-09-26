@@ -966,6 +966,77 @@
   },
   {
     "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Pause a running 1C debug session now and return where it is executing (thread and stack frames); unlike wait_for_break, it requests the suspend itself. Parameters and examples: get_tool_guide('debug_pause').",
+    "inputSchema": {
+      "properties": {
+        "applicationId": {
+          "type": "string"
+        },
+        "timeout": {
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "debug_pause",
+    "outputSchema": {
+      "properties": {
+        "alreadySuspended": {
+          "type": "boolean"
+        },
+        "applicationId": {
+          "type": "string"
+        },
+        "autoResolved": {
+          "type": "boolean"
+        },
+        "frames": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "message": {
+          "type": "string"
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "serverTarget": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "threadId": {
+          "type": "integer"
+        },
+        "threadName": {
+          "type": "string"
+        },
+        "topFrameRef": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
       "idempotentHint": true,
       "openWorldHint": false,
       "readOnlyHint": true

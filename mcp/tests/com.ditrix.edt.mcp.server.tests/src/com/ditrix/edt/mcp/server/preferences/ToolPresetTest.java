@@ -86,6 +86,7 @@ public class ToolPresetTest
         assertTrue("Should disable launch", disabled.contains("launch"));
         assertTrue("Should disable set_breakpoint", disabled.contains("set_breakpoint"));
         assertTrue("Should disable set_error_breakpoint", disabled.contains("set_error_breakpoint")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("Should disable debug_pause", disabled.contains("debug_pause")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("Should disable write_module_source", disabled.contains("write_module_source"));
         assertTrue("Should disable rename_metadata_object", disabled.contains("rename_metadata_object"));
         assertTrue("Should disable adopt_metadata_object", //$NON-NLS-1$
@@ -125,6 +126,7 @@ public class ToolPresetTest
         assertTrue("Should disable rename_metadata_object", disabled.contains("rename_metadata_object"));
         assertTrue("Should disable set_breakpoint", disabled.contains("set_breakpoint"));
         assertTrue("Should disable set_error_breakpoint", disabled.contains("set_error_breakpoint")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("Should disable debug_pause", disabled.contains("debug_pause")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("Should disable adopt_metadata_object", //$NON-NLS-1$
             disabled.contains("adopt_metadata_object")); //$NON-NLS-1$
         assertTrue("Should disable build_external_objects", //$NON-NLS-1$
@@ -151,6 +153,7 @@ public class ToolPresetTest
         assertTrue("Should disable set_breakpoint", disabled.contains("set_breakpoint"));
         assertTrue("Should disable set_error_breakpoint", disabled.contains("set_error_breakpoint")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("Should disable resume", disabled.contains("resume"));
+        assertTrue("Should disable debug_pause", disabled.contains("debug_pause")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("Should disable stop_profiling", //$NON-NLS-1$
             disabled.contains("stop_profiling")); //$NON-NLS-1$
 

@@ -7,15 +7,21 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.Collections;
+import java.util.List;
+
 import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchConfigurationType;
+import org.eclipse.debug.core.ILaunchManager;
 import org.eclipse.debug.core.model.IDebugTarget;
 import org.junit.Test;
 
@@ -176,5 +182,115 @@ public class DebugTargetResolverTest
         assertNull(DebugTargetResolver.canonicalIdFor(null, null));
         assertEquals(MINTED_ID,
             DebugTargetResolver.canonicalIdFor(null, serverView(mock(IDebugTarget.class))));
+    }
+
+    // --- isSoleLiveTarget(): a blank id may act only on the one live session ---
+
+    private static final List<DebugServerTargetSupport.ServerTarget> NO_SERVER_TARGETS = Collections.emptyList();
+
+    /** An EDT launch in the given mode owning the given targets. */
+    private static ILaunch mockLaunch(String mode, String configName, IDebugTarget... targets) throws Exception
+    {
+        ILaunchConfiguration config = mockConfig(LaunchConfigUtils.LAUNCH_CONFIG_TYPE_ID, configName, null);
+        ILaunch launch = mock(ILaunch.class);
+        when(launch.getLaunchMode()).thenReturn(mode);
+        when(launch.getLaunchConfiguration()).thenReturn(config);
+        when(launch.getDebugTargets()).thenReturn(targets);
+        return launch;
+    }
+
+    @Test
+    public void testALoneServerTargetBesideAnotherLaunchIsNotSole() throws Exception
+    {
+        // Two debug launches: the resolver's lone-server fallback picks the server's target,
+        // but the thin client of the other launch is a second live session.
+        IDebugTarget server = mock(IDebugTarget.class);
+        IDebugTarget client = mock(IDebugTarget.class);
+        ILaunch[] launches = {
+            mockLaunch(ILaunchManager.DEBUG_MODE, "Server", server), //$NON-NLS-1$
+            mockLaunch(ILaunchManager.DEBUG_MODE, "Client", client) }; //$NON-NLS-1$
+
+        assertFalse(DebugTargetResolver.isSoleLiveTarget(server, launches, List.of(serverView(server))));
+    }
+
+    @Test
+    public void testAnUnownedServerTargetBesideTheLoneLaunchIsNotSole() throws Exception
+    {
+        IDebugTarget launched = mock(IDebugTarget.class);
+        IDebugTarget unowned = mock(IDebugTarget.class);
+        ILaunch[] launches = { mockLaunch(ILaunchManager.DEBUG_MODE, "Cfg", launched) }; //$NON-NLS-1$
+
+        assertFalse(DebugTargetResolver.isSoleLiveTarget(launched, launches, List.of(serverView(unowned))));
+    }
+
+    @Test
+    public void testOneTargetSeenThroughEveryViewIsSole() throws Exception
+    {
+        // A standalone server and a client running on it: two launches, one target object.
+        IDebugTarget server = mock(IDebugTarget.class);
+        ILaunch[] launches = {
+            mockLaunch(ILaunchManager.DEBUG_MODE, "Server", server), //$NON-NLS-1$
+            mockLaunch(ILaunchManager.DEBUG_MODE, "Client", server) }; //$NON-NLS-1$
+
+        assertTrue(DebugTargetResolver.isSoleLiveTarget(server, launches, List.of(serverView(server))));
+        assertTrue(DebugTargetResolver.isSoleLiveTarget(server, new ILaunch[0], NO_SERVER_TARGETS));
+    }
+
+    @Test
+    public void testADebugLaunchStillWithoutATargetIsASecondSession() throws Exception
+    {
+        // The other launch has not added its target yet; pausing the lone server target would
+        // pick one of two sessions.
+        IDebugTarget server = mock(IDebugTarget.class);
+        ILaunch serverLaunch = mockLaunch(ILaunchManager.DEBUG_MODE, "Server", server); //$NON-NLS-1$
+        ILaunch starting = mockLaunch(ILaunchManager.DEBUG_MODE, "Starting"); //$NON-NLS-1$
+
+        assertFalse(DebugTargetResolver.isSoleLiveTarget(server, new ILaunch[] { serverLaunch, starting },
+            List.of(serverView(server))));
+    }
+
+    @Test
+    public void testTheTargetsOwnLaunchWithoutListedTargetsDoesNotCount() throws Exception
+    {
+        IDebugTarget server = mock(IDebugTarget.class);
+        ILaunch own = mockLaunch(ILaunchManager.DEBUG_MODE, "Server"); //$NON-NLS-1$
+        when(server.getLaunch()).thenReturn(own);
+
+        assertTrue(DebugTargetResolver.isSoleLiveTarget(server, new ILaunch[] { own },
+            List.of(serverView(server))));
+    }
+
+    @Test
+    public void testEndedRunModeAndNonEdtSessionsDoNotCount() throws Exception
+    {
+        IDebugTarget target = mock(IDebugTarget.class);
+        IDebugTarget ended = mock(IDebugTarget.class);
+        when(ended.isTerminated()).thenReturn(true);
+        ILaunch terminatedLaunch =
+            mockLaunch(ILaunchManager.DEBUG_MODE, "Ended", mock(IDebugTarget.class)); //$NON-NLS-1$
+        when(terminatedLaunch.isTerminated()).thenReturn(true);
+        ILaunchConfiguration javaConfig =
+            mockConfig("org.eclipse.jdt.launching.localJavaApplication", "JavaApp", null); //$NON-NLS-1$ //$NON-NLS-2$
+        IDebugTarget javaTarget = mock(IDebugTarget.class);
+        ILaunch javaLaunch = mock(ILaunch.class);
+        when(javaLaunch.getLaunchMode()).thenReturn(ILaunchManager.DEBUG_MODE);
+        when(javaLaunch.getLaunchConfiguration()).thenReturn(javaConfig);
+        when(javaLaunch.getDebugTargets()).thenReturn(new IDebugTarget[] { javaTarget });
+        ILaunch[] launches = {
+            mockLaunch(ILaunchManager.DEBUG_MODE, "Cfg", target, ended), //$NON-NLS-1$
+            mockLaunch(ILaunchManager.RUN_MODE, "Run", mock(IDebugTarget.class)), //$NON-NLS-1$
+            terminatedLaunch, javaLaunch };
+
+        assertTrue(DebugTargetResolver.isSoleLiveTarget(target, launches, List.of(serverView(ended))));
+    }
+
+    @Test
+    public void testAMissingOrEndedTargetIsNeverSole()
+    {
+        IDebugTarget ended = mock(IDebugTarget.class);
+        when(ended.isTerminated()).thenReturn(true);
+
+        assertFalse(DebugTargetResolver.isSoleLiveTarget(null, new ILaunch[0], NO_SERVER_TARGETS));
+        assertFalse(DebugTargetResolver.isSoleLiveTarget(ended, new ILaunch[0], NO_SERVER_TARGETS));
     }
 }

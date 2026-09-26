@@ -63,7 +63,7 @@ public class ToolSettingsServiceTest
         "delete_infobase", //$NON-NLS-1$
         "delete_metadata"); //$NON-NLS-1$
 
-    private static final Set<String> READ_ONLY_V10_ADDITIONS = Set.of(
+    private static final Set<String> READ_ONLY_V11_ADDITIONS = Set.of(
         "import_project_from_file"); //$NON-NLS-1$
 
     private static final int VERSION_8_ANALYSIS_ONLY_DISABLED_COUNT = 58;
@@ -1058,6 +1058,50 @@ public class ToolSettingsServiceTest
     }
 
     @Test
+    public void testVersion10AddsDebugPauseToAStoredNoDebugPreset()
+    {
+        // Stored at 9 by a build that had no debug_pause: the denylist cannot name it, so
+        // without this step the upgrade would hand a no-debug profile a way to suspend a session.
+        Set<String> stored = new HashSet<>(ToolPreset.DEVELOPMENT.getDisabledTools());
+        stored.remove("debug_pause"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(stored, 9);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertEquals("version 10 must restore the current Development preset", //$NON-NLS-1$
+            ToolPreset.DEVELOPMENT.getDisabledTools(), disabled);
+        assertEquals(ToolPreset.DEVELOPMENT, ToolPreset.matchPreset(disabled));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+    }
+
+    @Test
+    public void testVersion10LeavesAnAllToolsStoreAlone()
+    {
+        PreferenceStore store = storedDisabledTools(Set.of("git", "ask_workmate"), 9); //$NON-NLS-1$ //$NON-NLS-2$
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(Set.of("git", "ask_workmate"), disabledTools(store)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testVersion10LeavesAProfileThatReenabledADebugToolAlone()
+    {
+        // Containment tolerates tightening only: a profile that turned resume back on is its
+        // author's own selection and must not gain a disable it never chose.
+        Set<String> custom = new HashSet<>(ToolPreset.DEVELOPMENT.getDisabledTools());
+        custom.remove("debug_pause"); //$NON-NLS-1$
+        custom.remove("resume"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(custom, 9);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(custom, disabledTools(store));
+    }
+
+    @Test
     public void testVersion5DoesNotDisableLaunchForAStoreThatNeverDisabledIt()
     {
         PreferenceStore store = storedDisabledTools(Set.of("git", "ask_workmate"), 4); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1367,19 +1411,19 @@ public class ToolSettingsServiceTest
     }
 
     @Test
-    public void testVersion10AddsTheProjectImporterToAStoredAnalysisOnlyPreset()
+    public void testVersion11AddsTheProjectImporterToAStoredAnalysisOnlyPreset()
     {
-        assertVersion10RestoresCurrentPreset(ToolPreset.ANALYSIS_ONLY);
+        assertVersion11RestoresCurrentPreset(ToolPreset.ANALYSIS_ONLY);
     }
 
     @Test
-    public void testVersion10AddsTheProjectImporterToAStoredCodeReviewPreset()
+    public void testVersion11AddsTheProjectImporterToAStoredCodeReviewPreset()
     {
-        assertVersion10RestoresCurrentPreset(ToolPreset.CODE_REVIEW);
+        assertVersion11RestoresCurrentPreset(ToolPreset.CODE_REVIEW);
     }
 
     @Test
-    public void testVersion10LeavesAStoredAllToolsProfileAlone()
+    public void testVersion11LeavesAStoredAllToolsProfileAlone()
     {
         PreferenceStore store = storedDisabledTools(Set.of(), 9);
 
@@ -1389,10 +1433,10 @@ public class ToolSettingsServiceTest
     }
 
     @Test
-    public void testVersion10LeavesAProfileThatReenabledTheConfigurationImporter()
+    public void testVersion11LeavesAProfileThatReenabledTheConfigurationImporter()
     {
         Set<String> custom = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
-        custom.removeAll(READ_ONLY_V10_ADDITIONS);
+        custom.removeAll(READ_ONLY_V11_ADDITIONS);
         custom.remove("import_configuration_from_xml"); //$NON-NLS-1$
         PreferenceStore store = storedDisabledTools(custom, 9);
 
@@ -1401,19 +1445,19 @@ public class ToolSettingsServiceTest
         assertEquals(custom, disabledTools(store));
     }
 
-    private static void assertVersion10RestoresCurrentPreset(ToolPreset preset)
+    private static void assertVersion11RestoresCurrentPreset(ToolPreset preset)
     {
-        Set<String> beforeVersion10 = new HashSet<>(preset.getDisabledTools());
-        beforeVersion10.removeAll(READ_ONLY_V10_ADDITIONS);
-        PreferenceStore store = storedDisabledTools(beforeVersion10, 9);
+        Set<String> beforeVersion11 = new HashSet<>(preset.getDisabledTools());
+        beforeVersion11.removeAll(READ_ONLY_V11_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(beforeVersion11, 10);
 
         ToolSettingsService.ensureMigratedForTest(store);
 
         Set<String> disabled = disabledTools(store);
-        assertEquals("version 10 must restore the current disabled set for " + preset, //$NON-NLS-1$
+        assertEquals("version 11 must restore the current disabled set for " + preset, //$NON-NLS-1$
             preset.getDisabledTools(), disabled);
         assertEquals(preset, ToolPreset.matchPreset(disabled));
-        assertEquals(10, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+        assertEquals(11, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
     }
 
     private static void assertVersion9RestoresCurrentPreset(ToolPreset preset)
@@ -1429,7 +1473,8 @@ public class ToolSettingsServiceTest
             preset.getDisabledTools(), disabled);
         assertEquals("the restored set must match " + preset, //$NON-NLS-1$
             preset, ToolPreset.matchPreset(disabled));
-        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
     }
 
     private static void assertVersion9LeavesCustomizedProfileAlone(String enabledPriorTool)

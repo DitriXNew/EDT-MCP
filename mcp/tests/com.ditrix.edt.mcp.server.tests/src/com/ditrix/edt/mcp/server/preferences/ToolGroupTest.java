@@ -189,7 +189,9 @@ public class ToolGroupTest
         // The workspace-wide break-on-error switch sits in the same group as the line
         // breakpoints it complements: whoever may set one may set the other.
         assertTrue(tools.contains("set_error_breakpoint")); //$NON-NLS-1$
-        assertEquals(15, tools.size());
+        // Pausing a running session is the counterpart of resume, so it rides the same group.
+        assertTrue(tools.contains("debug_pause")); //$NON-NLS-1$
+        assertEquals(16, tools.size());
     }
 
     @Test

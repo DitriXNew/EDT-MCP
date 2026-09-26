@@ -62,10 +62,11 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 
 ## Debug
 
-> Runtime debugging: launch/attach, breakpoints, step/resume, variables, expression evaluation.
+> Runtime debugging: launch/attach, breakpoints, step/resume/pause, variables, expression evaluation.
 
 | Tool | Description |
 |------|-------------|
+| [`debug_pause`](debug_pause.md) | Pause a running 1C debug session now and return where it is executing (thread and stack frames); unlike wait_for_break, it requests the suspend itself. Param… |
 | [`debug_status`](debug_status.md) | Report active debug sessions: applicationId (real or synthetic 'attach:<name>' / 'launch:<name>'), launch configuration name/type, mode (debug/run), whether… |
 | [`evaluate_expression`](evaluate_expression.md) | Evaluate a BSL expression in the context of a suspended stack frame. Pass frameRef from wait_for_break and the expression text. WARNING: this executes arbitr… |
 | [`get_applications`](get_applications.md) | Get list of applications (infobases) for a project. Returns application ID, name, type, and update state. Application ID is required for update_database and… |
