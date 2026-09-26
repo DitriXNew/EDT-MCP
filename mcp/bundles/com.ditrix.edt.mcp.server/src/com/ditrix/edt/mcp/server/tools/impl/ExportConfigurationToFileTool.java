@@ -14,7 +14,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.core.resources.IProject;
@@ -86,6 +88,8 @@ public class ExportConfigurationToFileTool implements IMcpTool
     static final long LOCK_WAIT_MS = 5L * 60_000L;
     /** Starting a standalone server and connecting the project. */
     static final long PREPARE_TIMEOUT_MS = 5L * 60_000L;
+    /** How long a prepare that outlived its wait still holds the infobase before it is released. */
+    static final long PREPARE_END_CAP_MS = 2L * 60_000L;
     /** How long a LOADING equality state may be waited out. */
     static final long SYNC_SETTLE_MS = 30_000L;
     /** The Designer dump itself. */
@@ -556,13 +560,22 @@ public class ExportConfigurationToFileTool implements IMcpTool
         {
             boolean armed = portPolicy != null && LaunchUpdateDialogAutoConfirmer.arm(false, false,
                 false, null, infobaseName, portPolicy, serverName);
+            CountDownLatch prepareEnded = new CountDownLatch(1);
             try
             {
                 result = BoundedJob.run(NAME + ": prepare " + applicationId, timeout, monitor -> { //$NON-NLS-1$
                     StandaloneServerStateRecovery.ensureStartable(project, application, applicationId,
                         manager);
                     manager.prepare(application, PREPARE_MODE, context, monitor);
-                });
+                }, prepareEnded::countDown);
+                // A prepare that outlived the wait may still start the server and raise its
+                // port modal: keep the arm, the watch and the caller's infobase lock until it ends.
+                if (BoundedJob.isInconclusive(result.getOutcome())
+                    && !awaitEnd(prepareEnded, PREPARE_END_CAP_MS))
+                {
+                    progress.add("Preparing is still running " + seconds(PREPARE_END_CAP_MS) //$NON-NLS-1$
+                        + " after the wait ended; releasing the infobase anyway."); //$NON-NLS-1$
+                }
             }
             finally
             {
@@ -601,6 +614,44 @@ public class ExportConfigurationToFileTool implements IMcpTool
                 throw new IllegalStateException("Preparing application '" + applicationId //$NON-NLS-1$
                     + "' never started (EDT's job queue did not run it). Nothing was exported; " //$NON-NLS-1$
                     + "retrying is safe."); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Waits for {@code ended} at most {@code capMs}, through interrupts (a cancelled call still
+     * holds what the running work needs); the interrupt flag is restored afterwards.
+     *
+     * @return {@code true} when the work ended within the cap
+     */
+    static boolean awaitEnd(CountDownLatch ended, long capMs)
+    {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(capMs);
+        boolean interrupted = false;
+        try
+        {
+            while (true)
+            {
+                long left = deadline - System.nanoTime();
+                if (left <= 0)
+                {
+                    return ended.getCount() == 0;
+                }
+                try
+                {
+                    return ended.await(left, TimeUnit.NANOSECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    interrupted = true;
+                }
+            }
+        }
+        finally
+        {
+            if (interrupted)
+            {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 

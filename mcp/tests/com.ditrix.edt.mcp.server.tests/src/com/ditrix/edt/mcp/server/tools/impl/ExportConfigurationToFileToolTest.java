@@ -439,6 +439,68 @@ public class ExportConfigurationToFileToolTest
         assertSame(syncProject, target.syncProject);
     }
 
+    @Test
+    public void testAwaitEndReturnsAsSoonAsThePrepareJobEnds() throws Exception
+    {
+        CountDownLatch ended = new CountDownLatch(1);
+        Thread ender = new Thread(() -> {
+            sleepQuietly(100);
+            ended.countDown();
+        });
+        ender.start();
+        long start = System.nanoTime();
+        assertTrue(ExportConfigurationToFileTool.awaitEnd(ended, 10_000));
+        assertTrue("returned long after the job ended", //$NON-NLS-1$
+            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start) < 5_000);
+        ender.join();
+    }
+
+    @Test
+    public void testAwaitEndGivesUpAtTheCapWhenThePrepareJobNeverEnds()
+    {
+        CountDownLatch never = new CountDownLatch(1);
+        long start = System.nanoTime();
+        assertFalse(ExportConfigurationToFileTool.awaitEnd(never, 150));
+        assertTrue("released before the cap", //$NON-NLS-1$
+            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start) >= 140);
+    }
+
+    @Test
+    public void testAwaitEndKeepsWaitingThroughACancelAndRestoresTheInterrupt() throws Exception
+    {
+        // A cancelled call must still hold the infobase until the prepare it started has ended.
+        CountDownLatch ended = new CountDownLatch(1);
+        Thread.currentThread().interrupt();
+        Thread ender = new Thread(() -> {
+            sleepQuietly(200);
+            ended.countDown();
+        });
+        ender.start();
+        try
+        {
+            assertTrue(ExportConfigurationToFileTool.awaitEnd(ended, 10_000));
+            assertEquals(0, ended.getCount());
+            assertTrue("the interrupt must survive the wait", Thread.interrupted()); //$NON-NLS-1$
+        }
+        finally
+        {
+            Thread.interrupted();
+            ender.join();
+        }
+    }
+
+    private static void sleepQuietly(long millis)
+    {
+        try
+        {
+            Thread.sleep(millis);
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private static Map<String, String> params(String projectName, String outputFile)
     {
         Map<String, String> params = new HashMap<>();
