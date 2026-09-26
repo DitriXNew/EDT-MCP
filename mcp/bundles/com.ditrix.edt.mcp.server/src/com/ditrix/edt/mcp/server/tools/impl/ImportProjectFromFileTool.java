@@ -24,8 +24,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
-import org.eclipse.core.runtime.CoreException;
-import org.eclipse.core.runtime.NullProgressMonitor;
 
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
@@ -49,6 +47,7 @@ import com.ditrix.edt.mcp.server.utils.BackgroundJobPolling;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobRenderer;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs.MarkedFailure;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.ProgressReporter;
 import com.ditrix.edt.mcp.server.utils.BinaryToXmlConverter;
 import com.ditrix.edt.mcp.server.utils.BinaryToXmlConverter.ConversionException;
@@ -71,8 +70,8 @@ import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
  *
  * <p>The work runs as a background job. Everything before the project is created - the conversion
  * and the check that the dump holds what the extension promised - can still be abandoned and
- * leaves nothing behind; the job commits only then. An import that fails after that removes the
- * half-created project again, and the answer says whether that worked.
+ * leaves nothing behind; the job commits only then. An import that fails after that leaves what
+ * EDT created in place and names it, with the mutation marker read from the workspace.
  */
 public class ImportProjectFromFileTool implements IMcpTool
 {
@@ -94,6 +93,10 @@ public class ImportProjectFromFileTool implements IMcpTool
 
     /** Kept between the conversion deadline and the job's own, so the conversion's fires first. */
     private static final long COMMIT_MARGIN_MS = TimeUnit.MINUTES.toMillis(10);
+
+    /** The error-contract markers, as {@link ToolResult} spells them. */
+    private static final String MARKER_COMMITTED = "mutationCommitted"; //$NON-NLS-1$
+    private static final String MARKER_UNKNOWN = "mutationOutcomeUnknown"; //$NON-NLS-1$
 
     private static final String NATURE_CONFIGURATION = "com._1c.g5.v8.dt.core.V8ConfigurationNature"; //$NON-NLS-1$
     private static final String NATURE_EXTENSION = "com._1c.g5.v8.dt.core.V8ExtensionNature"; //$NON-NLS-1$
@@ -271,13 +274,12 @@ public class ImportProjectFromFileTool implements IMcpTool
         Request request = new Request(kind, file, outsideWorkspace, projectName, baseProjectName,
             baseProject.get() == null ? null : runtimeVersionOf(baseProject.get()), client,
             effectiveLifecycle);
-        AtomicReference<Mutation> mutation = new AtomicReference<>(Mutation.NONE);
         JobSnapshot started;
         try
         {
             started = jobs.start(NAME, conversionBudgetMs + COMMIT_MARGIN_MS,
                 "Queued: import " + file.getFileName() + " into new project " + projectName + ".", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                progress -> runImport(request, progress, mutation));
+                progress -> runImport(request, progress));
         }
         catch (RejectedExecutionException e)
         {
@@ -292,7 +294,7 @@ public class ImportProjectFromFileTool implements IMcpTool
                 + "could read it. Check list_projects for project '" + projectName //$NON-NLS-1$
                 + "' before importing again.").toJson(); //$NON-NLS-1$
         }
-        return renderStart(latest, mutation.get());
+        return renderStart(latest);
     }
 
     /**
@@ -420,16 +422,46 @@ public class ImportProjectFromFileTool implements IMcpTool
     }
 
     /**
-     * The job: convert, check, commit, import, start, observe.
+     * The job. A failure carries the marker of what the workspace holds by then, so polling the job
+     * and the starting call report the same outcome.
      *
      * @param request the validated request
      * @param progress the job's reporter
-     * @param mutation set to what this job did to the workspace, for the caller's error markers
+     * @return the Markdown answer
+     * @throws Exception a {@link MarkedFailure} for every failure once the import was entered
+     */
+    private Object runImport(Request request, ProgressReporter progress) throws Exception
+    {
+        AtomicReference<Mutation> mutation = new AtomicReference<>(Mutation.NONE);
+        try
+        {
+            return importAndStart(request, progress, mutation);
+        }
+        catch (ImportFailure e)
+        {
+            throw new MarkedFailure(e.getMessage(), marker(mutation.get()));
+        }
+        catch (RuntimeException e)
+        {
+            if (mutation.get() == Mutation.NONE)
+            {
+                throw e;
+            }
+            throw new MarkedFailure(PlatformFailures.describeWithRootCause(e), marker(mutation.get()));
+        }
+    }
+
+    /**
+     * Convert, check, commit, import, start, observe.
+     *
+     * @param request the validated request
+     * @param progress the job's reporter
+     * @param mutation set to what the workspace holds as the job goes
      * @return the Markdown answer
      * @throws Exception an {@link ImportFailure} for every expected failure
      */
-    Object runImport(Request request, ProgressReporter progress, AtomicReference<Mutation> mutation)
-        throws Exception
+    private Object importAndStart(Request request, ProgressReporter progress,
+        AtomicReference<Mutation> mutation) throws Exception
     {
         String name = request.projectName;
         Long otherStartedAt = ImportConfigurationFromXmlTool.tryClaimImport(name);
@@ -481,16 +513,14 @@ public class ImportProjectFromFileTool implements IMcpTool
             }
             catch (Exception e) // NOSONAR the CLI API is reached by reflection
             {
-                throw rollBack(name, e, mutation);
+                throw importFailure(name, e, mutation);
             }
-            mutation.set(Mutation.COMMITTED);
             IProject project = ProjectContext.of(name).project();
             if (!request.lifecycle.projectExists(project))
             {
-                throw new ImportFailure("The import of '" + name + "' returned without an error, but " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "the workspace holds no project of that name. Check the EDT error log, then " //$NON-NLS-1$
-                    + "retry the import."); //$NON-NLS-1$
+                throw noProjectAfterImport(name, mutation);
             }
+            mutation.set(Mutation.COMMITTED);
             progress.add("Starting project " + name + " in EDT."); //$NON-NLS-1$ //$NON-NLS-2$
             StartOutcome outcome = ImportConfigurationFromXmlTool.startImportedProject(project, name,
                 request.lifecycle, startBudgetMs);
@@ -513,53 +543,58 @@ public class ImportProjectFromFileTool implements IMcpTool
     }
 
     /**
-     * Removes what a failed import left behind, so a retry does not trip over it.
+     * Reports a failed import by what it left behind. Nothing is deleted: no check can prove that
+     * a project of this name is the import's own rather than one another operation created meanwhile.
      *
      * @param name the project the import was creating
      * @param failure what the import raised
-     * @param mutation set to what is left behind
+     * @param mutation set to what the workspace holds afterwards
      * @return the failure to report
      */
-    private static ImportFailure rollBack(String name, Exception failure, AtomicReference<Mutation> mutation)
+    private static ImportFailure importFailure(String name, Exception failure,
+        AtomicReference<Mutation> mutation)
     {
-        String cause = PlatformFailures.describeWithRootCause(failure);
         String head = "EDT could not import the converted XML files into project '" + name + "': " //$NON-NLS-1$ //$NON-NLS-2$
-            + cause + ". "; //$NON-NLS-1$
-        IProject project = ProjectContext.of(name).project();
+            + PlatformFailures.describeWithRootCause(failure) + ". "; //$NON-NLS-1$
         Path folder = WorkspacePaths.defaultProjectFolder(name);
-        if (!project.exists() && (folder == null || !Files.exists(folder)))
+        if (ProjectContext.of(name).project().exists())
         {
-            mutation.set(Mutation.NONE);
-            return new ImportFailure(head + "No project was created."); //$NON-NLS-1$
+            mutation.set(Mutation.COMMITTED);
+            return new ImportFailure(head + "A project of that name exists now and is left as it is. " //$NON-NLS-1$
+                + "Check it, and delete it with delete_project (deleteContent=true) before importing " //$NON-NLS-1$
+                + "again."); //$NON-NLS-1$
         }
-        String deleteFailure = null;
-        try
+        if (folder != null && Files.exists(folder))
         {
-            // The folder was checked absent before the job started, so it is the import's own.
-            if (project.exists())
-            {
-                project.delete(true, true, new NullProgressMonitor());
-            }
+            mutation.set(Mutation.COMMITTED);
+            return new ImportFailure(head + "No project exists, but the workspace folder " + folder //$NON-NLS-1$
+                + " does now; remove it before importing again."); //$NON-NLS-1$
         }
-        catch (CoreException | RuntimeException e)
+        mutation.set(Mutation.NONE);
+        return new ImportFailure(head + "No project was created."); //$NON-NLS-1$
+    }
+
+    /**
+     * Reports an import that returned normally but left no project to start.
+     *
+     * @param name the project the import was creating
+     * @param mutation set to what the workspace holds afterwards
+     * @return the failure to report
+     */
+    private static ImportFailure noProjectAfterImport(String name, AtomicReference<Mutation> mutation)
+    {
+        String head = "The import of '" + name + "' returned without an error, but the workspace holds " //$NON-NLS-1$ //$NON-NLS-2$
+            + "no project of that name. "; //$NON-NLS-1$
+        Path folder = WorkspacePaths.defaultProjectFolder(name);
+        if (folder != null && Files.exists(folder))
         {
-            deleteFailure = PlatformFailures.describe(e);
+            mutation.set(Mutation.COMMITTED);
+            return new ImportFailure(head + "Its workspace folder " + folder + " exists; remove it and " //$NON-NLS-1$ //$NON-NLS-2$
+                + "check the EDT error log before importing again."); //$NON-NLS-1$
         }
-        if (!project.exists() && (folder == null || !Files.exists(folder)))
-        {
-            mutation.set(Mutation.NONE);
-            return new ImportFailure(head + "The partly created project was deleted again, so nothing " //$NON-NLS-1$
-                + "is left behind."); //$NON-NLS-1$
-        }
-        mutation.set(Mutation.COMMITTED);
-        Activator.logWarning(NAME + ": the partly imported project '" + name //$NON-NLS-1$
-            + "' could not be removed after a failed import" //$NON-NLS-1$
-            + (deleteFailure == null ? "" : ": " + deleteFailure)); //$NON-NLS-1$ //$NON-NLS-2$
-        String fix = project.exists()
-            ? "; delete it with delete_project (deleteContent=true) before importing again." //$NON-NLS-1$
-            : "; its folder " + folder + " is left on disk, remove it before importing again."; //$NON-NLS-1$ //$NON-NLS-2$
-        return new ImportFailure(head + "The partly created project could not be removed" //$NON-NLS-1$
-            + (deleteFailure == null ? "" : " (" + deleteFailure + ")") + fix); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        // The import claimed success and nothing is visible: whether it left anything is not known.
+        return new ImportFailure(head + "Check the EDT error log and list_projects before importing " //$NON-NLS-1$
+            + "again."); //$NON-NLS-1$
     }
 
     /**
@@ -721,11 +756,23 @@ public class ImportProjectFromFileTool implements IMcpTool
     }
 
     /**
-     * @param job the snapshot after this call's wait
-     * @param mutation what the job did to the workspace so far
-     * @return the answer for this call
+     * @param mutation what the workspace holds after a failure
+     * @return the error-contract marker for it, or {@code null}
      */
-    static String renderStart(JobSnapshot job, Mutation mutation)
+    private static String marker(Mutation mutation)
+    {
+        if (mutation == Mutation.COMMITTED)
+        {
+            return MARKER_COMMITTED;
+        }
+        return mutation == Mutation.UNKNOWN ? MARKER_UNKNOWN : null;
+    }
+
+    /**
+     * @param job the snapshot after this call's wait
+     * @return the answer for this call; a failure's marker is the one the job published
+     */
+    static String renderStart(JobSnapshot job)
     {
         if (job.getStatus() == BackgroundJobs.Status.DONE)
         {
@@ -734,11 +781,11 @@ public class ImportProjectFromFileTool implements IMcpTool
         if (job.getStatus() == BackgroundJobs.Status.FAILED)
         {
             String message = job.getErrorMessage();
-            if (mutation == Mutation.COMMITTED)
+            if (MARKER_COMMITTED.equals(job.getErrorMarker()))
             {
                 return ToolResult.errorAfterMutation(message).toJson();
             }
-            if (mutation == Mutation.UNKNOWN)
+            if (MARKER_UNKNOWN.equals(job.getErrorMarker()))
             {
                 return ToolResult.errorWithUnknownMutationOutcome(message).toJson();
             }
@@ -771,7 +818,7 @@ public class ImportProjectFromFileTool implements IMcpTool
         NONE,
         /** The import API was entered and whether it left anything is not known. */
         UNKNOWN,
-        /** A project exists that this job created. */
+        /** A project or workspace folder of that name exists after the import API was entered. */
         COMMITTED
     }
 

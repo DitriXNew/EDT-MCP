@@ -40,6 +40,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.ImportConfigurationFromXmlTool.IImportLifecycle;
 import com.ditrix.edt.mcp.server.tools.impl.ImportProjectFromFileTool.IProjectImporter;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobRenderer;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
 import com.ditrix.edt.mcp.server.utils.BinaryToXmlConverter.ConversionException;
 import com.ditrix.edt.mcp.server.utils.BinaryToXmlConverter.IThickClient;
@@ -49,7 +50,7 @@ import com.ditrix.edt.mcp.server.utils.BinaryToXmlConverter.IThickClient;
  * <p>
  * The platform is injected: a fake thick client writes the dump a real one would, a fake importer
  * records the call, and a fake lifecycle starts the project at once. So the whole job - refusals,
- * conversion, the pre-commit checks, the rollback of a failed import and the error markers - runs
+ * conversion, the pre-commit checks, a failed import and the error markers - runs
  * headless. The real conversion and import are covered by the E2E suite on a stand with a platform.
  */
 public class ImportProjectFromFileToolTest
@@ -370,6 +371,13 @@ public class ImportProjectFromFileToolTest
         assertTrue(result, result.startsWith("**Pending:**")); //$NON-NLS-1$
         Matcher id = Pattern.compile("jobId=\\\\?\"([0-9a-f-]+)").matcher(result); //$NON-NLS-1$
         assertTrue(result, id.find());
+        // Cancelled while still queued, the job would never reach the step this test is about.
+        long runningBy = System.currentTimeMillis() + SANE_WAIT_MS;
+        while (!client.calls.contains("create:template") && System.currentTimeMillis() < runningBy) //$NON-NLS-1$
+        {
+            Thread.sleep(20L);
+        }
+        assertTrue("the step must be running before the cancel", client.calls.contains("create:template")); //$NON-NLS-1$ //$NON-NLS-2$
         jobs.cancel(id.group(1));
         long deadline = System.currentTimeMillis() + SANE_WAIT_MS;
         while (!client.interrupted && System.currentTimeMillis() < deadline)
@@ -394,18 +402,30 @@ public class ImportProjectFromFileToolTest
     }
 
     @Test
-    public void testAFailedImportIsRolledBack() throws IOException
+    public void testAFailedImportLeavesTheProjectItFindsAndSaysSo() throws IOException
     {
         String name = uniqueName();
         projectsToDelete.add(name);
         importer.createProjectThenFail = true;
         String result = tool().execute(params(tempFile(".cf").toString(), name, FULL_WAIT)); //$NON-NLS-1$
         assertError(result, "simulated import failure"); //$NON-NLS-1$
-        assertTrue(result, result.contains("deleted again")); //$NON-NLS-1$
-        assertNoMutationMarker(result);
-        assertFalse("the half-created project must be gone", projectHandle(name).exists()); //$NON-NLS-1$
-        assertFalse(Files.exists(ResourcesPlugin.getWorkspace().getRoot().getLocation().toFile().toPath()
-            .resolve(name)));
+        assertTrue(result, result.contains("delete_project")); //$NON-NLS-1$
+        assertTrue("a project is left, so the mutation happened: " + result, //$NON-NLS-1$
+            result.contains("\"mutationCommitted\":true")); //$NON-NLS-1$
+        assertTrue("nothing proves the project is the import's own, so it is not deleted", //$NON-NLS-1$
+            projectHandle(name).exists());
+    }
+
+    @Test
+    public void testAnImportThatLeavesNoProjectIsNotReportedAsCommitted() throws IOException
+    {
+        lifecycle.projectMissing = true;
+        String result = tool().execute(params(tempFile(".cf").toString(), uniqueName(), FULL_WAIT)); //$NON-NLS-1$
+        assertError(result, "returned without an error"); //$NON-NLS-1$
+        assertFalse(result, result.contains("mutationCommitted")); //$NON-NLS-1$
+        assertTrue("the API claimed success, so what it left is unknown: " + result, //$NON-NLS-1$
+            result.contains("\"mutationOutcomeUnknown\":true")); //$NON-NLS-1$
+        assertEquals("nothing to start", 0, lifecycle.startRequests); //$NON-NLS-1$
     }
 
     @Test
@@ -427,6 +447,26 @@ public class ImportProjectFromFileToolTest
         assertTrue("a start failure happens after the project exists: " + result, //$NON-NLS-1$
             result.contains("\"mutationCommitted\":true")); //$NON-NLS-1$
         assertEquals("the latch is released when no start of ours is coming", 1, lifecycle.permits); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAPolledFailureCarriesTheMarkerTheStartingCallWouldHave() throws Exception
+    {
+        client.blockCreate = true;
+        lifecycle.startFails = true;
+        String result = tool().execute(params(tempFile(".cf").toString(), uniqueName(), "0")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(result, result.startsWith("**Pending:**")); //$NON-NLS-1$
+        Matcher id = Pattern.compile("jobId=\\\\?\"([0-9a-f-]+)").matcher(result); //$NON-NLS-1$
+        assertTrue(result, id.find());
+        client.release();
+        JobSnapshot job = jobs.await(id.group(1), SANE_WAIT_MS);
+        assertEquals(BackgroundJobs.Status.FAILED, job.getStatus());
+        assertEquals("mutationCommitted", job.getErrorMarker()); //$NON-NLS-1$
+        String polled = BackgroundJobRenderer.render(job);
+        assertTrue("get_job_status must show the marker: " + polled, //$NON-NLS-1$
+            polled.contains("| mutationCommitted | true |")); //$NON-NLS-1$
+        String answered = ImportProjectFromFileTool.renderStart(job);
+        assertTrue(answered, answered.contains("\"mutationCommitted\":true")); //$NON-NLS-1$
     }
 
     @Test
@@ -659,13 +699,14 @@ public class ImportProjectFromFileToolTest
         volatile boolean started;
         volatile boolean startFails;
         volatile boolean neverStarts;
+        volatile boolean projectMissing;
         volatile int startRequests;
         volatile int permits;
 
         @Override
         public boolean projectExists(IProject project)
         {
-            return true;
+            return !projectMissing;
         }
 
         @Override

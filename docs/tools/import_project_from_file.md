@@ -80,7 +80,8 @@ A finished job answers with a table: the project, `State` (`ready`, or `starting
 - A refusal of the arguments (missing file, unsupported extension, taken name, wrong base) comes back at once, before any job starts.
 - **No installed platform** (or none matching `platformVersion`) is also refused at once. Install the 1C:Enterprise platform and register it in EDT (Window -> Preferences -> 1C:Enterprise -> Installed Installations); without one, dump the file to XML in Designer and use `import_configuration_from_xml`.
 - A conversion failure (a damaged file, a file of another kind, a platform too old for the file) fails the job with the designer's own log text. No project was created.
-- An import failure removes the half-created project again and says so. If that removal fails, the error carries `mutationCommitted` and names what is left - a project to delete with `delete_project` (`deleteContent=true`), or a workspace folder to remove - before importing again.
+- An import failure deletes nothing: whatever EDT created is left in place, because no check can prove a project of that name is this import's own. The error says what the workspace holds afterwards - a project to check and delete with `delete_project` (`deleteContent=true`), a workspace folder to remove, or nothing ("No project was created") - and carries `mutationCommitted` when something is there.
+- The `mutationCommitted` / `mutationOutcomeUnknown` markers come with the answer of the call that saw the job end. A failure read through `get_job_status` carries the same message, which says in words whether a project exists.
 - A start failure keeps the project (the import succeeded) and carries `mutationCommitted`; follow the recovery the message gives instead of importing again.
 
 ## Gotchas
