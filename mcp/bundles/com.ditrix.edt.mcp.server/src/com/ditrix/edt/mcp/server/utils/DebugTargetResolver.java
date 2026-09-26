@@ -6,6 +6,10 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.List;
+
+import org.eclipse.debug.core.DebugPlugin;
+import org.eclipse.debug.core.ILaunch;
 import org.eclipse.debug.core.model.IDebugTarget;
 
 /**
@@ -162,6 +166,64 @@ public final class DebugTargetResolver
             return new Resolution(lone.target, canonicalIdFor(lone.target, lone, lone.applicationId), lone, true);
         }
         return null;
+    }
+
+    /**
+     * Whether {@code target} is the only live 1C debug target. A blank id can resolve one of
+     * several sessions (the lone-server fallback), so a tool that changes state checks this first.
+     *
+     * @param target the auto-resolved target
+     * @return {@code true} when no other active debug launch or debug-server target is live
+     */
+    public static boolean isSoleLiveTarget(IDebugTarget target)
+    {
+        DebugPlugin debugPlugin = DebugPlugin.getDefault();
+        ILaunch[] launches = debugPlugin != null ? debugPlugin.getLaunchManager().getLaunches() : new ILaunch[0];
+        return isSoleLiveTarget(target, launches, DebugServerTargetSupport.listServerTargets());
+    }
+
+    /**
+     * {@link #isSoleLiveTarget(IDebugTarget)} over explicit views; package-visible for headless tests.
+     *
+     * @param target the auto-resolved target
+     * @param launches the launches registered in the launch manager
+     * @param serverTargets the debug-server targets
+     * @return {@code true} when every other live target among both views is {@code target} itself
+     */
+    static boolean isSoleLiveTarget(IDebugTarget target, ILaunch[] launches,
+        List<DebugServerTargetSupport.ServerTarget> serverTargets)
+    {
+        if (target == null || target.isTerminated())
+        {
+            return false;
+        }
+        for (ILaunch launch : launches)
+        {
+            if (DebugSessionRegistry.isActiveDebugLaunch(launch)
+                && LaunchConfigUtils.getApplicationIdFor(launch) != null)
+            {
+                for (IDebugTarget other : launch.getDebugTargets())
+                {
+                    if (isOtherLiveTarget(other, target))
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+        for (DebugServerTargetSupport.ServerTarget st : serverTargets)
+        {
+            if (isOtherLiveTarget(st.target, target))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isOtherLiveTarget(IDebugTarget candidate, IDebugTarget target)
+    {
+        return candidate != null && candidate != target && !candidate.isTerminated();
     }
 
     /**

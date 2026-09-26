@@ -125,7 +125,8 @@ public class DebugPauseTool implements IMcpTool
         registry.ensureListenerRegistered();
 
         DebugTargetResolver.Resolution res = DebugTargetResolver.resolve(applicationId);
-        if (res == null)
+        // A blank id pauses only a sole session: the resolver may pick one of several.
+        if (res == null || (res.autoResolved && !DebugTargetResolver.isSoleLiveTarget(res.target)))
         {
             return unresolved(applicationId);
         }
