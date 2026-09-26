@@ -85,21 +85,14 @@ public final class DcsOptions
                         languages.resolvedCode()), languages);
             }
             if ("outputParameter".equals(type) || "userSettings".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
-                || "grouping".equals(type) || "table".equals(type)) //$NON-NLS-1$ //$NON-NLS-2$
+                || "grouping".equals(type) || "table".equals(type) || "chart".equals(type)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             {
                 OutputParameterCatalogue catalogue = outputCatalogue(type, address, node.value,
                     node.owner);
                 if (catalogue == null)
                 {
                     return Result.failure("Address '" + address //$NON-NLS-1$
-                        + "' is not an output-parameter, grouping, or table holder."); //$NON-NLS-1$
-                }
-                if (catalogue == OutputParameterCatalogue.CHART
-                    || catalogue == OutputParameterCatalogue.CHART_GROUP)
-                {
-                    return Result.failure("The platform exposes chart output-parameter catalogues, " //$NON-NLS-1$
-                        + "but this tool deliberately refuses chart authoring. action='options' " //$NON-NLS-1$
-                        + "cannot list them as writable choices until chart writes are supported."); //$NON-NLS-1$
+                        + "' is not an output-parameter, grouping, table, or chart holder."); //$NON-NLS-1$
                 }
                 addParameters(options, "output parameter", //$NON-NLS-1$
                     DcsSettingsWriter.outputParameters(catalogue, version,
@@ -215,6 +208,7 @@ public final class DcsOptions
         {
             if ("grouping".equals(type)) return OutputParameterCatalogue.GROUP; //$NON-NLS-1$
             if ("table".equals(type)) return OutputParameterCatalogue.TABLE; //$NON-NLS-1$
+            if ("chart".equals(type)) return OutputParameterCatalogue.CHART; //$NON-NLS-1$
             return OutputParameterCatalogue.SETTINGS;
         }
         EObject current = value instanceof EObject ? (EObject)value : owner;
@@ -287,6 +281,13 @@ public final class DcsOptions
                 addEnum(result, "viewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
                 addEnum(result, "rowsViewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
                 addEnum(result, "columnsViewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
+                break;
+            case "chart": //$NON-NLS-1$
+                addEnum(result, "viewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
+                addEnum(result, "pointsViewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
+                addEnum(result, "seriesViewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
+                addEnum(result, "points[].groupFields.items[].groupType", //$NON-NLS-1$
+                    DataCompositionGroupType.values());
                 break;
             default:
                 break;

@@ -95,7 +95,7 @@ public class DcsTool implements IMcpTool
         "schema", "dynamicList", //$NON-NLS-1$ //$NON-NLS-2$
         "dataSource", "dataSet", "field", "fieldFolder", "parameter", "calculatedField", "totalField", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$
         "variant", "grouping", "selection", "filter", "dataParameter", "order", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
-        "conditionalAppearance", "table", "userField", "outputParameter", "userSettings" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        "conditionalAppearance", "table", "chart", "userField", "outputParameter", "userSettings" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
     };
 
     private static final Set<String> ACTION_SET = new LinkedHashSet<>(Arrays.asList(ACTIONS));
@@ -788,6 +788,14 @@ public class DcsTool implements IMcpTool
                     }
                     if (settings != null)
                     {
+                        // After the schema half of the write, so a chart may measure a resource
+                        // this same call declares.
+                        String chartError = settings.plan().chartReferenceError(content.schema(),
+                            address.rootFqn());
+                        if (chartError != null)
+                        {
+                            throw DcsWriteFailure.message(chartError);
+                        }
                         settings.plan().commit(content.schema());
                     }
                     return new WriteOutcome(DcsHash.compute(content.schema()), content.contentFqn(),
@@ -923,7 +931,7 @@ public class DcsTool implements IMcpTool
                 }
                 // The same refusal the schema path applies, now that replace actually reaches the
                 // settings writer here: an authoritative replacement must not silently discard
-                // content this writer cannot reproduce (a chart, a nested schema, an area template)
+                // content this writer cannot reproduce (nested parameter values, nested-object settings)
                 // that still lives under the target. A dynamic list's listSettings is the same
                 // settings model a report variant uses, so it can hold exactly those subtypes.
                 if (ACTION_REPLACE.equals(action))

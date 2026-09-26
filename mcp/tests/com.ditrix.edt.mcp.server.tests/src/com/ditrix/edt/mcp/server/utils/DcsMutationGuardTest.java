@@ -16,7 +16,9 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartOutputParameterValues;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.SettingsParameterValue;
 
 /** Scoping of the unmodellable-content refusal. */
 public class DcsMutationGuardTest
@@ -24,34 +26,46 @@ public class DcsMutationGuardTest
     private static final String ROOT = "Report.Sales"; //$NON-NLS-1$
 
     /**
-     * A chart the writer cannot model blocks a replacement only when it is UNDER the target. The
-     * bare-root form of a concrete settings type must therefore be scoped to that type's own node
-     * before it is checked: unscoped, a chart anywhere in the document counted as a descendant and
-     * refused a selection-only replacement that could never have removed it.
+     * Content the writer cannot model (here a chart's nested output-parameter values) blocks a
+     * replacement only when it is UNDER the target. The bare-root form of a concrete settings type
+     * must therefore be scoped to that type's own node before it is checked: unscoped, a node
+     * anywhere in the document counted as a descendant and refused a selection-only replacement
+     * that could never have removed it.
      */
     @Test
-    public void testAChartBlocksOnlyWhenItIsUnderTheAddressedNode()
+    public void testUnmodellableChartContentBlocksOnlyWhenItIsUnderTheAddressedNode()
     {
+        com._1c.g5.v8.dt.dcs.model.settings.DcsFactory factory =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE;
         DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
-        DataCompositionSettings settings =
-            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE.createDataCompositionSettings();
-        DataCompositionChart chart =
-            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE.createDataCompositionChart();
+        DataCompositionSettings settings = factory.createDataCompositionSettings();
+        DataCompositionChart chart = factory.createDataCompositionChart();
         settings.getItems().add(chart);
         schema.setDefaultSettings(settings);
+        assertNull("a fully modelled chart must not block a ROOT replacement", //$NON-NLS-1$
+            DcsMutationGuard.replaceError(schema, address(ROOT)));
 
-        // Unscoped: the whole schema against a pointerless address - the chart counts.
+        DataCompositionChartOutputParameterValues output =
+            factory.createDataCompositionChartOutputParameterValues();
+        SettingsParameterValue chartType = factory.createSettingsParameterValue();
+        chartType.getNestedParameterValues().add(factory.createSettingsParameterValue());
+        output.getItems().add(chartType);
+        chart.setOutputParameters(output);
+
+        // Unscoped: the whole schema against a pointerless address - the nested values count.
         String whole = DcsMutationGuard.replaceError(schema, address(ROOT));
-        assertNotNull("a chart in the document must block a ROOT replacement", whole); //$NON-NLS-1$
-        assertTrue(whole, whole.contains("Chart")); //$NON-NLS-1$
+        assertNotNull("nested chart output values must block a ROOT replacement", whole); //$NON-NLS-1$
+        assertTrue(whole, whole.contains("#/defaultSettings/items/0/outputParameters/items/0")); //$NON-NLS-1$
 
         // Scoped the way the tool now scopes it: the settings root, addressed at 'selection'.
-        assertNull("a chart in the structure must NOT block a selection-only replacement", //$NON-NLS-1$
+        assertNull("the chart in the structure must NOT block a selection-only replacement", //$NON-NLS-1$
             DcsMutationGuard.replaceError(settings, address(ROOT + "#/selection"))); //$NON-NLS-1$
 
         // ...and it still blocks when the address genuinely covers it.
-        assertNotNull("a chart under the addressed node must still block", //$NON-NLS-1$
+        assertNotNull("content under the addressed node must still block", //$NON-NLS-1$
             DcsMutationGuard.replaceError(settings, address(ROOT + "#/items"))); //$NON-NLS-1$
+        assertNotNull("replacing the chart itself must still block", //$NON-NLS-1$
+            DcsMutationGuard.replaceError(settings, address(ROOT + "#/items/0"))); //$NON-NLS-1$
     }
 
     @Test

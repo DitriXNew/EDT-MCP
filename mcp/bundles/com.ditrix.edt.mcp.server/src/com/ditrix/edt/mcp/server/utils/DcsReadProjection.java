@@ -38,6 +38,7 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
 import com._1c.g5.v8.dt.dcs.model.schema.DataSet;
 import com._1c.g5.v8.dt.dcs.model.schema.DataSetField;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
@@ -191,11 +192,6 @@ public final class DcsReadProjection
             return Result.failure(resolution.error);
         }
         NodeRef node = resolution.node;
-        if (isChart(node.value))
-        {
-            return Result.success(renderTextPage(node.address, type, renderFullNode(node, language),
-                characterPageLimit(limit, maxPageChars), offset, false, maxPageChars));
-        }
         String actualType = typeOf(node);
         if (actualType == null)
         {
@@ -345,7 +341,7 @@ public final class DcsReadProjection
                 && !(object instanceof DataCompositionSchemaDataSetField)
                 && !(object instanceof DataCompositionSchemaDataSetFieldFolder)
             || object instanceof StructureItem && !(object instanceof DataCompositionGroup)
-                && !(object instanceof DataCompositionTable)
+                && !(object instanceof DataCompositionTable) && !(object instanceof DataCompositionChart)
             || "nestedSchemas".equals(collection) || "templates".equals(collection) //$NON-NLS-1$ //$NON-NLS-2$
             || "fieldTemplates".equals(collection) || "groupTemplates".equals(collection) //$NON-NLS-1$ //$NON-NLS-2$
             || "groupHeaderTemplates".equals(collection) //$NON-NLS-1$
@@ -988,9 +984,10 @@ public final class DcsReadProjection
         String settingsFeature = kind == TargetKind.DYNAMIC_LIST ? "listSettings" : "defaultSettings"; //$NON-NLS-1$ //$NON-NLS-2$
         EObject settings = asEObject(featureValue(root, settingsFeature));
         String settingsAddress = child(rootFqn, settingsFeature);
-        if ("grouping".equals(type) || "table".equals(type)) //$NON-NLS-1$ //$NON-NLS-2$
+        if (isStructureKind(type))
         {
-            String className = "grouping".equals(type) ? "DataCompositionGroup" : "DataCompositionTable"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            String className = "grouping".equals(type) ? "DataCompositionGroup" //$NON-NLS-1$ //$NON-NLS-2$
+                : "table".equals(type) ? "DataCompositionTable" : "DataCompositionChart"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             List<NodeRef> matches = new ArrayList<>();
             collectByClass(settings, settingsAddress, className, matches);
             return CollectionRef.success(child(settingsAddress, FEATURE_ITEMS), matches);
@@ -1134,11 +1131,9 @@ public final class DcsReadProjection
         result.append(MarkdownUtils.tableHeader("Name", "Kind", "Address", "Note")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         for (NodeRef item : page)
         {
-            String note = isChart(item.value)
-                ? "Read-only existing chart; chart authoring is unsupported." //$NON-NLS-1$
-                : isNestedDataSet(item.value)
-                    ? "Read-only existing nested data set; nested-data-set authoring is unsupported." //$NON-NLS-1$
-                    : ""; //$NON-NLS-1$
+            String note = isNestedDataSet(item.value)
+                ? "Read-only existing nested data set; nested-data-set authoring is unsupported." //$NON-NLS-1$
+                : ""; //$NON-NLS-1$
             if (item.value instanceof EObject
                 && "SettingsVariant".equals(((EObject)item.value).eClass().getName())) //$NON-NLS-1$
             {
@@ -1491,11 +1486,6 @@ public final class DcsReadProjection
                 + MarkdownUtils.escapeMarkdown(displayValue(node.value, language)) + '\n';
         }
         EObject object = (EObject)node.value;
-        if (isChart(object))
-        {
-            return "# Existing DCS chart\n\n" //$NON-NLS-1$
-                + "This chart is visible read-only; chart authoring is unsupported.\n"; //$NON-NLS-1$
-        }
         if (isNestedDataSet(object))
         {
             return "# Existing DCS nested data set\n\n" //$NON-NLS-1$
@@ -1550,7 +1540,32 @@ public final class DcsReadProjection
         {
             appendContainedOutline(result, object, node.address, language);
         }
+        if (object instanceof DataCompositionChart)
+        {
+            appendChartReferences(result, (DataCompositionChart)object, node.address);
+        }
         return result.toString();
+    }
+
+    /** The references a chart draws from, so a read confirms what a write validated. */
+    private static void appendChartReferences(StringBuilder result, DataCompositionChart chart,
+        String address)
+    {
+        List<DcsChartReferences.Reference> references = DcsChartReferences.references(chart, address);
+        result.append("\n## Chart references\n\n") //$NON-NLS-1$
+            .append("Points are the categories, series split them, and selection holds the ") //$NON-NLS-1$
+            .append("measures, which must be resources.\n\n"); //$NON-NLS-1$
+        if (references.isEmpty())
+        {
+            result.append("_(no references)_\n"); //$NON-NLS-1$
+            return;
+        }
+        result.append(MarkdownUtils.tableHeader("Role", "Field", "Address")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        for (DcsChartReferences.Reference reference : references)
+        {
+            result.append(MarkdownUtils.tableRow(reference.role,
+                reference.field == null ? "(auto)" : reference.field, reference.address)); //$NON-NLS-1$
+        }
     }
 
     private static void appendScalarTable(StringBuilder result, EObject object, String language,
@@ -1753,12 +1768,6 @@ public final class DcsReadProjection
         int depth, String language)
     {
         indent(result, depth);
-        if (isChart(object))
-        {
-            result.append("- DataCompositionChart — `").append(address) //$NON-NLS-1$
-                .append("` — read-only; chart authoring is unsupported.\n"); //$NON-NLS-1$
-            return;
-        }
         if (isNestedDataSet(object))
         {
             result.append("- DataCompositionSchemaNestedDataSet — `").append(address) //$NON-NLS-1$
@@ -1984,6 +1993,10 @@ public final class DcsReadProjection
         {
             return "table"; //$NON-NLS-1$
         }
+        if (name.contains("DataCompositionChart")) //$NON-NLS-1$
+        {
+            return "chart"; //$NON-NLS-1$
+        }
         return null;
     }
 
@@ -2077,13 +2090,13 @@ public final class DcsReadProjection
 
     private static boolean isStructureKind(String type)
     {
-        return "grouping".equals(type) || "table".equals(type); //$NON-NLS-1$ //$NON-NLS-2$
+        return "grouping".equals(type) || "table".equals(type) || "chart".equals(type); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     private static Result structureCollectionTypeMismatch(String requested, String address)
     {
         return Result.failure("Type '" + requested + "' does not match structure collection '" //$NON-NLS-1$ //$NON-NLS-2$
-            + address + "' for a read. It is polymorphic (groupings and tables), so read this " //$NON-NLS-1$
+            + address + "' for a read. It is polymorphic (groupings, tables and charts), so read this " //$NON-NLS-1$
             + "same address with type='userSettings'; read one structure item by its own type at '" //$NON-NLS-1$
             + address + "/<index>'. For a write, type='" + requested //$NON-NLS-1$
             + "' is accepted at this same address because the write type describes the body, " //$NON-NLS-1$
@@ -2229,12 +2242,6 @@ public final class DcsReadProjection
     private static DataCompositionSettings asSettings(Object value)
     {
         return value instanceof DataCompositionSettings ? (DataCompositionSettings)value : null;
-    }
-
-    private static boolean isChart(Object value)
-    {
-        return value instanceof EObject && DcsUnsupportedAuthoring.CHART_CLASS
-            .equals(((EObject)value).eClass().getName());
     }
 
     private static boolean isNestedDataSet(Object value)

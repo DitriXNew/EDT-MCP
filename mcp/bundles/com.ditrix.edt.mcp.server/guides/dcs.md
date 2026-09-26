@@ -5,15 +5,17 @@ combinations.
 
 Authoring covers the schema layer (data sources, query/object/union data sets, fields and field folders,
 parameters, calculated fields, total fields, data-set links), the settings layer (default
-settings, named variants, structure groups, tables, selection, filters, order, conditional
+settings, named variants, structure groups, tables, charts, selection, filters, order, conditional
 appearance, user fields, and data/output parameter values), and dynamic lists — their
 ext-info scalars, schema-style fields/calculated fields/parameters, and `listSettings`,
 which goes through the same settings implementation as a report variant.
 
-Charts and nested data sets are deliberately excluded from the typed authoring surface. `get`
-renders existing nodes and their addresses read-only; carry schemas containing either feature
-through the lossless XML channel below (`action='replace'`, `type='schema'`, `body={xml:...}` on a
-bare schema root), which preserves them untouched.
+Nested data sets are deliberately excluded from the typed authoring surface. `get` renders
+existing ones and their addresses read-only; carry a schema containing them through the lossless
+XML channel below (`action='replace'`, `type='schema'`, `body={xml:...}` on a bare schema root),
+which preserves them untouched. A chart's appearance values nested under its `ChartType` output
+parameter (label type, legend, axes and the like) are not authorable either: an update keeps them,
+and a `replace` that would drop them is refused.
 
 ### Lossless XML round-trip
 
@@ -144,7 +146,7 @@ RFC-6901 pointer:
   or variant; `dataPath` for fields, field folders, calculated fields, and total
   fields.
 - Ordered nodes use a zero-based index. This applies to selection, filter, order,
-  conditional-appearance, table row/column, and every structure item, including a
+  conditional-appearance, table row/column, chart point/series, and every structure item, including a
   grouping that has a `name`.
 - Copy addresses from `get` output. Do not invent or persist MCP-only IDs.
 
@@ -182,9 +184,8 @@ For example, a data-set drill-down is:
 
 It renders the complete data-set properties, full query in a fenced block, complete
 field table, and a canonical address on every rendered node. A settings pointer renders
-the entire nested settings subtree as an address-aware outline. Existing charts appear
-as one read-only line with their address; chart authoring is unsupported and there is no
-`chart` type.
+the entire nested settings subtree as an address-aware outline. A chart node also lists
+its references under `## Chart references`: each point, series and measure with its address.
 
 If a segment cannot be resolved, the error names that segment and lists the keys or
 indices that exist at its parent. Copy one of the listed values or read the parent
@@ -216,18 +217,19 @@ concatenate character chunks in offset order.
 pages the dynamic list's own `#/fields` collection.
 
 Settings collection types (`grouping`, `selection`, `filter`, `dataParameter`, `order`,
-`conditionalAppearance`, `table`, `userField`, `outputParameter`, `userSettings`) refer
+`conditionalAppearance`, `table`, `chart`, `userField`, `outputParameter`, `userSettings`) refer
 to `defaultSettings` for a schema and `listSettings` for a dynamic list. Inside a named
 variant, every named holder reads by its own type at
 `#/variants/<name>/settings/<holder>/items`. A structure collection takes its read type
 from its owner: the settings object owns `#/variants/<name>/settings/items`, so that
-polymorphic groupings-and-tables collection reads as `type='userSettings'`; a grouping
+polymorphic structure collection reads as `type='userSettings'`; a grouping
 owns `#/variants/<name>/settings/items/<group-index>/items`, so that collection reads as
 `type='grouping'`; and a table owns
 `#/variants/<name>/settings/items/<table-index>/rows` and
-`#/variants/<name>/settings/items/<table-index>/columns`, so both read as `type='table'`.
+`#/variants/<name>/settings/items/<table-index>/columns`, so both read as `type='table'`;
+a chart's `points` and `series` likewise read as `type='chart'`.
 A single structure item at `#/variants/<name>/settings/items/<index>` reads by its own
-type, `grouping` or `table`.
+type, `grouping`, `table` or `chart`.
 
 A form's own conditional appearance is rooted directly at the form FQN, for example
 `Catalog.Products.Form.ListForm` with `type='conditionalAppearance'`; its rules continue
@@ -322,7 +324,8 @@ ValueTypeSpec = {"types":[{"kind":"String","length"?:int,"fixed"?:bool} | {"kind
 | `dataParameter` | `{items:[{parameter?:ValueSpec, value?:ValueSpec, use?, viewMode?, userSettingID?, userSettingPresentation?:PresentationSpec}]}`. Items are ordered/indexed. |
 | `order` | `{items:[{kind?:"item", field?:ValueSpec, orderType?, use?, viewMode?} | {kind:"auto", use?}], ...HolderScaffold}`. Items are ordered/indexed. |
 | `conditionalAppearance` | `{items:[{use?, selection?:{items:[{field?:ValueSpec, use?}]}, filter?, appearance?, presentation?:PresentationSpec, useInGroup?, useInHierarchicalGroup?, useInOverall?, useInFieldsHeader?, useInHeader?, useInParameters?, useInFilter?, useInResourceFieldsHeader?, useInOverallHeader?, useInOverallResourceFieldsHeader?, ...ItemScaffold}], ...HolderScaffold}`. Items are ordered/indexed. Schema/settings targets validate `appearance` keys against the schema catalogue; a form root uses EDT's `FormAppearanceParameters` catalogue and a dynamic list uses `DynamicListAppearanceParameters`. Unknown keys are refused and valid keys are listed. A form appearance field reference is accepted but is not validated against the form's data in this release. A color accepts `{color:{red,green,blue}}`, `{color:'auto'}`, `{color:{style:'<StyleItem name>'}}`, or `{color:{palette:'<PaletteColor name>'}}`; named colors must resolve in the project configuration. |
-| `table` | `{kind?:"table", name?, use?, id?, rows?, columns?, selection?, conditionalAppearance?, outputParameters?, rowsViewMode?, rowsUserSettingID?, rowsUserSettingPresentation?, columnsViewMode?, columnsUserSettingID?, columnsUserSettingPresentation?, ...HolderScaffold}`. `id` is the table's real settable platform member. `rows` and `columns` hold group items and recurse like `grouping`. Tables are structure items, so they share the `items` tree and its indexed addressing. An exact `replace` of a structure item builds it from the `kind` in the body, so a grouping and a table can be exchanged at the same index. |
+| `table` | `{kind?:"table", name?, use?, id?, rows?, columns?, selection?, conditionalAppearance?, outputParameters?, rowsViewMode?, rowsUserSettingID?, rowsUserSettingPresentation?, columnsViewMode?, columnsUserSettingID?, columnsUserSettingPresentation?, ...HolderScaffold}`. `id` is the table's real settable platform member. `rows` and `columns` hold group items and recurse like `grouping`. Tables are structure items, so they share the `items` tree and its indexed addressing. An exact `replace` of a structure item builds it from the `kind` in the body, so a grouping, a table and a chart can be exchanged at the same index. |
+| `chart` | `{kind?:"chart", name?, use?, id?, points?, series?, selection?, conditionalAppearance?, outputParameters?, pointsViewMode?, pointsUserSettingID?, pointsUserSettingPresentation?, seriesViewMode?, seriesUserSettingID?, seriesUserSettingPresentation?, ...HolderScaffold}`. `points` (the categories) and `series` hold group items and recurse like `grouping`; `selection` holds the measures. Addressing, `id` and the exact `replace` work as for `table`; a body appended without `kind:"chart"` is a grouping. Every chart a write adds or changes is checked against the schema as that write leaves it, so the same `type='schema'` call may declare the resource it measures: a point or series must group by a data-set field, calculated field or user field, or an attribute of one (`<field>.<attribute>`), that its use restriction allows; a measure must be a resource (`totalFields`), a user field with a total expression or aggregate, a resource's percent field such as `Amount.OverallPercent`, or `{kind:"auto"}`; a chart needs at least one measure. Paths compare case-insensitively; the user-field folder and percent terms are accepted in English or Russian, and a field an auto-fill query data set derives from its query text is accepted by name. A bad reference is refused with the choices and nothing is written; a problem the chart already had does not block an unrelated edit. `outputParameters` takes the platform chart catalogue (`ChartType`, `Title`, ...; `action='options'`, `type='chart'` lists it). Dynamic-list `listSettings` refuse a new or changed chart. |
 | `userField` | Expression field: `{kind:"expression", dataPath, use?, title?:PresentationSpec, detailExpression?, detailExpressionPresentation?, totalExpression?, totalExpressionPresentation?}`. Case field: `{kind:"case", dataPath, use?, title?:PresentationSpec, variants?}`. Items are ordered/indexed. |
 | `outputParameter` | `{items:[{parameter?:ValueSpec, value?:ValueSpec, use?, viewMode?, userSettingID?, userSettingPresentation?:PresentationSpec}]}`. Items are ordered/indexed. Platform-enum values accept either a bare literal string or `{kind:'string',value:'<literal>'}`; other shapes are refused with the allowed literals. |
 | `userSettings` | Whole settings body: `{items?, selection?, filter?, dataParameters?, order?, conditionalAppearance?:{items:[], ...HolderScaffold}, outputParameters?, additionalProperties?:{"Name":ValueSpec, ...}, itemsViewMode?, itemsUserSettingID?, itemsUserSettingPresentation?:PresentationSpec}`. `additionalProperties` is the platform `Structure`; `upsert`/`update` merge named entries and `replace` is authoritative. Value kinds outside the documented `ValueSpec` set are refused rather than discarded. Never use settings scaffold fields to store invented MCP IDs. |

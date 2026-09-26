@@ -19,6 +19,7 @@ import java.util.function.Supplier;
 import org.eclipse.emf.common.util.Enumerator;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
@@ -35,6 +36,7 @@ import com._1c.g5.v8.dt.dcs.model.core.Presentation;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionAutoOrderItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionAutoSelectedField;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionComparisonType;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearance;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceItem;
@@ -61,9 +63,6 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettingsItemState;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettingsItemViewMode;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
-import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableGroup;
-import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableGroupOutputParameterValues;
-import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableOutputParameterValues;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFieldCase;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFieldExpression;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFields;
@@ -142,6 +141,7 @@ public final class DcsSettingsWriter
     private static final String TYPE_ORDER = "order"; //$NON-NLS-1$
     private static final String TYPE_CONDITIONAL_APPEARANCE = "conditionalAppearance"; //$NON-NLS-1$
     private static final String TYPE_TABLE = "table"; //$NON-NLS-1$
+    private static final String TYPE_CHART = "chart"; //$NON-NLS-1$
     private static final String TYPE_USER_FIELD = "userField"; //$NON-NLS-1$
     private static final String TYPE_OUTPUT_PARAMETER = "outputParameter"; //$NON-NLS-1$
     private static final String TYPE_USER_SETTINGS = "userSettings"; //$NON-NLS-1$
@@ -171,7 +171,7 @@ public final class DcsSettingsWriter
         return TYPE_VARIANT.equals(type) || TYPE_GROUPING.equals(type) || TYPE_SELECTION.equals(type)
             || TYPE_FILTER.equals(type) || TYPE_DATA_PARAMETER.equals(type) || TYPE_ORDER.equals(type)
             || TYPE_CONDITIONAL_APPEARANCE.equals(type) || TYPE_TABLE.equals(type)
-            || TYPE_USER_FIELD.equals(type) || TYPE_OUTPUT_PARAMETER.equals(type)
+            || TYPE_CHART.equals(type) || TYPE_USER_FIELD.equals(type) || TYPE_OUTPUT_PARAMETER.equals(type)
             || TYPE_USER_SETTINGS.equals(type);
     }
 
@@ -532,9 +532,9 @@ public final class DcsSettingsWriter
             }
             JsonObject settingsBody = object(body, "listSettings", "dynamic-list settings body"); //$NON-NLS-1$ //$NON-NLS-2$
             return settingsBody == null ? SettingsResult.failure(objectError)
-                : withTouched(planSettings(current, Collections.emptyList(), action,
+                : dynamicListResult(current, planSettings(current, Collections.emptyList(), action,
                     TYPE_USER_SETTINGS, settingsBody, languages, version, address,
-                    dynamicListSettingsRootAddress(address)));
+                    dynamicListSettingsRootAddress(address)), address);
         }
 
         List<String> segments = new ArrayList<>(address.segments());
@@ -547,8 +547,23 @@ public final class DcsSettingsWriter
             return SettingsResult.failure("Dynamic-list settings address '" + address //$NON-NLS-1$
                 + "' must start with '#/listSettings'. Copy the settings address from dcs action='get'."); //$NON-NLS-1$
         }
-        return withTouched(planSettings(current, segments, action, type, body, languages, version,
-            address, dynamicListSettingsRootAddress(address)));
+        return dynamicListResult(current, planSettings(current, segments, action, type, body,
+            languages, version, address, dynamicListSettingsRootAddress(address)), address);
+    }
+
+    /** A dynamic list draws no charts, and it has no schema to check chart references against. */
+    private static SettingsResult dynamicListResult(DataCompositionSettings current,
+        SettingsResult planned, DcsAddress address)
+    {
+        if (planned.isSuccess() && DcsChartReferences.changesCharts(current, planned.settings()))
+        {
+            return SettingsResult.failure("Dynamic-list settings at '" //$NON-NLS-1$
+                + dynamicListSettingsRootAddress(address) + "' cannot gain or change a chart. " //$NON-NLS-1$
+                + "Charts are authored in a report or template schema's defaultSettings or " //$NON-NLS-1$
+                + "variants, where their references are checked against the schema; remove the " //$NON-NLS-1$
+                + "chart from this body."); //$NON-NLS-1$
+        }
+        return withTouched(planned);
     }
 
     /** Live-project dynamic-list entry that additionally resolves style/palette named colors. */
@@ -759,8 +774,9 @@ public final class DcsSettingsWriter
         }
         if (!TYPE_SCHEMA.equals(type) && !TYPE_DYNAMIC_LIST.equals(type) && !supports(type))
         {
-            return "Type '" + type + "' is not a settings type. Use variant, grouping, selection, " //$NON-NLS-1$ //$NON-NLS-2$
-                + "filter, dataParameter, order, outputParameter, or userSettings."; //$NON-NLS-1$
+            return "Type '" + type + "' is not a settings type. Use variant, grouping, table, chart, " //$NON-NLS-1$ //$NON-NLS-2$
+                + "selection, filter, dataParameter, order, conditionalAppearance, userField, " //$NON-NLS-1$
+                + "outputParameter, or userSettings."; //$NON-NLS-1$
         }
         String presentation = body == null ? null
             : DcsPresentationParser.validateRecursively(body, languages);
@@ -1281,17 +1297,14 @@ public final class DcsSettingsWriter
                 + ". Re-run dcs action='get' and copy the new address."; //$NON-NLS-1$
         }
         StructureItem selected = items.get(index);
+        AxisItemKind selectedAxisKind = AxisItemKind.of(selected);
         if (ACTION_REPLACE.equals(action) && path.size() == 1)
         {
-            if (!(selected instanceof DataCompositionGroup)
-                && !(selected instanceof DataCompositionTable))
+            if (!(selected instanceof DataCompositionGroup) && selectedAxisKind == null)
             {
-                String refusal = DcsUnsupportedAuthoring.refusal(selected,
-                    where + "/" + selector); //$NON-NLS-1$
-                if (refusal != null) return refusal;
                 return "Structure item '" + selector + "' is " + selected.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
-                    + ", not a supported grouping or table. Replace a grouping or table address " //$NON-NLS-1$
-                    + "returned by get."; //$NON-NLS-1$
+                    + ", not a supported grouping, table, or chart. Replace a grouping, table, or " //$NON-NLS-1$
+                    + "chart address returned by get."; //$NON-NLS-1$
             }
             String kind = optionalString(body, KEY_KIND, where + "/" + selector); //$NON-NLS-1$
             if (stringError != null)
@@ -1300,18 +1313,14 @@ public final class DcsSettingsWriter
             }
             if (kind == null)
             {
-                kind = selected instanceof DataCompositionTable ? "table" : "grouping"; //$NON-NLS-1$ //$NON-NLS-2$
+                kind = selectedAxisKind != null ? selectedAxisKind.token : "grouping"; //$NON-NLS-1$
             }
-            if (DcsUnsupportedAuthoring.isChartKind(kind))
+            AxisItemKind axisKind = AxisItemKind.ofToken(kind);
+            if (axisKind != null)
             {
-                return DcsUnsupportedAuthoring.refusal(DcsUnsupportedAuthoring.CHART_CLASS,
-                    where + "/" + selector); //$NON-NLS-1$
-            }
-            if ("table".equalsIgnoreCase(kind)) //$NON-NLS-1$
-            {
-                DataCompositionTable table = DcsFactory.eINSTANCE.createDataCompositionTable();
-                items.set(index, table);
-                return applyTable(table, body, action, languages, version,
+                StructureItem item = axisKind.create();
+                items.set(index, item);
+                return applyAxisItem(axisKind, item, body, action, languages, version,
                     where + "/" + selector, items); //$NON-NLS-1$
             }
             if ("grouping".equalsIgnoreCase(kind)) //$NON-NLS-1$
@@ -1322,27 +1331,23 @@ public final class DcsSettingsWriter
                     where + "/" + selector, items); //$NON-NLS-1$
             }
             return "Structure item kind '" + kind + "' at '" + where + "/" + selector //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + "' is invalid. Use kind='grouping' or kind='table'."; //$NON-NLS-1$
+                + "' is invalid. Use kind='grouping', kind='table', or kind='chart'."; //$NON-NLS-1$
         }
-        if (selected instanceof DataCompositionTable)
+        if (selectedAxisKind != null)
         {
-            DataCompositionTable table = (DataCompositionTable)selected;
             if (path.size() == 1)
             {
-                return applyTable(table, body, action, languages, version,
+                return applyAxisItem(selectedAxisKind, selected, body, action, languages, version,
                     where + "/" + selector, items); //$NON-NLS-1$
             }
-            return applyTableChildPath(table, path.subList(1, path.size()), body, action, languages,
-                version, where + "/" + selector); //$NON-NLS-1$
+            return applyAxisItemChildPath(selectedAxisKind, selected, path.subList(1, path.size()),
+                body, action, languages, version, where + "/" + selector); //$NON-NLS-1$
         }
         if (!(selected instanceof DataCompositionGroup))
         {
-            String refusal = DcsUnsupportedAuthoring.refusal(selected,
-                where + "/" + selector); //$NON-NLS-1$
-            if (refusal != null) return refusal;
             return "Structure item '" + selector + "' is " + selected.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
-                + ", not DataCompositionGroup. Group authoring cannot replace tables, charts, or " //$NON-NLS-1$
-                + "nested settings; address a group returned by get."; //$NON-NLS-1$
+                + ", not a grouping, table, or chart. Nested-object settings are not authorable; " //$NON-NLS-1$
+                + "address a structure item returned by get."; //$NON-NLS-1$
         }
         DataCompositionGroup group = (DataCompositionGroup)selected;
         if (path.size() == 1)
@@ -1456,20 +1461,26 @@ public final class DcsSettingsWriter
         {
             return stringError;
         }
-        if ("table".equalsIgnoreCase(kind)) //$NON-NLS-1$
+        AxisItemKind axisKind = AxisItemKind.ofToken(kind);
+        if (axisKind != null)
         {
-            DataCompositionTable table = DcsFactory.eINSTANCE.createDataCompositionTable();
-            items.add(table);
-            return applyTable(table, body, action, languages, version, where, items);
-        }
-        if (DcsUnsupportedAuthoring.isChartKind(kind))
-        {
-            return DcsUnsupportedAuthoring.refusal(DcsUnsupportedAuthoring.CHART_CLASS, where);
+            StructureItem item = axisKind.create();
+            items.add(item);
+            return applyAxisItem(axisKind, item, body, action, languages, version, where, items);
         }
         if (kind != null && !"grouping".equalsIgnoreCase(kind)) //$NON-NLS-1$
         {
             return "Structure item kind '" + kind + "' at '" + where //$NON-NLS-1$ //$NON-NLS-2$
-                + "' is invalid. Use kind='grouping' or kind='table'."; //$NON-NLS-1$
+                + "' is invalid. Use kind='grouping', kind='table', or kind='chart'."; //$NON-NLS-1$
+        }
+        for (AxisItemKind candidate : AxisItemKind.values())
+        {
+            if (kind == null && (body.has(candidate.firstAxis) || body.has(candidate.secondAxis)))
+            {
+                return "Structure item at '" + where + "' has " + candidate.token //$NON-NLS-1$ //$NON-NLS-2$
+                    + " axes but no kind, and an item appended without kind is a grouping. Add kind='" //$NON-NLS-1$
+                    + candidate.token + "'."; //$NON-NLS-1$
+            }
         }
         DataCompositionGroup group = DcsFactory.eINSTANCE.createDataCompositionGroup();
         items.add(group);
@@ -1666,22 +1677,119 @@ public final class DcsSettingsWriter
         return null;
     }
 
-    // ---- tables -----------------------------------------------------------------------------
+    // ---- tables and charts ------------------------------------------------------------------
 
-    private static String applyTable(DataCompositionTable table, JsonObject body, String action,
-        DcsPresentationParser.LanguageContext languages, Version version, String path,
+    /**
+     * The two structure items built from two axes of groups. A table and a chart, and their axis
+     * groups, share every authorable feature name apart from the axis names, so one
+     * implementation authors both through those shared names.
+     */
+    private enum AxisItemKind
+    {
+        TABLE("table", "Table", "rows", "columns", OutputParameterCatalogue.TABLE, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            OutputParameterCatalogue.TABLE_GROUP),
+        CHART("chart", "Chart", "points", "series", OutputParameterCatalogue.CHART, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            OutputParameterCatalogue.CHART_GROUP);
+
+        final String token;
+        final String label;
+        final String firstAxis;
+        final String secondAxis;
+        final OutputParameterCatalogue catalogue;
+        final OutputParameterCatalogue groupCatalogue;
+
+        AxisItemKind(String token, String label, String firstAxis, String secondAxis,
+            OutputParameterCatalogue catalogue, OutputParameterCatalogue groupCatalogue)
+        {
+            this.token = token;
+            this.label = label;
+            this.firstAxis = firstAxis;
+            this.secondAxis = secondAxis;
+            this.catalogue = catalogue;
+            this.groupCatalogue = groupCatalogue;
+        }
+
+        static AxisItemKind ofToken(String kind)
+        {
+            for (AxisItemKind value : values())
+            {
+                if (value.token.equalsIgnoreCase(kind)) return value;
+            }
+            return null;
+        }
+
+        static AxisItemKind of(Object item)
+        {
+            return item instanceof DataCompositionTable ? TABLE
+                : item instanceof DataCompositionChart ? CHART : null;
+        }
+
+        StructureItem create()
+        {
+            return this == TABLE ? DcsFactory.eINSTANCE.createDataCompositionTable()
+                : DcsFactory.eINSTANCE.createDataCompositionChart();
+        }
+
+        EObject createGroup()
+        {
+            return this == TABLE ? DcsFactory.eINSTANCE.createDataCompositionTableGroup()
+                : DcsFactory.eINSTANCE.createDataCompositionChartGroup();
+        }
+
+        boolean isAxis(String member)
+        {
+            return firstAxis.equals(member) || secondAxis.equals(member);
+        }
+    }
+
+    private static Object feature(EObject owner, String name)
+    {
+        return owner.eGet(owner.eClass().getEStructuralFeature(name));
+    }
+
+    private static void setFeature(EObject owner, String name, Object value)
+    {
+        owner.eSet(owner.eClass().getEStructuralFeature(name), value);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static EList<EObject> axisGroups(EObject owner, String name)
+    {
+        return (EList<EObject>)feature(owner, name);
+    }
+
+    /** A copy of the holder in {@code name}, or a new one of the feature's own type. */
+    @SuppressWarnings("unchecked")
+    private static <T extends EObject> T workingHolder(EObject owner, String name, boolean fresh)
+    {
+        EStructuralFeature holderFeature = owner.eClass().getEStructuralFeature(name);
+        T existing = fresh ? null : copy((T)owner.eGet(holderFeature));
+        return existing != null ? existing
+            : (T)EcoreUtil.create(((EReference)holderFeature).getEReferenceType());
+    }
+
+    private static boolean isAxisHolder(String member)
+    {
+        return "selection".equals(member) || "conditionalAppearance".equals(member) //$NON-NLS-1$ //$NON-NLS-2$
+            || "outputParameters".equals(member); //$NON-NLS-1$
+    }
+
+    private static String applyAxisItem(AxisItemKind kind, StructureItem item, JsonObject body,
+        String action, DcsPresentationParser.LanguageContext languages, Version version, String path,
         List<StructureItem> siblings)
     {
-        String kindError = kindMustBe(body, path, "table"); //$NON-NLS-1$
+        String kindError = kindMustBe(body, path, kind.token);
         if (kindError != null)
         {
             return kindError;
         }
-        String members = checkMembers(body, path, KEY_KIND, KEY_NAME, KEY_USE, "rows", "columns", //$NON-NLS-1$ //$NON-NLS-2$
+        String first = kind.firstAxis;
+        String second = kind.secondAxis;
+        String members = checkMembers(body, path, KEY_KIND, KEY_NAME, KEY_USE, first, second,
             "selection", "conditionalAppearance", "outputParameters", KEY_VIEW_MODE, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            KEY_USER_SETTING_ID, KEY_USER_SETTING_PRESENTATION, "rowsViewMode", //$NON-NLS-1$
-            "rowsUserSettingID", "rowsUserSettingPresentation", "columnsViewMode", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            "columnsUserSettingID", "columnsUserSettingPresentation", KEY_ID); //$NON-NLS-1$ //$NON-NLS-2$
+            KEY_USER_SETTING_ID, KEY_USER_SETTING_PRESENTATION, first + "ViewMode", //$NON-NLS-1$
+            first + "UserSettingID", first + "UserSettingPresentation", second + "ViewMode", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            second + "UserSettingID", second + "UserSettingPresentation", KEY_ID); //$NON-NLS-1$ //$NON-NLS-2$
         if (members != null)
         {
             return members;
@@ -1695,14 +1803,15 @@ public final class DcsSettingsWriter
             }
             for (StructureItem sibling : siblings)
             {
-                if (sibling != table && sibling instanceof DataCompositionTable
-                    && name.equals(((DataCompositionTable)sibling).getName()))
+                if (sibling != item && AxisItemKind.of(sibling) == kind
+                    && name.equals(feature(sibling, KEY_NAME)))
                 {
-                    return "Table name '" + name + "' collides with a sibling at '" + path //$NON-NLS-1$ //$NON-NLS-2$
-                        + "'. Choose a unique name or update the existing table address."; //$NON-NLS-1$
+                    return kind.label + " name '" + name + "' collides with a sibling at '" + path //$NON-NLS-1$ //$NON-NLS-2$
+                        + "'. Choose a unique name or update the existing " + kind.token //$NON-NLS-1$
+                        + " address."; //$NON-NLS-1$
                 }
             }
-            table.setName(name);
+            setFeature(item, KEY_NAME, name);
         }
         if (body.has(KEY_USE))
         {
@@ -1711,183 +1820,141 @@ public final class DcsSettingsWriter
             {
                 return booleanError;
             }
-            table.setUse(use.booleanValue());
+            setFeature(item, KEY_USE, use);
         }
         if (body.has(KEY_ID))
         {
             String id = optionalString(body, KEY_ID, path);
             if (stringError != null) return stringError;
-            table.setId(id);
+            if (item instanceof DataCompositionTable) ((DataCompositionTable)item).setId(id);
+            else ((DataCompositionChart)item).setId(id);
         }
-        String scaffold = applyTableScaffold(table, body, languages, path);
+        String scaffold = applyAxisScaffold(item, body, languages, path, first, second);
         if (scaffold != null)
         {
             return scaffold;
         }
-        String error = applyTableGroupsMember(table.getRows(), body, "rows", action, languages, //$NON-NLS-1$
-            version, path);
+        String error = applyAxisGroupsMember(kind, axisGroups(item, first), body, first, action,
+            languages, version, path);
         if (error == null)
         {
-            error = applyTableGroupsMember(table.getColumns(), body, "columns", action, languages, //$NON-NLS-1$
-                version, path);
+            error = applyAxisGroupsMember(kind, axisGroups(item, second), body, second, action,
+                languages, version, path);
         }
-        if (error != null)
-        {
-            return error;
-        }
+        return error != null ? error
+            : applyAxisHolders(item, body, action, languages, version, path, kind.catalogue);
+    }
+
+    /** Authors the selection, conditional appearance and output parameters a body names. */
+    private static String applyAxisHolders(EObject owner, JsonObject body, String action,
+        DcsPresentationParser.LanguageContext languages, Version version, String path,
+        OutputParameterCatalogue catalogue)
+    {
+        boolean fresh = ACTION_REPLACE.equals(action);
         if (body.has("selection")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "selection", path); //$NON-NLS-1$
-            if (value == null)
-            {
-                return objectError;
-            }
-            String missing = missingHolderUpdate(action, table.getSelection(),
+            if (value == null) return objectError;
+            String missing = missingHolderUpdate(action, (EObject)feature(owner, "selection"), //$NON-NLS-1$
                 path + ".selection"); //$NON-NLS-1$
             if (missing != null) return missing;
-            DataCompositionSelectedFields holder = ACTION_REPLACE.equals(action) ? null
-                : copy(table.getSelection());
-            if (holder == null)
-            {
-                holder = DcsFactory.eINSTANCE.createDataCompositionSelectedFields();
-            }
-            error = applySelection(holder, value, action, languages, path + ".selection"); //$NON-NLS-1$
-            if (error != null)
-            {
-                return error;
-            }
-            table.setSelection(holder);
+            DataCompositionSelectedFields holder = workingHolder(owner, "selection", fresh); //$NON-NLS-1$
+            String error = applySelection(holder, value, action, languages, path + ".selection"); //$NON-NLS-1$
+            if (error != null) return error;
+            setFeature(owner, "selection", holder); //$NON-NLS-1$
         }
         if (body.has("conditionalAppearance")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "conditionalAppearance", path); //$NON-NLS-1$
-            if (value == null)
-            {
-                return objectError;
-            }
-            String missing = missingHolderUpdate(action, table.getConditionalAppearance(),
+            if (value == null) return objectError;
+            String missing = missingHolderUpdate(action,
+                (EObject)feature(owner, "conditionalAppearance"), //$NON-NLS-1$
                 path + ".conditionalAppearance"); //$NON-NLS-1$
             if (missing != null) return missing;
-            DataCompositionConditionalAppearance holder = ACTION_REPLACE.equals(action) ? null
-                : copy(table.getConditionalAppearance());
-            if (holder == null)
-            {
-                holder = DcsFactory.eINSTANCE.createDataCompositionConditionalAppearance();
-            }
-            error = applyConditionalAppearance(holder, value, action, languages, version,
+            DataCompositionConditionalAppearance holder = workingHolder(owner,
+                "conditionalAppearance", fresh); //$NON-NLS-1$
+            String error = applyConditionalAppearance(holder, value, action, languages, version,
                 path + ".conditionalAppearance"); //$NON-NLS-1$
-            if (error != null)
-            {
-                return error;
-            }
-            table.setConditionalAppearance(holder);
+            if (error != null) return error;
+            setFeature(owner, "conditionalAppearance", holder); //$NON-NLS-1$
         }
         if (body.has("outputParameters")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "outputParameters", path); //$NON-NLS-1$
-            if (value == null)
-            {
-                return objectError;
-            }
-            String missing = missingHolderUpdate(action, table.getOutputParameters(),
+            if (value == null) return objectError;
+            String missing = missingHolderUpdate(action, (EObject)feature(owner, "outputParameters"), //$NON-NLS-1$
                 path + ".outputParameters"); //$NON-NLS-1$
             if (missing != null) return missing;
-            DataCompositionTableOutputParameterValues holder = ACTION_REPLACE.equals(action) ? null
-                : copy(table.getOutputParameters());
-            if (holder == null)
-            {
-                holder = DcsFactory.eINSTANCE.createDataCompositionTableOutputParameterValues();
-            }
-            error = applyParameters(holder, value, action, languages, version,
-                OutputParameterCatalogue.TABLE, path + ".outputParameters"); //$NON-NLS-1$
-            if (error != null)
-            {
-                return error;
-            }
-            table.setOutputParameters(holder);
+            ParameterValues holder = workingHolder(owner, "outputParameters", fresh); //$NON-NLS-1$
+            String error = applyParameters(holder, value, action, languages, version, catalogue,
+                path + ".outputParameters"); //$NON-NLS-1$
+            if (error != null) return error;
+            setFeature(owner, "outputParameters", holder); //$NON-NLS-1$
         }
         return null;
     }
 
-    private static String applyTableChildPath(DataCompositionTable table, List<String> path,
-        JsonObject body, String action, DcsPresentationParser.LanguageContext languages, Version version,
-        String where)
+    private static String applyAxisItemChildPath(AxisItemKind kind, StructureItem item,
+        List<String> path, JsonObject body, String action,
+        DcsPresentationParser.LanguageContext languages, Version version, String where)
     {
         String head = path.get(0);
         List<String> tail = path.subList(1, path.size());
-        String relativeAddress = where.startsWith("settings.") //$NON-NLS-1$
-            ? where.substring("settings.".length()) : where; //$NON-NLS-1$
-        if ("rows".equals(head) || "columns".equals(head)) //$NON-NLS-1$ //$NON-NLS-2$
+        if (kind.isAxis(head))
         {
-            return applyTableGroupsPath("rows".equals(head) ? table.getRows() : table.getColumns(), //$NON-NLS-1$
-                tail, body, action, languages, version, where + "/" + head); //$NON-NLS-1$
+            return applyAxisGroupsPath(kind, axisGroups(item, head), tail, body, action, languages,
+                version, where + "/" + head); //$NON-NLS-1$
         }
-        if ("selection".equals(head)) //$NON-NLS-1$
+        if (isAxisHolder(head))
         {
-            // A holder is not a collection: it carries viewMode, userSettingID and a presentation
-            // of its own alongside its items. The address ends AT it, so replace starts from
-            // nothing rather than from a copy - otherwise clearing the items still left the
-            // holder's own scalars set. Same idiom the settings-level paths already use.
-            DataCompositionSelectedFields existing = table.getSelection();
-            if (ACTION_UPDATE.equals(action) && existing == null)
-            {
-                return "action='update' cannot find selection at relative address '" //$NON-NLS-1$
-                    + relativeAddress
-                    + "/selection'. Use action='upsert' to create it."; //$NON-NLS-1$
-            }
-            DataCompositionSelectedFields holder = ACTION_REPLACE.equals(action) && tail.isEmpty() ? null
-                : copy(existing);
-            if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionSelectedFields();
-            String error = applySelectionPath(holder, tail, body, action, languages,
-                where + "/selection"); //$NON-NLS-1$
-            if (error == null) table.setSelection(holder);
-            return error;
+            return applyAxisHolderPath(item, head, tail, body, action, languages, version, where,
+                kind.catalogue);
         }
-        if ("conditionalAppearance".equals(head)) //$NON-NLS-1$
-        {
-            DataCompositionConditionalAppearance existing = table.getConditionalAppearance();
-            if (ACTION_UPDATE.equals(action) && existing == null)
-            {
-                return "action='update' cannot find conditionalAppearance at relative address '" //$NON-NLS-1$
-                    + relativeAddress
-                    + "/conditionalAppearance'. Use action='upsert' to create it."; //$NON-NLS-1$
-            }
-            DataCompositionConditionalAppearance holder = ACTION_REPLACE.equals(action) && tail.isEmpty() ? null
-                : copy(existing);
-            if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionConditionalAppearance();
-            String error = applyConditionalAppearancePath(holder, tail, body, action, languages, version,
-                where + "/conditionalAppearance"); //$NON-NLS-1$
-            if (error == null) table.setConditionalAppearance(holder);
-            return error;
-        }
-        if ("outputParameters".equals(head)) //$NON-NLS-1$
-        {
-            DataCompositionTableOutputParameterValues existing = table.getOutputParameters();
-            if (ACTION_UPDATE.equals(action) && existing == null)
-            {
-                return "action='update' cannot find outputParameters at relative address '" //$NON-NLS-1$
-                    + relativeAddress
-                    + "/outputParameters'. Use action='upsert' to create them."; //$NON-NLS-1$
-            }
-            DataCompositionTableOutputParameterValues holder = ACTION_REPLACE.equals(action)
-                && tail.isEmpty() ? null : copy(existing);
-            if (holder == null)
-            {
-                holder = DcsFactory.eINSTANCE.createDataCompositionTableOutputParameterValues();
-            }
-            String error = applyParameterValuesPath(holder, tail, body, action, languages, version,
-                OutputParameterCatalogue.TABLE, where + "/outputParameters"); //$NON-NLS-1$
-            if (error == null) table.setOutputParameters(holder);
-            return error;
-        }
-        return "Table path segment '" + head + "' at '" + where //$NON-NLS-1$ //$NON-NLS-2$
-            + "' is not authorable. Use rows, columns, selection, conditionalAppearance, or " //$NON-NLS-1$
-            + "outputParameters."; //$NON-NLS-1$
+        return kind.label + " path segment '" + head + "' at '" + where //$NON-NLS-1$ //$NON-NLS-2$
+            + "' is not authorable. Use " + kind.firstAxis + ", " + kind.secondAxis //$NON-NLS-1$ //$NON-NLS-2$
+            + ", selection, conditionalAppearance, or outputParameters."; //$NON-NLS-1$
     }
 
-    private static String applyTableGroupsMember(List<DataCompositionTableGroup> groups, JsonObject body,
-        String member, String action, DcsPresentationParser.LanguageContext languages, Version version,
-        String path)
+    /** Authors one addressed holder of a table, chart, or axis group, or a descendant of it. */
+    private static String applyAxisHolderPath(EObject owner, String member, List<String> tail,
+        JsonObject body, String action, DcsPresentationParser.LanguageContext languages,
+        Version version, String where, OutputParameterCatalogue catalogue)
+    {
+        String relativeAddress = (where.startsWith("settings.") //$NON-NLS-1$
+            ? where.substring("settings.".length()) : where) + "/" + member; //$NON-NLS-1$ //$NON-NLS-2$
+        if (ACTION_UPDATE.equals(action) && feature(owner, member) == null)
+        {
+            return "action='update' cannot find " + member + " at relative address '" //$NON-NLS-1$ //$NON-NLS-2$
+                + relativeAddress + "'. Use action='upsert' to create " //$NON-NLS-1$
+                + ("outputParameters".equals(member) ? "them." : "it."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        // A holder is not a collection: it carries viewMode, userSettingID and a presentation of its
+        // own, so a replace addressed AT it starts from a new holder rather than from a copy.
+        EObject holder = workingHolder(owner, member, ACTION_REPLACE.equals(action) && tail.isEmpty());
+        String at = where + "/" + member; //$NON-NLS-1$
+        String error;
+        if (holder instanceof DataCompositionSelectedFields)
+        {
+            error = applySelectionPath((DataCompositionSelectedFields)holder, tail, body, action,
+                languages, at);
+        }
+        else if (holder instanceof DataCompositionConditionalAppearance)
+        {
+            error = applyConditionalAppearancePath((DataCompositionConditionalAppearance)holder, tail,
+                body, action, languages, version, at);
+        }
+        else
+        {
+            error = applyParameterValuesPath((ParameterValues)holder, tail, body, action, languages,
+                version, catalogue, at);
+        }
+        if (error == null) setFeature(owner, member, holder);
+        return error;
+    }
+
+    private static String applyAxisGroupsMember(AxisItemKind kind, List<EObject> groups,
+        JsonObject body, String member, String action, DcsPresentationParser.LanguageContext languages,
+        Version version, String path)
     {
         if (!body.has(member))
         {
@@ -1902,12 +1969,12 @@ public final class DcsSettingsWriter
         {
             groups.clear();
         }
-        return appendTableGroups(groups, array, action, languages, version, path + "." + member); //$NON-NLS-1$
+        return appendAxisGroups(kind, groups, array, action, languages, version, path + "." + member); //$NON-NLS-1$
     }
 
-    private static String applyTableGroupsPath(List<DataCompositionTableGroup> groups, List<String> path,
-        JsonObject body, String action, DcsPresentationParser.LanguageContext languages, Version version,
-        String where)
+    private static String applyAxisGroupsPath(AxisItemKind kind, List<EObject> groups,
+        List<String> path, JsonObject body, String action,
+        DcsPresentationParser.LanguageContext languages, Version version, String where)
     {
         if (path.isEmpty())
         {
@@ -1916,93 +1983,57 @@ public final class DcsSettingsWriter
             JsonArray array = array(body, KEY_ITEMS, where);
             if (array == null) return arrayError;
             if (ACTION_REPLACE.equals(action)) groups.clear();
-            return appendTableGroups(groups, array, action, languages, version, where);
+            return appendAxisGroups(kind, groups, array, action, languages, version, where);
         }
         int selected = index(path.get(0), groups.size(), where);
         if (indexError != null) return indexError;
-        DataCompositionTableGroup group = groups.get(selected);
+        EObject group = groups.get(selected);
+        String at = where + "/" + path.get(0); //$NON-NLS-1$
         if (path.size() == 1)
         {
             if (ACTION_REPLACE.equals(action))
             {
-                group = DcsFactory.eINSTANCE.createDataCompositionTableGroup();
+                group = kind.createGroup();
                 groups.set(selected, group);
             }
-            return applyTableGroup(group, body, action, languages, version,
-                where + "/" + path.get(0)); //$NON-NLS-1$
+            return applyAxisGroup(kind, group, body, action, languages, version, at);
         }
         String member = path.get(1);
+        List<String> tail = path.subList(2, path.size());
         if (isGroupingHolder(member))
         {
-            return applyGroupingHolderPath(new TableGroupSettingsAccess(group), member,
-                path.subList(2, path.size()), body, action, languages,
-                where + "/" + path.get(0)); //$NON-NLS-1$
+            return applyGroupingHolderPath(new AxisGroupSettingsAccess(group), member, tail, body,
+                action, languages, at);
         }
-        if ("conditionalAppearance".equals(member)) //$NON-NLS-1$
+        if (isAxisHolder(member))
         {
-            List<String> tail = path.subList(2, path.size());
-            DataCompositionConditionalAppearance existing = group.getConditionalAppearance();
-            if (ACTION_UPDATE.equals(action) && existing == null)
-            {
-                return "action='update' cannot find conditionalAppearance at '" + where + "/" //$NON-NLS-1$ //$NON-NLS-2$
-                    + path.get(0) + "/conditionalAppearance'. Use action='upsert' to create it."; //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            DataCompositionConditionalAppearance holder = ACTION_REPLACE.equals(action)
-                && tail.isEmpty() ? null : copy(existing);
-            if (holder == null)
-            {
-                holder = DcsFactory.eINSTANCE.createDataCompositionConditionalAppearance();
-            }
-            String error = applyConditionalAppearancePath(holder, tail, body, action, languages,
-                version, where + "/" + path.get(0) + "/conditionalAppearance"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (error == null) group.setConditionalAppearance(holder);
-            return error;
-        }
-        if ("outputParameters".equals(member)) //$NON-NLS-1$
-        {
-            List<String> tail = path.subList(2, path.size());
-            DataCompositionTableGroupOutputParameterValues existing = group.getOutputParameters();
-            if (ACTION_UPDATE.equals(action) && existing == null)
-            {
-                return "action='update' cannot find outputParameters at '" + where + "/" //$NON-NLS-1$ //$NON-NLS-2$
-                    + path.get(0) + "/outputParameters'. Use action='upsert' to create them."; //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            DataCompositionTableGroupOutputParameterValues holder = ACTION_REPLACE.equals(action)
-                && tail.isEmpty() ? null : copy(existing);
-            if (holder == null)
-            {
-                holder = DcsFactory.eINSTANCE.createDataCompositionTableGroupOutputParameterValues();
-            }
-            String error = applyParameterValuesPath(holder, tail, body, action, languages, version,
-                OutputParameterCatalogue.TABLE_GROUP,
-                where + "/" + path.get(0) + "/outputParameters"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (error == null) group.setOutputParameters(holder);
-            return error;
+            return applyAxisHolderPath(group, member, tail, body, action, languages, version, at,
+                kind.groupCatalogue);
         }
         if (!KEY_ITEMS.equals(member))
         {
-            return "Table-axis path '" + where + "/" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return kind.label + "-axis path '" + where + "/" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + "' is invalid. Use items, groupFields, selection, filter, order, " //$NON-NLS-1$
                 + "conditionalAppearance, or outputParameters."; //$NON-NLS-1$
         }
-        return applyTableGroupsPath(group.getItems(), path.subList(2, path.size()), body, action,
-            languages, version, where + "/" + path.get(0) + "/items"); //$NON-NLS-1$ //$NON-NLS-2$
+        return applyAxisGroupsPath(kind, axisGroups(group, KEY_ITEMS), tail, body, action, languages,
+            version, at + "/items"); //$NON-NLS-1$
     }
 
-    private static String appendTableGroups(List<DataCompositionTableGroup> groups, JsonArray array,
+    private static String appendAxisGroups(AxisItemKind kind, List<EObject> groups, JsonArray array,
         String action, DcsPresentationParser.LanguageContext languages, Version version, String where)
     {
         if (ACTION_UPDATE.equals(action))
         {
-            return "action='update' needs an exact table-axis group index at '" + where //$NON-NLS-1$
+            return "action='update' needs an exact " + kind.token + "-axis group index at '" + where //$NON-NLS-1$ //$NON-NLS-2$
                 + "'. Use upsert to append a group."; //$NON-NLS-1$
         }
         for (int i = 0; i < array.size(); i++)
         {
             JsonObject item = arrayObject(array, i, where);
             if (item == null) return arrayObjectError;
-            DataCompositionTableGroup group = DcsFactory.eINSTANCE.createDataCompositionTableGroup();
-            String error = applyTableGroup(group, item, action, languages, version,
+            EObject group = kind.createGroup();
+            String error = applyAxisGroup(kind, group, item, action, languages, version,
                 where + "[" + i + "]"); //$NON-NLS-1$ //$NON-NLS-2$
             if (error != null) return error;
             groups.add(group);
@@ -2010,11 +2041,11 @@ public final class DcsSettingsWriter
         return null;
     }
 
-    private static String applyTableGroup(DataCompositionTableGroup group, JsonObject body, String action,
-        DcsPresentationParser.LanguageContext languages, Version version, String path)
+    private static String applyAxisGroup(AxisItemKind kind, EObject group, JsonObject body,
+        String action, DcsPresentationParser.LanguageContext languages, Version version, String path)
     {
         String members = checkMembers(body, path, KEY_NAME, KEY_USE, "groupFields", "filter", //$NON-NLS-1$ //$NON-NLS-2$
-            "order", "selection", "conditionalAppearance", "outputParameters", KEY_ITEMS, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "order", "selection", "conditionalAppearance", "outputParameters", KEY_ITEMS, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             KEY_VIEW_MODE, KEY_USER_SETTING_ID, KEY_USER_SETTING_PRESENTATION, "itemsViewMode", //$NON-NLS-1$
             "itemsUserSettingID", "itemsUserSettingPresentation"); //$NON-NLS-1$ //$NON-NLS-2$
         if (members != null) return members;
@@ -2022,102 +2053,63 @@ public final class DcsSettingsWriter
         {
             String name = requiredString(body, KEY_NAME, path);
             if (stringError != null) return stringError;
-            group.setName(name);
+            setFeature(group, KEY_NAME, name);
         }
         if (body.has(KEY_USE))
         {
             Boolean use = bool(body, KEY_USE, path);
             if (use == null) return booleanError;
-            group.setUse(use.booleanValue());
+            setFeature(group, KEY_USE, use);
         }
-        String scaffold = applyTableGroupScaffold(group, body, languages, path);
+        String scaffold = applyAxisScaffold(group, body, languages, path, KEY_ITEMS);
         if (scaffold != null) return scaffold;
+        boolean fresh = ACTION_REPLACE.equals(action);
         if (body.has("groupFields")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "groupFields", path); //$NON-NLS-1$
             if (value == null) return objectError;
-            String missing = missingHolderUpdate(action, group.getGroupFields(),
+            String missing = missingHolderUpdate(action, (EObject)feature(group, "groupFields"), //$NON-NLS-1$
                 path + ".groupFields"); //$NON-NLS-1$
             if (missing != null) return missing;
-            DataCompositionGroupFields holder = ACTION_REPLACE.equals(action) ? null : copy(group.getGroupFields());
-            if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionGroupFields();
+            DataCompositionGroupFields holder = workingHolder(group, "groupFields", fresh); //$NON-NLS-1$
             String error = applyGroupFields(holder, value, action, path + ".groupFields"); //$NON-NLS-1$
             if (error != null) return error;
-            group.setGroupFields(holder);
+            setFeature(group, "groupFields", holder); //$NON-NLS-1$
         }
         if (body.has("filter")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "filter", path); //$NON-NLS-1$
             if (value == null) return objectError;
-            String missing = missingHolderUpdate(action, group.getFilter(), path + ".filter"); //$NON-NLS-1$
+            String missing = missingHolderUpdate(action, (EObject)feature(group, "filter"), //$NON-NLS-1$
+                path + ".filter"); //$NON-NLS-1$
             if (missing != null) return missing;
-            DataCompositionFilter holder = ACTION_REPLACE.equals(action) ? null : copy(group.getFilter());
-            if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionFilter();
+            DataCompositionFilter holder = workingHolder(group, "filter", fresh); //$NON-NLS-1$
             String error = applyFilter(holder, value, action, languages, path + ".filter"); //$NON-NLS-1$
             if (error != null) return error;
-            group.setFilter(holder);
+            setFeature(group, "filter", holder); //$NON-NLS-1$
         }
         if (body.has("order")) //$NON-NLS-1$
         {
             JsonObject value = object(body, "order", path); //$NON-NLS-1$
             if (value == null) return objectError;
-            String missing = missingHolderUpdate(action, group.getOrder(), path + ".order"); //$NON-NLS-1$
+            String missing = missingHolderUpdate(action, (EObject)feature(group, "order"), //$NON-NLS-1$
+                path + ".order"); //$NON-NLS-1$
             if (missing != null) return missing;
-            DataCompositionOrder holder = ACTION_REPLACE.equals(action) ? null : copy(group.getOrder());
-            if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionOrder();
+            DataCompositionOrder holder = workingHolder(group, "order", fresh); //$NON-NLS-1$
             String error = applyOrder(holder, value, action, languages, path + ".order"); //$NON-NLS-1$
             if (error != null) return error;
-            group.setOrder(holder);
+            setFeature(group, "order", holder); //$NON-NLS-1$
         }
-        if (body.has("selection")) //$NON-NLS-1$
-        {
-            JsonObject value = object(body, "selection", path); //$NON-NLS-1$
-            if (value == null) return objectError;
-            String missing = missingHolderUpdate(action, group.getSelection(),
-                path + ".selection"); //$NON-NLS-1$
-            if (missing != null) return missing;
-            DataCompositionSelectedFields holder = ACTION_REPLACE.equals(action) ? null : copy(group.getSelection());
-            if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionSelectedFields();
-            String error = applySelection(holder, value, action, languages, path + ".selection"); //$NON-NLS-1$
-            if (error != null) return error;
-            group.setSelection(holder);
-        }
-        if (body.has("conditionalAppearance")) //$NON-NLS-1$
-        {
-            JsonObject value = object(body, "conditionalAppearance", path); //$NON-NLS-1$
-            if (value == null) return objectError;
-            String missing = missingHolderUpdate(action, group.getConditionalAppearance(),
-                path + ".conditionalAppearance"); //$NON-NLS-1$
-            if (missing != null) return missing;
-            DataCompositionConditionalAppearance holder = ACTION_REPLACE.equals(action) ? null
-                : copy(group.getConditionalAppearance());
-            if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionConditionalAppearance();
-            String error = applyConditionalAppearance(holder, value, action, languages, version,
-                path + ".conditionalAppearance"); //$NON-NLS-1$
-            if (error != null) return error;
-            group.setConditionalAppearance(holder);
-        }
-        if (body.has("outputParameters")) //$NON-NLS-1$
-        {
-            JsonObject value = object(body, "outputParameters", path); //$NON-NLS-1$
-            if (value == null) return objectError;
-            String missing = missingHolderUpdate(action, group.getOutputParameters(),
-                path + ".outputParameters"); //$NON-NLS-1$
-            if (missing != null) return missing;
-            DataCompositionTableGroupOutputParameterValues holder = ACTION_REPLACE.equals(action) ? null
-                : copy(group.getOutputParameters());
-            if (holder == null) holder = DcsFactory.eINSTANCE.createDataCompositionTableGroupOutputParameterValues();
-            String error = applyParameters(holder, value, action, languages, version,
-                OutputParameterCatalogue.TABLE_GROUP, path + ".outputParameters"); //$NON-NLS-1$
-            if (error != null) return error;
-            group.setOutputParameters(holder);
-        }
+        String error = applyAxisHolders(group, body, action, languages, version, path,
+            kind.groupCatalogue);
+        if (error != null) return error;
         if (body.has(KEY_ITEMS))
         {
             JsonArray array = array(body, KEY_ITEMS, path);
             if (array == null) return arrayError;
-            if (ACTION_REPLACE.equals(action)) group.getItems().clear();
-            return appendTableGroups(group.getItems(), array, action, languages, version, path + ".items"); //$NON-NLS-1$
+            EList<EObject> items = axisGroups(group, KEY_ITEMS);
+            if (fresh) items.clear();
+            return appendAxisGroups(kind, items, array, action, languages, version, path + ".items"); //$NON-NLS-1$
         }
         return null;
     }
@@ -4594,110 +4586,43 @@ public final class DcsSettingsWriter
         return null;
     }
 
-    private static String applyTableScaffold(DataCompositionTable table, JsonObject body,
-        DcsPresentationParser.LanguageContext languages, String path)
+    /**
+     * viewMode, userSettingID and userSettingPresentation of a table, chart, or axis group, then the
+     * same three members under each prefix (for example {@code rowsViewMode}). Body members and EMF
+     * features share these names.
+     */
+    private static String applyAxisScaffold(EObject target, JsonObject body,
+        DcsPresentationParser.LanguageContext languages, String path, String... prefixes)
     {
-        String error = applySettingsItemScaffold(table, body, languages, path);
-        if (error != null) return error;
-        String[] prefixes = {"rows", "columns"}; //$NON-NLS-1$ //$NON-NLS-2$
-        for (String prefix : prefixes)
+        List<String> all = new ArrayList<>();
+        all.add(""); //$NON-NLS-1$
+        all.addAll(Arrays.asList(prefixes));
+        for (String prefix : all)
         {
-            String viewMember = prefix + "ViewMode"; //$NON-NLS-1$
+            String viewMember = prefix.isEmpty() ? KEY_VIEW_MODE : prefix + "ViewMode"; //$NON-NLS-1$
             if (body.has(viewMember))
             {
                 EnumResult<DataCompositionSettingsItemViewMode> value = enumValue(body, viewMember,
                     path, DataCompositionSettingsItemViewMode.values());
                 if (value.error != null) return value.error;
-                if ("rows".equals(prefix)) table.setRowsViewMode(value.value); //$NON-NLS-1$
-                else table.setColumnsViewMode(value.value);
+                setFeature(target, viewMember, value.value);
             }
-            String idMember = prefix + "UserSettingID"; //$NON-NLS-1$
+            String idMember = prefix.isEmpty() ? KEY_USER_SETTING_ID : prefix + "UserSettingID"; //$NON-NLS-1$
             if (body.has(idMember))
             {
                 String value = optionalString(body, idMember, path);
                 if (stringError != null) return stringError;
-                if ("rows".equals(prefix)) table.setRowsUserSettingID(value); //$NON-NLS-1$
-                else table.setColumnsUserSettingID(value);
+                setFeature(target, idMember, value);
             }
-            String presentationMember = prefix + "UserSettingPresentation"; //$NON-NLS-1$
+            String presentationMember = prefix.isEmpty() ? KEY_USER_SETTING_PRESENTATION
+                : prefix + "UserSettingPresentation"; //$NON-NLS-1$
             if (body.has(presentationMember))
             {
                 PresentationResult value = presentation(body.get(presentationMember), languages,
                     path + "." + presentationMember); //$NON-NLS-1$
                 if (value.error != null) return value.error;
-                if ("rows".equals(prefix)) table.setRowsUserSettingPresentation(value.value); //$NON-NLS-1$
-                else table.setColumnsUserSettingPresentation(value.value);
+                setFeature(target, presentationMember, value.value);
             }
-        }
-        return null;
-    }
-
-    private static String applyTableGroupScaffold(DataCompositionTableGroup group, JsonObject body,
-        DcsPresentationParser.LanguageContext languages, String path)
-    {
-        String error = applySettingsItemScaffold(group, body, languages, path);
-        if (error != null) return error;
-        if (body.has("itemsViewMode")) //$NON-NLS-1$
-        {
-            EnumResult<DataCompositionSettingsItemViewMode> value = enumValue(body, "itemsViewMode", //$NON-NLS-1$
-                path, DataCompositionSettingsItemViewMode.values());
-            if (value.error != null) return value.error;
-            group.setItemsViewMode(value.value);
-        }
-        if (body.has("itemsUserSettingID")) //$NON-NLS-1$
-        {
-            String value = optionalString(body, "itemsUserSettingID", path); //$NON-NLS-1$
-            if (stringError != null) return stringError;
-            group.setItemsUserSettingID(value);
-        }
-        if (body.has("itemsUserSettingPresentation")) //$NON-NLS-1$
-        {
-            PresentationResult value = presentation(body.get("itemsUserSettingPresentation"), //$NON-NLS-1$
-                languages, path + ".itemsUserSettingPresentation"); //$NON-NLS-1$
-            if (value.error != null) return value.error;
-            group.setItemsUserSettingPresentation(value.value);
-        }
-        return null;
-    }
-
-    private static String applySettingsItemScaffold(Object target, JsonObject body,
-        DcsPresentationParser.LanguageContext languages, String path)
-    {
-        DataCompositionSettingsItemViewMode view = null;
-        if (body.has(KEY_VIEW_MODE))
-        {
-            EnumResult<DataCompositionSettingsItemViewMode> value = enumValue(body, KEY_VIEW_MODE,
-                path, DataCompositionSettingsItemViewMode.values());
-            if (value.error != null) return value.error;
-            view = value.value;
-        }
-        String id = null;
-        if (body.has(KEY_USER_SETTING_ID))
-        {
-            id = optionalString(body, KEY_USER_SETTING_ID, path);
-            if (stringError != null) return stringError;
-        }
-        Presentation settingPresentation = null;
-        if (body.has(KEY_USER_SETTING_PRESENTATION))
-        {
-            PresentationResult value = presentation(body.get(KEY_USER_SETTING_PRESENTATION),
-                languages, path + ".userSettingPresentation"); //$NON-NLS-1$
-            if (value.error != null) return value.error;
-            settingPresentation = value.value;
-        }
-        if (target instanceof DataCompositionTable)
-        {
-            DataCompositionTable value = (DataCompositionTable)target;
-            if (view != null) value.setViewMode(view);
-            if (body.has(KEY_USER_SETTING_ID)) value.setUserSettingID(id);
-            if (body.has(KEY_USER_SETTING_PRESENTATION)) value.setUserSettingPresentation(settingPresentation);
-        }
-        else if (target instanceof DataCompositionTableGroup)
-        {
-            DataCompositionTableGroup value = (DataCompositionTableGroup)target;
-            if (view != null) value.setViewMode(view);
-            if (body.has(KEY_USER_SETTING_ID)) value.setUserSettingID(id);
-            if (body.has(KEY_USER_SETTING_PRESENTATION)) value.setUserSettingPresentation(settingPresentation);
         }
         return null;
     }
@@ -5260,6 +5185,7 @@ public final class DcsSettingsWriter
             case TYPE_CONDITIONAL_APPEARANCE:
                 return Collections.singletonList("conditionalAppearance"); //$NON-NLS-1$
             case TYPE_TABLE:
+            case TYPE_CHART:
                 return Collections.singletonList(KEY_ITEMS);
             case TYPE_USER_FIELD:
                 return Collections.singletonList("userFields"); //$NON-NLS-1$
@@ -5406,9 +5332,6 @@ public final class DcsSettingsWriter
         String action, String type, String targetAddress)
     {
         String renderedPath = path.isEmpty() ? "settings root" : String.join("/", path); //$NON-NLS-1$ //$NON-NLS-2$
-        String refusal = DcsUnsupportedAuthoring.refusal(target,
-            targetAddress == null ? renderedPath : targetAddress);
-        if (refusal != null) return refusal;
         String actualType = DcsReadProjection.typeOf(target, target.eContainer());
         if (actualType == null)
         {
@@ -5420,10 +5343,9 @@ public final class DcsSettingsWriter
         }
         if (!type.equals(actualType))
         {
-            // Structure slots are polymorphic, so exact replace may swap grouping and table kinds.
+            // Structure slots are polymorphic, so exact replace may swap grouping, table and chart.
             if (ACTION_REPLACE.equals(action) && target instanceof StructureItem
-                && (TYPE_GROUPING.equals(type) || TYPE_TABLE.equals(type))
-                && (TYPE_GROUPING.equals(actualType) || TYPE_TABLE.equals(actualType)))
+                && isStructureType(type) && isStructureType(actualType))
             {
                 return null;
             }
@@ -5434,6 +5356,11 @@ public final class DcsSettingsWriter
                 + "' or copy another exact address from dcs action='get'."; //$NON-NLS-1$
         }
         return null;
+    }
+
+    private static boolean isStructureType(String type)
+    {
+        return TYPE_GROUPING.equals(type) || TYPE_TABLE.equals(type) || TYPE_CHART.equals(type);
     }
 
     private static String removeStructurePath(List<StructureItem> items, List<String> path, String where)
@@ -5460,10 +5387,10 @@ public final class DcsSettingsWriter
                     where + "/" + path.get(0) + "/items"); //$NON-NLS-1$ //$NON-NLS-2$
             return removeGroupChild(group, tail, where + "/" + path.get(0)); //$NON-NLS-1$
         }
-        if (item instanceof DataCompositionTable)
+        AxisItemKind kind = AxisItemKind.of(item);
+        if (kind != null)
         {
-            return removeTableChild((DataCompositionTable)item, tail,
-                where + "/" + path.get(0)); //$NON-NLS-1$
+            return removeAxisItemChild(kind, item, tail, where + "/" + path.get(0)); //$NON-NLS-1$
         }
         return "Structure subtype '" + item.eClass().getName() + "' at '" + where + "/" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + path.get(0) + "' has no authorable child at the requested address."; //$NON-NLS-1$
@@ -5496,38 +5423,46 @@ public final class DcsSettingsWriter
             + "' does not select exactly one authorable node."; //$NON-NLS-1$
     }
 
-    private static String removeTableChild(DataCompositionTable table, List<String> path, String where)
+    private static String removeAxisItemChild(AxisItemKind kind, EObject item, List<String> path,
+        String where)
     {
         String head = path.get(0);
         List<String> tail = path.subList(1, path.size());
-        if ("rows".equals(head) || "columns".equals(head)) //$NON-NLS-1$ //$NON-NLS-2$
+        if (kind.isAxis(head))
         {
-            return removeTableGroupPath("rows".equals(head) ? table.getRows() : table.getColumns(), //$NON-NLS-1$
-                tail, where + "/" + head); //$NON-NLS-1$
+            return removeAxisGroupPath(kind, axisGroups(item, head), tail, where + "/" + head); //$NON-NLS-1$
         }
-        if (tail.isEmpty())
+        if (isAxisHolder(head))
         {
-            if ("selection".equals(head)) { table.setSelection(null); return null; } //$NON-NLS-1$
-            if ("conditionalAppearance".equals(head)) { table.setConditionalAppearance(null); return null; } //$NON-NLS-1$
-            if ("outputParameters".equals(head)) { table.setOutputParameters(null); return null; } //$NON-NLS-1$
+            return removeAxisHolder(item, head, tail, where);
         }
-        if ("selection".equals(head)) //$NON-NLS-1$
-            return removeSelectionPath(table.getSelection(), tail, where + "/selection"); //$NON-NLS-1$
-        if ("conditionalAppearance".equals(head)) //$NON-NLS-1$
-            return removeConditionalAppearancePath(table.getConditionalAppearance(), tail,
-                where + "/conditionalAppearance"); //$NON-NLS-1$
-        if ("outputParameters".equals(head)) //$NON-NLS-1$
-            return removeIndexed(table.getOutputParameters() == null ? null
-                : table.getOutputParameters().getItems(), tail, where + "/outputParameters"); //$NON-NLS-1$
-        return "Table child address '" + where + "/" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return kind.label + " child address '" + where + "/" + String.join("/", path) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + "' does not select exactly one authorable node."; //$NON-NLS-1$
     }
 
-    private static String removeTableGroupPath(List<DataCompositionTableGroup> groups, List<String> path,
+    private static String removeAxisHolder(EObject owner, String member, List<String> tail,
         String where)
     {
-        if (path.isEmpty()) return "action='remove' needs one table-axis group index after '" //$NON-NLS-1$
-            + where + "'."; //$NON-NLS-1$
+        if (tail.isEmpty())
+        {
+            setFeature(owner, member, null);
+            return null;
+        }
+        Object holder = feature(owner, member);
+        String at = where + "/" + member; //$NON-NLS-1$
+        if ("selection".equals(member)) //$NON-NLS-1$
+            return removeSelectionPath((DataCompositionSelectedFields)holder, tail, at);
+        if ("conditionalAppearance".equals(member)) //$NON-NLS-1$
+            return removeConditionalAppearancePath((DataCompositionConditionalAppearance)holder, tail,
+                at);
+        return removeIndexed(holder == null ? null : ((ParameterValues)holder).getItems(), tail, at);
+    }
+
+    private static String removeAxisGroupPath(AxisItemKind kind, List<EObject> groups,
+        List<String> path, String where)
+    {
+        if (path.isEmpty()) return "action='remove' needs one " + kind.token //$NON-NLS-1$
+            + "-axis group index after '" + where + "'."; //$NON-NLS-1$ //$NON-NLS-2$
         int selected = index(path.get(0), groups.size(), where);
         if (indexError != null) return indexError;
         if (path.size() == 1)
@@ -5535,37 +5470,17 @@ public final class DcsSettingsWriter
             groups.remove(selected);
             return null;
         }
-        DataCompositionTableGroup group = groups.get(selected);
+        EObject group = groups.get(selected);
         List<String> tail = path.subList(1, path.size());
+        String at = where + "/" + path.get(0); //$NON-NLS-1$
         if (KEY_ITEMS.equals(tail.get(0)))
-            return removeTableGroupPath(group.getItems(), tail.subList(1, tail.size()),
-                where + "/" + path.get(0) + "/items"); //$NON-NLS-1$ //$NON-NLS-2$
+            return removeAxisGroupPath(kind, axisGroups(group, KEY_ITEMS), tail.subList(1, tail.size()),
+                at + "/items"); //$NON-NLS-1$
         if (isGroupingHolder(tail.get(0)))
-            return removeGroupingHolder(new TableGroupSettingsAccess(group), tail,
-                where + "/" + path.get(0)); //$NON-NLS-1$
-        if ("conditionalAppearance".equals(tail.get(0))) //$NON-NLS-1$
-        {
-            if (tail.size() == 1)
-            {
-                group.setConditionalAppearance(null);
-                return null;
-            }
-            return removeConditionalAppearancePath(group.getConditionalAppearance(),
-                tail.subList(1, tail.size()), where + "/" + path.get(0) //$NON-NLS-1$
-                    + "/conditionalAppearance"); //$NON-NLS-1$
-        }
-        if ("outputParameters".equals(tail.get(0))) //$NON-NLS-1$
-        {
-            if (tail.size() == 1)
-            {
-                group.setOutputParameters(null);
-                return null;
-            }
-            return removeIndexed(group.getOutputParameters() == null ? null
-                : group.getOutputParameters().getItems(), tail.subList(1, tail.size()),
-                where + "/" + path.get(0) + "/outputParameters"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        return "Table-axis child removal at '" + where //$NON-NLS-1$
+            return removeGroupingHolder(new AxisGroupSettingsAccess(group), tail, at);
+        if (isAxisHolder(tail.get(0)))
+            return removeAxisHolder(group, tail.get(0), tail.subList(1, tail.size()), at);
+        return kind.label + "-axis child removal at '" + where //$NON-NLS-1$
             + "' currently supports items, groupFields, selection, filter, order, " //$NON-NLS-1$
             + "conditionalAppearance, or outputParameters. Remove the group or update its body."; //$NON-NLS-1$
     }
@@ -5913,18 +5828,27 @@ public final class DcsSettingsWriter
         @Override public void groupFields(DataCompositionGroupFields value) { group.setGroupFields(value); }
     }
 
-    private static final class TableGroupSettingsAccess implements GroupingSettingsAccess
+    /** Grouping holders of a table or chart axis group, reached through their shared feature names. */
+    private static final class AxisGroupSettingsAccess implements GroupingSettingsAccess
     {
-        private final DataCompositionTableGroup group;
-        TableGroupSettingsAccess(DataCompositionTableGroup group) { this.group = group; }
-        @Override public DataCompositionSelectedFields selection() { return group.getSelection(); }
-        @Override public void selection(DataCompositionSelectedFields value) { group.setSelection(value); }
-        @Override public DataCompositionFilter filter() { return group.getFilter(); }
-        @Override public void filter(DataCompositionFilter value) { group.setFilter(value); }
-        @Override public DataCompositionOrder order() { return group.getOrder(); }
-        @Override public void order(DataCompositionOrder value) { group.setOrder(value); }
-        @Override public DataCompositionGroupFields groupFields() { return group.getGroupFields(); }
-        @Override public void groupFields(DataCompositionGroupFields value) { group.setGroupFields(value); }
+        private final EObject group;
+        AxisGroupSettingsAccess(EObject group) { this.group = group; }
+        @Override public DataCompositionSelectedFields selection()
+        { return (DataCompositionSelectedFields)feature(group, "selection"); } //$NON-NLS-1$
+        @Override public void selection(DataCompositionSelectedFields value)
+        { setFeature(group, "selection", value); } //$NON-NLS-1$
+        @Override public DataCompositionFilter filter()
+        { return (DataCompositionFilter)feature(group, "filter"); } //$NON-NLS-1$
+        @Override public void filter(DataCompositionFilter value)
+        { setFeature(group, "filter", value); } //$NON-NLS-1$
+        @Override public DataCompositionOrder order()
+        { return (DataCompositionOrder)feature(group, "order"); } //$NON-NLS-1$
+        @Override public void order(DataCompositionOrder value)
+        { setFeature(group, "order", value); } //$NON-NLS-1$
+        @Override public DataCompositionGroupFields groupFields()
+        { return (DataCompositionGroupFields)feature(group, "groupFields"); } //$NON-NLS-1$
+        @Override public void groupFields(DataCompositionGroupFields value)
+        { setFeature(group, "groupFields", value); } //$NON-NLS-1$
     }
 
     /** Detached schema settings plan. */
@@ -5942,6 +5866,38 @@ public final class DcsSettingsWriter
             this.variants = variants;
             this.defaultTouched = defaultTouched;
             this.variantsTouched = variantsTouched;
+        }
+
+        /**
+         * Refusal for a chart this plan adds or changes whose references do not resolve against
+         * {@code schema}, or {@code null}. Call it after every schema mutation of the write and
+         * before {@link #commit}, so it judges the state the write leaves behind.
+         */
+        public String chartReferenceError(DataCompositionSchema schema, String rootFqn)
+        {
+            if (defaultTouched)
+            {
+                String error = DcsChartReferences.error(schema, schema.getDefaultSettings(),
+                    defaultSettings, DcsAddress.render(rootFqn,
+                        Collections.singletonList("defaultSettings"))); //$NON-NLS-1$
+                if (error != null) return error;
+            }
+            if (!variantsTouched) return null;
+            for (int i = 0; i < variants.size(); i++)
+            {
+                SettingsVariant variant = variants.get(i);
+                String name = variant.getName();
+                List<Integer> before = name == null || name.isEmpty()
+                    ? Collections.<Integer> emptyList()
+                    : findVariants(schema.getSettingsVariants(), name);
+                DataCompositionSettings original = before.size() == 1
+                    ? schema.getSettingsVariants().get(before.get(0).intValue()).getSettings() : null;
+                String selector = name == null || name.isEmpty() ? Integer.toString(i) : name;
+                String error = DcsChartReferences.error(schema, original, variant.getSettings(),
+                    DcsAddress.render(rootFqn, Arrays.asList("variants", selector, "settings"))); //$NON-NLS-1$ //$NON-NLS-2$
+                if (error != null) return error;
+            }
+            return null;
         }
 
         /** Commits the already-validated detached tree. */

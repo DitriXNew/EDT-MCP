@@ -135,6 +135,27 @@ public class DcsOptionsTest
     }
 
     @Test
+    public void testChartOptionsListTheChartCatalogueAndAxisEnums()
+    {
+        DcsOptions.Result chart;
+        try (DcsCatalogueTestRuntime.Scope ignored =
+            DcsCatalogueTestRuntime.prepareCatalogues(Version.V8_3_27))
+        {
+            chart = DcsOptions.render("Report.Options", TargetKind.REPORT_MAIN_DCS, null, //$NON-NLS-1$
+                address("Report.Options"), "chart", "en", Version.V8_3_27, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                Integer.valueOf(1000), 0);
+        }
+        assertTrue(chart.error(), chart.isSuccess());
+        String markdown = chart.markdown();
+        assertTrue(markdown, markdown.contains("ChartType")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("pointsViewMode")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("seriesViewMode")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("points[].groupFields.items[].groupType")); //$NON-NLS-1$
+        assertTrue("a chart does not offer the report-level catalogue", //$NON-NLS-1$
+            !markdown.contains("VerticalOverallPlacement")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testPlatformCatalogueDeclaresAutoIndentAsNumber()
         throws Exception
     {

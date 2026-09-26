@@ -27,6 +27,8 @@ import com._1c.g5.v8.dt.dcs.model.core.LocalString;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionAppearanceField;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearance;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItem;
@@ -888,7 +890,7 @@ public class DcsSettingsWriterTest
     }
 
     @Test
-    public void testExactStructureReplaceCanChangeBetweenGroupingAndTable()
+    public void testExactStructureReplaceCanChangeBetweenGroupingTableAndChart()
     {
         DataCompositionSettings settings = plan(json("{\"items\":[{\"kind\":\"grouping\"," //$NON-NLS-1$
             + "\"name\":\"OldGroup\",\"groupFields\":{\"items\":[]}}]}")); //$NON-NLS-1$
@@ -899,7 +901,14 @@ public class DcsSettingsWriterTest
         assertTrue(table.error(), table.isSuccess());
         assertTrue(table.settings().getItems().get(0) instanceof DataCompositionTable);
 
-        DcsSettingsWriter.SettingsResult group = DcsSettingsWriter.planSettings(table.settings(),
+        DcsSettingsWriter.SettingsResult chart = DcsSettingsWriter.planSettings(table.settings(),
+            java.util.Arrays.asList("items", "0"), "replace", "chart", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            json("{\"kind\":\"chart\",\"name\":\"NewChart\"}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(chart.error(), chart.isSuccess());
+        assertTrue(chart.settings().getItems().get(0) instanceof DataCompositionChart);
+        assertEquals("NewChart", ((DataCompositionChart)chart.settings().getItems().get(0)).getName()); //$NON-NLS-1$
+
+        DcsSettingsWriter.SettingsResult group = DcsSettingsWriter.planSettings(chart.settings(),
             java.util.Arrays.asList("items", "0"), "replace", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             json("{\"kind\":\"grouping\",\"name\":\"NewGroup\"}"), LANGUAGES); //$NON-NLS-1$
         assertTrue(group.error(), group.isSuccess());
@@ -907,36 +916,233 @@ public class DcsSettingsWriterTest
 
         DcsSettingsWriter.SettingsResult unknown = DcsSettingsWriter.planSettings(settings,
             java.util.Arrays.asList("items", "0"), "replace", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            json("{\"kind\":\"chart\"}"), LANGUAGES); //$NON-NLS-1$
+            json("{\"kind\":\"pivot\"}"), LANGUAGES); //$NON-NLS-1$
         assertFalse(unknown.isSuccess());
-        assertUnsupportedChart(unknown.error());
+        assertTrue(unknown.error(), unknown.error().contains("kind='chart'")); //$NON-NLS-1$
     }
 
     @Test
-    public void testChartRefusalIsArticulateAtNodeParentBodyAndRemove()
+    public void testChartIsATypedStructureItemAtNodeParentBodyAndRemove()
     {
         DataCompositionSettings settings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
             .eINSTANCE.createDataCompositionSettings();
         settings.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
             .createDataCompositionChart());
 
-        DcsSettingsWriter.SettingsResult atNode = DcsSettingsWriter.planSettings(settings,
+        DcsSettingsWriter.SettingsResult wrongType = DcsSettingsWriter.planSettings(settings,
             java.util.Arrays.asList("items", "0"), "update", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             json("{\"name\":\"NeverApplied\"}"), LANGUAGES); //$NON-NLS-1$
-        assertFalse(atNode.isSuccess());
-        assertUnsupportedChart(atNode.error());
+        assertFalse(wrongType.isSuccess());
+        assertTrue(wrongType.error(), wrongType.error().contains("type='chart'")); //$NON-NLS-1$
+
+        DcsSettingsWriter.SettingsResult renamed = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0"), "update", "chart", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            json("{\"name\":\"Renamed\",\"use\":false}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(renamed.error(), renamed.isSuccess());
+        DataCompositionChart chart = (DataCompositionChart)renamed.settings().getItems().get(0);
+        assertEquals("Renamed", chart.getName()); //$NON-NLS-1$
+        assertFalse(chart.isUse());
 
         DcsSettingsWriter.SettingsResult remove = DcsSettingsWriter.planSettings(settings,
-            java.util.Arrays.asList("items", "0"), "remove", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            java.util.Arrays.asList("items", "0"), "remove", "chart", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             new JsonObject(), LANGUAGES);
-        assertFalse(remove.isSuccess());
-        assertUnsupportedChart(remove.error());
+        assertTrue(remove.error(), remove.isSuccess());
+        assertTrue(remove.settings().getItems().isEmpty());
 
         DcsSettingsWriter.SettingsResult parentBody = DcsSettingsWriter.planSettings(null,
             java.util.Collections.emptyList(), "upsert", "grouping", //$NON-NLS-1$ //$NON-NLS-2$
-            json("{\"items\":[{\"kind\":\"chart\"}]}"), LANGUAGES); //$NON-NLS-1$
-        assertFalse(parentBody.isSuccess());
-        assertUnsupportedChart(parentBody.error());
+            json("{\"items\":[{\"kind\":\"chart\",\"name\":\"C\"}]}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(parentBody.error(), parentBody.isSuccess());
+        assertTrue(parentBody.settings().getItems().get(0) instanceof DataCompositionChart);
+    }
+
+    @Test
+    public void testChartAuthorsPointsSeriesMeasuresAndAxisScaffolding()
+    {
+        DataCompositionSettings settings = plan(json("{\"items\":[{\"kind\":\"chart\"," //$NON-NLS-1$
+            + "\"name\":\"Sales\",\"id\":\"chart-id\",\"viewMode\":\"Normal\"," //$NON-NLS-1$
+            + "\"pointsViewMode\":\"Normal\",\"pointsUserSettingID\":\"points\"," //$NON-NLS-1$
+            + "\"seriesViewMode\":\"Inaccessible\",\"seriesUserSettingPresentation\":{\"EN\":\"Series\"}," //$NON-NLS-1$
+            + "\"points\":[{\"name\":\"ByCustomer\",\"itemsViewMode\":\"Normal\",\"groupFields\":{\"items\":[" //$NON-NLS-1$
+            + "{\"field\":{\"kind\":\"field\",\"value\":\"Customer\"},\"groupType\":\"Items\"}]}," //$NON-NLS-1$
+            + "\"order\":{\"items\":[{\"kind\":\"auto\"}]},\"selection\":{\"items\":[{\"kind\":\"auto\"}]}}]," //$NON-NLS-1$
+            + "\"series\":[{\"groupFields\":{\"items\":[" //$NON-NLS-1$
+            + "{\"field\":{\"kind\":\"field\",\"value\":\"Period\"}}]}}]," //$NON-NLS-1$
+            + "\"selection\":{\"items\":[{\"kind\":\"field\",\"field\":{\"kind\":\"field\",\"value\":\"Amount\"}}]}}]}")); //$NON-NLS-1$
+
+        DataCompositionChart chart = (DataCompositionChart)settings.getItems().get(0);
+        assertEquals("Sales", chart.getName()); //$NON-NLS-1$
+        assertEquals("chart-id", chart.getId()); //$NON-NLS-1$
+        assertEquals("Normal", chart.getPointsViewMode().getName()); //$NON-NLS-1$
+        assertEquals("points", chart.getPointsUserSettingID()); //$NON-NLS-1$
+        assertEquals("Inaccessible", chart.getSeriesViewMode().getName()); //$NON-NLS-1$
+        assertEquals("Series", presentationText(chart.getSeriesUserSettingPresentation())); //$NON-NLS-1$
+        assertEquals(1, chart.getPoints().size());
+        DataCompositionChartGroup point = chart.getPoints().get(0);
+        assertEquals("ByCustomer", point.getName()); //$NON-NLS-1$
+        assertEquals("Normal", point.getItemsViewMode().getName()); //$NON-NLS-1$
+        assertEquals("Customer", ((DataCompositionGroupField)point.getGroupFields().getItems().get(0)) //$NON-NLS-1$
+            .getField().getValue());
+        assertEquals(1, point.getOrder().getItems().size());
+        assertEquals("Period", ((DataCompositionGroupField)chart.getSeries().get(0).getGroupFields() //$NON-NLS-1$
+            .getItems().get(0)).getField().getValue());
+        assertEquals("Amount", ((DataCompositionSelectedField)chart.getSelection().getItems().get(0)) //$NON-NLS-1$
+            .getField().getValue());
+    }
+
+    @Test
+    public void testEveryIndexedHolderDescendantUnderChartCanBeUpdatedAndRemoved()
+    {
+        DataCompositionSettings settings = plan(json("{\"items\":[{\"kind\":\"chart\",\"name\":\"C\"," //$NON-NLS-1$
+            + "\"selection\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Amount\"}}]}," //$NON-NLS-1$
+            + "\"conditionalAppearance\":{\"items\":[{\"use\":true}]}," //$NON-NLS-1$
+            + "\"points\":[" + tableAxisJson("Point") + "]," //$NON-NLS-1$ //$NON-NLS-2$
+            + "\"series\":[" + tableAxisJson("Series") + "]}]}")); //$NON-NLS-1$ //$NON-NLS-2$
+        seedChartOutputParameters((DataCompositionChart)settings.getItems().get(0));
+
+        assertIndexedUpdateAndRemove(settings,
+            Arrays.asList("items", "0", "selection", "items", "0"), "selection"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        assertIndexedUpdateAndRemove(settings,
+            Arrays.asList("items", "0", "conditionalAppearance", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "conditionalAppearance"); //$NON-NLS-1$
+        assertIndexedUpdateAndRemove(settings,
+            Arrays.asList("items", "0", "outputParameters", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "outputParameter"); //$NON-NLS-1$
+        for (String axis : Arrays.asList("points", "series")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            assertIndexedUpdateAndRemove(settings,
+                Arrays.asList("items", "0", axis, "0", "groupFields", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+                "grouping"); //$NON-NLS-1$
+            assertIndexedUpdateAndRemove(settings,
+                Arrays.asList("items", "0", axis, "0", "selection", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+                "selection"); //$NON-NLS-1$
+            assertIndexedUpdateAndRemove(settings,
+                Arrays.asList("items", "0", axis, "0", "filter", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+                "filter"); //$NON-NLS-1$
+            assertIndexedUpdateAndRemove(settings,
+                Arrays.asList("items", "0", axis, "0", "order", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+                "order"); //$NON-NLS-1$
+            assertIndexedUpdateAndRemove(settings,
+                Arrays.asList("items", "0", axis, "0", "conditionalAppearance", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+                "conditionalAppearance"); //$NON-NLS-1$
+            assertIndexedUpdateAndRemove(settings,
+                Arrays.asList("items", "0", axis, "0", "outputParameters", "items", "0"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+                "outputParameter"); //$NON-NLS-1$
+            assertIndexedUpdateAndRemove(settings,
+                Arrays.asList("items", "0", axis, "0"), "chart"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+
+        DcsSettingsWriter.SettingsResult axisHolder = DcsSettingsWriter.planSettings(settings,
+            Arrays.asList("items", "0", "points"), "upsert", "chart", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            json("{\"items\":[{\"name\":\"Second\"}]}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(axisHolder.error(), axisHolder.isSuccess());
+        assertEquals("Second", ((DataCompositionChart)axisHolder.settings().getItems().get(0)) //$NON-NLS-1$
+            .getPoints().get(1).getName());
+    }
+
+    @Test
+    public void testChartUpdateKeepsNestedOutputParameterValuesItCannotModel()
+    {
+        com._1c.g5.v8.dt.dcs.model.settings.DcsFactory factory =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE;
+        DataCompositionSettings settings = plan(json("{\"items\":[{\"kind\":\"chart\",\"name\":\"C\"}]}")); //$NON-NLS-1$
+        DataCompositionChart seeded = (DataCompositionChart)settings.getItems().get(0);
+        com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartOutputParameterValues output =
+            factory.createDataCompositionChartOutputParameterValues();
+        SettingsParameterValue chartType = settingsParameter("ChartType"); //$NON-NLS-1$
+        chartType.getNestedParameterValues().add(settingsParameter("ChartType.LabelType")); //$NON-NLS-1$
+        output.getItems().add(chartType);
+        seeded.setOutputParameters(output);
+
+        DcsSettingsWriter.SettingsResult renamed = DcsSettingsWriter.planSettings(settings,
+            Arrays.asList("items", "0"), "update", "chart", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            json("{\"name\":\"Renamed\",\"points\":[{\"name\":\"P\"}]}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse("update cannot append an axis group without an index", renamed.isSuccess()); //$NON-NLS-1$
+
+        renamed = DcsSettingsWriter.planSettings(settings, Arrays.asList("items", "0"), "update", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "chart", json("{\"name\":\"Renamed\"}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(renamed.error(), renamed.isSuccess());
+        DataCompositionChart chart = (DataCompositionChart)renamed.settings().getItems().get(0);
+        assertEquals("Renamed", chart.getName()); //$NON-NLS-1$
+        assertEquals("a targeted update must keep what V1 cannot author", 1, //$NON-NLS-1$
+            chart.getOutputParameters().getItems().get(0).getNestedParameterValues().size());
+
+        DcsSettingsWriter.SettingsResult typeValue = DcsSettingsWriter.planSettings(settings,
+            Arrays.asList("items", "0", "outputParameters", "items", "0"), "update", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            "outputParameter", json("{\"use\":false}"), LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(typeValue.error(), typeValue.isSuccess());
+        DataCompositionParameterValue updated = ((DataCompositionChart)typeValue.settings().getItems()
+            .get(0)).getOutputParameters().getItems().get(0);
+        assertFalse(updated.isUse());
+        assertEquals(1, updated.getNestedParameterValues().size());
+    }
+
+    @Test
+    public void testChartOutputParametersUseThePlatformChartCatalogue()
+    {
+        DcsSettingsWriter.SettingsResult pie;
+        DcsSettingsWriter.SettingsResult unknown;
+        try (DcsCatalogueTestRuntime.Scope ignored =
+            DcsCatalogueTestRuntime.prepareCatalogues(Version.V8_3_27))
+        {
+            pie = DcsSettingsWriter.planSettings(null, java.util.Collections.emptyList(), "upsert", //$NON-NLS-1$
+                "userSettings", json("{\"items\":[{\"kind\":\"chart\",\"outputParameters\":{\"items\":[" //$NON-NLS-1$ //$NON-NLS-2$
+                    + "{\"parameter\":{\"kind\":\"parameter\",\"value\":\"ChartType\"},\"value\":\"Pie\"}]}}]}"), //$NON-NLS-1$
+                LANGUAGES, Version.V8_3_27);
+            unknown = DcsSettingsWriter.planSettings(null, java.util.Collections.emptyList(), "upsert", //$NON-NLS-1$
+                "userSettings", json("{\"items\":[{\"kind\":\"chart\",\"outputParameters\":{\"items\":[" //$NON-NLS-1$ //$NON-NLS-2$
+                    + "{\"parameter\":{\"kind\":\"parameter\",\"value\":\"VerticalOverallPlacement\"}," //$NON-NLS-1$
+                    + "\"value\":\"None\"}]}}]}"), //$NON-NLS-1$
+                LANGUAGES, Version.V8_3_27);
+        }
+        assertTrue(pie.error(), pie.isSuccess());
+        DataCompositionParameterValue chartType = ((DataCompositionChart)pie.settings().getItems().get(0))
+            .getOutputParameters().getItems().get(0);
+        assertTrue(chartType.getValues().get(0) instanceof EnumValue);
+        assertEquals("Pie", ((EnumValue)chartType.getValues().get(0)).getValue().getLiteral()); //$NON-NLS-1$
+
+        assertFalse("a report-level parameter is not a chart parameter", unknown.isSuccess()); //$NON-NLS-1$
+        assertTrue(unknown.error(), unknown.error().contains("ChartType")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testChartBodyWithoutKindAndChartNameCollisionAreNamed()
+    {
+        DcsSettingsWriter.SettingsResult noKind = DcsSettingsWriter.planSettings(null,
+            java.util.Collections.emptyList(), "upsert", "chart", //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"points\":[{\"name\":\"P\"}]}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse(noKind.isSuccess());
+        assertTrue(noKind.error(), noKind.error().contains("kind='chart'")); //$NON-NLS-1$
+
+        DataCompositionSettings settings = plan(json("{\"items\":[{\"kind\":\"chart\",\"name\":\"C\"}," //$NON-NLS-1$
+            + "{\"kind\":\"table\",\"name\":\"C\"}]}")); //$NON-NLS-1$
+        DcsSettingsWriter.SettingsResult duplicate = DcsSettingsWriter.planSettings(settings,
+            java.util.Collections.emptyList(), "upsert", "chart", //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"kind\":\"chart\",\"name\":\"C\"}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse("a chart name must be unique among sibling charts", duplicate.isSuccess()); //$NON-NLS-1$
+        assertTrue(duplicate.error(), duplicate.error().contains("Chart name 'C'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDynamicListSettingsRefuseANewChartButKeepAnUnchangedOne()
+    {
+        String root = "Catalog.Products.Form.ListForm.Attribute.List"; //$NON-NLS-1$
+        DcsSettingsWriter.SettingsResult added = DcsSettingsWriter.planDynamicList(null, "upsert", //$NON-NLS-1$
+            "chart", address(root + "#/listSettings/items"), //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"kind\":\"chart\",\"selection\":{\"items\":[{\"kind\":\"auto\"}]}}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse(added.isSuccess());
+        assertTrue(added.error(), added.error().contains("cannot gain or change a chart")); //$NON-NLS-1$
+        assertTrue(added.error(), added.error().contains(root + "#/listSettings")); //$NON-NLS-1$
+
+        DataCompositionSettings withChart = plan(json("{\"items\":[{\"kind\":\"chart\"}]}")); //$NON-NLS-1$
+        DcsSettingsWriter.SettingsResult unrelated = DcsSettingsWriter.planDynamicList(withChart,
+            "upsert", "selection", address(root + "#/listSettings/selection"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            json("{\"items\":[{\"kind\":\"auto\"}]}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue("an edit that leaves an existing chart alone must pass", unrelated.isSuccess()); //$NON-NLS-1$
+
+        DcsSettingsWriter.SettingsResult removed = DcsSettingsWriter.planDynamicList(withChart,
+            "remove", "chart", address(root + "#/listSettings/items/0"), null, LANGUAGES); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue("removing a chart adds nothing to check", removed.isSuccess()); //$NON-NLS-1$
     }
 
     @Test
@@ -2108,6 +2314,24 @@ public class DcsSettingsWriterTest
         }
     }
 
+    private static void seedChartOutputParameters(DataCompositionChart chart)
+    {
+        com._1c.g5.v8.dt.dcs.model.settings.DcsFactory factory =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE;
+        com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartOutputParameterValues chartValues =
+            factory.createDataCompositionChartOutputParameterValues();
+        chartValues.getItems().add(settingsParameter("Title")); //$NON-NLS-1$
+        chart.setOutputParameters(chartValues);
+        for (DataCompositionChartGroup group : Arrays.asList(chart.getPoints().get(0),
+            chart.getSeries().get(0)))
+        {
+            com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartGroupOutputParameterValues values =
+                factory.createDataCompositionChartGroupOutputParameterValues();
+            values.getItems().add(settingsParameter("Title")); //$NON-NLS-1$
+            group.setOutputParameters(values);
+        }
+    }
+
     private static SettingsParameterValue settingsParameter(String name)
     {
         SettingsParameterValue result = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
@@ -2159,16 +2383,6 @@ public class DcsSettingsWriterTest
     private static JsonObject json(String source)
     {
         return JsonParser.parseString(source).getAsJsonObject();
-    }
-
-    private static void assertUnsupportedChart(String error)
-    {
-        assertTrue(error, error.contains("DataCompositionChart")); //$NON-NLS-1$
-        assertTrue(error, error.contains("authoring it is not supported by this tool")); //$NON-NLS-1$
-        assertTrue(error, error.contains("action='replace', type='schema'")); //$NON-NLS-1$
-        assertTrue(error, error.contains("body={xml:...}")); //$NON-NLS-1$
-        assertTrue(error, error.contains("bare schema root")); //$NON-NLS-1$
-        assertFalse(error, error.contains("no public DCS type")); //$NON-NLS-1$
     }
 
     private static DcsAvailableParameterCollection outputParameters()
