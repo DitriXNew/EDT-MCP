@@ -11,6 +11,7 @@ EDT must be launched with `-DnativeFormBufferedLayoutRender=true` in the `1cedt.
 ## Parameter details
 - `projectName` - EDT project name. **Required when `formPath` is specified**; omitting it then returns the error "projectName is required when formPath is specified". Ignored when targeting the active editor.
 - `formPath` - metadata FQN of the form. If given, the tool opens and activates that form automatically, waits for the WYSIWYG page, then captures it. If omitted, the currently active form editor is captured.
+- `showElement` - programmatic name of a form element to bring into view before capturing, typically a page of a Pages group (case-insensitive). Every Pages group enclosing the element switches to the page holding it, nested groups included - the same as selecting the element in the form designer. Without it the capture shows the designer's current page, which is the first one after the form opens or after `refresh: true`. The switch applies to this capture only and is done after the refresh render, so the two can be combined. An unknown name fails with an explicit error; `get_metadata_details` with the form FQN lists the element names.
 - `refresh` - force a **real re-render** before capturing; default `false`. Set `true` if the form was just edited and the rendered image may be stale. With `refresh: true` the previously rendered buffer is never returned: if the re-render cannot be completed in time the tool fails with an explicit error ("refresh=true was requested but the form could not be re-rendered in time...") instead of silently returning the pre-edit image; retry, or call with `refresh: false` to accept the last rendered image.
 
 ### formPath format
@@ -22,6 +23,7 @@ EDT must be launched with `-DnativeFormBufferedLayoutRender=true` in the `1cedt.
 ## Examples
 - Active editor, default: `{}`.
 - Specific form: `{projectName: "MyProj", formPath: "Catalog.Products.Forms.ItemForm"}`.
+- A specific page: `{projectName: "MyProj", formPath: "Document.SalesOrder.Forms.DocumentForm", showElement: "DeliveryPage"}`.
 - Force refresh first: `{projectName: "MyProj", formPath: "CommonForm.MyForm", refresh: true}`.
 
 ## Notes & gotchas

@@ -2142,6 +2142,9 @@
         "refresh": {
           "description": "Force a real WYSIWYG re-render before capture; fails with an explicit error instead of returning a stale image when the re-render cannot be completed (default: false)",
           "type": "boolean"
+        },
+        "showElement": {
+          "type": "string"
         }
       },
       "required": [],
