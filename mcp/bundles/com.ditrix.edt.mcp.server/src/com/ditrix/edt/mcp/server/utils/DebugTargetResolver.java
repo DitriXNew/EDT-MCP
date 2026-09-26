@@ -189,6 +189,7 @@ public final class DebugTargetResolver
      * @param launches the launches registered in the launch manager
      * @param serverTargets the debug-server targets
      * @return {@code true} when every other live target among both views is {@code target} itself
+     *     and no other active debug launch is still without a target
      */
     static boolean isSoleLiveTarget(IDebugTarget target, ILaunch[] launches,
         List<DebugServerTargetSupport.ServerTarget> serverTargets)
@@ -197,12 +198,19 @@ public final class DebugTargetResolver
         {
             return false;
         }
+        ILaunch ownLaunch = target.getLaunch();
         for (ILaunch launch : launches)
         {
             if (DebugSessionRegistry.isActiveDebugLaunch(launch)
                 && LaunchConfigUtils.getApplicationIdFor(launch) != null)
             {
-                for (IDebugTarget other : launch.getDebugTargets())
+                IDebugTarget[] targets = launch.getDebugTargets();
+                // A debug launch still starting has no target yet, but it is a second session.
+                if (targets.length == 0 && launch != ownLaunch)
+                {
+                    return false;
+                }
+                for (IDebugTarget other : targets)
                 {
                     if (isOtherLiveTarget(other, target))
                     {

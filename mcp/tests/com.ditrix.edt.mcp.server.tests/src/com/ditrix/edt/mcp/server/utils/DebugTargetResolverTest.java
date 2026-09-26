@@ -230,11 +230,34 @@ public class DebugTargetResolverTest
         IDebugTarget server = mock(IDebugTarget.class);
         ILaunch[] launches = {
             mockLaunch(ILaunchManager.DEBUG_MODE, "Server", server), //$NON-NLS-1$
-            mockLaunch(ILaunchManager.DEBUG_MODE, "Client", server), //$NON-NLS-1$
-            mockLaunch(ILaunchManager.DEBUG_MODE, "Starting") }; //$NON-NLS-1$
+            mockLaunch(ILaunchManager.DEBUG_MODE, "Client", server) }; //$NON-NLS-1$
 
         assertTrue(DebugTargetResolver.isSoleLiveTarget(server, launches, List.of(serverView(server))));
         assertTrue(DebugTargetResolver.isSoleLiveTarget(server, new ILaunch[0], NO_SERVER_TARGETS));
+    }
+
+    @Test
+    public void testADebugLaunchStillWithoutATargetIsASecondSession() throws Exception
+    {
+        // The other launch has not added its target yet; pausing the lone server target would
+        // pick one of two sessions.
+        IDebugTarget server = mock(IDebugTarget.class);
+        ILaunch serverLaunch = mockLaunch(ILaunchManager.DEBUG_MODE, "Server", server); //$NON-NLS-1$
+        ILaunch starting = mockLaunch(ILaunchManager.DEBUG_MODE, "Starting"); //$NON-NLS-1$
+
+        assertFalse(DebugTargetResolver.isSoleLiveTarget(server, new ILaunch[] { serverLaunch, starting },
+            List.of(serverView(server))));
+    }
+
+    @Test
+    public void testTheTargetsOwnLaunchWithoutListedTargetsDoesNotCount() throws Exception
+    {
+        IDebugTarget server = mock(IDebugTarget.class);
+        ILaunch own = mockLaunch(ILaunchManager.DEBUG_MODE, "Server"); //$NON-NLS-1$
+        when(server.getLaunch()).thenReturn(own);
+
+        assertTrue(DebugTargetResolver.isSoleLiveTarget(server, new ILaunch[] { own },
+            List.of(serverView(server))));
     }
 
     @Test

@@ -5,7 +5,7 @@ Pauses a debug session that is already running and returns where it is executing
 - You want to inspect variables of running code without knowing where to put a breakpoint.
 
 ## Parameter details
-- `applicationId` - the debug session, in any form `resume` / `wait_for_break` accept (real id, `attach:<configName>`, `launch:<configName>`, `ServerApplication.<app>`). **Optional** if exactly one debug session is active; with none or several active it errors - list them with `debug_status`.
+- `applicationId` - the debug session, in any form `resume` / `wait_for_break` accept (real id, `attach:<configName>`, `launch:<configName>`, `ServerApplication.<app>`). **Optional** only when exactly one live debug target exists and no other debug launch is starting; otherwise it errors - list them with `debug_status`. A client launched against a debug-mode standalone server can show as two targets (the client's and the server's), which pause different code, so pass the id there.
 - `timeout` - seconds to wait for the pause to take effect (default 10, capped at 600).
 
 ## What you get
