@@ -23,6 +23,7 @@ import com.ditrix.edt.mcp.server.tools.impl.SetInfobaseCredentialsTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateLaunchConfigTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool;
 import com.ditrix.edt.mcp.server.tools.impl.CreateProjectTool;
+import com.ditrix.edt.mcp.server.tools.impl.DebugPauseTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugStatusTool;
 import com.ditrix.edt.mcp.server.tools.impl.DebugYaxunitTestsTool;
 import com.ditrix.edt.mcp.server.tools.impl.DeleteInfobaseTool;
@@ -69,6 +70,7 @@ import com.ditrix.edt.mcp.server.tools.impl.GetTranslationProjectInfoTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetVariablesTool;
 import com.ditrix.edt.mcp.server.tools.impl.GoToDefinitionTool;
 import com.ditrix.edt.mcp.server.tools.impl.ImportConfigurationFromXmlTool;
+import com.ditrix.edt.mcp.server.tools.impl.ImportProjectFromFileTool;
 import com.ditrix.edt.mcp.server.tools.impl.InfobaseSessionsTool;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListBreakpointsTool;
@@ -152,6 +154,7 @@ public final class BuiltInToolRegistrar
         catalogue.add(new ResyncToDiskTool());
         catalogue.add(new ExportConfigurationToXmlTool());
         catalogue.add(new ImportConfigurationFromXmlTool());
+        catalogue.add(new ImportProjectFromFileTool());
         catalogue.add(new BuildExternalObjectsTool());
         catalogue.add(new ExportConfigurationToFileTool());
         catalogue.add(new DeleteProjectTool());
@@ -210,6 +213,7 @@ public final class BuiltInToolRegistrar
         catalogue.add(new SetVariableTool());
         catalogue.add(new StepTool());
         catalogue.add(new ResumeTool());
+        catalogue.add(new DebugPauseTool());
         catalogue.add(new EvaluateExpressionTool());
         catalogue.add(new DebugYaxunitTestsTool()); // NOSONAR deprecated EDT API used intentionally (no non-deprecated equivalent here)
         catalogue.add(new DebugStatusTool());

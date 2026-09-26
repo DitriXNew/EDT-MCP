@@ -966,6 +966,77 @@
   },
   {
     "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Pause a running 1C debug session now and return where it is executing (thread and stack frames); unlike wait_for_break, it requests the suspend itself. Parameters and examples: get_tool_guide('debug_pause').",
+    "inputSchema": {
+      "properties": {
+        "applicationId": {
+          "type": "string"
+        },
+        "timeout": {
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "debug_pause",
+    "outputSchema": {
+      "properties": {
+        "alreadySuspended": {
+          "type": "boolean"
+        },
+        "applicationId": {
+          "type": "string"
+        },
+        "autoResolved": {
+          "type": "boolean"
+        },
+        "frames": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "message": {
+          "type": "string"
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "serverTarget": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "threadId": {
+          "type": "integer"
+        },
+        "threadName": {
+          "type": "string"
+        },
+        "topFrameRef": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "annotations": {
       "idempotentHint": true,
       "openWorldHint": false,
       "readOnlyHint": true
@@ -3037,6 +3108,41 @@
       "type": "object"
     },
     "name": "import_configuration_from_xml",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Create a NEW EDT project from a 1C binary file: .cf (configuration), .cfe (extension; baseProjectName required) or .epf/.erf (external data processor/report). Needs an installed 1C:Enterprise platform. Runs in background: an unfinished call returns a jobId - poll get_job_status, do not call again. Parameters and examples: get_tool_guide('import_project_from_file').",
+    "inputSchema": {
+      "properties": {
+        "baseProjectName": {
+          "description": "Configuration project the result depends on: REQUIRED for .cfe, optional for .epf/.erf, refused for .cf.",
+          "type": "string"
+        },
+        "filePath": {
+          "type": "string"
+        },
+        "platformVersion": {
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "waitSeconds": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "filePath",
+        "projectName"
+      ],
+      "type": "object"
+    },
+    "name": "import_project_from_file",
     "outputSchema": null
   },
   {

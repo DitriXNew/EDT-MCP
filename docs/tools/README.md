@@ -62,10 +62,11 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 
 ## Debug
 
-> Runtime debugging: launch/attach, breakpoints, step/resume, variables, expression evaluation.
+> Runtime debugging: launch/attach, breakpoints, step/resume/pause, variables, expression evaluation.
 
 | Tool | Description |
 |------|-------------|
+| [`debug_pause`](debug_pause.md) | Pause a running 1C debug session now and return where it is executing (thread and stack frames); unlike wait_for_break, it requests the suspend itself. Param… |
 | [`debug_status`](debug_status.md) | Report active debug sessions: applicationId (real or synthetic 'attach:<name>' / 'launch:<name>'), launch configuration name/type, mode (debug/run), whether… |
 | [`evaluate_expression`](evaluate_expression.md) | Evaluate a BSL expression in the context of a suspended stack frame. Pass frameRef from wait_for_break and the expression text. WARNING: this executes arbitr… |
 | [`get_applications`](get_applications.md) | Get list of applications (infobases) for a project. Returns application ID, name, type, and update state. Application ID is required for update_database and… |
@@ -157,6 +158,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`get_problem_summary`](get_problem_summary.md) | Get problem summary with counts grouped by project and EDT severity level (ERRORS, BLOCKER, CRITICAL, MAJOR, MINOR, TRIVIAL). Use this for severity totals on… |
 | [`get_project_errors`](get_project_errors.md) | List EDT configuration problems (validation markers) with optional project / severity / check-id / object filters. Each row carries the check code, message,… |
 | [`import_configuration_from_xml`](import_configuration_from_xml.md) | Import a configuration from a directory of XML files into a NEW EDT project (EDT menu: Import); the reverse of export_configuration_to_xml. The projectName m… |
+| [`import_project_from_file`](import_project_from_file.md) | Create a NEW EDT project from a 1C binary file: .cf (configuration), .cfe (extension; baseProjectName required) or .epf/.erf (external data processor/report)… |
 | [`infobase_sessions`](infobase_sessions.md) | List or terminate sessions on a running standalone-server infobase. DESTRUCTIVE for terminate: pass confirm=true; bulk termination skips Designer, while its… |
 | [`list_git_branches`](list_git_branches.md) | List a project's git branches: local and remote-tracking, with the CURRENT branch marked (detached HEAD flagged), plus the 1C application/infobase each branc… |
 | [`resync_to_disk`](resync_to_disk.md) | Bulk re-synchronize the in-memory BM model to the on-disk src/ .mdo files and report BM-to-disk desync. Direction: MODEL -> DISK (writes the model out to src… |

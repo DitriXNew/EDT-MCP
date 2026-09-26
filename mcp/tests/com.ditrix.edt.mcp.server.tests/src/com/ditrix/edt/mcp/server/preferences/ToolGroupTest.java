@@ -164,6 +164,7 @@ public class ToolGroupTest
         assertTrue(tools.contains("get_configuration_properties"));
         assertTrue(tools.contains("export_configuration_to_xml"));
         assertTrue(tools.contains("import_configuration_from_xml"));
+        assertTrue(tools.contains("import_project_from_file")); //$NON-NLS-1$
         assertTrue(tools.contains("delete_project"));
         assertTrue(tools.contains("resync_to_disk"));
         assertTrue(tools.contains("create_project"));
@@ -173,7 +174,7 @@ public class ToolGroupTest
         assertTrue(tools.contains("enable_toolset")); //$NON-NLS-1$
         assertTrue(tools.contains("get_event_log")); //$NON-NLS-1$
         assertTrue(tools.contains("get_mcp_history")); //$NON-NLS-1$
-        assertEquals(17, tools.size());
+        assertEquals(18, tools.size());
     }
 
     @Test
@@ -188,7 +189,9 @@ public class ToolGroupTest
         // The workspace-wide break-on-error switch sits in the same group as the line
         // breakpoints it complements: whoever may set one may set the other.
         assertTrue(tools.contains("set_error_breakpoint")); //$NON-NLS-1$
-        assertEquals(15, tools.size());
+        // Pausing a running session is the counterpart of resume, so it rides the same group.
+        assertTrue(tools.contains("debug_pause")); //$NON-NLS-1$
+        assertEquals(16, tools.size());
     }
 
     @Test

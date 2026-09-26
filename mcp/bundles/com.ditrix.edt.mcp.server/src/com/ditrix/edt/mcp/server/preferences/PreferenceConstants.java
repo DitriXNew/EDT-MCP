@@ -102,10 +102,12 @@ public final class PreferenceConstants
      * 7 = a stored Analysis Only / Code Review profile gains the destructive tools it missed -
      * {@code merge_rules} (new in the release after 2.15.1) and {@code delete_project}; 8 = those
      * stored read-only profiles gain the new destructive {@code infobase_sessions} tool; 9 = they
-     * gain three older tools whose own descriptions declare them destructive; 10 = they gain the new
-     * {@code export_configuration_to_file} infobase dump.
+     * gain three older tools whose own descriptions declare them destructive; 10 = a stored
+     * no-debug preset gains {@code debug_pause}, a tool that did not exist when it was saved;
+     * 11 = stored read-only profiles gain the new {@code import_project_from_file} project importer;
+     * 12 = they gain the new {@code export_configuration_to_file} infobase dump.
      */
-    public static final int TOOL_PREFS_MIGRATION_VERSION = 10;
+    public static final int TOOL_PREFS_MIGRATION_VERSION = 12;
 
     /** The raw {@code git} command tool is powerful, so it ships DISABLED by default (opt-in). */
     public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate"; //$NON-NLS-1$

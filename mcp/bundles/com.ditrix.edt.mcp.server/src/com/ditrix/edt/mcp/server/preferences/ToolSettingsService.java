@@ -73,32 +73,42 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         "delete_infobase", //$NON-NLS-1$
         "delete_metadata"); //$NON-NLS-1$
 
-    private static final Set<String> READ_ONLY_V10_ADDITIONS = Set.of(
+    private static final Set<String> NO_DEBUG_V10_ADDITIONS = Set.of(
+        "debug_pause"); //$NON-NLS-1$
+
+    private static final Set<String> READ_ONLY_V11_ADDITIONS = Set.of(
+        "import_project_from_file"); //$NON-NLS-1$
+
+    private static final Set<String> READ_ONLY_V12_ADDITIONS = Set.of(
         "export_configuration_to_file"); //$NON-NLS-1$
 
     /** Actual disabled-name additions registered for each Analysis Only migration. */
-    static final Map<Integer, Set<String>> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION = Map.of(
-        1, STORED_PROFILE_V1_ADDITIONS,
-        2, READ_ONLY_V2_ADDITIONS,
-        3, STORED_PROFILE_V3_ADDITIONS,
-        4, ANALYSIS_ONLY_V4_ADDITIONS,
-        6, NO_DEBUG_V6_ADDITIONS,
-        7, READ_ONLY_V7_ADDITIONS,
-        8, READ_ONLY_V8_ADDITIONS,
-        9, READ_ONLY_V9_ADDITIONS,
-        10, READ_ONLY_V10_ADDITIONS);
+    static final Map<Integer, Set<String>> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
+        Map.entry(1, STORED_PROFILE_V1_ADDITIONS),
+        Map.entry(2, READ_ONLY_V2_ADDITIONS),
+        Map.entry(3, STORED_PROFILE_V3_ADDITIONS),
+        Map.entry(4, ANALYSIS_ONLY_V4_ADDITIONS),
+        Map.entry(6, NO_DEBUG_V6_ADDITIONS),
+        Map.entry(7, READ_ONLY_V7_ADDITIONS),
+        Map.entry(8, READ_ONLY_V8_ADDITIONS),
+        Map.entry(9, READ_ONLY_V9_ADDITIONS),
+        Map.entry(10, NO_DEBUG_V10_ADDITIONS),
+        Map.entry(11, READ_ONLY_V11_ADDITIONS),
+        Map.entry(12, READ_ONLY_V12_ADDITIONS));
 
     /** Actual disabled-name additions registered for each Code Review migration. */
-    static final Map<Integer, Set<String>> CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION = Map.of(
-        1, STORED_PROFILE_V1_ADDITIONS,
-        2, READ_ONLY_V2_ADDITIONS,
-        3, STORED_PROFILE_V3_ADDITIONS,
-        4, CODE_REVIEW_V4_ADDITIONS,
-        6, NO_DEBUG_V6_ADDITIONS,
-        7, READ_ONLY_V7_ADDITIONS,
-        8, READ_ONLY_V8_ADDITIONS,
-        9, READ_ONLY_V9_ADDITIONS,
-        10, READ_ONLY_V10_ADDITIONS);
+    static final Map<Integer, Set<String>> CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION = Map.ofEntries(
+        Map.entry(1, STORED_PROFILE_V1_ADDITIONS),
+        Map.entry(2, READ_ONLY_V2_ADDITIONS),
+        Map.entry(3, STORED_PROFILE_V3_ADDITIONS),
+        Map.entry(4, CODE_REVIEW_V4_ADDITIONS),
+        Map.entry(6, NO_DEBUG_V6_ADDITIONS),
+        Map.entry(7, READ_ONLY_V7_ADDITIONS),
+        Map.entry(8, READ_ONLY_V8_ADDITIONS),
+        Map.entry(9, READ_ONLY_V9_ADDITIONS),
+        Map.entry(10, NO_DEBUG_V10_ADDITIONS),
+        Map.entry(11, READ_ONLY_V11_ADDITIONS),
+        Map.entry(12, READ_ONLY_V12_ADDITIONS));
 
     /*
      * Frozen recognition shapes: what any historical stored profile of this preset must contain.
@@ -340,6 +350,17 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             }
             if (storedVersion < 10)
             {
+                // debug_pause is new: a stored no-debug preset cannot name it, and a denylist
+                // would otherwise hand it a tool that suspends a running session.
+                changed |= migrateDebugPauseIntoNoDebugPresets(disabled);
+            }
+            if (storedVersion < 11)
+            {
+                // import_project_from_file is new and creates a project from a file.
+                changed |= migrateProjectFileImportIntoReadOnlyPresets(disabled);
+            }
+            if (storedVersion < 12)
+            {
                 // export_configuration_to_file is new and drives the Designer against an infobase.
                 changed |= migrateConfigurationFileExportIntoReadOnlyPresets(disabled);
             }
@@ -410,6 +431,24 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             || disabled.containsAll(DEVELOPMENT_RECOGNITION_SHAPE))
         {
             return disabled.addAll(NO_DEBUG_V6_ADDITIONS);
+        }
+        return false;
+    }
+
+    /**
+     * Adds {@code debug_pause} to a store that already expresses a NO-DEBUG profile - the version 6
+     * step again, one debugging tool later, recognized by the same frozen shapes.
+     *
+     * @param disabled the mutable stored disabled-tools set; modified in place
+     * @return {@code true} when the tool was added
+     */
+    private static boolean migrateDebugPauseIntoNoDebugPresets(Set<String> disabled)
+    {
+        if (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE)
+            || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE)
+            || disabled.containsAll(DEVELOPMENT_RECOGNITION_SHAPE))
+        {
+            return disabled.addAll(NO_DEBUG_V10_ADDITIONS);
         }
         return false;
     }
@@ -496,7 +535,23 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         return false;
     }
 
-    /** Adds the v10 infobase-dump tool only to stored profiles still recognized as read-only. */
+    /** Adds the v11 project importer only to stored profiles still recognized as read-only. */
+    private static boolean migrateProjectFileImportIntoReadOnlyPresets(Set<String> disabled)
+    {
+        if (disabled.containsAll(READ_ONLY_V7_ADDITIONS)
+            && disabled.containsAll(READ_ONLY_V8_ADDITIONS)
+            && disabled.containsAll(READ_ONLY_V9_ADDITIONS)
+            // A profile that re-enabled the configuration importer wants importers.
+            && disabled.contains("import_configuration_from_xml") //$NON-NLS-1$
+            && (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE)
+                || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE)))
+        {
+            return disabled.addAll(READ_ONLY_V11_ADDITIONS);
+        }
+        return false;
+    }
+
+    /** Adds the v12 infobase-dump tool only to stored profiles still recognized as read-only. */
     private static boolean migrateConfigurationFileExportIntoReadOnlyPresets(Set<String> disabled)
     {
         if (disabled.containsAll(READ_ONLY_V7_ADDITIONS)
@@ -505,7 +560,7 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             && (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE)
                 || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE)))
         {
-            return disabled.addAll(READ_ONLY_V10_ADDITIONS);
+            return disabled.addAll(READ_ONLY_V12_ADDITIONS);
         }
         return false;
     }

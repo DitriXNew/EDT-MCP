@@ -225,13 +225,15 @@ public final class BackgroundJobs implements AutoCloseable
         private final List<ProgressEntry> progress;
         private final Object result;
         private final String errorMessage;
+        private final String errorMarker;
         private final String cancellationPreview;
         private final boolean claimed;
         private final boolean cancellationHandlerInFlight;
 
         JobSnapshot(String id, String owningTool, Status status, long startedAtMs, long completedAtMs,
             long elapsedMs, List<ProgressEntry> progress, Object result, String errorMessage,
-            String cancellationPreview, boolean claimed, boolean cancellationHandlerInFlight)
+            String errorMarker, String cancellationPreview, boolean claimed,
+            boolean cancellationHandlerInFlight)
         {
             this.id = id;
             this.owningTool = owningTool;
@@ -242,6 +244,7 @@ public final class BackgroundJobs implements AutoCloseable
             this.progress = Collections.unmodifiableList(progress);
             this.result = result;
             this.errorMessage = errorMessage;
+            this.errorMarker = errorMarker;
             this.cancellationPreview = cancellationPreview;
             this.claimed = claimed;
             this.cancellationHandlerInFlight = cancellationHandlerInFlight;
@@ -291,6 +294,15 @@ public final class BackgroundJobs implements AutoCloseable
         public String getErrorMessage()
         {
             return errorMessage;
+        }
+
+        /**
+         * @return the error-contract marker a {@link MarkedFailure} published with the failure,
+         *     e.g. {@code mutationCommitted}, or {@code null}
+         */
+        public String getErrorMarker()
+        {
+            return errorMarker;
         }
 
         /** @return destructive committed-cancellation warning, or {@code null} when unsupported */
@@ -517,6 +529,33 @@ public final class BackgroundJobs implements AutoCloseable
     public interface JobWork
     {
         Object run(ProgressReporter progress) throws Exception; // NOSONAR arbitrary background work
+    }
+
+    /**
+     * A failure of work that changed something before it failed. The marker is kept with the
+     * failure, so a caller polling the job learns what a caller of the owning tool would.
+     */
+    public static final class MarkedFailure extends Exception
+    {
+        private static final long serialVersionUID = 1L;
+
+        private final String marker;
+
+        /**
+         * @param message the failure to publish
+         * @param marker the error-contract marker, e.g. {@code mutationCommitted}, or {@code null}
+         */
+        public MarkedFailure(String message, String marker)
+        {
+            super(message);
+            this.marker = marker;
+        }
+
+        /** @return the marker, or {@code null} */
+        public String getMarker()
+        {
+            return marker;
+        }
     }
 
     /**
@@ -1004,6 +1043,10 @@ public final class BackgroundJobs implements AutoCloseable
             Thread.currentThread().interrupt();
             record.fail("Background job was interrupted."); //$NON-NLS-1$
         }
+        catch (MarkedFailure e)
+        {
+            record.fail(failureMessage(e), null, e.getMarker());
+        }
         catch (Exception e) // NOSONAR job failures are retained for polling
         {
             record.fail(failureMessage(e));
@@ -1102,10 +1145,12 @@ public final class BackgroundJobs implements AutoCloseable
         private PendingTerminalOutcome pendingTerminalOutcome;
         private Object pendingResult;
         private String pendingErrorMessage;
+        private String pendingErrorMarker;
         private long completedAtMs;
         private long completedAtNanos;
         private Object result;
         private String errorMessage;
+        private String errorMarker;
         private Future<?> workFuture;
         private ScheduledFuture<?> deadlineFuture;
         /** Gives the admission slot back; see {@link #releaseSlot()}. */
@@ -1267,7 +1312,7 @@ public final class BackgroundJobs implements AutoCloseable
 
         boolean fail(String message)
         {
-            return fail(message, null);
+            return fail(message, null, null);
         }
 
         /**
@@ -1279,7 +1324,7 @@ public final class BackgroundJobs implements AutoCloseable
          */
         boolean failUnlessCommitted(String message, String committedNote)
         {
-            return fail(message, committedNote);
+            return fail(message, committedNote, null);
         }
 
         /**
@@ -1488,7 +1533,7 @@ public final class BackgroundJobs implements AutoCloseable
             completed.countDown();
         }
 
-        private boolean fail(String message, String committedNote)
+        private boolean fail(String message, String committedNote, String marker)
         {
             ScheduledFuture<?> deadline;
             synchronized (this)
@@ -1508,6 +1553,7 @@ public final class BackgroundJobs implements AutoCloseable
                 {
                     pendingTerminalOutcome = PendingTerminalOutcome.FAILED;
                     pendingErrorMessage = message;
+                    pendingErrorMarker = marker;
                     return true;
                 }
                 if (cancellationRequested)
@@ -1520,6 +1566,7 @@ public final class BackgroundJobs implements AutoCloseable
                     "Failed: " + message)); //$NON-NLS-1$
                 status = Status.FAILED;
                 errorMessage = message;
+                errorMarker = marker;
                 completedAtMs = System.currentTimeMillis();
                 completedAtNanos = System.nanoTime();
                 deadline = deadlineFuture;
@@ -1556,6 +1603,7 @@ public final class BackgroundJobs implements AutoCloseable
                     "Failed: " + pendingErrorMessage)); //$NON-NLS-1$
                 status = Status.FAILED;
                 errorMessage = pendingErrorMessage;
+                errorMarker = pendingErrorMarker;
             }
             completedAtMs = System.currentTimeMillis();
             completedAtNanos = System.nanoTime();
@@ -1572,6 +1620,7 @@ public final class BackgroundJobs implements AutoCloseable
             pendingTerminalOutcome = null;
             pendingResult = null;
             pendingErrorMessage = null;
+            pendingErrorMarker = null;
         }
 
         /**
@@ -1640,7 +1689,7 @@ public final class BackgroundJobs implements AutoCloseable
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(
                 Math.max(0L, endNanos - startedAtNanos));
             return new JobSnapshot(id, owningTool, status, startedAtMs, completedAtMs, elapsedMs,
-                new ArrayList<>(progress), result, errorMessage,
+                new ArrayList<>(progress), result, errorMessage, errorMarker,
                 cancellation != null ? cancellation.previewWarning : null, isClaimed(),
                 cancellationHandlerInFlight);
         }
