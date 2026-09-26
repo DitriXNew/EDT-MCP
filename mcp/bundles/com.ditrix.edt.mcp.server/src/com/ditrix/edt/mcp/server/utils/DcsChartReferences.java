@@ -145,7 +145,7 @@ public final class DcsChartReferences
     /**
      * The broken chart references of a schema, in document order and counted by kind. A kind is
      * a settings tree plus role and field: within one tree a reference resolves the same way in
-     * every chart, so a count per tree cannot trade one chart's fix for another chart's break.
+     * every chart, so a write may move a break between charts of one tree but never add one.
      */
     public static final class Census
     {
@@ -231,7 +231,7 @@ public final class DcsChartReferences
         for (int t = 0; t < trees.size(); t++)
         {
             String tree = identities.get(t);
-            Map<String, DataCompositionChart> charts = charts(trees.get(t));
+            Map<String, DataCompositionChart> charts = drawnCharts(trees.get(t));
             if (charts.isEmpty()) continue;
             if (schemaLevel == null) schemaLevel = new Resolver(schema);
             Resolver resolver = schemaLevel.withUserFields(trees.get(t));
@@ -283,7 +283,18 @@ public final class DcsChartReferences
         Map<String, DataCompositionChart> result = new LinkedHashMap<>();
         if (settings != null)
         {
-            collectCharts(settings.getItems(), "items", result); //$NON-NLS-1$
+            collectCharts(settings.getItems(), "items", false, result); //$NON-NLS-1$
+        }
+        return result;
+    }
+
+    /** Charts of a settings tree that are drawn: neither they nor a structure group above is off. */
+    static Map<String, DataCompositionChart> drawnCharts(DataCompositionSettings settings)
+    {
+        Map<String, DataCompositionChart> result = new LinkedHashMap<>();
+        if (settings != null)
+        {
+            collectCharts(settings.getItems(), "items", true, result); //$NON-NLS-1$
         }
         return result;
     }
@@ -326,7 +337,7 @@ public final class DcsChartReferences
         return false;
     }
 
-    private static void collectCharts(List<StructureItem> items, String where,
+    private static void collectCharts(List<StructureItem> items, String where, boolean drawnOnly,
         Map<String, DataCompositionChart> result)
     {
         for (int i = 0; i < items.size(); i++)
@@ -335,11 +346,16 @@ public final class DcsChartReferences
             String address = where + "/" + i; //$NON-NLS-1$
             if (item instanceof DataCompositionChart)
             {
-                result.put(address, (DataCompositionChart)item);
+                if (!drawnOnly || ((DataCompositionChart)item).isUse())
+                {
+                    result.put(address, (DataCompositionChart)item);
+                }
             }
-            else if (item instanceof DataCompositionGroup)
+            else if (item instanceof DataCompositionGroup
+                && (!drawnOnly || ((DataCompositionGroup)item).isUse()))
             {
-                collectCharts(((DataCompositionGroup)item).getItems(), address + "/items", result); //$NON-NLS-1$
+                collectCharts(((DataCompositionGroup)item).getItems(), address + "/items", drawnOnly, //$NON-NLS-1$
+                    result);
             }
         }
     }
@@ -649,11 +665,6 @@ public final class DcsChartReferences
         List<Problem> problems(DataCompositionChart chart, String chartAddress)
         {
             List<Problem> result = new ArrayList<>();
-            if (!chart.isUse())
-            {
-                // A switched-off chart is not drawn, so none of its references can break it.
-                return result;
-            }
             boolean measured = false;
             for (Reference reference : references(chart, chartAddress))
             {

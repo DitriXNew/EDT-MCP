@@ -28,6 +28,7 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaFieldUseRestrictio
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalField;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
@@ -431,6 +432,24 @@ public class DcsChartReferencesTest
 
         chart.setUse(false);
         assertNull("a switched-off chart", after(before, schema)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAChartUnderASwitchedOffGroupIsJudgedOnceTheGroupIsSwitchedOn()
+    {
+        DataCompositionSchema schema = schema();
+        schema.setDefaultSettings(settings(chart(points("Missing"), "", measures("Amount")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        DataCompositionSettings settings = schema.getDefaultSettings();
+        DataCompositionGroup group = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionGroup();
+        group.getItems().add(settings.getItems().get(0));
+        settings.getItems().add(group);
+        group.setUse(false);
+        DcsChartReferences.Census before = DcsChartReferences.census(schema, ROOT);
+        assertEquals("a chart under a switched-off group is not drawn", 0, before.size()); //$NON-NLS-1$
+
+        group.setUse(true);
+        assertNotNull("switching the group on draws the broken chart", after(before, schema)); //$NON-NLS-1$
     }
 
     /** An unnamed variant and one named like its index are separate trees, whatever moves. */
