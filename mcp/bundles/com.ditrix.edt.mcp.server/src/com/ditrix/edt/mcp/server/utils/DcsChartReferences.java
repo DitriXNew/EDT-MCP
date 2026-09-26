@@ -19,6 +19,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
+import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
@@ -292,6 +293,18 @@ public final class DcsChartReferences
     private static boolean drawn(DataCompositionGroup group)
     {
         return group.isUse() && group.getGroupState() == DataCompositionSettingsItemState.ENABLED;
+    }
+
+    /** Whether the chart is drawn as {@link #drawnCharts} judges it: it and every structure group above are on. */
+    public static boolean isDrawn(DataCompositionChart chart)
+    {
+        if (!chart.isUse()) return false;
+        for (EObject container = chart.eContainer(); container != null
+            && !(container instanceof DataCompositionSettings); container = container.eContainer())
+        {
+            if (container instanceof DataCompositionGroup && !drawn((DataCompositionGroup)container)) return false;
+        }
+        return true;
     }
 
     /** Charts of a settings tree that are drawn: neither they nor a structure group above is off. */

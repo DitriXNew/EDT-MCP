@@ -25,6 +25,8 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameterCollection;
+import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
+import com._1c.g5.v8.dt.form.model.FormFactory;
 import com._1c.g5.v8.dt.mcore.BooleanValue;
 import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.FontValue;
@@ -229,6 +231,53 @@ public class DcsOptionsTest
         assertTrue(markdown, !markdown.contains("groupFields.items[]")); //$NON-NLS-1$
         assertTrue(markdown, !markdown.contains("output parameter")); //$NON-NLS-1$
         assertTrue(markdown, markdown.contains("**Total:** 2 options")); //$NON-NLS-1$
+    }
+
+    /** A dynamic list refuses every chart change, so its options offer no chart vocabulary. */
+    @Test
+    public void testDynamicListRefusesChartOptions()
+    {
+        com._1c.g5.v8.dt.dcs.model.settings.DcsFactory factory =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE;
+        DataCompositionSettings settings = factory.createDataCompositionSettings();
+        DataCompositionChart chart = factory.createDataCompositionChart();
+        DataCompositionChartGroup point = factory.createDataCompositionChartGroup();
+        DataCompositionGroupFields fields = factory.createDataCompositionGroupFields();
+        fields.getItems().add(factory.createDataCompositionGroupField());
+        point.setGroupFields(fields);
+        chart.getPoints().add(point);
+        settings.getItems().add(chart);
+        DynamicListExtInfo list = FormFactory.eINSTANCE.createDynamicListExtInfo();
+        list.setListSettings(settings);
+        String root = "Catalog.Products.Form.ListForm.Attribute.List"; //$NON-NLS-1$
+
+        String[][] refused = {
+            {root, "chart"}, //$NON-NLS-1$
+            {root + "#/listSettings/items/0", "chart"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {root + "#/listSettings/items/0/points/0", "chart"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {root + "#/listSettings/items/0/points/0/groupFields/items/0", "grouping"}}; //$NON-NLS-1$ //$NON-NLS-2$
+        for (String[] request : refused)
+        {
+            DcsOptions.Result result = dynamicListOptions(list, request[0], request[1]);
+            assertTrue(request[0] + " must be refused", !result.isSuccess()); //$NON-NLS-1$
+            assertTrue(result.error(), result.error().contains("A dynamic list draws no chart")); //$NON-NLS-1$
+            assertTrue(result.error(), result.error().contains("'" + request[0] + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(result.error(), result.error().contains("defaultSettings or variants")); //$NON-NLS-1$
+        }
+        DcsOptions.Result appearance = dynamicListOptions(list, root, "conditionalAppearance"); //$NON-NLS-1$
+        assertTrue(appearance.error(), appearance.isSuccess());
+    }
+
+    private static DcsOptions.Result dynamicListOptions(DynamicListExtInfo list, String address,
+        String type)
+    {
+        try (DcsCatalogueTestRuntime.Scope ignored =
+            DcsCatalogueTestRuntime.prepareCatalogues(Version.V8_3_27))
+        {
+            return DcsOptions.render("Catalog.Products.Form.ListForm.Attribute.List", //$NON-NLS-1$
+                TargetKind.DYNAMIC_LIST, list, address(address), type, "en", Version.V8_3_27, //$NON-NLS-1$
+                Integer.valueOf(1000), 0);
+        }
     }
 
     private static String options(DataCompositionSchema schema, String address, String type)

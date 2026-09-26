@@ -17,6 +17,7 @@ import com._1c.g5.v8.dt.dcs.model.core.DataCompositionGroupType;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionPeriodAdditionType;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionSortDirection;
 import com._1c.g5.v8.dt.dcs.model.core.LocalString;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionComparisonType;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceUse;
@@ -65,6 +66,14 @@ public final class DcsOptions
         {
             return Result.failure("A form DCS root supports options only for " //$NON-NLS-1$
                 + "type='conditionalAppearance'; got type='" + type + "'."); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (targetKind == TargetKind.DYNAMIC_LIST
+            && ("chart".equals(type) || insideChart(node.value))) //$NON-NLS-1$
+        {
+            // The dynamic-list writer refuses every chart change, so no chart vocabulary applies.
+            return Result.failure("A dynamic list draws no chart, so '" + address //$NON-NLS-1$
+                + "' has no writable chart options. Charts are authored in a report or template " //$NON-NLS-1$
+                + "schema's defaultSettings or variants; request type='chart' options there."); //$NON-NLS-1$
         }
         if (address.hasPointer() && node.actualType != null && !type.equals(node.actualType))
         {
@@ -144,6 +153,17 @@ public final class DcsOptions
             markdown.append("\n**Next offset:** `").append(end).append("`\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return Result.success(markdown.toString());
+    }
+
+    /** Whether the options node is a chart or lies inside one (an axis group, group field, measure). */
+    private static boolean insideChart(Object value)
+    {
+        for (EObject current = value instanceof EObject ? (EObject)value : null; current != null;
+            current = current.eContainer())
+        {
+            if (current instanceof DataCompositionChart) return true;
+        }
+        return false;
     }
 
     private static void addParameters(List<Option> result, String kind,
