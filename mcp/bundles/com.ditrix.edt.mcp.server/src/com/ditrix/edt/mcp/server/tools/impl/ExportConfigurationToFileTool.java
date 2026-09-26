@@ -773,7 +773,7 @@ public class ExportConfigurationToFileTool implements IMcpTool
         if (result.getOutcome() != BoundedJob.Outcome.COMPLETED)
         {
             abandoned.set(true);
-            ConfigurationFileExportSupport.deleteQuietly(partial);
+            String leftover = removePartial(partial);
             // The caller's infobase lock and dialog suppression stay on while the dump still runs.
             if (BoundedJob.isInconclusive(result.getOutcome()) && !awaitEnd(dumpEnded, DUMP_END_CAP_MS))
             {
@@ -785,12 +785,12 @@ public class ExportConfigurationToFileTool implements IMcpTool
                 // The job is committed, so its message must name what the abandoned dump may leave.
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("The dump was interrupted and abandoned. " //$NON-NLS-1$
-                    + abandonedDumpNote(request.outputFile, partial));
+                    + abandonedDumpNote(request.outputFile, partial) + leftover);
             }
             if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT)
             {
                 throw new IllegalStateException("The dump did not finish within " + seconds(timeout) //$NON-NLS-1$
-                    + " and was abandoned. " + abandonedDumpNote(request.outputFile, partial) //$NON-NLS-1$
+                    + " and was abandoned. " + abandonedDumpNote(request.outputFile, partial) + leftover //$NON-NLS-1$
                     + " Retry, or check the infobase in EDT."); //$NON-NLS-1$
             }
             throw new IllegalStateException("The dump never started (EDT's job queue did not run " //$NON-NLS-1$
@@ -798,9 +798,9 @@ public class ExportConfigurationToFileTool implements IMcpTool
         }
         if (result.getFailure() instanceof OperationCanceledException)
         {
-            ConfigurationFileExportSupport.deleteQuietly(partial);
+            String leftover = removePartial(partial);
             throw new IllegalStateException("The dump was cancelled in EDT (its progress job was " //$NON-NLS-1$
-                + "stopped). " + abandonedDumpNote(request.outputFile, partial) + " Call " + NAME //$NON-NLS-1$ //$NON-NLS-2$
+                + "stopped). " + abandonedDumpNote(request.outputFile, partial) + leftover + " Call " + NAME //$NON-NLS-1$ //$NON-NLS-2$
                 + " again to retry."); //$NON-NLS-1$
         }
         if (result.getFailure() != null)
