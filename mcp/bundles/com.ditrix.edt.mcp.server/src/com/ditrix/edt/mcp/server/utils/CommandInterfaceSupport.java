@@ -944,7 +944,10 @@ public final class CommandInterfaceSupport
         return false;
     }
 
-    /** The platform's own identity rule for command interface references (same object, proxy URI, or BM id). */
+    /**
+     * Identity of command interface references: same object, proxy URI, a standard command by owner
+     * and name, else BM id.
+     */
     static boolean sameObject(EObject a, EObject b)
     {
         if (a == b)
@@ -958,6 +961,13 @@ public final class CommandInterfaceSupport
         if (a.eIsProxy())
         {
             return EcoreUtil.getURI(a).equals(EcoreUtil.getURI(b));
+        }
+        if (a instanceof StandardCommand && b instanceof StandardCommand)
+        {
+            // Transient children of their owner; the .cmi names them by owner and name.
+            String name = ((StandardCommand)a).getName();
+            return name != null && name.equals(((StandardCommand)b).getName()) && a.eContainer() != null
+                && sameObject(a.eContainer(), b.eContainer());
         }
         if (a instanceof IBmObject && b instanceof IBmObject)
         {

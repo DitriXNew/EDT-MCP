@@ -25,11 +25,13 @@ import com._1c.g5.v8.dt.cmi.model.deriveddata.CommandItem;
 import com._1c.g5.v8.dt.cmi.model.deriveddata.CommandItemGroup;
 import com._1c.g5.v8.dt.mcore.Command;
 import com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean;
+import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CommandGroup;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonCommand;
 import com._1c.g5.v8.dt.metadata.mdclass.ForRoleType;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
+import com._1c.g5.v8.dt.metadata.mdclass.StandardCommand;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSection.Group;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSection.Item;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSection.Panel;
@@ -161,6 +163,34 @@ public class CommandInterfaceStaleViewTest
     }
 
     @Test
+    public void testDistinctStandardCommandObjectsAreTheSameByOwnerAndName()
+    {
+        Catalog products = catalog("Products"); //$NON-NLS-1$
+        Catalog orders = catalog("Orders"); //$NON-NLS-1$
+        StandardCommand stored = standardCommand(products, "OpenList"); //$NON-NLS-1$
+        StandardCommand derived = standardCommand(products, "OpenList"); //$NON-NLS-1$
+
+        assertEquals(true, CommandInterfaceSupport.sameObject(stored, derived));
+        assertEquals(false, CommandInterfaceSupport.sameObject(stored, standardCommand(products, "Create"))); //$NON-NLS-1$
+        assertEquals(false, CommandInterfaceSupport.sameObject(stored, standardCommand(orders, "OpenList"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAStandardCommandOrderReadThroughDistinctObjectsIsWritten()
+    {
+        Catalog products = catalog("Products"); //$NON-NLS-1$
+        StandardCommand openList = standardCommand(products, "OpenList"); //$NON-NLS-1$
+        items(derivedTools, openList, print);
+        viewOrder(derivedTools, openList, print);
+        CommandInterface stored = CmiFactory.eINSTANCE.createCommandInterface();
+        // The stored fragment references its own object for the same standard command.
+        storeOrder(stored, toolsGroup, standardCommand(products, "OpenList"), print); //$NON-NLS-1$
+
+        assertNull(CommandInterfaceSupport.staleReason(stored,
+            plan("[{command:'CommonCommand.Print', before:'Catalog.Products.StandardCommand.OpenList'}]"))); //$NON-NLS-1$
+    }
+
+    @Test
     public void testDetachedObjectsAreNotTheSameByTheirMissingId()
     {
         assertEquals(false, CommandInterfaceSupport.sameObject(print, export));
@@ -195,14 +225,24 @@ public class CommandInterfaceStaleViewTest
         group.derived = derived;
         for (CommandItem commandItem : derived.getItems())
         {
-            Item item = new Item("CommonCommand." + ((CommonCommand)commandItem.getCommand()).getName(), null, //$NON-NLS-1$
-                commandItem.getCommand(),
+            Item item = new Item(fqn(commandItem.getCommand()), null, commandItem.getCommand(),
                 CommandInterfaceSupport.visibilityOf(commandItem.getVisibility()),
                 commandItem.isVisibilityCustomized(), commandItem.isGroupCustomized(), true);
             item.derived = commandItem;
             group.items.add(item);
         }
         return group;
+    }
+
+    /** The section address of a fixture command (detached objects have no BM FQN). */
+    private static String fqn(Command command)
+    {
+        if (command instanceof StandardCommand)
+        {
+            return "Catalog." + ((Catalog)command.eContainer()).getName() + ".StandardCommand." //$NON-NLS-1$ //$NON-NLS-2$
+                + ((StandardCommand)command).getName();
+        }
+        return "CommonCommand." + ((CommonCommand)command).getName(); //$NON-NLS-1$
     }
 
     private static CommandGroup group(String name)
@@ -216,6 +256,22 @@ public class CommandInterfaceStaleViewTest
     {
         CommonCommand command = MdClassFactory.eINSTANCE.createCommonCommand();
         command.setName(name);
+        return command;
+    }
+
+    private static Catalog catalog(String name)
+    {
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        catalog.setName(name);
+        return catalog;
+    }
+
+    /** A standard command of {@code owner}, a new object each call, as a separate resolution would give. */
+    private static StandardCommand standardCommand(Catalog owner, String name)
+    {
+        StandardCommand command = MdClassFactory.eINSTANCE.createStandardCommand();
+        command.setName(name);
+        owner.getStandardCommands().add(command);
         return command;
     }
 
