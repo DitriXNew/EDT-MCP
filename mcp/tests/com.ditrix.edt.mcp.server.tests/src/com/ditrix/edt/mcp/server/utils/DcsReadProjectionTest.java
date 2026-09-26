@@ -1334,6 +1334,17 @@ public class DcsReadProjectionTest
             + "/selection/items/0 | yes |")); //$NON-NLS-1$
         assertTrue(markdown, markdown.contains("| selection | Cost | " + address //$NON-NLS-1$
             + "/selection/items/1/items/0 | no |")); //$NON-NLS-1$
+        assertFalse(markdown, markdown.contains("draws nothing")); //$NON-NLS-1$
+
+        // With every measure off, the read states what the guard counts as a broken chart.
+        com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField amount =
+            (com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField)chart.getSelection()
+                .getItems().get(0);
+        amount.setUse(false);
+        String unmeasured = chartRead(schema, address);
+        assertTrue(unmeasured, unmeasured.contains(
+            "The chart has no enabled measure, so it draws nothing.")); //$NON-NLS-1$
+        amount.setUse(true);
 
         chart.setUse(false);
         String chartOff = chartRead(schema, address);

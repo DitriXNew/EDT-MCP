@@ -1595,18 +1595,27 @@ public final class DcsReadProjection
             .append("measures, which must be resources. Drawn is 'no' when the item, a group or ") //$NON-NLS-1$
             .append("folder holding it, the chart, or a structure group above the chart is ") //$NON-NLS-1$
             .append("switched off; such a reference is not drawn and not checked.\n\n"); //$NON-NLS-1$
+        boolean chartDrawn = DcsChartReferences.isDrawn(chart);
+        boolean measured = false;
         if (references.isEmpty())
         {
             result.append("_(no references)_\n"); //$NON-NLS-1$
-            return;
         }
-        boolean chartDrawn = DcsChartReferences.isDrawn(chart);
-        result.append(MarkdownUtils.tableHeader("Role", "Field", "Address", "Drawn")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        for (DcsChartReferences.Reference reference : references)
+        else
         {
-            result.append(MarkdownUtils.tableRow(reference.role,
-                reference.field == null ? "(auto)" : reference.field, reference.address, //$NON-NLS-1$
-                chartDrawn && reference.use ? "yes" : "no")); //$NON-NLS-1$ //$NON-NLS-2$
+            result.append(MarkdownUtils.tableHeader("Role", "Field", "Address", "Drawn")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            for (DcsChartReferences.Reference reference : references)
+            {
+                measured |= reference.use && DcsChartReferences.ROLE_MEASURE.equals(reference.role);
+                result.append(MarkdownUtils.tableRow(reference.role,
+                    reference.field == null ? "(auto)" : reference.field, reference.address, //$NON-NLS-1$
+                    chartDrawn && reference.use ? "yes" : "no")); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        if (chartDrawn && !measured)
+        {
+            // The same condition the chart guard counts as a broken chart.
+            result.append("\nThe chart has no enabled measure, so it draws nothing.\n"); //$NON-NLS-1$
         }
     }
 
