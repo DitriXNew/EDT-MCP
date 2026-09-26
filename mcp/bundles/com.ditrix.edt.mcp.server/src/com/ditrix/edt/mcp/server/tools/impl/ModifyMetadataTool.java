@@ -75,6 +75,9 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.CommandInterfaceAddress;
+import com.ditrix.edt.mcp.server.utils.CommandInterfaceSection;
+import com.ditrix.edt.mcp.server.utils.CommandInterfaceSupport;
 import com.ditrix.edt.mcp.server.utils.CommonAttributeContentWriter;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
@@ -105,6 +108,7 @@ import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -253,6 +257,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /** Payload / output key: the SpreadsheetDocument template content spec / applied-counts object. */
     private static final String KEY_TEMPLATE = "template"; //$NON-NLS-1$
 
+    /** Payload / output key: the command-interface changes array / applied-counts object. */
+    static final String KEY_COMMANDS = "commands"; //$NON-NLS-1$
+
+    /** Output key: what a command interface stores after a {@link #KEY_COMMANDS} change. */
+    private static final String KEY_STORED = "stored"; //$NON-NLS-1$
+
+    /** Output key: the commands of {@link #KEY_COMMANDS} entries that changed nothing. */
+    private static final String KEY_UNCHANGED = "unchanged"; //$NON-NLS-1$
+
+    /** How long a command-interface edit waits for EDT to finish recomputing the section. */
+    private static final long COMMAND_INTERFACE_WAIT_MS = 15_000L;
+
     /** Actual-kind stem in the "payload only for X FQN" refusals (java:S1192). */
     private static final String ERR_IS_A = "is a "; //$NON-NLS-1$
 
@@ -299,7 +315,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     public String getDescription()
     {
         return "Set properties of any metadata node, including managed-form roots, items, " //$NON-NLS-1$
-            + "attributes, commands, and handlers. Parameters and examples: " //$NON-NLS-1$
+            + "attributes, commands, and handlers, and edit a section's command interface. " //$NON-NLS-1$
+            + "Parameters and examples: " //$NON-NLS-1$
             + "get_tool_guide('modify_metadata')."; //$NON-NLS-1$
     }
 
@@ -355,6 +372,17 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "plain reference is a no-op). Valid only for a CommonAttribute / ExchangePlan / " //$NON-NLS-1$
                 + "Catalog / Document / Subsystem FQN (a Subsystem FQN may be nested); cannot be " //$NON-NLS-1$
                 + "combined with 'properties'.") //$NON-NLS-1$
+            .objectArrayProperty(KEY_COMMANDS,
+                "COMMAND INTERFACE FQN only ('Subsystem.<Name>.CommandInterface' or " //$NON-NLS-1$
+                + "'Configuration.MainSectionCommandInterface'): section commands to change, as [{command, " //$NON-NLS-1$
+                + "visible?, roles?, group?, after? | before?}], applied in order and validated as one " //$NON-NLS-1$
+                + "batch. 'command' is the command FQN, e.g. 'Report.Sales.StandardCommand.Open' or " //$NON-NLS-1$
+                + "'CommonCommand.Print'; 'visible' the common visibility; 'roles' [{role: 'Role.<Name>', " //$NON-NLS-1$
+                + "visible: true | false | 'default' (drops the override)}]; 'group' the panel group to move it " //$NON-NLS-1$
+                + "to, e.g. 'NavigationPanelImportant', 'ActionsPanelReports' or 'CommandGroup.<Name>'; " //$NON-NLS-1$
+                + "'after' / 'before' another command of that group to order it by. get_metadata_details " //$NON-NLS-1$
+                + "on the same FQN lists the section's commands and groups. Cannot be combined with other " //$NON-NLS-1$
+                + "payloads.") //$NON-NLS-1$
             .objectProperty(KEY_TEMPLATE,
                 "SpreadsheetDocument (print form / макет) TEMPLATE FQN only: the spreadsheet content to " //$NON-NLS-1$
                 + "author, instead of 'properties'. An object with any of: 'cells' [{row, col (both " //$NON-NLS-1$
@@ -389,7 +417,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         return JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the properties were set", true) //$NON-NLS-1$ //$NON-NLS-2$
-            .stringProperty(McpKeys.ACTION, "'modified' on success") //$NON-NLS-1$
+            .stringProperty(McpKeys.ACTION, "'modified' on success; 'unchanged' when a 'commands' change " //$NON-NLS-1$
+                + "requested only what the section already had") //$NON-NLS-1$
             .stringProperty("fqn", "Normalized FQN of the modified node") //$NON-NLS-1$ //$NON-NLS-2$
             .stringArrayProperty(KEY_APPLIED, "Names of the properties that were set (for a Role " //$NON-NLS-1$
                 + "rights change this is instead an object {rights, templates, roleProperties} with " //$NON-NLS-1$
@@ -426,6 +455,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "reference list, no per-entry flag) reports {added, removed}") //$NON-NLS-1$
             .objectProperty(KEY_TEMPLATE, "For a template content change: the applied counts object " //$NON-NLS-1$
                 + "{cells, merges, areas, columnWidths, rowHeights}") //$NON-NLS-1$
+            .objectProperty(KEY_COMMANDS, "For a command-interface change: how many commands changed " //$NON-NLS-1$
+                + "visibility / group, and how many groups got an explicit order {visibility, placement, " //$NON-NLS-1$
+                + "order}") //$NON-NLS-1$
+            .objectProperty(KEY_STORED, "For a command-interface change: what the section now stores - " //$NON-NLS-1$
+                + "{commands: {<command>: {visible: 'default' | {common, roles}, group: 'default' | " //$NON-NLS-1$
+                + "<group>}}, order: {<group>: [commands]}}; 'default' means the platform's own value") //$NON-NLS-1$
+            .stringArrayProperty(KEY_UNCHANGED, "For a command-interface change: the commands whose " //$NON-NLS-1$
+                + "entries requested what the section already had") //$NON-NLS-1$
             .booleanProperty(KEY_PERSISTED, //$NON-NLS-1$
                 "Whether the platform accepted a save task for the change. The tool then waits for the " //$NON-NLS-1$
                     + "export queue to drain before answering, so a success normally means the write has "
@@ -460,6 +497,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (ctx.hasError())
         {
             return ctx.error;
+        }
+
+        // A command interface is its own top object with its own payload; the 'commands' payload is
+        // refused everywhere else.
+        String commandInterfaceResult = dispatchCommandInterface(ctx, args);
+        if (commandInterfaceResult != null)
+        {
+            return commandInterfaceResult;
         }
 
         // A FQN that addresses a FORM member (item / attribute / command) is dispatched to its own
@@ -574,6 +619,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean hasContentPayload;
         JsonObject templateSpec;
         boolean hasTemplatePayload;
+        List<JsonObject> commands;
+        boolean hasCommandsPayload;
         MdNameNormalizer.Report normReport;
     }
 
@@ -632,14 +679,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         args.templateSpec = templateArg.spec;
         args.hasTemplatePayload = args.templateSpec != null;
 
+        // Command-interface payload (commands[]): only for a section's command interface FQN.
+        args.commands = new ArrayList<>();
+        String commandsError = parseCommandsArg(params, args.commands);
+        if (commandsError != null)
+        {
+            args.error = commandsError;
+            return args;
+        }
+        args.hasCommandsPayload = !args.commands.isEmpty();
+
         if (args.properties.isEmpty() && !args.hasRolePayload && !args.hasContentPayload
-            && !args.hasTemplatePayload)
+            && !args.hasTemplatePayload && !args.hasCommandsPayload)
         {
             args.error = ToolResult.error("properties is required: provide at least one {name, value} to " //$NON-NLS-1$
                 + "set, e.g. [{name: 'comment', value: 'Goods'}]. For a Role FQN, provide 'rights', " //$NON-NLS-1$
                 + "'templates' or 'roleProperties' instead; for a CommonAttribute / ExchangePlan / " //$NON-NLS-1$
                 + "Catalog / Document / Subsystem FQN, provide 'content' instead; for a template FQN, " //$NON-NLS-1$
-                + "provide 'template' instead.").toJson(); //$NON-NLS-1$
+                + "provide 'template' instead; for a command interface FQN " //$NON-NLS-1$
+                + "('Subsystem.<Name>.CommandInterface'), provide 'commands' instead.").toJson(); //$NON-NLS-1$
             return args;
         }
 
@@ -987,6 +1045,193 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         return modifySubsystemContent(ctx, normFqn, subsystem, args.properties, args.content,
             args.hasRolePayload);
+    }
+
+    // ===== Section command interface (issue #666) ===================================================
+
+    /**
+     * Waits, off the UI thread, until EDT has recomputed the command interface a 'commands' change is
+     * validated against - a content change made a moment earlier is not in it before that.
+     */
+    @Override
+    protected String beforeUiThreadOrError(Map<String, String> params)
+    {
+        CommandInterfaceAddress address =
+            CommandInterfaceAddress.parse(JsonUtils.extractStringArgument(params, "fqn")); //$NON-NLS-1$
+        if (address == null || JsonUtils.extractObjectArray(params, KEY_COMMANDS).isEmpty())
+        {
+            return null;
+        }
+        com.ditrix.edt.mcp.server.utils.ProjectContext project = com.ditrix.edt.mcp.server.utils.ProjectContext
+            .of(JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME));
+        // A missing project is named by the regular resolution on the UI thread.
+        if (!project.exists() || CommandInterfaceSupport.awaitComputed(project.project(), COMMAND_INTERFACE_WAIT_MS))
+        {
+            return null;
+        }
+        return "EDT is still computing the command interface of project '" + project.name() //$NON-NLS-1$
+            + "', which a 'commands' change is validated against. Nothing was changed; retry in a few " //$NON-NLS-1$
+            + "seconds."; //$NON-NLS-1$
+    }
+
+    /**
+     * Dispatches a command-interface FQN and the 'commands' payload, which only go together.
+     * Returns {@code null} when the call is neither, so the caller continues down the normal path.
+     */
+    private String dispatchCommandInterface(ProjectContext ctx, ModifyArgs args)
+    {
+        CommandInterfaceAddress address = CommandInterfaceAddress.parse(args.fqn);
+        if (address == null)
+        {
+            return args.hasCommandsPayload ? ToolResult.error(commandsOnlyForCommandInterfaceError(args.fqn))
+                .toJson() : null;
+        }
+        if (address.kind() == CommandInterfaceAddress.Kind.SECTIONS_PANEL)
+        {
+            return ToolResult.error(CommandInterfaceSupport.sectionsPanelRefusal()).toJson();
+        }
+        String fqn = address.canonicalFqn();
+        if (!args.hasCommandsPayload)
+        {
+            return ToolResult.error("'" + fqn + "' is a command interface, which has no 'properties' of " //$NON-NLS-1$ //$NON-NLS-2$
+                + "its own: change its commands with 'commands' = [{command, visible?, roles?, group?, " //$NON-NLS-1$
+                + "after? | before?}]. get_metadata_details on the same FQN lists them.").toJson(); //$NON-NLS-1$
+        }
+        if (!args.properties.isEmpty() || args.hasRolePayload || args.hasContentPayload
+            || args.hasTemplatePayload)
+        {
+            return ToolResult.error("'commands' cannot be combined with 'properties', a Role payload, " //$NON-NLS-1$
+                + "'content' or 'template' in one call. Change the command interface alone, and its owner (" //$NON-NLS-1$
+                + address.ownerFqn() + ") in a separate call.").toJson(); //$NON-NLS-1$
+        }
+        if (ctx.scope.isExternalObjects())
+        {
+            return ToolResult.error("Project '" + ctx.project.getName() + "' is an external-objects " //$NON-NLS-1$ //$NON-NLS-2$
+                + "project, which has no command interface. Address " + fqn //$NON-NLS-1$
+                + " in the configuration project it belongs to.").toJson(); //$NON-NLS-1$
+        }
+        if (ExtensionOriginUtils.isExtensionProject(ctx.project))
+        {
+            return ToolResult.error(CommandInterfaceSupport.extensionRefusal(ctx.project.getName())).toJson();
+        }
+        return modifyCommandInterface(ctx, address, args.commands);
+    }
+
+    /**
+     * Reads the 'commands' payload strictly: a skipped entry would apply part of a batch that is
+     * validated as a whole.
+     *
+     * @param params the tool parameters
+     * @param into receives the entries
+     * @return a ready JSON error, or {@code null}
+     */
+    static String parseCommandsArg(Map<String, String> params, List<JsonObject> into)
+    {
+        String raw = params.get(KEY_COMMANDS);
+        if (raw == null || raw.trim().isEmpty())
+        {
+            return null;
+        }
+        JsonElement parsed;
+        try
+        {
+            parsed = JsonParser.parseString(raw.trim());
+        }
+        catch (RuntimeException e)
+        {
+            parsed = null;
+        }
+        if (parsed != null && parsed.isJsonNull())
+        {
+            return null;
+        }
+        if (parsed == null || !parsed.isJsonArray())
+        {
+            return ToolResult.error("'commands' must be an array of {command, visible?, roles?, group?, " //$NON-NLS-1$
+                + "after? | before?} objects, e.g. [{command:'Report.Sales.StandardCommand.Open', " //$NON-NLS-1$
+                + "visible:false}].").toJson(); //$NON-NLS-1$
+        }
+        JsonArray array = parsed.getAsJsonArray();
+        for (int i = 0; i < array.size(); i++)
+        {
+            JsonElement entry = array.get(i);
+            if (!entry.isJsonObject())
+            {
+                return ToolResult.error("commands[" + i + "] must be an object {command, visible?, roles?, " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "group?, after? | before?}, got " + entry + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            into.add(entry.getAsJsonObject());
+        }
+        return null;
+    }
+
+    /** The refusal for a 'commands' payload addressed to anything but a section's command interface. */
+    static String commandsOnlyForCommandInterfaceError(String fqn)
+    {
+        String why = CommandInterfaceAddress.hasCommandInterfaceTail(fqn)
+            ? " only a subsystem and the configuration have a section command interface." //$NON-NLS-1$
+            : " it is not a command interface address."; //$NON-NLS-1$
+        return "'commands' applies only to a section's command interface - 'Subsystem.<Name>.CommandInterface' " //$NON-NLS-1$
+            + "(nested: 'Subsystem.<Parent>.Subsystem.<Child>.CommandInterface') or " //$NON-NLS-1$
+            + "'Configuration.MainSectionCommandInterface'. '" + fqn + "' does not qualify:" + why; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Validates the whole 'commands' batch against the section, applies it in one BM write through
+     * EDT's own command interface tasks and exports the command interface's own file.
+     */
+    private String modifyCommandInterface(ProjectContext ctx, CommandInterfaceAddress address,
+        List<JsonObject> entries)
+    {
+        IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
+        if (bmModelManager == null)
+        {
+            return ToolResult.error(ERR_NO_BM_MANAGER).toJson();
+        }
+        IBmModel bmModel = bmModelManager.getModel(ctx.project);
+        if (bmModel == null)
+        {
+            return ToolResult.error(ERR_NO_BM_MODEL + ctx.project.getName()).toJson();
+        }
+        CommandInterfaceSupport.EditResult edit = CommandInterfaceSupport.edit(bmModel, address, entries);
+        if (edit.error != null)
+        {
+            return ToolResult.error(edit.error).toJson();
+        }
+        boolean persisted = edit.writtenFqn != null
+            && BmTransactions.forceExportToDisk(ctx.project, edit.writtenFqn);
+        return buildCommandInterfaceResult(address.canonicalFqn(), edit, persisted);
+    }
+
+    /** The success JSON of a 'commands' change. Package-visible for tests. */
+    static String buildCommandInterfaceResult(String fqn, CommandInterfaceSupport.EditResult edit,
+        boolean persisted)
+    {
+        CommandInterfaceSection.Plan plan = edit.plan;
+        JsonObject counts = new JsonObject();
+        counts.addProperty("visibility", plan.visibility().size()); //$NON-NLS-1$
+        counts.addProperty("placement", plan.placement().size()); //$NON-NLS-1$
+        counts.addProperty("order", plan.order().size()); //$NON-NLS-1$
+        ToolResult result = ToolResult.success()
+            .put(McpKeys.ACTION, plan.isEmpty() ? "unchanged" : VAL_MODIFIED) //$NON-NLS-1$
+            .put("fqn", fqn) //$NON-NLS-1$
+            .put(KEY_COMMANDS, counts)
+            .put(KEY_PERSISTED, persisted);
+        if (edit.stored != null)
+        {
+            result.put(KEY_STORED, edit.stored);
+        }
+        if (!plan.unchanged().isEmpty())
+        {
+            JsonArray unchanged = new JsonArray();
+            plan.unchanged().forEach(unchanged::add);
+            result.put(KEY_UNCHANGED, unchanged);
+        }
+        String message = plan.isEmpty()
+            ? "Nothing to change in " + fqn + ": every entry requested what the section already has" //$NON-NLS-1$ //$NON-NLS-2$
+            : MSG_MODIFIED_PREFIX + fqn + " (visibility: " + plan.visibility().size() + ", placement: " //$NON-NLS-1$ //$NON-NLS-2$
+                + plan.placement().size() + ", order: " + plan.order().size() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+        return result.put(McpKeys.MESSAGE, message).toJson();
     }
 
     // ===== XDTO package member editing (issue #183 stream 1) ==========================================

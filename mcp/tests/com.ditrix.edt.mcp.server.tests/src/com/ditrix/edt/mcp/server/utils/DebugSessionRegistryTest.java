@@ -16,8 +16,10 @@ import static org.mockito.Mockito.when;
 
 import org.eclipse.debug.core.DebugEvent;
 import org.eclipse.debug.core.ILaunch;
+import org.eclipse.debug.core.ILaunchConfiguration;
 import org.eclipse.debug.core.ILaunchManager;
 import org.eclipse.debug.core.model.IDebugTarget;
+import org.eclipse.debug.core.model.IStackFrame;
 import org.eclipse.debug.core.model.IThread;
 import org.junit.After;
 import org.junit.Test;
@@ -252,5 +254,123 @@ public class DebugSessionRegistryTest
         DebugSessionRegistry registry = DebugSessionRegistry.get();
         registry.clear();
         assertNull(registry.getThreadApplicationId(999_999L));
+    }
+
+    // === SUSPEND events vs a stop a poller already registered ===
+
+    private static final String LAUNCH_APP = "launch:Cfg"; //$NON-NLS-1$
+
+    @Test
+    public void testSuspendEventRegistersASnapshot() throws Exception
+    {
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        IThread thread = launchThread(LAUNCH_APP);
+
+        registry.handleEvent(new DebugEvent(thread, DebugEvent.SUSPEND));
+
+        assertSame(thread, registry.getSnapshot(LAUNCH_APP).thread);
+        assertSame(thread, registry.getThread(registry.getSnapshot(LAUNCH_APP).threadId));
+    }
+
+    @Test
+    public void testALateSuspendEventKeepsTheHandedOutThreadIdValid() throws Exception
+    {
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        IThread thread = launchThread(LAUNCH_APP);
+        // A poller (debug_pause / wait_for_break) saw the stop before Eclipse dispatched its event.
+        registry.injectSuspend(LAUNCH_APP, thread);
+        long handedOut = registry.getSnapshot(LAUNCH_APP).threadId;
+
+        registry.handleEvent(new DebugEvent(thread, DebugEvent.SUSPEND));
+
+        // The event records its own stop; the id already handed out still addresses the thread.
+        DebugSessionRegistry.SuspendSnapshot current = registry.getSnapshot(LAUNCH_APP);
+        assertSame(thread, current.thread);
+        assertFalse("the event cannot tell this stop from a later one, so it mints its own id", //$NON-NLS-1$
+            handedOut == current.threadId);
+        assertSame(thread, registry.getThread(handedOut));
+        assertEquals(LAUNCH_APP, registry.getThreadApplicationId(handedOut));
+    }
+
+    @Test
+    public void testASecondStopOfTheSameThreadAfterAStepIsANewSnapshot() throws Exception
+    {
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        IThread thread = launchThread(LAUNCH_APP);
+        registry.handleEvent(new DebugEvent(thread, DebugEvent.SUSPEND));
+        long firstStop = registry.getSnapshot(LAUNCH_APP).threadId;
+
+        // A 1C step fires its RESUME on the debug target, never on the thread.
+        registry.handleEvent(new DebugEvent(thread.getDebugTarget(), DebugEvent.RESUME, DebugEvent.STEP_OVER));
+        registry.handleEvent(new DebugEvent(thread, DebugEvent.SUSPEND));
+
+        assertFalse("the stop after the step must not be taken for the first one", //$NON-NLS-1$
+            firstStop == registry.getSnapshot(LAUNCH_APP).threadId);
+    }
+
+    @Test
+    public void testAnEvaluationResumeKeepsMintedKeyFrames()
+    {
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        IThread thread = mock(IThread.class);
+        // The generic Eclipse model runs the thread while an expression evaluates.
+        when(thread.isSuspended()).thenReturn(false);
+        IStackFrame frame = mock(IStackFrame.class);
+        when(frame.getThread()).thenReturn(thread);
+        registry.injectSuspend(MINTED_APP, thread);
+        long frameRef = registry.registerFrame(frame, MINTED_APP);
+
+        registry.handleEvent(new DebugEvent(thread, DebugEvent.RESUME, DebugEvent.EVALUATION_IMPLICIT));
+
+        assertSame("an evaluation returns to the same stop, so its frameRef must survive", //$NON-NLS-1$
+            frame, registry.getFrame(frameRef));
+    }
+
+    @Test
+    public void testSuspendEventOfAnotherThreadReplacesTheSnapshot() throws Exception
+    {
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        IThread first = launchThread(LAUNCH_APP);
+        IThread second = launchThread(LAUNCH_APP);
+        registry.injectSuspend(LAUNCH_APP, first);
+        long firstId = registry.getSnapshot(LAUNCH_APP).threadId;
+
+        registry.handleEvent(new DebugEvent(second, DebugEvent.SUSPEND));
+
+        DebugSessionRegistry.SuspendSnapshot current = registry.getSnapshot(LAUNCH_APP);
+        assertSame(second, current.thread);
+        assertFalse(firstId == current.threadId);
+    }
+
+    @Test
+    public void testFramesRegisteredUnderAMintedKeyDieWithTheSession()
+    {
+        DebugSessionRegistry registry = DebugSessionRegistry.get();
+        // A launchless 1C server thread: no launch attribute can yield the minted key.
+        IThread thread = mock(IThread.class);
+        when(thread.isSuspended()).thenReturn(false);
+        IStackFrame frame = mock(IStackFrame.class);
+        when(frame.getThread()).thenReturn(thread);
+        registry.injectSuspend(MINTED_APP, thread);
+        long frameRef = registry.registerFrame(frame, MINTED_APP);
+
+        registry.handleEvent(new DebugEvent(thread, DebugEvent.RESUME));
+
+        assertNull("a resumed session's frameRef must stop resolving", registry.getFrame(frameRef)); //$NON-NLS-1$
+    }
+
+    /** A thread whose launch configuration carries {@code appId} as its application id. */
+    private static IThread launchThread(String appId) throws Exception
+    {
+        ILaunchConfiguration config = mock(ILaunchConfiguration.class);
+        when(config.getAttribute(LaunchConfigUtils.ATTR_APPLICATION_ID, (String) null)).thenReturn(appId);
+        ILaunch launch = mock(ILaunch.class);
+        when(launch.getLaunchConfiguration()).thenReturn(config);
+        IDebugTarget target = mock(IDebugTarget.class);
+        when(target.getLaunch()).thenReturn(launch);
+        IThread thread = mock(IThread.class);
+        when(thread.getDebugTarget()).thenReturn(target);
+        when(thread.isSuspended()).thenReturn(true);
+        return thread;
     }
 }

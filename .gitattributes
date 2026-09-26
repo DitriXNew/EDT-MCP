@@ -8,3 +8,6 @@ tests/e2e/tools_list.golden.json text eol=lf
 # Shell scripts run on Linux CI runners — force LF so a Windows checkout can never
 # introduce CRLF (a CRLF shebang / `\r` breaks the script on the runner).
 *.sh text eol=lf
+
+# 1C binary fixtures for import_project_from_file - never touch their bytes.
+tests/ImportFiles/** binary

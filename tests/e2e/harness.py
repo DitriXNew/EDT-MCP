@@ -528,6 +528,8 @@ DEEP_MUTATION_TOOLS = frozenset({
     "rename_metadata_object", "delete_metadata", "adopt_metadata_object",
     "update_database", "import_configuration_from_xml", "resync_to_disk",
     "clean_project", "create_project", "delete_project",
+    # Creates a NEW project from a 1C file; a failed import is rolled back by the tool.
+    "import_project_from_file",
 })
 
 # These tools can confirm writes in fixture projects that the response does not name.
@@ -593,6 +595,7 @@ MODEL_MUTATION_TOOLS = frozenset({
 NON_FIXTURE_MODEL_MUTATION_TOOLS = frozenset({
     "clean_project",    # Restores the in-memory model FROM the fixture on disk.
     "create_project",   # Changes workspace composition, not the fixture's model.
+    "import_project_from_file",  # Adds a NEW project; the fixture model is only read.
     "delete_project",   # Changes workspace composition, not the fixture's model.
     "update_database",  # Writes to the information base, not the fixture's model.
 })

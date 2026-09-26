@@ -45,9 +45,10 @@ skills; do not broaden maintenance to the workspace or unrelated projects.
    its current authorization and confirmation contract. Treat a client timeout
    as an unknown result; reconcile the authoritative operation outcome under
    current help before retrying, continuing, or reporting completion.
-4. For import, confirm a caller-approved XML source plus a new project target,
-   call `import_configuration_from_xml`, then verify the returned project exists
-   and becomes usable. For export, confirm the exact project and approved output
+4. For import, confirm a caller-approved source plus a new project target, call
+   `import_configuration_from_xml` for a directory of XML files or
+   `import_project_from_file` for a .cf/.cfe/.epf/.erf file, then verify the
+   returned project exists and becomes usable. For export, confirm the exact project and approved output
    directory, call `export_configuration_to_xml`, then verify the reported
    destination and expected export result.
 5. Before using the current working tree, inspect actual repository status and

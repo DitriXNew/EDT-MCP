@@ -324,7 +324,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
         {
             if (claimed)
             {
-                IMPORTS_IN_FLIGHT.remove(projectName);
+                releaseImport(projectName);
             }
         }
     }
@@ -338,20 +338,54 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
      */
     private static String claimImport(String projectName)
     {
-        long now = System.currentTimeMillis();
+        Long startedAt = tryClaimImport(projectName);
+        return startedAt == null ? null
+            : ToolResult.error(importInProgressMessage(projectName, startedAt.longValue())).toJson();
+    }
+
+    /**
+     * Claims {@code projectName} in the registry shared by every tool that creates a project by
+     * import, so two imports of one name cannot race inside EDT whichever tools make them.
+     *
+     * @param projectName the project the caller wants to create
+     * @return {@code null} when the claim was taken, otherwise the instant the running import of
+     *     that name was claimed; release a taken claim with {@link #releaseImport(String)}
+     */
+    static Long tryClaimImport(String projectName)
+    {
         // Eclipse project names are case-sensitive on the resource layer, so the claim compares
         // the name exactly - folding case here would refuse two imports that really are distinct.
-        Long startedAt = IMPORTS_IN_FLIGHT.putIfAbsent(projectName, Long.valueOf(now));
-        if (startedAt == null)
-        {
-            return null;
-        }
-        long seconds = Math.max(0L, (now - startedAt.longValue()) / 1000L);
-        return ToolResult.error("An import into project `" + projectName //$NON-NLS-1$
+        return IMPORTS_IN_FLIGHT.putIfAbsent(projectName, Long.valueOf(System.currentTimeMillis()));
+    }
+
+    /**
+     * @param projectName a project name
+     * @return the instant a running import of that name was claimed, or {@code null} when none runs
+     */
+    static Long importClaimedAt(String projectName)
+    {
+        return IMPORTS_IN_FLIGHT.get(projectName);
+    }
+
+    /** @param projectName a name claimed by {@link #tryClaimImport(String)} */
+    static void releaseImport(String projectName)
+    {
+        IMPORTS_IN_FLIGHT.remove(projectName);
+    }
+
+    /**
+     * @param projectName the project whose import is running
+     * @param startedAt when that import was claimed
+     * @return the refusal for a second import of the same name
+     */
+    static String importInProgressMessage(String projectName, long startedAt)
+    {
+        long seconds = Math.max(0L, (System.currentTimeMillis() - startedAt) / 1000L);
+        return "An import into project `" + projectName //$NON-NLS-1$
             + "` is already in progress (started " + seconds //$NON-NLS-1$
             + (seconds == 1 ? " second ago). " : " seconds ago). ") //$NON-NLS-1$ //$NON-NLS-2$
             + "Wait for it to finish, then poll `list_projects`; do not retry the import - a " //$NON-NLS-1$
-            + "second import of the same name races the first and can destroy both.").toJson(); //$NON-NLS-1$
+            + "second import of the same name races the first and can destroy both."; //$NON-NLS-1$
     }
 
     /**
@@ -913,7 +947,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
      * @return {@code null} when every service the post-import start needs is available, otherwise
      *     the error JSON naming the missing one
      */
-    private static String missingLifecycleServiceError()
+    static String missingLifecycleServiceError()
     {
         Activator activator = Activator.getDefault();
         if (activator == null || activator.getWorkspaceOrchestrator() == null)
@@ -950,7 +984,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
      * @return the lifecycle backed by {@code IWorkspaceOrchestrator},
      *     {@code IDtProjectResourceLifecycleBootstrap} and {@code IDtProjectManager}
      */
-    private static IImportLifecycle platformLifecycle()
+    static IImportLifecycle platformLifecycle()
     {
         Activator activator = Activator.getDefault();
         IWorkspaceOrchestrator orchestrator = activator.getWorkspaceOrchestrator();

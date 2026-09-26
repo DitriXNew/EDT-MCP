@@ -124,6 +124,7 @@ public class ToolAnnotationClassifierTest
             "evaluate_expression",
             "step",
             "resume",
+            "debug_pause",
             "set_variable" })
         {
             assertEquals(name + " must stay readOnlyHint=false", Boolean.FALSE,
