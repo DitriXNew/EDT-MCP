@@ -952,7 +952,8 @@ public final class DcsReadProjection
         return false;
     }
 
-    private static int afterStringLiteral(String expression, int openingQuote)
+    /** Index just past the 1C string literal opening at {@code openingQuote} ({@code ""} escapes a quote). */
+    static int afterStringLiteral(String expression, int openingQuote)
     {
         int current = openingQuote + 1;
         while (current < expression.length())

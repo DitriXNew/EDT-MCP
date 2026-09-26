@@ -890,7 +890,7 @@ public class DcsSettingsWriterTest
     }
 
     @Test
-    public void testExactStructureReplaceCanChangeBetweenGroupingTableAndChart()
+    public void testExactStructureReplaceCanChangeBetweenGroupingAndTable()
     {
         DataCompositionSettings settings = plan(json("{\"items\":[{\"kind\":\"grouping\"," //$NON-NLS-1$
             + "\"name\":\"OldGroup\",\"groupFields\":{\"items\":[]}}]}")); //$NON-NLS-1$
@@ -901,7 +901,26 @@ public class DcsSettingsWriterTest
         assertTrue(table.error(), table.isSuccess());
         assertTrue(table.settings().getItems().get(0) instanceof DataCompositionTable);
 
-        DcsSettingsWriter.SettingsResult chart = DcsSettingsWriter.planSettings(table.settings(),
+        DcsSettingsWriter.SettingsResult group = DcsSettingsWriter.planSettings(table.settings(),
+            java.util.Arrays.asList("items", "0"), "replace", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            json("{\"kind\":\"grouping\",\"name\":\"NewGroup\"}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(group.error(), group.isSuccess());
+        assertTrue(group.settings().getItems().get(0) instanceof DataCompositionGroup);
+
+        DcsSettingsWriter.SettingsResult unknown = DcsSettingsWriter.planSettings(settings,
+            java.util.Arrays.asList("items", "0"), "replace", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            json("{\"kind\":\"pivot\"}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse(unknown.isSuccess());
+        assertTrue(unknown.error(), unknown.error().contains("kind='chart'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExactStructureReplaceCanChangeToAndFromAChart()
+    {
+        DataCompositionSettings settings = plan(json("{\"items\":[{\"kind\":\"table\"," //$NON-NLS-1$
+            + "\"name\":\"OldTable\"}]}")); //$NON-NLS-1$
+
+        DcsSettingsWriter.SettingsResult chart = DcsSettingsWriter.planSettings(settings,
             java.util.Arrays.asList("items", "0"), "replace", "chart", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             json("{\"kind\":\"chart\",\"name\":\"NewChart\"}"), LANGUAGES); //$NON-NLS-1$
         assertTrue(chart.error(), chart.isSuccess());
@@ -913,12 +932,6 @@ public class DcsSettingsWriterTest
             json("{\"kind\":\"grouping\",\"name\":\"NewGroup\"}"), LANGUAGES); //$NON-NLS-1$
         assertTrue(group.error(), group.isSuccess());
         assertTrue(group.settings().getItems().get(0) instanceof DataCompositionGroup);
-
-        DcsSettingsWriter.SettingsResult unknown = DcsSettingsWriter.planSettings(settings,
-            java.util.Arrays.asList("items", "0"), "replace", "grouping", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            json("{\"kind\":\"pivot\"}"), LANGUAGES); //$NON-NLS-1$
-        assertFalse(unknown.isSuccess());
-        assertTrue(unknown.error(), unknown.error().contains("kind='chart'")); //$NON-NLS-1$
     }
 
     @Test

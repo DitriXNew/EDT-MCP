@@ -3314,6 +3314,17 @@ def test_chart_with_bad_references_is_refused_and_nothing_is_written():
     assert_error_quality(error, names=["measure 'Bonus'"], suggests=["totalFields"],
                          ctx="the batch refusal must name the missing resource")
 
+    # A schema-only edit that breaks the unchanged valid chart is refused too.
+    ungroupable = _write(root + "#/dataSets/Sales/fields/Customer", "update", "field",
+                         {"useRestriction": {"group": True}})
+    error = assert_error(ungroupable, "forbidding grouping on the field an unchanged chart's point uses")
+    assert_error_quality(
+        error,
+        names=["point 'Customer'", settings_address + "/items/0/points/0/groupFields/items/0",
+               "'Customer' is not available for grouping"],
+        suggests=["keep the schema data it needs"],
+        ctx="the refusal must name the chart reference the schema edit would break")
+
     after = _get(root, "schema")
     assert _hash(after) == _hash(before), "a refused chart write must leave the schema hash"
     assert read_disk(dcs_rel) == disk_before, "a refused chart write must not touch Template.dcs"

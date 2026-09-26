@@ -5868,38 +5868,6 @@ public final class DcsSettingsWriter
             this.variantsTouched = variantsTouched;
         }
 
-        /**
-         * Refusal for a chart this plan adds or changes whose references do not resolve against
-         * {@code schema}, or {@code null}. Call it after every schema mutation of the write and
-         * before {@link #commit}, so it judges the state the write leaves behind.
-         */
-        public String chartReferenceError(DataCompositionSchema schema, String rootFqn)
-        {
-            if (defaultTouched)
-            {
-                String error = DcsChartReferences.error(schema, schema.getDefaultSettings(),
-                    defaultSettings, DcsAddress.render(rootFqn,
-                        Collections.singletonList("defaultSettings"))); //$NON-NLS-1$
-                if (error != null) return error;
-            }
-            if (!variantsTouched) return null;
-            for (int i = 0; i < variants.size(); i++)
-            {
-                SettingsVariant variant = variants.get(i);
-                String name = variant.getName();
-                List<Integer> before = name == null || name.isEmpty()
-                    ? Collections.<Integer> emptyList()
-                    : findVariants(schema.getSettingsVariants(), name);
-                DataCompositionSettings original = before.size() == 1
-                    ? schema.getSettingsVariants().get(before.get(0).intValue()).getSettings() : null;
-                String selector = name == null || name.isEmpty() ? Integer.toString(i) : name;
-                String error = DcsChartReferences.error(schema, original, variant.getSettings(),
-                    DcsAddress.render(rootFqn, Arrays.asList("variants", selector, "settings"))); //$NON-NLS-1$ //$NON-NLS-2$
-                if (error != null) return error;
-            }
-            return null;
-        }
-
         /** Commits the already-validated detached tree. */
         public void commit(DataCompositionSchema schema)
         {

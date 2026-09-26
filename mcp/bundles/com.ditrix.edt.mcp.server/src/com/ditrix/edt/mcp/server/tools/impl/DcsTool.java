@@ -36,6 +36,7 @@ import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DcsAddress;
+import com.ditrix.edt.mcp.server.utils.DcsChartReferences;
 import com.ditrix.edt.mcp.server.utils.DcsDynamicListWriter;
 import com.ditrix.edt.mcp.server.utils.DcsFormAppearanceContent;
 import com.ditrix.edt.mcp.server.utils.DcsHash;
@@ -755,6 +756,8 @@ public class DcsTool implements IMcpTool
                         return new WriteOutcome(DcsHash.compute(content.schema()), content.contentFqn(),
                             null, false, true);
                     }
+                    DcsChartReferences.Census chartsBefore =
+                        DcsChartReferences.census(content.schema(), address.rootFqn());
                     DcsSettingsWriter.SchemaResult settings = null;
                     if (settingsWrite)
                     {
@@ -788,15 +791,15 @@ public class DcsTool implements IMcpTool
                     }
                     if (settings != null)
                     {
-                        // After the schema half of the write, so a chart may measure a resource
-                        // this same call declares.
-                        String chartError = settings.plan().chartReferenceError(content.schema(),
-                            address.rootFqn());
-                        if (chartError != null)
-                        {
-                            throw DcsWriteFailure.message(chartError);
-                        }
                         settings.plan().commit(content.schema());
+                    }
+                    // The end state of the whole call, so a chart may measure a resource the call
+                    // declares and a schema edit that breaks an unchanged chart is refused too.
+                    String chartError = DcsChartReferences.error(chartsBefore,
+                        DcsChartReferences.census(content.schema(), address.rootFqn()));
+                    if (chartError != null)
+                    {
+                        throw DcsWriteFailure.message(chartError);
                     }
                     return new WriteOutcome(DcsHash.compute(content.schema()), content.contentFqn(),
                         counts, settingsWrite, false);

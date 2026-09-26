@@ -7,6 +7,10 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -14,7 +18,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Pattern;
 
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
@@ -40,6 +43,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFieldExpression;
 import com._1c.g5.v8.dt.dcs.model.settings.GroupItem;
 import com._1c.g5.v8.dt.dcs.model.settings.SelectedItem;
+import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com._1c.g5.v8.dt.dcs.model.settings.StructureItem;
 import com._1c.g5.v8.dt.dcs.model.settings.UserField;
 import com._1c.g5.v8.dt.dcs.util.DcsTerms;
@@ -47,15 +51,22 @@ import com._1c.g5.v8.dt.dcs.util.DcsTerms;
 /**
  * Reference guard for DCS charts. A chart draws its point (category) and series axes from
  * group fields and its values from its selection, whose items must be resources. The platform
- * stores a chart whose references resolve to nothing and then renders an empty area, so every
- * chart a write adds or changes is checked here against the end state of that write.
+ * stores a chart whose references resolve to nothing and then renders an empty area.
+ *
+ * <p>The guard is a ratchet over the whole schema: {@link #census} counts the broken chart
+ * references of every settings tree (default settings and each variant), and {@link #error}
+ * refuses a write after which some kind of broken reference (role plus field) is more frequent
+ * than before it. A write that breaks an unchanged chart by changing the schema is refused like
+ * one that adds a broken chart, and a problem that was already there never blocks an unrelated
+ * edit.</p>
  *
  * <p>Resolution mirrors EDT's available-fields rules on the schema model: data-set and calculated
  * fields group unless their use restriction forbids it, a resource is a {@code totalFields}
- * entry, and paths compare case-insensitively. Two things are not provable from the model and
- * are accepted: the attribute part of a dotted path ({@code Field.Attribute}), which depends on
- * the field's runtime type, and a field an auto-fill query data set derives from its query text
- * without listing it.</p>
+ * entry, a user field is a leaf with no attributes or percent fields, and paths compare
+ * case-insensitively. What the model cannot prove is accepted: the attribute part of a dotted
+ * path under a schema field ({@code Field.Attribute}), whose existence depends on a runtime type;
+ * any unlisted field when an auto-fill query data set exists, because EDT derives such a set's
+ * fields by parsing its query; and a case user field as a measure.</p>
  */
 public final class DcsChartReferences
 {
@@ -69,12 +80,31 @@ public final class DcsChartReferences
     private static final int MAX_CHOICES = 20;
     private static final int MAX_PROBLEMS = 10;
 
-    private static final Pattern AGGREGATE = Pattern.compile(
-        "(?<![\\p{L}\\p{N}_])(Sum|Count|Max|Min|Avg|\u0421\u0443\u043c\u043c\u0430" //$NON-NLS-1$
-            + "|\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e" //$NON-NLS-1$
-            + "|\u041c\u0430\u043a\u0441\u0438\u043c\u0443\u043c|\u041c\u0438\u043d\u0438\u043c\u0443\u043c" //$NON-NLS-1$
-            + "|\u0421\u0440\u0435\u0434\u043d\u0435\u0435)\\s*\\(", //$NON-NLS-1$
-        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    /** The platform's aggregate functions, each as its English and Russian spelling. */
+    private static final Set<String> AGGREGATES = lowerSet(
+        "Sum", "\u0421\u0443\u043c\u043c\u0430", //$NON-NLS-1$ //$NON-NLS-2$
+        "Count", "\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e", //$NON-NLS-1$ //$NON-NLS-2$
+        "Max", "\u041c\u0430\u043a\u0441\u0438\u043c\u0443\u043c", //$NON-NLS-1$ //$NON-NLS-2$
+        "Min", "\u041c\u0438\u043d\u0438\u043c\u0443\u043c", //$NON-NLS-1$ //$NON-NLS-2$
+        "Avg", "\u0421\u0440\u0435\u0434\u043d\u0435\u0435", //$NON-NLS-1$ //$NON-NLS-2$
+        "Array", "\u041c\u0430\u0441\u0441\u0438\u0432", //$NON-NLS-1$ //$NON-NLS-2$
+        "JoinStrings", "\u0421\u043e\u0435\u0434\u0438\u043d\u0438\u0442\u044c\u0421\u0442\u0440\u043e\u043a\u0438", //$NON-NLS-1$ //$NON-NLS-2$
+        "Every", "\u041a\u0430\u0436\u0434\u044b\u0439", //$NON-NLS-1$ //$NON-NLS-2$
+        "Any", "\u041b\u044e\u0431\u043e\u0439", //$NON-NLS-1$ //$NON-NLS-2$
+        "Var_Samp", "\u0414\u0438\u0441\u043f\u0435\u0440\u0441\u0438\u044f\u0412\u044b\u0431\u043e\u0440\u043a\u0438", //$NON-NLS-1$ //$NON-NLS-2$
+        "Var_Pop", "\u0414\u0438\u0441\u043f\u0435\u0440\u0441\u0438\u044f\u0413\u0435\u043d\u0435\u0440\u0430\u043b\u044c\u043d\u043e\u0439\u0421\u043e\u0432\u043e\u043a\u0443\u043f\u043d\u043e\u0441\u0442\u0438", //$NON-NLS-1$ //$NON-NLS-2$
+        "Covar_Pop", "\u041a\u043e\u0432\u0430\u0440\u0438\u0430\u0446\u0438\u044f\u0413\u0435\u043d\u0435\u0440\u0430\u043b\u044c\u043d\u043e\u0439\u0421\u043e\u0432\u043e\u043a\u0443\u043f\u043d\u043e\u0441\u0442\u0438", //$NON-NLS-1$ //$NON-NLS-2$
+        "Covar_Samp", "\u041a\u043e\u0432\u0430\u0440\u0438\u0430\u0446\u0438\u044f\u0412\u044b\u0431\u043e\u0440\u043a\u0438", //$NON-NLS-1$ //$NON-NLS-2$
+        "Corr", "\u041a\u043e\u0440\u0440\u0435\u043b\u044f\u0446\u0438\u044f", //$NON-NLS-1$ //$NON-NLS-2$
+        "Regr_Slope", "\u0420\u0435\u0433\u0440\u0435\u0441\u0441\u0438\u044f\u041d\u0430\u043a\u043b\u043e\u043d", //$NON-NLS-1$ //$NON-NLS-2$
+        "Regr_Intercept", "\u0420\u0435\u0433\u0440\u0435\u0441\u0441\u0438\u044f\u041e\u0442\u0440\u0435\u0437\u043e\u043a", //$NON-NLS-1$ //$NON-NLS-2$
+        "Regr_Count", "\u0420\u0435\u0433\u0440\u0435\u0441\u0441\u0438\u044f\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e", //$NON-NLS-1$ //$NON-NLS-2$
+        "Regr_R2", "\u0420\u0435\u0433\u0440\u0435\u0441\u0441\u0438\u044fR2", //$NON-NLS-1$ //$NON-NLS-2$
+        "Regr_AvgX", "\u0420\u0435\u0433\u0440\u0435\u0441\u0441\u0438\u044f\u0421\u0440\u0435\u0434\u043d\u0435\u0435X", //$NON-NLS-1$ //$NON-NLS-2$
+        "Regr_AvgY", "\u0420\u0435\u0433\u0440\u0435\u0441\u0441\u0438\u044f\u0421\u0440\u0435\u0434\u043d\u0435\u0435Y", //$NON-NLS-1$ //$NON-NLS-2$
+        "Regr_SXX", "\u0420\u0435\u0433\u0440\u0435\u0441\u0441\u0438\u044fSXX", //$NON-NLS-1$ //$NON-NLS-2$
+        "Regr_SYY", "\u0420\u0435\u0433\u0440\u0435\u0441\u0441\u0438\u044fSYY", //$NON-NLS-1$ //$NON-NLS-2$
+        "Regr_SXY", "\u0420\u0435\u0433\u0440\u0435\u0441\u0441\u0438\u044fSXY"); //$NON-NLS-1$ //$NON-NLS-2$
 
     private static final String[][] PERCENT_TERMS = {
         DcsTerms.kDCSSystemFieldsGroupPercent, DcsTerms.kDCSSystemFieldsOverallPercent,
@@ -104,6 +134,31 @@ public final class DcsChartReferences
         }
     }
 
+    /** The broken chart references of a schema, in document order and counted by kind. */
+    public static final class Census
+    {
+        private final List<Problem> problems = new ArrayList<>();
+        private final Map<String, Integer> counts = new HashMap<>();
+
+        private void add(Problem problem)
+        {
+            problems.add(problem);
+            counts.merge(problem.key, Integer.valueOf(1), Integer::sum);
+        }
+
+        private int count(String key)
+        {
+            Integer count = counts.get(key);
+            return count == null ? 0 : count.intValue();
+        }
+
+        /** Number of broken references counted. */
+        public int size()
+        {
+            return problems.size();
+        }
+    }
+
     /** Every point and series group field and every measure of a chart, with its address. */
     public static List<Reference> references(DataCompositionChart chart, String chartAddress)
     {
@@ -125,51 +180,76 @@ public final class DcsChartReferences
     }
 
     /**
-     * Refusal for the first chart in {@code planned} that is new or changed relative to
-     * {@code original} and refers to data {@code schema} does not have, or {@code null}. A bad
-     * reference the same chart already had before the write is left alone, so an unrelated edit
-     * never fails over it.
+     * The broken chart references of every settings tree of {@code schema}, judged against the
+     * schema's own fields and each tree's own user fields.
      *
-     * @param schema the schema in the state this write leaves it in
-     * @param original the settings before the write, possibly {@code null}
-     * @param planned the settings this write commits, possibly {@code null}
-     * @param settingsAddress canonical address of the settings object
+     * @param schema the schema, possibly {@code null}
+     * @param rootFqn the canonical root the reported addresses start with
+     * @return the census, empty when the schema has no chart
+     */
+    public static Census census(DataCompositionSchema schema, String rootFqn)
+    {
+        Census census = new Census();
+        if (schema == null) return census;
+        Resolver schemaLevel = null;
+        // Parallel lists, not a map: two variants may share a name and both must be counted.
+        List<String> addresses = new ArrayList<>();
+        List<DataCompositionSettings> trees = new ArrayList<>();
+        addresses.add(DcsAddress.render(rootFqn, Collections.singletonList("defaultSettings"))); //$NON-NLS-1$
+        trees.add(schema.getDefaultSettings());
+        List<SettingsVariant> variants = schema.getSettingsVariants();
+        for (int i = 0; i < variants.size(); i++)
+        {
+            String name = variants.get(i).getName();
+            String selector = name == null || name.isEmpty() ? Integer.toString(i) : name;
+            addresses.add(DcsAddress.render(rootFqn, Arrays.asList("variants", selector, "settings"))); //$NON-NLS-1$ //$NON-NLS-2$
+            trees.add(variants.get(i).getSettings());
+        }
+        for (int t = 0; t < trees.size(); t++)
+        {
+            Map<String, DataCompositionChart> charts = charts(trees.get(t));
+            if (charts.isEmpty()) continue;
+            if (schemaLevel == null) schemaLevel = new Resolver(schema);
+            Resolver resolver = schemaLevel.withUserFields(trees.get(t));
+            for (Map.Entry<String, DataCompositionChart> chart : charts.entrySet())
+            {
+                String chartAddress = addresses.get(t) + "/" + chart.getKey(); //$NON-NLS-1$
+                for (Problem problem : resolver.problems(chart.getValue(), chartAddress))
+                {
+                    census.add(problem);
+                }
+            }
+        }
+        return census;
+    }
+
+    /**
+     * Refusal when {@code after} holds more broken chart references of some kind than
+     * {@code before}, or {@code null}. It lists every reference of each kind that grew.
+     *
+     * @param before the census of the schema before the write
+     * @param after the census of the state the write leaves behind
      * @return an actionable refusal, or {@code null}
      */
-    public static String error(DataCompositionSchema schema, DataCompositionSettings original,
-        DataCompositionSettings planned, String settingsAddress)
+    public static String error(Census before, Census after)
     {
-        if (schema == null || planned == null)
+        List<Problem> grown = new ArrayList<>();
+        Set<String> kinds = new LinkedHashSet<>();
+        for (Problem problem : after.problems)
         {
-            return null;
-        }
-        Map<String, DataCompositionChart> before = charts(original);
-        Resolver resolver = null;
-        for (Map.Entry<String, DataCompositionChart> entry : changed(before, charts(planned)).entrySet())
-        {
-            DataCompositionChart chart = entry.getValue();
-            if (resolver == null)
+            if (after.count(problem.key) > before.count(problem.key))
             {
-                resolver = new Resolver(schema, planned);
-            }
-            String chartAddress = settingsAddress + "/" + entry.getKey(); //$NON-NLS-1$
-            List<Problem> problems = resolver.problems(chart, chartAddress);
-            DataCompositionChart counterpart = before.get(entry.getKey());
-            if (counterpart != null && !problems.isEmpty())
-            {
-                Set<String> existing = new LinkedHashSet<>();
-                for (Problem problem : resolver.problems(counterpart, chartAddress))
-                {
-                    existing.add(problem.key());
-                }
-                problems.removeIf(problem -> existing.contains(problem.key()));
-            }
-            if (!problems.isEmpty())
-            {
-                return resolver.render(chartAddress, problems);
+                grown.add(problem);
+                kinds.add(problem.key);
             }
         }
-        return null;
+        if (grown.isEmpty()) return null;
+        int added = 0;
+        for (String kind : kinds)
+        {
+            added += after.count(kind) - before.count(kind);
+        }
+        return grown.get(0).resolver.render(grown, added);
     }
 
     /** Charts of a settings tree, keyed by their address relative to the settings. */
@@ -181,6 +261,44 @@ public final class DcsChartReferences
             collectCharts(settings.getItems(), "items", result); //$NON-NLS-1$
         }
         return result;
+    }
+
+    /** Whether a user-field expression aggregates, outside its string literals. */
+    static boolean aggregates(String expression)
+    {
+        if (expression == null) return false;
+        int current = 0;
+        while (current < expression.length())
+        {
+            char c = expression.charAt(current);
+            if (c == '"')
+            {
+                current = DcsReadProjection.afterStringLiteral(expression, current);
+                continue;
+            }
+            if (!Character.isLetterOrDigit(c) && c != '_')
+            {
+                current++;
+                continue;
+            }
+            int start = current;
+            while (current < expression.length() && (Character.isLetterOrDigit(expression.charAt(current))
+                || expression.charAt(current) == '_' || expression.charAt(current) == '.'))
+            {
+                current++;
+            }
+            int next = current;
+            while (next < expression.length() && Character.isWhitespace(expression.charAt(next)))
+            {
+                next++;
+            }
+            if (next < expression.length() && expression.charAt(next) == '('
+                && AGGREGATES.contains(lower(expression.substring(start, current))))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void collectCharts(List<StructureItem> items, String where,
@@ -204,8 +322,7 @@ public final class DcsChartReferences
     /**
      * The planned charts no unchanged original accounts for. Each original accounts for one equal
      * chart, at its own address first and then anywhere, so a moved chart is not a change and a
-     * copy of one is. Accounted originals leave {@code before}, which keeps only the changed or
-     * removed ones.
+     * copy of one is.
      */
     private static Map<String, DataCompositionChart> changed(Map<String, DataCompositionChart> before,
         Map<String, DataCompositionChart> planned)
@@ -287,6 +404,16 @@ public final class DcsChartReferences
         return value.toLowerCase(Locale.ROOT);
     }
 
+    private static Set<String> lowerSet(String... values)
+    {
+        Set<String> result = new HashSet<>();
+        for (String value : values)
+        {
+            result.add(lower(value));
+        }
+        return result;
+    }
+
     /** User-field paths compare by the part after the folder term, which is spelled in either language. */
     private static String userFieldKey(String path)
     {
@@ -314,21 +441,23 @@ public final class DcsChartReferences
         return false;
     }
 
-    /** One unresolved reference and why. */
+    /** One unresolved reference, why, and the resolver that judged it. */
     private static final class Problem
     {
         final Reference reference;
         final String reason;
+        final String chartAddress;
+        final Resolver resolver;
+        /** Role and lower-case field; the two field-less measure problems get their own marker. */
+        final String key;
 
-        Problem(Reference reference, String reason)
+        Problem(Reference reference, String reason, String chartAddress, Resolver resolver, String marker)
         {
             this.reference = reference;
             this.reason = reason;
-        }
-
-        String key()
-        {
-            return reference.role + '\n' + (reference.field == null ? "" : lower(reference.field)); //$NON-NLS-1$
+            this.chartAddress = chartAddress;
+            this.resolver = resolver;
+            this.key = reference.role + '\n' + (reference.field == null ? marker : lower(reference.field));
         }
     }
 
@@ -345,21 +474,29 @@ public final class DcsChartReferences
         }
     }
 
-    /** The fields, resources and user fields of the write's end state. */
+    /**
+     * The fields and resources of a schema, and the user fields of one settings tree. A user
+     * field maps to {@code TRUE} when it is a resource, {@code FALSE} when it is not, and
+     * {@code null} when the model cannot tell.
+     */
     private static final class Resolver
     {
-        private final Map<String, FieldInfo> fields = new LinkedHashMap<>();
-        private final Map<String, String> resources = new LinkedHashMap<>();
+        private final Map<String, FieldInfo> fields;
+        private final Map<String, String> resources;
+        private final boolean autoFill;
         private final Map<String, String> userFields = new LinkedHashMap<>();
-        private final Map<String, Boolean> userResources = new LinkedHashMap<>();
-        private final List<String> autoFillQueries = new ArrayList<>();
+        private final Map<String, Boolean> userResources = new HashMap<>();
 
-        Resolver(DataCompositionSchema schema, DataCompositionSettings settings)
+        Resolver(DataCompositionSchema schema)
         {
+            fields = new LinkedHashMap<>();
+            resources = new LinkedHashMap<>();
+            boolean anyAutoFill = false;
             for (DataSet dataSet : schema.getDataSets())
             {
-                addDataSet(dataSet);
+                anyAutoFill |= addDataSet(dataSet);
             }
+            autoFill = anyAutoFill;
             for (DataCompositionSchemaCalculatedField field : schema.getCalculatedFields())
             {
                 String dataPath = field.getDataPath();
@@ -377,28 +514,46 @@ public final class DcsChartReferences
                     resources.putIfAbsent(lower(dataPath), dataPath);
                 }
             }
-            if (settings.getUserFields() != null)
-            {
-                for (UserField field : settings.getUserFields().getItems())
-                {
-                    String dataPath = field.getDataPath();
-                    if (dataPath == null || dataPath.isEmpty()) continue;
-                    String key = userFieldKey(dataPath);
-                    key = key == null ? lower(dataPath) : key;
-                    userFields.putIfAbsent(key, dataPath);
-                    userResources.merge(key, Boolean.valueOf(isResource(field)), Boolean::logicalOr);
-                }
-            }
         }
 
-        private void addDataSet(DataSet dataSet)
+        private Resolver(Resolver schemaLevel)
         {
-            if (dataSet instanceof DataCompositionSchemaDataSetQuery
-                && ((DataCompositionSchemaDataSetQuery)dataSet).isAutoFillAvailableFields())
+            fields = schemaLevel.fields;
+            resources = schemaLevel.resources;
+            autoFill = schemaLevel.autoFill;
+        }
+
+        /** This schema's resolver extended with the user fields of one settings tree. */
+        Resolver withUserFields(DataCompositionSettings settings)
+        {
+            Resolver result = new Resolver(this);
+            if (settings == null || settings.getUserFields() == null) return result;
+            for (UserField field : settings.getUserFields().getItems())
             {
-                String query = ((DataCompositionSchemaDataSetQuery)dataSet).getQuery();
-                if (query != null) autoFillQueries.add(query);
+                String dataPath = field.getDataPath();
+                if (dataPath == null || dataPath.isEmpty()) continue;
+                String key = userFieldKey(dataPath);
+                key = key == null ? lower(dataPath) : key;
+                result.userFields.putIfAbsent(key, dataPath);
+                Boolean resource = isResource(field);
+                result.userResources.put(key, result.userResources.containsKey(key)
+                    ? either(result.userResources.get(key), resource) : resource);
             }
+            return result;
+        }
+
+        /** A duplicated user field is a resource if either spelling is; unknown beats "not". */
+        private static Boolean either(Boolean first, Boolean second)
+        {
+            if (Boolean.TRUE.equals(first) || Boolean.TRUE.equals(second)) return Boolean.TRUE;
+            return first == null || second == null ? null : Boolean.FALSE;
+        }
+
+        /** Whether the data set is or holds an auto-fill query set; lists its fields either way. */
+        private boolean addDataSet(DataSet dataSet)
+        {
+            boolean autoFillSet = dataSet instanceof DataCompositionSchemaDataSetQuery
+                && ((DataCompositionSchemaDataSetQuery)dataSet).isAutoFillAvailableFields();
             for (DataSetField field : dataSet.getFields())
             {
                 if (!(field instanceof DataCompositionSchemaDataSetField)) continue;
@@ -415,9 +570,10 @@ public final class DcsChartReferences
             {
                 for (DataSet item : ((DataCompositionSchemaDataSetUnion)dataSet).getItems())
                 {
-                    addDataSet(item);
+                    autoFillSet |= addDataSet(item);
                 }
             }
+            return autoFillSet;
         }
 
         private static boolean restrictsGroup(DataCompositionSchemaFieldUseRestriction restriction)
@@ -425,19 +581,20 @@ public final class DcsChartReferences
             return restriction != null && restriction.isGroup();
         }
 
-        private static boolean isResource(UserField field)
+        /** As EDT decides it: a total expression, or an aggregate in the detail expression. */
+        private static Boolean isResource(UserField field)
         {
-            if (!(field instanceof DataCompositionUserFieldExpression)) return false;
+            if (!(field instanceof DataCompositionUserFieldExpression)) return null;
             DataCompositionUserFieldExpression expression = (DataCompositionUserFieldExpression)field;
             String total = expression.getTotalExpression();
-            String detail = expression.getDetailExpression();
-            return total != null && !total.trim().isEmpty()
-                || detail != null && AGGREGATE.matcher(detail).find();
+            return Boolean.valueOf(total != null && !total.trim().isEmpty()
+                || aggregates(expression.getDetailExpression()));
         }
 
         private boolean hasResources()
         {
-            return !resources.isEmpty() || userResources.containsValue(Boolean.TRUE);
+            return !resources.isEmpty() || userResources.containsValue(Boolean.TRUE)
+                || userResources.containsValue(null);
         }
 
         List<Problem> problems(DataCompositionChart chart, String chartAddress)
@@ -458,13 +615,13 @@ public final class DcsChartReferences
                 }
                 if (reason != null)
                 {
-                    result.add(new Problem(reference, reason));
+                    result.add(new Problem(reference, reason, chartAddress, this, "#auto")); //$NON-NLS-1$
                 }
             }
             if (!measured)
             {
                 result.add(new Problem(new Reference(ROLE_MEASURE, null, chartAddress + "/selection"), //$NON-NLS-1$
-                    "the chart has no measure, so it has nothing to draw")); //$NON-NLS-1$
+                    "the chart has no measure, so it has nothing to draw", chartAddress, this, "#none")); //$NON-NLS-1$ //$NON-NLS-2$
             }
             return result;
         }
@@ -483,15 +640,21 @@ public final class DcsChartReferences
             String userKey = userFieldKey(path);
             if (userKey != null && userFields.containsKey(userKey))
             {
-                return Boolean.TRUE.equals(userResources.get(userKey)) ? null
-                    : "user field '" + userFields.get(userKey) + "' has no total expression, " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "so it is not a resource"; //$NON-NLS-1$
+                return !Boolean.FALSE.equals(userResources.get(userKey)) ? null
+                    : "user field '" + userFields.get(userKey) + "' has no total expression and " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "no aggregate in its expression, so it is not a resource"; //$NON-NLS-1$
             }
             int dot = path.lastIndexOf('.');
-            if (dot > 0 && isPercentTerm(path.substring(dot + 1))
-                && resources.containsKey(lower(path.substring(0, dot))))
+            if (dot > 0 && isPercentTerm(path.substring(dot + 1)))
             {
-                return null;
+                String base = path.substring(0, dot);
+                if (resources.containsKey(lower(base))) return null;
+                String baseUserKey = userFieldKey(base);
+                if (baseUserKey != null && userFields.containsKey(baseUserKey))
+                {
+                    return "percent fields belong to totalFields resources; user field '" //$NON-NLS-1$
+                        + userFields.get(baseUserKey) + "' has none"; //$NON-NLS-1$
+                }
             }
             if (fields.containsKey(key))
             {
@@ -512,21 +675,22 @@ public final class DcsChartReferences
                         + "forbids it)"; //$NON-NLS-1$
             }
             String userKey = userFieldKey(path);
-            if (userKey != null && userFields.containsKey(userKey)) return null;
-            if (resources.containsKey(key))
+            if (userKey != null) return userGroupReason(userKey);
+            // An auto-fill set may derive a data-set field under a resource's name, and such a field groups.
+            if (resources.containsKey(key) && !autoFill)
             {
                 return "'" + resources.get(key) + "' is a resource; a resource cannot be a point " //$NON-NLS-1$ //$NON-NLS-2$
                     + "or series"; //$NON-NLS-1$
             }
             for (int dot = path.lastIndexOf('.'); dot > 0; dot = path.lastIndexOf('.', dot - 1))
             {
-                String head = lower(path.substring(0, dot));
-                if (resources.containsKey(head))
+                String head = path.substring(0, dot);
+                if (resources.containsKey(lower(head)))
                 {
-                    return "'" + resources.get(head) + "' is a resource, and a resource's attributes " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "cannot be grouped"; //$NON-NLS-1$
+                    return "'" + resources.get(lower(head)) + "' is a resource, and a resource's " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "attributes cannot be grouped"; //$NON-NLS-1$
                 }
-                FieldInfo parent = fields.get(head);
+                FieldInfo parent = fields.get(lower(head));
                 if (parent != null)
                 {
                     return parent.childrenGroupable ? null
@@ -534,27 +698,37 @@ public final class DcsChartReferences
                             + "grouping (its attribute use restriction forbids it)"; //$NON-NLS-1$
                 }
             }
-            int dot = path.indexOf('.');
-            return mentionedByAutoFillQuery(dot < 0 ? path : path.substring(0, dot)) ? null
+            return autoFill ? null
                 : "no schema field, calculated field or user field has this data path"; //$NON-NLS-1$
         }
 
-        private boolean mentionedByAutoFillQuery(String name)
+        /** A user field groups as itself only: EDT lists it as a leaf, with no attributes. */
+        private String userGroupReason(String userKey)
         {
-            if (autoFillQueries.isEmpty() || name.isEmpty()) return false;
-            Pattern word = Pattern.compile("(?<![\\p{L}\\p{N}_])" + Pattern.quote(name) //$NON-NLS-1$
-                + "(?![\\p{L}\\p{N}_])", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE); //$NON-NLS-1$
-            for (String query : autoFillQueries)
+            if (userFields.containsKey(userKey)) return null;
+            for (int dot = userKey.lastIndexOf('.'); dot > 0; dot = userKey.lastIndexOf('.', dot - 1))
             {
-                if (word.matcher(query).find()) return true;
+                String head = userKey.substring(0, dot);
+                if (userFields.containsKey(head))
+                {
+                    return "user field '" + userFields.get(head) + "' has no attributes to group by; " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "group by the user field itself or by an attribute of a schema field"; //$NON-NLS-1$
+                }
             }
-            return false;
+            return "no user field of these settings has this data path"; //$NON-NLS-1$
         }
 
-        String render(String chartAddress, List<Problem> problems)
+        String render(List<Problem> problems, int added)
         {
-            StringBuilder message = new StringBuilder("Chart at '").append(chartAddress) //$NON-NLS-1$
-                .append("' refers to data this schema does not have, so it would render empty. "); //$NON-NLS-1$
+            Set<String> charts = new LinkedHashSet<>();
+            for (int i = 0; i < problems.size() && i < MAX_PROBLEMS; i++)
+            {
+                charts.add(problems.get(i).chartAddress);
+            }
+            StringBuilder message = new StringBuilder(charts.size() == 1 ? "Chart at '" : "Charts at '") //$NON-NLS-1$ //$NON-NLS-2$
+                .append(String.join("', '", charts)) //$NON-NLS-1$
+                .append(charts.size() == 1 ? "' refers" : "' refer") //$NON-NLS-1$ //$NON-NLS-2$
+                .append(" to data this schema does not have, so it would render empty. "); //$NON-NLS-1$
             boolean groupProblem = false;
             boolean measureProblem = false;
             for (int i = 0; i < problems.size() && i < MAX_PROBLEMS; i++)
@@ -577,6 +751,11 @@ public final class DcsChartReferences
                 message.append(" (").append(problems.size() - MAX_PROBLEMS) //$NON-NLS-1$
                     .append(" more)"); //$NON-NLS-1$
             }
+            if (added < problems.size())
+            {
+                message.append(" The write adds ").append(added).append(" of these ") //$NON-NLS-1$ //$NON-NLS-2$
+                    .append(problems.size()).append("; the others were already there."); //$NON-NLS-1$
+            }
             if (measureProblem)
             {
                 List<String> choices = new ArrayList<>(resources.values());
@@ -585,7 +764,7 @@ public final class DcsChartReferences
                     if (Boolean.TRUE.equals(userResources.get(entry.getKey()))) choices.add(entry.getValue());
                 }
                 message.append(" A measure must be a resource: ").append(choices(choices)) //$NON-NLS-1$
-                    .append(", a resource's percent field such as '<resource>.") //$NON-NLS-1$
+                    .append(", a totalFields resource's percent field such as '<resource>.") //$NON-NLS-1$
                     .append(DcsTerms.kDCSSystemFieldsOverallPercent[0])
                     .append("', or kind='auto'. Declare a missing resource in totalFields first."); //$NON-NLS-1$
             }
@@ -598,10 +777,11 @@ public final class DcsChartReferences
                 }
                 choices.addAll(userFields.values());
                 message.append(" A point or series groups by a schema field, calculated field or ") //$NON-NLS-1$
-                    .append("user field, or an attribute of one ('<field>.<attribute>'): ") //$NON-NLS-1$
-                    .append(choices(choices)).append('.');
+                    .append("user field, or by an attribute of a schema or calculated field ") //$NON-NLS-1$
+                    .append("('<field>.<attribute>'): ").append(choices(choices)).append('.'); //$NON-NLS-1$
             }
-            return message.append(" Nothing was written.").toString(); //$NON-NLS-1$
+            return message.append(" Fix or remove the reference, or keep the schema data it needs.") //$NON-NLS-1$
+                .append(" Nothing was written.").toString(); //$NON-NLS-1$
         }
 
         private static String choices(List<String> values)
