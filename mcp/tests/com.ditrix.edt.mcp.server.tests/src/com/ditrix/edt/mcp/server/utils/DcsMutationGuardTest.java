@@ -19,6 +19,8 @@ import com._1c.g5.v8.dt.dcs.model.core.DataCompositionPeriodAdditionType;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartOutputParameterValues;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilter;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
@@ -112,6 +114,82 @@ public class DcsMutationGuardTest
         }
         assertNull("a sibling replace does not reach the bound", //$NON-NLS-1$
             DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/selection"))); //$NON-NLS-1$
+    }
+
+    /** A filter's left operand is written only through an untyped ValueSpec, like a period bound. */
+    @Test
+    public void testUnauthorableFilterLeftOperandInAChartGroupBlocksReplace()
+    {
+        com._1c.g5.v8.dt.dcs.model.settings.DcsFactory factory =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE;
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        DataCompositionSettings settings = factory.createDataCompositionSettings();
+        DataCompositionChart chart = factory.createDataCompositionChart();
+        DataCompositionChartGroup series = factory.createDataCompositionChartGroup();
+        DataCompositionFilter filter = factory.createDataCompositionFilter();
+        DataCompositionFilterItem item = factory.createDataCompositionFilterItem();
+        item.setLeft(com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+            .createDataCompositionField());
+        filter.getItems().add(item);
+        series.setFilter(filter);
+        chart.getSeries().add(series);
+        settings.getItems().add(chart);
+        schema.setDefaultSettings(settings);
+        assertNull("a field operand is authorable", //$NON-NLS-1$
+            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/items/0"))); //$NON-NLS-1$
+
+        EnumValue left = McoreFactory.eINSTANCE.createEnumValue();
+        left.setValue(DataCompositionPeriodAdditionType.MONTH);
+        item.setLeft(left);
+
+        String error = DcsMutationGuard.replaceError(schema,
+            address(ROOT + "#/defaultSettings/items/0/series/0")); //$NON-NLS-1$
+        assertNotNull(error);
+        assertTrue(error, error.contains("EnumValue at Report.Sales#/defaultSettings/items/0" //$NON-NLS-1$
+            + "/series/0/filter/items/0/left")); //$NON-NLS-1$
+
+        // The right operands go through the same untyped ValueSpec.
+        item.setLeft(com._1c.g5.v8.dt.dcs.model.core.DcsFactory.eINSTANCE
+            .createDataCompositionField());
+        item.getRight().add(McoreFactory.eINSTANCE.createStringValue());
+        assertNull("a string operand is authorable", //$NON-NLS-1$
+            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/items/0"))); //$NON-NLS-1$
+        EnumValue right = McoreFactory.eINSTANCE.createEnumValue();
+        right.setValue(DataCompositionPeriodAdditionType.MONTH);
+        item.getRight().add(right);
+        error = DcsMutationGuard.replaceError(schema,
+            address(ROOT + "#/defaultSettings/items/0")); //$NON-NLS-1$
+        assertNotNull(error);
+        assertTrue(error, error.contains("EnumValue at Report.Sales#/defaultSettings/items/0" //$NON-NLS-1$
+            + "/series/0/filter/items/0/right")); //$NON-NLS-1$
+    }
+
+    /** The typed parameter body holds one value; a stored list would be truncated to it. */
+    @Test
+    public void testMultiValuedChartOutputParameterBlocksReplace()
+    {
+        com._1c.g5.v8.dt.dcs.model.settings.DcsFactory factory =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE;
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        DataCompositionSettings settings = factory.createDataCompositionSettings();
+        DataCompositionChart chart = factory.createDataCompositionChart();
+        DataCompositionChartOutputParameterValues output =
+            factory.createDataCompositionChartOutputParameterValues();
+        SettingsParameterValue parameter = factory.createSettingsParameterValue();
+        parameter.getValues().add(McoreFactory.eINSTANCE.createStringValue());
+        output.getItems().add(parameter);
+        chart.setOutputParameters(output);
+        settings.getItems().add(chart);
+        schema.setDefaultSettings(settings);
+        assertNull("a single value is authorable", //$NON-NLS-1$
+            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/items/0"))); //$NON-NLS-1$
+
+        parameter.getValues().add(McoreFactory.eINSTANCE.createStringValue());
+        String error = DcsMutationGuard.replaceError(schema,
+            address(ROOT + "#/defaultSettings/items/0")); //$NON-NLS-1$
+        assertNotNull(error);
+        assertTrue(error, error.contains("SettingsParameterValue at Report.Sales#/defaultSettings" //$NON-NLS-1$
+            + "/items/0/outputParameters/items/0")); //$NON-NLS-1$
     }
 
     @Test

@@ -39,6 +39,7 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
 import com._1c.g5.v8.dt.dcs.model.schema.DataSet;
 import com._1c.g5.v8.dt.dcs.model.schema.DataSetField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
@@ -349,14 +350,18 @@ public final class DcsReadProjection
         // Slots the writer fills only through an untyped ValueSpec; any other Value there is lost.
         boolean untypedValueSlot = additionalProperties
             || "periodAdditionBegin".equals(collection) //$NON-NLS-1$
-            || "periodAdditionEnd".equals(collection); //$NON-NLS-1$
+            || "periodAdditionEnd".equals(collection) //$NON-NLS-1$
+            || object.eContainer() instanceof DataCompositionFilterItem
+                && ("left".equals(collection) || "right".equals(collection)); //$NON-NLS-1$ //$NON-NLS-2$
         if (untypedValueSlot && object instanceof Value
             && !isAuthorableUntypedValue((Value)object))
         {
             unsupported = true;
         }
+        // The typed body carries a single 'value'; the writer keeps only that one entry.
         if (object instanceof DataCompositionParameterValue
-            && !((DataCompositionParameterValue)object).getNestedParameterValues().isEmpty())
+            && (!((DataCompositionParameterValue)object).getNestedParameterValues().isEmpty()
+                || ((DataCompositionParameterValue)object).getValues().size() > 1))
         {
             unsupported = true;
         }

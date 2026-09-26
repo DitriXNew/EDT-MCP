@@ -20,6 +20,8 @@ import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterValue;
 import com._1c.g5.v8.dt.dcs.model.core.LocalString;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartGroup;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameterCollection;
@@ -154,7 +156,12 @@ public class DcsOptionsTest
         assertTrue(markdown, markdown.contains("ChartType")); //$NON-NLS-1$
         assertTrue(markdown, markdown.contains("pointsViewMode")); //$NON-NLS-1$
         assertTrue(markdown, markdown.contains("seriesViewMode")); //$NON-NLS-1$
-        assertTrue(markdown, markdown.contains("points[].groupFields.items[].groupType")); //$NON-NLS-1$
+        for (String axis : new String[] {"points", "series"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            assertTrue(markdown, markdown.contains(axis + "[].groupFields.items[].groupType")); //$NON-NLS-1$
+            assertTrue(markdown, markdown.contains(axis //$NON-NLS-1$
+                + "[].groupFields.items[].periodAdditionType")); //$NON-NLS-1$
+        }
         assertTrue("a chart does not offer the report-level catalogue", //$NON-NLS-1$
             !markdown.contains("VerticalOverallPlacement")); //$NON-NLS-1$
     }
@@ -193,6 +200,35 @@ public class DcsOptionsTest
         String rows = options(schema, root + "1/rows/0", "table"); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(rows, rows.contains("groupState")); //$NON-NLS-1$
         assertTrue(rows, !rows.contains("rowsViewMode")); //$NON-NLS-1$
+    }
+
+    /** An exact group-field address lists only the members applyGroupField writes. */
+    @Test
+    public void testGroupFieldAddressListsTheGroupFieldEnums()
+    {
+        com._1c.g5.v8.dt.dcs.model.settings.DcsFactory factory =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE;
+        DataCompositionSchema schema =
+            com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE.createDataCompositionSchema();
+        DataCompositionSettings settings = factory.createDataCompositionSettings();
+        DataCompositionChart chart = factory.createDataCompositionChart();
+        DataCompositionChartGroup point = factory.createDataCompositionChartGroup();
+        DataCompositionGroupFields fields = factory.createDataCompositionGroupFields();
+        fields.getItems().add(factory.createDataCompositionGroupField());
+        point.setGroupFields(fields);
+        chart.getPoints().add(point);
+        settings.getItems().add(chart);
+        schema.setDefaultSettings(settings);
+
+        String markdown = options(schema,
+            "Report.Options#/defaultSettings/items/0/points/0/groupFields/items/0", "grouping"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(markdown, markdown.contains("DataCompositionGroupType")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("DataCompositionPeriodAdditionType")); //$NON-NLS-1$
+        assertTrue(markdown, !markdown.contains("groupState")); //$NON-NLS-1$
+        assertTrue(markdown, !markdown.contains("itemsViewMode")); //$NON-NLS-1$
+        assertTrue(markdown, !markdown.contains("groupFields.items[]")); //$NON-NLS-1$
+        assertTrue(markdown, !markdown.contains("output parameter")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("**Total:** 2 options")); //$NON-NLS-1$
     }
 
     private static String options(DataCompositionSchema schema, String address, String type)

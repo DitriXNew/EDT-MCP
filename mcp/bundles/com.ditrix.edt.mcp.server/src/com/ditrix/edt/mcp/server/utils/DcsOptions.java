@@ -23,6 +23,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceU
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFieldPlacement;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterApplicationType;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItemsGroupType;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettingsItemState;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettingsItemViewMode;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableGroup;
@@ -75,6 +76,8 @@ public final class DcsOptions
             Collections.singletonList(configurationLanguage == null ? "en" : configurationLanguage), //$NON-NLS-1$
             configurationLanguage == null ? "en" : configurationLanguage); //$NON-NLS-1$
         List<Option> options = new ArrayList<>();
+        // A group-field address is written by applyGroupField: only its own members apply.
+        boolean groupField = node.value instanceof DataCompositionGroupField;
         try
         {
             if ("conditionalAppearance".equals(type)) //$NON-NLS-1$
@@ -86,8 +89,8 @@ public final class DcsOptions
                     DcsSettingsWriter.appearanceParameters(catalogue, version,
                         languages.resolvedCode()), languages);
             }
-            if ("outputParameter".equals(type) || "userSettings".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
-                || "grouping".equals(type) || "table".equals(type) || "chart".equals(type)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            if (!groupField && ("outputParameter".equals(type) || "userSettings".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
+                || "grouping".equals(type) || "table".equals(type) || "chart".equals(type))) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             {
                 OutputParameterCatalogue catalogue = outputCatalogue(type, address, node.value,
                     node.owner);
@@ -109,7 +112,7 @@ public final class DcsOptions
         // A points/series/rows/columns group is typed as its chart/table but written as a grouping.
         boolean axisGroup = node.value instanceof DataCompositionChartGroup
             || node.value instanceof DataCompositionTableGroup;
-        addBodyEnums(options, axisGroup ? "grouping" : type); //$NON-NLS-1$
+        addBodyEnums(options, groupField ? "groupField" : axisGroup ? "grouping" : type); //$NON-NLS-1$ //$NON-NLS-2$
 
         int limit = Pagination.clampLimit(requestedLimit == null ? Pagination.DEFAULT_LIMIT
             : requestedLimit.intValue(), Pagination.MAX_LIMIT);
@@ -291,8 +294,17 @@ public final class DcsOptions
                 addEnum(result, "viewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
                 addEnum(result, "pointsViewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
                 addEnum(result, "seriesViewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
-                addEnum(result, "points[].groupFields.items[].groupType", //$NON-NLS-1$
-                    DataCompositionGroupType.values());
+                for (String axis : new String[] {"points", "series"}) //$NON-NLS-1$ //$NON-NLS-2$
+                {
+                    addEnum(result, axis + "[].groupFields.items[].groupType", //$NON-NLS-1$
+                        DataCompositionGroupType.values());
+                    addEnum(result, axis + "[].groupFields.items[].periodAdditionType", //$NON-NLS-1$
+                        DataCompositionPeriodAdditionType.values());
+                }
+                break;
+            case "groupField": //$NON-NLS-1$
+                addEnum(result, "groupType", DataCompositionGroupType.values()); //$NON-NLS-1$
+                addEnum(result, "periodAdditionType", DataCompositionPeriodAdditionType.values()); //$NON-NLS-1$
                 break;
             default:
                 break;
