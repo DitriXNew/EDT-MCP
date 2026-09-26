@@ -254,11 +254,15 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
         {
             return;
         }
-        long threadId = idGenerator.getAndIncrement();
-        threadsById.put(threadId, thread);
-        threadAppId.put(threadId, appId);
-        SuspendSnapshot snapshot = new SuspendSnapshot(threadId, thread);
-        snapshots.put(appId, snapshot);
+        SuspendSnapshot current = snapshots.get(appId);
+        // A poller may have registered this stop before its event arrived: keep the id it handed out.
+        if (current == null || current.thread != thread)
+        {
+            long threadId = idGenerator.getAndIncrement();
+            threadsById.put(threadId, thread);
+            threadAppId.put(threadId, appId);
+            snapshots.put(appId, new SuspendSnapshot(threadId, thread));
+        }
         // notify any waiters
         notifyAll();
     }
@@ -342,20 +346,34 @@ public final class DebugSessionRegistry // NOSONAR intentional singleton (Eclips
     /** Registers an IStackFrame and returns a stable id for later lookup. */
     public synchronized long registerFrame(IStackFrame frame)
     {
-        long id = idGenerator.getAndIncrement();
-        framesById.put(id, frame);
-        // Track owning appId so onResumeOrTerminate can clean up deterministically
+        String appId = null;
         try
         {
-            String appId = findApplicationIdFor(frame.getThread());
-            if (appId != null)
-            {
-                frameAppId.put(id, appId);
-            }
+            appId = findApplicationIdFor(frame.getThread());
         }
         catch (Exception ex)
         {
             // best effort
+        }
+        return registerFrame(frame, appId);
+    }
+
+    /**
+     * Registers an IStackFrame owned by the given session, so forgetting that session drops it.
+     * Pass the key the frame's snapshot lives under: a launchless server session's minted key is
+     * never derivable from the frame's own launch.
+     *
+     * @param frame the stack frame
+     * @param applicationId the owning session key, or {@code null} to leave it untracked
+     * @return the stable frame reference
+     */
+    public synchronized long registerFrame(IStackFrame frame, String applicationId)
+    {
+        long id = idGenerator.getAndIncrement();
+        framesById.put(id, frame);
+        if (applicationId != null)
+        {
+            frameAppId.put(id, applicationId);
         }
         return id;
     }

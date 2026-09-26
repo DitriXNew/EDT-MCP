@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -148,6 +149,28 @@ public class DebugPauseToolTest
         {
             assertFalse("a paused result must not carry " + absent, result.has(absent)); //$NON-NLS-1$
         }
+    }
+
+    @Test
+    public void testFrameRefsOfALaunchlessSessionDieWithIt() throws Exception
+    {
+        // A launchless server session lives under a minted key its frames' launch cannot yield.
+        String minted = "ServerApplication.PauseToolApp"; //$NON-NLS-1$
+        IThread thread = mock(IThread.class);
+        when(thread.isSuspended()).thenReturn(true);
+        IStackFrame frame = mock(IStackFrame.class);
+        when(frame.getThread()).thenReturn(thread);
+        when(thread.getStackFrames()).thenReturn(new IStackFrame[] { frame });
+        IDebugTarget target = mock(IDebugTarget.class);
+        when(target.getThreads()).thenReturn(new IThread[] { thread });
+        DebugPause.Outcome outcome = DebugPause.pause(target, minted, registry, 10_000, 10);
+        long topFrameRef = json(DebugPauseTool.render(outcome, minted, false, true, 10, registry))
+            .get("topFrameRef").getAsLong(); //$NON-NLS-1$
+
+        registry.forgetApplication(minted);
+
+        assertNull("forgetting the session must drop the frameRefs it handed out", //$NON-NLS-1$
+            registry.getFrame(topFrameRef));
     }
 
     @Test

@@ -86,7 +86,8 @@ public final class DebugPause
      * @param timeoutMs the wait window in milliseconds
      * @param pollIntervalMs the pause between two observations in milliseconds
      * @return the observed outcome (never {@code null})
-     * @throws DebugException if the suspend request itself fails - the break may or may not be armed
+     * @throws DebugException if the suspend request fails on a target that is still live - the
+     *     break may or may not be armed
      * @throws InterruptedException if the waiting thread is interrupted after the request
      */
     public static Outcome pause(IDebugTarget target, String applicationId, DebugSessionRegistry registry,
@@ -101,11 +102,23 @@ public final class DebugPause
         {
             return new Outcome(State.SUSPENDED, current, true);
         }
-        // Nothing is suspended now, so a snapshot still held for the session is stale.
-        registry.clearSnapshot(applicationId);
-        if (!requestSuspend(target) && !target.isSuspended())
+        boolean requested;
+        try
         {
-            return new Outcome(State.REFUSED, null, false);
+            requested = requestSuspend(target);
+        }
+        catch (DebugException e)
+        {
+            // A request that failed because the target ended has a known outcome.
+            if (target.isTerminated())
+            {
+                return new Outcome(State.TERMINATED, null, false);
+            }
+            throw e;
+        }
+        if (!requested && !target.isSuspended())
+        {
+            return new Outcome(target.isTerminated() ? State.TERMINATED : State.REFUSED, null, false);
         }
         long deadline = System.currentTimeMillis() + timeoutMs;
         while (true)
@@ -136,18 +149,19 @@ public final class DebugPause
         String applicationId, DebugSessionRegistry registry)
     {
         DebugSessionRegistry.SuspendSnapshot existing = registry.getSnapshot(applicationId);
-        if (existing != null && isSuspended(existing.thread))
+        if (existing != null)
         {
-            return existing;
+            if (isSuspended(existing.thread))
+            {
+                return existing;
+            }
+            // That stop was released unseen: its threadId and frameRefs are stale along with it.
+            registry.forgetApplication(applicationId);
         }
         IThread suspended = DebugServerTargetSupport.findSuspendedThread(target);
         if (suspended == null)
         {
             return null;
-        }
-        if (existing != null)
-        {
-            registry.clearSnapshot(applicationId);
         }
         registry.injectSuspend(applicationId, suspended);
         DebugSessionRegistry.SuspendSnapshot registered = registry.getSnapshot(applicationId);

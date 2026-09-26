@@ -26,6 +26,7 @@ import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.debug.core.DebugException;
 import org.eclipse.debug.core.model.IDebugTarget;
+import org.eclipse.debug.core.model.IStackFrame;
 import org.eclipse.debug.core.model.IThread;
 import org.junit.After;
 import org.junit.Test;
@@ -139,6 +140,8 @@ public class DebugPauseTest
     {
         IThread released = thread(new AtomicBoolean(false));
         registry.injectSuspend(APP_ID, released);
+        long staleThreadId = registry.getSnapshot(APP_ID).threadId;
+        long staleFrameRef = registry.registerFrame(mock(IStackFrame.class), APP_ID);
         AtomicBoolean suspended = new AtomicBoolean(false);
         IThread running = thread(suspended);
         IDebugTarget target = target(running);
@@ -152,6 +155,41 @@ public class DebugPauseTest
 
         assertSame(running, outcome.snapshot.thread);
         assertSame(running, registry.getSnapshot(APP_ID).thread);
+        assertNull("the released stop's threadId must stop resolving", registry.getThread(staleThreadId));
+        assertNull("the released stop's frameRef must stop resolving", registry.getFrame(staleFrameRef));
+    }
+
+    @Test
+    public void testAReleasedStopReplacedByAnotherSuspendedThreadDropsItsReferences() throws Exception
+    {
+        IThread released = thread(new AtomicBoolean(false));
+        registry.injectSuspend(APP_ID, released);
+        long staleThreadId = registry.getSnapshot(APP_ID).threadId;
+        long staleFrameRef = registry.registerFrame(mock(IStackFrame.class), APP_ID);
+        IThread stopped = thread(new AtomicBoolean(true));
+        IDebugTarget target = target(released, stopped);
+
+        DebugPause.Outcome outcome = DebugPause.pause(target, APP_ID, registry, 10_000, 10);
+
+        assertEquals(DebugPause.State.SUSPENDED, outcome.state);
+        assertTrue(outcome.alreadySuspended);
+        assertSame(stopped, outcome.snapshot.thread);
+        assertNull(registry.getThread(staleThreadId));
+        assertNull(registry.getFrame(staleFrameRef));
+        assertSame(stopped, registry.getThread(outcome.snapshot.threadId));
+        verify(target, never()).suspend();
+    }
+
+    @Test
+    public void testALiveStopKeepsTheReferencesAlreadyHandedOut() throws Exception
+    {
+        IThread thread = thread(new AtomicBoolean(true));
+        registry.injectSuspend(APP_ID, thread);
+        long frameRef = registry.registerFrame(mock(IStackFrame.class), APP_ID);
+
+        DebugPause.pause(target(thread), APP_ID, registry, 10_000, 10);
+
+        assertNotNull("a stop that is still live must keep its frameRefs", registry.getFrame(frameRef));
     }
 
     @Test
@@ -239,6 +277,34 @@ public class DebugPauseTest
 
         assertEquals(DebugPause.State.TERMINATED, outcome.state);
         verify(target, never()).suspend();
+    }
+
+    @Test
+    public void testATargetEndingBeforeTheRequestIsTerminatedNotRefused() throws Exception
+    {
+        IDebugTarget target = target(thread(new AtomicBoolean(false)));
+        // Live at the first check, gone by the time the request would go out.
+        when(target.isTerminated()).thenReturn(false, true);
+
+        DebugPause.Outcome outcome = DebugPause.pause(target, APP_ID, registry, 10_000, 10);
+
+        assertEquals(DebugPause.State.TERMINATED, outcome.state);
+        verify(target, never()).suspend();
+    }
+
+    @Test
+    public void testARequestFailingBecauseTheTargetEndedIsTerminated() throws Exception
+    {
+        IDebugTarget target = target(thread(new AtomicBoolean(false)));
+        when(target.isTerminated()).thenReturn(false, true);
+        when(target.canSuspend()).thenReturn(true);
+        doThrow(new DebugException(new Status(IStatus.ERROR, "test", "target gone"))) //$NON-NLS-1$ //$NON-NLS-2$
+            .when(target).suspend();
+
+        DebugPause.Outcome outcome = DebugPause.pause(target, APP_ID, registry, 10_000, 10);
+
+        assertEquals(DebugPause.State.TERMINATED, outcome.state);
+        assertNull(outcome.snapshot);
     }
 
     @Test

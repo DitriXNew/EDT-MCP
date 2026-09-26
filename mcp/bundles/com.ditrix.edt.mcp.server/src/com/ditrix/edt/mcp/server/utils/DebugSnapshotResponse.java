@@ -38,8 +38,9 @@ public final class DebugSnapshotResponse
 
     /**
      * Adds the snapshot of a suspended thread to {@code result}. Every stack frame is registered
-     * in the registry so follow-up tools (get_variables, evaluate_expression, step) can address it
-     * by {@code frameRef}. {@code autoResolved} and {@code serverTarget} are emitted only when true.
+     * under {@code applicationId}, the key the snapshot lives under, so follow-up tools
+     * (get_variables, evaluate_expression, step) can address it by {@code frameRef} and forgetting
+     * the session drops it. {@code autoResolved} and {@code serverTarget} are emitted only when true.
      *
      * @param result the result to extend (its own outcome keys are left untouched)
      * @param snapshot the suspend snapshot to render
@@ -60,7 +61,7 @@ public final class DebugSnapshotResponse
         for (int i = 0; i < stackFrames.length; i++)
         {
             IStackFrame f = stackFrames[i];
-            long frameRef = registry.registerFrame(f);
+            long frameRef = registry.registerFrame(f, applicationId);
             Map<String, Object> dto = new LinkedHashMap<>();
             dto.put("frameIndex", i); //$NON-NLS-1$
             dto.put("frameRef", frameRef); //$NON-NLS-1$
