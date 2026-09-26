@@ -242,7 +242,7 @@ public class BinaryToXmlConverterTest
     {
         // EDT's CLI import asks Files.exists(dir/Configuration.xml): the check must ask the same.
         Path xml = Files.createDirectories(workDir.resolve("xml")); //$NON-NLS-1$
-        write(xml.resolve("configuration.xml"), "<MetaDataObject/>"); //$NON-NLS-1$ //$NON-NLS-2$
+        write(xml.resolve("configuration.xml"), externalXml("ExternalReport")); //$NON-NLS-1$ //$NON-NLS-2$
         boolean edtSeesAConfiguration = Files.exists(xml.resolve("Configuration.xml")); //$NON-NLS-1$
         assertEquals("on this file system's case rules", edtSeesAConfiguration, //$NON-NLS-1$
             BinaryToXmlConverter.verifyDump(SourceKind.EXTERNAL_REPORT, xml) != null);
