@@ -470,8 +470,9 @@ public final class CommandInterfaceSupport
 
     /**
      * Validates a {@code commands} payload against the section and, when it changes anything,
-     * applies it in ONE BM write transaction through the platform's customization tasks, then reads
-     * back what the command interface stores. The caller force-exports {@link EditResult#writtenFqn}.
+     * re-plans and applies it in ONE BM write transaction through the platform's customization
+     * tasks, then reads back what the command interface stores. The caller force-exports
+     * {@link EditResult#writtenFqn}.
      *
      * @param model the project's BM model
      * @param address the parsed address
@@ -480,33 +481,104 @@ public final class CommandInterfaceSupport
      */
     public static EditResult edit(IBmModel model, CommandInterfaceAddress address, List<JsonObject> entries)
     {
+        EditResult result = edit(model, entries, (tx, e) -> planInTx(tx, address, e),
+            (tx, pm, plan) -> applyInTx(tx, pm, address, plan), address.ownerFqn());
+        if (result.writtenFqn != null)
+        {
+            String writtenFqn = result.writtenFqn;
+            Plan plan = result.plan;
+            result.stored = BmTransactions.read(model, "Read back command interface", //$NON-NLS-1$
+                (tx, pm) -> storedState(tx, writtenFqn, plan));
+        }
+        return result;
+    }
+
+    /** Validates and plans a batch against the section as one transaction sees it. */
+    @FunctionalInterface
+    interface Planner
+    {
+        PlanResult plan(IBmTransaction tx, List<JsonObject> entries);
+    }
+
+    /** Applies a plan inside a write transaction and returns the written command interface's FQN. */
+    @FunctionalInterface
+    interface Applier
+    {
+        String apply(IBmTransaction tx, IProgressMonitor pm, Plan plan);
+    }
+
+    /**
+     * The edit without the read-back. A refused batch never opens a write; an accepted one is planned
+     * again inside the write, and that plan is the one applied.
+     */
+    static EditResult edit(IBmModel model, List<JsonObject> entries, Planner planner, Applier applier,
+        String ownerFqn)
+    {
         EditResult result = new EditResult();
-        PlanResult planned = BmTransactions.read(model, "Plan command interface edit", (tx, pm) -> { //$NON-NLS-1$
-            Snapshot snapshot = snapshotInTx(tx, address);
-            if (snapshot.error != null)
-            {
-                return CommandInterfaceSection.failed(snapshot.error);
-            }
-            Configuration config = (Configuration)tx.getTopObjectByFqn(CONFIGURATION_FQN);
-            return snapshot.section.plan(entries, ref -> canonicalRole(config, ref));
-        });
+        PlanResult planned = BmTransactions.read(model, "Plan command interface edit", //$NON-NLS-1$
+            (tx, pm) -> planner.plan(tx, entries));
         if (planned.error != null)
         {
             result.error = planned.error;
             return result;
         }
-        Plan plan = planned.plan;
-        result.plan = plan;
-        if (plan.isEmpty())
+        result.plan = planned.plan;
+        if (planned.plan.isEmpty())
         {
             return result;
         }
-        String writtenFqn = BmTransactions.write(model, "Edit command interface", //$NON-NLS-1$
-            (tx, pm) -> applyInTx(tx, pm, address, plan));
-        result.writtenFqn = writtenFqn;
-        result.stored = BmTransactions.read(model, "Read back command interface", //$NON-NLS-1$
-            (tx, pm) -> storedState(tx, writtenFqn, plan));
-        return result;
+        try
+        {
+            // The earlier read may be stale by now, and a deadlock retry re-runs this body afresh.
+            return BmTransactions.write(model, "Edit command interface", (tx, pm) -> { //$NON-NLS-1$
+                PlanResult fresh = planner.plan(tx, entries);
+                if (fresh.error != null)
+                {
+                    throw new SectionChangedException(fresh.error);
+                }
+                EditResult applied = new EditResult();
+                applied.plan = fresh.plan;
+                applied.writtenFqn = fresh.plan.isEmpty() ? null : applier.apply(tx, pm, fresh.plan);
+                return applied;
+            });
+        }
+        catch (SectionChangedException e)
+        {
+            result.plan = null;
+            result.error = sectionChangedError(ownerFqn, e.getMessage());
+            return result;
+        }
+    }
+
+    /** The refusal when the section changed between validation and the write. */
+    static String sectionChangedError(String ownerFqn, String why)
+    {
+        return "The command interface of " + ownerFqn + " changed while this call was writing it, and the " //$NON-NLS-1$ //$NON-NLS-2$
+            + "batch no longer applies: " + why + " Nothing was changed; read it again with " //$NON-NLS-1$ //$NON-NLS-2$
+            + "get_metadata_details and retry."; //$NON-NLS-1$
+    }
+
+    /** Thrown inside the write to roll it back when the re-planned batch no longer validates. */
+    static final class SectionChangedException
+        extends RuntimeException
+    {
+        private static final long serialVersionUID = 1L;
+
+        SectionChangedException(String message)
+        {
+            super(message);
+        }
+    }
+
+    private static PlanResult planInTx(IBmTransaction tx, CommandInterfaceAddress address, List<JsonObject> entries)
+    {
+        Snapshot snapshot = snapshotInTx(tx, address);
+        if (snapshot.error != null)
+        {
+            return CommandInterfaceSection.failed(snapshot.error);
+        }
+        Configuration config = (Configuration)tx.getTopObjectByFqn(CONFIGURATION_FQN);
+        return snapshot.section.plan(entries, ref -> canonicalRole(config, ref));
     }
 
     /** Maps a requested role FQN to {@code Role.<Name>}, or {@code null} when the configuration has none. */
@@ -542,7 +614,8 @@ public final class CommandInterfaceSupport
         Plan plan)
     {
         Configuration config = (Configuration)tx.getTopObjectByFqn(CONFIGURATION_FQN);
-        CommandInterface commandInterface = commandInterfaceInTx(tx, config, address);
+        Target target = commandInterfaceInTx(tx, config, address);
+        CommandInterface commandInterface = target.commandInterface;
         for (Map.Entry<Item, Visibility> e : plan.visibility().entrySet())
         {
             SetCommandVisibilityTask.create(commandInterface, (Command)e.getKey().handle(),
@@ -563,7 +636,20 @@ public final class CommandInterfaceSupport
             SetCommandOrderTask.create(commandInterface, (CommandGroup)e.getKey().handle(), commands)
                 .execute(tx, pm);
         }
-        return ((IBmObject)commandInterface).bmGetFqn();
+        return target.fqn;
+    }
+
+    /** The section's command interface in a write transaction and the FQN it is registered under. */
+    static final class Target
+    {
+        final CommandInterface commandInterface;
+        final String fqn;
+
+        Target(CommandInterface commandInterface, String fqn)
+        {
+            this.commandInterface = commandInterface;
+            this.fqn = fqn;
+        }
     }
 
     /**
@@ -571,7 +657,7 @@ public final class CommandInterfaceSupport
      * has no stored object yet; it is attached under the platform's own external-property FQN, as
      * the editor's tasks do.
      */
-    private static CommandInterface commandInterfaceInTx(IBmTransaction tx, Configuration config,
+    private static Target commandInterfaceInTx(IBmTransaction tx, Configuration config,
         CommandInterfaceAddress address)
     {
         EObject owner;
@@ -594,17 +680,26 @@ public final class CommandInterfaceSupport
         Object value = owner.eGet(feature, true);
         if (value instanceof CommandInterface && !((EObject)value).eIsProxy())
         {
-            return tx.toTransactionObject((CommandInterface)value);
+            CommandInterface stored = tx.toTransactionObject((CommandInterface)value);
+            return new Target(stored, ((IBmObject)stored).bmGetFqn());
         }
-        String fqn = externalPropertyFqn(owner, feature, value);
+        return registeredOrAttached(tx, externalPropertyFqn(owner, feature, value));
+    }
+
+    /**
+     * The command interface registered under {@code fqn}, or a new one attached there. Either way the
+     * FQN reported is {@code fqn} itself, never {@code bmGetFqn()} of an object this transaction attached.
+     */
+    static Target registeredOrAttached(IBmTransaction tx, String fqn)
+    {
         IBmObject existing = tx.getTopObjectByFqn(fqn);
         if (existing instanceof CommandInterface)
         {
-            return (CommandInterface)existing;
+            return new Target((CommandInterface)existing, fqn);
         }
         CommandInterface created = CmiFactory.eINSTANCE.createCommandInterface();
         tx.attachTopObject((IBmObject)created, fqn);
-        return created;
+        return new Target(created, fqn);
     }
 
     private static String externalPropertyFqn(EObject owner, EReference feature, Object proxy)
