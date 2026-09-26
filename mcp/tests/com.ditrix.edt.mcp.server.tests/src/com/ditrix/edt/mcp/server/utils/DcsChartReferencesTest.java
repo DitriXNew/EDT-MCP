@@ -420,6 +420,19 @@ public class DcsChartReferencesTest
         assertNull("a point field under a disabled chart group", after(before, schema)); //$NON-NLS-1$
     }
 
+    @Test
+    public void testASwitchedOffChartIsNotJudged()
+    {
+        DataCompositionSchema schema = schema();
+        DcsChartReferences.Census before = DcsChartReferences.census(schema, ROOT);
+        schema.setDefaultSettings(settings(chart(points("Missing"), "", ""))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        DataCompositionChart chart = (DataCompositionChart)schema.getDefaultSettings().getItems().get(0);
+        assertNotNull("the enabled chart is broken", after(before, schema)); //$NON-NLS-1$
+
+        chart.setUse(false);
+        assertNull("a switched-off chart", after(before, schema)); //$NON-NLS-1$
+    }
+
     /** An unnamed variant and one named like its index are separate trees, whatever moves. */
     @Test
     public void testAnUnnamedVariantAndANumericNameStayApartWhenVariantsShift()

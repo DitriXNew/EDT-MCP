@@ -649,6 +649,11 @@ public final class DcsChartReferences
         List<Problem> problems(DataCompositionChart chart, String chartAddress)
         {
             List<Problem> result = new ArrayList<>();
+            if (!chart.isUse())
+            {
+                // A switched-off chart is not drawn, so none of its references can break it.
+                return result;
+            }
             boolean measured = false;
             for (Reference reference : references(chart, chartAddress))
             {
