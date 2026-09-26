@@ -567,7 +567,7 @@ public class ImportProjectFromFileTool implements IMcpTool
      *
      * @param name the project the import was creating
      * @param failure what the import raised
-     * @param mutation set to {@link Mutation#NONE} when nothing of that name is left
+     * @param mutation left as it is: an entered import stays of unknown outcome
      * @return the failure to report
      */
     private static ImportFailure importFailure(String name, Exception failure,
@@ -594,8 +594,10 @@ public class ImportProjectFromFileTool implements IMcpTool
             return new ImportFailure(head + "No project exists, but the workspace folder " + folder //$NON-NLS-1$
                 + " does now." + whose + "removing it or importing again."); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        mutation.set(Mutation.NONE);
-        return new ImportFailure(head + "No project was created."); //$NON-NLS-1$
+        // EDT's importer ran partly: nothing visible is left, but that does not prove it undid all.
+        return new ImportFailure(head + "No project or workspace folder of that name is visible now, " //$NON-NLS-1$
+            + "but the import was entered, so whether it left anything is unknown: check list_projects " //$NON-NLS-1$
+            + "and the EDT error log before importing again."); //$NON-NLS-1$
     }
 
     /**

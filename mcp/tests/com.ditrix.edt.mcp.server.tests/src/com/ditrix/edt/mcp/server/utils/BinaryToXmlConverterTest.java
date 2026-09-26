@@ -210,11 +210,31 @@ public class BinaryToXmlConverterTest
     {
         Path xml = Files.createDirectories(workDir.resolve("xml")); //$NON-NLS-1$
         assertTrue(BinaryToXmlConverter.verifyDump(SourceKind.EXTERNAL_DATA_PROCESSOR, xml).contains("0 root XML files")); //$NON-NLS-1$
-        write(xml.resolve("Proc.xml"), "<MetaDataObject/>"); //$NON-NLS-1$ //$NON-NLS-2$
+        write(xml.resolve("Proc.xml"), externalXml("ExternalDataProcessor")); //$NON-NLS-1$ //$NON-NLS-2$
         Files.createDirectories(xml.resolve("Proc").resolve("Forms")); //$NON-NLS-1$ //$NON-NLS-2$
         assertNull(BinaryToXmlConverter.verifyDump(SourceKind.EXTERNAL_DATA_PROCESSOR, xml));
         write(xml.resolve("Other.xml"), "<MetaDataObject/>"); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(BinaryToXmlConverter.verifyDump(SourceKind.EXTERNAL_DATA_PROCESSOR, xml).contains("2 root XML files")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDumpCheckTellsAnExternalReportFromADataProcessor() throws IOException
+    {
+        Path xml = Files.createDirectories(workDir.resolve("xml")); //$NON-NLS-1$
+        write(xml.resolve("Rep.xml"), externalXml("ExternalReport")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(BinaryToXmlConverter.verifyDump(SourceKind.EXTERNAL_REPORT, xml));
+        String renamed = BinaryToXmlConverter.verifyDump(SourceKind.EXTERNAL_DATA_PROCESSOR, xml);
+        assertTrue(renamed, renamed != null && renamed.contains("holds an external report")); //$NON-NLS-1$
+
+        write(xml.resolve("Rep.xml"), "not xml"); //$NON-NLS-1$ //$NON-NLS-2$
+        String broken = BinaryToXmlConverter.verifyDump(SourceKind.EXTERNAL_REPORT, xml);
+        assertTrue(broken, broken != null && broken.contains("could not be read")); //$NON-NLS-1$
+    }
+
+    private static String externalXml(String object)
+    {
+        return "<MetaDataObject xmlns=\"http://v8.1c.ru/8.3/MDClasses\"><" + object //$NON-NLS-1$
+            + " uuid=\"00000000-0000-0000-0000-000000000001\"/></MetaDataObject>"; //$NON-NLS-1$
     }
 
     @Test

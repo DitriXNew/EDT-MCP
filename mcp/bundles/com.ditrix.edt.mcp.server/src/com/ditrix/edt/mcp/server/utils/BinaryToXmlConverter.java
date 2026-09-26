@@ -19,6 +19,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import javax.xml.parsers.DocumentBuilder;
@@ -421,19 +422,36 @@ public final class BinaryToXmlConverter
                     + ", and EDT imports a dump holding that file as a configuration, not as an " //$NON-NLS-1$
                     + kind.label() + ". Copy the file under another name and import the copy."; //$NON-NLS-1$
             }
+            List<Path> roots;
             try (Stream<Path> entries = Files.list(xmlDir))
             {
-                long roots = entries.filter(p -> Files.isRegularFile(p)
+                roots = entries.filter(p -> Files.isRegularFile(p)
                     && p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".xml")) //$NON-NLS-1$
-                    .count();
-                return roots == 1 ? null
-                    : "The platform dump of the " + kind.label() + " holds " + roots //$NON-NLS-1$ //$NON-NLS-2$
-                        + " root XML files instead of one."; //$NON-NLS-1$
+                    .collect(Collectors.toList());
             }
             catch (IOException e)
             {
                 return "The platform dump could not be read: " + PlatformFailures.describe(e); //$NON-NLS-1$
             }
+            if (roots.size() != 1)
+            {
+                return "The platform dump of the " + kind.label() + " holds " + roots.size() //$NON-NLS-1$ //$NON-NLS-2$
+                    + " root XML files instead of one."; //$NON-NLS-1$
+            }
+            // The platform converts .epf and .erf alike, so the root object says which one it is.
+            String expected = kind == SourceKind.EXTERNAL_REPORT ? "ExternalReport" : "ExternalDataProcessor"; //$NON-NLS-1$ //$NON-NLS-2$
+            String actual = rootObjectName(roots.get(0));
+            if (actual == null)
+            {
+                return "The platform dump could not be read: its root file " + roots.get(0).getFileName() //$NON-NLS-1$
+                    + " is not a metadata object dump."; //$NON-NLS-1$
+            }
+            return expected.equals(actual) ? null
+                : "The file's extension promises an " + kind.label() + ", but it holds an " //$NON-NLS-1$ //$NON-NLS-2$
+                    + ("ExternalReport".equals(actual) ? SourceKind.EXTERNAL_REPORT.label() //$NON-NLS-1$
+                        : "ExternalDataProcessor".equals(actual) ? SourceKind.EXTERNAL_DATA_PROCESSOR.label() //$NON-NLS-1$
+                        : "object of type " + actual) //$NON-NLS-1$
+                    + ". Rename the file to the matching extension (.epf or .erf) and import it again."; //$NON-NLS-1$
         }
         Path configurationXml = xmlDir.resolve(CONFIGURATION_XML);
         if (!Files.isRegularFile(configurationXml))
@@ -457,6 +475,35 @@ public final class BinaryToXmlConverter
                 + "omit baseProjectName."; //$NON-NLS-1$
         }
         return null;
+    }
+
+    /**
+     * @param rootXml the root file of an external object dump
+     * @return the local name of the object element under {@code MetaDataObject}, or {@code null}
+     */
+    static String rootObjectName(Path rootXml)
+    {
+        try
+        {
+            DocumentBuilder builder = SecureXml.documentBuilderFactory().newDocumentBuilder();
+            org.w3c.dom.Element root = builder.parse(rootXml.toFile()).getDocumentElement();
+            if (!"MetaDataObject".equals(root.getLocalName() != null ? root.getLocalName() : root.getNodeName())) //$NON-NLS-1$
+            {
+                return null;
+            }
+            for (org.w3c.dom.Node child = root.getFirstChild(); child != null; child = child.getNextSibling())
+            {
+                if (child.getNodeType() == org.w3c.dom.Node.ELEMENT_NODE)
+                {
+                    return child.getLocalName() != null ? child.getLocalName() : child.getNodeName();
+                }
+            }
+            return null;
+        }
+        catch (Exception e) // NOSONAR any parse failure means "not a dump"
+        {
+            return null;
+        }
     }
 
     /**

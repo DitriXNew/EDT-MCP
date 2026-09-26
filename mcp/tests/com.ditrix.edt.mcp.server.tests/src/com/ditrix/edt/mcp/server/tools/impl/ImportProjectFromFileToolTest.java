@@ -550,13 +550,14 @@ public class ImportProjectFromFileToolTest
     }
 
     @Test
-    public void testAFailedImportThatLeftNothingNeedsNoRollback() throws IOException
+    public void testAFailedImportThatLeftNothingVisibleStaysOfUnknownOutcome() throws IOException
     {
         importer.failure = new IllegalStateException("XML version is not supported"); //$NON-NLS-1$
         String result = tool().execute(params(tempFile(".cf").toString(), uniqueName(), FULL_WAIT)); //$NON-NLS-1$
         assertError(result, "XML version is not supported"); //$NON-NLS-1$
-        assertTrue(result, result.contains("No project was created")); //$NON-NLS-1$
-        assertNoMutationMarker(result);
+        assertTrue(result, result.contains("whether it left anything is unknown")); //$NON-NLS-1$
+        assertFalse(result, result.contains("No project was created")); //$NON-NLS-1$
+        assertTrue(result, result.contains("\"mutationOutcomeUnknown\":true")); //$NON-NLS-1$
         assertEquals(0, lifecycle.permits);
     }
 
@@ -803,7 +804,10 @@ public class ImportProjectFromFileToolTest
         {
             calls.add("dumpExternal:" + rootXml.getFileName()); //$NON-NLS-1$
             xmlDir = rootXml.getParent();
-            Files.write(rootXml, "<MetaDataObject/>".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+            String object = binary.getFileName().toString().endsWith(".erf") ? "ExternalReport" //$NON-NLS-1$ //$NON-NLS-2$
+                : "ExternalDataProcessor"; //$NON-NLS-1$
+            Files.write(rootXml, ("<MetaDataObject xmlns=\"http://v8.1c.ru/8.3/MDClasses\"><" + object //$NON-NLS-1$
+                + " uuid=\"1\"/></MetaDataObject>").getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
         }
 
         Path workDir()
