@@ -839,7 +839,11 @@ public final class CommandInterfaceSupport
         return null;
     }
 
-    /** Whether the item's computed group agrees with the stored placement: customized exactly when stored. */
+    /**
+     * Whether the item's computed group agrees with the stored placement: a placed command sits in the
+     * fragment's group, an unplaced one is not customized. A fragment naming the group the command
+     * already sits in leaves it uncustomized, and the managed main section stores such fragments.
+     */
     private static boolean placementAgrees(CommandInterface stored, Object derivedItem)
     {
         if (!(derivedItem instanceof CommandItem))
@@ -862,7 +866,7 @@ public final class CommandInterfaceSupport
                 }
             }
         }
-        return placed ? item.isGroupCustomized() && placedHere : !item.isGroupCustomized();
+        return placed ? placedHere : !item.isGroupCustomized();
     }
 
     /** Whether the item's computed visibility agrees with the stored one: customized exactly when stored, same value. */

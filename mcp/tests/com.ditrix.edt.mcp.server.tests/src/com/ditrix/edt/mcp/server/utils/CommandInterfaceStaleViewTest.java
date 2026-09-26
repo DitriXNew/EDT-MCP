@@ -127,6 +127,45 @@ public class CommandInterfaceStaleViewTest
     }
 
     @Test
+    public void testAManagedMainSectionReorderIsWritten()
+    {
+        // The managed main section places every command, most in the group they already sit in, which
+        // EDT leaves uncustomized.
+        items(derivedTools, print, export, archive);
+        CommandInterface stored = CmiFactory.eINSTANCE.createCommandInterface();
+        storePlacement(stored, toolsGroup, print, export, archive);
+
+        assertNull(CommandInterfaceSupport.staleReason(stored, plan(MOVE_PRINT)));
+    }
+
+    @Test
+    public void testAManagedMainSectionMoveIsWritten()
+    {
+        items(derivedTools, print, export);
+        items(derivedOther, archive);
+        CommandInterface stored = CmiFactory.eINSTANCE.createCommandInterface();
+        storePlacement(stored, toolsGroup, print, export);
+        storePlacement(stored, otherGroup, archive);
+
+        assertNull(CommandInterfaceSupport.staleReason(stored,
+            plan("[{command:'CommonCommand.Print', group:'CommandGroup.Other', after:'CommonCommand.Archive'}]"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAManagedMainSectionCommandANewerWriteMovedIsRefused()
+    {
+        items(derivedTools, print, export);
+        items(derivedOther, archive);
+        CommandInterface stored = CmiFactory.eINSTANCE.createCommandInterface();
+        // A newer write moved Export to Other; the view still shows it in Tools.
+        storePlacement(stored, toolsGroup, print);
+        storePlacement(stored, otherGroup, archive, export);
+
+        assertEquals(staleView("the group of CommonCommand.Export"), //$NON-NLS-1$
+            CommandInterfaceSupport.staleReason(stored, plan(MOVE_PRINT)));
+    }
+
+    @Test
     public void testAPlacementTheViewAlreadyShowsIsWritten()
     {
         items(derivedTools, print, export, archive).get(2).setGroupCustomized(true);
