@@ -108,6 +108,33 @@ public class GetMetadataDetailsToolTest
     }
 
     @Test
+    public void testDescriptionAdvertisesTheCommandInterface()
+    {
+        assertTrue(new GetMetadataDetailsTool().getDescription().contains("command interface")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testMisaddressedCommandInterfaceIsRecognizedInBothLanguages()
+    {
+        assertTrue(GetMetadataDetailsTool.isMisaddressedCommandInterface("Catalog.Products.CommandInterface")); //$NON-NLS-1$
+        assertTrue(GetMetadataDetailsTool.isMisaddressedCommandInterface("Справочник.Товары.КомандныйИнтерфейс")); //$NON-NLS-1$
+        assertTrue(GetMetadataDetailsTool.isMisaddressedCommandInterface("Configuration.Sales.CommandInterface")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRealAndUnrelatedAddressesAreNotMisaddressed()
+    {
+        // A real section address takes the command-interface view instead.
+        assertFalse(GetMetadataDetailsTool.isMisaddressedCommandInterface("Subsystem.Sales.CommandInterface")); //$NON-NLS-1$
+        assertFalse(GetMetadataDetailsTool.isMisaddressedCommandInterface("Подсистема.Продажи.КомандныйИнтерфейс")); //$NON-NLS-1$
+        // An object or a member whose Name is CommandInterface is an ordinary address.
+        assertFalse(GetMetadataDetailsTool.isMisaddressedCommandInterface("Catalog.CommandInterface")); //$NON-NLS-1$
+        assertFalse(GetMetadataDetailsTool.isMisaddressedCommandInterface("Catalog.Products.Attribute.CommandInterface")); //$NON-NLS-1$
+        assertFalse(GetMetadataDetailsTool.isMisaddressedCommandInterface("Catalog.Products.Attribute")); //$NON-NLS-1$
+        assertFalse(GetMetadataDetailsTool.isMisaddressedCommandInterface(null));
+    }
+
+    @Test
     public void testSchemaDeclaresParameters()
     {
         String schema = new GetMetadataDetailsTool().getInputSchema();
