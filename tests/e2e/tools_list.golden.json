@@ -946,6 +946,7 @@
             "order",
             "conditionalAppearance",
             "table",
+            "chart",
             "userField",
             "outputParameter",
             "userSettings"

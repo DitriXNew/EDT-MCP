@@ -18,6 +18,10 @@ import org.junit.Test;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionAppearance;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterValue;
 import com._1c.g5.v8.dt.dcs.model.core.LocalString;
+import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTable;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameterCollection;
 import com._1c.g5.v8.dt.mcore.BooleanValue;
 import com._1c.g5.v8.dt.mcore.ColorValue;
@@ -132,6 +136,76 @@ public class DcsOptionsTest
         assertTrue(text.getValues().get(0) instanceof LocalString);
         assertEquals("Pinned localized text", //$NON-NLS-1$
             ((LocalString)text.getValues().get(0)).getContent().get("en")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testChartOptionsListTheChartCatalogueAndAxisEnums()
+    {
+        DcsOptions.Result chart;
+        try (DcsCatalogueTestRuntime.Scope ignored =
+            DcsCatalogueTestRuntime.prepareCatalogues(Version.V8_3_27))
+        {
+            chart = DcsOptions.render("Report.Options", TargetKind.REPORT_MAIN_DCS, null, //$NON-NLS-1$
+                address("Report.Options"), "chart", "en", Version.V8_3_27, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                Integer.valueOf(1000), 0);
+        }
+        assertTrue(chart.error(), chart.isSuccess());
+        String markdown = chart.markdown();
+        assertTrue(markdown, markdown.contains("ChartType")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("pointsViewMode")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("seriesViewMode")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("points[].groupFields.items[].groupType")); //$NON-NLS-1$
+        assertTrue("a chart does not offer the report-level catalogue", //$NON-NLS-1$
+            !markdown.contains("VerticalOverallPlacement")); //$NON-NLS-1$
+    }
+
+    /** An exact points/series/rows/columns address is written as an axis group, not its item. */
+    @Test
+    public void testAxisGroupAddressListsTheAxisGroupEnums()
+    {
+        com._1c.g5.v8.dt.dcs.model.settings.DcsFactory factory =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE;
+        DataCompositionSchema schema =
+            com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE.createDataCompositionSchema();
+        DataCompositionSettings settings = factory.createDataCompositionSettings();
+        DataCompositionChart chart = factory.createDataCompositionChart();
+        chart.getPoints().add(factory.createDataCompositionChartGroup());
+        chart.getSeries().add(factory.createDataCompositionChartGroup());
+        settings.getItems().add(chart);
+        DataCompositionTable table = factory.createDataCompositionTable();
+        table.getRows().add(factory.createDataCompositionTableGroup());
+        settings.getItems().add(table);
+        schema.setDefaultSettings(settings);
+
+        String root = "Report.Options#/defaultSettings/items/"; //$NON-NLS-1$
+        String chartItem = options(schema, root + "0", "chart"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(chartItem, chartItem.contains("pointsViewMode")); //$NON-NLS-1$
+        assertTrue(chartItem, !chartItem.contains("groupState")); //$NON-NLS-1$
+        for (String axis : new String[] {"0/points/0", "0/series/0"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            String markdown = options(schema, root + axis, "chart"); //$NON-NLS-1$
+            assertTrue(markdown, markdown.contains("groupState")); //$NON-NLS-1$
+            assertTrue(markdown, markdown.contains("itemsViewMode")); //$NON-NLS-1$
+            assertTrue(markdown, markdown.contains("groupFields.items[].periodAdditionType")); //$NON-NLS-1$
+            assertTrue(markdown, !markdown.contains("pointsViewMode")); //$NON-NLS-1$
+            assertTrue(markdown, !markdown.contains("seriesViewMode")); //$NON-NLS-1$
+        }
+        String rows = options(schema, root + "1/rows/0", "table"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(rows, rows.contains("groupState")); //$NON-NLS-1$
+        assertTrue(rows, !rows.contains("rowsViewMode")); //$NON-NLS-1$
+    }
+
+    private static String options(DataCompositionSchema schema, String address, String type)
+    {
+        DcsOptions.Result result;
+        try (DcsCatalogueTestRuntime.Scope ignored =
+            DcsCatalogueTestRuntime.prepareCatalogues(Version.V8_3_27))
+        {
+            result = DcsOptions.render("Report.Options", TargetKind.REPORT_MAIN_DCS, schema, //$NON-NLS-1$
+                address(address), type, "en", Version.V8_3_27, Integer.valueOf(1000), 0); //$NON-NLS-1$
+        }
+        assertTrue(result.error(), result.isSuccess());
+        return result.markdown();
     }
 
     @Test

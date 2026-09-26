@@ -26,7 +26,9 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetFieldFolder;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetQuery;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartOutputParameterValues;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.SettingsParameterValue;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.form.model.FormFactory;
@@ -55,7 +57,7 @@ public class DcsToolTest
         "schema", "dynamicList", "dataSource", "dataSet", "field", "fieldFolder", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
         "parameter", //$NON-NLS-1$
         "calculatedField", "totalField", "variant", "grouping", "selection", "filter", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
-        "dataParameter", "order", "conditionalAppearance", "table", "userField", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        "dataParameter", "order", "conditionalAppearance", "table", "chart", "userField", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
         "outputParameter", "userSettings")); //$NON-NLS-1$ //$NON-NLS-2$
 
     @Test
@@ -291,14 +293,17 @@ public class DcsToolTest
         schema.setDefaultSettings(settings);
         assertNull(DcsTool.replaceRefusal(schema, settings, "userSettings", address)); //$NON-NLS-1$
 
-        DataCompositionChart settingsChart = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
-            .eINSTANCE.createDataCompositionChart();
-        settings.getItems().add(settingsChart);
+        // A chart is modelled now; its nested output-parameter values are not.
+        settings.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionChart());
+        assertNull("a fully modelled chart must not block a replacement", //$NON-NLS-1$
+            DcsTool.replaceRefusal(schema, settings, "userSettings", address)); //$NON-NLS-1$
+        settings.getItems().add(chartWithNestedOutputParameter());
         assertNull(DcsTool.replaceRefusal(schema, settings, "selection", address)); //$NON-NLS-1$
         String reportSettingsRefusal =
             DcsTool.replaceRefusal(schema, settings, "userSettings", address); //$NON-NLS-1$
         assertNotNull(reportSettingsRefusal);
-        assertArticulateChartRefusal(reportSettingsRefusal);
+        assertUnmodellableRefusal(reportSettingsRefusal);
 
         SettingsVariant variant = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
             .createSettingsVariant();
@@ -309,12 +314,10 @@ public class DcsToolTest
         schema.getSettingsVariants().add(variant);
         assertNull(DcsTool.replaceRefusal(schema, settings, "variant", address)); //$NON-NLS-1$
 
-        DataCompositionChart variantChart = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
-            .eINSTANCE.createDataCompositionChart();
-        variantSettings.getItems().add(variantChart);
+        variantSettings.getItems().add(chartWithNestedOutputParameter());
         String variantRefusal = DcsTool.replaceRefusal(schema, settings, "variant", address); //$NON-NLS-1$
         assertNotNull(variantRefusal);
-        assertArticulateChartRefusal(variantRefusal);
+        assertUnmodellableRefusal(variantRefusal);
 
         DynamicListExtInfo dynamic = FormFactory.eINSTANCE.createDynamicListExtInfo();
         dynamic.getFields().add(com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
@@ -323,13 +326,12 @@ public class DcsToolTest
             .eINSTANCE.createDataCompositionSettings();
         dynamic.setListSettings(listSettings);
         assertNull(DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", address)); //$NON-NLS-1$
-        listSettings.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
-            .createDataCompositionChart());
+        listSettings.getItems().add(chartWithNestedOutputParameter());
         assertNull(DcsTool.replaceRefusal(dynamic, listSettings, "selection", address)); //$NON-NLS-1$
         String listSettingsRefusal =
             DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", address); //$NON-NLS-1$
         assertNotNull(listSettingsRefusal);
-        assertArticulateChartRefusal(listSettingsRefusal);
+        assertUnmodellableRefusal(listSettingsRefusal);
     }
 
     @Test
@@ -340,25 +342,24 @@ public class DcsToolTest
         DataCompositionSettings listSettings = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory
             .eINSTANCE.createDataCompositionSettings();
         dynamic.setListSettings(listSettings);
-        listSettings.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
-            .createDataCompositionChart());
+        listSettings.getItems().add(chartWithNestedOutputParameter());
 
         String bare = DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", //$NON-NLS-1$
             address(root));
         assertNotNull("the established bare-root scan must remain guarded", bare); //$NON-NLS-1$
-        assertArticulateChartRefusal(bare);
+        assertUnmodellableRefusal(bare);
 
         String settingsPointer = DcsTool.replaceRefusal(dynamic, listSettings, "userSettings", //$NON-NLS-1$
             address(root + "#/listSettings")); //$NON-NLS-1$
         assertNotNull("a pointer to the whole non-containment settings root must be guarded", //$NON-NLS-1$
             settingsPointer);
-        assertTrue(settingsPointer, settingsPointer.contains("DataCompositionChart")); //$NON-NLS-1$
+        assertUnmodellableRefusal(settingsPointer);
 
         String itemPointer = DcsTool.replaceRefusal(dynamic, listSettings, "grouping", //$NON-NLS-1$
             address(root + "#/listSettings/items/0")); //$NON-NLS-1$
         assertNotNull("the relative pointer must line up with the scanned chart address", //$NON-NLS-1$
             itemPointer);
-        assertTrue(itemPointer, itemPointer.contains("DataCompositionChart")); //$NON-NLS-1$
+        assertUnmodellableRefusal(itemPointer);
 
         assertNull("a sibling holder replacement does not discard the chart", //$NON-NLS-1$
             DcsTool.replaceRefusal(dynamic, listSettings, "selection", //$NON-NLS-1$
@@ -465,13 +466,26 @@ public class DcsToolTest
         assertTrue(result, result.contains("bare root FQN")); //$NON-NLS-1$
     }
 
-    private static void assertArticulateChartRefusal(String error)
+    /** A chart whose chart-type output parameter carries nested values, which V1 cannot model. */
+    private static DataCompositionChart chartWithNestedOutputParameter()
     {
-        assertTrue(error, error.contains("DataCompositionChart")); //$NON-NLS-1$
-        assertTrue(error, error.contains("authoring it is not supported by this tool")); //$NON-NLS-1$
-        assertTrue(error, error.contains("action='replace', type='schema'")); //$NON-NLS-1$
-        assertTrue(error, error.contains("body={xml:...}")); //$NON-NLS-1$
-        assertTrue(error, error.contains("bare schema root")); //$NON-NLS-1$
+        com._1c.g5.v8.dt.dcs.model.settings.DcsFactory factory =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE;
+        DataCompositionChart chart = factory.createDataCompositionChart();
+        DataCompositionChartOutputParameterValues output =
+            factory.createDataCompositionChartOutputParameterValues();
+        SettingsParameterValue chartType = factory.createSettingsParameterValue();
+        chartType.getNestedParameterValues().add(factory.createSettingsParameterValue());
+        output.getItems().add(chartType);
+        chart.setOutputParameters(output);
+        return chart;
+    }
+
+    private static void assertUnmodellableRefusal(String error)
+    {
+        assertTrue(error, error.contains("cannot model")); //$NON-NLS-1$
+        assertTrue(error, error.contains("SettingsParameterValue")); //$NON-NLS-1$
+        assertTrue(error, error.contains("/outputParameters/items/0")); //$NON-NLS-1$
         assertFalse(error, error.contains("no public DCS type")); //$NON-NLS-1$
     }
 

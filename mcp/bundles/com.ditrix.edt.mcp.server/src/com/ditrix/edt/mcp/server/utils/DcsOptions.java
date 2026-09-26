@@ -17,6 +17,7 @@ import com._1c.g5.v8.dt.dcs.model.core.DataCompositionGroupType;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionPeriodAdditionType;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionSortDirection;
 import com._1c.g5.v8.dt.dcs.model.core.LocalString;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionComparisonType;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceUse;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFieldPlacement;
@@ -24,6 +25,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterApplicationType;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItemsGroupType;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettingsItemState;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettingsItemViewMode;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableGroup;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameter;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameterCollection;
 import com._1c.g5.v8.dt.dcs.path.DcsPathException;
@@ -85,21 +87,14 @@ public final class DcsOptions
                         languages.resolvedCode()), languages);
             }
             if ("outputParameter".equals(type) || "userSettings".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
-                || "grouping".equals(type) || "table".equals(type)) //$NON-NLS-1$ //$NON-NLS-2$
+                || "grouping".equals(type) || "table".equals(type) || "chart".equals(type)) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             {
                 OutputParameterCatalogue catalogue = outputCatalogue(type, address, node.value,
                     node.owner);
                 if (catalogue == null)
                 {
                     return Result.failure("Address '" + address //$NON-NLS-1$
-                        + "' is not an output-parameter, grouping, or table holder."); //$NON-NLS-1$
-                }
-                if (catalogue == OutputParameterCatalogue.CHART
-                    || catalogue == OutputParameterCatalogue.CHART_GROUP)
-                {
-                    return Result.failure("The platform exposes chart output-parameter catalogues, " //$NON-NLS-1$
-                        + "but this tool deliberately refuses chart authoring. action='options' " //$NON-NLS-1$
-                        + "cannot list them as writable choices until chart writes are supported."); //$NON-NLS-1$
+                        + "' is not an output-parameter, grouping, table, or chart holder."); //$NON-NLS-1$
                 }
                 addParameters(options, "output parameter", //$NON-NLS-1$
                     DcsSettingsWriter.outputParameters(catalogue, version,
@@ -111,7 +106,10 @@ public final class DcsOptions
             return Result.failure("Could not load DCS options for platform " //$NON-NLS-1$
                 + (version == null ? Version.LATEST : version) + ": " + e.getMessage()); //$NON-NLS-1$
         }
-        addBodyEnums(options, type);
+        // A points/series/rows/columns group is typed as its chart/table but written as a grouping.
+        boolean axisGroup = node.value instanceof DataCompositionChartGroup
+            || node.value instanceof DataCompositionTableGroup;
+        addBodyEnums(options, axisGroup ? "grouping" : type); //$NON-NLS-1$
 
         int limit = Pagination.clampLimit(requestedLimit == null ? Pagination.DEFAULT_LIMIT
             : requestedLimit.intValue(), Pagination.MAX_LIMIT);
@@ -215,6 +213,7 @@ public final class DcsOptions
         {
             if ("grouping".equals(type)) return OutputParameterCatalogue.GROUP; //$NON-NLS-1$
             if ("table".equals(type)) return OutputParameterCatalogue.TABLE; //$NON-NLS-1$
+            if ("chart".equals(type)) return OutputParameterCatalogue.CHART; //$NON-NLS-1$
             return OutputParameterCatalogue.SETTINGS;
         }
         EObject current = value instanceof EObject ? (EObject)value : owner;
@@ -287,6 +286,13 @@ public final class DcsOptions
                 addEnum(result, "viewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
                 addEnum(result, "rowsViewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
                 addEnum(result, "columnsViewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
+                break;
+            case "chart": //$NON-NLS-1$
+                addEnum(result, "viewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
+                addEnum(result, "pointsViewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
+                addEnum(result, "seriesViewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
+                addEnum(result, "points[].groupFields.items[].groupType", //$NON-NLS-1$
+                    DataCompositionGroupType.values());
                 break;
             default:
                 break;

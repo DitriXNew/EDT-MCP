@@ -1,20 +1,20 @@
 # dcs
 
-Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, and form dynamic lists. Call action='get' first; replace, remove and any index-addressed edit require its hash as expectedHash. Call get_tool_guide('dcs') for body shapes.
+Read, author, and losslessly XML-round-trip 1C DCS schemas, settings variants, form conditional appearance, and form dynamic lists. Call action='get' first; replace, remove and any index-addressed edit require its hash as expectedHash. Call get_tool_guide('dcs') for body shapes.
 
 ## Parameters
 | Parameter | Required | Type | Description |
 | --- | --- | --- | --- |
 | projectName | yes | string | EDT project name. |
 | fqn | yes | string | DCS root FQN, optionally followed by an RFC-6901 '#/...' pointer. |
-| action | yes | string (one of: get, upsert, update, replace, remove) | Operation; replace resets omitted members, remove deletes one node. |
-| type | yes | string (one of: schema, dynamicList, dataSource, dataSet, field, fieldFolder, parameter, calculatedField, totalField, variant, grouping, selection, filter, dataParameter, order, conditionalAppearance, table, userField, outputParameter, userSettings) | Target kind; body shapes are in get_tool_guide('dcs'). |
-| body | — | object | Mutation body; forbidden for get/remove and required by the other mutations. |
+| action | yes | string (one of: get, options, upsert, update, replace, remove) | Operation; options lists version-aware writable vocabularies, replace resets omitted members, and remove deletes one node. |
+| type | yes | string (one of: schema, dynamicList, dataSource, dataSet, field, fieldFolder, parameter, calculatedField, totalField, variant, grouping, selection, filter, dataParameter, order, conditionalAppearance, table, chart, userField, outputParameter, userSettings) | Target kind; body shapes are in get_tool_guide('dcs'). |
+| body | — | object | Mutation body; forbidden for get/options/remove and required by the other mutations. |
 | expectedHash | — | string | Hash from get; conditionally required for mutation actions. |
 | language | — | string | Optional declared configuration language code for localized values and presentations; parameter names always use the configuration's default language code. |
 | format | — | string (one of: md, xml) | Read output; defaults to md. xml is only for a bare schema get. |
 | limit | — | integer | Markdown collection/summary item count (default 100, maximum 1000), or exact-value/XML chunk characters (default 40000, bounded by the output envelope). |
-| offset | — | integer | Zero-based collection/summary item or exact-value/XML character offset for get. |
+| offset | — | integer | Zero-based item or character offset for get/options pagination. |
 
 ## Guide
 `dcs` addresses a data composition schema (DCS) or a form attribute's dynamic-list
@@ -24,15 +24,17 @@ combinations.
 
 Authoring covers the schema layer (data sources, query/object/union data sets, fields and field folders,
 parameters, calculated fields, total fields, data-set links), the settings layer (default
-settings, named variants, structure groups, tables, selection, filters, order, conditional
+settings, named variants, structure groups, tables, charts, selection, filters, order, conditional
 appearance, user fields, and data/output parameter values), and dynamic lists — their
 ext-info scalars, schema-style fields/calculated fields/parameters, and `listSettings`,
 which goes through the same settings implementation as a report variant.
 
-Charts and nested data sets are deliberately excluded from the typed authoring surface. `get`
-renders existing nodes and their addresses read-only; carry schemas containing either feature
-through the lossless XML channel below (`action='replace'`, `type='schema'`, `body={xml:...}` on a
-bare schema root), which preserves them untouched.
+Nested data sets are deliberately excluded from the typed authoring surface. `get` renders
+existing ones and their addresses read-only; carry a schema containing them through the lossless
+XML channel below (`action='replace'`, `type='schema'`, `body={xml:...}` on a bare schema root),
+which preserves them untouched. A chart's appearance values nested under its `ChartType` output
+parameter (label type, legend, axes and the like) are not authorable either: an update keeps them,
+and a `replace` that would drop them is refused.
 
 ### Lossless XML round-trip
 
@@ -112,8 +114,11 @@ Send the reassembled WHOLE document in that one `replace`; `body.xml` is not chu
 must never receive an individual page. It is mutually exclusive with every structured
 schema member, is accepted only for `replace` + `schema` at a bare root, and still requires
 `expectedHash`. The XML is deserialized before the write; malformed or truncated XML is
-refused without mutation. Inside the existing BM write transaction, every imported schema
-feature is deep-copied into the already attached external-property root. Keeping that root
+refused without mutation. Inside the existing BM write transaction, the imported result is
+re-serialized and compared asymmetrically with the submitted document: EDT-added defaults and
+namespace-prefix/formatting changes are allowed, but the first submitted path whose content was
+lost is refused and the transaction rolls back. Every imported schema feature is then deep-copied
+into the already attached external-property root. Keeping that root
 preserves its BM FQN; the normal DCS force-export path then writes `Template.dcs` after
 commit.
 
@@ -160,7 +165,7 @@ RFC-6901 pointer:
   or variant; `dataPath` for fields, field folders, calculated fields, and total
   fields.
 - Ordered nodes use a zero-based index. This applies to selection, filter, order,
-  conditional-appearance, table row/column, and every structure item, including a
+  conditional-appearance, table row/column, chart point/series, and every structure item, including a
   grouping that has a `name`.
 - Copy addresses from `get` output. Do not invent or persist MCP-only IDs.
 
@@ -198,9 +203,8 @@ For example, a data-set drill-down is:
 
 It renders the complete data-set properties, full query in a fenced block, complete
 field table, and a canonical address on every rendered node. A settings pointer renders
-the entire nested settings subtree as an address-aware outline. Existing charts appear
-as one read-only line with their address; chart authoring is unsupported and there is no
-`chart` type.
+the entire nested settings subtree as an address-aware outline. A chart node also lists
+its references under `## Chart references`: each point, series and measure with its address.
 
 If a segment cannot be resolved, the error names that segment and lists the keys or
 indices that exist at its parent. Copy one of the listed values or read the parent
@@ -232,18 +236,19 @@ concatenate character chunks in offset order.
 pages the dynamic list's own `#/fields` collection.
 
 Settings collection types (`grouping`, `selection`, `filter`, `dataParameter`, `order`,
-`conditionalAppearance`, `table`, `userField`, `outputParameter`, `userSettings`) refer
+`conditionalAppearance`, `table`, `chart`, `userField`, `outputParameter`, `userSettings`) refer
 to `defaultSettings` for a schema and `listSettings` for a dynamic list. Inside a named
 variant, every named holder reads by its own type at
 `#/variants/<name>/settings/<holder>/items`. A structure collection takes its read type
 from its owner: the settings object owns `#/variants/<name>/settings/items`, so that
-polymorphic groupings-and-tables collection reads as `type='userSettings'`; a grouping
+polymorphic structure collection reads as `type='userSettings'`; a grouping
 owns `#/variants/<name>/settings/items/<group-index>/items`, so that collection reads as
 `type='grouping'`; and a table owns
 `#/variants/<name>/settings/items/<table-index>/rows` and
-`#/variants/<name>/settings/items/<table-index>/columns`, so both read as `type='table'`.
+`#/variants/<name>/settings/items/<table-index>/columns`, so both read as `type='table'`;
+a chart's `points` and `series` likewise read as `type='chart'`.
 A single structure item at `#/variants/<name>/settings/items/<index>` reads by its own
-type, `grouping` or `table`.
+type, `grouping`, `table` or `chart`.
 
 A form's own conditional appearance is rooted directly at the form FQN, for example
 `Catalog.Products.Form.ListForm` with `type='conditionalAppearance'`; its rules continue
@@ -313,31 +318,36 @@ PresentationSpec = "text" | {"<languageCode>": "localized text", ...}
   value when the requested language is absent; pass the map form to set more than one.
 ValueSpec = {"kind": "field|parameter|expression|string|number|boolean|date|null",
              "value": <matching value>}
+AvailableValueSpec = {"value":ValueSpec, "presentation"?:PresentationSpec}
+InputParametersSpec = {"items":[{"parameter":ValueSpec(kind=parameter),
+                                  "values"?:ValueSpec[], "use"?:bool}]}
+OrderExpressionSpec = {"expression":string, "orderType"?:"Asc|Desc", "autoOrder"?:bool}
 ValueTypeSpec = {"types":[{"kind":"String","length"?:int,"fixed"?:bool} | {"kind":"Number","precision"?:int,"scale"?:int,"nonNegative"?:bool} | {"kind":"Date","fractions"?:"DateTime|Date|Time"} | {"kind":"Boolean"} | {"kind":"Ref|...Ref","ref":string} | {"kind":"ValueStorage|UUID|..."}]}
 ```
 
 | `type` | Target / body shape |
 | --- | --- |
-| `schema` | Root schema: `{dataSources?, dataSets?, dataSetLinks?, calculatedFields?, totalFields?, parameters?, defaultSettings?, variants?}`. A link is `{sourceDataSet, destinationDataSet, sourceExpression, destinationExpression, parameter?, linkCondition?, startExpression?, required?}`; links have no natural key, so they are addressed by index (`#/dataSetLinks/<i>`) and read under this same `type="schema"`. For a lossless bare-root replacement, use only `{xml:"<DataCompositionSchema ...>..."}`. Structured `replace` is authoritative and will refuse unsupported designer content rather than drop it. |
+| `schema` | Root schema: `{dataSources?, dataSets?, dataSetLinks?, calculatedFields?, totalFields?, parameters?, defaultSettings?, variants?}`. A link is `{sourceDataSet, destinationDataSet, sourceExpression, destinationExpression, parameter?, parameterListAllowed?, linkConditionExpression?, startExpression?, required?}`; supplying `parameterListAllowed` sets the model's unsettable feature. The legacy alias `linkCondition` is accepted, but reads use the canonical `linkConditionExpression`. Links have no natural key, so they are addressed by index (`#/dataSetLinks/<i>`) and read under this same `type="schema"`. For a lossless bare-root replacement, use only `{xml:"<DataCompositionSchema ...>..."}`. Structured `replace` is authoritative and will refuse unsupported designer content rather than drop it. |
 | `dynamicList` | Dynamic-list ext-info: `{queryText?, mainTable?, dynamicDataRead?, autoFillAvailableFields?, customQuery?, autoSaveUserSettings?, getInvisibleFieldPresentations?, keyType?, keyField?, fields?, calculatedFields?, parameters?, listSettings?}`. Existing dynamic-list conversion safety gates still apply. |
 | `dataSource` | `{name, type?}`; natural key is `name`; `type` defaults to `"Local"`. |
-| `dataSet` | Query data set: `{name, type:"query", dataSource?, query?, autoFillFields?, fields?}`; natural key is `name`. Creating one requires `query`; an existing node may omit it. Object data set: `{name, type:"object", objectName}`. Union data set: `{name, type:"union", items:[...nested data sets]}`. Field entries may declare `kind:"field"` (the default) or `kind:"folder"`; a folder's `fields` recursively carries its children, each with its full dotted `dataPath`. An exact `replace` may declare a different `type` to change the subtype in place; omitting `type` keeps the existing one. |
-| `field` | `{kind?:"field", dataPath, field?, title?:PresentationSpec, role?, useRestriction?}`; natural key is `dataPath`. `DataCompositionField` values use their string path. |
-| `fieldFolder` | `{kind?:"folder", dataPath, title?:PresentationSpec, useRestriction?, fields?:[(field | fieldFolder), ...]}`; natural key is the full dotted `dataPath`, and children are addressed below `<folder-address>/fields`. |
-| `parameter` | `{name, title?:PresentationSpec, valueType?:ValueTypeSpec, use?}`; natural key is `name`. |
-| `calculatedField` | `{dataPath, title?:PresentationSpec, expression?}`; natural key is `dataPath`. Creation and an exact `replace` must carry `expression`; pass an empty string only when intentionally resetting it. An existing calculated field may keep an empty expression during a partial update. |
+| `dataSet` | Query data set: `{name, type:"query", dataSource?, query?, autoFillFields?, fields?}`; natural key is `name`. Creating one requires `query`; an existing node may omit it. Object data set: `{name, type:"object", objectName}`. Union data set: `{name, type:"union", items:[...nested data sets]}`. Field entries may declare `kind:"field"` (the default) or `kind:"folder"`; a folder's `fields` recursively carries its children. Every child keeps its full dotted `dataPath`. An exact `replace` may declare a different `type` to change the subtype in place; omitting `type` keeps the existing one. |
+| `field` | `{kind?:"field", dataPath, field?, title?:PresentationSpec, role?, useRestriction?, valueType?:ValueTypeSpec, appearance?:object, attributeUseRestriction?, presentationExpression?:string, orderExpressions?:OrderExpressionSpec[], inHierarchyDataSet?:string, inHierarchyDataSetParameter?:string, availableValues?:AvailableValueSpec[], inputParameters?:InputParametersSpec}`; natural key is `dataPath`. Appearance uses the same platform-typed keys and merge-on-update behavior as conditional appearance. `inHierarchyDataSet` and `inHierarchyDataSetParameter` must name a data set and a parameter that the assembled schema actually contains, and removing or renaming that target is refused while a field still points at it. |
+| `fieldFolder` | `{kind?:"folder", dataPath, title?:PresentationSpec, useRestriction?, fields?:[(field | fieldFolder), ...]}`; natural key is the full dotted `dataPath`. Its child collection is the returned `<folder-address>/fields`; nested fields and folders use that address while the platform stores the same hierarchy as flat dotted paths. |
+| `parameter` | `{name, title?:PresentationSpec, valueType?:ValueTypeSpec, use?, values?:ValueSpec[], availableValues?:AvailableValueSpec[], expression?:string, useRestriction?:bool, valueListAllowed?:bool, availableAsField?:bool, denyIncompleteValues?:bool, functionalOptionsParameter?:string, inputParameters?:InputParametersSpec}`; natural key is `name`. `values` is the model's plural list containing the default value(s); String/Number/Boolean/Date/Null defaults are checked against and serialized as the declared `valueType`. Unsupported declared ValueSpec pairings are refused. |
+| `calculatedField` | `{dataPath, title?:PresentationSpec, expression?, valueType?:ValueTypeSpec, appearance?:object, useRestriction?, presentationExpression?:string, orderExpression?:OrderExpressionSpec[], availableValues?:AvailableValueSpec[], inputParameters?:InputParametersSpec}`; natural key is `dataPath`. Note the model's singular `orderExpression` list name. Creation and an exact `replace` must carry `expression`; pass an empty string only when intentionally resetting it. An existing calculated field may keep an empty expression during a partial update. |
 | `totalField` | `{dataPath, expression?, groups?:string[]}`; natural key is `dataPath`. Creation and an exact `replace` must carry a non-empty `expression`. |
 | `variant` | `{name, presentation:PresentationSpec, settings?}`; natural key is `name`. `presentation` is required when creating or replacing a variant; an update/upsert that finds an existing variant may omit it. |
-| `grouping` | `{name?, use?, id?, groupState?:"Enabled|Disabled|DeletedByUser", groupFields?:{items:[{field?:ValueSpec, use?, groupType?, periodAdditionType?, periodAdditionBegin?:ValueSpec, periodAdditionEnd?:ValueSpec}]}, selection?, filter?, order?, conditionalAppearance?, outputParameters?, items?, ...GroupScaffold}`. `id` and `groupState` are real settable platform members. Groups recurse through `items`; all group addresses use the returned index and hash. |
+| `grouping` | `{name?, use?, id?, groupState?:"Enabled|Disabled|DeletedByUser", groupFields?:{items:[{field?:ValueSpec, use?, groupType?, periodAdditionType?, periodAdditionBegin?:ValueSpec, periodAdditionEnd?:ValueSpec}]}, selection?, filter?, order?, conditionalAppearance?, outputParameters?, items?, ...GroupScaffold}`. `id` and `groupState` are real settable platform members, not invented MCP identifiers. Groups recurse through `items`; all group addresses use the returned index and hash. Renaming writes the group's `name` property without changing the indexed addressing rule. |
 | `selection` | `{items:[{kind?:"field", field?:ValueSpec, title?:PresentationSpec, use?, viewMode?} | {kind:"group", field?:ValueSpec, title?:PresentationSpec, use?, placement?, items:[...], viewMode?} | {kind:"auto", use?}], ...HolderScaffold}`. Items are ordered/indexed. |
 | `filter` | `{items:[{kind?:"item", left?:ValueSpec, comparisonType?, right?:ValueSpec[], use?, ...ItemScaffold} | {kind:"group", groupType?, use?, items:[...], ...ItemScaffold}], ...HolderScaffold}`. Groups can be nested; items are ordered/indexed. |
 | `dataParameter` | `{items:[{parameter?:ValueSpec, value?:ValueSpec, use?, viewMode?, userSettingID?, userSettingPresentation?:PresentationSpec}]}`. Items are ordered/indexed. |
 | `order` | `{items:[{kind?:"item", field?:ValueSpec, orderType?, use?, viewMode?} | {kind:"auto", use?}], ...HolderScaffold}`. Items are ordered/indexed. |
-| `conditionalAppearance` | `{items:[{use?, selection?:{items:[{field?:ValueSpec, use?}]}, filter?, appearance?, presentation?:PresentationSpec, useInGroup?, useInHierarchicalGroup?, useInOverall?, useInFieldsHeader?, useInHeader?, useInParameters?, useInFilter?, useInResourceFieldsHeader?, useInOverallHeader?, useInOverallResourceFieldsHeader?, ...ItemScaffold}], ...HolderScaffold}`. Items are ordered/indexed. `appearance` is `{"ParameterName":AppearanceParameterSpec,...}` as described below. Schema/settings targets validate its keys against the schema catalogue; a form root uses EDT's `FormAppearanceParameters` catalogue. Unknown keys are refused and valid keys are listed. A form appearance field reference is accepted but is not validated against the form's data in this release. |
-| `table` | `{kind?:"table", name?, use?, id?, rows?, columns?, selection?, conditionalAppearance?, outputParameters?, rowsViewMode?, rowsUserSettingID?, rowsUserSettingPresentation?, columnsViewMode?, columnsUserSettingID?, columnsUserSettingPresentation?, ...HolderScaffold}`. `id` is the table's real settable platform member. `rows` and `columns` hold group items and recurse like `grouping`. Tables are structure items, so they share the `items` tree and its indexed addressing. |
+| `conditionalAppearance` | `{items:[{use?, selection?:{items:[{field?:ValueSpec, use?}]}, filter?, appearance?, presentation?:PresentationSpec, useInGroup?, useInHierarchicalGroup?, useInOverall?, useInFieldsHeader?, useInHeader?, useInParameters?, useInFilter?, useInResourceFieldsHeader?, useInOverallHeader?, useInOverallResourceFieldsHeader?, ...ItemScaffold}], ...HolderScaffold}`. Items are ordered/indexed. Schema/settings targets validate `appearance` keys against the schema catalogue; a form root uses EDT's `FormAppearanceParameters` catalogue and a dynamic list uses `DynamicListAppearanceParameters`. Unknown keys are refused and valid keys are listed. A form appearance field reference is accepted but is not validated against the form's data in this release. A color accepts `{color:{red,green,blue}}`, `{color:'auto'}`, `{color:{style:'<StyleItem name>'}}`, or `{color:{palette:'<PaletteColor name>'}}`; named colors must resolve in the project configuration. |
+| `table` | `{kind?:"table", name?, use?, id?, rows?, columns?, selection?, conditionalAppearance?, outputParameters?, rowsViewMode?, rowsUserSettingID?, rowsUserSettingPresentation?, columnsViewMode?, columnsUserSettingID?, columnsUserSettingPresentation?, ...HolderScaffold}`. `id` is the table's real settable platform member. `rows` and `columns` hold group items and recurse like `grouping`. Tables are structure items, so they share the `items` tree and its indexed addressing. An exact `replace` of a structure item builds it from the `kind` in the body, so a grouping, a table and a chart can be exchanged at the same index. |
+| `chart` | `{kind?:"chart", name?, use?, id?, points?, series?, selection?, conditionalAppearance?, outputParameters?, pointsViewMode?, pointsUserSettingID?, pointsUserSettingPresentation?, seriesViewMode?, seriesUserSettingID?, seriesUserSettingPresentation?, ...HolderScaffold}`. `points` (the categories) and `series` hold group items and recurse like `grouping`; `selection` holds the measures. Addressing, `id` and the exact `replace` work as for `table`; a body appended without `kind:"chart"` is a grouping. Every chart of the schema is checked against the state a write leaves it in, so the same `type='schema'` call may declare the resource a chart measures: a point or series must group by a data-set field, calculated field or user field, or by an attribute of a data-set or calculated field (`<field>.<attribute>`), that its use restriction allows; a measure must be a resource (`totalFields`), a user field with a total expression or aggregate, a `totalFields` resource's percent field such as `Amount.OverallPercent`, or `{kind:"auto"}`; a chart needs at least one measure. Paths compare case-insensitively; the user-field folder and percent terms are accepted in English or Russian, and while an auto-fill query data set exists any unlisted field is accepted as a point or series. A write that leaves more broken references of some role and field in a settings tree (the default settings or one variant) than that tree had is refused with the choices and nothing is written, including a schema edit that breaks an unchanged chart; a problem that was already there in the same tree does not block an unrelated edit, and a switched-off chart, point, series or measure (`use:false` or a non-Enabled `groupState`, also through its structure group, axis group or folder) is not judged, and a switched-off user field is not available; a lossless `xml` replacement is copied as it is and not judged. `outputParameters` takes the platform chart catalogue (`ChartType`, `Title`, ...; `action='options'`, `type='chart'` lists it). Dynamic-list `listSettings` refuse a new or changed chart. |
 | `userField` | Expression field: `{kind:"expression", dataPath, use?, title?:PresentationSpec, detailExpression?, detailExpressionPresentation?, totalExpression?, totalExpressionPresentation?}`. Case field: `{kind:"case", dataPath, use?, title?:PresentationSpec, variants?}`. Items are ordered/indexed. |
-| `outputParameter` | `{items:[{parameter?:ValueSpec, value?:ValueSpec, use?, viewMode?, userSettingID?, userSettingPresentation?:PresentationSpec}]}`. Items are ordered/indexed. |
-| `userSettings` | Whole settings body: `{items?, selection?, filter?, dataParameters?, order?, conditionalAppearance?:{items:[], ...HolderScaffold}, outputParameters?, additionalProperties?:{"Name":ValueSpec, ...}, itemsViewMode?, itemsUserSettingID?, itemsUserSettingPresentation?:PresentationSpec}`. `additionalProperties` is the platform `Structure`; unsupported value kinds are refused rather than discarded. Never use scaffold fields to store invented MCP IDs. |
+| `outputParameter` | `{items:[{parameter?:ValueSpec, value?:ValueSpec, use?, viewMode?, userSettingID?, userSettingPresentation?:PresentationSpec}]}`. Items are ordered/indexed. Platform-enum values accept either a bare literal string or `{kind:'string',value:'<literal>'}`; other shapes are refused with the allowed literals. |
+| `userSettings` | Whole settings body: `{items?, selection?, filter?, dataParameters?, order?, conditionalAppearance?:{items:[], ...HolderScaffold}, outputParameters?, additionalProperties?:{"Name":ValueSpec, ...}, itemsViewMode?, itemsUserSettingID?, itemsUserSettingPresentation?:PresentationSpec}`. `additionalProperties` is the platform `Structure`; `upsert`/`update` merge named entries and `replace` is authoritative. Value kinds outside the documented `ValueSpec` set are refused rather than discarded. Never use settings scaffold fields to store invented MCP IDs. |
 
 `HolderScaffold` means `viewMode?`, `userSettingID?`, and
 `userSettingPresentation?:PresentationSpec`. `GroupScaffold` includes those three plus
@@ -355,16 +365,6 @@ body and either the root/collection address (`upsert`) or exact returned node ad
 Enum values are platform literals such as `Equal`, `AndGroup`, `Asc`, `Items`, and
 `Normal`. An invalid comparison, order direction, grouping kind, or similar token is
 rejected; the error names the bad value and lists every allowed platform literal.
-
-`AppearanceParameterSpec` is the parameter's existing typed value plus an optional `use`
-member on the same object. For example, a present-but-disabled color is
-`{"TextColor":{"use":false,"color":{"red":0,"green":128,"blue":0}}}`. For a
-typed value that is normally bare (such as an enum literal or localized string), use
-`{"use":false,"value":<typed-value>}`. Omitting `use` means `true`. The flag belongs to
-the appearance parameter's `DataCompositionParameterValue`, not to the conditional-
-appearance rule. Appearance and output parameter names may be supplied in either English
-or Russian; the stored name follows the configuration's default language code, independently
-of the per-call `language` argument.
 
 ### Settings examples
 

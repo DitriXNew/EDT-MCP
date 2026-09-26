@@ -15,8 +15,16 @@ import org.junit.Test;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionPeriodAdditionType;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartGroup;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartOutputParameterValues;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupField;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.SettingsParameterValue;
+import com._1c.g5.v8.dt.mcore.EnumValue;
+import com._1c.g5.v8.dt.mcore.McoreFactory;
 
 /** Scoping of the unmodellable-content refusal. */
 public class DcsMutationGuardTest
@@ -24,34 +32,86 @@ public class DcsMutationGuardTest
     private static final String ROOT = "Report.Sales"; //$NON-NLS-1$
 
     /**
-     * A chart the writer cannot model blocks a replacement only when it is UNDER the target. The
-     * bare-root form of a concrete settings type must therefore be scoped to that type's own node
-     * before it is checked: unscoped, a chart anywhere in the document counted as a descendant and
-     * refused a selection-only replacement that could never have removed it.
+     * Content the writer cannot model (here a chart's nested output-parameter values) blocks a
+     * replacement only when it is UNDER the target. The bare-root form of a concrete settings type
+     * must therefore be scoped to that type's own node before it is checked: unscoped, a node
+     * anywhere in the document counted as a descendant and refused a selection-only replacement
+     * that could never have removed it.
      */
     @Test
-    public void testAChartBlocksOnlyWhenItIsUnderTheAddressedNode()
+    public void testUnmodellableChartContentBlocksOnlyWhenItIsUnderTheAddressedNode()
     {
+        com._1c.g5.v8.dt.dcs.model.settings.DcsFactory factory =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE;
         DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
-        DataCompositionSettings settings =
-            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE.createDataCompositionSettings();
-        DataCompositionChart chart =
-            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE.createDataCompositionChart();
+        DataCompositionSettings settings = factory.createDataCompositionSettings();
+        DataCompositionChart chart = factory.createDataCompositionChart();
         settings.getItems().add(chart);
         schema.setDefaultSettings(settings);
+        assertNull("a fully modelled chart must not block a ROOT replacement", //$NON-NLS-1$
+            DcsMutationGuard.replaceError(schema, address(ROOT)));
 
-        // Unscoped: the whole schema against a pointerless address - the chart counts.
+        DataCompositionChartOutputParameterValues output =
+            factory.createDataCompositionChartOutputParameterValues();
+        SettingsParameterValue chartType = factory.createSettingsParameterValue();
+        chartType.getNestedParameterValues().add(factory.createSettingsParameterValue());
+        output.getItems().add(chartType);
+        chart.setOutputParameters(output);
+
+        // Unscoped: the whole schema against a pointerless address - the nested values count.
         String whole = DcsMutationGuard.replaceError(schema, address(ROOT));
-        assertNotNull("a chart in the document must block a ROOT replacement", whole); //$NON-NLS-1$
-        assertTrue(whole, whole.contains("Chart")); //$NON-NLS-1$
+        assertNotNull("nested chart output values must block a ROOT replacement", whole); //$NON-NLS-1$
+        assertTrue(whole, whole.contains("#/defaultSettings/items/0/outputParameters/items/0")); //$NON-NLS-1$
 
         // Scoped the way the tool now scopes it: the settings root, addressed at 'selection'.
-        assertNull("a chart in the structure must NOT block a selection-only replacement", //$NON-NLS-1$
+        assertNull("the chart in the structure must NOT block a selection-only replacement", //$NON-NLS-1$
             DcsMutationGuard.replaceError(settings, address(ROOT + "#/selection"))); //$NON-NLS-1$
 
         // ...and it still blocks when the address genuinely covers it.
-        assertNotNull("a chart under the addressed node must still block", //$NON-NLS-1$
+        assertNotNull("content under the addressed node must still block", //$NON-NLS-1$
             DcsMutationGuard.replaceError(settings, address(ROOT + "#/items"))); //$NON-NLS-1$
+        assertNotNull("replacing the chart itself must still block", //$NON-NLS-1$
+            DcsMutationGuard.replaceError(settings, address(ROOT + "#/items/0"))); //$NON-NLS-1$
+    }
+
+    /**
+     * A period-addition bound the ValueSpec writer cannot restate (an enum literal) blocks a
+     * replace of the chart and its ancestors, while an authorable date bound does not.
+     */
+    @Test
+    public void testUnauthorablePeriodAdditionBoundInAChartGroupBlocksReplace()
+    {
+        com._1c.g5.v8.dt.dcs.model.settings.DcsFactory factory =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE;
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        DataCompositionSettings settings = factory.createDataCompositionSettings();
+        DataCompositionChart chart = factory.createDataCompositionChart();
+        DataCompositionChartGroup point = factory.createDataCompositionChartGroup();
+        DataCompositionGroupFields fields = factory.createDataCompositionGroupFields();
+        DataCompositionGroupField field = factory.createDataCompositionGroupField();
+        field.setPeriodAdditionBegin(McoreFactory.eINSTANCE.createDateValue());
+        fields.getItems().add(field);
+        point.setGroupFields(fields);
+        chart.getPoints().add(point);
+        settings.getItems().add(chart);
+        schema.setDefaultSettings(settings);
+        assertNull("a date bound is authorable", //$NON-NLS-1$
+            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/items/0"))); //$NON-NLS-1$
+
+        EnumValue bound = McoreFactory.eINSTANCE.createEnumValue();
+        bound.setValue(DataCompositionPeriodAdditionType.MONTH);
+        field.setPeriodAdditionEnd(bound);
+
+        for (String target : new String[] {"#/defaultSettings/items/0", //$NON-NLS-1$
+            "#/defaultSettings/items/0/points/0", "#/defaultSettings"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            String error = DcsMutationGuard.replaceError(schema, address(ROOT + target));
+            assertNotNull(target, error);
+            assertTrue(error, error.contains("EnumValue at Report.Sales#/defaultSettings/items/0" //$NON-NLS-1$
+                + "/points/0/groupFields/items/0/periodAdditionEnd")); //$NON-NLS-1$
+        }
+        assertNull("a sibling replace does not reach the bound", //$NON-NLS-1$
+            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/selection"))); //$NON-NLS-1$
     }
 
     @Test
