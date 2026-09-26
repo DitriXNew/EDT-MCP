@@ -338,6 +338,7 @@ public final class CommandInterfaceSupport
         String russian = commandGroup instanceof StandardCommandGroup && !commandGroup.eIsProxy()
             ? ((StandardCommandGroup)commandGroup).getNameRu() : null;
         Group group = new Group(id, russian, panel, false, commandGroup, itemGroup.isItemsOrderCustomized());
+        group.derived = itemGroup;
         addItems(group, itemGroup);
         groups.add(group);
     }
@@ -354,6 +355,7 @@ public final class CommandInterfaceSupport
             }
             Group group = new Group(COMMAND_GROUP_PREFIX + ((MdObject)commandGroup).getName(), null, panel, true,
                 commandGroup, itemGroup.isItemsOrderCustomized());
+            group.derived = itemGroup;
             addItems(group, itemGroup);
             groups.add(group);
         }
@@ -373,16 +375,20 @@ public final class CommandInterfaceSupport
             {
                 // The stored proxy, as the editor hands it to the tasks, never the derived stand-in.
                 UnresolvedCommand unresolved = (UnresolvedCommand)command;
-                group.items.add(new Item(String.valueOf(unresolved.getProxyName()), null,
+                Item item = new Item(String.valueOf(unresolved.getProxyName()), null,
                     unresolved.getProxyCommand(), visibility, commandItem.isVisibilityCustomized(),
-                    commandItem.isGroupCustomized(), false));
+                    commandItem.isGroupCustomized(), false);
+                item.derived = commandItem;
+                group.items.add(item);
                 continue;
             }
             String[] names = commandNames(command);
             if (names != null)
             {
-                group.items.add(new Item(names[0], names[1], command, visibility,
-                    commandItem.isVisibilityCustomized(), commandItem.isGroupCustomized(), true));
+                Item item = new Item(names[0], names[1], command, visibility,
+                    commandItem.isVisibilityCustomized(), commandItem.isGroupCustomized(), true);
+                item.derived = commandItem;
+                group.items.add(item);
             }
         }
     }
@@ -480,6 +486,7 @@ public final class CommandInterfaceSupport
     public static EditResult edit(IBmModel model, CommandInterfaceAddress address, List<JsonObject> entries)
     {
         EditResult result = edit(model, entries, (tx, e) -> planInTx(tx, address, e),
+            (tx, plan) -> staleReason(storedInTx(tx, address), plan),
             (tx, pm, plan) -> applyInTx(tx, pm, address, plan), address.ownerFqn());
         if (result.writtenFqn != null)
         {
@@ -498,6 +505,13 @@ public final class CommandInterfaceSupport
         PlanResult plan(IBmTransaction tx, List<JsonObject> entries);
     }
 
+    /** Why the write's plan is built on a computed view that lags the stored section, or {@code null}. */
+    @FunctionalInterface
+    interface Verifier
+    {
+        String staleReason(IBmTransaction tx, Plan plan);
+    }
+
     /** Applies a plan inside a write transaction and returns the written command interface's FQN. */
     @FunctionalInterface
     interface Applier
@@ -507,10 +521,10 @@ public final class CommandInterfaceSupport
 
     /**
      * The edit without the read-back. A refused batch never opens a write; an accepted one is planned
-     * again inside the write, and that plan is the one applied.
+     * again inside the write, verified against the stored section, and that plan is the one applied.
      */
-    static EditResult edit(IBmModel model, List<JsonObject> entries, Planner planner, Applier applier,
-        String ownerFqn)
+    static EditResult edit(IBmModel model, List<JsonObject> entries, Planner planner, Verifier verifier,
+        Applier applier, String ownerFqn)
     {
         EditResult result = new EditResult();
         PlanResult planned = BmTransactions.read(model, "Plan command interface edit", //$NON-NLS-1$
@@ -533,6 +547,11 @@ public final class CommandInterfaceSupport
                 if (fresh.error != null)
                 {
                     throw new SectionChangedException(fresh.error);
+                }
+                String stale = fresh.plan.isEmpty() ? null : verifier.staleReason(tx, fresh.plan);
+                if (stale != null)
+                {
+                    throw new SectionChangedException(stale);
                 }
                 EditResult applied = new EditResult();
                 applied.plan = fresh.plan;
@@ -658,23 +677,12 @@ public final class CommandInterfaceSupport
     private static Target commandInterfaceInTx(IBmTransaction tx, Configuration config,
         CommandInterfaceAddress address)
     {
-        EObject owner;
-        EReference feature;
-        if (address.kind() == CommandInterfaceAddress.Kind.SUBSYSTEM)
-        {
-            String[] chain = address.subsystemChain();
-            owner = SubsystemUtils.resolveByPath(config, chain, chain.length);
-            feature = MdClassPackage.Literals.SUBSYSTEM__COMMAND_INTERFACE;
-        }
-        else
-        {
-            owner = config;
-            feature = MdClassPackage.Literals.CONFIGURATION__MAIN_SECTION_COMMAND_INTERFACE;
-        }
+        EObject owner = ownerInTx(config, address);
         if (owner == null)
         {
             throw new IllegalStateException(address.ownerFqn() + " disappeared before the write"); //$NON-NLS-1$
         }
+        EReference feature = featureOf(address);
         Object value = owner.eGet(feature, true);
         if (value instanceof CommandInterface && !((EObject)value).eIsProxy())
         {
@@ -682,6 +690,293 @@ public final class CommandInterfaceSupport
             return new Target(stored, ((IBmObject)stored).bmGetFqn());
         }
         return registeredOrAttached(tx, externalPropertyFqn(owner, feature, value));
+    }
+
+    /** The section's stored command interface in this transaction, or {@code null}; never attaches one. */
+    private static CommandInterface storedInTx(IBmTransaction tx, CommandInterfaceAddress address)
+    {
+        EObject owner = ownerInTx((Configuration)tx.getTopObjectByFqn(CONFIGURATION_FQN), address);
+        if (owner == null)
+        {
+            return null;
+        }
+        EReference feature = featureOf(address);
+        Object value = owner.eGet(feature, true);
+        if (value instanceof CommandInterface && !((EObject)value).eIsProxy())
+        {
+            return tx.toTransactionObject((CommandInterface)value);
+        }
+        IBmObject registered = tx.getTopObjectByFqn(externalPropertyFqn(owner, feature, value));
+        return registered instanceof CommandInterface ? (CommandInterface)registered : null;
+    }
+
+    private static EObject ownerInTx(Configuration config, CommandInterfaceAddress address)
+    {
+        if (config == null || address.kind() != CommandInterfaceAddress.Kind.SUBSYSTEM)
+        {
+            return config;
+        }
+        String[] chain = address.subsystemChain();
+        return SubsystemUtils.resolveByPath(config, chain, chain.length);
+    }
+
+    private static EReference featureOf(CommandInterfaceAddress address)
+    {
+        return address.kind() == CommandInterfaceAddress.Kind.SUBSYSTEM
+            ? MdClassPackage.Literals.SUBSYSTEM__COMMAND_INTERFACE
+            : MdClassPackage.Literals.CONFIGURATION__MAIN_SECTION_COMMAND_INTERFACE;
+    }
+
+    // ===== computed view vs stored section ==========================================================
+
+    /**
+     * Why a plan built from EDT's computed command interface would overwrite a newer stored
+     * customization, or {@code null}. The computed view is recomputed asynchronously, and it keeps
+     * copies of the stored fragments it was computed from, so a copy that differs from the stored
+     * fragment in the same transaction proves the view lags. Checked for everything the plan writes:
+     * the order of each reordered group and the placement of its commands, each placed command, and
+     * each command whose visibility changes. Package-visible for tests.
+     *
+     * @param stored the section's stored command interface, or {@code null} when it stores nothing
+     * @param plan the plan built in the same transaction
+     * @return the reason, or {@code null} when the view agrees
+     */
+    static String staleReason(CommandInterface stored, Plan plan)
+    {
+        for (Group group : plan.order().keySet())
+        {
+            String reason = staleOrder(stored, plan, group);
+            if (reason != null)
+            {
+                return reason;
+            }
+        }
+        for (Item item : plan.placement().keySet())
+        {
+            if (!placementAgrees(stored, item.derived))
+            {
+                return staleView("the group of " + item.fqn()); //$NON-NLS-1$
+            }
+        }
+        for (Item item : plan.visibility().keySet())
+        {
+            if (!visibilityAgrees(stored, item.derived))
+            {
+                return staleView("the visibility of " + item.fqn()); //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+
+    private static String staleOrder(CommandInterface stored, Plan plan, Group group)
+    {
+        if (!(group.derived instanceof CommandItemGroup))
+        {
+            return null;
+        }
+        CommandItemGroup derived = (CommandItemGroup)group.derived;
+        CommandsOrderFragment storedOrder = orderFragment(stored, derived.getCommandGroup());
+        CommandsOrderFragment derivedOrder = derived.isItemsOrderCustomized() ? derived.getOrderFragment() : null;
+        if (!sameCommands(storedOrder, derivedOrder))
+        {
+            return staleView("the order of " + group.id()); //$NON-NLS-1$
+        }
+        for (Item item : group.items)
+        {
+            if (!placementAgrees(stored, item.derived))
+            {
+                return staleView("the group of " + item.fqn()); //$NON-NLS-1$
+            }
+        }
+        // A command the stored section places here must not be shown in another group.
+        if (stored != null && stored.getCommandsPlacement() != null)
+        {
+            for (CommandsPlacementFragment fragment : stored.getCommandsPlacement().getPlacementFragments())
+            {
+                if (!sameGroup(fragment.getGroup(), derived.getCommandGroup()))
+                {
+                    continue;
+                }
+                for (Command command : fragment.getCommands())
+                {
+                    Item elsewhere = itemOutside(plan.section, group, command);
+                    if (elsewhere != null)
+                    {
+                        return staleView("the group of " + elsewhere.fqn()); //$NON-NLS-1$
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String staleView(String what)
+    {
+        return "EDT has not yet recomputed its view of this section after another change to " + what //$NON-NLS-1$
+            + ", so writing from it would undo that change."; //$NON-NLS-1$
+    }
+
+    private static Item itemOutside(CommandInterfaceSection section, Group group, Command command)
+    {
+        if (section == null)
+        {
+            return null;
+        }
+        for (Group other : section.groups())
+        {
+            if (other == group)
+            {
+                continue;
+            }
+            for (Item item : other.items)
+            {
+                if (item.derived instanceof CommandItem && sameObject(storedCommand((CommandItem)item.derived), command))
+                {
+                    return item;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Whether the item's computed group agrees with the stored placement: customized exactly when stored. */
+    private static boolean placementAgrees(CommandInterface stored, Object derivedItem)
+    {
+        if (!(derivedItem instanceof CommandItem))
+        {
+            return true;
+        }
+        CommandItem item = (CommandItem)derivedItem;
+        Command command = storedCommand(item);
+        boolean placed = false;
+        boolean placedHere = false;
+        if (stored != null && stored.getCommandsPlacement() != null)
+        {
+            for (CommandsPlacementFragment fragment : stored.getCommandsPlacement().getPlacementFragments())
+            {
+                if (containsObject(fragment.getCommands(), command))
+                {
+                    placed = true;
+                    placedHere |= item.getGroup() != null
+                        && sameGroup(fragment.getGroup(), item.getGroup().getCommandGroup());
+                }
+            }
+        }
+        return placed ? item.isGroupCustomized() && placedHere : !item.isGroupCustomized();
+    }
+
+    /** Whether the item's computed visibility agrees with the stored one: customized exactly when stored, same value. */
+    private static boolean visibilityAgrees(CommandInterface stored, Object derivedItem)
+    {
+        if (!(derivedItem instanceof CommandItem))
+        {
+            return true;
+        }
+        CommandItem item = (CommandItem)derivedItem;
+        Command command = storedCommand(item);
+        if (stored != null && stored.getCommandsVisibility() != null)
+        {
+            for (CommandsVisibilityFragment fragment : stored.getCommandsVisibility().getVisibilityFragments())
+            {
+                if (sameObject(fragment.getCommand(), command))
+                {
+                    return item.isVisibilityCustomized()
+                        && visibilityOf(fragment.getVisible()).equals(visibilityOf(item.getVisibility()));
+                }
+            }
+        }
+        return !item.isVisibilityCustomized();
+    }
+
+    private static CommandsOrderFragment orderFragment(CommandInterface stored, CommandGroup group)
+    {
+        if (stored != null && stored.getCommandsOrder() != null)
+        {
+            for (CommandsOrderFragment fragment : stored.getCommandsOrder().getOrderFragments())
+            {
+                if (sameGroup(fragment.getGroup(), group))
+                {
+                    return fragment;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static boolean sameCommands(CommandsOrderFragment a, CommandsOrderFragment b)
+    {
+        if (a == null || b == null)
+        {
+            return a == b;
+        }
+        List<Command> left = a.getCommands();
+        List<Command> right = b.getCommands();
+        if (left.size() != right.size())
+        {
+            return false;
+        }
+        for (int i = 0; i < left.size(); i++)
+        {
+            if (!sameObject(left.get(i), right.get(i)))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** The command as the stored section references it: an unresolved one by its stored proxy. */
+    private static Command storedCommand(CommandItem item)
+    {
+        Command command = item.getCommand();
+        return command instanceof UnresolvedCommand ? ((UnresolvedCommand)command).getProxyCommand() : command;
+    }
+
+    private static boolean containsObject(List<? extends EObject> list, EObject object)
+    {
+        for (EObject candidate : list)
+        {
+            if (sameObject(candidate, object))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The platform's own identity rule for command interface references (same object, proxy URI, or BM id). */
+    static boolean sameObject(EObject a, EObject b)
+    {
+        if (a == b)
+        {
+            return true;
+        }
+        if (a == null || b == null || a.eIsProxy() != b.eIsProxy())
+        {
+            return false;
+        }
+        if (a.eIsProxy())
+        {
+            return EcoreUtil.getURI(a).equals(EcoreUtil.getURI(b));
+        }
+        if (a instanceof IBmObject && b instanceof IBmObject)
+        {
+            // A detached object has no id yet (-1), so two of them are never the same by id.
+            long id = ((IBmObject)a).bmGetId();
+            return id != -1L && id == ((IBmObject)b).bmGetId();
+        }
+        return a.equals(b);
+    }
+
+    /** The platform's group identity: a standard group by name, anything else as {@link #sameObject}. */
+    static boolean sameGroup(CommandGroup a, CommandGroup b)
+    {
+        if (a instanceof StandardCommandGroup && b instanceof StandardCommandGroup && !a.eIsProxy() && !b.eIsProxy())
+        {
+            String name = ((StandardCommandGroup)a).getName();
+            return name != null && name.equals(((StandardCommandGroup)b).getName());
+        }
+        return sameObject(a, b);
     }
 
     /**

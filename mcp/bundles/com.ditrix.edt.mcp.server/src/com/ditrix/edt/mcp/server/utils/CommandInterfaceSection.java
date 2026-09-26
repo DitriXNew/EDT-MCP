@@ -64,6 +64,8 @@ public final class CommandInterfaceSection
         final Object handle;
         final boolean orderCustomized;
         final List<Item> items = new ArrayList<>();
+        /** EDT's computed group this was read from, or {@code null}. */
+        Object derived;
 
         /**
          * @param id canonical id: a standard group name ({@code NavigationPanelImportant}) or
@@ -119,6 +121,8 @@ public final class CommandInterfaceSection
         final boolean visibilityCustomized;
         final boolean groupCustomized;
         final boolean resolved;
+        /** EDT's computed command item this was read from, or {@code null}. */
+        Object derived;
 
         /**
          * @param fqn canonical English FQN, e.g. {@code Report.Sales.StandardCommand.Open}
@@ -208,6 +212,8 @@ public final class CommandInterfaceSection
         final Map<Group, List<Item>> order = new LinkedHashMap<>();
         final List<String> unchanged = new ArrayList<>();
         final List<String> touched = new ArrayList<>();
+        /** The section this plan was computed from. */
+        CommandInterfaceSection section;
 
         /** @return command -&gt; final visibility, for commands whose visibility changes */
         public Map<Item, Visibility> visibility()
@@ -464,6 +470,7 @@ public final class CommandInterfaceSection
         }
 
         Plan plan = new Plan();
+        plan.section = this;
         for (Group group : groups)
         {
             for (Item item : group.items)

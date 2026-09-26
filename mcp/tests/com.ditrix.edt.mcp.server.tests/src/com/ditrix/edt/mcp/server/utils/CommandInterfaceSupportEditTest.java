@@ -61,6 +61,8 @@ public class CommandInterfaceSupportEditTest
     private final IBmTransaction writeTx = mock(IBmTransaction.class);
     private final IBmModel model = mock(IBmModel.class);
     private final List<Plan> applied = new ArrayList<>();
+    /** What the write's staleness check reports; {@code null} means the computed view agrees. */
+    private String stale;
 
     public CommandInterfaceSupportEditTest()
     {
@@ -134,6 +136,37 @@ public class CommandInterfaceSupportEditTest
         // The read's order would have dropped Archive, which joined the group in between.
         assertEquals(Arrays.asList(EXPORT, PRINT, ARCHIVE), order);
         assertEquals(SECTION_FQN, result.writtenFqn);
+    }
+
+    @Test
+    public void testAComputedViewThatLagsTheStoredSectionRollsBackAndSaysSo()
+    {
+        stale = "EDT has not yet recomputed its view of this section after another change to the order of " //$NON-NLS-1$
+            + ORDINARY + ", so writing from it would undo that change."; //$NON-NLS-1$
+        WriteScope scope = new WriteScope();
+        CommandInterfaceSupport.EditResult[] result = new CommandInterfaceSupport.EditResult[1];
+        WriteScope.runWithScope(scope, () -> result[0] = edit(section(PRINT, EXPORT), section(PRINT, EXPORT),
+            "[{command:'CommonCommand.Print', after:'CommonCommand.Export'}]")); //$NON-NLS-1$
+
+        assertEquals("The command interface of Subsystem.Sales changed while this call was writing it, and the " //$NON-NLS-1$
+            + "batch no longer applies: " + stale + " Nothing was changed; read it again with " //$NON-NLS-1$ //$NON-NLS-2$
+            + "get_metadata_details and retry.", result[0].error); //$NON-NLS-1$
+        assertNull(result[0].plan);
+        assertNull(result[0].writtenFqn);
+        assertTrue("nothing may be applied from a lagging view", applied.isEmpty()); //$NON-NLS-1$
+        assertFalse("the write threw, so it did not commit", scope.hasRecordedWrite()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAPlanThatChangesNothingIsNotCheckedForStaleness()
+    {
+        stale = "must not be asked"; //$NON-NLS-1$
+        CommandInterfaceSupport.EditResult result = edit(section(PRINT, EXPORT), sectionHiding(PRINT, PRINT, EXPORT),
+            "[{command:'CommonCommand.Print', visible:false}]"); //$NON-NLS-1$
+
+        assertNull(result.error, result.error);
+        assertTrue(result.plan.isEmpty());
+        assertTrue(applied.isEmpty());
     }
 
     @Test
@@ -223,12 +256,16 @@ public class CommandInterfaceSupportEditTest
             fail("planned outside the edit's own transactions"); //$NON-NLS-1$
             return null;
         };
+        CommandInterfaceSupport.Verifier verifier = (tx, plan) -> {
+            assertSame("verified inside the write transaction", writeTx, tx); //$NON-NLS-1$
+            return stale;
+        };
         CommandInterfaceSupport.Applier applier = (tx, pm, plan) -> {
             assertSame("applied inside the write transaction", writeTx, tx); //$NON-NLS-1$
             applied.add(plan);
             return SECTION_FQN;
         };
-        return CommandInterfaceSupport.edit(model, entries, planner, applier, OWNER);
+        return CommandInterfaceSupport.edit(model, entries, planner, verifier, applier, OWNER);
     }
 
     private static List<JsonObject> entries(String json)
