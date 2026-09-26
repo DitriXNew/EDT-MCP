@@ -502,6 +502,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         if (disabled.containsAll(READ_ONLY_V7_ADDITIONS)
             && disabled.containsAll(READ_ONLY_V8_ADDITIONS)
             && disabled.containsAll(READ_ONLY_V9_ADDITIONS)
+            // A profile that re-enabled the configuration importer wants importers.
+            && disabled.contains("import_configuration_from_xml") //$NON-NLS-1$
             && (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE)
                 || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE)))
         {

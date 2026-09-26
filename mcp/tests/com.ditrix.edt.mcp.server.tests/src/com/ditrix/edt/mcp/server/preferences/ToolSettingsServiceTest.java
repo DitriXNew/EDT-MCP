@@ -1388,6 +1388,19 @@ public class ToolSettingsServiceTest
         assertEquals(Set.of(), disabledTools(store));
     }
 
+    @Test
+    public void testVersion10LeavesAProfileThatReenabledTheConfigurationImporter()
+    {
+        Set<String> custom = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        custom.removeAll(READ_ONLY_V10_ADDITIONS);
+        custom.remove("import_configuration_from_xml"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(custom, 9);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(custom, disabledTools(store));
+    }
+
     private static void assertVersion10RestoresCurrentPreset(ToolPreset preset)
     {
         Set<String> beforeVersion10 = new HashSet<>(preset.getDisabledTools());
