@@ -298,6 +298,33 @@ public class CommandInterfaceSupportEditTest
             new Visibility(false, Collections.emptyMap()), null).getFor().isEmpty());
     }
 
+    @Test
+    public void testTheCarryOverMatchesTheEditorForNullRolesAndSameNamedProxies()
+    {
+        // EDT's editor copies every stored override (copyVisibility) and adds a named role next to a proxy
+        // it cannot match (isSameBmObject is false for a proxy against a resolved role): the same here.
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Role manager = MdClassFactory.eINSTANCE.createRole();
+        manager.setName("Manager"); //$NON-NLS-1$
+        config.getRoles().add(manager);
+        Role oldManager = MdClassFactory.eINSTANCE.createRole();
+        ((InternalEObject)oldManager).eSetProxyURI(URI.createURI("bm://TestConfiguration/Role.Manager")); //$NON-NLS-1$
+        AdjustableBoolean stored = MdClassFactory.eINSTANCE.createAdjustableBoolean();
+        stored.getFor().add(forRole(null, true));
+        stored.getFor().add(forRole(oldManager, false));
+
+        AdjustableBoolean written = CommandInterfaceSupport.toAdjustableBoolean(config,
+            new Visibility(false, Collections.singletonMap("Role.Manager", true)), stored); //$NON-NLS-1$
+
+        assertEquals(3, written.getFor().size());
+        assertSame(manager, written.getFor().get(0).getRole());
+        assertTrue(written.getFor().get(0).isValue());
+        assertNull(written.getFor().get(1).getRole());
+        assertTrue(written.getFor().get(1).isValue());
+        assertSame(oldManager, written.getFor().get(2).getRole());
+        assertFalse(written.getFor().get(2).isValue());
+    }
+
     private static ForRoleType forRole(Role role, boolean value)
     {
         ForRoleType forRole = MdClassFactory.eINSTANCE.createForRoleType();
