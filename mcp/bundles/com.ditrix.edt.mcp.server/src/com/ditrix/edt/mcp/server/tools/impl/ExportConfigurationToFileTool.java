@@ -18,6 +18,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.OperationCanceledException;
@@ -94,6 +95,8 @@ public class ExportConfigurationToFileTool implements IMcpTool
     static final long DUMP_END_CAP_MS = 2L * 60_000L;
     /** How long a LOADING equality state may be waited out. */
     static final long SYNC_SETTLE_MS = 30_000L;
+    /** How long past the settle wait EDT's synchronization service may take to answer. */
+    static final long SYNC_READ_MARGIN_MS = 30_000L;
     /** The Designer dump itself. */
     static final long EXPORT_TIMEOUT_MS = 30L * 60_000L;
 
@@ -479,7 +482,7 @@ public class ExportConfigurationToFileTool implements IMcpTool
                 throw new InterruptedException("cancelled before the export was handed to EDT"); //$NON-NLS-1$
             }
             prepare(project, application, applicationId, manager, progress);
-            SyncReading sync = readSync(request, infobase);
+            SyncReading sync = readSyncBounded(request, infobase, progress);
             progress.add("Infobase vs project: " + sync.state().wire() + " - " + sync.detail() + '.'); //$NON-NLS-1$ //$NON-NLS-2$
             if (sync.state() == SyncState.OUT_OF_DATE && !request.allowOutOfDate)
             {
@@ -684,6 +687,27 @@ public class ExportConfigurationToFileTool implements IMcpTool
             + "the server configuration. Nothing was exported. Free those ports - most often an " //$NON-NLS-1$
             + "ibsrv process left from an earlier EDT session (stop it, or stop the server in " //$NON-NLS-1$
             + "EDT's Servers view) - then retry."; //$NON-NLS-1$
+    }
+
+    /** The job is committed here, so a stalled synchronization service must not hold it forever. */
+    private static SyncReading readSyncBounded(Request request, InfobaseReference infobase,
+        ProgressReporter progress) throws InterruptedException
+    {
+        long timeout = boundedBy(progress, SYNC_SETTLE_MS + SYNC_READ_MARGIN_MS);
+        AtomicReference<SyncReading> reading = new AtomicReference<>();
+        BoundedJob.Result result = BoundedJob.run(NAME + ": read the synchronization state", timeout, //$NON-NLS-1$
+            monitor -> reading.set(readSync(request, infobase)));
+        if (result.getOutcome() == BoundedJob.Outcome.INTERRUPTED)
+        {
+            throw new InterruptedException("cancelled while reading the synchronization state"); //$NON-NLS-1$
+        }
+        SyncReading value = reading.get();
+        if (result.getOutcome() == BoundedJob.Outcome.COMPLETED && value != null)
+        {
+            return value;
+        }
+        return new SyncReading(SyncState.UNKNOWN, "EDT did not report the synchronization state within " //$NON-NLS-1$
+            + seconds(timeout));
     }
 
     private static SyncReading readSync(Request request, InfobaseReference infobase)
