@@ -1632,6 +1632,43 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
+    "description": "Export the configuration (.cf) or an extension (.cfe) FROM an application's infobase to a file via the 1C thick client - the infobase's content, not the project's (for project sources use export_configuration_to_xml). An extension project in projectName exports that extension. Refused while EDT reports the infobase out of date with the project: run update_database first, or pass allowOutOfDate=true. outputFile must not exist - it is never overwritten. Returns a jobId when not finished within waitSeconds; poll get_job_status. Full parameters and examples: call get_tool_guide('export_configuration_to_file').",
+    "inputSchema": {
+      "properties": {
+        "allowOutOfDate": {
+          "type": "boolean"
+        },
+        "applicationId": {
+          "type": "string"
+        },
+        "extensionName": {
+          "type": "string"
+        },
+        "outputFile": {
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "waitSeconds": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "projectName",
+        "outputFile"
+      ],
+      "type": "object"
+    },
+    "name": "export_configuration_to_file",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Export an EDT configuration into 1C XML files. Parameters and examples: get_tool_guide('export_configuration_to_xml').",
     "inputSchema": {
       "properties": {
