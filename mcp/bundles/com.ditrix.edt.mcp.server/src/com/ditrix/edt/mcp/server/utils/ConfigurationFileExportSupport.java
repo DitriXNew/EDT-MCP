@@ -407,18 +407,18 @@ public final class ConfigurationFileExportSupport
     /**
      * Resolves the platform installation and thick client for {@code project} + {@code infobase}
      * exactly as EDT's export wizard does, then dumps the configuration or extension to
-     * {@code target}. A cancelled {@code monitor} makes the platform stop the Designer process and
-     * return without an exception - the caller must judge the outcome by the file, not by the return.
+     * {@code target}. A cancelled {@code monitor} makes EDT return at once without an exception,
+     * without waiting for the Designer - the caller must judge the outcome by the file, not by the
+     * return. EDT may re-run the dump with another platform version, so none is reported.
      *
      * @param project the configuration project the runtime is resolved for
      * @param infobase the infobase to dump
      * @param extensionName the extension to dump, or {@code null} for the configuration
      * @param target the file the platform writes
      * @param monitor the cancellation source
-     * @return the platform version that ran the dump
      * @throws Exception whatever the platform raised
      */
-    public static String export(IProject project, InfobaseReference infobase, String extensionName,
+    public static void export(IProject project, InfobaseReference infobase, String extensionName,
         Path target, IProgressMonitor monitor) throws Exception // NOSONAR platform failures are reported by the caller
     {
         IExportConfigurationFileService service = ServiceAccess.get(IExportConfigurationFileService.class);
@@ -437,7 +437,6 @@ public final class ConfigurationFileExportSupport
                 installation, IRuntimeComponentTypes.THICK_CLIENT);
         service.exportConfigurationOrExtension(actual, thickClient.getComponent(),
             thickClient.getExecutor(), extensionName, target, monitor);
-        return installation.getVersionWithBuild();
     }
 
     /**

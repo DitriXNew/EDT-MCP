@@ -28,20 +28,22 @@ Dumps the configuration to a `.cf` file, or one configuration extension to a `.c
 - `waitSeconds` (optional, default 20, 0 to 45) - how long this call waits before returning a `jobId`. The dump itself keeps running in the background either way.
 
 ## Infobase vs project
-Before dumping, the tool prepares the application (starts its standalone server if needed and connects the project, as EDT's own export command does) and reads EDT's own comparison of the project with what was last applied to the infobase (for an extension, the extension project) - the reading `get_applications` shows as the update state:
-- `inSync` - EDT reports them equal (`get_applications`: up to date).
+Before dumping, the tool prepares the application (starts its standalone server if needed and connects the project, as EDT's own export command does) and reads EDT's own comparison of the ONE project the file corresponds to with what was last applied to the infobase: the configuration project for a `.cf`, the extension project for a `.cfe`.
+- `inSync` - EDT reports that project equal.
 - `outOfDate` - EDT reports a difference: the call is REFUSED and nothing is written. Apply the project with `update_database` first, or pass `allowOutOfDate=true` to dump what the infobase holds now.
 - `unknown` - EDT could not tell (no project holds that extension, the comparison did not settle within 30 s, or the state could not be read). The dump is made and the result says so explicitly.
 
-The state is reported as `infobaseSync` in the result.
+The state is reported as `infobaseSync` in the result. It is NOT the update state `get_applications` shows: that one is up to date only when the configuration AND every extension project of it are equal. So a `.cf` dump can be `inSync` while `get_applications` asks for an update because an extension lags (a `.cf` holds no extensions), and a `.cfe` dump can be `inSync` while the configuration lags.
 
 ## What you get
-Markdown with front matter: `status`, `source` (`configuration` / `extension`), `project`, `extensionName`, `applicationId`, `application`, `infobase`, `outputFile`, `sizeBytes`, `infobaseSync`, `platformVersion`.
+Markdown with front matter: `status`, `source` (`configuration` / `extension`), `project`, `extensionName`, `applicationId`, `application`, `infobase`, `outputFile`, `sizeBytes`, `infobaseSync`.
 
-Success is reported only after the file was seen on disk: the Designer writes to a temporary `<name>.partial-<id>.cf(e)` beside `outputFile`; the tool checks it is non-empty and written by this call, renames it to `outputFile` (never replacing a file that appeared meanwhile), and reads the size back. On any failure, cancellation or timeout the temporary file is removed and `outputFile` is not created.
+Success is reported only after the file was seen on disk: the Designer writes to a temporary `<name>.partial-<id>.cf(e)` beside `outputFile`; the tool checks it is non-empty and written by this call, renames it to `outputFile` (never replacing a file that appeared meanwhile), and reads the size back. `outputFile` is created only by that rename, so a failed, cancelled or timed-out call never creates it; a failure also removes the temporary file.
 
 ## Background job
-The dump can take minutes on a large configuration. When it does not finish within `waitSeconds`, the call returns a `jobId`: poll `get_job_status` with it, and do not start the same export again. `cancel_job` stops a dump that has not finished: EDT is asked to stop the Designer, and the temporary file is removed once it has ended. The phases are bounded: waiting for another operation on the same infobase (5 min), preparing the application (5 min), the dump itself (30 min).
+The dump can take minutes on a large configuration. When it does not finish within `waitSeconds`, the call returns a `jobId`: poll `get_job_status` with it, and do not start the same export again. The phases are bounded: waiting for another operation on the same infobase (5 min), preparing the application (5 min), the dump itself (30 min).
+
+`cancel_job`, or the 30-minute bound, abandons a dump that has not finished. EDT kills a Designer process it started, but does NOT stop a dump running in its Designer-agent session. The tool removes the temporary file when it abandons the dump, so a Designer that finishes later can still leave `<name>.partial-<id>.cf(e)` beside `outputFile` (the job's progress names it): delete it.
 
 ## Errors
 - **No platform with a thick client** - EDT found no locally installed 1C:Enterprise version matching the project and infobase. Install it (with the thick client) and register it in EDT's installed platforms.

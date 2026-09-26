@@ -9,6 +9,8 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -17,7 +19,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.OperationCanceledException;
-import org.eclipse.swt.widgets.Shell;
 
 import com._1c.g5.v8.dt.core.platform.IConfigurationProject;
 import com._1c.g5.v8.dt.core.platform.IExtensionProject;
@@ -300,34 +301,56 @@ public class ExportConfigurationToFileTool implements IMcpTool
         {
             return new Target(project, null, project, null);
         }
-        // The infobase knows an extension by its configuration name; the EDT project name is
-        // accepted as a fallback, since callers often pass it.
-        IProject byProjectName = null;
-        String byProjectNameExtension = null;
+        List<ExtensionCandidate> candidates = new ArrayList<>();
         for (IExtensionProject candidate : v8Projects.getProjects(IExtensionProject.class))
         {
             IProject candidateProject = candidate.getProject();
-            if (!project.equals(candidate.getParentProject()) || candidateProject == null
-                || !candidateProject.isOpen())
+            if (project.equals(candidate.getParentProject()) && candidateProject != null
+                && candidateProject.isOpen())
+            {
+                candidates.add(new ExtensionCandidate(candidateProject,
+                    ConfigurationFileExportSupport.configurationName(candidateProject, candidate)));
+            }
+        }
+        return matchExtension(project, candidates, requestedExtension);
+    }
+
+    /**
+     * Picks the extension {@code requested} names among the configuration's extension projects.
+     * The infobase knows an extension by its configuration name; the EDT project name is accepted
+     * as a fallback, since callers often pass it. An unmatched name goes to the Designer as given.
+     *
+     * @param configurationProject the configuration project
+     * @param candidates its open extension projects
+     * @param requested the caller's extensionName
+     * @return the target; its extension name is always the configuration name when one matched
+     */
+    static Target matchExtension(IProject configurationProject, List<ExtensionCandidate> candidates,
+        String requested)
+    {
+        ExtensionCandidate byProjectName = null;
+        for (ExtensionCandidate candidate : candidates)
+        {
+            String name = candidate.configurationName();
+            if (name == null)
             {
                 continue;
             }
-            String name = ConfigurationFileExportSupport.configurationName(candidateProject, candidate);
-            if (name != null && name.equalsIgnoreCase(requestedExtension))
+            if (name.equalsIgnoreCase(requested))
             {
-                return new Target(project, name, candidateProject, null);
+                return new Target(configurationProject, name, candidate.project(), null);
             }
-            if (name != null && candidateProject.getName().equalsIgnoreCase(requestedExtension))
+            if (candidate.project().getName().equalsIgnoreCase(requested))
             {
-                byProjectName = candidateProject;
-                byProjectNameExtension = name;
+                byProjectName = candidate;
             }
         }
         if (byProjectName != null)
         {
-            return new Target(project, byProjectNameExtension, byProjectName, null);
+            return new Target(configurationProject, byProjectName.configurationName(),
+                byProjectName.project(), null);
         }
-        return new Target(project, requestedExtension, null, null);
+        return new Target(configurationProject, requested, null, null);
     }
 
     private static Target extensionProjectTarget(IProject project, IExtensionProject extension,
@@ -517,12 +540,9 @@ public class ExportConfigurationToFileTool implements IMcpTool
     {
         progress.add("Preparing application '" + applicationId //$NON-NLS-1$
             + "' (starting its server if needed, connecting the project)."); //$NON-NLS-1$
+        // No shell and so no UI-thread wait under the lock: prepare never reads one, and EDT's
+        // own export command passes an empty context too.
         ExecutionContext context = new ExecutionContext();
-        Shell shell = LaunchLifecycleUtils.grabActiveShell();
-        if (shell != null)
-        {
-            context.setProperty(ExecutionContext.ACTIVE_SHELL_NAME, shell);
-        }
         boolean serverApplication = DebugServerTargetSupport.isServerApplicationId(applicationId);
         String infobaseName = LaunchLifecycleUtils.conflictAttributionName(application);
         String serverName = serverApplication
@@ -621,9 +641,9 @@ public class ExportConfigurationToFileTool implements IMcpTool
     }
 
     /**
-     * Runs the dump into a partial file under a deadline, then publishes it. A dump that is
-     * abandoned (deadline, cancel) has its monitor cancelled - the platform then stops the
-     * Designer - and its partial file is removed when the dump actually ends.
+     * Runs the dump into a partial file under a deadline, then publishes it. An abandoned dump
+     * (deadline, cancel) has its monitor cancelled and its partial file removed once EDT's call
+     * returns; the Designer can outlive that, so the partial file may reappear.
      */
     private Object dumpAndPublish(Request request, String applicationId, IApplication application,
         InfobaseReference infobase, SyncReading sync, ProgressReporter progress) throws Exception
@@ -631,16 +651,15 @@ public class ExportConfigurationToFileTool implements IMcpTool
         Path partial = ConfigurationFileExportSupport.partialFileFor(request.outputFile,
             UUID.randomUUID().toString().substring(0, 8));
         AtomicBoolean abandoned = new AtomicBoolean();
-        String[] platformVersion = new String[1];
         long timeout = boundedBy(progress, EXPORT_TIMEOUT_MS);
         long startMillis = System.currentTimeMillis();
-        progress.add("Dumping the " + describeSource(request) + " with the 1C Designer."); //$NON-NLS-1$ //$NON-NLS-2$
+        progress.add("Dumping the " + describeSource(request) + " with the 1C Designer into " //$NON-NLS-1$ //$NON-NLS-2$
+            + partial + '.');
         BoundedJob.Result result = BoundedJob.run(NAME + ": " + request.outputFile.getFileName(), //$NON-NLS-1$
             timeout,
             monitor -> {
-                platformVersion[0] = ConfigurationFileExportSupport.export(
-                    request.target.configurationProject, infobase, request.target.extensionName,
-                    partial, monitor);
+                ConfigurationFileExportSupport.export(request.target.configurationProject, infobase,
+                    request.target.extensionName, partial, monitor);
                 // A cancelled platform call returns normally, leaving a partial or no file.
                 if (monitor.isCanceled())
                 {
@@ -664,8 +683,8 @@ public class ExportConfigurationToFileTool implements IMcpTool
             if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT)
             {
                 throw new IllegalStateException("The dump did not finish within " + seconds(timeout) //$NON-NLS-1$
-                    + "; EDT was asked to stop the Designer. Nothing was written to " //$NON-NLS-1$
-                    + request.outputFile + ". Retry, or check the infobase in EDT."); //$NON-NLS-1$
+                    + " and was abandoned. " + abandonedDumpNote(request.outputFile, partial) //$NON-NLS-1$
+                    + " Retry, or check the infobase in EDT."); //$NON-NLS-1$
             }
             throw new IllegalStateException("The dump never started (EDT's job queue did not run " //$NON-NLS-1$
                 + "it). Nothing was written to " + request.outputFile + "; retrying is safe."); //$NON-NLS-1$ //$NON-NLS-2$
@@ -674,7 +693,7 @@ public class ExportConfigurationToFileTool implements IMcpTool
         {
             ConfigurationFileExportSupport.deleteQuietly(partial);
             throw new IllegalStateException("The dump was cancelled in EDT (its progress job was " //$NON-NLS-1$
-                + "stopped). Nothing was written to " + request.outputFile + "; call " + NAME //$NON-NLS-1$ //$NON-NLS-2$
+                + "stopped). " + abandonedDumpNote(request.outputFile, partial) + " Call " + NAME //$NON-NLS-1$ //$NON-NLS-2$
                 + " again to retry."); //$NON-NLS-1$
         }
         if (result.getFailure() != null)
@@ -715,12 +734,22 @@ public class ExportConfigurationToFileTool implements IMcpTool
                 + "check the EDT log.", e); //$NON-NLS-1$
         }
         progress.add("Wrote " + published.sizeBytes() + " bytes to " + published.path() + '.'); //$NON-NLS-1$ //$NON-NLS-2$
-        return renderReport(request, applicationId, application, infobase, sync, published,
-            platformVersion[0]);
+        return renderReport(request, applicationId, application, infobase, sync, published);
+    }
+
+    /**
+     * What an abandoned dump may leave behind. EDT kills a Designer process it started, but does
+     * not stop a dump in its Designer-agent session, so the temporary file can appear later.
+     */
+    static String abandonedDumpNote(Path outputFile, Path partial)
+    {
+        return outputFile + " was not created. The Designer may still be running (EDT does not " //$NON-NLS-1$
+            + "stop a dump in its Designer-agent session): if " + partial + " appears later, " //$NON-NLS-1$ //$NON-NLS-2$
+            + "delete it."; //$NON-NLS-1$
     }
 
     static String renderReport(Request request, String applicationId, IApplication application,
-        InfobaseReference infobase, SyncReading sync, PublishedFile published, String platformVersion)
+        InfobaseReference infobase, SyncReading sync, PublishedFile published)
     {
         String extensionName = request.target.extensionName;
         FrontMatter fm = FrontMatter.create()
@@ -738,10 +767,6 @@ public class ExportConfigurationToFileTool implements IMcpTool
             .put(KEY_OUTPUT_FILE, published.path().toString())
             .put("sizeBytes", published.sizeBytes()) //$NON-NLS-1$
             .put("infobaseSync", sync.state().wire()); //$NON-NLS-1$
-        if (platformVersion != null)
-        {
-            fm.put("platformVersion", platformVersion); //$NON-NLS-1$
-        }
 
         StringBuilder body = new StringBuilder();
         body.append(extensionName == null ? "# Configuration exported to a .cf file\n\n" //$NON-NLS-1$
@@ -800,6 +825,16 @@ public class ExportConfigurationToFileTool implements IMcpTool
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /**
+     * An open extension project of the configuration being exported.
+     *
+     * @param project the extension project
+     * @param configurationName its configuration's name, or {@code null} when its model is not ready
+     */
+    record ExtensionCandidate(IProject project, String configurationName)
+    {
     }
 
     /** What is exported and against which project its staleness is judged. */

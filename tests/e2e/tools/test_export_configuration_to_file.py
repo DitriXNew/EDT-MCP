@@ -290,6 +290,37 @@ def test_extension_project_with_a_different_extension_name_is_refused():
 
 
 @e2e_test(tool=TOOL, kind="action")
+def test_extension_name_resolves_to_the_infobase_name():
+    """projectName = the configuration: extensionName by the extension's configuration Name (any
+    case) or by its EDT project name resolves to that Name; an unknown one is passed on as given.
+    A .cf name makes the resolution visible synchronously, before any job or file."""
+    with open(os.path.join(TESTS_PROJECT_DIR, "src", "Configuration", "Configuration.mdo"),
+              encoding="utf-8") as f:
+        ext_name = re.search(r"<name>([^<]+)</name>", f.read()).group(1)
+    assert ext_name != TESTS_PROJECT, "the fixture must tell the two names apart"
+    out_dir = tempfile.mkdtemp(prefix="edt_export_cf_e2e_")
+    try:
+        cases = ((TESTS_PROJECT, ext_name), (ext_name.upper(), ext_name),
+                 ("NoSuchExtension_e2e", "NoSuchExtension_e2e"))
+        for requested, resolved in cases:
+            e = assert_error(call(TOOL, {"projectName": PROJECT,
+                                         "outputFile": os.path.join(out_dir, "a.cf"),
+                                         "extensionName": requested}),
+                             "extensionName=%s with a .cf name" % requested)
+            assert "but the source is extension '%s'," % resolved in e, \
+                "extensionName=%s must resolve to '%s': %s" % (requested, resolved, e[:400])
+            assert_error_quality(e, names=[resolved], suggests=["Use a .cfe name"],
+                                 ctx="extensionName=%s with a .cf name" % requested)
+            if requested != resolved:
+                assert "extension '%s'" % requested not in e, \
+                    "the caller's spelling must not reach the Designer: " + e[:400]
+        assert not os.listdir(out_dir), "a refused call must write nothing"
+        assert_no_diff("refusals touch nothing")
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
+
+
+@e2e_test(tool=TOOL, kind="action")
 def test_unknown_project_and_bad_wait_are_refused():
     out_dir = tempfile.mkdtemp(prefix="edt_export_cf_e2e_")
     try:

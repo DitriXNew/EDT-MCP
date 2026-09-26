@@ -10,6 +10,8 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -290,9 +292,87 @@ public class ExportConfigurationToFileToolTest
         assertTrue(report.contains("source: configuration")); //$NON-NLS-1$
         assertTrue(report.contains("sizeBytes: 4096")); //$NON-NLS-1$
         assertTrue(report.contains("infobaseSync: inSync")); //$NON-NLS-1$
-        assertTrue(report.contains("platformVersion: 8.3.27.1000")); //$NON-NLS-1$
+        assertFalse("EDT may re-run the dump on another platform, so no version is claimed", //$NON-NLS-1$
+            report.contains("platformVersion")); //$NON-NLS-1$
         assertFalse(report.contains("extensionName:")); //$NON-NLS-1$
         assertFalse("an in-sync dump carries no caveat", report.contains("> ")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAbandonedDumpNoteNamesTheTemporaryFile()
+    {
+        Path output = Path.of("C:/export/Config.cf"); //$NON-NLS-1$
+        Path partial = Path.of("C:/export/Config.partial-1a2b3c4d.cf"); //$NON-NLS-1$
+        String note = ExportConfigurationToFileTool.abandonedDumpNote(output, partial);
+        assertTrue(note.startsWith(output + " was not created.")); //$NON-NLS-1$
+        assertTrue(note.contains("if " + partial + " appears later, delete it.")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(note.contains("Designer-agent session")); //$NON-NLS-1$
+        assertFalse("EDT sends no stop to an agent session", note.contains("asked to stop")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testGuideStatesWhatSyncAndCancelActuallyMean()
+    {
+        String guide = new ExportConfigurationToFileTool().getGuide();
+        assertTrue(guide.contains("It is NOT the update state `get_applications` shows")); //$NON-NLS-1$
+        assertFalse(guide.contains("(`get_applications`: up to date)")); //$NON-NLS-1$
+        assertTrue(guide.contains("does NOT stop a dump running in its Designer-agent session")); //$NON-NLS-1$
+        assertFalse(guide.contains("the temporary file is removed once it has ended")); //$NON-NLS-1$
+        assertFalse(guide.contains("platformVersion")); //$NON-NLS-1$
+    }
+
+    // ==================== extensionName resolution ====================
+
+    @Test
+    public void testExtensionMatchesItsConfigurationNameIgnoringCase()
+    {
+        IProject config = project("Config"); //$NON-NLS-1$
+        IProject tests = project("Config.tests"); //$NON-NLS-1$
+        ExportConfigurationToFileTool.Target target = ExportConfigurationToFileTool.matchExtension(config,
+            List.of(candidate(tests, "tests")), "TESTS"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTarget(target, config, "tests", tests); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExtensionProjectNameResolvesToTheConfigurationName()
+    {
+        IProject config = project("Config"); //$NON-NLS-1$
+        IProject tests = project("Config.tests"); //$NON-NLS-1$
+        ExportConfigurationToFileTool.Target target = ExportConfigurationToFileTool.matchExtension(config,
+            List.of(candidate(tests, "tests")), "config.TESTS"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTarget(target, config, "tests", tests); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testConfigurationNameWinsOverAnotherProjectsName()
+    {
+        IProject config = project("Config"); //$NON-NLS-1$
+        IProject namedLikeIt = project("Ext"); //$NON-NLS-1$
+        IProject realExt = project("Config.ext"); //$NON-NLS-1$
+        ExportConfigurationToFileTool.Target target = ExportConfigurationToFileTool.matchExtension(config,
+            List.of(candidate(namedLikeIt, "Other"), candidate(realExt, "Ext")), "Ext"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTarget(target, config, "Ext", realExt); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRussianExtensionNameMatchesIgnoringCase()
+    {
+        IProject config = project("Config"); //$NON-NLS-1$
+        IProject ext = project("Config.ext"); //$NON-NLS-1$
+        String name = "\u0422\u0435\u0441\u0442\u044B"; //$NON-NLS-1$ Тесты
+        ExportConfigurationToFileTool.Target target = ExportConfigurationToFileTool.matchExtension(config,
+            List.of(candidate(ext, name)), "\u0442\u0415\u0421\u0422\u042B"); //$NON-NLS-1$ тЕСТЫ
+        assertTarget(target, config, name, ext);
+    }
+
+    @Test
+    public void testUnknownExtensionGoesToTheDesignerAsGivenWithNoSyncProject()
+    {
+        IProject config = project("Config"); //$NON-NLS-1$
+        IProject tests = project("Config.tests"); //$NON-NLS-1$
+        ExportConfigurationToFileTool.Target unknown = ExportConfigurationToFileTool.matchExtension(config,
+            List.of(candidate(tests, "tests")), "Installed"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTarget(unknown, config, "Installed", null); //$NON-NLS-1$
     }
 
     @Test
@@ -334,7 +414,29 @@ public class ExportConfigurationToFileToolTest
         when(infobase.getName()).thenReturn("ConfigBase"); //$NON-NLS-1$
         PublishedFile published = new PublishedFile(request.outputFile, 4096L, 1_700_000_000_000L);
         return ExportConfigurationToFileTool.renderReport(request, "App.1", application, infobase, //$NON-NLS-1$
-            sync, published, "8.3.27.1000"); //$NON-NLS-1$
+            sync, published);
+    }
+
+    private static IProject project(String name)
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn(name);
+        return project;
+    }
+
+    private static ExportConfigurationToFileTool.ExtensionCandidate candidate(IProject project,
+        String configurationName)
+    {
+        return new ExportConfigurationToFileTool.ExtensionCandidate(project, configurationName);
+    }
+
+    private static void assertTarget(ExportConfigurationToFileTool.Target target, IProject configuration,
+        String extensionName, IProject syncProject)
+    {
+        assertNull(target.error);
+        assertSame(configuration, target.configurationProject);
+        assertEquals(extensionName, target.extensionName);
+        assertSame(syncProject, target.syncProject);
     }
 
     private static Map<String, String> params(String projectName, String outputFile)
