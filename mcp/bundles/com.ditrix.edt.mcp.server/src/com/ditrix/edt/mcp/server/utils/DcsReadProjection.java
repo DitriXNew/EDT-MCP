@@ -346,8 +346,12 @@ public final class DcsReadProjection
             || "fieldTemplates".equals(collection) || "groupTemplates".equals(collection) //$NON-NLS-1$ //$NON-NLS-2$
             || "groupHeaderTemplates".equals(collection) //$NON-NLS-1$
             || "totalFieldsTemplates".equals(collection); //$NON-NLS-1$
-        if (additionalProperties && object instanceof Value
-            && !isAuthorableAdditionalPropertyValue((Value)object))
+        // Slots the writer fills only through an untyped ValueSpec; any other Value there is lost.
+        boolean untypedValueSlot = additionalProperties
+            || "periodAdditionBegin".equals(collection) //$NON-NLS-1$
+            || "periodAdditionEnd".equals(collection); //$NON-NLS-1$
+        if (untypedValueSlot && object instanceof Value
+            && !isAuthorableUntypedValue((Value)object))
         {
             unsupported = true;
         }
@@ -394,7 +398,7 @@ public final class DcsReadProjection
         }
     }
 
-    private static boolean isAuthorableAdditionalPropertyValue(Value value)
+    private static boolean isAuthorableUntypedValue(Value value)
     {
         return value instanceof DataCompositionField || value instanceof DataCompositionParameter
             || value instanceof DesignTimeValueValue || value instanceof StringValue

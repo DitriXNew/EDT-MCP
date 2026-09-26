@@ -17,6 +17,7 @@ import com._1c.g5.v8.dt.dcs.model.core.DataCompositionGroupType;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionPeriodAdditionType;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionSortDirection;
 import com._1c.g5.v8.dt.dcs.model.core.LocalString;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionComparisonType;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceUse;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFieldPlacement;
@@ -24,6 +25,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterApplicationType;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItemsGroupType;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettingsItemState;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettingsItemViewMode;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableGroup;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameter;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameterCollection;
 import com._1c.g5.v8.dt.dcs.path.DcsPathException;
@@ -104,7 +106,10 @@ public final class DcsOptions
             return Result.failure("Could not load DCS options for platform " //$NON-NLS-1$
                 + (version == null ? Version.LATEST : version) + ": " + e.getMessage()); //$NON-NLS-1$
         }
-        addBodyEnums(options, type);
+        // A points/series/rows/columns group is typed as its chart/table but written as a grouping.
+        boolean axisGroup = node.value instanceof DataCompositionChartGroup
+            || node.value instanceof DataCompositionTableGroup;
+        addBodyEnums(options, axisGroup ? "grouping" : type); //$NON-NLS-1$
 
         int limit = Pagination.clampLimit(requestedLimit == null ? Pagination.DEFAULT_LIMIT
             : requestedLimit.intValue(), Pagination.MAX_LIMIT);

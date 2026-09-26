@@ -15,10 +15,16 @@ import org.junit.Test;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionPeriodAdditionType;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartOutputParameterValues;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupField;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsParameterValue;
+import com._1c.g5.v8.dt.mcore.EnumValue;
+import com._1c.g5.v8.dt.mcore.McoreFactory;
 
 /** Scoping of the unmodellable-content refusal. */
 public class DcsMutationGuardTest
@@ -66,6 +72,46 @@ public class DcsMutationGuardTest
             DcsMutationGuard.replaceError(settings, address(ROOT + "#/items"))); //$NON-NLS-1$
         assertNotNull("replacing the chart itself must still block", //$NON-NLS-1$
             DcsMutationGuard.replaceError(settings, address(ROOT + "#/items/0"))); //$NON-NLS-1$
+    }
+
+    /**
+     * A period-addition bound the ValueSpec writer cannot restate (an enum literal) blocks a
+     * replace of the chart and its ancestors, while an authorable date bound does not.
+     */
+    @Test
+    public void testUnauthorablePeriodAdditionBoundInAChartGroupBlocksReplace()
+    {
+        com._1c.g5.v8.dt.dcs.model.settings.DcsFactory factory =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE;
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        DataCompositionSettings settings = factory.createDataCompositionSettings();
+        DataCompositionChart chart = factory.createDataCompositionChart();
+        DataCompositionChartGroup point = factory.createDataCompositionChartGroup();
+        DataCompositionGroupFields fields = factory.createDataCompositionGroupFields();
+        DataCompositionGroupField field = factory.createDataCompositionGroupField();
+        field.setPeriodAdditionBegin(McoreFactory.eINSTANCE.createDateValue());
+        fields.getItems().add(field);
+        point.setGroupFields(fields);
+        chart.getPoints().add(point);
+        settings.getItems().add(chart);
+        schema.setDefaultSettings(settings);
+        assertNull("a date bound is authorable", //$NON-NLS-1$
+            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/items/0"))); //$NON-NLS-1$
+
+        EnumValue bound = McoreFactory.eINSTANCE.createEnumValue();
+        bound.setValue(DataCompositionPeriodAdditionType.MONTH);
+        field.setPeriodAdditionEnd(bound);
+
+        for (String target : new String[] {"#/defaultSettings/items/0", //$NON-NLS-1$
+            "#/defaultSettings/items/0/points/0", "#/defaultSettings"}) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            String error = DcsMutationGuard.replaceError(schema, address(ROOT + target));
+            assertNotNull(target, error);
+            assertTrue(error, error.contains("EnumValue at Report.Sales#/defaultSettings/items/0" //$NON-NLS-1$
+                + "/points/0/groupFields/items/0/periodAdditionEnd")); //$NON-NLS-1$
+        }
+        assertNull("a sibling replace does not reach the bound", //$NON-NLS-1$
+            DcsMutationGuard.replaceError(schema, address(ROOT + "#/defaultSettings/selection"))); //$NON-NLS-1$
     }
 
     @Test
