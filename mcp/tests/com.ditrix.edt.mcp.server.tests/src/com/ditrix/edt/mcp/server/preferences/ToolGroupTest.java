@@ -164,6 +164,7 @@ public class ToolGroupTest
         assertTrue(tools.contains("get_configuration_properties"));
         assertTrue(tools.contains("export_configuration_to_xml"));
         assertTrue(tools.contains("import_configuration_from_xml"));
+        assertTrue(tools.contains("import_project_from_file")); //$NON-NLS-1$
         assertTrue(tools.contains("delete_project"));
         assertTrue(tools.contains("resync_to_disk"));
         assertTrue(tools.contains("create_project"));
@@ -173,7 +174,7 @@ public class ToolGroupTest
         assertTrue(tools.contains("enable_toolset")); //$NON-NLS-1$
         assertTrue(tools.contains("get_event_log")); //$NON-NLS-1$
         assertTrue(tools.contains("get_mcp_history")); //$NON-NLS-1$
-        assertEquals(17, tools.size());
+        assertEquals(18, tools.size());
     }
 
     @Test

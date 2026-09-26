@@ -180,6 +180,7 @@ public final class Toolsets
             "export_configuration_to_xml", "import_configuration_from_xml", "build_external_objects", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "create_infobase", "delete_infobase", "infobase_sessions", "set_infobase_credentials", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "create_project", //$NON-NLS-1$
+            "import_project_from_file", //$NON-NLS-1$
             "get_problem_summary", "get_project_errors", "validate_xdto_package", "get_markers", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "get_event_log", //$NON-NLS-1$
             "get_mcp_history", //$NON-NLS-1$

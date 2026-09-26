@@ -52,6 +52,11 @@ public final class BackgroundJobRenderer
             summary.put("assistantMessages", //$NON-NLS-1$
                 workmateResponse.getAssistantMessageCount().toString());
         }
+        if (job.getStatus() == BackgroundJobs.Status.FAILED && job.getErrorMarker() != null)
+        {
+            // The same marker the owning tool's own error answer carries.
+            summary.put(job.getErrorMarker(), "true"); //$NON-NLS-1$
+        }
         result.append(MarkdownUtils.keyValueTable("Field", "Value", summary)); //$NON-NLS-1$ //$NON-NLS-2$
 
         result.append("\n## Progress\n\n"); //$NON-NLS-1$

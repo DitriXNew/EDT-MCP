@@ -33,6 +33,7 @@ import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationOutcome;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.CancellationResult;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobWork;
+import com.ditrix.edt.mcp.server.utils.BackgroundJobs.MarkedFailure;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.Status;
 
 /** Focused lifecycle and capacity tests for {@link BackgroundJobs}. */
@@ -105,6 +106,33 @@ public class BackgroundJobsTest
      * manufacturing a failure for it: the published "timed out, start a new job" would be
      * answered with a retry that performs the SAME action twice.
      */
+    @Test
+    public void testAMarkedFailureKeepsItsMarkerAndAPlainOneHasNone() throws Exception
+    {
+        try (BackgroundJobs jobs = new BackgroundJobs(20, 2))
+        {
+            JobSnapshot marked = jobs.start(10_000L, "start", progress -> { //$NON-NLS-1$
+                throw new MarkedFailure("left a project", "mutationCommitted"); //$NON-NLS-1$ //$NON-NLS-2$
+            });
+            JobSnapshot plain = jobs.start(10_000L, "start", progress -> { //$NON-NLS-1$
+                throw new IllegalStateException("nothing changed"); //$NON-NLS-1$
+            });
+            JobSnapshot markedEnd = jobs.await(marked.getId(), 10_000L);
+            JobSnapshot plainEnd = jobs.await(plain.getId(), 10_000L);
+
+            assertEquals(Status.FAILED, markedEnd.getStatus());
+            assertEquals("left a project", markedEnd.getErrorMessage()); //$NON-NLS-1$
+            assertEquals("mutationCommitted", markedEnd.getErrorMarker()); //$NON-NLS-1$
+            String rendered = BackgroundJobRenderer.render(markedEnd);
+            assertTrue(rendered, rendered.contains("| mutationCommitted | true |")); //$NON-NLS-1$
+
+            assertEquals(Status.FAILED, plainEnd.getStatus());
+            assertNull(plainEnd.getErrorMarker());
+            String plainRendered = BackgroundJobRenderer.render(plainEnd);
+            assertTrue(plainRendered, !plainRendered.contains("mutation")); //$NON-NLS-1$
+        }
+    }
+
     @Test
     public void testDeadlineDoesNotFailWorkThatCanNoLongerBeAbandoned() throws Exception
     {

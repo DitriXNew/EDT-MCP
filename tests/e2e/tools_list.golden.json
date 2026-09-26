@@ -3075,6 +3075,41 @@
   },
   {
     "annotations": {
+      "destructiveHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Create a NEW EDT project from a 1C binary file: .cf (configuration), .cfe (extension; baseProjectName required) or .epf/.erf (external data processor/report). Needs an installed 1C:Enterprise platform. Runs in background: an unfinished call returns a jobId - poll get_job_status, do not call again. Parameters and examples: get_tool_guide('import_project_from_file').",
+    "inputSchema": {
+      "properties": {
+        "baseProjectName": {
+          "description": "Configuration project the result depends on: REQUIRED for .cfe, optional for .epf/.erf, refused for .cf.",
+          "type": "string"
+        },
+        "filePath": {
+          "type": "string"
+        },
+        "platformVersion": {
+          "type": "string"
+        },
+        "projectName": {
+          "type": "string"
+        },
+        "waitSeconds": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "filePath",
+        "projectName"
+      ],
+      "type": "object"
+    },
+    "name": "import_project_from_file",
+    "outputSchema": null
+  },
+  {
+    "annotations": {
       "destructiveHint": true,
       "openWorldHint": false,
       "readOnlyHint": false

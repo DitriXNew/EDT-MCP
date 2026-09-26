@@ -76,6 +76,9 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
     private static final Set<String> NO_DEBUG_V10_ADDITIONS = Set.of(
         "debug_pause"); //$NON-NLS-1$
 
+    private static final Set<String> READ_ONLY_V11_ADDITIONS = Set.of(
+        "import_project_from_file"); //$NON-NLS-1$
+
     /** Actual disabled-name additions registered for each Analysis Only migration. */
     static final Map<Integer, Set<String>> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION = Map.of(
         1, STORED_PROFILE_V1_ADDITIONS,
@@ -86,7 +89,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         7, READ_ONLY_V7_ADDITIONS,
         8, READ_ONLY_V8_ADDITIONS,
         9, READ_ONLY_V9_ADDITIONS,
-        10, NO_DEBUG_V10_ADDITIONS);
+        10, NO_DEBUG_V10_ADDITIONS,
+        11, READ_ONLY_V11_ADDITIONS);
 
     /** Actual disabled-name additions registered for each Code Review migration. */
     static final Map<Integer, Set<String>> CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION = Map.of(
@@ -98,7 +102,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         7, READ_ONLY_V7_ADDITIONS,
         8, READ_ONLY_V8_ADDITIONS,
         9, READ_ONLY_V9_ADDITIONS,
-        10, NO_DEBUG_V10_ADDITIONS);
+        10, NO_DEBUG_V10_ADDITIONS,
+        11, READ_ONLY_V11_ADDITIONS);
 
     /*
      * Frozen recognition shapes: what any historical stored profile of this preset must contain.
@@ -344,6 +349,11 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
                 // would otherwise hand it a tool that suspends a running session.
                 changed |= migrateDebugPauseIntoNoDebugPresets(disabled);
             }
+            if (storedVersion < 11)
+            {
+                // import_project_from_file is new and creates a project from a file.
+                changed |= migrateProjectFileImportIntoReadOnlyPresets(disabled);
+            }
             if (changed)
             {
                 store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, serializeDisabledTools(disabled));
@@ -511,6 +521,22 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             // An absent v9 name dates nothing: a stored set is a preset plus arbitrary user edits
             // in both directions, so this resolves toward the promise the preset makes.
             return disabled.addAll(READ_ONLY_V9_ADDITIONS);
+        }
+        return false;
+    }
+
+    /** Adds the v11 project importer only to stored profiles still recognized as read-only. */
+    private static boolean migrateProjectFileImportIntoReadOnlyPresets(Set<String> disabled)
+    {
+        if (disabled.containsAll(READ_ONLY_V7_ADDITIONS)
+            && disabled.containsAll(READ_ONLY_V8_ADDITIONS)
+            && disabled.containsAll(READ_ONLY_V9_ADDITIONS)
+            // A profile that re-enabled the configuration importer wants importers.
+            && disabled.contains("import_configuration_from_xml") //$NON-NLS-1$
+            && (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE)
+                || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE)))
+        {
+            return disabled.addAll(READ_ONLY_V11_ADDITIONS);
         }
         return false;
     }

@@ -69,6 +69,7 @@ import com.ditrix.edt.mcp.server.tools.impl.GetTranslationProjectInfoTool;
 import com.ditrix.edt.mcp.server.tools.impl.GetVariablesTool;
 import com.ditrix.edt.mcp.server.tools.impl.GoToDefinitionTool;
 import com.ditrix.edt.mcp.server.tools.impl.ImportConfigurationFromXmlTool;
+import com.ditrix.edt.mcp.server.tools.impl.ImportProjectFromFileTool;
 import com.ditrix.edt.mcp.server.tools.impl.InfobaseSessionsTool;
 import com.ditrix.edt.mcp.server.tools.impl.LaunchTool;
 import com.ditrix.edt.mcp.server.tools.impl.ListBreakpointsTool;
@@ -152,6 +153,7 @@ public final class BuiltInToolRegistrar
         catalogue.add(new ResyncToDiskTool());
         catalogue.add(new ExportConfigurationToXmlTool());
         catalogue.add(new ImportConfigurationFromXmlTool());
+        catalogue.add(new ImportProjectFromFileTool());
         catalogue.add(new BuildExternalObjectsTool());
         catalogue.add(new DeleteProjectTool());
         catalogue.add(new CreateProjectTool());

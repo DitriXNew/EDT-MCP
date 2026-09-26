@@ -103,9 +103,10 @@ public final class PreferenceConstants
      * {@code merge_rules} (new in the release after 2.15.1) and {@code delete_project}; 8 = those
      * stored read-only profiles gain the new destructive {@code infobase_sessions} tool; 9 = they
      * gain three older tools whose own descriptions declare them destructive; 10 = a stored
-     * no-debug preset gains {@code debug_pause}, a tool that did not exist when it was saved.
+     * no-debug preset gains {@code debug_pause}, a tool that did not exist when it was saved;
+     * 11 = stored read-only profiles gain the new {@code import_project_from_file} project importer.
      */
-    public static final int TOOL_PREFS_MIGRATION_VERSION = 10;
+    public static final int TOOL_PREFS_MIGRATION_VERSION = 11;
 
     /** The raw {@code git} command tool is powerful, so it ships DISABLED by default (opt-in). */
     public static final String DEFAULT_DISABLED_TOOLS = "git,ask_workmate"; //$NON-NLS-1$

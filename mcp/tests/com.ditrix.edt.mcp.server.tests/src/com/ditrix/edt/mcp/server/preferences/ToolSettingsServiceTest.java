@@ -63,6 +63,9 @@ public class ToolSettingsServiceTest
         "delete_infobase", //$NON-NLS-1$
         "delete_metadata"); //$NON-NLS-1$
 
+    private static final Set<String> READ_ONLY_V11_ADDITIONS = Set.of(
+        "import_project_from_file"); //$NON-NLS-1$
+
     private static final int VERSION_8_ANALYSIS_ONLY_DISABLED_COUNT = 58;
 
     private static final String VERSION_8_ANALYSIS_ONLY_DISABLED_SHA_256 =
@@ -1405,6 +1408,56 @@ public class ToolSettingsServiceTest
 
         assertEquals(custom, disabledTools(store));
         assertTrue(Collections.disjoint(disabledTools(store), READ_ONLY_V9_ADDITIONS));
+    }
+
+    @Test
+    public void testVersion11AddsTheProjectImporterToAStoredAnalysisOnlyPreset()
+    {
+        assertVersion11RestoresCurrentPreset(ToolPreset.ANALYSIS_ONLY);
+    }
+
+    @Test
+    public void testVersion11AddsTheProjectImporterToAStoredCodeReviewPreset()
+    {
+        assertVersion11RestoresCurrentPreset(ToolPreset.CODE_REVIEW);
+    }
+
+    @Test
+    public void testVersion11LeavesAStoredAllToolsProfileAlone()
+    {
+        PreferenceStore store = storedDisabledTools(Set.of(), 9);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(Set.of(), disabledTools(store));
+    }
+
+    @Test
+    public void testVersion11LeavesAProfileThatReenabledTheConfigurationImporter()
+    {
+        Set<String> custom = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        custom.removeAll(READ_ONLY_V11_ADDITIONS);
+        custom.remove("import_configuration_from_xml"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(custom, 9);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(custom, disabledTools(store));
+    }
+
+    private static void assertVersion11RestoresCurrentPreset(ToolPreset preset)
+    {
+        Set<String> beforeVersion11 = new HashSet<>(preset.getDisabledTools());
+        beforeVersion11.removeAll(READ_ONLY_V11_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(beforeVersion11, 10);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertEquals("version 11 must restore the current disabled set for " + preset, //$NON-NLS-1$
+            preset.getDisabledTools(), disabled);
+        assertEquals(preset, ToolPreset.matchPreset(disabled));
+        assertEquals(11, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
     }
 
     private static void assertVersion9RestoresCurrentPreset(ToolPreset preset)

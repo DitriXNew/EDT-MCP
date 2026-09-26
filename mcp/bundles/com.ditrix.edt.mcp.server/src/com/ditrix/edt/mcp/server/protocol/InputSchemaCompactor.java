@@ -275,6 +275,9 @@ public final class InputSchemaCompactor
         // prose a caller cannot know that a requested root Name may be stored differently.
         keep.put("create_project", asSet("autoSortTopObjects", "scriptVariant", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             "version", "baseProjectName", "externalObject", "normalizeYo")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        // baseProjectName is REQUIRED for a .cfe, optional for .epf/.erf and refused for a .cf - a
+        // requirement conditional on the file extension, which the schema cannot state.
+        keep.put("import_project_from_file", asSet("baseProjectName")); //$NON-NLS-1$ //$NON-NLS-2$
         // The parameter is ACCEPTED and then discarded (execute() reads it only for schema
         // parity; the class doc reserves it for a future release). Stripped to a bare
         // boolean it reads as a working option, and the response says otherwise only after
