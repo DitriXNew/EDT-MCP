@@ -299,6 +299,29 @@ public class ConfigurationFileExportSupportTest
         assertFalse(ConfigurationFileExportSupport.isDeclaredPlatformFailure(null));
     }
 
+    @Test
+    public void testAMovedFileThatFailsTheReadBackIsRemovedAndSaysSo() throws Exception
+    {
+        Path destination = dir.resolve("moved.cf"); //$NON-NLS-1$
+        Files.write(destination, new byte[] {1, 2, 3});
+        try
+        {
+            ConfigurationFileExportSupport.verifyMoved(destination, 10);
+            fail("a size mismatch must refuse"); //$NON-NLS-1$
+        }
+        catch (IOException e)
+        {
+            assertFalse("the file was removed, so the caller may say nothing was written", //$NON-NLS-1$
+                e instanceof ConfigurationFileExportSupport.LeftAtDestinationException);
+            assertTrue(e.getMessage(), e.getMessage().endsWith("does not match what the platform wrote; it was removed")); //$NON-NLS-1$
+        }
+        assertFalse(Files.exists(destination));
+
+        Files.write(destination, new byte[] {1, 2, 3});
+        assertEquals(3L, ConfigurationFileExportSupport.verifyMoved(destination, 3).sizeBytes());
+        assertTrue(Files.exists(destination));
+    }
+
     private static void assertPublishRefused(Path partial, Path destination, long start, String reason)
     {
         try

@@ -274,15 +274,50 @@ public final class ConfigurationFileExportSupport
             throw new IOException("'" + destination + "' appeared while the export ran and was " //$NON-NLS-1$ //$NON-NLS-2$
                 + "left untouched", e); //$NON-NLS-1$
         }
-        BasicFileAttributes published = Files.readAttributes(destination, BasicFileAttributes.class,
-            LinkOption.NOFOLLOW_LINKS);
-        if (!published.isRegularFile() || published.size() != written.size())
+        return verifyMoved(destination, written.size());
+    }
+
+    /**
+     * Reads back a file this call has just moved to {@code destination}; on any mismatch removes it,
+     * or says it may remain.
+     */
+    static PublishedFile verifyMoved(Path destination, long expectedSize) throws IOException
+    {
+        String problem;
+        try
         {
-            throw new IOException("the file read back at '" + destination //$NON-NLS-1$
-                + "' does not match what the platform wrote"); //$NON-NLS-1$
+            BasicFileAttributes published = Files.readAttributes(destination, BasicFileAttributes.class,
+                LinkOption.NOFOLLOW_LINKS);
+            if (published.isRegularFile() && published.size() == expectedSize)
+            {
+                return new PublishedFile(destination, published.size(),
+                    published.lastModifiedTime().toMillis());
+            }
+            problem = "the file read back at '" + destination + "' does not match what the platform wrote"; //$NON-NLS-1$ //$NON-NLS-2$
         }
-        return new PublishedFile(destination, published.size(),
-            published.lastModifiedTime().toMillis());
+        catch (IOException e)
+        {
+            problem = "the file moved to '" + destination + "' could not be read back (" + e.getMessage() + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        }
+        // The move already happened: remove what this call put there, or say it may remain.
+        if (deleteQuietly(destination))
+        {
+            throw new IOException(problem + "; it was removed"); //$NON-NLS-1$
+        }
+        throw new LeftAtDestinationException(problem + "; it could not be removed, so '" + destination //$NON-NLS-1$
+            + "' may hold an unverified dump - delete it before retrying"); //$NON-NLS-1$
+    }
+
+    /** A publish failure after which the destination file may still exist. */
+    public static final class LeftAtDestinationException
+        extends IOException
+    {
+        private static final long serialVersionUID = 1L;
+
+        LeftAtDestinationException(String message)
+        {
+            super(message);
+        }
     }
 
     /**

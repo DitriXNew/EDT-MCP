@@ -90,6 +90,8 @@ public class ExportConfigurationToFileTool implements IMcpTool
     static final long PREPARE_TIMEOUT_MS = 5L * 60_000L;
     /** How long a prepare that outlived its wait still holds the infobase before it is released. */
     static final long PREPARE_END_CAP_MS = 2L * 60_000L;
+    /** How long an abandoned dump still holds the infobase before it is released. */
+    static final long DUMP_END_CAP_MS = 2L * 60_000L;
     /** How long a LOADING equality state may be waited out. */
     static final long SYNC_SETTLE_MS = 30_000L;
     /** The Designer dump itself. */
@@ -702,6 +704,7 @@ public class ExportConfigurationToFileTool implements IMcpTool
         Path partial = ConfigurationFileExportSupport.partialFileFor(request.outputFile,
             UUID.randomUUID().toString().substring(0, 8));
         AtomicBoolean abandoned = new AtomicBoolean();
+        CountDownLatch dumpEnded = new CountDownLatch(1);
         long timeout = boundedBy(progress, EXPORT_TIMEOUT_MS);
         long startMillis = System.currentTimeMillis();
         progress.add("Dumping the " + describeSource(request) + " with the 1C Designer into " //$NON-NLS-1$ //$NON-NLS-2$
@@ -722,11 +725,18 @@ public class ExportConfigurationToFileTool implements IMcpTool
                 {
                     ConfigurationFileExportSupport.deleteQuietly(partial);
                 }
+                dumpEnded.countDown();
             });
         if (result.getOutcome() != BoundedJob.Outcome.COMPLETED)
         {
             abandoned.set(true);
             ConfigurationFileExportSupport.deleteQuietly(partial);
+            // The caller's infobase lock and dialog suppression stay on while the dump still runs.
+            if (BoundedJob.isInconclusive(result.getOutcome()) && !awaitEnd(dumpEnded, DUMP_END_CAP_MS))
+            {
+                progress.add("The abandoned dump is still running " + seconds(DUMP_END_CAP_MS) //$NON-NLS-1$
+                    + " later; releasing the infobase anyway."); //$NON-NLS-1$
+            }
             if (result.getOutcome() == BoundedJob.Outcome.INTERRUPTED)
             {
                 throw new InterruptedException("cancelled while the Designer was dumping"); //$NON-NLS-1$
@@ -780,9 +790,10 @@ public class ExportConfigurationToFileTool implements IMcpTool
         catch (IOException e)
         {
             ConfigurationFileExportSupport.deleteQuietly(partial);
-            throw new IllegalStateException("The dump was not published: " + e.getMessage() //$NON-NLS-1$
-                + ". Nothing was written to " + request.outputFile + ". Retry; if it repeats, " //$NON-NLS-1$ //$NON-NLS-2$
-                + "check the EDT log.", e); //$NON-NLS-1$
+            String written = e instanceof ConfigurationFileExportSupport.LeftAtDestinationException ? "" //$NON-NLS-1$
+                : " Nothing was written to " + request.outputFile + '.'; //$NON-NLS-1$
+            throw new IllegalStateException("The dump was not published: " + e.getMessage() + '.' //$NON-NLS-1$
+                + written + " Retry; if it repeats, check the EDT log.", e); //$NON-NLS-1$
         }
         progress.add("Wrote " + published.sizeBytes() + " bytes to " + published.path() + '.'); //$NON-NLS-1$ //$NON-NLS-2$
         return renderReport(request, applicationId, application, infobase, sync, published);
