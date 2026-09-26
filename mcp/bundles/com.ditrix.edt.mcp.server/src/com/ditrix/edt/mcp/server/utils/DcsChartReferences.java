@@ -480,7 +480,23 @@ public final class DcsChartReferences
     private static String canonical(String path)
     {
         String userKey = userFieldKey(path);
-        return userKey != null ? "\u0001" + userKey : lower(path); //$NON-NLS-1$
+        return userKey != null ? "\u0001" + userKey : lower(englishPercentTerm(path));
+    }
+
+    /** A percent field keyed by its English term, so a respelling in Russian is the same field. */
+    private static String englishPercentTerm(String path)
+    {
+        int dot = path.lastIndexOf('.');
+        if (dot <= 0) return path;
+        String suffix = path.substring(dot + 1);
+        for (String[] term : PERCENT_TERMS)
+        {
+            for (String spelling : term)
+            {
+                if (spelling.equalsIgnoreCase(suffix)) return path.substring(0, dot + 1) + term[0];
+            }
+        }
+        return path;
     }
 
     /** User-field paths compare by the part after the folder term, which is spelled in either language. */

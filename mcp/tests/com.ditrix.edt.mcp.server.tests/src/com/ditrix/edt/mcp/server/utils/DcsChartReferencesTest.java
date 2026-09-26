@@ -423,6 +423,19 @@ public class DcsChartReferencesTest
     }
 
     @Test
+    public void testRespellingABrokenPercentFieldInRussianIsNotANewBreak()
+    {
+        String[] overall = DcsTerms.kDCSSystemFieldsOverallPercent;
+        DataCompositionSchema schema = schema();
+        schema.setDefaultSettings(settings(chart(points("Customer"), "", measures("Missing." + overall[0])))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        DcsChartReferences.Census before = DcsChartReferences.census(schema, ROOT);
+        assertEquals(1, before.size());
+
+        schema.setDefaultSettings(settings(chart(points("Customer"), "", measures("Missing." + overall[1])))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNull("the same broken percent field in the other language", after(before, schema)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testASwitchedOffChartIsNotJudged()
     {
         DataCompositionSchema schema = schema();

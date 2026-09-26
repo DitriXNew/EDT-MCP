@@ -2044,7 +2044,7 @@ public final class DcsSettingsWriter
     private static String applyAxisGroup(AxisItemKind kind, EObject group, JsonObject body,
         String action, DcsPresentationParser.LanguageContext languages, Version version, String path)
     {
-        String members = checkMembers(body, path, KEY_NAME, KEY_USE, "groupFields", "filter", //$NON-NLS-1$ //$NON-NLS-2$
+        String members = checkMembers(body, path, KEY_NAME, KEY_USE, KEY_GROUP_STATE, "groupFields", "filter", //$NON-NLS-1$ //$NON-NLS-2$
             "order", "selection", "conditionalAppearance", "outputParameters", KEY_ITEMS, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             KEY_VIEW_MODE, KEY_USER_SETTING_ID, KEY_USER_SETTING_PRESENTATION, "itemsViewMode", //$NON-NLS-1$
             "itemsUserSettingID", "itemsUserSettingPresentation"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -2060,6 +2060,13 @@ public final class DcsSettingsWriter
             Boolean use = bool(body, KEY_USE, path);
             if (use == null) return booleanError;
             setFeature(group, KEY_USE, use);
+        }
+        if (body.has(KEY_GROUP_STATE))
+        {
+            EnumResult<DataCompositionSettingsItemState> state = enumValue(body, KEY_GROUP_STATE,
+                path, DataCompositionSettingsItemState.values());
+            if (state.error != null) return state.error;
+            setFeature(group, KEY_GROUP_STATE, state.value);
         }
         String scaffold = applyAxisScaffold(group, body, languages, path, KEY_ITEMS);
         if (scaffold != null) return scaffold;

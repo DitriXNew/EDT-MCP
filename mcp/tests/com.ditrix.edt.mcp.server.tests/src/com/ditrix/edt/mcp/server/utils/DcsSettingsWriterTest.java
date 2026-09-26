@@ -1004,6 +1004,16 @@ public class DcsSettingsWriterTest
     }
 
     @Test
+    public void testChartAxisGroupTakesTheGroupState()
+    {
+        DataCompositionSettings settings = plan(json("{\"items\":[{\"kind\":\"chart\"," //$NON-NLS-1$
+            + "\"points\":[{\"groupState\":\"Disabled\",\"groupFields\":{\"items\":[" //$NON-NLS-1$
+            + "{\"field\":{\"kind\":\"field\",\"value\":\"Customer\"}}]}}]}]}")); //$NON-NLS-1$
+        DataCompositionChart chart = (DataCompositionChart)settings.getItems().get(0);
+        assertEquals("Disabled", chart.getPoints().get(0).getGroupState().getName()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testEveryIndexedHolderDescendantUnderChartCanBeUpdatedAndRemoved()
     {
         DataCompositionSettings settings = plan(json("{\"items\":[{\"kind\":\"chart\",\"name\":\"C\"," //$NON-NLS-1$
