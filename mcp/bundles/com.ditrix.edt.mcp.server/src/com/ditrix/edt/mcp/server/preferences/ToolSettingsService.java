@@ -73,6 +73,9 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         "delete_infobase", //$NON-NLS-1$
         "delete_metadata"); //$NON-NLS-1$
 
+    private static final Set<String> NO_DEBUG_V10_ADDITIONS = Set.of(
+        "debug_pause"); //$NON-NLS-1$
+
     /** Actual disabled-name additions registered for each Analysis Only migration. */
     static final Map<Integer, Set<String>> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION = Map.of(
         1, STORED_PROFILE_V1_ADDITIONS,
@@ -82,7 +85,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         6, NO_DEBUG_V6_ADDITIONS,
         7, READ_ONLY_V7_ADDITIONS,
         8, READ_ONLY_V8_ADDITIONS,
-        9, READ_ONLY_V9_ADDITIONS);
+        9, READ_ONLY_V9_ADDITIONS,
+        10, NO_DEBUG_V10_ADDITIONS);
 
     /** Actual disabled-name additions registered for each Code Review migration. */
     static final Map<Integer, Set<String>> CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION = Map.of(
@@ -93,7 +97,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         6, NO_DEBUG_V6_ADDITIONS,
         7, READ_ONLY_V7_ADDITIONS,
         8, READ_ONLY_V8_ADDITIONS,
-        9, READ_ONLY_V9_ADDITIONS);
+        9, READ_ONLY_V9_ADDITIONS,
+        10, NO_DEBUG_V10_ADDITIONS);
 
     /*
      * Frozen recognition shapes: what any historical stored profile of this preset must contain.
@@ -333,6 +338,12 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
                 // These older tools declare themselves destructive but missed read-only migrations.
                 changed |= migrateLegacyDestructiveToolsIntoReadOnlyPresets(disabled);
             }
+            if (storedVersion < 10)
+            {
+                // debug_pause is new: a stored no-debug preset cannot name it, and a denylist
+                // would otherwise hand it a tool that suspends a running session.
+                changed |= migrateDebugPauseIntoNoDebugPresets(disabled);
+            }
             if (changed)
             {
                 store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, serializeDisabledTools(disabled));
@@ -400,6 +411,24 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             || disabled.containsAll(DEVELOPMENT_RECOGNITION_SHAPE))
         {
             return disabled.addAll(NO_DEBUG_V6_ADDITIONS);
+        }
+        return false;
+    }
+
+    /**
+     * Adds {@code debug_pause} to a store that already expresses a NO-DEBUG profile - the version 6
+     * step again, one debugging tool later, recognized by the same frozen shapes.
+     *
+     * @param disabled the mutable stored disabled-tools set; modified in place
+     * @return {@code true} when the tool was added
+     */
+    private static boolean migrateDebugPauseIntoNoDebugPresets(Set<String> disabled)
+    {
+        if (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE)
+            || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE)
+            || disabled.containsAll(DEVELOPMENT_RECOGNITION_SHAPE))
+        {
+            return disabled.addAll(NO_DEBUG_V10_ADDITIONS);
         }
         return false;
     }
