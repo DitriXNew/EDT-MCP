@@ -177,6 +177,7 @@ public final class Toolsets
         assign(PROJECT,
             "clean_project", "revalidate_objects", "resync_to_disk", "update_database", "delete_project", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
             "export_configuration_to_xml", "import_configuration_from_xml", "build_external_objects", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "export_configuration_to_file", //$NON-NLS-1$
             "create_infobase", "delete_infobase", "infobase_sessions", "set_infobase_credentials", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             "create_project", //$NON-NLS-1$
             "get_problem_summary", "get_project_errors", "validate_xdto_package", "get_markers", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$

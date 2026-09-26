@@ -2,7 +2,7 @@
 
 One page per tool: what it does, every parameter, and how it works. Generated from the live server by `docs/generate_tool_docs.py` (re-run to refresh; the source of truth is each tool's Java).
 
-**96 tools.**
+**97 tools.**
 
 ## Core
 
@@ -147,6 +147,7 @@ One page per tool: what it does, every parameter, and how it works. Generated fr
 | [`create_project`](create_project.md) | Create a NEW 1C project in the EDT workspace. projectKind selects the kind: 'configuration' (standalone), 'extension' (bound to a base configuration), or 'ex… |
 | [`delete_infobase`](delete_infobase.md) | Remove a FILE infobase association from a configuration project OR delete a standalone (autonomous) server application. Destructive: guarded by a confirm-pre… |
 | [`delete_project`](delete_project.md) | Remove an EDT project from the workspace, optionally deleting its files from disk (deleteContent). Destructive: guarded by a confirm-preview - call without c… |
+| [`export_configuration_to_file`](export_configuration_to_file.md) | Export the configuration (.cf) or an extension (.cfe) FROM an application's infobase to a file via the 1C thick client - the infobase's content, not the proj… |
 | [`export_configuration_to_xml`](export_configuration_to_xml.md) | Export an EDT configuration project to XML files (EDT menu: Export -> Configuration to XML Files). Equivalent of 1C platform DumpConfigToFiles. |
 | [`get_check_description`](get_check_description.md) | Get detailed description of an EDT check by its ID. Returns markdown content with check explanation, examples, and how to fix. Accepts the symbolic check id… |
 | [`get_event_log`](get_event_log.md) | Read a 1C infobase event log WITHOUT a running 1C session by parsing the raw log files (legacy text ver 2.0: a 1Cv8.lgf dictionary + dated *.lgp partitions).… |

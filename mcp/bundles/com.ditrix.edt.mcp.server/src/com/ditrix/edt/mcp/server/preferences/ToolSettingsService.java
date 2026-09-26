@@ -73,6 +73,9 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         "delete_infobase", //$NON-NLS-1$
         "delete_metadata"); //$NON-NLS-1$
 
+    private static final Set<String> READ_ONLY_V10_ADDITIONS = Set.of(
+        "export_configuration_to_file"); //$NON-NLS-1$
+
     /** Actual disabled-name additions registered for each Analysis Only migration. */
     static final Map<Integer, Set<String>> ANALYSIS_ONLY_MIGRATION_ADDITIONS_BY_VERSION = Map.of(
         1, STORED_PROFILE_V1_ADDITIONS,
@@ -82,7 +85,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         6, NO_DEBUG_V6_ADDITIONS,
         7, READ_ONLY_V7_ADDITIONS,
         8, READ_ONLY_V8_ADDITIONS,
-        9, READ_ONLY_V9_ADDITIONS);
+        9, READ_ONLY_V9_ADDITIONS,
+        10, READ_ONLY_V10_ADDITIONS);
 
     /** Actual disabled-name additions registered for each Code Review migration. */
     static final Map<Integer, Set<String>> CODE_REVIEW_MIGRATION_ADDITIONS_BY_VERSION = Map.of(
@@ -93,7 +97,8 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
         6, NO_DEBUG_V6_ADDITIONS,
         7, READ_ONLY_V7_ADDITIONS,
         8, READ_ONLY_V8_ADDITIONS,
-        9, READ_ONLY_V9_ADDITIONS);
+        9, READ_ONLY_V9_ADDITIONS,
+        10, READ_ONLY_V10_ADDITIONS);
 
     /*
      * Frozen recognition shapes: what any historical stored profile of this preset must contain.
@@ -333,6 +338,11 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
                 // These older tools declare themselves destructive but missed read-only migrations.
                 changed |= migrateLegacyDestructiveToolsIntoReadOnlyPresets(disabled);
             }
+            if (storedVersion < 10)
+            {
+                // export_configuration_to_file is new and drives the Designer against an infobase.
+                changed |= migrateConfigurationFileExportIntoReadOnlyPresets(disabled);
+            }
             if (changed)
             {
                 store.setValue(PreferenceConstants.PREF_DISABLED_TOOLS, serializeDisabledTools(disabled));
@@ -482,6 +492,20 @@ public final class ToolSettingsService // NOSONAR intentional singleton (Eclipse
             // An absent v9 name dates nothing: a stored set is a preset plus arbitrary user edits
             // in both directions, so this resolves toward the promise the preset makes.
             return disabled.addAll(READ_ONLY_V9_ADDITIONS);
+        }
+        return false;
+    }
+
+    /** Adds the v10 infobase-dump tool only to stored profiles still recognized as read-only. */
+    private static boolean migrateConfigurationFileExportIntoReadOnlyPresets(Set<String> disabled)
+    {
+        if (disabled.containsAll(READ_ONLY_V7_ADDITIONS)
+            && disabled.containsAll(READ_ONLY_V8_ADDITIONS)
+            && disabled.containsAll(READ_ONLY_V9_ADDITIONS)
+            && (disabled.containsAll(ANALYSIS_ONLY_RECOGNITION_SHAPE)
+                || disabled.containsAll(CODE_REVIEW_RECOGNITION_SHAPE)))
+        {
+            return disabled.addAll(READ_ONLY_V10_ADDITIONS);
         }
         return false;
     }

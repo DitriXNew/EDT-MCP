@@ -63,6 +63,9 @@ public class ToolSettingsServiceTest
         "delete_infobase", //$NON-NLS-1$
         "delete_metadata"); //$NON-NLS-1$
 
+    private static final Set<String> READ_ONLY_V10_ADDITIONS = Set.of(
+        "export_configuration_to_file"); //$NON-NLS-1$
+
     private static final int VERSION_8_ANALYSIS_ONLY_DISABLED_COUNT = 58;
 
     private static final String VERSION_8_ANALYSIS_ONLY_DISABLED_SHA_256 =
@@ -1363,6 +1366,58 @@ public class ToolSettingsServiceTest
         assertTrue(Collections.disjoint(disabledTools(store), READ_ONLY_V9_ADDITIONS));
     }
 
+    @Test
+    public void testVersion10AddsTheConfigurationFileExportToAStoredAnalysisOnlyPreset()
+    {
+        assertVersion10RestoresCurrentPreset(ToolPreset.ANALYSIS_ONLY);
+    }
+
+    @Test
+    public void testVersion10AddsTheConfigurationFileExportToAStoredCodeReviewPreset()
+    {
+        assertVersion10RestoresCurrentPreset(ToolPreset.CODE_REVIEW);
+    }
+
+    @Test
+    public void testVersion10LeavesAProfileThatReenabledAVersion9ToolAlone()
+    {
+        Set<String> customized = new HashSet<>(ToolPreset.CODE_REVIEW.getDisabledTools());
+        customized.removeAll(READ_ONLY_V10_ADDITIONS);
+        customized.remove("cancel_job"); //$NON-NLS-1$
+        PreferenceStore store = storedDisabledTools(customized, 9);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(customized, disabledTools(store));
+        assertTrue(Collections.disjoint(disabledTools(store), READ_ONLY_V10_ADDITIONS));
+    }
+
+    @Test
+    public void testVersion10LeavesAStoredAllToolsProfileAlone()
+    {
+        PreferenceStore store = storedDisabledTools(Set.of(), 9);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        assertEquals(Set.of(), disabledTools(store));
+    }
+
+    private static void assertVersion10RestoresCurrentPreset(ToolPreset preset)
+    {
+        Set<String> beforeVersion10 = new HashSet<>(preset.getDisabledTools());
+        beforeVersion10.removeAll(READ_ONLY_V10_ADDITIONS);
+        PreferenceStore store = storedDisabledTools(beforeVersion10, 9);
+
+        ToolSettingsService.ensureMigratedForTest(store);
+
+        Set<String> disabled = disabledTools(store);
+        assertEquals("version 10 must restore the current disabled set for " + preset, //$NON-NLS-1$
+            preset.getDisabledTools(), disabled);
+        assertEquals("the restored set must match " + preset, //$NON-NLS-1$
+            preset, ToolPreset.matchPreset(disabled));
+        assertEquals(10, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+    }
+
     private static void assertVersion9RestoresCurrentPreset(ToolPreset preset)
     {
         Set<String> beforeVersion9 = new HashSet<>(preset.getDisabledTools());
@@ -1376,7 +1431,8 @@ public class ToolSettingsServiceTest
             preset.getDisabledTools(), disabled);
         assertEquals("the restored set must match " + preset, //$NON-NLS-1$
             preset, ToolPreset.matchPreset(disabled));
-        assertEquals(9, store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
+        assertEquals(PreferenceConstants.TOOL_PREFS_MIGRATION_VERSION,
+            store.getInt(PreferenceConstants.PREF_TOOL_PREFS_MIGRATION));
     }
 
     private static void assertVersion9LeavesCustomizedProfileAlone(String enabledPriorTool)
