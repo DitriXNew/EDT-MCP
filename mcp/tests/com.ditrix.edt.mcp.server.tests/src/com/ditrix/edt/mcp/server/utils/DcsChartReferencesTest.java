@@ -28,6 +28,7 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaFieldUseRestrictio
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaTotalField;
 import com._1c.g5.v8.dt.dcs.model.schema.DcsFactory;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFieldExpression;
 import com._1c.g5.v8.dt.dcs.model.settings.SettingsVariant;
@@ -338,7 +339,75 @@ public class DcsChartReferencesTest
         variant.setSettings(settings());
         variant.getSettings().getItems().add(schema.getDefaultSettings().getItems().remove(1));
         schema.getSettingsVariants().add(variant);
-        assertNull("moving it into a variant", after(before, schema)); //$NON-NLS-1$
+        // Counts are per settings tree, so a broken chart moved into another tree is a new break there.
+        String moved = after(before, schema);
+        assertNotNull("moving it into a variant", moved); //$NON-NLS-1$
+        assertTrue(moved, moved.startsWith("Chart at '" + ROOT + "#/variants/Main/settings/items/0'")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A fix in one settings tree cannot pay for a break of the same reference in another tree. */
+    @Test
+    public void testAFixInOneTreeCannotPayForABreakInAnother()
+    {
+        String en = DcsTerms.kDCSSUserFieldsTerm[0];
+        String resource = "{\"userFields\":{\"items\":[{\"kind\":\"expression\",\"dataPath\":\"" + en //$NON-NLS-1$
+            + ".X\",\"totalExpression\":\"Sum(Amount)\"}]},"; //$NON-NLS-1$
+        String plain = "{\"userFields\":{\"items\":[{\"kind\":\"expression\",\"dataPath\":\"" + en //$NON-NLS-1$
+            + ".X\",\"detailExpression\":\"Customer\"}]},"; //$NON-NLS-1$
+        String items = "\"items\":[" + chart(points("Customer"), "", measures(en + ".X")) + "]}"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        DataCompositionSchema schema = schema();
+        schema.setDefaultSettings(plan(json(plain + items)));
+        SettingsVariant variant =
+            com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE.createSettingsVariant();
+        variant.setName("Main"); //$NON-NLS-1$
+        variant.setSettings(plan(json(resource + items)));
+        schema.getSettingsVariants().add(variant);
+        DcsChartReferences.Census before = DcsChartReferences.census(schema, ROOT);
+        assertEquals("only the default chart measures a non-resource", 1, before.size()); //$NON-NLS-1$
+
+        schema.setDefaultSettings(plan(json(resource + items)));
+        variant.setSettings(plan(json(plain + items)));
+        String error = after(before, schema);
+        assertNotNull("the variant's chart is newly broken", error); //$NON-NLS-1$
+        assertTrue(error, error.contains("measure '" + en + ".X' at '" + ROOT //$NON-NLS-1$ //$NON-NLS-2$
+            + "#/variants/Main/settings/items/0/selection/items/0'")); //$NON-NLS-1$
+    }
+
+    /** The same broken user field spelled with the other folder term is not a new break. */
+    @Test
+    public void testRespellingABrokenUserFieldInTheOtherLanguageIsNotANewBreak()
+    {
+        String en = DcsTerms.kDCSSUserFieldsTerm[0];
+        String ru = DcsTerms.kDCSSUserFieldsTerm[1];
+        DataCompositionSchema schema = schema();
+        schema.setDefaultSettings(settings(chart(points("Customer"), "", measures(en + ".Missing")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        DcsChartReferences.Census before = DcsChartReferences.census(schema, ROOT);
+        assertEquals(1, before.size());
+
+        schema.setDefaultSettings(settings(chart(points("Customer"), "", measures(ru + ".missing")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNull(after(before, schema));
+    }
+
+    /** A switched-off measure is not drawn, so it neither breaks a chart nor gives it a measure. */
+    @Test
+    public void testSwitchedOffMeasuresNeitherBreakNorMeasureAChart()
+    {
+        DataCompositionSchema schema = schema();
+        DcsChartReferences.Census before = DcsChartReferences.census(schema, ROOT);
+        schema.setDefaultSettings(settings(chart(points("Customer"), "", measures("Amount", "Missing")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        selected(schema, 1).setUse(false);
+        assertNull("a disabled missing measure beside a valid one", after(before, schema)); //$NON-NLS-1$
+
+        selected(schema, 0).setUse(false);
+        String error = after(before, schema);
+        assertNotNull("only disabled measures", error); //$NON-NLS-1$
+        assertTrue(error, error.contains("the chart has no measure")); //$NON-NLS-1$
+    }
+
+    private static DataCompositionSelectedField selected(DataCompositionSchema schema, int index)
+    {
+        DataCompositionChart chart = (DataCompositionChart)schema.getDefaultSettings().getItems().get(0);
+        return (DataCompositionSelectedField)chart.getSelection().getItems().get(index);
     }
 
     /** The count is per kind, so a second broken reference like the first one is still new. */

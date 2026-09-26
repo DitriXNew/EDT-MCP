@@ -55,10 +55,10 @@ import com._1c.g5.v8.dt.dcs.util.DcsTerms;
  *
  * <p>The guard is a ratchet over the whole schema: {@link #census} counts the broken chart
  * references of every settings tree (default settings and each variant), and {@link #error}
- * refuses a write after which some kind of broken reference (role plus field) is more frequent
- * than before it. A write that breaks an unchanged chart by changing the schema is refused like
- * one that adds a broken chart, and a problem that was already there never blocks an unrelated
- * edit.</p>
+ * refuses a write after which some kind of broken reference (settings tree, role and field) is
+ * more frequent than before it. A write that breaks an unchanged chart by changing the schema is
+ * refused like one that adds a broken chart, and a problem that was already there in the same
+ * tree never blocks an unrelated edit. Switched-off measures are not judged.</p>
  *
  * <p>Resolution mirrors EDT's available-fields rules on the schema model: data-set and calculated
  * fields group unless their use restriction forbids it, a resource is a {@code totalFields}
@@ -125,25 +125,40 @@ public final class DcsChartReferences
         public final String role;
         public final String field;
         public final String address;
+        /** {@code false} when the item or a folder or group holding it is switched off. */
+        public final boolean use;
 
         Reference(String role, String field, String address)
+        {
+            this(role, field, address, true);
+        }
+
+        Reference(String role, String field, String address, boolean use)
         {
             this.role = role;
             this.field = field;
             this.address = address;
+            this.use = use;
         }
     }
 
-    /** The broken chart references of a schema, in document order and counted by kind. */
+    /**
+     * The broken chart references of a schema, in document order and counted by kind. A kind is
+     * a settings tree plus role and field: within one tree a reference resolves the same way in
+     * every chart, so a count per tree cannot trade one chart's fix for another chart's break.
+     */
     public static final class Census
     {
         private final List<Problem> problems = new ArrayList<>();
+        private final List<String> keys = new ArrayList<>();
         private final Map<String, Integer> counts = new HashMap<>();
 
-        private void add(Problem problem)
+        private void add(String tree, Problem problem)
         {
+            String key = tree + '\u0000' + problem.key;
             problems.add(problem);
-            counts.merge(problem.key, Integer.valueOf(1), Integer::sum);
+            keys.add(key);
+            counts.merge(key, Integer.valueOf(1), Integer::sum);
         }
 
         private int count(String key)
@@ -205,8 +220,12 @@ public final class DcsChartReferences
             addresses.add(DcsAddress.render(rootFqn, Arrays.asList("variants", selector, "settings"))); //$NON-NLS-1$ //$NON-NLS-2$
             trees.add(variants.get(i).getSettings());
         }
+        Map<String, Integer> sameAddress = new HashMap<>();
         for (int t = 0; t < trees.size(); t++)
         {
+            // Same-named variants keep apart: each has its own user fields.
+            int seen = sameAddress.merge(addresses.get(t), Integer.valueOf(1), Integer::sum).intValue();
+            String tree = seen == 1 ? addresses.get(t) : addresses.get(t) + '\u0000' + seen;
             Map<String, DataCompositionChart> charts = charts(trees.get(t));
             if (charts.isEmpty()) continue;
             if (schemaLevel == null) schemaLevel = new Resolver(schema);
@@ -216,7 +235,7 @@ public final class DcsChartReferences
                 String chartAddress = addresses.get(t) + "/" + chart.getKey(); //$NON-NLS-1$
                 for (Problem problem : resolver.problems(chart.getValue(), chartAddress))
                 {
-                    census.add(problem);
+                    census.add(tree, problem);
                 }
             }
         }
@@ -235,12 +254,13 @@ public final class DcsChartReferences
     {
         List<Problem> grown = new ArrayList<>();
         Set<String> kinds = new LinkedHashSet<>();
-        for (Problem problem : after.problems)
+        for (int i = 0; i < after.problems.size(); i++)
         {
-            if (after.count(problem.key) > before.count(problem.key))
+            String key = after.keys.get(i);
+            if (after.count(key) > before.count(key))
             {
-                grown.add(problem);
-                kinds.add(problem.key);
+                grown.add(after.problems.get(i));
+                kinds.add(key);
             }
         }
         if (grown.isEmpty()) return null;
@@ -373,23 +393,31 @@ public final class DcsChartReferences
 
     private static void collectMeasures(List<SelectedItem> items, String where, List<Reference> result)
     {
+        collectMeasures(items, where, true, result);
+    }
+
+    private static void collectMeasures(List<SelectedItem> items, String where, boolean used,
+        List<Reference> result)
+    {
         for (int i = 0; i < items.size(); i++)
         {
             SelectedItem item = items.get(i);
             String address = where + "/" + i; //$NON-NLS-1$
             if (item instanceof DataCompositionAutoSelectedField)
             {
-                result.add(new Reference(ROLE_MEASURE, null, address));
+                result.add(new Reference(ROLE_MEASURE, null, address,
+                    used && ((DataCompositionAutoSelectedField)item).isUse()));
             }
             else if (item instanceof DataCompositionSelectedField)
             {
-                result.add(new Reference(ROLE_MEASURE,
-                    path(((DataCompositionSelectedField)item).getField()), address));
+                DataCompositionSelectedField field = (DataCompositionSelectedField)item;
+                result.add(new Reference(ROLE_MEASURE, path(field.getField()), address,
+                    used && field.isUse()));
             }
             else if (item instanceof DataCompositionSelectedFieldGroup)
             {
-                collectMeasures(((DataCompositionSelectedFieldGroup)item).getItems(),
-                    address + "/items", result); //$NON-NLS-1$
+                DataCompositionSelectedFieldGroup folder = (DataCompositionSelectedFieldGroup)item;
+                collectMeasures(folder.getItems(), address + "/items", used && folder.isUse(), result); //$NON-NLS-1$
             }
         }
     }
@@ -412,6 +440,13 @@ public final class DcsChartReferences
             result.add(lower(value));
         }
         return result;
+    }
+
+    /** A field path as resolution compares it: case-insensitive, either user-field folder spelling. */
+    private static String canonical(String path)
+    {
+        String userKey = userFieldKey(path);
+        return userKey != null ? "\u0001" + userKey : lower(path); //$NON-NLS-1$
     }
 
     /** User-field paths compare by the part after the folder term, which is spelled in either language. */
@@ -457,7 +492,7 @@ public final class DcsChartReferences
             this.reason = reason;
             this.chartAddress = chartAddress;
             this.resolver = resolver;
-            this.key = reference.role + '\n' + (reference.field == null ? marker : lower(reference.field));
+            this.key = reference.role + '\n' + (reference.field == null ? marker : canonical(reference.field));
         }
     }
 
@@ -603,6 +638,11 @@ public final class DcsChartReferences
             boolean measured = false;
             for (Reference reference : references(chart, chartAddress))
             {
+                if (!reference.use)
+                {
+                    // A switched-off measure is not drawn: it neither breaks nor measures the chart.
+                    continue;
+                }
                 String reason;
                 if (ROLE_MEASURE.equals(reference.role))
                 {
