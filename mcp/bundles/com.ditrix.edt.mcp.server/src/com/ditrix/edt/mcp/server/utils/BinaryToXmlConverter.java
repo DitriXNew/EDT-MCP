@@ -7,6 +7,8 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -72,6 +74,9 @@ public final class BinaryToXmlConverter
 
     /** The byte-order mark a designer log starts with. */
     private static final char BYTE_ORDER_MARK = 0xFEFF;
+
+    /** The most of a designer log a failure message carries; the verdict is at its end. */
+    static final int LOG_TAIL_BYTES = 16 * 1024;
 
     private BinaryToXmlConverter()
     {
@@ -375,6 +380,27 @@ public final class BinaryToXmlConverter
             Thread.currentThread().interrupt();
         }
         return !worker.isAlive();
+    }
+
+    /**
+     * EDT's CREATEINFOBASE command splits {@code File="<path>";} on every space into separate
+     * process arguments. Java on Windows re-joins them with one space, so only a run of spaces is
+     * lost there; elsewhere each space splits the path.
+     *
+     * @param infobaseParent the directory the temporary infobase is created under
+     * @param windows whether the process arguments are re-joined into one Windows command line
+     * @return {@code null} when the path survives that split, otherwise why it does not
+     */
+    public static String infobasePathProblem(Path infobaseParent, boolean windows)
+    {
+        String path = infobaseParent.toString();
+        if (windows ? path.contains("  ") : path.indexOf(' ') >= 0) //$NON-NLS-1$
+        {
+            return windows
+                ? "that path holds two spaces in a row, which EDT's infobase command does not pass on intact" //$NON-NLS-1$
+                : "that path holds a space, at which EDT's infobase command splits it"; //$NON-NLS-1$
+        }
+        return null;
     }
 
     /**
@@ -684,13 +710,39 @@ public final class BinaryToXmlConverter
         }
     }
 
-    /** Reads a designer log: UTF-8 with a BOM on every platform EDT supports. */
-    private static String readLog(Path log)
+    /**
+     * Reads the tail of a designer log: UTF-8 with a BOM on every platform EDT supports. Only the
+     * last {@link #LOG_TAIL_BYTES} are read, since the message is kept by the job registry.
+     *
+     * @param log the log file
+     * @return its text, marked when cut
+     */
+    static String readLog(Path log)
     {
-        try
+        try (SeekableByteChannel channel = Files.newByteChannel(log))
         {
-            String text = new String(Files.readAllBytes(log), StandardCharsets.UTF_8);
-            return (!text.isEmpty() && text.charAt(0) == BYTE_ORDER_MARK ? text.substring(1) : text).trim();
+            long size = channel.size();
+            long skipped = Math.max(0L, size - LOG_TAIL_BYTES);
+            channel.position(skipped);
+            ByteBuffer buffer = ByteBuffer.allocate((int)(size - skipped));
+            while (buffer.hasRemaining() && channel.read(buffer) > 0)
+            {
+                // fill the buffer
+            }
+            byte[] bytes = buffer.array();
+            int start = 0;
+            // A cut can land inside a character: skip its UTF-8 continuation bytes.
+            while (skipped > 0 && start < buffer.position() && (bytes[start] & 0xC0) == 0x80)
+            {
+                start++;
+            }
+            String text = new String(bytes, start, buffer.position() - start, StandardCharsets.UTF_8);
+            if (skipped == 0)
+            {
+                return (!text.isEmpty() && text.charAt(0) == BYTE_ORDER_MARK ? text.substring(1) : text).trim();
+            }
+            return "(designer log cut to its last " + (buffer.position() - start) + " of " + size //$NON-NLS-1$ //$NON-NLS-2$
+                + " bytes) ..." + text.trim(); //$NON-NLS-1$
         }
         catch (IOException e)
         {

@@ -327,6 +327,34 @@ public class ImportProjectFromFileToolTest
         }
     }
 
+    @Test
+    public void testAScratchPathEdtWouldSplitIsRefusedForAnInfobaseConversion() throws IOException
+    {
+        // Two spaces in a row do not survive EDT's infobase command on any OS.
+        Path root = spacedScratchRoot();
+        String result = tool(root).execute(params(tempFile(".cf").toString(), uniqueName(), FULL_WAIT)); //$NON-NLS-1$
+        assertError(result, "The temporary infobase of a .cf conversion is created under "); //$NON-NLS-1$
+        String error = errorText(result);
+        assertTrue(error, error.startsWith("The temporary infobase of a .cf conversion is created under " //$NON-NLS-1$
+            + root + ", and that path holds ")); //$NON-NLS-1$
+        assertTrue(error, error.endsWith(". Start EDT with -Djava.io.tmpdir=<a directory whose path has " //$NON-NLS-1$
+            + "no spaces> (after -vmargs in 1cedt.ini) and retry. No project was created.")); //$NON-NLS-1$
+        assertNoMutationMarker(result);
+        assertEquals("refused before the platform is resolved", 0, providerCalls); //$NON-NLS-1$
+        assertTrue(client.calls.isEmpty());
+        assertTrue(importer.calls.isEmpty());
+    }
+
+    @Test
+    public void testAnExternalObjectNeedsNoInfobaseSoTheSameScratchPathServes() throws IOException
+    {
+        Path root = spacedScratchRoot();
+        String result = tool(root).execute(params(tempFile(".epf").toString(), uniqueName(), FULL_WAIT)); //$NON-NLS-1$
+        assertTrue(result, result.contains("| State | ready |")); //$NON-NLS-1$
+        assertEquals("the scratch directory is made under the given root", root, //$NON-NLS-1$
+            client.workDir().getParent());
+    }
+
     // ==================== The job ====================
 
     @Test
@@ -388,7 +416,7 @@ public class ImportProjectFromFileToolTest
     {
         client.blockCreate = true;
         ImportProjectFromFileTool tool = new ImportProjectFromFileTool(jobs, this::provide, importer,
-            lifecycle, 5_000, 300);
+            lifecycle, 5_000, 300, null);
         String result = tool.execute(params(tempFile(".cf").toString(), uniqueName(), FULL_WAIT)); //$NON-NLS-1$
         assertError(result, "ran out of time"); //$NON-NLS-1$
         assertTrue("the blocked step must have been interrupted, which kills its process", //$NON-NLS-1$
@@ -477,13 +505,18 @@ public class ImportProjectFromFileToolTest
         assertTrue(errorText(result), errorText(result).endsWith("A project of that name exists now and is " //$NON-NLS-1$
             + "left as it is. This import may have created it before failing, or another operation may " //$NON-NLS-1$
             + "have created it meanwhile: check what it holds before deleting it with delete_project " //$NON-NLS-1$
-            + "(deleteContent=true) or importing again.")); //$NON-NLS-1$
+            + "(deleteContent=true) or importing again. If this import created it, EDT's import start " //$NON-NLS-1$
+            + "latch on it may still be set, and while it is - until project '" + name + "' is deleted, " //$NON-NLS-1$ //$NON-NLS-2$
+            + "closed or started - EDT starts no project on its own (an opened or added project stays " //$NON-NLS-1$
+            + "unstarted). delete_project, closing the project in EDT or restarting EDT clears it; it " //$NON-NLS-1$
+            + "is not released here, because nothing proves the project is this import's.")); //$NON-NLS-1$
         assertTrue("a project of that name need not be this call's: " + result, //$NON-NLS-1$
             result.contains("\"mutationOutcomeUnknown\":true")); //$NON-NLS-1$
         assertFalse(result, result.contains("mutationCommitted")); //$NON-NLS-1$
         assertTrue("nothing proves the project is the import's own, so it is not deleted", //$NON-NLS-1$
             projectHandle(name).exists());
-        assertEquals("the latch a failed import parks must be released", 1, lifecycle.permits); //$NON-NLS-1$
+        assertEquals("the latch is keyed by the project alone, so releasing it could start another " //$NON-NLS-1$
+            + "importer's project early", 0, lifecycle.permits); //$NON-NLS-1$
         assertEquals("nothing to start", 0, lifecycle.startRequests); //$NON-NLS-1$
     }
 
@@ -563,7 +596,7 @@ public class ImportProjectFromFileToolTest
     {
         lifecycle.neverStarts = true;
         ImportProjectFromFileTool tool = new ImportProjectFromFileTool(jobs, this::provide, importer,
-            lifecycle, 500, ImportProjectFromFileTool.CONVERSION_BUDGET_MS);
+            lifecycle, 500, ImportProjectFromFileTool.CONVERSION_BUDGET_MS, null);
         String result = tool.execute(params(tempFile(".cf").toString(), uniqueName(), FULL_WAIT)); //$NON-NLS-1$
         assertTrue(result, result.contains("| State | starting |")); //$NON-NLS-1$
         assertTrue(result, result.contains("do not import it again")); //$NON-NLS-1$
@@ -573,8 +606,13 @@ public class ImportProjectFromFileToolTest
 
     private ImportProjectFromFileTool tool()
     {
+        return tool(null);
+    }
+
+    private ImportProjectFromFileTool tool(Path scratchRoot)
+    {
         return new ImportProjectFromFileTool(jobs, this::provide, importer, lifecycle, 5_000,
-            ImportProjectFromFileTool.CONVERSION_BUDGET_MS);
+            ImportProjectFromFileTool.CONVERSION_BUDGET_MS, scratchRoot);
     }
 
     private IThickClient provide(String platformVersion, IProject baseProject) throws ConversionException
@@ -585,6 +623,14 @@ public class ImportProjectFromFileToolTest
             throw providerFailure;
         }
         return client;
+    }
+
+    /** A real directory whose path holds two spaces in a row. */
+    private Path spacedScratchRoot() throws IOException
+    {
+        Path parent = Files.createTempDirectory("import-root"); //$NON-NLS-1$
+        foldersToDelete.add(parent);
+        return Files.createDirectories(parent.resolve("scratch  root")); //$NON-NLS-1$
     }
 
     private Path tempFile(String extension) throws IOException

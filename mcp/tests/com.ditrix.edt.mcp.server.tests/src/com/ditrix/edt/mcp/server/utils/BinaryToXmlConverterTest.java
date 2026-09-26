@@ -249,6 +249,58 @@ public class BinaryToXmlConverterTest
     }
 
     @Test
+    public void testInfobasePathProblemFollowsHowEachOsPassesTheSplitPath()
+    {
+        Path plain = Paths.get("scratch", "edt-mcp-import-1"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(BinaryToXmlConverter.infobasePathProblem(plain, true));
+        assertNull(BinaryToXmlConverter.infobasePathProblem(plain, false));
+        Path oneSpace = Paths.get("John Doe", "Temp"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("Windows re-joins the split pieces with one space", //$NON-NLS-1$
+            BinaryToXmlConverter.infobasePathProblem(oneSpace, true));
+        assertEquals("that path holds a space, at which EDT's infobase command splits it", //$NON-NLS-1$
+            BinaryToXmlConverter.infobasePathProblem(oneSpace, false));
+        Path twoSpaces = Paths.get("a  b", "Temp"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("that path holds two spaces in a row, which EDT's infobase command does not " //$NON-NLS-1$
+            + "pass on intact", BinaryToXmlConverter.infobasePathProblem(twoSpaces, true)); //$NON-NLS-1$
+        assertEquals("that path holds a space, at which EDT's infobase command splits it", //$NON-NLS-1$
+            BinaryToXmlConverter.infobasePathProblem(twoSpaces, false));
+    }
+
+    @Test
+    public void testAShortDesignerLogIsReadWholeWithoutItsBom() throws IOException
+    {
+        Path log = workDir.resolve("short.log"); //$NON-NLS-1$
+        write(log, (char)0xFEFF + "Extension is not loaded\r\n"); //$NON-NLS-1$
+        assertEquals("Extension is not loaded", BinaryToXmlConverter.readLog(log)); //$NON-NLS-1$
+        assertEquals("(no designer log)", BinaryToXmlConverter.readLog(workDir.resolve("none.log"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testALongDesignerLogIsCutToItsTailOnACharacterBoundary() throws IOException
+    {
+        // BOM (3 bytes), then two-byte characters from offset 3: an even cut offset lands mid-character.
+        StringBuilder text = new StringBuilder().append((char)0xFEFF);
+        for (int i = 0; i < 50_000; i++)
+        {
+            text.append((char)0x041E);
+        }
+        text.append("FINAL VERDICT"); //$NON-NLS-1$
+        Path log = workDir.resolve("long.log"); //$NON-NLS-1$
+        write(log, text.toString());
+        long size = Files.size(log);
+        assertEquals(3 + 100_000 + 13, size);
+
+        String read = BinaryToXmlConverter.readLog(log);
+        int kept = BinaryToXmlConverter.LOG_TAIL_BYTES - 1;
+        assertTrue(read, read.startsWith("(designer log cut to its last " + kept + " of " + size //$NON-NLS-1$ //$NON-NLS-2$
+            + " bytes) ...")); //$NON-NLS-1$
+        assertTrue(read.endsWith("FINAL VERDICT")); //$NON-NLS-1$
+        assertTrue("no broken character at the cut", read.indexOf((char)0xFFFD) < 0); //$NON-NLS-1$
+        assertTrue("the kept text is bounded: " + read.length(), //$NON-NLS-1$
+            read.getBytes(StandardCharsets.UTF_8).length < BinaryToXmlConverter.LOG_TAIL_BYTES + 100);
+    }
+
+    @Test
     public void testDeleteQuietlyRemovesATree() throws IOException
     {
         Path dir = Files.createDirectories(workDir.resolve("a").resolve("b")); //$NON-NLS-1$ //$NON-NLS-2$

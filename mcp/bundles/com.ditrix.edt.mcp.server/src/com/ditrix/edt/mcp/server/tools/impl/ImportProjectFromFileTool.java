@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.io.File;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
@@ -108,12 +109,14 @@ public class ImportProjectFromFileTool implements IMcpTool
     private final IImportLifecycle lifecycle;
     private final long startBudgetMs;
     private final long conversionBudgetMs;
+    private final Path scratchRoot;
 
     /** The production tool. */
     public ImportProjectFromFileTool()
     {
         this(BackgroundJobs.shared(), BinaryToXmlConverter.installedPlatforms(), new CliProjectImporter(),
-            null, ImportConfigurationFromXmlTool.PROJECT_START_BUDGET_MS, CONVERSION_BUDGET_MS);
+            null, ImportConfigurationFromXmlTool.PROJECT_START_BUDGET_MS, CONVERSION_BUDGET_MS,
+            null);
     }
 
     /**
@@ -125,10 +128,12 @@ public class ImportProjectFromFileTool implements IMcpTool
      * @param lifecycle the project lifecycle, or {@code null} for the live EDT services
      * @param startBudgetMs how long the project start is waited for
      * @param conversionBudgetMs how long the conversion may take
+     * @param scratchRoot where the scratch directory is created, or {@code null} for
+     *     {@code java.io.tmpdir}
      */
     ImportProjectFromFileTool(BackgroundJobs jobs, IThickClientProvider thickClients,
         IProjectImporter importer, IImportLifecycle lifecycle, long startBudgetMs,
-        long conversionBudgetMs)
+        long conversionBudgetMs, Path scratchRoot)
     {
         this.jobs = jobs;
         this.thickClients = thickClients;
@@ -136,6 +141,7 @@ public class ImportProjectFromFileTool implements IMcpTool
         this.lifecycle = lifecycle;
         this.startBudgetMs = startBudgetMs;
         this.conversionBudgetMs = conversionBudgetMs;
+        this.scratchRoot = scratchRoot;
     }
 
     @Override
@@ -254,6 +260,18 @@ public class ImportProjectFromFileTool implements IMcpTool
             effectiveLifecycle = ImportConfigurationFromXmlTool.platformLifecycle();
         }
 
+        Path root = scratchRoot != null ? scratchRoot
+            : Paths.get(System.getProperty("java.io.tmpdir")).toAbsolutePath(); //$NON-NLS-1$
+        String rootError = kind.isExternalObject() ? null
+            : BinaryToXmlConverter.infobasePathProblem(root, File.separatorChar == '\\');
+        if (rootError != null)
+        {
+            return ToolResult.error("The temporary infobase of a ." + kind.extension() //$NON-NLS-1$
+                + " conversion is created under " + root + ", and " + rootError //$NON-NLS-1$ //$NON-NLS-2$
+                + ". Start EDT with -Djava.io.tmpdir=<a directory whose path has no spaces> " //$NON-NLS-1$
+                + "(after -vmargs in 1cedt.ini) and retry. No project was created.").toJson(); //$NON-NLS-1$
+        }
+
         IThickClient client;
         try
         {
@@ -273,7 +291,7 @@ public class ImportProjectFromFileTool implements IMcpTool
 
         Request request = new Request(kind, file, outsideWorkspace, projectName, baseProjectName,
             baseProject.get() == null ? null : runtimeVersionOf(baseProject.get()), client,
-            effectiveLifecycle);
+            effectiveLifecycle, root);
         JobSnapshot started;
         try
         {
@@ -473,7 +491,7 @@ public class ImportProjectFromFileTool implements IMcpTool
         Path workDir = null;
         try
         {
-            workDir = Files.createTempDirectory("edt-mcp-import-"); //$NON-NLS-1$
+            workDir = Files.createTempDirectory(request.scratchRoot, "edt-mcp-import-"); //$NON-NLS-1$
             long budgetMs = Math.min(conversionBudgetMs, progress.remainingMillis() - COMMIT_MARGIN_MS);
             long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0L, budgetMs));
             progress.add("Converting with 1C:Enterprise " + request.client.platformVersion() + "."); //$NON-NLS-1$ //$NON-NLS-2$
@@ -513,7 +531,7 @@ public class ImportProjectFromFileTool implements IMcpTool
             }
             catch (Exception e) // NOSONAR the CLI API is reached by reflection
             {
-                throw importFailure(name, e, request.lifecycle, mutation);
+                throw importFailure(name, e, mutation);
             }
             IProject project = ProjectContext.of(name).project();
             if (!request.lifecycle.projectExists(project))
@@ -543,17 +561,17 @@ public class ImportProjectFromFileTool implements IMcpTool
     }
 
     /**
-     * Reports a failed import by what it left behind. Nothing is deleted, and a leftover keeps the
-     * unknown marker: no check can prove it is this import's own rather than another operation's.
+     * Reports a failed import by what it left behind. Nothing is deleted and no start latch is
+     * released: EDT's latch is keyed by the project alone, so no check can prove a leftover is this
+     * import's own rather than another operation's.
      *
      * @param name the project the import was creating
      * @param failure what the import raised
-     * @param lifecycle releases the start latch the import may have parked
      * @param mutation set to {@link Mutation#NONE} when nothing of that name is left
      * @return the failure to report
      */
     private static ImportFailure importFailure(String name, Exception failure,
-        IImportLifecycle lifecycle, AtomicReference<Mutation> mutation)
+        AtomicReference<Mutation> mutation)
     {
         String head = "EDT could not import the converted XML files into project '" + name + "': " //$NON-NLS-1$ //$NON-NLS-2$
             + PlatformFailures.describeWithRootCause(failure) + ". "; //$NON-NLS-1$
@@ -562,9 +580,13 @@ public class ImportProjectFromFileTool implements IMcpTool
         IProject project = ProjectContext.of(name).project();
         if (project.exists())
         {
-            releaseImportLatch(project, name, lifecycle);
             return new ImportFailure(head + "A project of that name exists now and is left as it is." //$NON-NLS-1$
-                + whose + "deleting it with delete_project (deleteContent=true) or importing again."); //$NON-NLS-1$
+                + whose + "deleting it with delete_project (deleteContent=true) or importing again." //$NON-NLS-1$
+                + " If this import created it, EDT's import start latch on it may still be set, and " //$NON-NLS-1$
+                + "while it is - until project '" + name + "' is deleted, closed or started - EDT " //$NON-NLS-1$ //$NON-NLS-2$
+                + "starts no project on its own (an opened or added project stays unstarted). " //$NON-NLS-1$
+                + "delete_project, closing the project in EDT or restarting EDT clears it; it is not " //$NON-NLS-1$
+                + "released here, because nothing proves the project is this import's."); //$NON-NLS-1$
         }
         Path folder = WorkspacePaths.defaultProjectFolder(name);
         if (folder != null && Files.exists(folder))
@@ -574,23 +596,6 @@ public class ImportProjectFromFileTool implements IMcpTool
         }
         mutation.set(Mutation.NONE);
         return new ImportFailure(head + "No project was created."); //$NON-NLS-1$
-    }
-
-    /**
-     * The CLI import parks a MANUAL start latch it never releases on failure, and while it stands
-     * EDT starts no project in the workspace; EDT's own import wizard releases it the same way.
-     */
-    private static void releaseImportLatch(IProject project, String name, IImportLifecycle lifecycle)
-    {
-        try
-        {
-            lifecycle.permitImport(project);
-        }
-        catch (RuntimeException e)
-        {
-            Activator.logError(NAME + ": could not release the import latch of project '" + name //$NON-NLS-1$
-                + "' after its import failed; EDT starts no project until it is closed or deleted.", e); //$NON-NLS-1$
-        }
     }
 
     /**
@@ -852,10 +857,11 @@ public class ImportProjectFromFileTool implements IMcpTool
         final String runtimeVersion;
         final IThickClient client;
         final IImportLifecycle lifecycle;
+        final Path scratchRoot;
 
         Request(SourceKind kind, Path file, boolean outsideWorkspace, String projectName,
             String baseProjectName, String runtimeVersion, IThickClient client,
-            IImportLifecycle lifecycle)
+            IImportLifecycle lifecycle, Path scratchRoot)
         {
             this.kind = kind;
             this.file = file;
@@ -865,6 +871,7 @@ public class ImportProjectFromFileTool implements IMcpTool
             this.runtimeVersion = runtimeVersion;
             this.client = client;
             this.lifecycle = lifecycle;
+            this.scratchRoot = scratchRoot;
         }
     }
 
