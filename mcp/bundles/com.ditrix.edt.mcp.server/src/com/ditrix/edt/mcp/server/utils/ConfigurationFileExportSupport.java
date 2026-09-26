@@ -394,6 +394,8 @@ public final class ConfigurationFileExportSupport
             {
                 boolean connected = sync.isConnected(project, infobase);
                 InfobaseEqualityState state = sync.getEqualityState(project, infobase);
+                // A disconnect during the equality read makes that state meaningless.
+                connected = connected && sync.isConnected(project, infobase);
                 if (!connected || state != InfobaseEqualityState.LOADING
                     || System.currentTimeMillis() >= deadline)
                 {
