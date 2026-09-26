@@ -55,6 +55,7 @@ MCP (Model Context Protocol) server plugin for 1C:EDT, enabling AI assistants (C
 - 🏷️ **Metadata Tags** - Organize objects with custom tags, filter Navigator, keyboard shortcuts (Ctrl+Alt+1-0), multiselect support
 - 📁 **Metadata Groups** - Create custom folder hierarchy in Navigator tree per metadata collection, with a toolbar toggle to hide groups temporarily
 - ✏️ **Metadata Refactoring** - Create top-level objects with EDT default content; rename/delete metadata objects, their members and managed-form elements with full cascading updates across BSL code, forms and metadata; add new attributes to existing objects
+- 🧭 **Command Interface** - Read and edit a subsystem section's (or the main section's) command interface: command visibility, common and per role, placement into panel groups, and order within a group
 - 🛠️ **Tool Management** - Enable/disable tools by group, presets (Analysis Only, Code Review, Development), per-tool parameter defaults
 
 ## Installation
@@ -499,7 +500,7 @@ with `python docs/generate_tool_docs.py`.
 |------|-------------|
 | [`enable_toolset`](docs/tools/enable_toolset.md) | Reveal (or hide) tool groups for progressive disclosure. Pass toolsets=[ids] from list_toolsets to reveal them, then RE-REQUEST tools/list to see the newly r… |
 | [`get_edt_version`](docs/tools/get_edt_version.md) | Returns the running 1C:EDT version as a plain version string. Returns "Unknown" when the version cannot be determined. |
-| [`get_metadata_details`](docs/tools/get_metadata_details.md) | Inspect metadata objects and members, including managed-form root properties and structure. Parameters and examples: get_tool_guide('get_metadata_details'). |
+| [`get_metadata_details`](docs/tools/get_metadata_details.md) | Inspect metadata objects and members, including managed-form root properties and structure, and a section's command interface. Parameters and examples: get_t… |
 | [`get_metadata_objects`](docs/tools/get_metadata_objects.md) | Get a flat list of 1C configuration metadata objects (Name, Synonym, Comment, Type, ObjectModule, ManagerModule) as a Markdown table. Use it to discover what… |
 | [`get_module_structure`](docs/tools/get_module_structure.md) | Get structure of a BSL module: all procedures/functions with signatures, line numbers, regions, execution context (&AtServer, &AtClient), export flag, and pa… |
 | [`get_server_status`](docs/tools/get_server_status.md) | Self-diagnosis snapshot of the running MCP server: listening port, MCP protocol version, plugin version, EDT version, enabled/total tool counts, the plainTex… |
@@ -528,7 +529,7 @@ with `python docs/generate_tool_docs.py`.
 | [`list_common_pictures`](docs/tools/list_common_pictures.md) | List a 1C configuration's CommonPicture objects and the variants each carries in its Picture.zip (DPI, theme, interface variant, template flag, glyph size, p… |
 | [`list_configurations`](docs/tools/list_configurations.md) | List EDT launch configurations (runtime client + Attach + other 1C types) with their running state. This is the discovery step before launch / run_yaxunit… |
 | [`list_subsystems`](docs/tools/list_subsystems.md) | List 1C subsystems of a configuration as a flat table (FQN, Synonym, Comment, InCommandInterface, content count, children count). Walks the whole tree by def… |
-| [`modify_metadata`](docs/tools/modify_metadata.md) | Set properties of any metadata node, including managed-form roots, items, attributes, commands, and handlers. Parameters and examples: get_tool_guide('modify_metadata'). |
+| [`modify_metadata`](docs/tools/modify_metadata.md) | Set properties of any metadata node, including managed-form roots, items, attributes, commands, and handlers, and edit a section's command interface. Paramet… |
 | [`rename_metadata_object`](docs/tools/rename_metadata_object.md) | Rename a metadata object, one of its members, or a managed-form element (attribute / command / field / button / group / decoration / table / attribute column… |
 
 ### Code

@@ -48,6 +48,8 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.tools.metadata.MetadataFormatterRegistry;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.CommandInterfaceAddress;
+import com.ditrix.edt.mcp.server.utils.CommandInterfaceSupport;
 import com.ditrix.edt.mcp.server.utils.DcsStructureReader;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
@@ -88,7 +90,8 @@ public class GetMetadataDetailsTool implements IMcpTool
     public String getDescription()
     {
         return "Inspect metadata objects and members, including managed-form root properties and " //$NON-NLS-1$
-            + "structure. Parameters and examples: get_tool_guide('get_metadata_details')."; //$NON-NLS-1$
+            + "structure, and a section's command interface. Parameters and examples: " //$NON-NLS-1$
+            + "get_tool_guide('get_metadata_details')."; //$NON-NLS-1$
     }
 
     @Override
@@ -269,6 +272,23 @@ public class GetMetadataDetailsTool implements IMcpTool
      */
     private void processFqn(String fqn, StringBuilder sb, List<String[]> failures, RenderContext ctx)
     {
+        // A section's command interface renders its commands by panel group (issue #666). Checked
+        // first: it is its own top object, and no other view has anything to say about it.
+        CommandInterfaceAddress commandInterface = CommandInterfaceAddress.parse(fqn);
+        if (commandInterface != null)
+        {
+            appendCommandInterfaceView(commandInterface, fqn, sb, failures, ctx);
+            return;
+        }
+        if (isMisaddressedCommandInterface(fqn))
+        {
+            // resolveObject reads only the first two segments, so this would render the owner instead.
+            failures.add(new String[] { fqn, "only a subsystem and the configuration have a section " //$NON-NLS-1$
+                + "command interface: address it as 'Subsystem.<Name>.CommandInterface' or " //$NON-NLS-1$
+                + "'Configuration.MainSectionCommandInterface'" }); //$NON-NLS-1$
+            return;
+        }
+
         // Assignable-schema mode: resolve the node (top object OR member) via the shared
         // resolver and render its assignable-property table - what modify_metadata can set.
         if (ctx.assignable)
@@ -393,6 +413,67 @@ public class GetMetadataDetailsTool implements IMcpTool
                 ctx.isExtensionProject, ctx.scope.isExternalObjects()))
             .append("\n"); //$NON-NLS-1$
         sb.append(SECTION_SEPARATOR);
+    }
+
+    /**
+     * Renders a section's command interface: its panel groups in display order, each with its
+     * commands, their visibility and what the section customizes. Read from EDT's computed command
+     * interface inside one BM read transaction.
+     */
+    private void appendCommandInterfaceView(CommandInterfaceAddress address, String fqn, StringBuilder sb,
+        List<String[]> failures, RenderContext ctx)
+    {
+        String refusal = commandInterfaceRefusal(address, ctx);
+        if (refusal != null)
+        {
+            failures.add(new String[] { fqn, refusal });
+            return;
+        }
+        Boolean computed = CommandInterfaceSupport.isComputed(ctx.project);
+        CommandInterfaceSupport.Snapshot snapshot = CommandInterfaceSupport.read(ctx.bmModel, address);
+        if (snapshot.error != null)
+        {
+            failures.add(new String[] { fqn, snapshot.error });
+            return;
+        }
+        String note = Boolean.FALSE.equals(computed) ? CommandInterfaceSupport.staleNote() : null;
+        sb.append(snapshot.section.render(note));
+        sb.append(SECTION_SEPARATOR);
+    }
+
+    /** Why a command-interface address cannot be read in this request, or {@code null}. */
+    private static String commandInterfaceRefusal(CommandInterfaceAddress address, RenderContext ctx)
+    {
+        if (ctx.assignable)
+        {
+            return "a command interface has no assignable properties: read it without 'assignable', and " //$NON-NLS-1$
+                + "change its commands with modify_metadata 'commands'"; //$NON-NLS-1$
+        }
+        if (address.kind() == CommandInterfaceAddress.Kind.SECTIONS_PANEL)
+        {
+            return CommandInterfaceSupport.sectionsPanelRefusal();
+        }
+        if (ctx.scope.isExternalObjects())
+        {
+            return "an external-objects project has no command interface; address it in the " //$NON-NLS-1$
+                + "configuration project"; //$NON-NLS-1$
+        }
+        if (ctx.isExtensionProject)
+        {
+            return CommandInterfaceSupport.extensionRefusal(ctx.project.getName());
+        }
+        return ctx.bmModel == null ? "the project's BM model is not available" : null; //$NON-NLS-1$
+    }
+
+    /**
+     * Whether a three-part FQN puts a command interface under an object that has none, e.g.
+     * {@code Catalog.Products.CommandInterface}. Package-visible for tests.
+     */
+    static boolean isMisaddressedCommandInterface(String fqn)
+    {
+        return fqn != null && fqn.trim().split("\\.", -1).length == 3 //$NON-NLS-1$
+            && CommandInterfaceAddress.hasCommandInterfaceTail(fqn)
+            && CommandInterfaceAddress.parse(fqn) == null;
     }
 
     /**
