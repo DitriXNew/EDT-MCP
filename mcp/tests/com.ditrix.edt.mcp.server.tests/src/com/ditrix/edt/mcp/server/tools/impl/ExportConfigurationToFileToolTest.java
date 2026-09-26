@@ -262,6 +262,18 @@ public class ExportConfigurationToFileToolTest
     // ==================== Refusal and report text ====================
 
     @Test
+    public void testAPartialFileThatCannotBeRemovedIsNamed() throws Exception
+    {
+        java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("export-partial"); //$NON-NLS-1$
+        java.nio.file.Path partial = dir.resolve("out.partial-1.cf"); //$NON-NLS-1$
+        assertEquals("", ExportConfigurationToFileTool.removePartial(partial)); //$NON-NLS-1$
+        // A non-empty directory cannot be deleted, like a file another process holds open.
+        java.nio.file.Files.createDirectories(partial.resolve("held")); //$NON-NLS-1$
+        String note = ExportConfigurationToFileTool.removePartial(partial);
+        assertTrue(note, note.contains(partial.toString()) && note.contains("could not be removed")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testOutOfDateRefusalNamesBothWaysOut()
     {
         ExportConfigurationToFileTool.Request request = request(null);

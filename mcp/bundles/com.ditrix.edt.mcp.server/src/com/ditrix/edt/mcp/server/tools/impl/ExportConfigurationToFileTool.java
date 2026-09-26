@@ -802,7 +802,7 @@ public class ExportConfigurationToFileTool implements IMcpTool
         }
         if (result.getFailure() != null)
         {
-            ConfigurationFileExportSupport.deleteQuietly(partial);
+            String leftover = removePartial(partial);
             if (ConfigurationFileExportSupport.isDeclaredPlatformFailure(result.getFailure()))
             {
                 // An operational outcome the caller is told in full; the platform logs its stack.
@@ -817,7 +817,7 @@ public class ExportConfigurationToFileTool implements IMcpTool
             throw new IllegalStateException(ConfigurationFileExportSupport.describeExportFailure(
                 result.getFailure(), request.target.extensionName,
                 request.target.configurationProject.getName())
-                + " Nothing was written to " + request.outputFile + '.', result.getFailure()); //$NON-NLS-1$
+                + " Nothing was written to " + request.outputFile + '.' + leftover, result.getFailure()); //$NON-NLS-1$
         }
         // publish() judges success by the file.
         PublishedFile published;
@@ -827,14 +827,21 @@ public class ExportConfigurationToFileTool implements IMcpTool
         }
         catch (IOException e)
         {
-            ConfigurationFileExportSupport.deleteQuietly(partial);
+            String leftover = removePartial(partial);
             String written = e instanceof ConfigurationFileExportSupport.LeftAtDestinationException ? "" //$NON-NLS-1$
                 : " Nothing was written to " + request.outputFile + '.'; //$NON-NLS-1$
             throw new IllegalStateException("The dump was not published: " + e.getMessage() + '.' //$NON-NLS-1$
-                + written + " Retry; if it repeats, check the EDT log.", e); //$NON-NLS-1$
+                + written + leftover + " Retry; if it repeats, check the EDT log.", e); //$NON-NLS-1$
         }
         progress.add("Wrote " + published.sizeBytes() + " bytes to " + published.path() + '.'); //$NON-NLS-1$ //$NON-NLS-2$
         return renderReport(request, applicationId, application, infobase, sync, published);
+    }
+
+    /** Removes the temporary file, or names it when it could not be removed. */
+    static String removePartial(Path partial)
+    {
+        return ConfigurationFileExportSupport.deleteQuietly(partial) ? "" //$NON-NLS-1$
+            : " The temporary file " + partial + " could not be removed; delete it."; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
