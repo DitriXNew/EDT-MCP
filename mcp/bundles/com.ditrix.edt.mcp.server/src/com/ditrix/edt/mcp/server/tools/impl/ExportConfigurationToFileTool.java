@@ -782,7 +782,10 @@ public class ExportConfigurationToFileTool implements IMcpTool
             }
             if (result.getOutcome() == BoundedJob.Outcome.INTERRUPTED)
             {
-                throw new InterruptedException("cancelled while the Designer was dumping"); //$NON-NLS-1$
+                // The job is committed, so its message must name what the abandoned dump may leave.
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("The dump was interrupted and abandoned. " //$NON-NLS-1$
+                    + abandonedDumpNote(request.outputFile, partial));
             }
             if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT)
             {
