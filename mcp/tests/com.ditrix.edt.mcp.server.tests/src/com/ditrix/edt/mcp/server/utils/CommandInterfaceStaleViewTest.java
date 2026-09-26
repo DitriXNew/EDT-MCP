@@ -13,6 +13,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import org.eclipse.emf.common.util.URI;
+import org.eclipse.emf.ecore.InternalEObject;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.cmi.model.CmiFactory;
@@ -166,6 +168,70 @@ public class CommandInterfaceStaleViewTest
     }
 
     @Test
+    public void testACommandALaterFragmentPlacesElsewhereIsNotRequiredHere()
+    {
+        // EDT applies placement fragments in stored order, so the last one listing a command wins.
+        items(derivedTools, print, export);
+        items(derivedOther, archive).get(0).setGroupCustomized(true);
+        CommandInterface stored = CmiFactory.eINSTANCE.createCommandInterface();
+        storePlacement(stored, toolsGroup, archive);
+        storePlacement(stored, otherGroup, archive);
+
+        assertNull(CommandInterfaceSupport.staleReason(stored, plan(MOVE_PRINT)));
+    }
+
+    @Test
+    public void testACommandTheLastFragmentPlacesHereButTheViewShowsElsewhereIsRefused()
+    {
+        items(derivedTools, print, export);
+        items(derivedOther, archive).get(0).setGroupCustomized(true);
+        CommandInterface stored = CmiFactory.eINSTANCE.createCommandInterface();
+        storePlacement(stored, otherGroup, archive);
+        storePlacement(stored, toolsGroup, archive);
+
+        assertEquals(staleView("the group of " + ARCHIVE), //$NON-NLS-1$
+            CommandInterfaceSupport.staleReason(stored, plan(MOVE_PRINT)));
+    }
+
+    @Test
+    public void testACommandALaterFragmentPlacesInAnUnresolvedGroupIsNotRequiredHere()
+    {
+        // The unresolved group is not part of the section, so the command is in none of its groups.
+        items(derivedTools, print, export);
+        CommandGroup missing = group("Missing"); //$NON-NLS-1$
+        ((InternalEObject)missing).eSetProxyURI(URI.createURI("bm://TestConfiguration/CommandGroup.Missing")); //$NON-NLS-1$
+        CommandInterface stored = CmiFactory.eINSTANCE.createCommandInterface();
+        storePlacement(stored, toolsGroup, archive);
+        storePlacement(stored, missing, archive);
+
+        assertNull(CommandInterfaceSupport.staleReason(stored, plan(MOVE_PRINT)));
+    }
+
+    @Test
+    public void testANoOpTheStoredVisibilityContradictsIsRefused()
+    {
+        // The view still shows Print visible; the stored section has hidden it since.
+        items(derivedTools, print, export);
+        CommandInterface stored = CmiFactory.eINSTANCE.createCommandInterface();
+        storeVisibility(stored, print, visibility(false, null, false));
+
+        Plan plan = plan("[{command:'CommonCommand.Print', visible:true}]"); //$NON-NLS-1$
+        assertEquals(true, plan.isEmpty());
+        assertEquals(staleView("the visibility of " + PRINT), CommandInterfaceSupport.staleReason(stored, plan)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testANoOpTheStoredSectionAgreesWithPasses()
+    {
+        items(derivedTools, print, export);
+
+        Plan plan = plan("[{command:'CommonCommand.Print', visible:true}, {command:'CommonCommand.Export', " //$NON-NLS-1$
+            + "after:'CommonCommand.Print'}]"); //$NON-NLS-1$
+        assertEquals(true, plan.isEmpty());
+        assertNull(CommandInterfaceSupport.staleReason(CmiFactory.eINSTANCE.createCommandInterface(), plan));
+    }
+
+    @Test
     public void testAPlacementTheViewAlreadyShowsIsWritten()
     {
         items(derivedTools, print, export, archive).get(2).setGroupCustomized(true);
@@ -241,7 +307,7 @@ public class CommandInterfaceStaleViewTest
     private static String staleView(String what)
     {
         return "EDT has not yet recomputed its view of this section after another change to " + what //$NON-NLS-1$
-            + ", so writing from it would undo that change."; //$NON-NLS-1$
+            + ", so this batch was checked against an outdated state."; //$NON-NLS-1$
     }
 
     private Plan plan(String json)

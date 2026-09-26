@@ -527,11 +527,24 @@ public final class CommandInterfaceSupport
         Applier applier, String ownerFqn)
     {
         EditResult result = new EditResult();
-        PlanResult planned = BmTransactions.read(model, "Plan command interface edit", //$NON-NLS-1$
-            (tx, pm) -> planner.plan(tx, entries));
+        String[] staleNoOp = new String[1];
+        PlanResult planned = BmTransactions.read(model, "Plan command interface edit", (tx, pm) -> { //$NON-NLS-1$
+            PlanResult p = planner.plan(tx, entries);
+            // A no-op never reaches the write, so it is checked against the stored section here.
+            if (p.error == null && p.plan.isEmpty())
+            {
+                staleNoOp[0] = verifier.staleReason(tx, p.plan);
+            }
+            return p;
+        });
         if (planned.error != null)
         {
             result.error = planned.error;
+            return result;
+        }
+        if (staleNoOp[0] != null)
+        {
+            result.error = sectionChangedError(ownerFqn, staleNoOp[0]);
             return result;
         }
         result.plan = planned.plan;
@@ -548,7 +561,7 @@ public final class CommandInterfaceSupport
                 {
                     throw new SectionChangedException(fresh.error);
                 }
-                String stale = fresh.plan.isEmpty() ? null : verifier.staleReason(tx, fresh.plan);
+                String stale = verifier.staleReason(tx, fresh.plan);
                 if (stale != null)
                 {
                     throw new SectionChangedException(stale);
@@ -765,6 +778,39 @@ public final class CommandInterfaceSupport
                 return staleView("the visibility of " + item.fqn()); //$NON-NLS-1$
             }
         }
+        // Every command an entry named, so a lagging view cannot pass a request off as already done.
+        for (String fqn : plan.touched())
+        {
+            String reason = staleTouched(stored, plan, fqn);
+            if (reason != null)
+            {
+                return reason;
+            }
+        }
+        return null;
+    }
+
+    private static String staleTouched(CommandInterface stored, Plan plan, String fqn)
+    {
+        if (plan.section == null)
+        {
+            return null;
+        }
+        for (Group group : plan.section.groups())
+        {
+            for (Item item : group.items)
+            {
+                if (!item.fqn().equals(fqn))
+                {
+                    continue;
+                }
+                if (!visibilityAgrees(stored, item.derived))
+                {
+                    return staleView("the visibility of " + fqn); //$NON-NLS-1$
+                }
+                return staleOrder(stored, plan, group);
+            }
+        }
         return null;
     }
 
@@ -799,6 +845,10 @@ public final class CommandInterfaceSupport
                 }
                 for (Command command : fragment.getCommands())
                 {
+                    if (effectivePlacement(stored, command) != fragment)
+                    {
+                        continue; // a later fragment places it elsewhere
+                    }
                     Item elsewhere = itemOutside(plan.section, group, command);
                     if (elsewhere != null)
                     {
@@ -813,7 +863,7 @@ public final class CommandInterfaceSupport
     private static String staleView(String what)
     {
         return "EDT has not yet recomputed its view of this section after another change to " + what //$NON-NLS-1$
-            + ", so writing from it would undo that change."; //$NON-NLS-1$
+            + ", so this batch was checked against an outdated state."; //$NON-NLS-1$
     }
 
     private static Item itemOutside(CommandInterfaceSection section, Group group, Command command)
@@ -840,9 +890,9 @@ public final class CommandInterfaceSupport
     }
 
     /**
-     * Whether the item's computed group agrees with the stored placement: a placed command sits in the
-     * fragment's group, an unplaced one is not customized. A fragment naming the group the command
-     * already sits in leaves it uncustomized, and the managed main section stores such fragments.
+     * Whether the item's computed group agrees with the stored placement: a placed command sits in its
+     * effective fragment's group, an unplaced one is not customized. A fragment naming the group the
+     * command already sits in leaves it uncustomized, and the managed main section stores such fragments.
      */
     private static boolean placementAgrees(CommandInterface stored, Object derivedItem)
     {
@@ -851,22 +901,32 @@ public final class CommandInterfaceSupport
             return true;
         }
         CommandItem item = (CommandItem)derivedItem;
-        Command command = storedCommand(item);
-        boolean placed = false;
-        boolean placedHere = false;
+        CommandsPlacementFragment fragment = effectivePlacement(stored, storedCommand(item));
+        if (fragment == null)
+        {
+            return !item.isGroupCustomized();
+        }
+        return item.getGroup() != null && sameGroup(fragment.getGroup(), item.getGroup().getCommandGroup());
+    }
+
+    /**
+     * The fragment that decides where a command sits: EDT applies the fragments in stored order, each
+     * moving the command into its group, so the last one listing it wins.
+     */
+    private static CommandsPlacementFragment effectivePlacement(CommandInterface stored, Command command)
+    {
+        CommandsPlacementFragment effective = null;
         if (stored != null && stored.getCommandsPlacement() != null)
         {
             for (CommandsPlacementFragment fragment : stored.getCommandsPlacement().getPlacementFragments())
             {
                 if (containsObject(fragment.getCommands(), command))
                 {
-                    placed = true;
-                    placedHere |= item.getGroup() != null
-                        && sameGroup(fragment.getGroup(), item.getGroup().getCommandGroup());
+                    effective = fragment;
                 }
             }
         }
-        return placed ? placedHere : !item.isGroupCustomized();
+        return effective;
     }
 
     /** Whether the item's computed visibility agrees with the stored one: customized exactly when stored, same value. */

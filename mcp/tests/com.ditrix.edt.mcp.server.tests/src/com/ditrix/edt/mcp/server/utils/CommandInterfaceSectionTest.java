@@ -339,6 +339,24 @@ public class CommandInterfaceSectionTest
     }
 
     @Test
+    public void testMalformedPlacementAndAnchorFieldsRefuseTheWholeEntry()
+    {
+        String[] bad = { "{}", "[]", "null", "''", "1" }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        for (String key : new String[] { "group", "after", "before" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            for (String value : bad)
+            {
+                // A valid visibility change in the same entry must not be applied on its own.
+                String error = planError("[{command:'" + DOCUMENT_OPEN_LIST + "', visible:false, " + key + ":" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + value + "}]"); //$NON-NLS-1$
+                assertTrue(key + "=" + value + ": " + error, //$NON-NLS-1$ //$NON-NLS-2$
+                    error.startsWith("commands[0]." + key + " must be a non-empty string (")); //$NON-NLS-1$ //$NON-NLS-2$
+                assertTrue(error, error.endsWith("; omit the key to leave it unchanged.")); //$NON-NLS-1$
+            }
+        }
+    }
+
+    @Test
     public void testSelfAnchorIsRefused()
     {
         String error = planError("[{command:'" + DOCUMENT_OPEN_LIST + "', after:'" + DOCUMENT_OPEN_LIST + "'}]"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$

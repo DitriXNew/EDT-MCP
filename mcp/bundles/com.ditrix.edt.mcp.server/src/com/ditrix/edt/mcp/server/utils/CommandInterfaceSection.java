@@ -543,6 +543,17 @@ public final class CommandInterfaceSection
         {
             return unknownCommandError(at + ".command", commandRef); //$NON-NLS-1$
         }
+        for (String key : new String[] { KEY_GROUP, KEY_AFTER, KEY_BEFORE })
+        {
+            JsonElement value = entry.get(key);
+            if (value != null && (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()
+                || value.getAsString().trim().isEmpty()))
+            {
+                return at + "." + key + " must be a non-empty string (" //$NON-NLS-1$ //$NON-NLS-2$
+                    + (KEY_GROUP.equals(key) ? "a group id, e.g. 'NavigationPanelOrdinary'" : "a command FQN") //$NON-NLS-1$ //$NON-NLS-2$
+                    + "), got " + value + "; omit the key to leave it unchanged."; //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
         boolean hasVisible = entry.has(KEY_VISIBLE);
         boolean hasRoles = entry.has(KEY_ROLES);
         String groupRef = stringValue(entry, KEY_GROUP);

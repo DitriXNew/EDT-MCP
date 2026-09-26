@@ -142,7 +142,7 @@ public class CommandInterfaceSupportEditTest
     public void testAComputedViewThatLagsTheStoredSectionRollsBackAndSaysSo()
     {
         stale = "EDT has not yet recomputed its view of this section after another change to the order of " //$NON-NLS-1$
-            + ORDINARY + ", so writing from it would undo that change."; //$NON-NLS-1$
+            + ORDINARY + ", so this batch was checked against an outdated state."; //$NON-NLS-1$
         WriteScope scope = new WriteScope();
         CommandInterfaceSupport.EditResult[] result = new CommandInterfaceSupport.EditResult[1];
         WriteScope.runWithScope(scope, () -> result[0] = edit(section(PRINT, EXPORT), section(PRINT, EXPORT),
@@ -158,14 +158,29 @@ public class CommandInterfaceSupportEditTest
     }
 
     @Test
-    public void testAPlanThatChangesNothingIsNotCheckedForStaleness()
+    public void testANoOpTheStoredSectionContradictsIsRefusedWithoutAWrite()
     {
-        stale = "must not be asked"; //$NON-NLS-1$
+        stale = "EDT has not yet recomputed its view of this section after another change to the visibility of " //$NON-NLS-1$
+            + PRINT + ", so this batch was checked against an outdated state."; //$NON-NLS-1$
+        // The view already shows Print hidden, so the batch plans nothing; the stored section says otherwise.
+        CommandInterfaceSupport.EditResult result = edit(sectionHiding(PRINT, PRINT, EXPORT), section(PRINT, EXPORT),
+            "[{command:'CommonCommand.Print', visible:false}]"); //$NON-NLS-1$
+
+        assertEquals(CommandInterfaceSupport.sectionChangedError(OWNER, stale), result.error);
+        assertNull(result.plan);
+        verify(model, never()).execute(any());
+        assertTrue(applied.isEmpty());
+    }
+
+    @Test
+    public void testAWriteThatFindsNothingToDoIsStillCheckedForStaleness()
+    {
+        stale = "the stored section disagrees"; //$NON-NLS-1$
         CommandInterfaceSupport.EditResult result = edit(section(PRINT, EXPORT), sectionHiding(PRINT, PRINT, EXPORT),
             "[{command:'CommonCommand.Print', visible:false}]"); //$NON-NLS-1$
 
-        assertNull(result.error, result.error);
-        assertTrue(result.plan.isEmpty());
+        assertEquals(CommandInterfaceSupport.sectionChangedError(OWNER, stale), result.error);
+        assertNull(result.plan);
         assertTrue(applied.isEmpty());
     }
 
@@ -257,7 +272,7 @@ public class CommandInterfaceSupportEditTest
             return null;
         };
         CommandInterfaceSupport.Verifier verifier = (tx, plan) -> {
-            assertSame("verified inside the write transaction", writeTx, tx); //$NON-NLS-1$
+            assertTrue("verified inside the edit's own transactions", tx == readTx || tx == writeTx); //$NON-NLS-1$
             return stale;
         };
         CommandInterfaceSupport.Applier applier = (tx, pm, plan) -> {
