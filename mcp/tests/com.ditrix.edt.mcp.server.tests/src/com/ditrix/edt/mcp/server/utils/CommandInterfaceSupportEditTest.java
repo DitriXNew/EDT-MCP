@@ -162,6 +162,27 @@ public class CommandInterfaceSupportEditTest
     }
 
     @Test
+    public void testTheReadBackCoversEveryNamedCommandNotOnlyTheChangedOnes()
+    {
+        // Archive is only reordered; Export asks for what it has, in the group Archive's entry reorders.
+        List<JsonObject> entries = entries("[{command:'CommonCommand.Archive', before:'CommonCommand.Print'}, " //$NON-NLS-1$
+            + "{command:'CommonCommand.Export', visible:true}]"); //$NON-NLS-1$
+        Plan plan = section(PRINT, EXPORT, ARCHIVE).plan(entries, ref -> null).plan;
+        assertTrue(plan.visibility().isEmpty());
+        assertTrue(plan.placement().isEmpty());
+        assertTrue(plan.unchanged().isEmpty());
+        assertEquals(Arrays.asList(ARCHIVE, EXPORT), plan.touched());
+
+        IBmTransaction tx = mock(IBmTransaction.class);
+        when(tx.getTopObjectByFqn(SECTION_FQN)).thenReturn((IBmObject)CmiFactory.eINSTANCE.createCommandInterface());
+        JsonObject stored = CommandInterfaceSupport.storedState(tx, SECTION_FQN, plan);
+
+        assertEquals(JsonParser.parseString("{'CommonCommand.Archive':{visible:'default',group:'default'}," //$NON-NLS-1$
+            + "'CommonCommand.Export':{visible:'default',group:'default'}}"), stored.get("commands")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(stored.getAsJsonObject("order").has(ORDINARY)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testANewCommandInterfaceReportsTheFqnItWasAttachedUnder()
     {
         IBmTransaction tx = mock(IBmTransaction.class);
@@ -189,8 +210,7 @@ public class CommandInterfaceSupportEditTest
     private CommandInterfaceSupport.EditResult edit(CommandInterfaceSection read, CommandInterfaceSection written,
         String json)
     {
-        List<JsonObject> entries = new ArrayList<>();
-        JsonParser.parseString(json).getAsJsonArray().forEach(e -> entries.add(e.getAsJsonObject()));
+        List<JsonObject> entries = entries(json);
         CommandInterfaceSupport.Planner planner = (tx, e) -> {
             if (tx == readTx)
             {
@@ -209,6 +229,13 @@ public class CommandInterfaceSupportEditTest
             return SECTION_FQN;
         };
         return CommandInterfaceSupport.edit(model, entries, planner, applier, OWNER);
+    }
+
+    private static List<JsonObject> entries(String json)
+    {
+        List<JsonObject> entries = new ArrayList<>();
+        JsonParser.parseString(json).getAsJsonArray().forEach(e -> entries.add(e.getAsJsonObject()));
+        return entries;
     }
 
     /** A section whose NavigationPanelOrdinary lists {@code commands} in order, each with its own handle. */

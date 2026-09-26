@@ -9,10 +9,8 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -124,7 +122,7 @@ public final class CommandInterfaceSupport
         public Plan plan;
         /** The FQN of the command interface that was written, or {@code null} when nothing was. */
         public String writtenFqn;
-        /** What the command interface stores for the touched commands and groups after the write. */
+        /** Read back after the write: every command an entry named, and the ordered groups. */
         public JsonObject stored;
     }
 
@@ -736,22 +734,16 @@ public final class CommandInterfaceSupport
         return value;
     }
 
-    /** What the command interface stores for the touched commands and groups, read after the write. */
-    private static JsonObject storedState(IBmTransaction tx, String fqn, Plan plan)
+    /**
+     * What the command interface stores for every command an entry named and for the ordered groups,
+     * read after the write. Package-visible for tests.
+     */
+    static JsonObject storedState(IBmTransaction tx, String fqn, Plan plan)
     {
         IBmObject top = fqn == null ? null : tx.getTopObjectByFqn(fqn);
         CommandInterface commandInterface = top instanceof CommandInterface ? (CommandInterface)top : null;
-        Set<String> commands = new LinkedHashSet<>();
-        for (Item item : plan.visibility().keySet())
-        {
-            commands.add(item.fqn());
-        }
-        for (Item item : plan.placement().keySet())
-        {
-            commands.add(item.fqn());
-        }
         JsonObject perCommand = new JsonObject();
-        for (String command : commands)
+        for (String command : plan.touched())
         {
             JsonObject entry = new JsonObject();
             entry.add("visible", storedVisibility(commandInterface, command)); //$NON-NLS-1$

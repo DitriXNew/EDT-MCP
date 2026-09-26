@@ -207,6 +207,7 @@ public final class CommandInterfaceSection
         final Map<Item, Group> placement = new LinkedHashMap<>();
         final Map<Group, List<Item>> order = new LinkedHashMap<>();
         final List<String> unchanged = new ArrayList<>();
+        final List<String> touched = new ArrayList<>();
 
         /** @return command -&gt; final visibility, for commands whose visibility changes */
         public Map<Item, Visibility> visibility()
@@ -230,6 +231,12 @@ public final class CommandInterfaceSection
         public List<String> unchanged()
         {
             return Collections.unmodifiableList(unchanged);
+        }
+
+        /** @return every command an entry named, in the order first named */
+        public List<String> touched()
+        {
+            return Collections.unmodifiableList(touched);
         }
 
         /** @return whether the plan changes nothing */
@@ -485,6 +492,7 @@ public final class CommandInterfaceSection
         }
         for (Item item : touched)
         {
+            plan.touched.add(item.fqn);
             if (!plan.visibility.containsKey(item) && !plan.placement.containsKey(item)
                 && !orderedGroupMoved(plan, item, groupOf))
             {

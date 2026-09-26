@@ -234,6 +234,19 @@ def test_command_interface_move_and_order():
     assert "order: custom" in groups["NavigationPanelOrdinary"][0], groups["NavigationPanelOrdinary"][0]
     assert _row(groups, CREATE) == (CREATE, "yes", "-", "placement, visibility"), _row(groups, CREATE)
 
+    # An entry that only reorders, and one asking for what the command already has, are read back too.
+    reorder = _modify([{"command": OPEN_LIST, "before": CREATE}, {"command": CREATE, "visible": True}])
+    assert_ok(reorder, "reorder OpenList before Create")
+    s = _structured(reorder, "reorder write")
+    assert s.get("commands") == {"visibility": 0, "placement": 0, "order": 1}, s
+    assert s["stored"]["commands"] == {
+        OPEN_LIST: {"visible": "default", "group": "default"},
+        CREATE: {"visible": {"common": True, "roles": {}}, "group": "NavigationPanelOrdinary"}}, s["stored"]
+    assert s["stored"]["order"] == {"NavigationPanelOrdinary": [OPEN_LIST, CREATE]}, s["stored"]
+    assert "unchanged" not in s, s
+    _poll_section(lambda g: _commands_of(g, "NavigationPanelOrdinary") == [OPEN_LIST, CREATE],
+                  "OpenList first in NavigationPanelOrdinary")
+
     # Moving it back to its default group (named in Russian) removes the stored placement.
     back = _modify([{"command": CREATE, "group": "ПанельДействийСоздать"}])
     assert_ok(back, "move Create back to its default group")
