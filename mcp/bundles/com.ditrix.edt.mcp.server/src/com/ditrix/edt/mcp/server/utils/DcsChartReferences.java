@@ -480,7 +480,7 @@ public final class DcsChartReferences
     private static String canonical(String path)
     {
         String userKey = userFieldKey(path);
-        return userKey != null ? "\u0001" + userKey : lower(englishPercentTerm(path));
+        return userKey != null ? "\u0001" + lower(englishPercentTerm(userKey)) : lower(englishPercentTerm(path));
     }
 
     /** A percent field keyed by its English term, so a respelling in Russian is the same field. */
@@ -543,8 +543,9 @@ public final class DcsChartReferences
             this.chartAddress = chartAddress;
             this.resolver = resolver;
             // A NUL-led marker cannot collide with a field path such as a literal '#none'.
-            this.key = reference.role + '\n'
-                + (reference.field == null ? '\u0000' + marker : canonical(reference.field));
+            // A literal schema path keeps its own key; only spellings the resolver aliases share one.
+            this.key = reference.role + '\n' + (reference.field == null ? '\u0000' + marker
+                : resolver.isSchemaPath(reference.field) ? lower(reference.field) : canonical(reference.field));
         }
     }
 
@@ -608,6 +609,13 @@ public final class DcsChartReferences
             fields = schemaLevel.fields;
             resources = schemaLevel.resources;
             autoFill = schemaLevel.autoFill;
+        }
+
+        /** Whether {@code path} names a schema field or resource literally. */
+        boolean isSchemaPath(String path)
+        {
+            String key = lower(path);
+            return fields.containsKey(key) || resources.containsKey(key);
         }
 
         /** This schema's resolver extended with the user fields of one settings tree. */

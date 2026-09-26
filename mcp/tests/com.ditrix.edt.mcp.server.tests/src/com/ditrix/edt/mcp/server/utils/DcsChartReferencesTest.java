@@ -436,6 +436,38 @@ public class DcsChartReferencesTest
     }
 
     @Test
+    public void testTwoLiteralSchemaFieldsSpelledAsAliasesKeepSeparateKeys()
+    {
+        String[] folder = DcsTerms.kDCSSUserFieldsTerm;
+        DataCompositionSchema schema = schema();
+        field(schema, "Customer").setDataPath(folder[0] + ".X"); //$NON-NLS-1$ //$NON-NLS-2$
+        field(schema, "Period").setDataPath(folder[1] + ".X"); //$NON-NLS-1$ //$NON-NLS-2$
+        field(schema, folder[0] + ".X").setUseRestriction(groupRestriction()); //$NON-NLS-1$
+        schema.setDefaultSettings(settings(chart(points(folder[0] + ".X"), "", measures("Amount")), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            chart(points(folder[1] + ".X"), "", measures("Amount")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        DcsChartReferences.Census before = DcsChartReferences.census(schema, ROOT);
+        assertEquals(1, before.size());
+
+        field(schema, folder[0] + ".X").setUseRestriction(null); //$NON-NLS-1$
+        field(schema, folder[1] + ".X").setUseRestriction(groupRestriction()); //$NON-NLS-1$
+        assertNotNull("fixing one literal field cannot pay for breaking another", after(before, schema)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRespellingABrokenUserFieldPercentInRussianIsNotANewBreak()
+    {
+        String folder = DcsTerms.kDCSSUserFieldsTerm[0];
+        String[] overall = DcsTerms.kDCSSystemFieldsOverallPercent;
+        DataCompositionSchema schema = schema();
+        schema.setDefaultSettings(settings(chart(points("Customer"), "", measures(folder + ".Margin." + overall[0])))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        DcsChartReferences.Census before = DcsChartReferences.census(schema, ROOT);
+        assertEquals(1, before.size());
+
+        schema.setDefaultSettings(settings(chart(points("Customer"), "", measures(folder + ".Margin." + overall[1])))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertNull("the same broken user-field percent in the other language", after(before, schema)); //$NON-NLS-1$
+    }
+
+    @Test
     public void testASwitchedOffChartIsNotJudged()
     {
         DataCompositionSchema schema = schema();
