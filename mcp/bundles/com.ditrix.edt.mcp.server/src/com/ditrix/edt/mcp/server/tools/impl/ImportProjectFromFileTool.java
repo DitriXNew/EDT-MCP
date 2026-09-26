@@ -70,8 +70,8 @@ import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
  *
  * <p>The work runs as a background job. Everything before the project is created - the conversion
  * and the check that the dump holds what the extension promised - can still be abandoned and
- * leaves nothing behind; the job commits only then. An import that fails after that leaves what
- * EDT created in place and names it, with the mutation marker read from the workspace.
+ * leaves nothing behind; the job commits only then. An import that fails after that deletes
+ * nothing and names what the workspace holds, without claiming it as the import's own.
  */
 public class ImportProjectFromFileTool implements IMcpTool
 {
@@ -422,7 +422,7 @@ public class ImportProjectFromFileTool implements IMcpTool
     }
 
     /**
-     * The job. A failure carries the marker of what the workspace holds by then, so polling the job
+     * The job. A failure carries the mutation marker the job could establish, so polling the job
      * and the starting call report the same outcome.
      *
      * @param request the validated request
@@ -513,7 +513,7 @@ public class ImportProjectFromFileTool implements IMcpTool
             }
             catch (Exception e) // NOSONAR the CLI API is reached by reflection
             {
-                throw importFailure(name, e, mutation);
+                throw importFailure(name, e, request.lifecycle, mutation);
             }
             IProject project = ProjectContext.of(name).project();
             if (!request.lifecycle.projectExists(project))
@@ -543,35 +543,54 @@ public class ImportProjectFromFileTool implements IMcpTool
     }
 
     /**
-     * Reports a failed import by what it left behind. Nothing is deleted: no check can prove that
-     * a project of this name is the import's own rather than one another operation created meanwhile.
+     * Reports a failed import by what it left behind. Nothing is deleted, and a leftover keeps the
+     * unknown marker: no check can prove it is this import's own rather than another operation's.
      *
      * @param name the project the import was creating
      * @param failure what the import raised
-     * @param mutation set to what the workspace holds afterwards
+     * @param lifecycle releases the start latch the import may have parked
+     * @param mutation set to {@link Mutation#NONE} when nothing of that name is left
      * @return the failure to report
      */
     private static ImportFailure importFailure(String name, Exception failure,
-        AtomicReference<Mutation> mutation)
+        IImportLifecycle lifecycle, AtomicReference<Mutation> mutation)
     {
         String head = "EDT could not import the converted XML files into project '" + name + "': " //$NON-NLS-1$ //$NON-NLS-2$
             + PlatformFailures.describeWithRootCause(failure) + ". "; //$NON-NLS-1$
-        Path folder = WorkspacePaths.defaultProjectFolder(name);
-        if (ProjectContext.of(name).project().exists())
+        String whose = " This import may have created it before failing, or another operation may " //$NON-NLS-1$
+            + "have created it meanwhile: check what it holds before "; //$NON-NLS-1$
+        IProject project = ProjectContext.of(name).project();
+        if (project.exists())
         {
-            mutation.set(Mutation.COMMITTED);
-            return new ImportFailure(head + "A project of that name exists now and is left as it is. " //$NON-NLS-1$
-                + "Check it, and delete it with delete_project (deleteContent=true) before importing " //$NON-NLS-1$
-                + "again."); //$NON-NLS-1$
+            releaseImportLatch(project, name, lifecycle);
+            return new ImportFailure(head + "A project of that name exists now and is left as it is." //$NON-NLS-1$
+                + whose + "deleting it with delete_project (deleteContent=true) or importing again."); //$NON-NLS-1$
         }
+        Path folder = WorkspacePaths.defaultProjectFolder(name);
         if (folder != null && Files.exists(folder))
         {
-            mutation.set(Mutation.COMMITTED);
             return new ImportFailure(head + "No project exists, but the workspace folder " + folder //$NON-NLS-1$
-                + " does now; remove it before importing again."); //$NON-NLS-1$
+                + " does now." + whose + "removing it or importing again."); //$NON-NLS-1$ //$NON-NLS-2$
         }
         mutation.set(Mutation.NONE);
         return new ImportFailure(head + "No project was created."); //$NON-NLS-1$
+    }
+
+    /**
+     * The CLI import parks a MANUAL start latch it never releases on failure, and while it stands
+     * EDT starts no project in the workspace; EDT's own import wizard releases it the same way.
+     */
+    private static void releaseImportLatch(IProject project, String name, IImportLifecycle lifecycle)
+    {
+        try
+        {
+            lifecycle.permitImport(project);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError(NAME + ": could not release the import latch of project '" + name //$NON-NLS-1$
+                + "' after its import failed; EDT starts no project until it is closed or deleted.", e); //$NON-NLS-1$
+        }
     }
 
     /**
@@ -818,7 +837,7 @@ public class ImportProjectFromFileTool implements IMcpTool
         NONE,
         /** The import API was entered and whether it left anything is not known. */
         UNKNOWN,
-        /** A project or workspace folder of that name exists after the import API was entered. */
+        /** The import API returned normally, so it created the project. */
         COMMITTED
     }
 

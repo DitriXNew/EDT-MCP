@@ -218,6 +218,24 @@ public class BinaryToXmlConverterTest
     }
 
     @Test
+    public void testDumpCheckRefusesAnExternalRootEdtWouldImportAsAConfiguration() throws IOException
+    {
+        // EDT's CLI import asks Files.exists(dir/Configuration.xml): the check must ask the same.
+        Path xml = Files.createDirectories(workDir.resolve("xml")); //$NON-NLS-1$
+        write(xml.resolve("configuration.xml"), "<MetaDataObject/>"); //$NON-NLS-1$ //$NON-NLS-2$
+        boolean edtSeesAConfiguration = Files.exists(xml.resolve("Configuration.xml")); //$NON-NLS-1$
+        assertEquals("on this file system's case rules", edtSeesAConfiguration, //$NON-NLS-1$
+            BinaryToXmlConverter.verifyDump(SourceKind.EXTERNAL_REPORT, xml) != null);
+
+        Files.delete(xml.resolve("configuration.xml")); //$NON-NLS-1$
+        write(xml.resolve("Configuration.xml"), "<MetaDataObject/>"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("The file's name makes the root file of its dump Configuration.xml, and EDT imports " //$NON-NLS-1$
+            + "a dump holding that file as a configuration, not as an external data processor. Copy the " //$NON-NLS-1$
+            + "file under another name and import the copy.", //$NON-NLS-1$
+            BinaryToXmlConverter.verifyDump(SourceKind.EXTERNAL_DATA_PROCESSOR, xml));
+    }
+
+    @Test
     public void testNoPlatformMessageIsActionable()
     {
         String any = BinaryToXmlConverter.noPlatformMessage(null, new IllegalStateException("none")); //$NON-NLS-1$

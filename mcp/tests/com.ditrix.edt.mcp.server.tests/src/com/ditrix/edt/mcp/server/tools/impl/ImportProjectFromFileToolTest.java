@@ -36,14 +36,17 @@ import org.junit.Before;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.core.lifecycle.WorkspaceProjectStartRequest;
+import com.google.gson.JsonParser;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.ImportConfigurationFromXmlTool.IImportLifecycle;
 import com.ditrix.edt.mcp.server.tools.impl.ImportProjectFromFileTool.IProjectImporter;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobRenderer;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs.JobSnapshot;
+import com.ditrix.edt.mcp.server.utils.BinaryToXmlConverter;
 import com.ditrix.edt.mcp.server.utils.BinaryToXmlConverter.ConversionException;
 import com.ditrix.edt.mcp.server.utils.BinaryToXmlConverter.IThickClient;
+import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
 
 /**
  * Tests for {@link ImportProjectFromFileTool}.
@@ -75,6 +78,7 @@ public class ImportProjectFromFileToolTest
     private FakeLifecycle lifecycle;
     private final List<Path> tempFiles = new ArrayList<>();
     private final List<String> projectsToDelete = new ArrayList<>();
+    private final List<Path> foldersToDelete = new CopyOnWriteArrayList<>();
     private int providerCalls;
     private ConversionException providerFailure;
 
@@ -103,6 +107,10 @@ public class ImportProjectFromFileToolTest
             {
                 project.delete(true, true, new NullProgressMonitor());
             }
+        }
+        for (Path folder : foldersToDelete)
+        {
+            BinaryToXmlConverter.deleteQuietly(folder);
         }
     }
 
@@ -218,6 +226,32 @@ public class ImportProjectFromFileToolTest
         String name = createRealProject();
         String result = tool().execute(params(tempFile(".cf").toString(), name)); //$NON-NLS-1$
         assertError(result, "already exists"); //$NON-NLS-1$
+        assertEquals(0, providerCalls);
+    }
+
+    @Test
+    public void testAWorkspaceFolderOfThatNameIsRefused() throws IOException
+    {
+        // EDT's project setup checks only the project, so it would create one over this folder.
+        String name = uniqueName();
+        Path folder = createWorkspaceFolder(name);
+        String result = tool().execute(params(tempFile(".cf").toString(), name)); //$NON-NLS-1$
+        assertError(result, "already exists"); //$NON-NLS-1$
+        assertEquals("The workspace folder " + folder + " already exists, so project '" + name //$NON-NLS-1$ //$NON-NLS-2$
+            + "' cannot be created there. Pass a new project name, or remove that folder.", //$NON-NLS-1$
+            errorText(result));
+        assertEquals(0, providerCalls);
+        assertFalse(projectHandle(name).exists());
+    }
+
+    @Test
+    public void testAClosedBaseProjectIsRefused() throws Exception
+    {
+        String base = createRealProject();
+        projectHandle(base).close(new NullProgressMonitor());
+        Map<String, String> params = params(tempFile(".epf").toString(), uniqueName()); //$NON-NLS-1$
+        params.put("baseProjectName", base); //$NON-NLS-1$
+        assertError(tool().execute(params), "Base project '" + base + "' is closed. Open it in EDT first."); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(0, providerCalls);
     }
 
@@ -402,18 +436,72 @@ public class ImportProjectFromFileToolTest
     }
 
     @Test
-    public void testAFailedImportLeavesTheProjectItFindsAndSaysSo() throws IOException
+    public void testAWorkspaceFolderThatAppearsDuringTheConversionIsNotImportedInto() throws IOException
     {
         String name = uniqueName();
-        projectsToDelete.add(name);
+        client.onDump = () -> createWorkspaceFolderQuietly(name);
+        String result = tool().execute(params(tempFile(".cf").toString(), name, FULL_WAIT)); //$NON-NLS-1$
+        assertError(result, "A project or workspace folder named '" + name //$NON-NLS-1$
+            + "' appeared while the file was being converted, so nothing was imported."); //$NON-NLS-1$
+        assertNoMutationMarker(result);
+        assertTrue("the re-check must stop the job before the import", importer.calls.isEmpty()); //$NON-NLS-1$
+        assertFalse(projectHandle(name).exists());
+    }
+
+    @Test
+    public void testAnExternalObjectFileNamedConfigurationIsRefusedBeforeAnythingIsCreated()
+        throws IOException
+    {
+        // EDT's CLI import takes a dump holding Configuration.xml for a configuration.
+        Path dir = Files.createTempDirectory("import-named"); //$NON-NLS-1$
+        foldersToDelete.add(dir);
+        Path file = Files.createFile(dir.resolve("Configuration.epf")); //$NON-NLS-1$
+        String name = uniqueName();
+        String result = tool().execute(params(file.toString(), name, FULL_WAIT));
+        assertError(result, "The file's name makes the root file of its dump Configuration.xml"); //$NON-NLS-1$
+        assertTrue(result, result.contains("No project was created.")); //$NON-NLS-1$
+        assertNoMutationMarker(result);
+        assertEquals(List.of("dumpExternal:Configuration.xml"), client.calls); //$NON-NLS-1$
+        assertTrue("nothing may be imported", importer.calls.isEmpty()); //$NON-NLS-1$
+        assertFalse(projectHandle(name).exists());
+    }
+
+    @Test
+    public void testAFailedImportLeavesTheProjectItFindsWithoutClaimingIt() throws IOException
+    {
+        // The same answer as when EDT refused because another operation took the name meanwhile.
+        String name = uniqueName();
         importer.createProjectThenFail = true;
         String result = tool().execute(params(tempFile(".cf").toString(), name, FULL_WAIT)); //$NON-NLS-1$
         assertError(result, "simulated import failure"); //$NON-NLS-1$
-        assertTrue(result, result.contains("delete_project")); //$NON-NLS-1$
-        assertTrue("a project is left, so the mutation happened: " + result, //$NON-NLS-1$
-            result.contains("\"mutationCommitted\":true")); //$NON-NLS-1$
+        assertTrue(errorText(result), errorText(result).endsWith("A project of that name exists now and is " //$NON-NLS-1$
+            + "left as it is. This import may have created it before failing, or another operation may " //$NON-NLS-1$
+            + "have created it meanwhile: check what it holds before deleting it with delete_project " //$NON-NLS-1$
+            + "(deleteContent=true) or importing again.")); //$NON-NLS-1$
+        assertTrue("a project of that name need not be this call's: " + result, //$NON-NLS-1$
+            result.contains("\"mutationOutcomeUnknown\":true")); //$NON-NLS-1$
+        assertFalse(result, result.contains("mutationCommitted")); //$NON-NLS-1$
         assertTrue("nothing proves the project is the import's own, so it is not deleted", //$NON-NLS-1$
             projectHandle(name).exists());
+        assertEquals("the latch a failed import parks must be released", 1, lifecycle.permits); //$NON-NLS-1$
+        assertEquals("nothing to start", 0, lifecycle.startRequests); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFailedImportThatLeftOnlyAFolderSaysSoWithoutClaimingIt() throws IOException
+    {
+        String name = uniqueName();
+        foldersToDelete.add(WorkspacePaths.defaultProjectFolder(name));
+        importer.createFolderThenFail = true;
+        String result = tool().execute(params(tempFile(".cf").toString(), name, FULL_WAIT)); //$NON-NLS-1$
+        assertError(result, "simulated import failure"); //$NON-NLS-1$
+        assertTrue(errorText(result), errorText(result).endsWith("No project exists, but the workspace " //$NON-NLS-1$
+            + "folder " + WorkspacePaths.defaultProjectFolder(name) + " does now. This import may have " //$NON-NLS-1$ //$NON-NLS-2$
+            + "created it before failing, or another operation may have created it meanwhile: check " //$NON-NLS-1$
+            + "what it holds before removing it or importing again.")); //$NON-NLS-1$
+        assertTrue(result, result.contains("\"mutationOutcomeUnknown\":true")); //$NON-NLS-1$
+        assertFalse(result, result.contains("mutationCommitted")); //$NON-NLS-1$
+        assertEquals("no project, so no latch to release", 0, lifecycle.permits); //$NON-NLS-1$
     }
 
     @Test
@@ -436,6 +524,7 @@ public class ImportProjectFromFileToolTest
         assertError(result, "XML version is not supported"); //$NON-NLS-1$
         assertTrue(result, result.contains("No project was created")); //$NON-NLS-1$
         assertNoMutationMarker(result);
+        assertEquals(0, lifecycle.permits);
     }
 
     @Test
@@ -555,6 +644,32 @@ public class ImportProjectFromFileToolTest
         return ResourcesPlugin.getWorkspace().getRoot().getProject(name);
     }
 
+    /** A folder in the workspace directory with no project behind it. */
+    private Path createWorkspaceFolder(String name) throws IOException
+    {
+        Path folder = WorkspacePaths.defaultProjectFolder(name);
+        foldersToDelete.add(folder);
+        return Files.createDirectories(folder);
+    }
+
+    private void createWorkspaceFolderQuietly(String name)
+    {
+        try
+        {
+            createWorkspaceFolder(name);
+        }
+        catch (IOException e)
+        {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** The decoded error message, for a comparison a path's JSON escaping would break. */
+    private static String errorText(String result)
+    {
+        return JsonParser.parseString(result).getAsJsonObject().get("error").getAsString(); //$NON-NLS-1$
+    }
+
     private static void assertError(String result, String fragment)
     {
         assertTrue("expected an error JSON, got: " + result, result.trim().startsWith("{")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -667,6 +782,7 @@ public class ImportProjectFromFileToolTest
         volatile boolean available = true;
         volatile boolean sawConfigurationXml;
         volatile boolean createProjectThenFail;
+        volatile boolean createFolderThenFail;
         volatile Exception failure;
 
         @Override
@@ -684,6 +800,11 @@ public class ImportProjectFromFileToolTest
             if (createProjectThenFail)
             {
                 createProjectQuietly(projectName);
+                throw new IllegalStateException("simulated import failure"); //$NON-NLS-1$
+            }
+            if (createFolderThenFail)
+            {
+                Files.createDirectories(WorkspacePaths.defaultProjectFolder(projectName));
                 throw new IllegalStateException("simulated import failure"); //$NON-NLS-1$
             }
             if (failure != null)

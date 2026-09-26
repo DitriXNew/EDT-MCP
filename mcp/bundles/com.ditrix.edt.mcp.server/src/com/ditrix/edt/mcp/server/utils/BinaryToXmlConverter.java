@@ -388,6 +388,13 @@ public final class BinaryToXmlConverter
     {
         if (kind.isExternalObject())
         {
+            // EDT's CLI import takes any directory holding Configuration.xml for a configuration.
+            if (Files.exists(xmlDir.resolve(CONFIGURATION_XML)))
+            {
+                return "The file's name makes the root file of its dump " + CONFIGURATION_XML //$NON-NLS-1$
+                    + ", and EDT imports a dump holding that file as a configuration, not as an " //$NON-NLS-1$
+                    + kind.label() + ". Copy the file under another name and import the copy."; //$NON-NLS-1$
+            }
             try (Stream<Path> entries = Files.list(xmlDir))
             {
                 long roots = entries.filter(p -> Files.isRegularFile(p)
