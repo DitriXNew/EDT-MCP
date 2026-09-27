@@ -16,6 +16,7 @@ import static org.mockito.Mockito.when;
 import java.util.Collections;
 import java.util.List;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.InternalEObject;
@@ -258,6 +259,53 @@ public class RoleRightsOrphansTest
             assertEquals(1, scan.count(Verdict.UNDETERMINED));
             assertEquals(1, description.getRights().size());
         }
+    }
+
+    @Test
+    public void testAnEntryWithNoTargetIsRemovedAndTheRoleBecomesEditable()
+    {
+        // In an extension too: a null target secures nothing, whatever project it sits in.
+        for (boolean baseConfiguration : new boolean[] {true, false})
+        {
+            RoleDescription description = RightsFactory.eINSTANCE.createRoleDescription();
+            description.getRights().add(entry(null, false));
+            roles(role(description));
+            Scan report = RoleRightsOrphans.scan(tx, true, baseConfiguration, false);
+            assertEquals(1, report.count(Verdict.ABSENT));
+            assertEquals(RoleRightsOrphans.NO_TARGET, report.entries.get(0).target);
+            assertEquals(RoleRightsOrphans.NO_TARGET_REASON, report.entries.get(0).reason);
+            assertEquals(List.of(RoleRightsOrphans.NO_TARGET), RoleRightsWriter.unresolvedTargets(description));
+
+            roles(role(description));
+            Scan cleaned = RoleRightsOrphans.scan(tx, true, baseConfiguration, true);
+            assertEquals(1, cleaned.removed.size());
+            assertTrue(description.getRights().isEmpty());
+            assertTrue("the edit preflight must pass once the entry is gone", //$NON-NLS-1$
+                RoleRightsWriter.unresolvedTargets(description).isEmpty());
+        }
+    }
+
+    @Test
+    public void testAnEntryWithNoTargetIsKeptWhileTheModelIsIncomplete()
+    {
+        RoleDescription description = RightsFactory.eINSTANCE.createRoleDescription();
+        description.getRights().add(entry(null, false));
+        roles(role(description));
+        Scan scan = RoleRightsOrphans.scan(tx, false, true, true);
+        assertEquals(1, scan.count(Verdict.UNDETERMINED));
+        assertEquals(RoleRightsOrphans.NOT_READY_REASON, scan.entries.get(0).reason);
+        assertEquals(1, description.getRights().size());
+    }
+
+    @Test
+    public void testTheVerdictWaitsForTheModelGateNotForValidation()
+    {
+        // The gate is the write tools' model-readiness probe; its ignoring of validation is pinned
+        // in ProjectStateCheckerTest (modelDataIsComputedWhenItsSegmentsAre).
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("P"); //$NON-NLS-1$
+        assertEquals(ProjectStateChecker.modelBuildingErrorOrNull(project) == null,
+            RoleRightsOrphans.MODEL_READY.test(project));
     }
 
     // ==================== helpers ====================

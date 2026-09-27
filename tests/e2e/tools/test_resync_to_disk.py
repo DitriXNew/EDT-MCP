@@ -498,6 +498,8 @@ def test_orphaned_role_rights_are_reported_then_removed_on_request():
         raise AssertionError("the entry must name its target, be judged absent and carry its RLS: %r" % e)
     if sc.get("orphanRoleRightsFound") != 1 or sc.get("orphanRoleRightsRemovedCount") != 0:
         raise AssertionError("report mode must count 1 and remove 0: %r" % sc)
+    if sc.get("orphanRlsFieldsFound") != len(sc.get("orphanRlsFields") or []):
+        raise AssertionError("the RLS field total must match the (uncapped here) list: %r" % sc)
     if gone not in _read(rights):
         raise AssertionError("a report-only run must not rewrite Rights.rights")
 

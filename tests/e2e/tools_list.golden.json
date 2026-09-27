@@ -4137,6 +4137,9 @@
           },
           "type": "array"
         },
+        "orphanRlsFieldsFound": {
+          "type": "integer"
+        },
         "orphanRoleRights": {
           "items": {
             "type": "object"

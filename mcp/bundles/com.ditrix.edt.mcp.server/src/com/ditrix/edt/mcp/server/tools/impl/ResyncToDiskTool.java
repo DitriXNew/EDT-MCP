@@ -240,6 +240,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             .objectArrayProperty("orphanRoleRights", //$NON-NLS-1$
                 "Unresolved role-rights entries: [{role, target, verdict: absent|undetermined, rights, hasRls, " //$NON-NLS-1$
                     + "reason?}]") //$NON-NLS-1$
+            .integerProperty("orphanRlsFieldsFound", //$NON-NLS-1$
+                "RLS field references that do not resolve (the total; the list below is capped)") //$NON-NLS-1$
             .objectArrayProperty("orphanRlsFields", //$NON-NLS-1$
                 "RLS field references that do not resolve (report-only): [{role, target, right, field}]") //$NON-NLS-1$
             .stringProperty("orphanRoleRightsWarning", //$NON-NLS-1$
@@ -1403,6 +1405,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
                 orphans.scan.count(RoleRightsOrphans.Verdict.UNDETERMINED))
             .put("orphanRoleRightsRemovedCount", orphans.removed().size()) //$NON-NLS-1$
             .put("orphanRoleRights", limitObjects(entries)) //$NON-NLS-1$
+            .put("orphanRlsFieldsFound", fields.size()) //$NON-NLS-1$
             .put("orphanRlsFields", limitObjects(fields)); //$NON-NLS-1$
         if (orphans.warning != null)
         {
@@ -1416,15 +1419,14 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         JsonElement found = json.get("orphanRoleRightsFound"); //$NON-NLS-1$
         JsonElement undetermined = json.get("orphanRoleRightsUndetermined"); //$NON-NLS-1$
         JsonElement removed = json.get("orphanRoleRightsRemovedCount"); //$NON-NLS-1$
-        JsonElement fields = json.get("orphanRlsFields"); //$NON-NLS-1$
+        JsonElement fields = json.get("orphanRlsFieldsFound"); //$NON-NLS-1$
         JsonElement clean = json.get(KEY_CLEAN_ORPHAN_ROLE_RIGHTS);
-        if (found == null || undetermined == null || removed == null || fields == null || !fields.isJsonArray()
-            || clean == null)
+        if (found == null || undetermined == null || removed == null || fields == null || clean == null)
         {
             return ""; //$NON-NLS-1$
         }
         return orphanSummary(found.getAsInt(), undetermined.getAsInt(), removed.getAsInt(),
-            fields.getAsJsonArray().size(), clean.getAsBoolean());
+            fields.getAsInt(), clean.getAsBoolean());
     }
 
     /**

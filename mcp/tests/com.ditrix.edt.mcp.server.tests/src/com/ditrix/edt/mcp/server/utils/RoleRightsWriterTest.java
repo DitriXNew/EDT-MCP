@@ -1170,6 +1170,23 @@ public class RoleRightsWriterTest
         assertErrorMentions(error, "clean_project"); //$NON-NLS-1$
     }
 
+    @Test
+    public void testTheUnresolvedRefusalListsAtMostTwentyAndCountsTheRest()
+    {
+        List<String> targets = new java.util.ArrayList<>();
+        for (int i = 1; i <= 25; i++)
+        {
+            targets.add("Catalog.Gone" + i); //$NON-NLS-1$
+        }
+        String error = RoleRightsWriter.unresolvedTargetsRefusal("Sales", targets); //$NON-NLS-1$
+        assertErrorMentions(error, "has 25 rights entries"); //$NON-NLS-1$
+        assertErrorMentions(error, "Catalog.Gone20 and 5 more)"); //$NON-NLS-1$
+        assertFalse(error, error.contains("Catalog.Gone21")); //$NON-NLS-1$
+        String exact = RoleRightsWriter.unresolvedTargetsRefusal("Sales", targets.subList(0, 20)); //$NON-NLS-1$
+        assertErrorMentions(exact, "Catalog.Gone20)"); //$NON-NLS-1$
+        assertFalse(exact, exact.contains("more)")); //$NON-NLS-1$
+    }
+
     private static void assertErrorMentions(String errorJson, String needle)
     {
         assertTrue("expected an error", errorJson != null); //$NON-NLS-1$

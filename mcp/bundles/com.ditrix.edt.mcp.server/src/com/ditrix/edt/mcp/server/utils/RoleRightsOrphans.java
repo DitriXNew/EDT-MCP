@@ -11,6 +11,7 @@ import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Predicate;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.URI;
@@ -64,6 +65,21 @@ public final class RoleRightsOrphans
 
     /** The label of an entry that names no target at all. */
     public static final String NO_TARGET = "(no target)"; //$NON-NLS-1$
+
+    /** Why an entry with no target is removable: it secures nothing. */
+    static final String NO_TARGET_REASON = "the entry names no target"; //$NON-NLS-1$
+
+    /** Why nothing is judged absent while the model is incomplete. */
+    static final String NOT_READY_REASON =
+        "the project model is not fully loaded; retry when it is ready"; //$NON-NLS-1$
+
+    /**
+     * The readiness a verdict of absence waits for: the MODEL and its reference index (the gate the
+     * metadata write tools use), not the validation checks, which can run for hours on a large
+     * configuration without changing which objects exist.
+     */
+    static final Predicate<IProject> MODEL_READY =
+        project -> ProjectStateChecker.modelBuildingErrorOrNull(project) == null;
 
     /** The three verdicts on a rights entry's target. */
     public enum Verdict
@@ -213,7 +229,7 @@ public final class RoleRightsOrphans
     public static Sweep sweep(IProject project, IBmModel model, boolean remove)
     {
         Sweep sweep = new Sweep();
-        boolean ready = ProjectStateChecker.checkProjectState(project).isReady();
+        boolean ready = MODEL_READY.test(project);
         try
         {
             sweep.scan = BmTransactions.read(model, "FindOrphanRoleRights", //$NON-NLS-1$
@@ -290,17 +306,18 @@ public final class RoleRightsOrphans
                 continue;
             }
             scan.rolesScanned++;
-            String blocker = !modelReady ? "the project model is not fully loaded; retry when it is ready" //$NON-NLS-1$
+            String notReady = modelReady ? null : NOT_READY_REASON;
+            String blocker = notReady != null ? notReady
                 : !baseConfiguration ? "an extension project: a target outside it cannot be judged absent" //$NON-NLS-1$
                     : role.getObjectBelonging() != ObjectBelonging.NATIVE
                         ? "an adopted role: its rights belong to the base configuration" : null; //$NON-NLS-1$
-            scanRole(tx, role, (RoleDescription)role.getRights(), blocker, remove, scan);
+            scanRole(tx, role, (RoleDescription)role.getRights(), blocker, notReady, remove, scan);
         }
         return scan;
     }
 
-    private static void scanRole(IBmTransaction tx, Role role, RoleDescription description, String blocker,
-        boolean remove, Scan scan)
+    private static void scanRole(IBmTransaction tx, Role role, RoleDescription description, String blocker, // NOSONAR one cohesive per-role pass
+        String notReady, boolean remove, Scan scan)
     {
         String roleFqn = fqnOf(role);
         List<ObjectRights> toRemove = new ArrayList<>();
@@ -315,7 +332,11 @@ public final class RoleRightsOrphans
                 collectRlsFields(roleFqn, targetLabel, objectRights, scan);
                 continue;
             }
-            Judgement judgement = judge(tx, target, blocker);
+            // An entry with no target secures nothing, so it is removable wherever it sits - only an
+            // incomplete model (which may not have linked it yet) holds the verdict back.
+            Judgement judgement = target != null ? judge(tx, target, blocker)
+                : notReady != null ? Judgement.undetermined(notReady)
+                    : new Judgement(Verdict.ABSENT, NO_TARGET_REASON);
             if (judgement.verdict == Verdict.PRESENT)
             {
                 collectRlsFields(roleFqn, targetLabel, objectRights, scan);

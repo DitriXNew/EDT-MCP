@@ -1006,6 +1006,9 @@ public final class RoleRightsWriter
         return result;
     }
 
+    /** How many unresolved targets the edit refusal lists before summarising the rest. */
+    static final int MAX_LISTED_UNRESOLVED = 20;
+
     /**
      * The refusal for a rights edit on a role that holds unresolved entries. Pure.
      *
@@ -1015,9 +1018,12 @@ public final class RoleRightsWriter
      */
     static String unresolvedTargetsRefusal(String roleName, List<String> unresolved)
     {
+        int shown = Math.min(unresolved.size(), MAX_LISTED_UNRESOLVED);
+        String listed = String.join(", ", unresolved.subList(0, shown)) //$NON-NLS-1$
+            + (unresolved.size() > shown ? " and " + (unresolved.size() - shown) + " more" : ""); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         return ToolResult.error("Role " + roleName + " has " + unresolved.size() //$NON-NLS-1$ //$NON-NLS-2$
             + " rights entr" + (unresolved.size() == 1 ? "y" : "ies") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            + " whose object no longer resolves (" + String.join(", ", unresolved) //$NON-NLS-1$ //$NON-NLS-2$
+            + " whose object no longer resolves (" + listed //$NON-NLS-1$
             + "); EDT's rights tasks cannot edit the role while they remain, so nothing was written. " //$NON-NLS-1$
             + "Remove them with resync_to_disk(cleanOrphanRoleRights=true) - it reports first - then " //$NON-NLS-1$
             + "retry; an entry it reports as undetermined is re-linked by clean_project.").toJson(); //$NON-NLS-1$
