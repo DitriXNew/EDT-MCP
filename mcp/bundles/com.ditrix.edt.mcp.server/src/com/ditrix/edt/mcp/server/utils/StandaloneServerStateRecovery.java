@@ -494,7 +494,7 @@ public final class StandaloneServerStateRecovery
         checkGuard(guard);
         try
         {
-            return update.get();
+            return enter(update, guard);
         }
         catch (RuntimeException e)
         {
@@ -513,7 +513,7 @@ public final class StandaloneServerStateRecovery
             checkGuard(guard);
             try
             {
-                return update.get();
+                return enter(update, guard);
             }
             catch (RuntimeException retry)
             {
@@ -525,11 +525,30 @@ public final class StandaloneServerStateRecovery
 
     private static void checkGuard(AttemptGuard guard)
     {
-        String refusal = guard == null ? null : guard.refusalOrNull();
+        String refusal;
+        try
+        {
+            refusal = guard == null ? null : guard.refusalOrNull();
+        }
+        catch (RuntimeException e)
+        {
+            // A check that could not run proves nothing; the attempt must not proceed.
+            throw new AttemptRefusedException("The pre-update check failed: " //$NON-NLS-1$
+                + PlatformFailures.describe(e) + ". Nothing was updated."); //$NON-NLS-1$
+        }
         if (refusal != null)
         {
             throw new AttemptRefusedException(refusal);
         }
+    }
+
+    private static ApplicationUpdateState enter(Supplier<ApplicationUpdateState> update, AttemptGuard guard)
+    {
+        if (guard != null)
+        {
+            guard.updateEntered();
+        }
+        return update.get();
     }
 
     /** A check run immediately before each update attempt; a non-null answer refuses the attempt. */
@@ -540,6 +559,11 @@ public final class StandaloneServerStateRecovery
          * @return the refusal text, or {@code null} when the attempt may run
          */
         String refusalOrNull();
+
+        /** Called immediately before the platform update is entered (after a passing check). */
+        default void updateEntered()
+        {
+        }
     }
 
     /** Thrown when an {@link AttemptGuard} refuses an update attempt; nothing was attempted. */

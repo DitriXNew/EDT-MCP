@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -35,7 +37,7 @@ import com.e1c.g5.dt.applications.IApplication;
  * branch for a Git-shared project, the default context otherwise.
  *
  * <p>The target counts as bound when its UUID is bound, or when it and a bound FILE infobase
- * provably use the same database directory (a standalone server registered over an existing file
+ * use the same existing database directory (file-system identity) (a standalone server registered over an existing file
  * infobase carries its own UUID). Anything that cannot be proven the same database is refused.
  */
 public final class BranchInfobaseBinding
@@ -56,15 +58,35 @@ public final class BranchInfobaseBinding
      */
     public static String refusalOrNull(IProject project, IApplication application, String applicationId)
     {
-        IInfobaseAssociationManager assocManager = Activator.getDefault().getInfobaseAssociationManager();
+        return refusalOrNull(Activator.getDefault().getInfobaseAssociationManager(), project, application,
+            applicationId);
+    }
+
+    /** {@link #refusalOrNull(IProject, IApplication, String)} with the manager supplied (unit-testable). */
+    static String refusalOrNull(IInfobaseAssociationManager assocManager, IProject project,
+        IApplication application, String applicationId)
+    {
         if (assocManager == null)
         {
             return unreadable(project.getName(), "IInfobaseAssociationManager service is not available"); //$NON-NLS-1$
         }
-        Optional<IInfobaseAssociation> association;
         try
         {
-            association = assocManager.getAssociation(project);
+            Optional<IInfobaseAssociation> association = assocManager.getAssociation(project);
+            Collection<InfobaseReference> bound =
+                association.map(IInfobaseAssociation::getInfobases).orElse(null);
+            if (bound == null || bound.isEmpty())
+            {
+                return null;
+            }
+            InfobaseReference target = InfobaseAccessSupport.resolveInfobaseReference(application);
+            Path targetDir = fileDirOf(target);
+            if (targetDir == null)
+            {
+                targetDir = servedDatabaseDirOf(application);
+            }
+            return decide(association, target, targetDir, project.getName(), application.getName(),
+                applicationId);
         }
         catch (RuntimeException e)
         {
@@ -72,20 +94,6 @@ public final class BranchInfobaseBinding
                 + project.getName() + "' failed", e); //$NON-NLS-1$
             return unreadable(project.getName(), String.valueOf(e.getMessage()));
         }
-        Collection<InfobaseReference> bound =
-            association.map(IInfobaseAssociation::getInfobases).orElse(null);
-        if (bound == null || bound.isEmpty())
-        {
-            return null;
-        }
-        InfobaseReference target = InfobaseAccessSupport.resolveInfobaseReference(application);
-        Path targetDir = fileDirOf(target);
-        if (targetDir == null)
-        {
-            targetDir = servedDatabaseDirOf(application);
-        }
-        return decide(association, target, targetDir, project.getName(), application.getName(),
-            applicationId);
     }
 
     /**
@@ -107,7 +115,6 @@ public final class BranchInfobaseBinding
         List<String> boundNames = new ArrayList<>();
         boolean targetBound = false;
         UUID targetUuid = target == null ? null : target.getUuid();
-        Path normalizedTargetDir = targetDir == null ? null : targetDir.toAbsolutePath().normalize();
         if (bound != null)
         {
             for (InfobaseReference ib : bound)
@@ -121,14 +128,9 @@ public final class BranchInfobaseBinding
                 {
                     targetBound = true;
                 }
-                else if (normalizedTargetDir != null)
+                else if (sameExistingDirectory(targetDir, fileDirOf(ib)))
                 {
-                    // Path equality follows the file system's rules (case-insensitive on Windows).
-                    Path boundDir = fileDirOf(ib);
-                    if (boundDir != null && normalizedTargetDir.equals(boundDir.toAbsolutePath().normalize()))
-                    {
-                        targetBound = true;
-                    }
+                    targetBound = true;
                 }
             }
         }
@@ -146,6 +148,26 @@ public final class BranchInfobaseBinding
             + "database. Nothing was updated. Update an application of a bound infobase instead " //$NON-NLS-1$
             + "(get_applications lists them), bind this infobase to the current branch in EDT, or " //$NON-NLS-1$
             + "re-call with ignoreBranchBinding=true if this target is intended."; //$NON-NLS-1$
+    }
+
+    /**
+     * File-system identity of two EXISTING directories ({@link Files#isSameFile}); a missing path or
+     * an I/O failure is "not proven", never a match.
+     */
+    static boolean sameExistingDirectory(Path a, Path b)
+    {
+        if (a == null || b == null || !Files.isDirectory(a) || !Files.isDirectory(b))
+        {
+            return false;
+        }
+        try
+        {
+            return Files.isSameFile(a, b);
+        }
+        catch (IOException | RuntimeException e) // NOSONAR not provable - no match
+        {
+            return false;
+        }
     }
 
     /** The directory of a FILE infobase reference, or {@code null} for any other or unreadable one. */

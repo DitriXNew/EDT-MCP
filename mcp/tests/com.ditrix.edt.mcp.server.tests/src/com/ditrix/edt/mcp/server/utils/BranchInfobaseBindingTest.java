@@ -6,27 +6,28 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
-import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assume.assumeTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociation;
+import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager;
 import com._1c.g5.v8.dt.platform.services.model.FileConnectionString;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
+import com.e1c.g5.dt.applications.IApplication;
 
 /**
  * The branch-binding decision of {@code update_database} (#459): a target is refused only when
@@ -105,8 +106,6 @@ public class BranchInfobaseBindingTest
         assertTrue(refusal, refusal.contains("could not be resolved")); //$NON-NLS-1$
     }
 
-    private static final Path IB_DIR = Paths.get(System.getProperty("java.io.tmpdir"), "ib459", "BaseA"); //$NON-NLS-1$ //$NON-NLS-2$
-
     private static InfobaseReference fileRef(String name, UUID uuid, String dir)
     {
         InfobaseReference ref = ref(name, uuid);
@@ -116,55 +115,130 @@ public class BranchInfobaseBindingTest
         return ref;
     }
 
+    private static String decideByDirectory(String boundDir, Path targetDir)
+    {
+        return BranchInfobaseBinding.decide(bound(fileRef("BaseA", UUID.randomUUID(), boundDir)), //$NON-NLS-1$
+            ref("Server view", UUID.randomUUID()), targetDir, "P", "App", "ServerApplication.S"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
     @Test
-    public void testServerOverTheSameFileDirectoryUnderAnotherUuidPasses()
+    public void testServerOverTheSameExistingDirectoryUnderAnotherUuidPasses() throws Exception
     {
         // A standalone server registered over an existing file infobase gets a fresh UUID.
-        assertNull(BranchInfobaseBinding.decide(bound(fileRef("BaseA", UUID.randomUUID(), IB_DIR.toString())), //$NON-NLS-1$
-            ref("Server view", UUID.randomUUID()), IB_DIR, "P", "App", "ServerApplication.S")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        Path dir = Files.createTempDirectory("ib459"); //$NON-NLS-1$
+        try
+        {
+            assertNull(decideByDirectory(dir.toString(), dir));
+        }
+        finally
+        {
+            Files.deleteIfExists(dir);
+        }
     }
 
     @Test
-    public void testDirectoryIdentityIgnoresTrailingSeparatorAndDotSegments()
+    public void testSameDirectorySpelledDifferentlyPassesByFileSystemIdentity() throws Exception
     {
-        String boundDir = IB_DIR.toString() + File.separator;
-        Path target = IB_DIR.resolve("..").resolve(IB_DIR.getFileName()); //$NON-NLS-1$
-        assertNull(BranchInfobaseBinding.decide(bound(fileRef("BaseA", UUID.randomUUID(), boundDir)), //$NON-NLS-1$
-            ref("Server view", UUID.randomUUID()), target, "P", "App", "ServerApplication.S")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        Path parent = Files.createTempDirectory("ib459"); //$NON-NLS-1$
+        Path dir = Files.createDirectory(parent.resolve("BaseA")); //$NON-NLS-1$
+        try
+        {
+            String trailing = dir.toString() + File.separator;
+            Path viaDotDot = dir.resolve("..").resolve("BaseA"); //$NON-NLS-1$ //$NON-NLS-2$
+            assertNull(decideByDirectory(trailing, viaDotDot));
+        }
+        finally
+        {
+            Files.deleteIfExists(dir);
+            Files.deleteIfExists(parent);
+        }
     }
 
     @Test
-    public void testDirectoryIdentityIsCaseInsensitiveOnWindowsOnly()
+    public void testTwoDistinctExistingDirectoriesAreRefused() throws Exception
     {
-        String upper = IB_DIR.toString().toUpperCase(java.util.Locale.ROOT);
-        String refusal = BranchInfobaseBinding.decide(bound(fileRef("BaseA", UUID.randomUUID(), upper)), //$NON-NLS-1$
-            ref("Server view", UUID.randomUUID()), IB_DIR, "P", "App", "ServerApplication.S"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        boolean windows = File.separatorChar != '/';
-        assumeTrue("case differs only where the path has letters", !upper.equals(IB_DIR.toString())); //$NON-NLS-1$
-        assertEquals("the JDK's own path equality decides: case-insensitive on Windows only", //$NON-NLS-1$
-            windows, refusal == null);
+        Path a = Files.createTempDirectory("ib459a"); //$NON-NLS-1$
+        Path b = Files.createTempDirectory("ib459b"); //$NON-NLS-1$
+        try
+        {
+            assertNotNull(decideByDirectory(a.toString(), b));
+        }
+        finally
+        {
+            Files.deleteIfExists(a);
+            Files.deleteIfExists(b);
+        }
     }
 
     @Test
-    public void testAnotherDirectoryUnderAnotherUuidIsRefused()
+    public void testMissingDirectoryIsNotProvenEvenWhenTheSpellingIsEqual() throws Exception
     {
-        assertNotNull(BranchInfobaseBinding.decide(bound(fileRef("BaseB", UUID.randomUUID(), //$NON-NLS-1$
-            IB_DIR.resolveSibling("BaseB").toString())), ref("Server view", UUID.randomUUID()), IB_DIR, //$NON-NLS-1$ //$NON-NLS-2$
-            "P", "App", "ServerApplication.S")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        Path parent = Files.createTempDirectory("ib459"); //$NON-NLS-1$
+        Path missing = parent.resolve("gone"); //$NON-NLS-1$
+        try
+        {
+            assertNotNull(decideByDirectory(missing.toString(), missing));
+        }
+        finally
+        {
+            Files.deleteIfExists(parent);
+        }
     }
 
     @Test
-    public void testUnknownTargetDirectoryUnderAnotherUuidIsRefused()
+    public void testUnknownTargetDirectoryUnderAnotherUuidIsRefused() throws Exception
     {
         // No provable identity: an RDBMS-backed server or an unreadable configuration.
-        assertNotNull(BranchInfobaseBinding.decide(bound(fileRef("BaseA", UUID.randomUUID(), IB_DIR.toString())), //$NON-NLS-1$
-            ref("Server view", UUID.randomUUID()), null, "P", "App", "ServerApplication.S")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        Path dir = Files.createTempDirectory("ib459"); //$NON-NLS-1$
+        try
+        {
+            assertNotNull(decideByDirectory(dir.toString(), null));
+        }
+        finally
+        {
+            Files.deleteIfExists(dir);
+        }
     }
 
     @Test
-    public void testNonFileBoundReferenceNeverMatchesByDirectory()
+    public void testNonFileBoundReferenceNeverMatchesByDirectory() throws Exception
     {
-        assertNotNull(BranchInfobaseBinding.decide(bound(ref("Web", UUID.randomUUID())), //$NON-NLS-1$
-            ref("Server view", UUID.randomUUID()), IB_DIR, "P", "App", "ServerApplication.S")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        Path dir = Files.createTempDirectory("ib459"); //$NON-NLS-1$
+        try
+        {
+            assertNotNull(BranchInfobaseBinding.decide(bound(ref("Web", UUID.randomUUID())), //$NON-NLS-1$
+                ref("Server view", UUID.randomUUID()), dir, "P", "App", "ServerApplication.S")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        }
+        finally
+        {
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    public void testAThrowingBindingReadBecomesTheUnreadableRefusal()
+    {
+        IInfobaseAssociation association = mock(IInfobaseAssociation.class);
+        when(association.getInfobases()).thenThrow(new IllegalStateException("store closed")); //$NON-NLS-1$
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("Proj"); //$NON-NLS-1$
+        when(manager.getAssociation(project)).thenReturn(Optional.of(association));
+        String refusal = BranchInfobaseBinding.refusalOrNull(manager, project, mock(IApplication.class), "id"); //$NON-NLS-1$
+        assertNotNull(refusal);
+        assertTrue(refusal, refusal.contains("could not be read (store closed)")); //$NON-NLS-1$
+        assertTrue(refusal, refusal.contains("ignoreBranchBinding=true")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAThrowingAssociationLookupBecomesTheUnreadableRefusal()
+    {
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("Proj"); //$NON-NLS-1$
+        when(manager.getAssociation(project)).thenThrow(new IllegalStateException("no context")); //$NON-NLS-1$
+        String refusal = BranchInfobaseBinding.refusalOrNull(manager, project, mock(IApplication.class), "id"); //$NON-NLS-1$
+        assertNotNull(refusal);
+        assertTrue(refusal, refusal.contains("could not be read (no context)")); //$NON-NLS-1$
     }
 }

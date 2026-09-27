@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
@@ -943,14 +944,28 @@ public class UpdateDatabaseTool implements IMcpTool
                             ? portPolicy : null;
                     boolean autoConfirmerArmed = LaunchUpdateDialogAutoConfirmer.arm(false, false,
                         true, externalChanges, infobaseName, armedPortPolicy, armedServerName);
+                    // The branch may have been switched while consent, the lock, the session check
+                    // or a recovery stop waited: re-checked before EVERY update attempt. The guard
+                    // also records whether the platform update was actually entered.
+                    AtomicBoolean platformUpdateEntered = new AtomicBoolean();
+                    StandaloneServerStateRecovery.AttemptGuard bindingGuard =
+                        new StandaloneServerStateRecovery.AttemptGuard()
+                        {
+                            @Override
+                            public String refusalOrNull()
+                            {
+                                return ignoreBranchBinding ? null
+                                    : BranchInfobaseBinding.refusalOrNull(project, application, applicationId);
+                            }
+
+                            @Override
+                            public void updateEntered()
+                            {
+                                platformUpdateEntered.set(true);
+                            }
+                        };
                     try
                     {
-                        updateApiEntered = true;
-                        // The branch may have been switched while consent, the lock, the session
-                        // check or a recovery stop waited: re-checked before EVERY update attempt.
-                        StandaloneServerStateRecovery.AttemptGuard bindingGuard = ignoreBranchBinding
-                            ? null
-                            : () -> BranchInfobaseBinding.refusalOrNull(project, application, applicationId);
                         stateAfter = StandaloneServerStateRecovery.updateWithRecovery(appManager,
                             project, application, applicationId, updateType, context, monitor,
                             bindingGuard);
@@ -961,8 +976,7 @@ public class UpdateDatabaseTool implements IMcpTool
                         // The binding guard refused an attempt: nothing was published.
                         if (findInChain(ex, StandaloneServerStateRecovery.AttemptRefusedException.class::isInstance) != null)
                         {
-                            return ToolResult.error(ex.getMessage())
-                                .put(KEY_TERMINATED_CLIENT, terminatedClient).toJson();
+                            return bindingRefusalResult(ex.getMessage(), terminatedClient);
                         }
                         // A standalone-server target publishes THROUGH its server, so the update
                         // starts it first; when its ports are busy EDT raises the port-conflict
@@ -997,6 +1011,7 @@ public class UpdateDatabaseTool implements IMcpTool
                         // exception: once "Find free port" is pressed the server configuration is
                         // rewritten, and a RuntimeException on the way out must not swallow that.
                         portsReassigned = watch.portsReassigned();
+                        updateApiEntered = platformUpdateEntered.get();
                         if (autoConfirmerArmed)
                         {
                             LaunchUpdateDialogAutoConfirmer.disarm(false, false, true, externalChanges,
@@ -1067,6 +1082,20 @@ public class UpdateDatabaseTool implements IMcpTool
             return appendAccessSettingsDialogFailure(marked, accessDialogsBefore,
                 InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
         }
+    }
+
+    /**
+     * The refusal of a pre-update check (the branch binding): nothing was published, so it is a plain
+     * error; {@code terminatedClient} is reported only when a client was terminated, like every other path.
+     */
+    static String bindingRefusalResult(String message, boolean terminatedClient)
+    {
+        ToolResult result = ToolResult.error(message);
+        if (terminatedClient)
+        {
+            result.put(KEY_TERMINATED_CLIENT, true);
+        }
+        return result.toJson();
     }
 
     static String appendAccessSettingsDialogFailure(String result, long before, long after)

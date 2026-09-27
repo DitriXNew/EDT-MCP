@@ -198,6 +198,25 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
+    public void testBindingRefusalWithoutTerminationOmitsTerminatedClient()
+    {
+        String json = UpdateDatabaseTool.bindingRefusalResult("Refusing to update: x", false); //$NON-NLS-1$
+        assertTrue(json, json.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue(json, json.contains("Refusing to update: x")); //$NON-NLS-1$
+        assertFalse("absent unless a client was terminated, like every other path", //$NON-NLS-1$
+            json.contains("terminatedClient")); //$NON-NLS-1$
+        assertFalse("a pre-update refusal is not an unknown mutation outcome", //$NON-NLS-1$
+            json.contains("mutationOutcome")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testBindingRefusalAfterTerminationReportsIt()
+    {
+        String json = UpdateDatabaseTool.bindingRefusalResult("Refusing to update: x", true); //$NON-NLS-1$
+        assertTrue(json, json.contains("\"terminatedClient\":true")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testSchemaDeclaresTheStandaloneServerPortConflictPolicy()
     {
         // Without it the port-conflict refusal names a knob the caller cannot reach (#434).

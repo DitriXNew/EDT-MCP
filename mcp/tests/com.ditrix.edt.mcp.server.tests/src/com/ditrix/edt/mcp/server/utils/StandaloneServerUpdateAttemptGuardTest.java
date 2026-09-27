@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.util.concurrent.atomic.AtomicInteger;
@@ -99,5 +100,94 @@ public class StandaloneServerUpdateAttemptGuardTest
         ApplicationUpdateState state = StandaloneServerStateRecovery.attemptUpdates(
             () -> ApplicationUpdateState.UPDATED, null, refusal -> Recovery.stopped(), "app"); //$NON-NLS-1$
         assertSame(ApplicationUpdateState.UPDATED, state);
+    }
+
+    private static final class RecordingGuard implements StandaloneServerStateRecovery.AttemptGuard
+    {
+        final AtomicInteger entered = new AtomicInteger();
+        final java.util.function.IntFunction<String> answer;
+        final AtomicInteger checks = new AtomicInteger();
+
+        RecordingGuard(java.util.function.IntFunction<String> answer)
+        {
+            this.answer = answer;
+        }
+
+        @Override
+        public String refusalOrNull()
+        {
+            return answer.apply(checks.incrementAndGet());
+        }
+
+        @Override
+        public void updateEntered()
+        {
+            entered.incrementAndGet();
+        }
+    }
+
+    @Test
+    public void testUpdateEnteredIsReportedOnlyForAttemptsThatReachTheUpdate()
+    {
+        RecordingGuard guard = new RecordingGuard(n -> n == 1 ? null : "branch switched"); //$NON-NLS-1$
+        AtomicInteger updates = new AtomicInteger();
+        try
+        {
+            StandaloneServerStateRecovery.attemptUpdates(() -> {
+                updates.incrementAndGet();
+                throw new IllegalStateException(STALE);
+            }, guard, refusal -> Recovery.stopped(), "app"); //$NON-NLS-1$
+            fail("the retry must be refused"); //$NON-NLS-1$
+        }
+        catch (AttemptRefusedException expected)
+        {
+            // refused before the second attempt
+        }
+        assertEquals(1, updates.get());
+        assertEquals("only the attempt that ran is reported as entered", 1, guard.entered.get()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRefusalBeforeTheFirstAttemptReportsNothingEntered()
+    {
+        RecordingGuard guard = new RecordingGuard(n -> "refused"); //$NON-NLS-1$
+        try
+        {
+            StandaloneServerStateRecovery.attemptUpdates(() -> ApplicationUpdateState.UPDATED, guard,
+                refusal -> Recovery.stopped(), "app"); //$NON-NLS-1$
+            fail("must refuse"); //$NON-NLS-1$
+        }
+        catch (AttemptRefusedException expected)
+        {
+            // refused
+        }
+        assertEquals(0, guard.entered.get());
+    }
+
+    @Test
+    public void testAThrowingGuardOnTheRetryIsARefusalNotAnEscapingFailure()
+    {
+        RecordingGuard guard = new RecordingGuard(n -> {
+            if (n == 2)
+            {
+                throw new IllegalStateException("store closed"); //$NON-NLS-1$
+            }
+            return null;
+        });
+        AtomicInteger updates = new AtomicInteger();
+        try
+        {
+            StandaloneServerStateRecovery.attemptUpdates(() -> {
+                updates.incrementAndGet();
+                throw new IllegalStateException(STALE);
+            }, guard, refusal -> Recovery.stopped(), "app"); //$NON-NLS-1$
+            fail("a failing check must refuse"); //$NON-NLS-1$
+        }
+        catch (AttemptRefusedException e)
+        {
+            assertTrue(e.getMessage(), e.getMessage().contains("store closed")); //$NON-NLS-1$
+            assertTrue(e.getMessage(), e.getMessage().contains("Nothing was updated")); //$NON-NLS-1$
+        }
+        assertEquals(1, updates.get());
     }
 }
