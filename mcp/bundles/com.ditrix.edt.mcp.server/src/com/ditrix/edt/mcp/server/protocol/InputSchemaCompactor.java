@@ -209,9 +209,11 @@ public final class InputSchemaCompactor
                 "restartIfRunning")); //$NON-NLS-1$
         keep.put("debug_yaxunit_tests", //$NON-NLS-1$
             asSet("updateBeforeLaunch", KEY_EXTERNAL_CHANGES, KEY_PORT_CONFLICT)); //$NON-NLS-1$
+        // ignoreBranchBinding=true writes an infobase the current branch does not bind; the default
+        // (false) lives only in the prose.
         keep.put("update_database", //$NON-NLS-1$
             asSet("terminateRunningClients", "checkInfobaseSessions", KEY_EXTERNAL_CHANGES, //$NON-NLS-1$ //$NON-NLS-2$
-                KEY_PORT_CONFLICT));
+                KEY_PORT_CONFLICT, "ignoreBranchBinding")); //$NON-NLS-1$
         // Defaults and conditional selectors cannot be expressed by this schema builder. Keeping
         // them prevents a compacted terminate call from losing its target and confirmation rules.
         keep.put("infobase_sessions", //$NON-NLS-1$

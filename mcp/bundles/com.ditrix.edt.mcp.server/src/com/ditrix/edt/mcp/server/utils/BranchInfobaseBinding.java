@@ -15,6 +15,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
 
@@ -42,6 +43,9 @@ import com.e1c.g5.dt.applications.IApplication;
  */
 public final class BranchInfobaseBinding
 {
+    /** Deadline for one directory-identity probe. */
+    static final long PROBE_TIMEOUT_MS = 10_000L;
+
     private BranchInfobaseBinding()
     {
     }
@@ -111,9 +115,19 @@ public final class BranchInfobaseBinding
     static String decide(Optional<IInfobaseAssociation> association, InfobaseReference target,
         Path targetDir, String projectName, String applicationName, String applicationId)
     {
+        return decide(association, target, targetDir, projectName, applicationName, applicationId,
+            BranchInfobaseBinding::sameExistingDirectory, PROBE_TIMEOUT_MS);
+    }
+
+    /** {@link #decide} with the directory probe and its deadline supplied (unit-testable). */
+    static String decide(Optional<IInfobaseAssociation> association, InfobaseReference target,
+        Path targetDir, String projectName, String applicationName, String applicationId,
+        DirectoryProbe probe, long probeTimeoutMs)
+    {
         Collection<InfobaseReference> bound = association.map(IInfobaseAssociation::getInfobases).orElse(null);
         List<String> boundNames = new ArrayList<>();
         boolean targetBound = false;
+        String unansweredProbe = null;
         UUID targetUuid = target == null ? null : target.getUuid();
         if (bound != null)
         {
@@ -128,15 +142,34 @@ public final class BranchInfobaseBinding
                 {
                     targetBound = true;
                 }
-                else if (sameExistingDirectory(targetDir, fileDirOf(ib)))
+                else if (targetDir != null && !targetBound)
                 {
-                    targetBound = true;
+                    Path boundDir = fileDirOf(ib);
+                    Boolean same = boundDir == null ? Boolean.FALSE
+                        : probeBounded(probe, targetDir, boundDir, probeTimeoutMs);
+                    if (same == null)
+                    {
+                        unansweredProbe = "'" + targetDir + "' and bound infobase '" + ib.getName() //$NON-NLS-1$ //$NON-NLS-2$
+                            + "' ('" + boundDir + "')"; //$NON-NLS-1$ //$NON-NLS-2$
+                    }
+                    else if (same.booleanValue())
+                    {
+                        targetBound = true;
+                    }
                 }
             }
         }
         if (boundNames.isEmpty() || targetBound)
         {
             return null;
+        }
+        if (unansweredProbe != null)
+        {
+            return "Refusing to update: the file system did not answer within " + probeTimeoutMs //$NON-NLS-1$
+                + " ms whether " + unansweredProbe + " are the same database directory, so it is " //$NON-NLS-1$ //$NON-NLS-2$
+                + "unknown whether the target belongs to the current Git branch of project '" //$NON-NLS-1$
+                + projectName + "'. Nothing was updated. Retry once the path is reachable, or re-call " //$NON-NLS-1$
+                + "with ignoreBranchBinding=true if this target is intended."; //$NON-NLS-1$
         }
         String targetDescription = target == null
             ? "an infobase that could not be resolved" //$NON-NLS-1$
@@ -151,23 +184,41 @@ public final class BranchInfobaseBinding
     }
 
     /**
-     * File-system identity of two EXISTING directories ({@link Files#isSameFile}); a missing path or
-     * an I/O failure is "not proven", never a match.
+     * File-system identity of two EXISTING directories ({@link Files#isSameFile}); a missing path is
+     * "not proven", never a match. Unbounded: call it through {@link #probeBounded}.
      */
-    static boolean sameExistingDirectory(Path a, Path b)
+    static boolean sameExistingDirectory(Path a, Path b) throws IOException
     {
         if (a == null || b == null || !Files.isDirectory(a) || !Files.isDirectory(b))
         {
             return false;
         }
-        try
+        return Files.isSameFile(a, b);
+    }
+
+    /**
+     * Runs a directory probe under a deadline: a network path can hang the file system call.
+     *
+     * @return {@code TRUE}/{@code FALSE} when the probe answered ({@code FALSE} also when it
+     *         failed - not proven), {@code null} when it did not answer in time
+     */
+    static Boolean probeBounded(DirectoryProbe probe, Path a, Path b, long timeoutMs)
+    {
+        AtomicReference<Boolean> answer = new AtomicReference<>();
+        BoundedJob.Result result = BoundedJob.run("update_database: compare database directories", //$NON-NLS-1$
+            timeoutMs, monitor -> answer.set(Boolean.valueOf(probe.same(a, b))));
+        if (result.getOutcome() != BoundedJob.Outcome.COMPLETED)
         {
-            return Files.isSameFile(a, b);
+            return null;
         }
-        catch (IOException | RuntimeException e) // NOSONAR not provable - no match
-        {
-            return false;
-        }
+        return result.getFailure() == null && Boolean.TRUE.equals(answer.get()) ? Boolean.TRUE : Boolean.FALSE;
+    }
+
+    /** File-system identity of two directories; may block on an unreachable path. */
+    @FunctionalInterface
+    interface DirectoryProbe
+    {
+        boolean same(Path a, Path b) throws IOException;
     }
 
     /** The directory of a FILE infobase reference, or {@code null} for any other or unreadable one. */

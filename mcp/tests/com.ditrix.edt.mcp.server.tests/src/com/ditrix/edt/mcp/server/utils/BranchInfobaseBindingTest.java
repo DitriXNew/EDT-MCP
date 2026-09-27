@@ -15,10 +15,13 @@ import static org.mockito.Mockito.when;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.eclipse.core.resources.IProject;
 import org.junit.Test;
@@ -240,5 +243,52 @@ public class BranchInfobaseBindingTest
         String refusal = BranchInfobaseBinding.refusalOrNull(manager, project, mock(IApplication.class), "id"); //$NON-NLS-1$
         assertNotNull(refusal);
         assertTrue(refusal, refusal.contains("could not be read (no context)")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAProbeThatDoesNotAnswerInTimeRefusesNamingThePaths() throws Exception
+    {
+        Path target = Paths.get("X:", "unreachable", "server-db"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        Path bound = Paths.get("X:", "unreachable", "BaseA"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        CountDownLatch release = new CountDownLatch(1);
+        try
+        {
+            String refusal = BranchInfobaseBinding.decide(bound(fileRef("BaseA", UUID.randomUUID(), bound.toString())), //$NON-NLS-1$
+                ref("Server view", UUID.randomUUID()), target, "Proj", "App", "ServerApplication.S", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                (a, b) -> {
+                    try
+                    {
+                        return release.await(30, TimeUnit.SECONDS);
+                    }
+                    catch (InterruptedException e)
+                    {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                }, 200L);
+            assertNotNull("an unanswered probe is not a match", refusal); //$NON-NLS-1$
+            assertTrue(refusal, refusal.contains("did not answer within 200 ms")); //$NON-NLS-1$
+            assertTrue(refusal, refusal.contains(target.toString()));
+            assertTrue(refusal, refusal.contains(bound.toString()));
+            assertTrue(refusal, refusal.contains("Nothing was updated")); //$NON-NLS-1$
+            assertTrue(refusal, refusal.contains("ignoreBranchBinding=true")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+        }
+    }
+
+    @Test
+    public void testAProbeThatFailsIsNotAMatch()
+    {
+        Path dir = Paths.get("X:", "db"); //$NON-NLS-1$ //$NON-NLS-2$
+        String refusal = BranchInfobaseBinding.decide(bound(fileRef("BaseA", UUID.randomUUID(), dir.toString())), //$NON-NLS-1$
+            ref("Server view", UUID.randomUUID()), dir, "Proj", "App", "ServerApplication.S", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            (a, b) -> {
+                throw new java.io.IOException("access denied"); //$NON-NLS-1$
+            }, 5_000L);
+        assertNotNull(refusal);
+        assertTrue(refusal, refusal.contains("not bound to the current Git branch")); //$NON-NLS-1$
     }
 }
