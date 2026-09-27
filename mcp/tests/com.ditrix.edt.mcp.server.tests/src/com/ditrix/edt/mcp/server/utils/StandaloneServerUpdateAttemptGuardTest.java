@@ -10,14 +10,19 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockingDetails;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery.AttemptRefusedException;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerStateRecovery.Recovery;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
+import com.e1c.g5.dt.applications.IApplication;
+import com.e1c.g5.dt.applications.IApplicationManager;
 
 /**
  * The pre-attempt guard of {@code StandaloneServerStateRecovery.updateWithRecovery} (#459): it runs
@@ -189,5 +194,24 @@ public class StandaloneServerUpdateAttemptGuardTest
             assertTrue(e.getMessage(), e.getMessage().contains("Nothing was updated")); //$NON-NLS-1$
         }
         assertEquals(1, updates.get());
+    }
+
+    @Test
+    public void testGuardRefusalComesBeforeTheServerPreflight()
+    {
+        IApplicationManager manager = mock(IApplicationManager.class);
+        try
+        {
+            StandaloneServerStateRecovery.updateWithRecovery(manager, mock(IProject.class),
+                mock(IApplication.class), "ServerApplication.S", null, null, null, //$NON-NLS-1$
+                () -> "refused"); //$NON-NLS-1$
+            fail("a guard refusal must throw"); //$NON-NLS-1$
+        }
+        catch (AttemptRefusedException e)
+        {
+            assertEquals("refused", e.getMessage()); //$NON-NLS-1$
+        }
+        // No server state read, stop, restart or update for a refused target.
+        assertTrue(mockingDetails(manager).getInvocations().isEmpty());
     }
 }
