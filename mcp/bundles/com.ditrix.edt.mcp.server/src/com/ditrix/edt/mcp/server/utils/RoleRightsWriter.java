@@ -325,6 +325,21 @@ public final class RoleRightsWriter
             // resolution refusal can leave the role exactly as the call found it. Template resolution
             // genuinely needs the description and therefore remains after the bootstrap.
             List<RightPlan> rightsPlan = planRights(ctx, rights);
+            if (!rightsPlan.isEmpty())
+            {
+                // EDT's rights tasks sort the role's entries and fail on one whose target is an
+                // unresolved proxy (no UUID); refuse before anything commits.
+                List<String> unresolved = BmTransactions.read(ctx.model, "FindUnresolvedRights", //$NON-NLS-1$
+                    (tx, pm) -> {
+                        IBmObject current = tx.getObjectById(ctx.roleBmId);
+                        return current instanceof Role ? unresolvedTargets(((Role)current).getRights())
+                            : Collections.<String>emptyList();
+                    });
+                if (unresolved != null && !unresolved.isEmpty())
+                {
+                    throw new RoleWriteException(unresolvedTargetsRefusal(roleName, unresolved));
+                }
+            }
 
             // A RoleDescription must exist AND be registered as a BM top object before ANY rights task
             // runs (the tasks downcast Role.getRights() to RoleDescription without auto-creating it,
@@ -962,6 +977,45 @@ public final class RoleRightsWriter
             // Error handling must preserve the original payload instead of failing again.
         }
         return errorJson;
+    }
+
+    /**
+     * @param rights the role's {@code getRights()} value, inside a read transaction
+     * @return the addresses of the entries whose target is an unresolved proxy (empty when none)
+     */
+    static List<String> unresolvedTargets(Object rights)
+    {
+        List<String> result = new ArrayList<>();
+        List<ObjectRights> entries = rights instanceof RoleDescription ? ((RoleDescription)rights).getRights() : null;
+        if (entries != null)
+        {
+            for (ObjectRights objectRights : entries)
+            {
+                EObject target = RoleRightsOrphans.unresolvedTarget(objectRights);
+                if (target != null)
+                {
+                    result.add(RoleRightsOrphans.addressOrUri(target));
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * The refusal for a rights edit on a role that holds unresolved entries. Pure.
+     *
+     * @param roleName the role name
+     * @param unresolved the unresolved targets (non-empty)
+     * @return a ready JSON error
+     */
+    static String unresolvedTargetsRefusal(String roleName, List<String> unresolved)
+    {
+        return ToolResult.error("Role " + roleName + " has " + unresolved.size() //$NON-NLS-1$ //$NON-NLS-2$
+            + " rights entr" + (unresolved.size() == 1 ? "y" : "ies") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + " whose object no longer resolves (" + String.join(", ", unresolved) //$NON-NLS-1$ //$NON-NLS-2$
+            + "); EDT's rights tasks cannot edit the role while they remain, so nothing was written. " //$NON-NLS-1$
+            + "Remove them with resync_to_disk(cleanOrphanRoleRights=true) - it reports first - then " //$NON-NLS-1$
+            + "retry; an entry it reports as undetermined is re-linked by clean_project.").toJson(); //$NON-NLS-1$
     }
 
     /**

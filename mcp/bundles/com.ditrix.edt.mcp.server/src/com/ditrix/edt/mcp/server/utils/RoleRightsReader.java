@@ -64,6 +64,9 @@ public final class RoleRightsReader
     /** Label for a {@link RightValue#PROVIDED} cell (the right falls back to its default/inherited value). */
     static final String LABEL_DEFAULT = "default"; //$NON-NLS-1$
 
+    /** Appended to a target that no longer resolves (its object was deleted outside EDT). */
+    static final String UNRESOLVED_SUFFIX = " (unresolved)"; //$NON-NLS-1$
+
     private RoleRightsReader()
     {
         // utility class
@@ -160,6 +163,7 @@ public final class RoleRightsReader
         sb.append("**Objects with non-default rights:** ").append(selection.totalWithAuthored); //$NON-NLS-1$
         sb.append(matrixWindowNotice(from, to, total, full));
         sb.append("\n\n"); //$NON-NLS-1$
+        sb.append(unresolvedNotice(countUnresolved(description)));
 
         sb.append(MarkdownUtils.tableHeader("Object", "Right", "Value")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         renderMatrixRows(sb, selected, from, to, full, language);
@@ -214,6 +218,36 @@ public final class RoleRightsReader
                     rightValueLabel(right.getValue())));
             }
         }
+    }
+
+    /** @return how many entries of the role name a target that does not resolve */
+    private static int countUnresolved(RoleDescription description)
+    {
+        int count = 0;
+        for (ObjectRights objectRights : description.getRights())
+        {
+            EObject target = objectRights.getObject();
+            if (target != null && target.eIsProxy())
+            {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * @param unresolved the number of entries whose target does not resolve
+     * @return the notice for such entries, or an empty string. Pure.
+     */
+    static String unresolvedNotice(int unresolved)
+    {
+        if (unresolved == 0)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        return "**" + unresolved + " entry(ies) marked (unresolved)** name an object that no longer " //$NON-NLS-1$ //$NON-NLS-2$
+            + "resolves; EDT cannot edit this role's rights while they remain. Review and remove them " //$NON-NLS-1$
+            + "with resync_to_disk (cleanOrphanRoleRights).\n\n"; //$NON-NLS-1$
     }
 
     /** The selected matrix objects plus the count of objects carrying an authored (non-default) cell. */
@@ -426,6 +460,11 @@ public final class RoleRightsReader
         {
             return "(unknown)"; //$NON-NLS-1$
         }
+        if (object.eIsProxy())
+        {
+            // Deleted outside EDT: name the address the entry still carries, not its EClass.
+            return RoleRightsOrphans.addressOrUri(object) + UNRESOLVED_SUFFIX;
+        }
         if (object instanceof IBmObject)
         {
             try
@@ -466,7 +505,11 @@ public final class RoleRightsReader
         boolean ru = LANG_RU.equalsIgnoreCase(language);
         for (Object field : rls.getFields())
         {
-            if (field instanceof DuallyNamedElement)
+            if (field instanceof EObject && ((EObject)field).eIsProxy())
+            {
+                names.add(RoleRightsOrphans.addressOrUri((EObject)field) + UNRESOLVED_SUFFIX);
+            }
+            else if (field instanceof DuallyNamedElement)
             {
                 DuallyNamedElement named = (DuallyNamedElement)field;
                 String preferred = safe(ru ? named.getNameRu() : named.getName());

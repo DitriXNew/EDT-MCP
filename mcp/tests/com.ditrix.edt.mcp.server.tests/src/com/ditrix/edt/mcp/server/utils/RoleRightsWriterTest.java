@@ -29,6 +29,8 @@ import java.util.regex.Pattern;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.common.util.BasicEList;
+import org.eclipse.emf.common.util.URI;
+import org.eclipse.emf.ecore.InternalEObject;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -41,10 +43,12 @@ import com._1c.g5.v8.dt.core.event.IEventBroker;
 import com._1c.g5.v8.dt.core.model.IModelObjectCollectionRuntimeOrderSorter;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.metadata.mdclass.AbstractRoleDescription;
+import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
 import com._1c.g5.v8.dt.rights.IRightInfosService;
+import com._1c.g5.v8.dt.rights.model.ObjectRights;
 import com._1c.g5.v8.dt.rights.model.RightValue;
 import com._1c.g5.v8.dt.rights.model.RightsFactory;
 import com._1c.g5.v8.dt.rights.model.RoleDescription;
@@ -1124,6 +1128,37 @@ public class RoleRightsWriterTest
         assertSame("the previous reference must be restored, not cleared", previous, //$NON-NLS-1$
             role.getRights());
         verify(tx, never()).attachTopObject(any(), any());
+    }
+
+    // ---- a role holding entries on deleted objects ---------------------------------------------
+
+    @Test
+    public void testUnresolvedTargetsListsOnlyEntriesWhoseObjectDoesNotResolve()
+    {
+        RoleDescription description = RightsFactory.eINSTANCE.createRoleDescription();
+        ObjectRights live = RightsFactory.eINSTANCE.createObjectRights();
+        live.setObject(com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createCatalog());
+        ObjectRights gone = RightsFactory.eINSTANCE.createObjectRights();
+        Catalog proxy = com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createCatalog();
+        ((InternalEObject)proxy).eSetProxyURI(URI.createURI("unresolved:/Catalog.Gone")); //$NON-NLS-1$
+        gone.setObject(proxy);
+        description.getRights().add(live);
+        description.getRights().add(gone);
+
+        assertEquals(List.of("Catalog.Gone"), RoleRightsWriter.unresolvedTargets(description)); //$NON-NLS-1$
+        assertTrue(RoleRightsWriter.unresolvedTargets(null).isEmpty());
+    }
+
+    @Test
+    public void testTheUnresolvedRefusalNamesTheEntriesAndTheWayOut()
+    {
+        String error = RoleRightsWriter.unresolvedTargetsRefusal("Sales", List.of("Catalog.Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject json = JsonParser.parseString(error).getAsJsonObject();
+        assertFalse(json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertErrorMentions(error, "Catalog.Gone"); //$NON-NLS-1$
+        assertErrorMentions(error, "nothing was written"); //$NON-NLS-1$
+        assertErrorMentions(error, "resync_to_disk(cleanOrphanRoleRights=true)"); //$NON-NLS-1$
+        assertErrorMentions(error, "clean_project"); //$NON-NLS-1$
     }
 
     private static void assertErrorMentions(String errorJson, String needle)
