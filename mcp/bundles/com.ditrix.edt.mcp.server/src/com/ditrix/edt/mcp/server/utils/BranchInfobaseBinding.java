@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -16,6 +18,8 @@ import org.eclipse.core.resources.IProject;
 
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociation;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager;
+import com._1c.g5.v8.dt.platform.services.model.FileConnectionString;
+import com._1c.g5.v8.dt.platform.services.model.IConnectionString;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.Activator;
 import com.e1c.g5.dt.applications.IApplication;
@@ -29,6 +33,10 @@ import com.e1c.g5.dt.applications.IApplication;
  * The platform's update path does not consult the association either. "The current context" is
  * whatever {@link IInfobaseAssociationManager#getAssociation(IProject)} resolves: the checked-out
  * branch for a Git-shared project, the default context otherwise.
+ *
+ * <p>The target counts as bound when its UUID is bound, or when it and a bound FILE infobase
+ * provably use the same database directory (a standalone server registered over an existing file
+ * infobase carries its own UUID). Anything that cannot be proven the same database is refused.
  */
 public final class BranchInfobaseBinding
 {
@@ -64,8 +72,20 @@ public final class BranchInfobaseBinding
                 + project.getName() + "' failed", e); //$NON-NLS-1$
             return unreadable(project.getName(), String.valueOf(e.getMessage()));
         }
-        return decide(association, InfobaseAccessSupport.resolveInfobaseReference(application),
-            project.getName(), application.getName(), applicationId);
+        Collection<InfobaseReference> bound =
+            association.map(IInfobaseAssociation::getInfobases).orElse(null);
+        if (bound == null || bound.isEmpty())
+        {
+            return null;
+        }
+        InfobaseReference target = InfobaseAccessSupport.resolveInfobaseReference(application);
+        Path targetDir = fileDirOf(target);
+        if (targetDir == null)
+        {
+            targetDir = servedDatabaseDirOf(application);
+        }
+        return decide(association, target, targetDir, project.getName(), application.getName(),
+            applicationId);
     }
 
     /**
@@ -73,18 +93,21 @@ public final class BranchInfobaseBinding
      *
      * @param association the current context's association (may be empty)
      * @param target the target application's infobase, or {@code null} when it cannot be resolved
+     * @param targetDir the on-disk database directory the target uses, or {@code null} when unknown
+     *            or not file-backed
      * @param projectName the project named in the message
      * @param applicationName the target application's display name
      * @param applicationId the id the caller addressed
      * @return the refusal text, or {@code null} when the target is bound or nothing is bound
      */
     static String decide(Optional<IInfobaseAssociation> association, InfobaseReference target,
-        String projectName, String applicationName, String applicationId)
+        Path targetDir, String projectName, String applicationName, String applicationId)
     {
         Collection<InfobaseReference> bound = association.map(IInfobaseAssociation::getInfobases).orElse(null);
         List<String> boundNames = new ArrayList<>();
         boolean targetBound = false;
         UUID targetUuid = target == null ? null : target.getUuid();
+        Path normalizedTargetDir = targetDir == null ? null : targetDir.toAbsolutePath().normalize();
         if (bound != null)
         {
             for (InfobaseReference ib : bound)
@@ -97,6 +120,15 @@ public final class BranchInfobaseBinding
                 if (targetUuid != null && targetUuid.equals(ib.getUuid()))
                 {
                     targetBound = true;
+                }
+                else if (normalizedTargetDir != null)
+                {
+                    // Path equality follows the file system's rules (case-insensitive on Windows).
+                    Path boundDir = fileDirOf(ib);
+                    if (boundDir != null && normalizedTargetDir.equals(boundDir.toAbsolutePath().normalize()))
+                    {
+                        targetBound = true;
+                    }
                 }
             }
         }
@@ -114,6 +146,47 @@ public final class BranchInfobaseBinding
             + "database. Nothing was updated. Update an application of a bound infobase instead " //$NON-NLS-1$
             + "(get_applications lists them), bind this infobase to the current branch in EDT, or " //$NON-NLS-1$
             + "re-call with ignoreBranchBinding=true if this target is intended."; //$NON-NLS-1$
+    }
+
+    /** The directory of a FILE infobase reference, or {@code null} for any other or unreadable one. */
+    static Path fileDirOf(InfobaseReference ref)
+    {
+        if (ref == null)
+        {
+            return null;
+        }
+        try
+        {
+            IConnectionString cs = ref.getConnectionString();
+            if (cs instanceof FileConnectionString)
+            {
+                String file = ((FileConnectionString)cs).getFile();
+                if (file != null && !file.trim().isEmpty())
+                {
+                    return Paths.get(file.trim());
+                }
+            }
+        }
+        catch (RuntimeException e) // NOSONAR an unreadable reference proves nothing - no match
+        {
+            return null;
+        }
+        return null;
+    }
+
+    /** The served database directory of a file-backed standalone server application, else {@code null}. */
+    private static Path servedDatabaseDirOf(IApplication application)
+    {
+        try
+        {
+            Object module = StandaloneServerSupport.moduleOfApplication(application);
+            String dir = module == null ? null : StandaloneServerSupport.databaseDirOrThrow(module);
+            return dir == null || dir.trim().isEmpty() ? null : Paths.get(dir.trim());
+        }
+        catch (Exception e) // NOSONAR an unknown directory proves nothing - the UUID rule alone decides
+        {
+            return null;
+        }
     }
 
     private static String unreadable(String projectName, String reason)

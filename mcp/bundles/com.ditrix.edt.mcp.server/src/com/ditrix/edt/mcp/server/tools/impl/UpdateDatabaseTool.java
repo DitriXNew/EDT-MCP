@@ -913,18 +913,6 @@ public class UpdateDatabaseTool implements IMcpTool
                         sessionCheckUnreachableReason = sessions.unreachableReason();
                     }
                 }
-                // The branch may have been switched while consent, the lock or the session check
-                // waited; the resolved application still points at the old infobase.
-                if (!ignoreBranchBinding)
-                {
-                    String bindingRefusal =
-                        BranchInfobaseBinding.refusalOrNull(project, application, applicationId);
-                    if (bindingRefusal != null)
-                    {
-                        return ToolResult.error(bindingRefusal)
-                            .put(KEY_TERMINATED_CLIENT, terminatedClient).toJson();
-                    }
-                }
                 // EDT pops a blocking "Restructure data" / «Реорганизация информации» modal
                 // (InfobaseUpdateConfirmDialog) whenever the config changes the DB structure; it
                 // hangs this unattended call. Arm the restructure matcher to auto-press its default
@@ -958,12 +946,24 @@ public class UpdateDatabaseTool implements IMcpTool
                     try
                     {
                         updateApiEntered = true;
+                        // The branch may have been switched while consent, the lock, the session
+                        // check or a recovery stop waited: re-checked before EVERY update attempt.
+                        StandaloneServerStateRecovery.AttemptGuard bindingGuard = ignoreBranchBinding
+                            ? null
+                            : () -> BranchInfobaseBinding.refusalOrNull(project, application, applicationId);
                         stateAfter = StandaloneServerStateRecovery.updateWithRecovery(appManager,
-                            project, application, applicationId, updateType, context, monitor);
+                            project, application, applicationId, updateType, context, monitor,
+                            bindingGuard);
                         updateApiReturned = true;
                     }
                     catch (ApplicationException ex)
                     {
+                        // The binding guard refused an attempt: nothing was published.
+                        if (findInChain(ex, StandaloneServerStateRecovery.AttemptRefusedException.class::isInstance) != null)
+                        {
+                            return ToolResult.error(ex.getMessage())
+                                .put(KEY_TERMINATED_CLIENT, terminatedClient).toJson();
+                        }
                         // A standalone-server target publishes THROUGH its server, so the update
                         // starts it first; when its ports are busy EDT raises the port-conflict
                         // modal, the auto-confirmer cancels it (see LaunchUpdateDialogAutoConfirmer)

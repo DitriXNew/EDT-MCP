@@ -47,7 +47,7 @@ If you pass `launchConfigurationName` **and** an explicit `applicationId`, the c
 
 ## Branch binding
 
-When the project's current Git branch has infobases bound to it (`list_git_branches` → Application Bindings), the target's infobase must be one of them, or the call is refused, preview included. A branch switch removes the other branches' infobase applications from `get_applications`. A standalone-server application (`ServerApplication.*`) stays listed whichever branch is checked out, so without this check it would receive this branch's configuration. If the current branch has no binding, nothing is checked. The check runs again right before the update, because the branch can be switched while the consent dialog, the lock or the session check is waiting.
+When the project's current Git branch has infobases bound to it (`list_git_branches` → Application Bindings), the target's infobase must be one of them, or the call is refused, preview included. It matches by infobase UUID, or by the same database directory for a standalone server serving a bound file infobase. A branch switch removes the other branches' infobase applications from `get_applications`. A standalone-server application (`ServerApplication.*`) stays listed whichever branch is checked out, so without this check it would receive this branch's configuration. If the current branch has no binding, nothing is checked. The check runs again right before every update attempt, including the retry after a stale standalone server is stopped, because the branch can be switched while the consent dialog, the lock, the session check or that stop is waiting.
 
 ## Check standalone-server sessions first
 
