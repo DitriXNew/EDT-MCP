@@ -880,6 +880,13 @@ public class UpdateDatabaseTool implements IMcpTool
             }
             try
             {
+                // Consent and the lock can wait long: re-check before the first side effect.
+                String bindingRefusal = ignoreBranchBinding ? null
+                    : BranchInfobaseBinding.refusalOrNull(project, application, applicationId);
+                if (bindingRefusal != null)
+                {
+                    return bindingRefusalResult(bindingRefusal, false);
+                }
                 if (terminateRunningClients)
                 {
                     terminatedClient =
