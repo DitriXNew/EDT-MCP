@@ -185,6 +185,19 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
+    public void testSchemaAndGuideDeclareTheBranchBindingOptOut()
+    {
+        // The refusal names ignoreBranchBinding=true, so the knob must be reachable (#459).
+        String schema = new UpdateDatabaseTool().getInputSchema();
+        assertTrue("schema must declare the branch-binding opt-out", //$NON-NLS-1$
+            schema.contains("\"" + UpdateDatabaseTool.KEY_IGNORE_BRANCH_BINDING + "\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("ignoreBranchBinding", UpdateDatabaseTool.KEY_IGNORE_BRANCH_BINDING); //$NON-NLS-1$
+        String guide = new UpdateDatabaseTool().getGuide();
+        assertTrue(guide.contains("## Branch binding")); //$NON-NLS-1$
+        assertTrue(guide.contains("ignoreBranchBinding")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testSchemaDeclaresTheStandaloneServerPortConflictPolicy()
     {
         // Without it the port-conflict refusal names a knob the caller cannot reach (#434).

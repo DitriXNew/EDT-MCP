@@ -14,6 +14,7 @@ Apply the current EDT configuration to an infobase. Before applying, call infoba
 | standaloneServerPortConflict | — | string | Answer to EDT's standalone-server port-conflict prompt: cancel (default) = fail and name the busy ports; reassign = let EDT move the server to free ports (rewrites its configuration). |
 | terminateRunningClients | — | boolean | Before applying, terminate any 1C client THIS EDT launched on the target infobase to free the exclusive lock (default true). false keeps a running client — the update then fails if that client holds the infobase exclusively. |
 | checkInfobaseSessions | — | boolean | Before applying, refuse when infobase_sessions finds a non-agent standalone-server session (default true). false skips this safety pre-flight. |
+| ignoreBranchBinding | — | boolean | true skips the refusal of a target whose infobase is not bound to the project's current Git branch (default false). |
 
 ## Guide
 Applies the EDT configuration to an application's database (infobase) — the equivalent of "Update database configuration" in Designer. Supports a full reload or an incremental (changes-only) update.
@@ -61,6 +62,11 @@ If you pass `launchConfigurationName` **and** an explicit `applicationId`, the c
 - `externalInfobaseChanges` — how to answer EDT's blocking "Infobase configuration changes" modal when the infobase was changed OUTSIDE EDT (Designer, `ibcmd`, a CLI pipeline) since the last EDT interaction: `override` (default) keeps the project configuration and overwrites the infobase, `import` pulls the external changes into the PROJECT sources, `cancel` aborts the update with an error. See ## Infobase changed outside EDT.
 - **terminateRunningClients** (boolean, default true) — before applying, terminate any 1C client THIS EDT launched on the target infobase to free the exclusive lock and stop it running stale modules. Set false to leave a running client in place (the update then fails if that client holds the infobase exclusively). Only affects the apply phase (confirm=true); the preview reports `willTerminateRunningClients` but terminates nothing.
 - **checkInfobaseSessions** (boolean, default true) — after the EDT-launched-client sweep and before entering the update API, list standalone-server sessions and refuse while any non-agent session remains. Set false only when you intentionally accept that risk. The preview reports `willCheckInfobaseSessions`.
+- **ignoreBranchBinding** (boolean, default false) — skips the branch-binding check below. Set true only when you intend to update an infobase that the current branch does not bind.
+
+## Branch binding
+
+When the project's current Git branch has infobases bound to it (`list_git_branches` → Application Bindings), the target's infobase must be one of them, or the call is refused, preview included. A branch switch removes the other branches' infobase applications from `get_applications`. A standalone-server application (`ServerApplication.*`) stays listed whichever branch is checked out, so without this check it would receive this branch's configuration. If the current branch has no binding, nothing is checked. The check runs again right before the update, because the branch can be switched while the consent dialog, the lock or the session check is waiting.
 
 ## Check standalone-server sessions first
 

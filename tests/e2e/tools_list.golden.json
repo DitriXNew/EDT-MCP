@@ -4998,6 +4998,9 @@
         "fullUpdate": {
           "type": "boolean"
         },
+        "ignoreBranchBinding": {
+          "type": "boolean"
+        },
         "launchConfigurationName": {
           "type": "string"
         },

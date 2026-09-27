@@ -74,10 +74,12 @@ is only the launch-manager lookup and the two lines of execute() that join the s
 """
 
 from harness import (
+    E2ESkip,
     call,
     assert_error,
     assert_error_quality,
     assert_contains,
+    assert_ok,
     assert_not_contains,
     assert_no_diff,
     e2e_test,
@@ -171,6 +173,44 @@ def test_infobase_session_preflight_opt_out_param_is_accepted_without_mutation()
     assert_contains(e, "Application not found",
                     "checkInfobaseSessions must not alter target resolution")
     assert_no_diff("a rejected update with session opt-out must not touch project sources")
+
+
+@e2e_test(tool="update_database", kind="action")
+def test_branch_binding_opt_out_param_is_accepted_without_mutation():
+    """ignoreBranchBinding=true is parsed without changing target resolution (#459): the bogus
+    application still stops the call at the lookup, before any binding check or update."""
+    r = call("update_database", {
+        "projectName": PROJECT,
+        "applicationId": BOGUS_APP_ID,
+        "ignoreBranchBinding": True,
+    })
+    e = assert_error(r, "branch-binding opt-out with non-existent application")
+    assert_error_quality(e, names=[BOGUS_APP_ID], suggests=["get_applications"],
+                         ctx="branch-binding opt-out still reaches the application lookup")
+    assert_contains(e, "Application not found",
+                    "ignoreBranchBinding must not alter target resolution")
+    assert_no_diff("a rejected update with the branch-binding opt-out must not touch project sources")
+
+
+@e2e_test(tool="update_database", kind="action")
+def test_preview_of_a_real_application_passes_when_the_branch_binds_nothing():
+    """No binding on the current branch is not a conflict (#459). The fixture's application (a
+    standalone-server one on the stand) stays listed whatever branch is checked out; with nothing
+    bound, the preview must still resolve it. confirm is omitted, so nothing is updated."""
+    branches = call("list_git_branches", {"projectName": PROJECT})
+    if branches.is_error or "No application bindings recorded" not in (branches.text or ""):
+        raise E2ESkip("the current branch of the fixture has infobase bindings (or they are "
+                      "unreadable); this test covers the unbound case only")
+    apps = call("get_applications", {"projectName": PROJECT})
+    listed = ((apps.structured or {}).get("applications") or []) if not apps.is_error else []
+    if not listed:
+        raise E2ESkip("the fixture project has no application to preview")
+    app_id = listed[0]["id"]
+    r = call("update_database", {"projectName": PROJECT, "applicationId": app_id})
+    assert_ok(r, "preview of a real application with no branch binding")
+    assert r.structured.get("action") == "preview",         "an unbound branch must not refuse the preview: %r" % (r.structured,)
+    assert r.structured.get("applicationId") == app_id, r.structured
+    assert_no_diff("a preview must not touch project sources")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
