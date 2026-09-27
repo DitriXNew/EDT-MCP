@@ -294,6 +294,40 @@ public class BranchInfobaseBindingTest
     }
 
     @Test
+    public void testSeveralDeadSharesShareOneDeadline()
+    {
+        CountDownLatch release = new CountDownLatch(1);
+        try
+        {
+            long started = System.nanoTime();
+            String refusal = BranchInfobaseBinding.decide(
+                bound(fileRef("DeadA", UUID.randomUUID(), Paths.get("X:", "a").toString()), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    fileRef("DeadB", UUID.randomUUID(), Paths.get("X:", "b").toString()), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    fileRef("DeadC", UUID.randomUUID(), Paths.get("X:", "c").toString())), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                ref("Server view", UUID.randomUUID()), Paths.get("X:", "server-db"), "Proj", "App", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                "ServerApplication.S", (a, b) -> { //$NON-NLS-1$
+                    try
+                    {
+                        return release.await(30, TimeUnit.SECONDS);
+                    }
+                    catch (InterruptedException e)
+                    {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                }, 400L);
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+            assertNotNull(refusal);
+            assertTrue("three dead shares must not wait three deadlines: " + elapsedMs + " ms", //$NON-NLS-1$ //$NON-NLS-2$
+                elapsedMs < 1_000L);
+        }
+        finally
+        {
+            release.countDown();
+        }
+    }
+
+    @Test
     public void testAProbeThatFailsIsNotAMatch()
     {
         Path dir = Paths.get("X:", "db"); //$NON-NLS-1$ //$NON-NLS-2$

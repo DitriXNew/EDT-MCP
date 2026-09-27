@@ -15,6 +15,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IProject;
@@ -143,14 +144,18 @@ public final class BranchInfobaseBinding
                     targetBound = true;
                 }
             }
-            // Directory probes can block on a dead share; run them only when no UUID matched.
+            // Directory probes can block on a dead share; run them only when no UUID matched, and
+            // under one deadline for the whole scan so several dead shares do not add up.
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(probeTimeoutMs);
             for (InfobaseReference ib : bound)
             {
                 if (ib != null && targetDir != null && !targetBound)
                 {
                     Path boundDir = fileDirOf(ib);
+                    long remainingMs = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
                     Boolean same = boundDir == null ? Boolean.FALSE
-                        : probeBounded(probe, targetDir, boundDir, probeTimeoutMs);
+                        : remainingMs <= 0 ? null
+                        : probeBounded(probe, targetDir, boundDir, remainingMs);
                     if (same == null)
                     {
                         unansweredProbe = "'" + targetDir + "' and bound infobase '" + ib.getName() //$NON-NLS-1$ //$NON-NLS-2$
