@@ -17,13 +17,17 @@ import com._1c.g5.v8.dt.dcs.model.core.DataCompositionGroupType;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionPeriodAdditionType;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionSortDirection;
 import com._1c.g5.v8.dt.dcs.model.core.LocalString;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChartGroup;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionComparisonType;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceUse;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFieldPlacement;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterApplicationType;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionFilterItemsGroupType;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupField;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettingsItemState;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettingsItemViewMode;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionTableGroup;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameter;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameterCollection;
 import com._1c.g5.v8.dt.dcs.path.DcsPathException;
@@ -63,6 +67,14 @@ public final class DcsOptions
             return Result.failure("A form DCS root supports options only for " //$NON-NLS-1$
                 + "type='conditionalAppearance'; got type='" + type + "'."); //$NON-NLS-1$ //$NON-NLS-2$
         }
+        if (targetKind == TargetKind.DYNAMIC_LIST
+            && ("chart".equals(type) || insideChart(node.value))) //$NON-NLS-1$
+        {
+            // The dynamic-list writer refuses every chart change, so no chart vocabulary applies.
+            return Result.failure("A dynamic list draws no chart, so '" + address //$NON-NLS-1$
+                + "' has no writable chart options. Charts are authored in a report or template " //$NON-NLS-1$
+                + "schema's defaultSettings or variants; request type='chart' options there."); //$NON-NLS-1$
+        }
         if (address.hasPointer() && node.actualType != null && !type.equals(node.actualType))
         {
             return Result.failure("Type '" + type + "' does not match options target '" //$NON-NLS-1$ //$NON-NLS-2$
@@ -73,6 +85,8 @@ public final class DcsOptions
             Collections.singletonList(configurationLanguage == null ? "en" : configurationLanguage), //$NON-NLS-1$
             configurationLanguage == null ? "en" : configurationLanguage); //$NON-NLS-1$
         List<Option> options = new ArrayList<>();
+        // A group-field address is written by applyGroupField: only its own members apply.
+        boolean groupField = node.value instanceof DataCompositionGroupField;
         try
         {
             if ("conditionalAppearance".equals(type)) //$NON-NLS-1$
@@ -84,22 +98,15 @@ public final class DcsOptions
                     DcsSettingsWriter.appearanceParameters(catalogue, version,
                         languages.resolvedCode()), languages);
             }
-            if ("outputParameter".equals(type) || "userSettings".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
-                || "grouping".equals(type) || "table".equals(type)) //$NON-NLS-1$ //$NON-NLS-2$
+            if (!groupField && ("outputParameter".equals(type) || "userSettings".equals(type) //$NON-NLS-1$ //$NON-NLS-2$
+                || "grouping".equals(type) || "table".equals(type) || "chart".equals(type))) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             {
                 OutputParameterCatalogue catalogue = outputCatalogue(type, address, node.value,
                     node.owner);
                 if (catalogue == null)
                 {
                     return Result.failure("Address '" + address //$NON-NLS-1$
-                        + "' is not an output-parameter, grouping, or table holder."); //$NON-NLS-1$
-                }
-                if (catalogue == OutputParameterCatalogue.CHART
-                    || catalogue == OutputParameterCatalogue.CHART_GROUP)
-                {
-                    return Result.failure("The platform exposes chart output-parameter catalogues, " //$NON-NLS-1$
-                        + "but this tool deliberately refuses chart authoring. action='options' " //$NON-NLS-1$
-                        + "cannot list them as writable choices until chart writes are supported."); //$NON-NLS-1$
+                        + "' is not an output-parameter, grouping, table, or chart holder."); //$NON-NLS-1$
                 }
                 addParameters(options, "output parameter", //$NON-NLS-1$
                     DcsSettingsWriter.outputParameters(catalogue, version,
@@ -111,7 +118,10 @@ public final class DcsOptions
             return Result.failure("Could not load DCS options for platform " //$NON-NLS-1$
                 + (version == null ? Version.LATEST : version) + ": " + e.getMessage()); //$NON-NLS-1$
         }
-        addBodyEnums(options, type);
+        // A points/series/rows/columns group is typed as its chart/table but written as a grouping.
+        boolean axisGroup = node.value instanceof DataCompositionChartGroup
+            || node.value instanceof DataCompositionTableGroup;
+        addBodyEnums(options, groupField ? "groupField" : axisGroup ? "grouping" : type); //$NON-NLS-1$ //$NON-NLS-2$
 
         int limit = Pagination.clampLimit(requestedLimit == null ? Pagination.DEFAULT_LIMIT
             : requestedLimit.intValue(), Pagination.MAX_LIMIT);
@@ -143,6 +153,17 @@ public final class DcsOptions
             markdown.append("\n**Next offset:** `").append(end).append("`\n"); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return Result.success(markdown.toString());
+    }
+
+    /** Whether the options node is a chart or lies inside one (an axis group, group field, measure). */
+    private static boolean insideChart(Object value)
+    {
+        for (EObject current = value instanceof EObject ? (EObject)value : null; current != null;
+            current = current.eContainer())
+        {
+            if (current instanceof DataCompositionChart) return true;
+        }
+        return false;
     }
 
     private static void addParameters(List<Option> result, String kind,
@@ -215,6 +236,7 @@ public final class DcsOptions
         {
             if ("grouping".equals(type)) return OutputParameterCatalogue.GROUP; //$NON-NLS-1$
             if ("table".equals(type)) return OutputParameterCatalogue.TABLE; //$NON-NLS-1$
+            if ("chart".equals(type)) return OutputParameterCatalogue.CHART; //$NON-NLS-1$
             return OutputParameterCatalogue.SETTINGS;
         }
         EObject current = value instanceof EObject ? (EObject)value : owner;
@@ -287,6 +309,22 @@ public final class DcsOptions
                 addEnum(result, "viewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
                 addEnum(result, "rowsViewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
                 addEnum(result, "columnsViewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
+                break;
+            case "chart": //$NON-NLS-1$
+                addEnum(result, "viewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
+                addEnum(result, "pointsViewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
+                addEnum(result, "seriesViewMode", DataCompositionSettingsItemViewMode.values()); //$NON-NLS-1$
+                for (String axis : new String[] {"points", "series"}) //$NON-NLS-1$ //$NON-NLS-2$
+                {
+                    addEnum(result, axis + "[].groupFields.items[].groupType", //$NON-NLS-1$
+                        DataCompositionGroupType.values());
+                    addEnum(result, axis + "[].groupFields.items[].periodAdditionType", //$NON-NLS-1$
+                        DataCompositionPeriodAdditionType.values());
+                }
+                break;
+            case "groupField": //$NON-NLS-1$
+                addEnum(result, "groupType", DataCompositionGroupType.values()); //$NON-NLS-1$
+                addEnum(result, "periodAdditionType", DataCompositionPeriodAdditionType.values()); //$NON-NLS-1$
                 break;
             default:
                 break;

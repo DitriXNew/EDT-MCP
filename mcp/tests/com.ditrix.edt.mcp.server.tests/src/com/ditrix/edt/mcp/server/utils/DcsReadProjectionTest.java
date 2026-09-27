@@ -29,6 +29,7 @@ import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetObject;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaDataSetUnion;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchemaParameter;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionAppearanceFields;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionChart;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearance;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionConditionalAppearanceItem;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionDataParameterValues;
@@ -187,6 +188,7 @@ public class DcsReadProjectionTest
             {"calculatedField", "#/calculatedFields"}, {"totalField", "#/totalFields"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             {"variant", "#/variants"}, {"grouping", "#/defaultSettings/items"}, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             {"table", "#/defaultSettings/items"}, //$NON-NLS-1$ //$NON-NLS-2$
+            {"chart", "#/defaultSettings/items"}, //$NON-NLS-1$ //$NON-NLS-2$
             {"selection", "#/defaultSettings/selection/items"}, //$NON-NLS-1$ //$NON-NLS-2$
             {"filter", "#/defaultSettings/filter/items"}, //$NON-NLS-1$ //$NON-NLS-2$
             {"dataParameter", "#/defaultSettings/dataParameters/items"}, //$NON-NLS-1$ //$NON-NLS-2$
@@ -542,10 +544,12 @@ public class DcsReadProjectionTest
             .createDataCompositionGroup());
         settings.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
             .createDataCompositionTable());
+        settings.getItems().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionChart());
         variant.setSettings(settings);
         schema.getSettingsVariants().add(variant);
 
-        for (String type : new String[] {"grouping", "table"}) //$NON-NLS-1$ //$NON-NLS-2$
+        for (String type : new String[] {"grouping", "table", "chart"}) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         {
             DcsReadProjection.Result refusedRoot = DcsReadProjection.render(root,
                 TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(settingsAddress).address(),
@@ -1213,6 +1217,13 @@ public class DcsReadProjectionTest
         table.getRows().add(row);
         table.getColumns().add(column);
         settings.getItems().add(table);
+        DataCompositionChart chart = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionChart();
+        chart.getPoints().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionChartGroup());
+        chart.getSeries().add(com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionChartGroup());
+        settings.getItems().add(chart);
         schema.setDefaultSettings(settings);
 
         assertCollectionType(schema, "Report.Sales#/defaultSettings/selection/items", "selection"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1238,6 +1249,134 @@ public class DcsReadProjectionTest
             "Report.Sales#/defaultSettings/items/0/conditionalAppearance/items/0")); //$NON-NLS-1$
         assertCollectionType(schema, "Report.Sales#/defaultSettings/items/1/rows", "table"); //$NON-NLS-1$ //$NON-NLS-2$
         assertCollectionType(schema, "Report.Sales#/defaultSettings/items/1/columns", "table"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertCollectionType(schema, "Report.Sales#/defaultSettings/items/2/points", "chart"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertCollectionType(schema, "Report.Sales#/defaultSettings/items/2/series", "chart"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A chart reads as a typed node and lists the references a write validates. */
+    @Test
+    public void testChartNodeReadIsTypedAndListsItsReferences()
+    {
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        DcsSettingsWriter.SchemaResult planned = DcsSettingsWriter.planSchema(schema, "upsert", //$NON-NLS-1$
+            "chart", DcsAddress.parse("Report.Sales#/defaultSettings").address(), //$NON-NLS-1$ //$NON-NLS-2$
+            JsonParser.parseString("{\"kind\":\"chart\",\"name\":\"Sales|Chart\"," //$NON-NLS-1$
+                + "\"points\":[{\"groupFields\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Customer\"}}]}}]," //$NON-NLS-1$
+                + "\"series\":[{\"groupFields\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Period\"}}]}}]," //$NON-NLS-1$
+                + "\"selection\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Amount\"}},{\"kind\":\"auto\"}]}}") //$NON-NLS-1$
+                .getAsJsonObject(),
+            new DcsPresentationParser.LanguageContext(java.util.Arrays.asList("en"))); //$NON-NLS-1$
+        assertTrue(planned.error(), planned.isSuccess());
+        planned.plan().commit(schema);
+        String address = "Report.Sales#/defaultSettings/items/0"; //$NON-NLS-1$
+
+        DcsReadProjection.Result read = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(address).address(), "chart", //$NON-NLS-1$
+            "en", 100_000, 0); //$NON-NLS-1$
+        assertTrue(read.error(), read.isSuccess());
+        String markdown = read.markdown();
+        assertTrue(markdown, markdown.contains("# DCS node: DataCompositionChart")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("## Chart references")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("| points | Customer | " + address //$NON-NLS-1$
+            + "/points/0/groupFields/items/0 |")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("| series | Period | " + address //$NON-NLS-1$
+            + "/series/0/groupFields/items/0 |")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("| selection | Amount | " + address //$NON-NLS-1$
+            + "/selection/items/0 |")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("| selection | (auto) | " + address //$NON-NLS-1$
+            + "/selection/items/1 |")); //$NON-NLS-1$
+        assertFalse("a chart is no longer a read-only placeholder", //$NON-NLS-1$
+            markdown.contains("not supported")); //$NON-NLS-1$
+
+        DcsReadProjection.Result wrongType = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(address).address(), "table", //$NON-NLS-1$
+            "en", 100_000, 0); //$NON-NLS-1$
+        assertFalse("a chart does not read as a table", wrongType.isSuccess()); //$NON-NLS-1$
+        assertTrue(wrongType.error(), wrongType.error().contains("chart")); //$NON-NLS-1$
+    }
+
+    /** A switched-off chart, axis group, group field or measure folder reads as not drawn. */
+    @Test
+    public void testChartReferencesMarkSwitchedOffReferencesAsNotDrawn()
+    {
+        DataCompositionSchema schema = com._1c.g5.v8.dt.dcs.model.schema.DcsFactory.eINSTANCE
+            .createDataCompositionSchema();
+        DcsSettingsWriter.SchemaResult planned = DcsSettingsWriter.planSchema(schema, "upsert", //$NON-NLS-1$
+            "chart", DcsAddress.parse("Report.Sales#/defaultSettings").address(), //$NON-NLS-1$ //$NON-NLS-2$
+            JsonParser.parseString("{\"kind\":\"chart\",\"name\":\"Sales\"," //$NON-NLS-1$
+                + "\"points\":[{\"groupFields\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Customer\"}}," //$NON-NLS-1$
+                + "{\"field\":{\"kind\":\"field\",\"value\":\"Missing\"}}]}}]," //$NON-NLS-1$
+                + "\"series\":[{\"groupFields\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Period\"}}]}}]," //$NON-NLS-1$
+                + "\"selection\":{\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Amount\"}}," //$NON-NLS-1$
+                + "{\"kind\":\"group\",\"items\":[{\"field\":{\"kind\":\"field\",\"value\":\"Cost\"}}]}]}}") //$NON-NLS-1$
+                .getAsJsonObject(),
+            new DcsPresentationParser.LanguageContext(java.util.Arrays.asList("en"))); //$NON-NLS-1$
+        assertTrue(planned.error(), planned.isSuccess());
+        planned.plan().commit(schema);
+        DataCompositionChart chart = (DataCompositionChart)schema.getDefaultSettings().getItems().get(0);
+        ((com._1c.g5.v8.dt.dcs.model.settings.DataCompositionGroupField)chart.getPoints().get(0)
+            .getGroupFields().getItems().get(1)).setUse(false);
+        chart.getSeries().get(0).setUse(false);
+        ((com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedFieldGroup)chart.getSelection()
+            .getItems().get(1)).setUse(false);
+        String address = "Report.Sales#/defaultSettings/items/0"; //$NON-NLS-1$
+
+        String markdown = chartRead(schema, address);
+        assertTrue(markdown, markdown.contains("| Role | Field | Address | Drawn |")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("| points | Customer | " + address //$NON-NLS-1$
+            + "/points/0/groupFields/items/0 | yes |")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("| points | Missing | " + address //$NON-NLS-1$
+            + "/points/0/groupFields/items/1 | no |")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("| series | Period | " + address //$NON-NLS-1$
+            + "/series/0/groupFields/items/0 | no |")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("| selection | Amount | " + address //$NON-NLS-1$
+            + "/selection/items/0 | yes |")); //$NON-NLS-1$
+        assertTrue(markdown, markdown.contains("| selection | Cost | " + address //$NON-NLS-1$
+            + "/selection/items/1/items/0 | no |")); //$NON-NLS-1$
+        assertFalse(markdown, markdown.contains("draws nothing")); //$NON-NLS-1$
+
+        // With every measure off, the read states what the guard counts as a broken chart.
+        com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField amount =
+            (com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSelectedField)chart.getSelection()
+                .getItems().get(0);
+        amount.setUse(false);
+        String unmeasured = chartRead(schema, address);
+        assertTrue(unmeasured, unmeasured.contains(
+            "The chart has no enabled measure, so it draws nothing.")); //$NON-NLS-1$
+        amount.setUse(true);
+
+        chart.setUse(false);
+        String chartOff = chartRead(schema, address);
+        assertTrue(chartOff, chartOff.contains("| points | Customer | " + address //$NON-NLS-1$
+            + "/points/0/groupFields/items/0 | no |")); //$NON-NLS-1$
+        assertFalse(chartOff, chartOff.contains("| yes |")); //$NON-NLS-1$
+
+        // A chart under a switched-off structure group is not drawn either.
+        chart.setUse(true);
+        DataCompositionGroup group = com._1c.g5.v8.dt.dcs.model.settings.DcsFactory.eINSTANCE
+            .createDataCompositionGroup();
+        group.setUse(false);
+        schema.getDefaultSettings().getItems().add(0, group);
+        group.getItems().add(chart);
+        String nestedAddress = "Report.Sales#/defaultSettings/items/0/items/0"; //$NON-NLS-1$
+        String underOffGroup = chartRead(schema, nestedAddress);
+        assertTrue(underOffGroup, underOffGroup.contains("| selection | Amount | " + nestedAddress //$NON-NLS-1$
+            + "/selection/items/0 | no |")); //$NON-NLS-1$
+        assertFalse(underOffGroup, underOffGroup.contains("| yes |")); //$NON-NLS-1$
+        group.setUse(true);
+        String underOnGroup = chartRead(schema, nestedAddress);
+        assertTrue(underOnGroup, underOnGroup.contains("| selection | Amount | " + nestedAddress //$NON-NLS-1$
+            + "/selection/items/0 | yes |")); //$NON-NLS-1$
+    }
+
+    private static String chartRead(DataCompositionSchema schema, String address)
+    {
+        DcsReadProjection.Result read = DcsReadProjection.render("Report.Sales", //$NON-NLS-1$
+            TargetKind.REPORT_MAIN_DCS, schema, DcsAddress.parse(address).address(), "chart", //$NON-NLS-1$
+            "en", 100_000, 0); //$NON-NLS-1$
+        assertTrue(read.error(), read.isSuccess());
+        return read.markdown();
     }
 
     private static void assertCollectionType(DataCompositionSchema schema, String address,

@@ -11,7 +11,6 @@ import org.eclipse.emf.ecore.EObject;
 /** Caller-facing refusals for deliberately excluded DCS authoring features. */
 final class DcsUnsupportedAuthoring
 {
-    static final String CHART_CLASS = "DataCompositionChart"; //$NON-NLS-1$
     static final String NESTED_DATA_SET_CLASS = "DataCompositionSchemaNestedDataSet"; //$NON-NLS-1$
 
     private DcsUnsupportedAuthoring()
@@ -26,33 +25,15 @@ final class DcsUnsupportedAuthoring
 
     static String refusal(String className, String address)
     {
-        String node;
-        String feature;
-        if (CHART_CLASS.equals(className))
-        {
-            node = CHART_CLASS;
-            feature = "chart"; //$NON-NLS-1$
-        }
-        else if (NESTED_DATA_SET_CLASS.equals(className))
-        {
-            node = NESTED_DATA_SET_CLASS;
-            feature = "nested data set"; //$NON-NLS-1$
-        }
-        else
+        if (!NESTED_DATA_SET_CLASS.equals(className))
         {
             return null;
         }
         String location = address == null || address.isEmpty() ? "" : " at '" + address + "'"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        return node + location + " is a " + feature //$NON-NLS-1$
+        return NESTED_DATA_SET_CLASS + location + " is a nested data set" //$NON-NLS-1$
             + "; authoring it is not supported by this tool. Copy a schema that already contains " //$NON-NLS-1$
             + "it through the lossless XML channel: action='replace', type='schema', " //$NON-NLS-1$
             + "body={xml:...} on a bare schema root."; //$NON-NLS-1$
-    }
-
-    static boolean isChartKind(String kind)
-    {
-        return kind != null && ("chart".equalsIgnoreCase(kind) //$NON-NLS-1$
-            || CHART_CLASS.equalsIgnoreCase(kind));
     }
 
     static boolean isNestedDataSetKind(String kind)

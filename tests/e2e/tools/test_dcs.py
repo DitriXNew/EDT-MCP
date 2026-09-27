@@ -3095,7 +3095,7 @@ def test_field_folder_and_its_addressed_child_reach_exported_dcs():
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
-def test_chart_schema_survives_xml_copy_and_typed_chart_write_is_articulately_refused():
+def test_chart_schema_survives_xml_copy_and_typed_writes_address_it_as_a_chart():
     schema_ns = "http://v8.1c.ru/8.1/data-composition-system/schema"
     settings_ns = "http://v8.1c.ru/8.1/data-composition-system/settings"
     xsi_ns = "http://www.w3.org/2001/XMLSchema-instance"
@@ -3138,7 +3138,7 @@ def test_chart_schema_survives_xml_copy_and_typed_chart_write_is_articulately_re
     current = _get(source_root, "schema")
     imported = _write(source_root, "replace", "schema", {"xml": chart_xml},
                       expectedHash=_hash(current))
-    assert_ok(imported, "seed an intentionally typed-unsupported chart through XML")
+    assert_ok(imported, "seed a chart through XML")
     source_rel = _poll_report_dcs(source_name, ctx="the chart XML source")
     poll_disk_contains(source_rel, "StructureItemChart",
                        ctx="the chart-bearing source must reach Template.dcs")
@@ -3151,15 +3151,21 @@ def test_chart_schema_survives_xml_copy_and_typed_chart_write_is_articulately_re
 
     refused = _write(chart_address, "update", "grouping", {"name": "NoChartWrite"},
                      expectedHash=_hash(settings))
-    error = assert_error(refused, "typed write addressed at an existing chart")
+    error = assert_error(refused, "a grouping write addressed at an existing chart")
     assert_error_quality(
         error,
-        names=["DataCompositionChart", "chart"],
-        suggests=["authoring it is not supported by this tool",
-                  "action='replace', type='schema'", "body={xml:...}",
-                  "bare schema root"],
-        ctx="the chart refusal must name the deliberate exclusion and XML escape hatch")
+        names=["type='grouping'", "type='chart'"],
+        suggests=["Pass type='chart'"],
+        ctx="a type mismatch at a chart must name the chart type to pass")
     assert "no public DCS type" not in error
+
+    # The XML chart measures kind='auto' in a schema without resources. That problem predates
+    # this rename, so the rename is not refused over it.
+    renamed = _write(chart_address, "update", "chart", {"name": "RenamedChart"},
+                     expectedHash=_hash(settings))
+    assert_ok(renamed, "rename the XML-seeded chart through a typed chart write")
+    poll_disk_contains(source_rel, "RenamedChart",
+                       ctx="the typed chart rename must reach Template.dcs")
 
     source_chart_xml, _pages = _read_all_xml(source_root)
     target_name = "E2EDcsChartXmlTarget"
@@ -3177,6 +3183,152 @@ def test_chart_schema_survives_xml_copy_and_typed_chart_write_is_articulately_re
     target_chart_xml, _pages = _read_all_xml(target_root)
     assert _xml_structure(target_chart_xml) == _xml_structure(source_chart_xml), \
         "the chart-bearing schema must survive the XML copy unchanged"
+
+
+_PRODUCT_RU = "\u041d\u043e\u043c\u0435\u043d\u043a\u043b\u0430\u0442\u0443\u0440\u0430"
+
+
+def _seed_chart_report(name):
+    """A report whose data set lists Customer, Period, Amount and a Russian-named field."""
+    root = "Report." + name
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": root}),
+              "seed chart report " + root)
+    wait_for_project_ready()
+    assert_ok(_write(root, "upsert", "schema", {
+        "dataSets": [{
+            "name": "Sales",
+            "type": "query",
+            "query": "SELECT 1 AS Amount",
+            "autoFillFields": False,
+            "fields": [{"dataPath": "Customer"}, {"dataPath": "Period"},
+                       {"dataPath": "Amount"}, {"dataPath": _PRODUCT_RU}],
+        }],
+        "totalFields": [{"dataPath": "Amount", "expression": "Sum(Amount)"}],
+    }), "author the chart report's data set and resource")
+    wait_for_project_ready()
+    return root
+
+
+def _chart_body(name, point, series, measure):
+    body = {"kind": "chart", "name": name,
+            "points": [{"groupFields": {"items": [{"field": {"kind": "field", "value": point}}]}}],
+            "selection": {"items": [{"field": {"kind": "field", "value": measure}}]}}
+    if series:
+        body["series"] = [{"groupFields": {"items": [{"field": {"kind": "field", "value": series}}]}}]
+    return body
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_typed_chart_is_authored_read_back_and_exported():
+    report_name = "E2EDcsTypedChart"
+    root = _seed_chart_report(report_name)
+
+    options = _options(root, "chart")
+    assert_ok(options, "options for a chart")
+    assert "ChartType" in options.text and "pointsViewMode" in options.text, \
+        "chart options must list the chart catalogue and axis enums: %s" % options.text
+
+    # One schema call declares a resource and a chart that measures it: the chart is judged
+    # against the state the whole call leaves behind.
+    chart = _chart_body("SalesChart", "Customer", _PRODUCT_RU, "Revenue")
+    chart["outputParameters"] = {"items": [{
+        "parameter": {"kind": "parameter", "value": "ChartType"}, "value": "Pie"}]}
+    authored = _write(root, "upsert", "schema", {
+        "totalFields": [{"dataPath": "Revenue", "expression": "Sum(Amount)"}],
+        "defaultSettings": {"items": [chart]},
+    })
+    assert_ok(authored, "declare a resource and a chart measuring it in one call")
+
+    chart_address = root + "#/defaultSettings/items/0"
+    read = _get(chart_address, "chart")
+    assert_ok(read, "read the chart as a typed node")
+    assert "## Chart references" in read.text, read.text
+    for expected in ("| points | Customer | " + chart_address + "/points/0/groupFields/items/0 |",
+                     "| series | " + _PRODUCT_RU + " | " + chart_address
+                     + "/series/0/groupFields/items/0 |",
+                     "| selection | Revenue | " + chart_address + "/selection/items/0 |"):
+        assert expected in read.text, "missing %r in the chart read:\n%s" % (expected, read.text)
+
+    dcs_rel = _poll_report_dcs(report_name, ctx="the typed chart")
+    on_disk = poll_disk_contains_all(
+        dcs_rel, ["StructureItemChart", "Customer", _PRODUCT_RU, "Revenue", "Pie"],
+        ctx="the typed chart, its axes, measure and chart type must reach Template.dcs")
+    assert on_disk.count("StructureItemChart") == 1, on_disk
+
+    updated = _write(chart_address + "/points/0/groupFields/items/0", "update", "grouping",
+                     {"field": {"kind": "field", "value": "Period"}}, expectedHash=_hash(read))
+    assert_ok(updated, "retarget the chart's point to another schema field")
+    after = _get(chart_address, "chart")
+    assert_ok(after, "read the retargeted chart")
+    assert "| points | Period |" in after.text, after.text
+    # The data set lists both fields, so judge the exported point axis alone.
+    deadline = time.time() + 30
+    while True:
+        points = [m.group(0) for m in re.finditer(r"<(\w+:)?point>.*?</\1?point>",
+                                                   read_disk(dcs_rel), re.S)]
+        if points and "Period" in points[0] and "Customer" not in points[0]:
+            break
+        assert time.time() < deadline, \
+            "the retargeted point never reached Template.dcs: %s" % points
+        time.sleep(0.5)
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_chart_with_bad_references_is_refused_and_nothing_is_written():
+    report_name = "E2EDcsChartRefusal"
+    root = _seed_chart_report(report_name)
+    settings_address = root + "#/defaultSettings"
+    seeded = _write(settings_address, "upsert", "chart",
+                    _chart_body("Good", "Customer", "Period", "Amount"))
+    assert_ok(seeded, "author a valid chart")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the valid chart")
+    poll_disk_contains(dcs_rel, "StructureItemChart", ctx="the valid chart must reach disk")
+    wait_for_project_ready()
+    before = _get(root, "schema")
+    disk_before = read_disk(dcs_rel)
+
+    measure = _write(settings_address, "upsert", "chart",
+                     _chart_body("BadMeasure", "Customer", "", "Customer"))
+    error = assert_error(measure, "a chart measuring a field that is not a resource")
+    assert_error_quality(
+        error,
+        names=["measure 'Customer'", settings_address + "/items/1/selection/items/0",
+               "is a field but not a resource"],
+        suggests=["A measure must be a resource: Amount", "totalFields", "kind='auto'"],
+        ctx="a bad measure must name the reference, its address and the resources")
+
+    point = _write(settings_address, "upsert", "chart",
+                   _chart_body("BadPoint", "Nowhere", "", "Amount"))
+    error = assert_error(point, "a chart grouping by a field the schema lacks")
+    assert_error_quality(
+        error,
+        names=["point 'Nowhere'", "no schema field, calculated field or user field"],
+        suggests=["Customer", "Period"],
+        ctx="a bad point must name the reference and the fields to choose from")
+
+    undeclared = _write(root, "upsert", "schema", {
+        "calculatedFields": [{"dataPath": "Margin", "expression": "Amount"}],
+        "defaultSettings": {"items": [_chart_body("Undeclared", "Customer", "", "Bonus")]},
+    })
+    error = assert_error(undeclared, "a schema call whose chart measures an undeclared resource")
+    assert_error_quality(error, names=["measure 'Bonus'"], suggests=["totalFields"],
+                         ctx="the batch refusal must name the missing resource")
+
+    # A schema-only edit that breaks the unchanged valid chart is refused too.
+    ungroupable = _write(root + "#/dataSets/Sales/fields/Customer", "update", "field",
+                         {"useRestriction": {"group": True}})
+    error = assert_error(ungroupable, "forbidding grouping on the field an unchanged chart's point uses")
+    assert_error_quality(
+        error,
+        names=["point 'Customer'", settings_address + "/items/0/points/0/groupFields/items/0",
+               "'Customer' is not available for grouping"],
+        suggests=["keep the schema data it needs"],
+        ctx="the refusal must name the chart reference the schema edit would break")
+
+    after = _get(root, "schema")
+    assert _hash(after) == _hash(before), "a refused chart write must leave the schema hash"
+    assert read_disk(dcs_rel) == disk_before, "a refused chart write must not touch Template.dcs"
+    assert "Margin" not in after.text, "the refused call's schema half must not commit either"
 
 
 @e2e_test(tool="dcs", kind="read")
