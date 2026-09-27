@@ -1150,6 +1150,15 @@ public class RoleRightsWriterTest
     }
 
     @Test
+    public void testAnEntryWithNoTargetAlsoBlocksTheEdit()
+    {
+        // The orphan scan reports a null target (undetermined); the preflight must not let it through.
+        RoleDescription description = RightsFactory.eINSTANCE.createRoleDescription();
+        description.getRights().add(RightsFactory.eINSTANCE.createObjectRights());
+        assertEquals(List.of(RoleRightsOrphans.NO_TARGET), RoleRightsWriter.unresolvedTargets(description));
+    }
+
+    @Test
     public void testTheUnresolvedRefusalNamesTheEntriesAndTheWayOut()
     {
         String error = RoleRightsWriter.unresolvedTargetsRefusal("Sales", List.of("Catalog.Gone")); //$NON-NLS-1$ //$NON-NLS-2$

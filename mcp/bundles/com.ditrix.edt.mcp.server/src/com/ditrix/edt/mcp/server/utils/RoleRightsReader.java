@@ -148,9 +148,13 @@ public final class RoleRightsReader
 
         MatrixSelection selection = selectMatrixObjects(description, full);
         List<ObjectRights> selected = selection.selected;
+        // Counted over EVERY entry, not the selection: an unresolved entry holding only default
+        // cells is filtered out of the matrix but still blocks EDT's rights tasks.
+        String unresolved = unresolvedNotice(countUnresolved(description));
         if (selected.isEmpty())
         {
             sb.append(full ? "_(no rights)_\n\n" : "_(no non-default rights)_\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+            sb.append(unresolved);
             return;
         }
 
@@ -163,7 +167,7 @@ public final class RoleRightsReader
         sb.append("**Objects with non-default rights:** ").append(selection.totalWithAuthored); //$NON-NLS-1$
         sb.append(matrixWindowNotice(from, to, total, full));
         sb.append("\n\n"); //$NON-NLS-1$
-        sb.append(unresolvedNotice(countUnresolved(description)));
+        sb.append(unresolved);
 
         sb.append(MarkdownUtils.tableHeader("Object", "Right", "Value")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         renderMatrixRows(sb, selected, from, to, full, language);
@@ -227,7 +231,7 @@ public final class RoleRightsReader
         for (ObjectRights objectRights : description.getRights())
         {
             EObject target = objectRights.getObject();
-            if (target != null && target.eIsProxy())
+            if (target == null || target.eIsProxy())
             {
                 count++;
             }

@@ -363,6 +363,21 @@ public class RoleRightsReaderTest
     }
 
     @Test
+    public void testUnresolvedEntryWithOnlyDefaultCellsStillGetsTheNotice()
+    {
+        // Filtered out of the default matrix (PROVIDED, no RLS), yet it still blocks EDT's tasks.
+        RoleDescription description = RightsFactory.eINSTANCE.createRoleDescription();
+        ObjectRights gone = newObjectRights("Read", RightValue.PROVIDED); //$NON-NLS-1$
+        gone.setObject(proxy("unresolved:/Catalog.Gone")); //$NON-NLS-1$
+        description.getRights().add(gone);
+
+        String md = RoleRightsReader.render("Role.R", description, false, "en", 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(md, md.contains("_(no non-default rights)_")); //$NON-NLS-1$
+        assertTrue(md, md.contains("**1 entry(ies) marked (unresolved)**")); //$NON-NLS-1$
+        assertTrue(md, md.contains("resync_to_disk")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testNoUnresolvedNoticeForALiveRole()
     {
         assertEquals("", RoleRightsReader.unresolvedNotice(0)); //$NON-NLS-1$

@@ -62,6 +62,9 @@ public final class RoleRightsOrphans
     /** The DB-view path segment that precedes a field name in a field proxy's fragment. */
     private static final String FIELDS_SEGMENT = "fields:"; //$NON-NLS-1$
 
+    /** The label of an entry that names no target at all. */
+    public static final String NO_TARGET = "(no target)"; //$NON-NLS-1$
+
     /** The three verdicts on a rights entry's target. */
     public enum Verdict
     {
@@ -543,16 +546,6 @@ public final class RoleRightsOrphans
         return name.isEmpty() || name.indexOf('/') >= 0 ? null : name;
     }
 
-    /**
-     * @return the entry's target when it does not resolve (a proxy after the resolving getter), else
-     *         {@code null}
-     */
-    public static EObject unresolvedTarget(ObjectRights objectRights)
-    {
-        EObject target = objectRights.getObject();
-        return target != null && target.eIsProxy() ? target : null;
-    }
-
     /** @return the RLS fields of {@code rls} that stay proxies after resolution */
     public static List<EObject> unresolvedFields(Rls rls)
     {
@@ -616,7 +609,7 @@ public final class RoleRightsOrphans
         {
             return fqn;
         }
-        return object != null ? object.eClass().getName() : "(none)"; //$NON-NLS-1$
+        return object != null ? object.eClass().getName() : NO_TARGET;
     }
 
     /** @return the FQN of the top object {@code bm} belongs to, or {@code null} when it has none */

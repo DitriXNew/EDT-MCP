@@ -991,8 +991,13 @@ public final class RoleRightsWriter
         {
             for (ObjectRights objectRights : entries)
             {
-                EObject target = RoleRightsOrphans.unresolvedTarget(objectRights);
-                if (target != null)
+                // Same rule as the orphan scan: a missing target blocks exactly like a proxy one.
+                EObject target = objectRights.getObject();
+                if (target == null)
+                {
+                    result.add(RoleRightsOrphans.NO_TARGET);
+                }
+                else if (target.eIsProxy())
                 {
                     result.add(RoleRightsOrphans.addressOrUri(target));
                 }
