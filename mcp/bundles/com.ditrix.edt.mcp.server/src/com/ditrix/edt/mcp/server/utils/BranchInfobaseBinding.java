@@ -207,11 +207,13 @@ public final class BranchInfobaseBinding
         AtomicReference<Boolean> answer = new AtomicReference<>();
         BoundedJob.Result result = BoundedJob.run("update_database: compare database directories", //$NON-NLS-1$
             timeoutMs, monitor -> answer.set(Boolean.valueOf(probe.same(a, b))));
-        if (result.getOutcome() != BoundedJob.Outcome.COMPLETED)
+        // A probe that published its answer at the deadline has still answered.
+        Boolean published = answer.get();
+        if (published != null)
         {
-            return null;
+            return published;
         }
-        return result.getFailure() == null && Boolean.TRUE.equals(answer.get()) ? Boolean.TRUE : Boolean.FALSE;
+        return result.getOutcome() == BoundedJob.Outcome.COMPLETED ? Boolean.FALSE : null;
     }
 
     /** File-system identity of two directories; may block on an unreachable path. */
