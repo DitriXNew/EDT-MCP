@@ -46,6 +46,7 @@ import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
+import com.ditrix.edt.mcp.server.utils.RoleRightsOrphans;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -126,6 +127,9 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
     /** Param: opt-in flag to remove dangling/orphaned references from Configuration.mdo. */
     private static final String KEY_CLEAN_DANGLING_REFERENCES = "cleanDanglingReferences"; //$NON-NLS-1$
 
+    /** Param: opt-in flag to remove role-rights entries whose target is proven absent. */
+    private static final String KEY_CLEAN_ORPHAN_ROLE_RIGHTS = "cleanOrphanRoleRights"; //$NON-NLS-1$
+
     /** Param: opt-in flag to force-export every top object instead of the missing subset. */
     private static final String KEY_FULL_EXPORT = "fullExport"; //$NON-NLS-1$
 
@@ -166,7 +170,9 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             + "references. Direction MODEL -> DISK, the opposite of clean_project. Dangling references are " //$NON-NLS-1$
             + "REPORTED by default, not removed. Two opt-in modes are DESTRUCTIVE: re-exporting every " //$NON-NLS-1$
             + "object overwrites on-disk edits, and removing dangling references rewrites " //$NON-NLS-1$
-            + "Configuration.mdo. Parameters and examples: get_tool_guide('resync_to_disk')."; //$NON-NLS-1$
+            + "Configuration.mdo. Role-rights entries whose object no longer exists are also REPORTED by " //$NON-NLS-1$
+            + "default; call once to review them, then again with cleanOrphanRoleRights=true to remove " //$NON-NLS-1$
+            + "the proven-absent ones. Parameters and examples: get_tool_guide('resync_to_disk')."; //$NON-NLS-1$
     }
 
     @Override
@@ -182,6 +188,10 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
                     + "update_database / XML import. Destructive: rewrites Configuration.mdo. " //$NON-NLS-1$
                     + "Default: false - only report danglingFound + danglingDetails without " //$NON-NLS-1$
                     + "changing anything.") //$NON-NLS-1$
+            .booleanProperty(KEY_CLEAN_ORPHAN_ROLE_RIGHTS,
+                "When true, REMOVE the role-rights entries (with their RLS) whose target object is " //$NON-NLS-1$
+                    + "proven absent - rewrites those roles' Rights.rights. Entries judged undetermined " //$NON-NLS-1$
+                    + "are never removed. Default: false - only report orphanRoleRights.") //$NON-NLS-1$
             .booleanProperty(KEY_FULL_EXPORT,
                 "When true, force-export EVERY metadata top object's .mdo (a full disk refresh; " //$NON-NLS-1$
                     + "slow on a large configuration - the export runs on the UI thread). " //$NON-NLS-1$
@@ -221,6 +231,21 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             .objectArrayProperty("danglingRemoved", "Removed dangling entries: [{field, lostFqn, position}]") //$NON-NLS-1$ //$NON-NLS-2$
             .objectArrayProperty("danglingDetails", "All dangling entries found: [{field, lostFqn, position}]") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty("danglingWarning", "Set when the dangling scan/cleanup could not complete cleanly") //$NON-NLS-1$ //$NON-NLS-2$
+            .booleanProperty(KEY_CLEAN_ORPHAN_ROLE_RIGHTS, "Whether orphaned role-rights removal was requested") //$NON-NLS-1$
+            .integerProperty("orphanRoleRightsFound", //$NON-NLS-1$
+                "Role-rights entries whose target is proven absent (the removable ones)") //$NON-NLS-1$
+            .integerProperty("orphanRoleRightsUndetermined", //$NON-NLS-1$
+                "Role-rights entries whose target does not resolve but whose absence could not be proven") //$NON-NLS-1$
+            .integerProperty("orphanRoleRightsRemovedCount", "Entries actually removed (0 in report-only mode)") //$NON-NLS-1$ //$NON-NLS-2$
+            .objectArrayProperty("orphanRoleRights", //$NON-NLS-1$
+                "Unresolved role-rights entries: [{role, target, verdict: absent|undetermined, rights, hasRls, " //$NON-NLS-1$
+                    + "reason?}]") //$NON-NLS-1$
+            .integerProperty("orphanRlsFieldsFound", //$NON-NLS-1$
+                "RLS field references that do not resolve (the total; the list below is capped)") //$NON-NLS-1$
+            .objectArrayProperty("orphanRlsFields", //$NON-NLS-1$
+                "RLS field references that do not resolve (report-only): [{role, target, right, field}]") //$NON-NLS-1$
+            .stringProperty("orphanRoleRightsWarning", //$NON-NLS-1$
+                "Set when the orphaned role-rights sweep could not complete cleanly") //$NON-NLS-1$
             .booleanProperty(KEY_REVALIDATE, "Whether a post-export revalidation was requested") //$NON-NLS-1$
             .stringProperty("revalidateWarning", "Set when the optional post-export revalidation failed") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.MESSAGE, "Human-readable summary of the outcome") //$NON-NLS-1$
@@ -390,7 +415,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
                     json.get(KEY_FULL_EXPORT).getAsBoolean(), candidates.size(), stillMissing.size(),
                     json.get("danglingFound").getAsInt(), //$NON-NLS-1$
                     json.get("danglingRemovedCount").getAsInt() > 0, //$NON-NLS-1$
-                    json.get(KEY_CLEAN_DANGLING_REFERENCES).getAsBoolean()));
+                    json.get(KEY_CLEAN_DANGLING_REFERENCES).getAsBoolean())
+                    + orphanSummaryFrom(json));
             return GsonProvider.get().toJson(json);
         }
         catch (RuntimeException e)
@@ -415,6 +441,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         // Configuration.mdo, so the destructive step must be an explicit opt-in, never
         // a side effect of a diagnostic run.
         boolean cleanDangling = JsonUtils.extractBooleanArgument(params, KEY_CLEAN_DANGLING_REFERENCES, false);
+        // Default FALSE (report-only), like cleanDanglingReferences: the report IS the preview.
+        boolean cleanOrphanRights = JsonUtils.extractBooleanArgument(params, KEY_CLEAN_ORPHAN_ROLE_RIGHTS, false);
         // Default FALSE: only the objects whose .mdo is actually missing are exported; // NOSONAR explanatory comment, not commented-out code
         // true re-exports everything (a full disk refresh, slow on the UI thread).
         boolean fullExport = JsonUtils.extractBooleanArgument(params, KEY_FULL_EXPORT, false);
@@ -503,6 +531,10 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         DanglingResult dangling =
             cleanDanglingReferences(ctx.config, bmModel, ctx.project, cleanDangling);
 
+        // Step 5b: role-rights entries whose target no longer exists (deleted outside EDT's delete
+        // refactoring). Reported by default; only proven-absent entries are removed on request.
+        RoleRightsOrphans.Sweep orphans = RoleRightsOrphans.sweep(ctx.project, bmModel, cleanOrphanRights);
+
         // Step 6 (optional, best-effort) does NOT happen here. Revalidation rebuilds FROM DISK,
         // and at this point the export it is supposed to validate is still queued - so running it
         // now would rebuild from the previous bytes and report on them, which is precisely the
@@ -543,9 +575,12 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
         {
             result.put("danglingWarning", dangling.warning); //$NON-NLS-1$
         }
+        putOrphanRoleRights(result, orphans, cleanOrphanRights);
         result.put(McpKeys.MESSAGE, buildMessage(exported, exported ? exportFqns.size() : 0, fullExport,
             missingBefore.size(), stillMissing.size(), dangling.found, dangling.removedFromModel,
-            cleanDangling));
+            cleanDangling) + orphanSummary(orphans.scan.count(RoleRightsOrphans.Verdict.ABSENT),
+                orphans.scan.count(RoleRightsOrphans.Verdict.UNDETERMINED), orphans.removed().size(),
+                orphans.scan.rlsFields.size(), cleanOrphanRights));
         return result.toJson();
     }
 
@@ -1334,6 +1369,107 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
                 : " (report-only; pass cleanDanglingReferences=true to remove them)."); //$NON-NLS-1$
         }
         return sb.toString();
+    }
+
+    /** Adds the orphaned role-rights report (and removal outcome) to the result. */
+    private static void putOrphanRoleRights(ToolResult result, RoleRightsOrphans.Sweep orphans, boolean clean)
+    {
+        List<Map<String, Object>> entries = new ArrayList<>();
+        for (RoleRightsOrphans.Entry entry : orphans.scan.entries)
+        {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("role", entry.role); //$NON-NLS-1$
+            row.put("target", entry.target); //$NON-NLS-1$
+            row.put("verdict", entry.verdict.label()); //$NON-NLS-1$
+            row.put("rights", entry.rights); //$NON-NLS-1$
+            row.put("hasRls", Boolean.valueOf(entry.hasRls)); //$NON-NLS-1$
+            if (entry.reason != null)
+            {
+                row.put("reason", entry.reason); //$NON-NLS-1$
+            }
+            entries.add(row);
+        }
+        List<Map<String, Object>> fields = new ArrayList<>();
+        for (RoleRightsOrphans.RlsField field : orphans.scan.rlsFields)
+        {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("role", field.role); //$NON-NLS-1$
+            row.put("target", field.target); //$NON-NLS-1$
+            row.put("right", field.right); //$NON-NLS-1$
+            row.put("field", field.field); //$NON-NLS-1$
+            fields.add(row);
+        }
+        result.put(KEY_CLEAN_ORPHAN_ROLE_RIGHTS, clean)
+            .put("orphanRoleRightsFound", orphans.scan.count(RoleRightsOrphans.Verdict.ABSENT)) //$NON-NLS-1$
+            .put("orphanRoleRightsUndetermined", //$NON-NLS-1$
+                orphans.scan.count(RoleRightsOrphans.Verdict.UNDETERMINED))
+            .put("orphanRoleRightsRemovedCount", orphans.removed().size()) //$NON-NLS-1$
+            .put("orphanRoleRights", limitObjects(entries)) //$NON-NLS-1$
+            .put("orphanRlsFieldsFound", fields.size()) //$NON-NLS-1$
+            .put("orphanRlsFields", limitObjects(fields)); //$NON-NLS-1$
+        if (orphans.warning != null)
+        {
+            result.put("orphanRoleRightsWarning", orphans.warning); //$NON-NLS-1$
+        }
+    }
+
+    /** The orphaned role-rights sentence restated from a result JSON; empty when its fields are absent. */
+    static String orphanSummaryFrom(JsonObject json)
+    {
+        JsonElement found = json.get("orphanRoleRightsFound"); //$NON-NLS-1$
+        JsonElement undetermined = json.get("orphanRoleRightsUndetermined"); //$NON-NLS-1$
+        JsonElement removed = json.get("orphanRoleRightsRemovedCount"); //$NON-NLS-1$
+        JsonElement fields = json.get("orphanRlsFieldsFound"); //$NON-NLS-1$
+        JsonElement clean = json.get(KEY_CLEAN_ORPHAN_ROLE_RIGHTS);
+        if (found == null || undetermined == null || removed == null || fields == null || clean == null)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        return orphanSummary(found.getAsInt(), undetermined.getAsInt(), removed.getAsInt(),
+            fields.getAsInt(), clean.getAsBoolean());
+    }
+
+    /**
+     * The orphaned role-rights sentence appended to the summary. Pure.
+     *
+     * @param absent entries proven absent
+     * @param undetermined unresolved entries whose absence is not proven
+     * @param removed entries removed
+     * @param rlsFields dangling RLS field references
+     * @param clean whether removal was requested
+     * @return the sentence, starting with a space; empty when there is nothing to say
+     */
+    static String orphanSummary(int absent, int undetermined, int removed, int rlsFields, boolean clean)
+    {
+        if (absent == 0 && undetermined == 0 && rlsFields == 0)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        StringBuilder sb = new StringBuilder(" Role rights: "); //$NON-NLS-1$
+        if (removed > 0)
+        {
+            sb.append("removed ").append(removed).append(" entry(ies) on deleted objects"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        else
+        {
+            sb.append(absent).append(" entry(ies) on deleted objects"); //$NON-NLS-1$
+            if (absent > 0)
+            {
+                sb.append(clean ? " (not removed - see orphanRoleRightsWarning)" //$NON-NLS-1$
+                    : " (report-only; pass cleanOrphanRoleRights=true to remove them)"); //$NON-NLS-1$
+            }
+        }
+        if (undetermined > 0)
+        {
+            sb.append("; ").append(undetermined) //$NON-NLS-1$
+                .append(" unresolved entry(ies) kept - absence not proven, see each reason"); //$NON-NLS-1$
+        }
+        if (rlsFields > 0)
+        {
+            sb.append("; ").append(rlsFields) //$NON-NLS-1$
+                .append(" RLS field reference(s) do not resolve (report-only)"); //$NON-NLS-1$
+        }
+        return sb.append('.').toString();
     }
 
     /** Appends the missing-before/still-missing outcome shared by both export modes. */

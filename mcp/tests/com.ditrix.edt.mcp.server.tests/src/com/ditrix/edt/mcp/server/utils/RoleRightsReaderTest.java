@@ -12,6 +12,13 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
+import org.eclipse.emf.common.util.URI;
+import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.InternalEObject;
+
+import com._1c.g5.v8.dt.metadata.dbview.DbViewFactory;
+import com._1c.g5.v8.dt.metadata.dbview.DbViewFieldDef;
+import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.rights.model.ObjectRight;
 import com._1c.g5.v8.dt.rights.model.ObjectRights;
@@ -335,6 +342,74 @@ public class RoleRightsReaderTest
         RoleDescription description = RightsFactory.eINSTANCE.createRoleDescription();
         String md = RoleRightsReader.render("Role.FullAccess", description, false, "en", 0); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(md.contains("_(no RLS templates)_")); //$NON-NLS-1$
+    }
+
+    // ==================== unresolved targets (deleted outside EDT) ====================
+
+    @Test
+    public void testRenderNamesAnUnresolvedTargetByItsAddressNotItsEClass()
+    {
+        // Before: an entry on a deleted object rendered as "Catalog" - the EClass, not the address.
+        RoleDescription description = RightsFactory.eINSTANCE.createRoleDescription();
+        ObjectRights gone = newObjectRights("Read", RightValue.SET); //$NON-NLS-1$
+        gone.setObject(proxy("unresolved:/Catalog.Gone")); //$NON-NLS-1$
+        description.getRights().add(gone);
+
+        String md = RoleRightsReader.render("Role.R", description, false, "en", 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(md, md.contains("| Catalog.Gone (unresolved) | Read | allowed |")); //$NON-NLS-1$
+        assertFalse(md, md.contains("| Catalog | Read |")); //$NON-NLS-1$
+        assertTrue(md, md.contains("**1 entry(ies) marked (unresolved)**")); //$NON-NLS-1$
+        assertTrue(md, md.contains("resync_to_disk")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnresolvedEntryWithOnlyDefaultCellsStillGetsTheNotice()
+    {
+        // Filtered out of the default matrix (PROVIDED, no RLS), yet it still blocks EDT's tasks.
+        RoleDescription description = RightsFactory.eINSTANCE.createRoleDescription();
+        ObjectRights gone = newObjectRights("Read", RightValue.PROVIDED); //$NON-NLS-1$
+        gone.setObject(proxy("unresolved:/Catalog.Gone")); //$NON-NLS-1$
+        description.getRights().add(gone);
+
+        String md = RoleRightsReader.render("Role.R", description, false, "en", 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(md, md.contains("_(no non-default rights)_")); //$NON-NLS-1$
+        assertTrue(md, md.contains("**1 entry(ies) marked (unresolved)**")); //$NON-NLS-1$
+        assertTrue(md, md.contains("resync_to_disk")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNoUnresolvedNoticeForALiveRole()
+    {
+        assertEquals("", RoleRightsReader.unresolvedNotice(0)); //$NON-NLS-1$
+        RoleDescription description = RightsFactory.eINSTANCE.createRoleDescription();
+        description.getRights().add(newObjectRights("Read", RightValue.SET)); //$NON-NLS-1$
+        String md = RoleRightsReader.render("Role.R", description, false, "en", 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(md, md.contains("(unresolved)")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUnresolvedRlsFieldIsMarkedNotBlank()
+    {
+        // Before: a field whose attribute was deleted rendered as an EMPTY Fields cell.
+        RoleDescription description = RightsFactory.eINSTANCE.createRoleDescription();
+        ObjectRights catalog = newObjectRights("Read", RightValue.SET); //$NON-NLS-1$
+        Rls rls = RightsFactory.eINSTANCE.createRls();
+        rls.setCondition("WHERE AttrA = 1"); //$NON-NLS-1$
+        DbViewFieldDef field = DbViewFactory.eINSTANCE.createDbViewFieldFieldDef();
+        ((InternalEObject)field).eSetProxyURI(URI.createURI("unresolved:/AttrA")); //$NON-NLS-1$
+        rls.getFields().add(field);
+        catalog.getRights().get(0).getRestrictionsByCondition().add(rls);
+        description.getRights().add(catalog);
+
+        String md = RoleRightsReader.render("Role.R", description, false, "en", 0); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(md, md.contains("| AttrA (unresolved) | WHERE AttrA = 1 |")); //$NON-NLS-1$
+    }
+
+    private static EObject proxy(String uri)
+    {
+        Catalog catalog = MdClassFactory.eINSTANCE.createCatalog();
+        ((InternalEObject)catalog).eSetProxyURI(URI.createURI(uri));
+        return catalog;
     }
 
     // ==================== in-memory model builders (headless EMF) ====================

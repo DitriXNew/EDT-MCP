@@ -4055,10 +4055,13 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Write the in-memory model back out to the on-disk src/ .mdo files and report model-to-disk desync; fixes 'object file does not exist' failures and dangling Configuration.mdo references. Direction MODEL -> DISK, the opposite of clean_project. Dangling references are REPORTED by default, not removed. Two opt-in modes are DESTRUCTIVE: re-exporting every object overwrites on-disk edits, and removing dangling references rewrites Configuration.mdo. Parameters and examples: get_tool_guide('resync_to_disk').",
+    "description": "Write the in-memory model back out to the on-disk src/ .mdo files and report model-to-disk desync; fixes 'object file does not exist' failures and dangling Configuration.mdo references. Direction MODEL -> DISK, the opposite of clean_project. Dangling references are REPORTED by default, not removed. Two opt-in modes are DESTRUCTIVE: re-exporting every object overwrites on-disk edits, and removing dangling references rewrites Configuration.mdo. Role-rights entries whose object no longer exists are also REPORTED by default; call once to review them, then again with cleanOrphanRoleRights=true to remove the proven-absent ones. Parameters and examples: get_tool_guide('resync_to_disk').",
     "inputSchema": {
       "properties": {
         "cleanDanglingReferences": {
+          "type": "boolean"
+        },
+        "cleanOrphanRoleRights": {
           "type": "boolean"
         },
         "fullExport": {
@@ -4084,6 +4087,9 @@
     "outputSchema": {
       "properties": {
         "cleanDanglingReferences": {
+          "type": "boolean"
+        },
+        "cleanOrphanRoleRights": {
           "type": "boolean"
         },
         "danglingDetails": {
@@ -4124,6 +4130,33 @@
         },
         "objectsExported": {
           "type": "integer"
+        },
+        "orphanRlsFields": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "orphanRlsFieldsFound": {
+          "type": "integer"
+        },
+        "orphanRoleRights": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "orphanRoleRightsFound": {
+          "type": "integer"
+        },
+        "orphanRoleRightsRemovedCount": {
+          "type": "integer"
+        },
+        "orphanRoleRightsUndetermined": {
+          "type": "integer"
+        },
+        "orphanRoleRightsWarning": {
+          "type": "string"
         },
         "projectName": {
           "type": "string"

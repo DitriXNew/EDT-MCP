@@ -900,4 +900,81 @@ public class ResyncToDiskToolTest
         assertEquals("a no-op must still revalidate, and must not wait for anything", //$NON-NLS-1$
             Collections.singletonList("revalidated"), order); //$NON-NLS-1$
     }
+
+    // ---- orphaned role rights (issue #462) -----------------------------------------------------
+
+    @Test
+    public void testOrphanRoleRightsOptInIsDeclaredAndReportedByDefault()
+    {
+        ResyncToDiskTool tool = new ResyncToDiskTool();
+        assertTrue(tool.getInputSchema().contains("\"cleanOrphanRoleRights\"")); //$NON-NLS-1$
+        String output = tool.getOutputSchema();
+        for (String key : Arrays.asList("orphanRoleRightsFound", "orphanRoleRightsUndetermined", //$NON-NLS-1$ //$NON-NLS-2$
+            "orphanRoleRightsRemovedCount", "orphanRoleRights", "orphanRlsFieldsFound", "orphanRlsFields", //$NON-NLS-1$ //$NON-NLS-2$
+            "orphanRoleRightsWarning")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        {
+            assertTrue("output schema must declare " + key, output.contains('"' + key + '"')); //$NON-NLS-1$
+        }
+        // The protocol clause lives in the always-loaded description: review first, then opt in.
+        String desc = tool.getDescription();
+        assertTrue(desc, desc.contains("cleanOrphanRoleRights=true")); //$NON-NLS-1$
+        assertTrue(desc, desc.contains("call once to review them")); //$NON-NLS-1$
+        assertTrue(tool.getGuide().contains("cleanOrphanRoleRights")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOrphanSummarySaysNothingForACleanProject()
+    {
+        assertEquals("", ResyncToDiskTool.orphanSummary(0, 0, 0, 0, false)); //$NON-NLS-1$
+        assertEquals("", ResyncToDiskTool.orphanSummary(0, 0, 0, 0, true)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOrphanSummaryReportOnlyPointsAtTheOptIn()
+    {
+        String summary = ResyncToDiskTool.orphanSummary(2, 1, 0, 1, false);
+        assertTrue(summary, summary.contains("2 entry(ies) on deleted objects")); //$NON-NLS-1$
+        assertTrue(summary, summary.contains("pass cleanOrphanRoleRights=true")); //$NON-NLS-1$
+        assertTrue(summary, summary.contains("1 unresolved entry(ies) kept")); //$NON-NLS-1$
+        assertTrue(summary, summary.contains("1 RLS field reference(s)")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOrphanSummaryClaimsARemovalOnlyWhenOneHappened()
+    {
+        assertTrue(ResyncToDiskTool.orphanSummary(2, 0, 2, 0, true).contains("removed 2 entry(ies)")); //$NON-NLS-1$
+        String failed = ResyncToDiskTool.orphanSummary(2, 0, 0, 0, true);
+        assertFalse(failed, failed.contains("removed 2")); //$NON-NLS-1$
+        assertTrue(failed, failed.contains("see orphanRoleRightsWarning")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOrphanSummaryFromAResultWithoutTheFieldsIsEmpty()
+    {
+        JsonObject json = new JsonObject();
+        assertEquals("", ResyncToDiskTool.orphanSummaryFrom(json)); //$NON-NLS-1$
+        json.addProperty("orphanRoleRightsFound", 1); //$NON-NLS-1$
+        json.addProperty("orphanRoleRightsUndetermined", 0); //$NON-NLS-1$
+        json.addProperty("orphanRoleRightsRemovedCount", 0); //$NON-NLS-1$
+        json.addProperty("orphanRlsFieldsFound", 0); //$NON-NLS-1$
+        json.addProperty("cleanOrphanRoleRights", false); //$NON-NLS-1$
+        assertEquals(ResyncToDiskTool.orphanSummary(1, 0, 0, 0, false), ResyncToDiskTool.orphanSummaryFrom(json));
+    }
+
+    @Test
+    public void testOrphanSummaryFromCountsTheTotalNotTheCappedList()
+    {
+        // The listed array stops at 500; the summary must restate the uncapped total.
+        JsonObject json = new JsonObject();
+        json.addProperty("orphanRoleRightsFound", 0); //$NON-NLS-1$
+        json.addProperty("orphanRoleRightsUndetermined", 0); //$NON-NLS-1$
+        json.addProperty("orphanRoleRightsRemovedCount", 0); //$NON-NLS-1$
+        json.addProperty("orphanRlsFieldsFound", 750); //$NON-NLS-1$
+        JsonArray capped = new JsonArray();
+        capped.add(new JsonObject());
+        json.add("orphanRlsFields", capped); //$NON-NLS-1$
+        json.addProperty("cleanOrphanRoleRights", false); //$NON-NLS-1$
+        String summary = ResyncToDiskTool.orphanSummaryFrom(json);
+        assertTrue(summary, summary.contains("750 RLS field reference(s)")); //$NON-NLS-1$
+    }
 }
