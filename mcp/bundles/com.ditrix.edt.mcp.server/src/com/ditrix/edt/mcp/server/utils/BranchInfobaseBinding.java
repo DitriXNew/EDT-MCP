@@ -142,7 +142,11 @@ public final class BranchInfobaseBinding
                 {
                     targetBound = true;
                 }
-                else if (targetDir != null && !targetBound)
+            }
+            // Directory probes can block on a dead share; run them only when no UUID matched.
+            for (InfobaseReference ib : bound)
+            {
+                if (ib != null && targetDir != null && !targetBound)
                 {
                     Path boundDir = fileDirOf(ib);
                     Boolean same = boundDir == null ? Boolean.FALSE

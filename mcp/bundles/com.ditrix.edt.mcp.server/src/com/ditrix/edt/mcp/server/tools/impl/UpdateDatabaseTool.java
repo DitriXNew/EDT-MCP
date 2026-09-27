@@ -1085,16 +1085,17 @@ public class UpdateDatabaseTool implements IMcpTool
     }
 
     /**
-     * The refusal of a pre-update check (the branch binding): nothing was published, so it is a plain
-     * error; {@code terminatedClient} is reported only when a client was terminated, like every other path.
+     * The refusal of a pre-update check (the branch binding): nothing was published. A terminated
+     * client is still a committed side effect, so that refusal carries the mutation marker too.
      */
     static String bindingRefusalResult(String message, boolean terminatedClient)
     {
-        ToolResult result = ToolResult.error(message);
-        if (terminatedClient)
+        if (!terminatedClient)
         {
-            result.put(KEY_TERMINATED_CLIENT, true);
+            return ToolResult.error(message).toJson();
         }
+        ToolResult result = ToolResult.errorAfterMutation(message);
+        result.put(KEY_TERMINATED_CLIENT, true);
         return result.toJson();
     }
 

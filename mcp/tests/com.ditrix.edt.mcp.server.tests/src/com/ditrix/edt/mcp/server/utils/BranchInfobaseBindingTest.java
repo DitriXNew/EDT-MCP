@@ -54,6 +54,20 @@ public class BranchInfobaseBindingTest
     }
 
     @Test
+    public void testAUuidMatchIsFoundBeforeAnyDirectoryProbe()
+    {
+        UUID targetUuid = UUID.randomUUID();
+        InfobaseReference unreachable = fileRef("Dead", UUID.randomUUID(), //$NON-NLS-1$
+            Paths.get("X:", "dead-share", "Base").toString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String refusal = BranchInfobaseBinding.decide(bound(unreachable, ref("Target", targetUuid)), //$NON-NLS-1$
+            ref("Target", targetUuid), Paths.get("X:", "server-db"), "Proj", "App", "ServerApplication.S", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            (a, b) -> {
+                throw new AssertionError("no probe may run when a UUID already matches"); //$NON-NLS-1$
+            }, 5_000L);
+        assertNull(refusal);
+    }
+
+    @Test
     public void testNoBindingIsNotAConflict()
     {
         assertNull(BranchInfobaseBinding.decide(Optional.empty(), ref("A", UUID.randomUUID()), null, //$NON-NLS-1$

@@ -214,6 +214,8 @@ public class UpdateDatabaseToolTest
     {
         String json = UpdateDatabaseTool.bindingRefusalResult("Refusing to update: x", true); //$NON-NLS-1$
         assertTrue(json, json.contains("\"terminatedClient\":true")); //$NON-NLS-1$
+        assertTrue("a terminated client is a committed side effect", //$NON-NLS-1$
+            json.contains("\"mutationCommitted\":true")); //$NON-NLS-1$
     }
 
     @Test
