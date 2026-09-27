@@ -12,6 +12,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -442,38 +443,33 @@ public final class StandaloneServerStateRecovery
         IProject project, IApplication application, String applicationId,
         ApplicationUpdateType updateType, ExecutionContext context, IProgressMonitor monitor)
     {
+        return updateWithRecovery(manager, project, application, applicationId, updateType, context,
+            monitor, null);
+    }
+
+    /**
+     * {@link #updateWithRecovery(IApplicationManager, IProject, IApplication, String,
+     * ApplicationUpdateType, ExecutionContext, IProgressMonitor)} with a guard consulted immediately
+     * before EVERY update attempt, the recovery retry included. A guard refusal is thrown as
+     * {@link AttemptRefusedException} and is never retried.
+     *
+     * @param guard the pre-attempt check, or {@code null} for none
+     * @return the update state EDT reported
+     */
+    public static ApplicationUpdateState updateWithRecovery(IApplicationManager manager, // NOSONAR every argument is EDT's own update signature plus what the recovery needs
+        IProject project, IApplication application, String applicationId,
+        ApplicationUpdateType updateType, ExecutionContext context, IProgressMonitor monitor,
+        AttemptGuard guard)
+    {
         beginOperation();
         try
         {
+            // Before the pre-flight: a refused target must not have its server stopped or restarted.
+            checkGuard(guard);
             ensureStartable(project, application, applicationId, manager);
-            try
-            {
-                return manager.update(application, updateType, context, monitor);
-            }
-            catch (RuntimeException e)
-            {
-                String refusal = refusalMessage(e);
-                if (refusal == null)
-                {
-                    throw e;
-                }
-                Recovery recovery = stopServerForRefusal(project, application, applicationId,
-                    manager, refusal);
-                if (!recovery.recovered())
-                {
-                    throw new ApplicationException(
-                        staleStateError(applicationId, refusal, recovery, null), e);
-                }
-                try
-                {
-                    return manager.update(application, updateType, context, monitor);
-                }
-                catch (RuntimeException retry)
-                {
-                    throw new ApplicationException(staleStateError(applicationId, refusal, recovery,
-                        PlatformFailures.describe(retry)), retry);
-                }
-            }
+            return attemptUpdates(() -> manager.update(application, updateType, context, monitor), guard,
+                refusal -> stopServerForRefusal(project, application, applicationId, manager, refusal),
+                applicationId);
         }
         catch (RuntimeException failure)
         {
@@ -487,6 +483,99 @@ public final class StandaloneServerStateRecovery
         finally
         {
             endOperation();
+        }
+    }
+
+    /**
+     * The attempt sequence of {@link #updateWithRecovery}: guard, update, and on a stale-state
+     * refusal one recovery stop, guard again, one retry. Package-private for unit tests.
+     */
+    static ApplicationUpdateState attemptUpdates(Supplier<ApplicationUpdateState> update,
+        AttemptGuard guard, Function<String, Recovery> recover, String applicationId)
+    {
+        checkGuard(guard);
+        try
+        {
+            return enter(update, guard);
+        }
+        catch (RuntimeException e)
+        {
+            String refusal = refusalMessage(e);
+            if (refusal == null)
+            {
+                throw e;
+            }
+            Recovery recovery = recover.apply(refusal);
+            if (!recovery.recovered())
+            {
+                throw new ApplicationException(
+                    staleStateError(applicationId, refusal, recovery, null), e);
+            }
+            // The stop can take long enough for the caller's precondition to change.
+            checkGuard(guard);
+            try
+            {
+                return enter(update, guard);
+            }
+            catch (RuntimeException retry)
+            {
+                throw new ApplicationException(staleStateError(applicationId, refusal, recovery,
+                    PlatformFailures.describe(retry)), retry);
+            }
+        }
+    }
+
+    private static void checkGuard(AttemptGuard guard)
+    {
+        String refusal;
+        try
+        {
+            refusal = guard == null ? null : guard.refusalOrNull();
+        }
+        catch (RuntimeException e)
+        {
+            // A check that could not run proves nothing; the attempt must not proceed.
+            throw new AttemptRefusedException("The pre-update check failed: " //$NON-NLS-1$
+                + PlatformFailures.describe(e) + ". Nothing was updated."); //$NON-NLS-1$
+        }
+        if (refusal != null)
+        {
+            throw new AttemptRefusedException(refusal);
+        }
+    }
+
+    private static ApplicationUpdateState enter(Supplier<ApplicationUpdateState> update, AttemptGuard guard)
+    {
+        if (guard != null)
+        {
+            guard.updateEntered();
+        }
+        return update.get();
+    }
+
+    /** A check run immediately before each update attempt; a non-null answer refuses the attempt. */
+    @FunctionalInterface
+    public interface AttemptGuard
+    {
+        /**
+         * @return the refusal text, or {@code null} when the attempt may run
+         */
+        String refusalOrNull();
+
+        /** Called immediately before the platform update is entered (after a passing check). */
+        default void updateEntered()
+        {
+        }
+    }
+
+    /** Thrown when an {@link AttemptGuard} refuses an update attempt; nothing was attempted. */
+    public static final class AttemptRefusedException extends ApplicationException
+    {
+        private static final long serialVersionUID = 1L;
+
+        AttemptRefusedException(String message)
+        {
+            super(message);
         }
     }
 

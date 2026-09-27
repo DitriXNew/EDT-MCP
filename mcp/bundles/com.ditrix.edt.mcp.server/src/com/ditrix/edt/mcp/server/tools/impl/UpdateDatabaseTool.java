@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
@@ -27,6 +28,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
+import com.ditrix.edt.mcp.server.utils.BranchInfobaseBinding;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DebugServerTargetSupport;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
@@ -64,6 +66,10 @@ public class UpdateDatabaseTool implements IMcpTool
 
     /** Output key: whether a running 1C client was terminated to free the infobase. */
     private static final String KEY_TERMINATED_CLIENT = "terminatedClient"; //$NON-NLS-1$
+
+    /** Input param: skip the current-branch binding check of the target infobase. */
+    static final String KEY_IGNORE_BRANCH_BINDING = "ignoreBranchBinding"; //$NON-NLS-1$
+
     /** Output key: display name of the target application. */
     private static final String KEY_APPLICATION_NAME = "applicationName"; //$NON-NLS-1$
     /** Output key: update mode applied (FULL or INCREMENTAL). */
@@ -127,6 +133,9 @@ public class UpdateDatabaseTool implements IMcpTool
             .booleanProperty("checkInfobaseSessions", //$NON-NLS-1$
                 "Before applying, refuse when infobase_sessions finds a non-agent standalone-server " //$NON-NLS-1$
                 + "session (default true). false skips this safety pre-flight.") //$NON-NLS-1$
+            .booleanProperty(KEY_IGNORE_BRANCH_BINDING,
+                "true skips the refusal of a target whose infobase is not bound to the project's " //$NON-NLS-1$
+                + "current Git branch (default false).") //$NON-NLS-1$
             .build();
     }
 
@@ -204,6 +213,8 @@ public class UpdateDatabaseTool implements IMcpTool
             JsonUtils.extractBooleanArgument(params, "terminateRunningClients", true); //$NON-NLS-1$
         boolean checkInfobaseSessions =
             JsonUtils.extractBooleanArgument(params, "checkInfobaseSessions", true); //$NON-NLS-1$
+        boolean ignoreBranchBinding =
+            JsonUtils.extractBooleanArgument(params, KEY_IGNORE_BRANCH_BINDING, false);
         String rawPolicy = JsonUtils.extractStringArgument(params, "externalInfobaseChanges"); //$NON-NLS-1$
         ExternalInfobaseChangesPolicy externalChanges = ExternalInfobaseChangesPolicy.parse(rawPolicy);
         if (externalChanges == null)
@@ -298,7 +309,8 @@ public class UpdateDatabaseTool implements IMcpTool
         }
 
         return updateDatabase(projectName, applicationId, fullUpdate, confirm,
-            terminateRunningClients, checkInfobaseSessions, externalChanges, portPolicy);
+            terminateRunningClients, checkInfobaseSessions, ignoreBranchBinding, externalChanges,
+            portPolicy);
     }
 
     /**
@@ -725,13 +737,14 @@ public class UpdateDatabaseTool implements IMcpTool
      *            this EDT launched on it before the update; false leaves a running client in place
      * @param checkInfobaseSessions true (default) refuses a readable non-agent standalone-server
      *            session before entering the update API
+     * @param ignoreBranchBinding true skips the current-branch binding check of the target infobase
      * @param externalChanges how to answer EDT's "Infobase configuration changes" modal when the
      *            infobase was changed outside EDT since the last EDT interaction
      * @return JSON string with result
      */
     private String updateDatabase(String projectName, String applicationId, // NOSONAR one resolved plan, not a bag of concerns
             boolean fullUpdate, boolean confirm,
-            boolean terminateRunningClients, boolean checkInfobaseSessions,
+            boolean terminateRunningClients, boolean checkInfobaseSessions, boolean ignoreBranchBinding,
             ExternalInfobaseChangesPolicy externalChanges,
             StandaloneServerPortConflictPolicy portPolicy)
     {
@@ -773,6 +786,18 @@ public class UpdateDatabaseTool implements IMcpTool
             }
 
             IApplication application = appOpt.get();
+
+            // A standalone-server application stays listed after a branch switch; refuse a target
+            // the current branch does not bind (checked again right before the update).
+            if (!ignoreBranchBinding)
+            {
+                String bindingRefusal =
+                    BranchInfobaseBinding.refusalOrNull(project, application, applicationId);
+                if (bindingRefusal != null)
+                {
+                    return ToolResult.error(bindingRefusal).toJson();
+                }
+            }
             
             // Check current update state before proceeding
             ApplicationUpdateState stateBefore = appManager.getUpdateState(application);
@@ -855,6 +880,13 @@ public class UpdateDatabaseTool implements IMcpTool
             }
             try
             {
+                // Consent and the lock can wait long: re-check before the first side effect.
+                String bindingRefusal = ignoreBranchBinding ? null
+                    : BranchInfobaseBinding.refusalOrNull(project, application, applicationId);
+                if (bindingRefusal != null)
+                {
+                    return bindingRefusalResult(bindingRefusal, false);
+                }
                 if (terminateRunningClients)
                 {
                     terminatedClient =
@@ -919,15 +951,40 @@ public class UpdateDatabaseTool implements IMcpTool
                             ? portPolicy : null;
                     boolean autoConfirmerArmed = LaunchUpdateDialogAutoConfirmer.arm(false, false,
                         true, externalChanges, infobaseName, armedPortPolicy, armedServerName);
+                    // The branch may have been switched while consent, the lock, the session check
+                    // or a recovery stop waited: re-checked before EVERY update attempt. The guard
+                    // also records whether the platform update was actually entered.
+                    AtomicBoolean platformUpdateEntered = new AtomicBoolean();
+                    StandaloneServerStateRecovery.AttemptGuard bindingGuard =
+                        new StandaloneServerStateRecovery.AttemptGuard()
+                        {
+                            @Override
+                            public String refusalOrNull()
+                            {
+                                return ignoreBranchBinding ? null
+                                    : BranchInfobaseBinding.refusalOrNull(project, application, applicationId);
+                            }
+
+                            @Override
+                            public void updateEntered()
+                            {
+                                platformUpdateEntered.set(true);
+                            }
+                        };
                     try
                     {
-                        updateApiEntered = true;
                         stateAfter = StandaloneServerStateRecovery.updateWithRecovery(appManager,
-                            project, application, applicationId, updateType, context, monitor);
+                            project, application, applicationId, updateType, context, monitor,
+                            bindingGuard);
                         updateApiReturned = true;
                     }
                     catch (ApplicationException ex)
                     {
+                        // The binding guard refused an attempt: nothing was published.
+                        if (findInChain(ex, StandaloneServerStateRecovery.AttemptRefusedException.class::isInstance) != null)
+                        {
+                            return bindingRefusalResult(ex.getMessage(), terminatedClient);
+                        }
                         // A standalone-server target publishes THROUGH its server, so the update
                         // starts it first; when its ports are busy EDT raises the port-conflict
                         // modal, the auto-confirmer cancels it (see LaunchUpdateDialogAutoConfirmer)
@@ -961,6 +1018,7 @@ public class UpdateDatabaseTool implements IMcpTool
                         // exception: once "Find free port" is pressed the server configuration is
                         // rewritten, and a RuntimeException on the way out must not swallow that.
                         portsReassigned = watch.portsReassigned();
+                        updateApiEntered = platformUpdateEntered.get();
                         if (autoConfirmerArmed)
                         {
                             LaunchUpdateDialogAutoConfirmer.disarm(false, false, true, externalChanges,
@@ -1031,6 +1089,21 @@ public class UpdateDatabaseTool implements IMcpTool
             return appendAccessSettingsDialogFailure(marked, accessDialogsBefore,
                 InfobaseAuthDialogSuppressor.accessSettingsAutoCancelCount());
         }
+    }
+
+    /**
+     * The refusal of a pre-update check (the branch binding): nothing was published. A terminated
+     * client is still a committed side effect, so that refusal carries the mutation marker too.
+     */
+    static String bindingRefusalResult(String message, boolean terminatedClient)
+    {
+        if (!terminatedClient)
+        {
+            return ToolResult.error(message).toJson();
+        }
+        ToolResult result = ToolResult.errorAfterMutation(message);
+        result.put(KEY_TERMINATED_CLIENT, true);
+        return result.toJson();
     }
 
     static String appendAccessSettingsDialogFailure(String result, long before, long after)

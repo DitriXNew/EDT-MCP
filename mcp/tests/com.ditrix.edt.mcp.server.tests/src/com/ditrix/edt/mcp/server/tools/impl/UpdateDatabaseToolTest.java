@@ -185,6 +185,40 @@ public class UpdateDatabaseToolTest
     }
 
     @Test
+    public void testSchemaAndGuideDeclareTheBranchBindingOptOut()
+    {
+        // The refusal names ignoreBranchBinding=true, so the knob must be reachable (#459).
+        String schema = new UpdateDatabaseTool().getInputSchema();
+        assertTrue("schema must declare the branch-binding opt-out", //$NON-NLS-1$
+            schema.contains("\"" + UpdateDatabaseTool.KEY_IGNORE_BRANCH_BINDING + "\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("ignoreBranchBinding", UpdateDatabaseTool.KEY_IGNORE_BRANCH_BINDING); //$NON-NLS-1$
+        String guide = new UpdateDatabaseTool().getGuide();
+        assertTrue(guide.contains("## Branch binding")); //$NON-NLS-1$
+        assertTrue(guide.contains("ignoreBranchBinding")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testBindingRefusalWithoutTerminationOmitsTerminatedClient()
+    {
+        String json = UpdateDatabaseTool.bindingRefusalResult("Refusing to update: x", false); //$NON-NLS-1$
+        assertTrue(json, json.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue(json, json.contains("Refusing to update: x")); //$NON-NLS-1$
+        assertFalse("absent unless a client was terminated, like every other path", //$NON-NLS-1$
+            json.contains("terminatedClient")); //$NON-NLS-1$
+        assertFalse("a pre-update refusal is not an unknown mutation outcome", //$NON-NLS-1$
+            json.contains("mutationOutcome")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testBindingRefusalAfterTerminationReportsIt()
+    {
+        String json = UpdateDatabaseTool.bindingRefusalResult("Refusing to update: x", true); //$NON-NLS-1$
+        assertTrue(json, json.contains("\"terminatedClient\":true")); //$NON-NLS-1$
+        assertTrue("a terminated client is a committed side effect", //$NON-NLS-1$
+            json.contains("\"mutationCommitted\":true")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testSchemaDeclaresTheStandaloneServerPortConflictPolicy()
     {
         // Without it the port-conflict refusal names a knob the caller cannot reach (#434).

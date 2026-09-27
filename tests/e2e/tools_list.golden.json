@@ -5031,6 +5031,10 @@
         "fullUpdate": {
           "type": "boolean"
         },
+        "ignoreBranchBinding": {
+          "description": "true skips the refusal of a target whose infobase is not bound to the project's current Git branch (default false).",
+          "type": "boolean"
+        },
         "launchConfigurationName": {
           "type": "string"
         },
