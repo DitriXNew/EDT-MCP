@@ -507,7 +507,7 @@ public final class RoleRightsReader
         {
             if (field instanceof EObject && ((EObject)field).eIsProxy())
             {
-                names.add(RoleRightsOrphans.addressOrUri((EObject)field) + UNRESOLVED_SUFFIX);
+                names.add(RoleRightsOrphans.fieldLabel((EObject)field) + UNRESOLVED_SUFFIX);
             }
             else if (field instanceof DuallyNamedElement)
             {

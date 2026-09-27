@@ -59,6 +59,9 @@ public final class RoleRightsOrphans
     /** Marker of a lazy-link proxy fragment; the symbolic name follows the last {@code ::}. */
     private static final String LAZY_LINK_MARKER = "lazyLink_"; //$NON-NLS-1$
 
+    /** The DB-view path segment that precedes a field name in a field proxy's fragment. */
+    private static final String FIELDS_SEGMENT = "fields:"; //$NON-NLS-1$
+
     /** The three verdicts on a rights entry's target. */
     public enum Verdict
     {
@@ -514,6 +517,33 @@ public final class RoleRightsOrphans
     }
 
     /**
+     * A human label for an RLS field that did not resolve: the field name its DB-view path still
+     * carries ({@code ...#/dbViewDefs/mainView/fields:AttrA} gives {@code AttrA}), else
+     * {@link #addressOrUri}.
+     *
+     * @param field an unresolved field proxy
+     * @return the label
+     */
+    public static String fieldLabel(EObject field)
+    {
+        URI uri = field instanceof InternalEObject ? ((InternalEObject)field).eProxyURI() : null;
+        return fieldNameOf(uri) != null ? fieldNameOf(uri) : addressOrUri(field);
+    }
+
+    /** @return the field name after the last {@code fields:} of a proxy fragment, or {@code null}. Pure. */
+    static String fieldNameOf(URI uri)
+    {
+        String fragment = uri != null ? uri.fragment() : null;
+        int at = fragment != null ? fragment.lastIndexOf(FIELDS_SEGMENT) : -1;
+        if (at < 0)
+        {
+            return null;
+        }
+        String name = fragment.substring(at + FIELDS_SEGMENT.length());
+        return name.isEmpty() || name.indexOf('/') >= 0 ? null : name;
+    }
+
+    /**
      * @return the entry's target when it does not resolve (a proxy after the resolving getter), else
      *         {@code null}
      */
@@ -546,7 +576,7 @@ public final class RoleRightsOrphans
             {
                 for (EObject field : unresolvedFields(rls))
                 {
-                    scan.rlsFields.add(new RlsField(roleFqn, targetLabel, rightName(right), addressOrUri(field)));
+                    scan.rlsFields.add(new RlsField(roleFqn, targetLabel, rightName(right), fieldLabel(field)));
                 }
             }
         }

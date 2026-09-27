@@ -96,6 +96,16 @@ public class RoleRightsOrphansTest
         assertNull(RoleRightsOrphans.addressOf(URI.createURI("platform:/resource/x#/1"))); //$NON-NLS-1$
     }
 
+    @Test
+    public void testFieldNameOfTheLiveDbViewFieldProxy()
+    {
+        // The exact URI EDT 2026.2.1 left on an RLS field after its attribute was deleted.
+        URI uri = URI.createURI("bm://TestConfiguration/Catalog.OrphA#/dbViewDefs/mainView/fields:AttrA"); //$NON-NLS-1$
+        assertEquals("AttrA", RoleRightsOrphans.fieldNameOf(uri)); //$NON-NLS-1$
+        assertNull(RoleRightsOrphans.fieldNameOf(URI.createURI("bm://P/Catalog.X#/attributes/1"))); //$NON-NLS-1$
+        assertNull(RoleRightsOrphans.fieldNameOf(null));
+    }
+
     // ==================== judge: the three verdicts ====================
 
     @Test
