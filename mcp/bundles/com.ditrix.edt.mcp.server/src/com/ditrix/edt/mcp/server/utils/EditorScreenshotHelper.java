@@ -733,32 +733,98 @@ public final class EditorScreenshotHelper
     }
 
     /**
-     * Brings a form element into view: every Pages group that encloses the element switches to the
-     * page holding it (nested groups included), the same way selecting the element in the form editor
-     * does. The selection is then cleared so no selection frame is painted into the captured image. A
-     * later full re-render shows the designer's default pages again. Must be called on the UI thread.
+     * The form element a capture should bring into view, resolved before any render so an unknown name
+     * fails fast. {@link #getItemId()} is meaningful only when {@link #getError()} is {@code null}.
+     */
+    public static final class ShowElementTarget
+    {
+        private final int itemId;
+        private final String error;
+
+        private ShowElementTarget(int itemId, String error)
+        {
+            this.itemId = itemId;
+            this.error = error;
+        }
+
+        /** @return the form item id to select, valid when {@link #getError()} is {@code null} */
+        public int getItemId()
+        {
+            return itemId;
+        }
+
+        /** @return {@code null} when the element was resolved, otherwise why it cannot be shown */
+        public String getError()
+        {
+            return error;
+        }
+    }
+
+    /**
+     * Resolves the element to show by name in the representation's form model. Needs no render, so it
+     * runs before the render gate: an unknown name fails with an explicit error instead of paying the
+     * render wait or falling into the render-unavailable error. Refused in Java (non-native) render
+     * mode, where the page switch is not driven: a silent capture of the default page would be a wrong
+     * answer.
      *
      * @param representation the {@code FormWysiwygRepresentation} instance
      * @param elementName the element's programmatic name (case-insensitive, as in 1C)
-     * @return {@code null} on success, otherwise a message describing why the element was not shown
+     * @return the resolved target, or one carrying the error
      */
-    public static String showFormElement(Object representation, String elementName)
+    public static ShowElementTarget resolveShowElement(Object representation, String elementName)
     {
+        return resolveShowElement(representation, elementName, NativeRenderModeProbe.getNativeRenderMode());
+    }
+
+    static ShowElementTarget resolveShowElement(Object representation, String elementName,
+        NativeRenderModeProbe.NativeRenderMode renderMode)
+    {
+        if (renderMode == NativeRenderModeProbe.NativeRenderMode.OFF)
+        {
+            return new ShowElementTarget(0, "showElement needs the native form render, but EDT runs with " //$NON-NLS-1$
+                + "-DnativeFormLayoutRender=false. Restart EDT with the native render to capture element '" //$NON-NLS-1$
+                + elementName + "'."); //$NON-NLS-1$
+        }
         if (!(getRepresentationForm(representation) instanceof Form form))
         {
-            return "The form model of the WYSIWYG editor is not available"; //$NON-NLS-1$
+            return new ShowElementTarget(0, "The form model of the WYSIWYG editor is not available"); //$NON-NLS-1$
         }
         FormItem item = findFormItem(form, elementName);
         if (item == null)
         {
-            return "Form element '" + elementName + "' was not found in the form. " //$NON-NLS-1$ //$NON-NLS-2$
+            return new ShowElementTarget(0, "Form element '" + elementName + "' was not found in the form. " //$NON-NLS-1$ //$NON-NLS-2$
                 + "Pass the element's programmatic name (e.g. a page name); " //$NON-NLS-1$
-                + "get_metadata_details with the form FQN lists the elements."; //$NON-NLS-1$
+                + "get_metadata_details with the form FQN lists the elements."); //$NON-NLS-1$
         }
+        return new ShowElementTarget(item.getId(), null);
+    }
+
+    /**
+     * Brings a resolved form element into view: every Pages group that encloses the element switches to
+     * the page holding it (nested groups included), the same way selecting the element in the form
+     * editor does. The selection is then cleared so no selection frame is painted into the captured
+     * image. Call {@link #restoreDefaultPages(Object)} after reading the image. Must be called on the UI
+     * thread.
+     *
+     * @param representation the {@code FormWysiwygRepresentation} instance
+     * @param target the element resolved by {@link #resolveShowElement(Object, String)}
+     * @param elementName the element name, for error messages
+     * @return {@code null} on success, otherwise a message describing why the element was not shown
+     */
+    public static String showFormElement(Object representation, ShowElementTarget target, String elementName)
+    {
+        return showFormElement(representation, target, elementName, FRESH_RENDER_WAIT_TIMEOUT_MS);
+    }
+
+    static String showFormElement(Object representation, ShowElementTarget target, String elementName,
+        int timeoutMs)
+    {
+        long deadline = System.currentTimeMillis() + timeoutMs;
         // Only the synchronous native render is driven here. The editor's own setSelection would also
         // switch the pages, but in native mode it schedules an asynchronous select-by-id rebuild that can
         // land after the frame-clearing render below and paint the selection frame back.
-        if (renderRequestedFormSynchronously(representation, new int[] { item.getId() }) != RenderOutcome.RENDERED)
+        if (renderUntilReady(representation, new int[] { target.getItemId() }, false,
+            deadline) != RenderOutcome.RENDERED)
         {
             return "The form could not be re-rendered to show element '" + elementName //$NON-NLS-1$
                 + "'. Ensure EDT runs with buffered native render " //$NON-NLS-1$
@@ -766,12 +832,54 @@ public final class EditorScreenshotHelper
         }
         // An update-only render with an empty selection keeps the switched pages but drops the
         // selection frame; a full render would bring back the default pages.
-        if (renderRequestedFormSynchronously(representation, new int[0], true) != RenderOutcome.RENDERED)
+        if (renderUntilReady(representation, new int[0], true, deadline) != RenderOutcome.RENDERED)
         {
             return "Element '" + elementName + "' was shown, but the selection frame could not be " //$NON-NLS-1$ //$NON-NLS-2$
                 + "cleared from the image. Try again."; //$NON-NLS-1$
         }
         return null;
+    }
+
+    /**
+     * Restores the designer's default pages after a {@code showElement} capture with a plain full
+     * render, so neither the user's editor nor a later capture without {@code showElement} keeps the
+     * switched page. Best effort: a failure is logged, the capture already holds its image.
+     *
+     * @param representation the {@code FormWysiwygRepresentation} instance
+     * @return {@code true} if the full render ran
+     */
+    public static boolean restoreDefaultPages(Object representation)
+    {
+        return restoreDefaultPages(representation, FRESH_RENDER_WAIT_TIMEOUT_MS);
+    }
+
+    static boolean restoreDefaultPages(Object representation, int timeoutMs)
+    {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        if (renderUntilReady(representation, null, false, deadline) == RenderOutcome.RENDERED)
+        {
+            return true;
+        }
+        Activator.logWarning("Could not restore the default form pages after a showElement capture"); //$NON-NLS-1$
+        return false;
+    }
+
+    /**
+     * Drives a synchronous render, retrying while the hooks report {@code NOT_READY} (the mapping root is
+     * transiently unavailable) until the deadline, as {@link #ensureRenderedFormImage(Object, int, boolean)}
+     * does.
+     */
+    private static RenderOutcome renderUntilReady(Object representation, int[] selectedIds, boolean updateOnly,
+        long deadline)
+    {
+        RenderOutcome outcome = renderRequestedFormSynchronously(representation, selectedIds, updateOnly);
+        while (outcome == RenderOutcome.NOT_READY && System.currentTimeMillis() < deadline)
+        {
+            processEvents(Display.getCurrent());
+            sleep(RENDER_WAIT_POLL_INTERVAL_MS);
+            outcome = renderRequestedFormSynchronously(representation, selectedIds, updateOnly);
+        }
+        return outcome;
     }
 
     /**
@@ -1185,7 +1293,8 @@ public final class EditorScreenshotHelper
         }
         catch (Exception e)
         {
-            Activator.logWarning("Synchronous form render failed, falling back to async rebuild: " //$NON-NLS-1$
+            // The caller decides on a fallback: ensureRenderedFormImage has the async rebuild, showElement none.
+            Activator.logWarning("Synchronous form render failed: " //$NON-NLS-1$
                 + e.getMessage());
             return RenderOutcome.UNREACHABLE;
         }

@@ -166,6 +166,18 @@ public class GetFormScreenshotTool implements IMcpTool
                     + "try again once the requested form's editor is fully open.").toJson()); //$NON-NLS-1$
             }
 
+            // Resolve showElement before the render gate: an unknown name must fail fast with the
+            // not-found error, not wait for the render or turn into the render-unavailable error.
+            EditorScreenshotHelper.ShowElementTarget showTarget = null;
+            if (showElement != null && !showElement.isEmpty())
+            {
+                showTarget = EditorScreenshotHelper.resolveShowElement(representation, showElement);
+                if (showTarget.getError() != null)
+                {
+                    return CaptureResult.error(ToolResult.error(showTarget.getError()).toJson());
+                }
+            }
+
             if (refresh)
             {
                 EditorScreenshotHelper.refreshViewer(wysiwygViewer);
@@ -200,11 +212,12 @@ public class GetFormScreenshotTool implements IMcpTool
 
             // After the (possibly forced) render: a full re-render shows the designer's default pages
             // again, so the requested page is switched last and read straight from that render.
-            if (showElement != null && !showElement.isEmpty())
+            if (showTarget != null)
             {
-                String showError = EditorScreenshotHelper.showFormElement(representation, showElement);
+                String showError = EditorScreenshotHelper.showFormElement(representation, showTarget, showElement);
                 if (showError != null)
                 {
+                    EditorScreenshotHelper.restoreDefaultPages(representation);
                     return CaptureResult.error(ToolResult.error(showError).toJson());
                 }
             }
@@ -212,10 +225,21 @@ public class GetFormScreenshotTool implements IMcpTool
             ImageDataResult imageResult = readValidImageData(representation, wysiwygViewer, rendered, formRequested);
             if (imageResult.error != null)
             {
+                if (showTarget != null)
+                {
+                    EditorScreenshotHelper.restoreDefaultPages(representation);
+                }
                 return imageResult.error;
             }
 
+            // Encode before restoring: the native render reuses the ImageData instance.
             String base64 = EditorScreenshotHelper.encodePng(imageResult.imageData);
+            if (showTarget != null)
+            {
+                // The switch applies to this capture only: bring the default pages back in the editor
+                // and in the buffer a later capture without showElement would read.
+                EditorScreenshotHelper.restoreDefaultPages(representation);
+            }
             return CaptureResult.success(base64);
         }
         catch (Exception e)
