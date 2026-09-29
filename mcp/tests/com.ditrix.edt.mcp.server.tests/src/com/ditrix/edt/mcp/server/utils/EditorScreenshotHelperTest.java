@@ -565,7 +565,8 @@ public class EditorScreenshotHelperTest
     {
         assertEquals(2, EditorScreenshotHelper.findResolutionPreset(PRESETS, "2")); //$NON-NLS-1$
         assertEquals(2, EditorScreenshotHelper.findResolutionPreset(PRESETS, " 1680x1050 ")); //$NON-NLS-1$
-        assertEquals(3, EditorScreenshotHelper.findResolutionPreset(PRESETS, "1920")); //$NON-NLS-1$
+        // A digits-only value is an index, so a caption part needs a non-digit.
+        assertEquals(3, EditorScreenshotHelper.findResolutionPreset(PRESETS, "1920x")); //$NON-NLS-1$
     }
 
     @Test
