@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertSame;
@@ -553,5 +554,105 @@ public class EditorScreenshotHelperTest
             EditorScreenshotHelper.ensureRenderedFormImage(rep, SHORT_TIMEOUT_MS, false));
         assertTrue("a rebuildInternal of a foreign shape must route to the async fallback", //$NON-NLS-1$
             rep.asyncRebuilds.get() >= 1);
+    }
+
+    // ==================== resolution presets ====================
+
+    private static final String[] PRESETS = { "1024x768", "1280x1024", "1680x1050", "1920x1080" }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+    @Test
+    public void testFindResolutionPresetByIndexAndCaption()
+    {
+        assertEquals(2, EditorScreenshotHelper.findResolutionPreset(PRESETS, "2")); //$NON-NLS-1$
+        assertEquals(2, EditorScreenshotHelper.findResolutionPreset(PRESETS, " 1680x1050 ")); //$NON-NLS-1$
+        assertEquals(3, EditorScreenshotHelper.findResolutionPreset(PRESETS, "1920")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFindResolutionPresetRejectsUnknownValues()
+    {
+        assertEquals(-1, EditorScreenshotHelper.findResolutionPreset(PRESETS, "4")); //$NON-NLS-1$
+        assertEquals(-1, EditorScreenshotHelper.findResolutionPreset(PRESETS, "-1")); //$NON-NLS-1$
+        assertEquals(-1, EditorScreenshotHelper.findResolutionPreset(PRESETS, "99999999999")); //$NON-NLS-1$
+        assertEquals(-1, EditorScreenshotHelper.findResolutionPreset(PRESETS, "800x600")); //$NON-NLS-1$
+        assertEquals(-1, EditorScreenshotHelper.findResolutionPreset(PRESETS, " ")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testDescribeResolutionPresets()
+    {
+        assertEquals("0 = 1024x768; 1 = 1280x1024", //$NON-NLS-1$
+            EditorScreenshotHelper.describeResolutionPresets(new String[] { "1024x768", "1280x1024" })); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Stand-in for the render service's list-type enum. */
+    public enum FakeListType
+    {
+        SCALES, RESOLUTIONS
+    }
+
+    /** Stand-in for the platform version class with its {@code LATEST} constant. */
+    public static final class FakeVersion
+    {
+        public static final FakeVersion LATEST = new FakeVersion();
+    }
+
+    /** Stand-in for the render service: answers only the RESOLUTIONS list for the LATEST version. */
+    public static final class FakeRenderService
+    {
+        public String[] getActionListContent(FakeListType type, FakeVersion version)
+        {
+            return type == FakeListType.RESOLUTIONS && version == FakeVersion.LATEST ? PRESETS.clone()
+                : new String[0];
+        }
+    }
+
+    private static final class FakeRenderServiceRepresentation
+    {
+        @SuppressWarnings("unused") // read reflectively
+        final FakeRenderService renderService = new FakeRenderService();
+    }
+
+    @Test
+    public void testGetResolutionPresetsResolvesTypesFromTheMethod() throws Exception
+    {
+        assertArrayEquals(PRESETS,
+            EditorScreenshotHelper.getResolutionPresets(new FakeRenderServiceRepresentation()));
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void testGetResolutionPresetsWithoutRenderService() throws Exception
+    {
+        EditorScreenshotHelper.getResolutionPresets(new FakeRepresentation());
+    }
+
+    /** Stand-in for the WYSIWYG viewer's resolution accessors. */
+    public static final class FakeResolutionViewer
+    {
+        int resolution = 1;
+
+        public int getResolution()
+        {
+            return resolution;
+        }
+
+        public void setResolution(int value)
+        {
+            resolution = value;
+        }
+    }
+
+    @Test
+    public void testRestoreViewerResolutionSetsPresetAndReRenders() throws Exception
+    {
+        FakeResolutionViewer viewer = new FakeResolutionViewer();
+        EditorScreenshotHelper.setViewerResolution(viewer, 3);
+        assertEquals(3, EditorScreenshotHelper.getViewerResolution(viewer));
+
+        FakeSyncRepresentation rep = new FakeSyncRepresentation();
+        EditorScreenshotHelper.restoreViewerResolution(viewer, rep, 1);
+        assertEquals(1, viewer.resolution);
+        assertTrue("the restored preset must be rendered so later captures use it", //$NON-NLS-1$
+            rep.lastEvent instanceof FakeNativeRenderEvent);
     }
 }

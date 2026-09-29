@@ -8,6 +8,7 @@ Capture a PNG screenshot of a form's WYSIWYG editor; pass formPath to open the f
 | projectName | — | string | EDT project name. Required when formPath is specified. |
 | formPath | — | string | Form FQN (e.g. 'Catalog.Products.Forms.ItemForm' or 'CommonForm.MyForm'); if omitted, captures the active form editor. |
 | refresh | — | boolean | Force a real WYSIWYG re-render before capture; fails with an explicit error instead of returning a stale image when the re-render cannot be completed (default: false) |
+| resolution | — | string | Screen resolution preset for this capture only: its index or a part of its text (e.g. '1680x1050'). The editor preset is restored afterwards. |
 
 ## Guide
 Captures a **PNG screenshot** of a form's WYSIWYG editor as it actually renders (the same visual EDT shows in the form designer). The response type is IMAGE - the tool returns the PNG, not text.
@@ -24,6 +25,7 @@ EDT must be launched with `-DnativeFormBufferedLayoutRender=true` in the `1cedt.
 - `projectName` - EDT project name. **Required when `formPath` is specified**; omitting it then returns the error "projectName is required when formPath is specified". Ignored when targeting the active editor.
 - `formPath` - metadata FQN of the form. If given, the tool opens and activates that form automatically, waits for the WYSIWYG page, then captures it. If omitted, the currently active form editor is captured.
 - `refresh` - force a **real re-render** before capturing; default `false`. Set `true` if the form was just edited and the rendered image may be stale. With `refresh: true` the previously rendered buffer is never returned: if the re-render cannot be completed in time the tool fails with an explicit error ("refresh=true was requested but the form could not be re-rendered in time...") instead of silently returning the pre-edit image; retry, or call with `refresh: false` to accept the last rendered image.
+- `resolution` - screen resolution preset for this capture only: its index or a part of its caption (e.g. `"1680x1050"`), the same list as the resolution drop-down of the form designer. The form window is laid out as the client would lay it out at that screen size, so the image size follows the preset (the default 1280x1024 gives a form window of about 984x972). Implies a re-render. The editor's preset is restored and re-rendered afterwards, so the open editor and later captures are not affected. An unknown value fails before anything changes and lists the presets by index.
 
 ### formPath format
 `MetadataType.ObjectName.Forms.FormName`, or `CommonForm.FormName` for a common form. Examples:
@@ -34,6 +36,7 @@ EDT must be launched with `-DnativeFormBufferedLayoutRender=true` in the `1cedt.
 ## Examples
 - Active editor, default: `{}`.
 - Specific form: `{projectName: "MyProj", formPath: "Catalog.Products.Forms.ItemForm"}`.
+- Wider screen: `{projectName: "MyProj", formPath: "Document.SalesOrder.Forms.DocumentForm", resolution: "1680x1050"}`.
 - Force refresh first: `{projectName: "MyProj", formPath: "CommonForm.MyForm", refresh: true}`.
 
 ## Notes & gotchas

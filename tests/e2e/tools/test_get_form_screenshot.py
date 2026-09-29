@@ -153,6 +153,62 @@ def test_capture_commonform_real_image_or_clean_render_sentinel():
     assert_no_diff("a screenshot read must not touch the project on disk")
 
 
+# Sentinels raised before the resolution preset is looked up (no editor at all).
+_NO_EDITOR_SENTINELS = (
+    "WYSIWYG viewer is not available",
+    "WYSIWYG page is not available",
+    "WYSIWYG representation is not available",
+)
+
+
+@e2e_test(tool="get_form_screenshot", kind="read")
+def test_unknown_resolution_errors_and_lists_presets():
+    """An unknown resolution must fail before any render, name the value and list
+    the presets, so the caller can pick one. The only other acceptable outcome is
+    that the editor itself could not be opened."""
+    r = call("get_form_screenshot", {
+        "projectName": PROJECT,
+        "formPath": "CommonForm.Form",
+        "resolution": "123x45",
+    })
+    assert_error(r)
+    err = r.error_text()
+    if not any(s in err for s in _NO_EDITOR_SENTINELS):
+        assert "Unknown resolution '123x45'" in err, (
+            "an unknown resolution must be named in the error; got: %r" % (err[:300])
+        )
+        assert "Presets: 0 = " in err, (
+            "the error must list the presets by index; got: %r" % (err[:300])
+        )
+    assert_no_diff("a screenshot read must not touch the project on disk")
+
+
+@e2e_test(tool="get_form_screenshot", kind="read")
+def test_resolution_by_index_real_image_or_clean_render_sentinel():
+    """Preset 0 always exists: the capture gives a real PNG or a clean render
+    sentinel, never an 'Unknown resolution' error."""
+    r = call("get_form_screenshot", {
+        "projectName": PROJECT,
+        "formPath": "CommonForm.Form",
+        "resolution": "0",
+    })
+    if r.is_error:
+        err = r.error_text()
+        assert "Unknown resolution" not in err, (
+            "preset 0 must be accepted; got: %r" % (err[:300])
+        )
+        assert (any(s in err for s in _RENDER_UNAVAILABLE_SENTINELS + _NO_EDITOR_SENTINELS)
+                or "could not be re-rendered" in err), (
+            "a failed capture must be a documented render outcome; got: %r" % (err[:300])
+        )
+    else:
+        blob = _blob(r)
+        assert blob and blob.startswith(_PNG_B64_PREFIX), (
+            "success must carry a real PNG blob; got prefix %r" % ((blob or "")[:16])
+        )
+    assert_no_diff("a screenshot read must not touch the project on disk")
+
+
 @e2e_test(tool="get_form_screenshot", kind="read")
 def test_no_formpath_captures_active_or_clean_no_active_sentinel():
     """Boundary: omit formPath entirely. This is NOT an error condition — it is

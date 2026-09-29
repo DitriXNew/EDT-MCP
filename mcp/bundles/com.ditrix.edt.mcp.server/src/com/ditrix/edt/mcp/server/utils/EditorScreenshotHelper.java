@@ -56,6 +56,12 @@ public final class EditorScreenshotHelper
     private static final String GET_MAPPING_ROOT_METHOD = "getMappingRoot"; //$NON-NLS-1$
     private static final String BUILD_UPDATE_EVENT_METHOD = "buildUpdateEvent"; //$NON-NLS-1$
     private static final String GET_CONTROL_METHOD = "getControl"; //$NON-NLS-1$
+    private static final String RENDER_SERVICE_FIELD = "renderService"; //$NON-NLS-1$
+    private static final String GET_ACTION_LIST_CONTENT_METHOD = "getActionListContent"; //$NON-NLS-1$
+    private static final String RESOLUTIONS_LIST_TYPE = "RESOLUTIONS"; //$NON-NLS-1$
+    private static final String LATEST_VERSION_FIELD = "LATEST"; //$NON-NLS-1$
+    private static final String GET_RESOLUTION_METHOD = "getResolution"; //$NON-NLS-1$
+    private static final String SET_RESOLUTION_METHOD = "setResolution"; //$NON-NLS-1$
     private static final String REFRESH_METHOD = "refresh"; //$NON-NLS-1$
     private static final String REBUILD_METHOD = "rebuild"; //$NON-NLS-1$
     private static final int WYSIWYG_WAIT_RETRIES = 15;
@@ -706,6 +712,163 @@ public final class EditorScreenshotHelper
         catch (Exception e)
         {
             return null;
+        }
+    }
+
+    /**
+     * Returns the screen resolution presets of the form editor, in the order of its resolution list:
+     * the index of a preset is the value {@link #setViewerResolution(Object, int)} takes. Read through
+     * the representation's render service ({@code getActionListContent(RESOLUTIONS, LATEST)}), the same
+     * source the editor's drop-down uses.
+     *
+     * @param representation the {@code FormWysiwygRepresentation} instance
+     * @return the preset captions, e.g. {@code "1280x1024"}
+     * @throws Exception if this EDT does not expose the render service or the preset list
+     */
+    public static String[] getResolutionPresets(Object representation) throws Exception
+    {
+        Object renderService = ReflectionUtils.getFieldValue(representation, RENDER_SERVICE_FIELD);
+        if (renderService == null)
+        {
+            throw new IllegalStateException("the form render service is not available"); //$NON-NLS-1$
+        }
+        Method listContent = findMethodByNameAndArity(renderService.getClass(), GET_ACTION_LIST_CONTENT_METHOD, 2);
+        if (listContent == null)
+        {
+            throw new IllegalStateException(GET_ACTION_LIST_CONTENT_METHOD + " is not available"); //$NON-NLS-1$
+        }
+        // The list-type enum and the platform version class come from the method's own parameter types:
+        // our bundle does not import those packages.
+        Class<?>[] paramTypes = listContent.getParameterTypes();
+        Object resolutionsType = null;
+        Object[] constants = paramTypes[0].getEnumConstants();
+        if (constants != null)
+        {
+            for (Object constant : constants)
+            {
+                if (RESOLUTIONS_LIST_TYPE.equals(((Enum<?>)constant).name()))
+                {
+                    resolutionsType = constant;
+                }
+            }
+        }
+        if (resolutionsType == null)
+        {
+            throw new IllegalStateException("the resolution list type is not available"); //$NON-NLS-1$
+        }
+        Object latestVersion = paramTypes[1].getField(LATEST_VERSION_FIELD).get(null);
+        listContent.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
+        Object presets = listContent.invoke(renderService, resolutionsType, latestVersion);
+        if (!(presets instanceof String[] captions))
+        {
+            throw new IllegalStateException("the resolution list has an unexpected type"); //$NON-NLS-1$
+        }
+        return captions;
+    }
+
+    /**
+     * Finds a resolution preset by index or by a part of its caption.
+     *
+     * @param presets the preset captions from {@link #getResolutionPresets(Object)}
+     * @param query a preset index (e.g. {@code "2"}) or a caption part (e.g. {@code "1680x1050"})
+     * @return the preset index, or {@code -1} when nothing matches
+     */
+    public static int findResolutionPreset(String[] presets, String query)
+    {
+        String trimmed = query.trim();
+        if (trimmed.isEmpty())
+        {
+            return -1;
+        }
+        if (trimmed.chars().allMatch(Character::isDigit))
+        {
+            try
+            {
+                int index = Integer.parseInt(trimmed);
+                return index < presets.length ? index : -1;
+            }
+            catch (NumberFormatException e)
+            {
+                return -1;
+            }
+        }
+        for (int i = 0; i < presets.length; i++)
+        {
+            if (presets[i] != null && presets[i].contains(trimmed))
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Lists resolution presets for an error message, as {@code "0 = 1024x768; 1 = 1280x1024"}.
+     *
+     * @param presets the preset captions
+     * @return the listing
+     */
+    public static String describeResolutionPresets(String[] presets)
+    {
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < presets.length; i++)
+        {
+            if (i > 0)
+            {
+                text.append("; "); //$NON-NLS-1$
+            }
+            text.append(i).append(" = ").append(presets[i]); //$NON-NLS-1$
+        }
+        return text.toString();
+    }
+
+    /**
+     * Returns the resolution preset index of the WYSIWYG viewer.
+     *
+     * @param wysiwygViewer the form editor's WYSIWYG viewer
+     * @return the preset index
+     * @throws Exception if the viewer has no {@code getResolution()}
+     */
+    public static int getViewerResolution(Object wysiwygViewer) throws Exception
+    {
+        return ((Number)wysiwygViewer.getClass().getMethod(GET_RESOLUTION_METHOD).invoke(wysiwygViewer))
+            .intValue();
+    }
+
+    /**
+     * Sets the resolution preset of the WYSIWYG viewer. The rendered image changes only after the next
+     * render.
+     *
+     * @param wysiwygViewer the form editor's WYSIWYG viewer
+     * @param index the preset index
+     * @throws Exception if the viewer has no {@code setResolution(int)}
+     */
+    public static void setViewerResolution(Object wysiwygViewer, int index) throws Exception
+    {
+        wysiwygViewer.getClass().getMethod(SET_RESOLUTION_METHOD, int.class).invoke(wysiwygViewer, index);
+    }
+
+    /**
+     * Restores a saved resolution preset and re-renders, so neither the user's editor nor a later capture
+     * keeps the preset of a capture. Best effort: a failure is logged.
+     *
+     * @param wysiwygViewer the form editor's WYSIWYG viewer
+     * @param representation its {@code FormWysiwygRepresentation}
+     * @param savedResolution the preset index to restore
+     */
+    public static void restoreViewerResolution(Object wysiwygViewer, Object representation, int savedResolution)
+    {
+        try
+        {
+            setViewerResolution(wysiwygViewer, savedResolution);
+            if (!ensureRenderedFormImage(representation, true))
+            {
+                Activator.logWarning("The editor resolution preset was restored, but the form was not re-rendered"); //$NON-NLS-1$
+            }
+        }
+        catch (Exception e)
+        {
+            Activator.logWarning("Could not restore the editor resolution preset: " + e.getMessage()); //$NON-NLS-1$
         }
     }
 
