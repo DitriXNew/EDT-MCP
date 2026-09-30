@@ -11,6 +11,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import org.junit.Test;
 
@@ -30,6 +31,9 @@ import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.StringQualifiers;
 import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.utils.DcsWriter.Result;
 import com.ditrix.edt.mcp.server.utils.DcsWriter.TypeResolution;
 import com.ditrix.edt.mcp.server.utils.DcsWriter.TypeResolver;
@@ -828,6 +832,60 @@ public class DcsWriterTest
         assertNotNull(result.error);
         assertTrue(result.error, result.error.contains("platform version")); //$NON-NLS-1$
         assertNull(result.typeDescription);
+    }
+
+    /** A configuration holding Catalog.Goods WITHOUT produced types (its Ref type not yet derived). */
+    private static Configuration configWithUnderivedCatalog()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        config.getCatalogs().add(MdClassFactory.eINSTANCE.createCatalog());
+        config.getCatalogs().get(0).setName("Goods"); //$NON-NLS-1$
+        return config;
+    }
+
+    @Test
+    public void testSharedTypeResolverRaisesAPlatformFailureUnmarked()
+    {
+        // A reference kind whose Ref type the platform has not derived is not the caller's spec: it
+        // must escape the writer, so the dcs tool's catch logs it at ERROR with its stack.
+        TypeResolver resolver = DcsWriter.typeResolver(configWithUnderivedCatalog(), Version.LATEST);
+        try
+        {
+            Result r = DcsWriter.apply(newSchema(), json("{\"parameters\":[{\"name\":\"Goods\"," //$NON-NLS-1$
+                + "\"valueType\":{\"types\":[{\"kind\":\"Ref\",\"ref\":\"Catalog.Goods\"}]}}]}"), resolver); //$NON-NLS-1$
+            fail("a platform failure must be raised, not returned as an invalid spec: " + r.error); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertTrue(e.getMessage(), e.getMessage().startsWith("Cannot build the parameter type: " //$NON-NLS-1$
+                + "Object 'Goods' resolved, but its Ref type is not available yet.")); //$NON-NLS-1$
+            assertNull("a platform failure must not be marked as a refusal", Refusals.messageOf(e)); //$NON-NLS-1$
+            assertNull("the client message must stay ours", e.getCause()); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testSharedTypeResolverKeepsACallersMistakeAsAFailedResolution()
+    {
+        Configuration config = configWithUnderivedCatalog();
+        config.getInformationRegisters().add(MdClassFactory.eINSTANCE.createInformationRegister());
+        config.getInformationRegisters().get(0).setName("Rates"); //$NON-NLS-1$
+        TypeResolver resolver = DcsWriter.typeResolver(config, Version.LATEST);
+        for (String ref : new String[] { "Catalog.Missing", "InformationRegister.Rates" }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            JsonObject spec = json("{\"types\":[{\"kind\":\"Ref\",\"ref\":\"" + ref + "\"}]}"); //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataTypeBuilder.Result built = MetadataTypeBuilder.build(spec, config, Version.LATEST, false,
+                MetadataTypeBuilder.TypeTarget.DCS_PARAMETER);
+            assertNotNull(ref, built.error);
+            assertFalse(ref, built.platformFailure);
+
+            // The builder's refusal reaches the writer verbatim, and the writer's error is unchanged.
+            assertEquals(ref, built.error, resolver.resolve(spec).error);
+            Result r = DcsWriter.apply(newSchema(), json("{\"parameters\":[{\"name\":\"P\",\"valueType\":" //$NON-NLS-1$
+                + spec + "}]}"), resolver); //$NON-NLS-1$
+            assertTrue(ref, r.hasError());
+            assertTrue(r.error, r.error.contains("' is invalid: " + built.error)); //$NON-NLS-1$
+        }
     }
 
     // ==================== pure parse (no model) ====================
