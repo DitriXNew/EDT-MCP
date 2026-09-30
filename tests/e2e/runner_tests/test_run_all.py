@@ -318,6 +318,47 @@ class RunAllRatchetTest(unittest.TestCase):
 
         harness.reset_model.assert_called_once_with(["Base", "Extension"])
 
+    def _skipping_unit_harness(self, confirmed, unresolved):
+        harness = self._mutation_harness()
+        harness.E2ESkip = HARNESS.E2ESkip
+        harness.E2ECallTimeout = HARNESS.E2ECallTimeout
+        harness.confirmed_mutation_tools.return_value = frozenset(confirmed)
+        harness.mutations_unresolved.return_value = unresolved
+        return harness
+
+    def test_skip_after_a_confirmed_write_still_resets_the_model(self):
+        harness = self._skipping_unit_harness({"create_metadata"}, False)
+        test = {"name": "seeds then skips", "kind": "write-metadata",
+                "func": mock.Mock(side_effect=HARNESS.E2ESkip("unsupported"))}
+
+        with mock.patch.object(RUN_ALL, "_reset_after_write") as reset:
+            with self.assertRaises(HARNESS.E2ESkip):
+                RUN_ALL._run_test_unit(harness, test)
+
+        reset.assert_called_once_with(harness, test)
+
+    def test_skip_after_an_unresolved_write_still_resets_the_model(self):
+        harness = self._skipping_unit_harness(set(), True)
+        test = {"name": "wire death then skip", "kind": "write-metadata",
+                "func": mock.Mock(side_effect=HARNESS.E2ESkip("unsupported"))}
+
+        with mock.patch.object(RUN_ALL, "_reset_after_write") as reset:
+            with self.assertRaises(HARNESS.E2ESkip):
+                RUN_ALL._run_test_unit(harness, test)
+
+        reset.assert_called_once_with(harness, test)
+
+    def test_skip_before_any_write_does_not_reset(self):
+        harness = self._skipping_unit_harness(set(), False)
+        test = {"name": "skips first", "kind": "write-metadata",
+                "func": mock.Mock(side_effect=HARNESS.E2ESkip("unsupported"))}
+
+        with mock.patch.object(RUN_ALL, "_reset_after_write") as reset:
+            with self.assertRaises(HARNESS.E2ESkip):
+                RUN_ALL._run_test_unit(harness, test)
+
+        reset.assert_not_called()
+
     def test_every_shard_holds_its_own_log_ratchet_out_of_the_main_loop(self):
         first = {"tool": "alpha", "name": "first"}
         deferred = {"tool": "omega", "name": "last", "last": True}

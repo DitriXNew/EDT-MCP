@@ -3594,9 +3594,10 @@ def test_fractional_value_for_a_long_property_is_refused_actionably():
 # #643 - the written object's EDT markers after a modify
 # ──────────────────────────────────────────────────────────────────────────────
 
-# v8codestyle `db-object-anyref-type`: MAJOR, on a stored attribute typed AnyRef / an abstract ref.
-_ANYREF_CHECK = "db-object-anyref-type"
-_ANYREF_TYPES = ({"types": [{"kind": "AnyRef"}]}, {"types": [{"kind": "CatalogRef"}]})
+# `md-list-object-presentation`: a Catalog with neither an object nor a list presentation. A fresh
+# Catalog carries it, and setting `objectPresentation` through modify_metadata clears it.
+_PRESENTATION_CHECK = "md-list-object-presentation"
+_PRESENTATION_ATTEMPTS = 4
 
 
 def _modify_markers(result, owner, ctx):
@@ -3609,60 +3610,52 @@ def _modify_markers(result, owner, ctx):
     return incomplete, rows
 
 
-def _anyref_rows(rows, attr):
-    return [row for row in rows if row.get("checkId") == _ANYREF_CHECK and attr in (row.get("location") or "")]
+def _has_check(rows, check_id):
+    return [row for row in rows if row.get("checkId") == check_id]
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_modify_markers_drop_a_fixed_marker_once_validation_is_confirmed():
-    """Staleness: after the AnyRef marker is fixed, a confirmed-complete answer must not still
-    report it - the pre-write marker is gone once EDT re-validated the object."""
-    owner = "Catalog.Catalog"
-    attr = "E2EMarkersAnyRef"
-    fqn = "%s.Attribute.%s" % (owner, attr)
-    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed attribute")
+    """Staleness: a fresh Catalog carries `md-list-object-presentation`; once modify_metadata sets
+    its objectPresentation, a confirmed-complete answer must no longer report it, and the settled
+    get_project_errors must agree."""
+    # Preconditions are read-only and checked BEFORE the first write: the check must run here.
     wait_for_project_ready()
-
-    refusals = []
-    dirty = None
-    for type_value in _ANYREF_TYPES:
-        r = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
-                                     "properties": [{"name": "type", "value": type_value}]})
-        if r.is_error:
-            refusals.append(r.error_text()[:160])
-            continue
-        dirty = _modify_markers(r, owner, "set an abstract reference type")
-        break
-    if dirty is None:
-        raise E2ESkip("no abstract reference type is accepted on a stored attribute here: %r" % refusals)
-    wait_for_project_ready()
-    deadline = time.time() + 60
-    while not any(check == _ANYREF_CHECK and attr in location
-                  for check, _message, location in project_error_rows(owner)):
-        if time.time() >= deadline:
-            raise E2ESkip("check %s does not run on this stand (no marker on %s after 60s)"
-                          % (_ANYREF_CHECK, fqn))
-        time.sleep(2)
-    if not dirty[0] and not _anyref_rows(dirty[1], attr):
-        _fail("FALSE CLEAN: markersIncomplete:false without the %s marker EDT reports on %s: %r"
-              % (_ANYREF_CHECK, fqn, dirty[1]))
+    if not poll_project_error_check("Catalog.Catalog", _PRESENTATION_CHECK, timeout=60):
+        raise E2ESkip("check %s does not run on this stand (no marker on Catalog.Catalog after 60s)"
+                      % _PRESENTATION_CHECK)
 
     confirmed = 0
-    for length in (10, 11, 12):
-        r = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn, "properties": [
-            {"name": "type", "value": {"types": [{"kind": "String", "length": length}]}}]})
-        incomplete, rows = _modify_markers(r, owner, "fix the type to String(%d)" % length)
+    for attempt in range(_PRESENTATION_ATTEMPTS):
+        owner = "Catalog.E2EMarkersPres%d" % attempt
+        created = call("create_metadata", {"projectName": PROJECT, "fqn": owner})
+        create_incomplete, create_rows = _modify_markers(created, owner, "create %s" % owner)
+        wait_for_project_ready()
+        if not create_incomplete and not _has_check(create_rows, _PRESENTATION_CHECK):
+            _fail("FALSE CLEAN: markersIncomplete:false on create without the %s marker a fresh "
+                  "Catalog carries: %r" % (_PRESENTATION_CHECK, create_rows))
+        if not poll_project_error_check(owner, _PRESENTATION_CHECK, timeout=60):
+            _fail("a fresh Catalog %s must carry %s (it does on Catalog.Catalog)"
+                  % (owner, _PRESENTATION_CHECK))
+
+        r = call("modify_metadata", {"projectName": PROJECT, "fqn": owner, "properties": [
+            {"name": "objectPresentation", "value": "E2E presentation %d" % attempt}]})
+        incomplete, rows = _modify_markers(r, owner, "set objectPresentation on %s" % owner)
         wait_for_project_ready()
         if incomplete:
             continue
         confirmed += 1
-        stale = _anyref_rows(rows, attr)
+        stale = _has_check(rows, _PRESENTATION_CHECK)
         if stale:
             _fail("STALE: a confirmed-complete answer still reports the fixed %s marker: %r"
-                  % (_ANYREF_CHECK, stale))
+                  % (_PRESENTATION_CHECK, stale))
+        if poll_project_error_check(owner, _PRESENTATION_CHECK, timeout=0):
+            _fail("the settled get_project_errors still reports the fixed %s marker on %s while "
+                  "the modify answered complete" % (_PRESENTATION_CHECK, owner))
+        break
     if not confirmed:
-        _fail("no modify out of 3 came back markersIncomplete:false - an implementation that "
-              "always answers 'incomplete' must not pass")
+        _fail("no modify out of %d came back markersIncomplete:false - an implementation that "
+              "always answers 'incomplete' must not pass" % _PRESENTATION_ATTEMPTS)
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

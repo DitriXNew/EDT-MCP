@@ -212,10 +212,13 @@ def _run_test_unit(harness, t):
         # The runner aborts on this, so no later test inherits the state either.
         raise
     except harness.E2ESkip:
-        # A skip is not a failed write - it is a test that decided there was nothing to do
-        # (an unsupported seed that committed nothing). Paying the full cleanup budget for it
-        # would be waste at best, and at worst would turn a legitimate skip into a
-        # reset-failed / call-timeout if clean_project happens to be refused just then.
+        # A skip before any write committed nothing: paying the full cleanup budget for it would
+        # be waste, and could turn a legitimate skip into a reset-failed if clean_project is
+        # refused just then. A skip AFTER a write is different: the model still carries it, and
+        # the next test's git revert would run under that model with no clean_project behind it.
+        # So reset on EVIDENCE of a mutation, never on the skip alone.
+        if harness.confirmed_mutation_tools() or harness.mutations_unresolved():
+            _reset_after_write(harness, t)
         raise
     except BaseException:
         # Any OTHER failure still leaves the write applied, exactly like a passing test does.
