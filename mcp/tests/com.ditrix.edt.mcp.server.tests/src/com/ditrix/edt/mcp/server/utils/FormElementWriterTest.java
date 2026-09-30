@@ -1271,6 +1271,276 @@ public class FormElementWriterTest
             "Proc", Version.LATEST, "en", null, null).contains("cannot hold event handlers")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    // ---- feature-shape splits (issue #650): a declared class lacking its list raises; a kind the
+    // caller chose that has no such list is refused. The refusal side runs on the REAL form model.
+
+    /** The shipped form EPackage, reached the way the writer reaches it (no compile-time import). */
+    private static EPackage realFormPackage()
+    {
+        return FormElementWriter.contentFormEClass().getEPackage();
+    }
+
+    /** A fresh instance of the named classifier of the shipped form EPackage, named {@code name}. */
+    private static EObject realFormObject(String classifier, String name)
+    {
+        EClass eClass = (EClass)realFormPackage().getEClassifier(classifier);
+        EObject object = realFormPackage().getEFactoryInstance().create(eClass);
+        object.eSet(feature(object, "name"), name); //$NON-NLS-1$
+        return object;
+    }
+
+    /** Asserts {@code e} is an UNMARKED failure (ERROR with its stack), never a refusal. */
+    private static void assertRaisedUnmarked(RuntimeException e, String expectedFragment)
+    {
+        assertTrue(e.getMessage(), e.getMessage().contains(expectedFragment));
+        assertNull("a model-shape failure must not be marked as a refusal", Refusals.messageOf(e)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheShippedFormModelDeclaresWhatTheSplitsAssume()
+    {
+        // The splits below rest on these facts of Form.xcore (identical in 2026.1.1 and 2026.2.1):
+        // FormItemContainer declares 'contains FormItem[] items', EventHandlerContainer declares
+        // 'contains EventHandler[] handlers', and Button 'refers Command commandName'.
+        EPackage pkg = realFormPackage();
+        for (String name : new String[] { "Form", "FormGroup", "Table", "AutoCommandBar", "ContextMenu" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        {
+            EClass eClass = (EClass)pkg.getEClassifier(name);
+            assertTrue(name, FormElementWriter.isOrInherits(eClass, "FormItemContainer")); //$NON-NLS-1$
+            EStructuralFeature items = eClass.getEStructuralFeature("items"); //$NON-NLS-1$
+            assertTrue(name, items instanceof EReference && items.isMany());
+        }
+        for (String name : new String[] { "Form", "FormField", "Table", "UsualGroupExtInfo", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "InputFieldExtInfo", "LabelDecorationExtInfo" }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            EClass eClass = (EClass)pkg.getEClassifier(name);
+            assertTrue(name, FormElementWriter.isOrInherits(eClass, "EventHandlerContainer")); //$NON-NLS-1$
+            EStructuralFeature handlers = eClass.getEStructuralFeature("handlers"); //$NON-NLS-1$
+            assertTrue(name, handlers instanceof EReference && handlers.isMany());
+        }
+        EClass button = (EClass)pkg.getEClassifier("Button"); //$NON-NLS-1$
+        assertTrue(button.getEStructuralFeature("commandName") instanceof EReference); //$NON-NLS-1$
+        for (String leaf : new String[] { "Button", "FormField", "Decoration" }) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            assertFalse(leaf, FormElementWriter.isOrInherits((EClass)pkg.getEClassifier(leaf), "FormItemContainer")); //$NON-NLS-1$
+        }
+        assertFalse(FormElementWriter.isOrInherits(button, "EventHandlerContainer")); //$NON-NLS-1$
+    }
+
+    /**
+     * A drifted form model: {@code FormItemContainer} is still FormGroup's declared supertype but no
+     * longer carries {@code items}; the root keeps its own list and holds group {@code G} and item
+     * {@code P}. With {@code rootHasItems} false the ROOT lost its list instead, and G keeps one.
+     */
+    private static EObject driftedItemsForm(boolean rootHasItems)
+    {
+        EcoreFactory f = EcoreFactory.eINSTANCE;
+        EPackage pkg = f.createEPackage();
+        pkg.setName("drift"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/drift-items-" + rootHasItems); //$NON-NLS-1$
+        EClass formItem = f.createEClass();
+        formItem.setName("FormItem"); //$NON-NLS-1$
+        formItem.setAbstract(true);
+        EAttribute name = f.createEAttribute();
+        name.setName("name"); //$NON-NLS-1$
+        name.setEType(EcorePackage.Literals.ESTRING);
+        formItem.getEStructuralFeatures().add(name);
+        EClass containerInterface = f.createEClass();
+        containerInterface.setName("FormItemContainer"); //$NON-NLS-1$
+        containerInterface.setAbstract(true);
+        containerInterface.setInterface(true);
+        EClass group = f.createEClass();
+        group.setName("FormGroup"); //$NON-NLS-1$
+        group.getESuperTypes().add(formItem);
+        group.getESuperTypes().add(containerInterface);
+        EClass probe = f.createEClass();
+        probe.setName("Probe"); //$NON-NLS-1$
+        probe.getESuperTypes().add(formItem);
+        EClass form = f.createEClass();
+        form.setName("Form"); //$NON-NLS-1$
+        EClass itemsOwner = rootHasItems ? form : group;
+        EReference items = f.createEReference();
+        items.setName("items"); //$NON-NLS-1$
+        items.setEType(formItem);
+        items.setContainment(true);
+        items.setUpperBound(-1);
+        itemsOwner.getEStructuralFeatures().add(items);
+        pkg.getEClassifiers().addAll(Arrays.asList(formItem, containerInterface, group, probe, form));
+
+        EObject formObject = pkg.getEFactoryInstance().create(form);
+        EObject groupObject = pkg.getEFactoryInstance().create(group);
+        groupObject.eSet(name, "G"); //$NON-NLS-1$
+        EObject probeObject = pkg.getEFactoryInstance().create(probe);
+        probeObject.eSet(name, "P"); //$NON-NLS-1$
+        if (rootHasItems)
+        {
+            addTo(formObject, "items", groupObject); //$NON-NLS-1$
+            addTo(formObject, "items", probeObject); //$NON-NLS-1$
+        }
+        else
+        {
+            // The root cannot contain anything without its list, so G sits in a detached tree.
+            addTo(groupObject, "items", probeObject); //$NON-NLS-1$
+        }
+        return rootHasItems ? formObject : groupObject;
+    }
+
+    @Test
+    public void testMoveIntoADeclaredItemContainerWithoutItsListRaises()
+    {
+        EObject form = driftedItemsForm(true);
+        EObject probe = FormElementWriter.findFormItem(form, "P"); //$NON-NLS-1$
+        try
+        {
+            String err = FormElementWriter.moveItem(form, probe, "G"); //$NON-NLS-1$
+            fail("a FormGroup without items is the model's shape and must raise, not refuse: " + err); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertRaisedUnmarked(e, "FormGroup.items"); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testMoveToAFormRootWithoutItsListRaises()
+    {
+        // P sits in group G; the ROOT lost its list, and a blank parent targets that root.
+        EObject group = driftedItemsForm(false);
+        EObject probe = FormElementWriter.findFormItem(group, "P"); //$NON-NLS-1$
+        EPackage pkg = group.eClass().getEPackage();
+        EObject rootWithoutItems = pkg.getEFactoryInstance().create((EClass)pkg.getEClassifier("Form")); //$NON-NLS-1$
+        try
+        {
+            String err = FormElementWriter.moveItem(rootWithoutItems, probe, null);
+            fail("a form root without items must raise, not refuse: " + err); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertRaisedUnmarked(e, "Form.items"); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testMoveIntoALeafTheCallerChoseStaysARefusalOnTheShippedModel()
+    {
+        EObject form = FormElementWriter.createContentForm(null, null, null, false);
+        EObject field = realFormObject("FormField", "F"); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject decoration = realFormObject("Decoration", "D"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "items", field); //$NON-NLS-1$
+        addTo(form, "items", decoration); //$NON-NLS-1$
+
+        assertEquals("The parent 'F' (FormField) cannot hold nested items.", //$NON-NLS-1$
+            FormElementWriter.moveItem(form, decoration, "F")); //$NON-NLS-1$
+    }
+
+    /** A drifted element: {@code className} declares EventHandlerContainer, which lost {@code handlers}. */
+    private static EObject driftedHandlerElement(String className, String extClassName)
+    {
+        EcoreFactory f = EcoreFactory.eINSTANCE;
+        EPackage pkg = f.createEPackage();
+        pkg.setName("drift"); //$NON-NLS-1$
+        pkg.setNsURI("http://ditrix.com/test/drift-handlers-" + className + "-" + extClassName); //$NON-NLS-1$ //$NON-NLS-2$
+        EClass handlerContainer = f.createEClass();
+        handlerContainer.setName("EventHandlerContainer"); //$NON-NLS-1$
+        handlerContainer.setAbstract(true);
+        handlerContainer.setInterface(true);
+        EClass element = f.createEClass();
+        element.setName(className);
+        pkg.getEClassifiers().add(handlerContainer);
+        pkg.getEClassifiers().add(element);
+        EClass ext = null;
+        if (extClassName == null)
+        {
+            element.getESuperTypes().add(handlerContainer);
+        }
+        else
+        {
+            ext = f.createEClass();
+            ext.setName(extClassName);
+            ext.getESuperTypes().add(handlerContainer);
+            pkg.getEClassifiers().add(ext);
+            EReference extInfo = f.createEReference();
+            extInfo.setName("extInfo"); //$NON-NLS-1$
+            extInfo.setEType(ext);
+            extInfo.setContainment(true);
+            element.getEStructuralFeatures().add(extInfo);
+        }
+        EObject object = pkg.getEFactoryInstance().create(element);
+        if (ext != null)
+        {
+            object.eSet(element.getEStructuralFeature("extInfo"), pkg.getEFactoryInstance().create(ext)); //$NON-NLS-1$
+        }
+        return object;
+    }
+
+    @Test
+    public void testHandlersOnADeclaredHandlerContainerWithoutItsListRaise()
+    {
+        // The element itself (a FormField) or the ext-info that holds its bindings (a group's
+        // UsualGroupExtInfo) is declared an EventHandlerContainer: a missing list is drift.
+        String[][] cases = { { "FormField", null, "FormField.handlers" }, //$NON-NLS-1$ //$NON-NLS-2$
+            { "FormGroup", "UsualGroupExtInfo", "UsualGroupExtInfo.handlers" } }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        for (String[] one : cases)
+        {
+            EObject element = driftedHandlerElement(one[0], one[1]);
+            try
+            {
+                String err = FormElementWriter.createHandler(element, "OnChange", "Proc", //$NON-NLS-1$ //$NON-NLS-2$
+                    Version.LATEST, "en", null, null); //$NON-NLS-1$
+                fail(one[0] + ": createHandler must raise, not refuse: " + err); //$NON-NLS-1$
+            }
+            catch (IllegalStateException e)
+            {
+                assertRaisedUnmarked(e, one[2]);
+            }
+            try
+            {
+                String err = FormElementWriter.rebindHandler(element, "OnChange", "Proc"); //$NON-NLS-1$ //$NON-NLS-2$
+                fail(one[0] + ": rebindHandler must raise, not refuse: " + err); //$NON-NLS-1$
+            }
+            catch (IllegalStateException e)
+            {
+                assertRaisedUnmarked(e, one[2]);
+            }
+        }
+    }
+
+    @Test
+    public void testHandlersOnAKindWithoutAnyListStayARefusalOnTheShippedModel()
+    {
+        // A real Button holds no handlers and has no ext-info: the caller picked the wrong element.
+        EObject button = realFormObject("Button", "B"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("The form element 'Button' cannot hold event handlers.", //$NON-NLS-1$
+            FormElementWriter.createHandler(button, "OnClick", "Proc", Version.LATEST, "en", null, null)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("The form element 'Button' cannot hold event handlers.", //$NON-NLS-1$
+            FormElementWriter.rebindHandler(button, "OnClick", "Proc")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testRebindCommandOnAButtonWithoutCommandNameRaises()
+    {
+        EObject button = syntheticElement("Button", false); //$NON-NLS-1$
+        try
+        {
+            String err = FormElementWriter.rebindButtonCommand(button, button, "Refresh"); //$NON-NLS-1$
+            fail("a Button without commandName is the model's shape and must raise: " + err); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertRaisedUnmarked(e, "Button.commandName"); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testRebindCommandOnANonButtonStaysARefusalOnTheShippedModel()
+    {
+        EObject form = FormElementWriter.createContentForm(null, null, null, false);
+        EObject field = realFormObject("FormField", "F"); //$NON-NLS-1$ //$NON-NLS-2$
+        addTo(form, "items", field); //$NON-NLS-1$
+        assertEquals("The form item 'FormField' has no 'commandName' reference; only a Button runs a " //$NON-NLS-1$
+            + "form command.", FormElementWriter.rebindButtonCommand(form, field, "Refresh")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     /**
      * A self-contained dynamic EMF model shaped like the form metamodel's handler containment: a
      * {@code FormField} container with a {@code handlers} containment list typed to base

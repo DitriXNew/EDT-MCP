@@ -5813,7 +5813,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             ctx.scope, ctx.version, isExtensionProject, typeTarget);
         if (tr.error != null)
         {
-            return ToolResult.error("Invalid 'type' for '" + name + "': " + tr.error).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            String message = "Invalid 'type' for '" + name + "': " + tr.error; //$NON-NLS-1$ //$NON-NLS-2$
+            if (tr.platformFailure)
+            {
+                // Not the caller's spec: the platform failed, so it reaches the log as an ERROR with a stack.
+                Activator.logError("Error building the type for '" + name + "'", tr.asException(message)); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            return ToolResult.error(message).toJson();
         }
         out.add(PreparedChange.typeDescription(info.feature, tr.typeDescription));
         return null;

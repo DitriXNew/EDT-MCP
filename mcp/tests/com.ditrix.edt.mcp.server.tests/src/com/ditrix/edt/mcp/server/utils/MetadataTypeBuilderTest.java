@@ -25,6 +25,7 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.InternalEObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
+import org.eclipse.xtext.resource.IEObjectDescription;
 import org.junit.Test;
 import org.mockito.Mockito;
 
@@ -385,7 +386,9 @@ public class MetadataTypeBuilderTest
             err.contains("UUID") && err.contains("UniqueIdentifier")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(td.getTypes().isEmpty());
         // A KNOWN kind the present provider could not build is the platform's failure, not the spec's.
-        assertTrue(MetadataTypeBuilder.typeError(err).platformFailure);
+        assertTrue(MetadataTypeBuilder.appendType(td, item, "uuid", provider, //$NON-NLS-1$
+            MdClassFactory.eINSTANCE.createConfiguration(), null, false,
+            MetadataTypeBuilder.TypeTarget.METADATA).platformFailure);
     }
 
     @Test
@@ -415,27 +418,178 @@ public class MetadataTypeBuilderTest
         assertTrue(err.contains("ValueStorage")); //$NON-NLS-1$
         assertTrue(err.contains("UUID")); //$NON-NLS-1$
         assertFalse("an unknown kind is the caller's refusal", //$NON-NLS-1$
-            MetadataTypeBuilder.typeError(err).platformFailure);
+            appendKind(item, "nonsense", null, MdClassFactory.eINSTANCE.createConfiguration(), //$NON-NLS-1$
+                MetadataTypeBuilder.TypeTarget.METADATA).platformFailure);
         // An EXISTING DefinedType whose produced-type chain the platform did not yield is not the spec's fault.
-        assertTrue(MetadataTypeBuilder.typeError("DefinedType 'Money' resolved, but its " //$NON-NLS-1$
-            + "producedTypes/containerType/typeSet chain is not available yet. Wait ...").platformFailure); //$NON-NLS-1$
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        seedDefinedType(config, "Money", false); //$NON-NLS-1$
+        assertTrue(appendKind(json("{\"kind\":\"DefinedType\",\"ref\":\"Money\"}").getAsJsonObject(), //$NON-NLS-1$
+            "DefinedType", null, config, MetadataTypeBuilder.TypeTarget.METADATA).platformFailure); //$NON-NLS-1$
         // So is a resolved object whose produced types, or one produced type's chain, did not come back.
-        assertTrue(MetadataTypeBuilder.typeError("Object 'Document.Invoice' resolved, but its produced " //$NON-NLS-1$
-            + "types are not available yet. Wait ...").platformFailure); //$NON-NLS-1$
-        assertTrue(MetadataTypeBuilder.typeError("Object 'Document.Invoice' offers produced type " //$NON-NLS-1$
-            + "'DocumentObject', but its producedTypes/object/type chain is not available yet. Wait ...") //$NON-NLS-1$
-            .platformFailure);
+        Configuration noProducedTypes = MdClassFactory.eINSTANCE.createConfiguration();
+        noProducedTypes.getDocuments().add(MdClassFactory.eINSTANCE.createDocument());
+        noProducedTypes.getDocuments().get(0).setName("Invoice"); //$NON-NLS-1$
+        JsonObject concrete = json("{\"kind\":\"DocumentObject\",\"ref\":\"Invoice\"}").getAsJsonObject(); //$NON-NLS-1$
+        assertTrue(appendKind(concrete, "DocumentObject", null, noProducedTypes, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE).platformFailure);
+        Configuration brokenChain = MdClassFactory.eINSTANCE.createConfiguration();
+        seedProducedType(brokenChain, "Document", "Invoice", "objectType", null); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(appendKind(concrete, "DocumentObject", null, brokenChain, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE).platformFailure);
         // A known primitive the provider did not build is the platform's failure too.
-        assertTrue(MetadataTypeBuilder.typeError(MetadataTypeBuilder.primitiveNotCreated("String")) //$NON-NLS-1$
+        IEObjectProvider noString = Mockito.mock(IEObjectProvider.class);
+        assertTrue(appendKind(json("{\"kind\":\"String\"}").getAsJsonObject(), "String", noString, //$NON-NLS-1$ //$NON-NLS-2$
+            MdClassFactory.eINSTANCE.createConfiguration(), MetadataTypeBuilder.TypeTarget.METADATA)
             .platformFailure);
         // A caller's kind that merely SPELLS a chain failure is still the caller's refusal.
         for (String spelled : new String[] { "resolved, but its produced types are not available yet.", //$NON-NLS-1$
             "/type chain is not available yet.", //$NON-NLS-1$
             "its producedTypes/containerType/typeSet chain is not available yet." }) //$NON-NLS-1$
         {
-            assertFalse(spelled, MetadataTypeBuilder.typeError("Unknown type kind 'bogus " + spelled //$NON-NLS-1$
-                + "'. Known kinds: ...").platformFailure); //$NON-NLS-1$
+            String kind = "bogus " + spelled; //$NON-NLS-1$
+            JsonObject bogus = new JsonObject();
+            bogus.addProperty("kind", kind); //$NON-NLS-1$
+            assertFalse(spelled, appendKind(bogus, kind, null, MdClassFactory.eINSTANCE.createConfiguration(),
+                MetadataTypeBuilder.TypeTarget.METADATA).platformFailure);
         }
+    }
+
+    /** The typed failure of one spec item, asserting that it failed at all. */
+    private static MetadataTypeBuilder.Result appendKind(JsonObject item, String kind, IEObjectProvider provider,
+        Configuration config, MetadataTypeBuilder.TypeTarget target)
+    {
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+        MetadataTypeBuilder.Result failure =
+            MetadataTypeBuilder.appendType(td, item, kind, provider, config, null, false, target);
+        assertNotNull(kind + " must fail", failure); //$NON-NLS-1$
+        assertTrue(kind + " must add nothing", td.getTypes().isEmpty()); //$NON-NLS-1$
+        return failure;
+    }
+
+    // ---- typed failures: the branch that produces a failure classifies it (issue #653) ------------
+
+    @Test
+    public void testRefToAReferenceKindWithoutItsRefTypeIsAPlatformFailure()
+    {
+        // getRefType routes a Catalog and answers null only when its produced Ref type is absent -
+        // derived data the platform has not computed, never the caller's choice of target.
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        config.getCatalogs().add(MdClassFactory.eINSTANCE.createCatalog());
+        config.getCatalogs().get(0).setName("Goods"); //$NON-NLS-1$
+        String ruCatalog = MetadataLanguageUtils.cp(0x0421, 0x043F, 0x0440, 0x0430, 0x0432, 0x043E,
+            0x0447, 0x043D, 0x0438, 0x043A);
+        for (String ref : new String[] { "Catalog.Goods", ruCatalog + ".Goods" }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            JsonObject item = new JsonObject();
+            item.addProperty("kind", "Ref"); //$NON-NLS-1$ //$NON-NLS-2$
+            item.addProperty("ref", ref); //$NON-NLS-1$
+            MetadataTypeBuilder.Result failure = appendKind(item, "Ref", null, config, //$NON-NLS-1$
+                MetadataTypeBuilder.TypeTarget.METADATA);
+
+            assertTrue(ref, failure.platformFailure);
+            assertFalse(ref + ": " + failure.error, failure.error.contains("is not a reference type")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(ref + ": " + failure.error, failure.error.startsWith( //$NON-NLS-1$
+                "Object 'Goods' resolved, but its Ref type is not available yet.")); //$NON-NLS-1$
+        }
+        MetadataTypeBuilder.Result byTypedKind = appendKind(
+            json("{\"kind\":\"CatalogRef\",\"ref\":\"Goods\"}").getAsJsonObject(), "CatalogRef", null, //$NON-NLS-1$ //$NON-NLS-2$
+            config, MetadataTypeBuilder.TypeTarget.METADATA);
+        assertTrue(byTypedKind.platformFailure);
+    }
+
+    @Test
+    public void testRefToAReferenceKindWithItsRefTypeSucceeds()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Type refType = McoreFactory.eINSTANCE.createType();
+        seedProducedType(config, "Catalog", "Goods", "refType", refType); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
+
+        assertNull(MetadataTypeBuilder.appendType(td,
+            json("{\"kind\":\"Ref\",\"ref\":\"Catalog.Goods\"}").getAsJsonObject(), "Ref", null, config, //$NON-NLS-1$ //$NON-NLS-2$
+            null, false, MetadataTypeBuilder.TypeTarget.METADATA));
+        assertSame(refType, td.getTypes().get(0));
+    }
+
+    @Test
+    public void testRefToAKindWithNoRefTypeStaysTheCallersRefusal()
+    {
+        // The dispatcher does not route a register at all (AssertionError): the caller picked a
+        // target that has no Ref type, and the refusal text is unchanged.
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        config.getInformationRegisters().add(MdClassFactory.eINSTANCE.createInformationRegister());
+        config.getInformationRegisters().get(0).setName("Rates"); //$NON-NLS-1$
+
+        MetadataTypeBuilder.Result failure = appendKind(
+            json("{\"kind\":\"Ref\",\"ref\":\"InformationRegister.Rates\"}").getAsJsonObject(), "Ref", //$NON-NLS-1$ //$NON-NLS-2$
+            null, config, MetadataTypeBuilder.TypeTarget.METADATA);
+
+        assertFalse(failure.platformFailure);
+        assertNull(failure.cause);
+        assertEquals("Object 'Rates' is not a reference type. Only objects with a Ref type (Catalog / " //$NON-NLS-1$
+            + "Document / Enum / ChartOf* / ExchangePlan / BusinessProcess / Task) can be referenced.", //$NON-NLS-1$
+            failure.error);
+    }
+
+    @Test
+    public void testProviderCrashOnAKnownNameIsAPlatformFailureWithItsCause()
+    {
+        // The provider knows ValueList (it has a description for it), so its throw is a crash - not
+        // the "unknown name" answer the unknown-kind refusal is built on.
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+        IllegalStateException crash = new IllegalStateException("index corrupted"); //$NON-NLS-1$
+        Mockito.doThrow(crash).when(provider).createProxy("ValueList"); //$NON-NLS-1$
+        Mockito.doReturn(Mockito.mock(IEObjectDescription.class)).when(provider)
+            .getEObjectDescription("ValueList"); //$NON-NLS-1$
+
+        MetadataTypeBuilder.Result failure = appendKind(
+            json("{\"kind\":\"ValueList\"}").getAsJsonObject(), "ValueList", provider, //$NON-NLS-1$ //$NON-NLS-2$
+            MdClassFactory.eINSTANCE.createConfiguration(), MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+        assertTrue(failure.platformFailure);
+        assertSame("the provider's exception must be preserved", crash, failure.cause); //$NON-NLS-1$
+        assertFalse(failure.error, failure.error.contains("Unknown type kind")); //$NON-NLS-1$
+        assertEquals("Could not create the platform type. Tried: ValueList.", failure.error); //$NON-NLS-1$
+
+        // The raised form keeps OUR message for the client and carries the crash for the log.
+        IllegalStateException raised = failure.asException("Cannot build 'valueType': " + failure.error); //$NON-NLS-1$
+        assertEquals("Cannot build 'valueType': " + failure.error, raised.getMessage()); //$NON-NLS-1$
+        assertNull("a cause would replace the client's message (unwrapCauseMessage)", raised.getCause()); //$NON-NLS-1$
+        assertSame(crash, raised.getSuppressed()[0]);
+    }
+
+    @Test
+    public void testProviderCrashOnAKnownSimpleTypeKeepsItsCause()
+    {
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+        IllegalStateException crash = new IllegalStateException("index corrupted"); //$NON-NLS-1$
+        Mockito.doThrow(crash).when(provider).createProxy("UUID"); //$NON-NLS-1$
+        Mockito.doReturn(Mockito.mock(IEObjectDescription.class)).when(provider).getEObjectDescription("UUID"); //$NON-NLS-1$
+        Mockito.doThrow(new IllegalArgumentException("Can't create proxy for unknown name")) //$NON-NLS-1$
+            .when(provider).createProxy("UniqueIdentifier"); //$NON-NLS-1$
+
+        MetadataTypeBuilder.Result failure = appendKind(json("{\"kind\":\"UUID\"}").getAsJsonObject(), "UUID", //$NON-NLS-1$ //$NON-NLS-2$
+            provider, MdClassFactory.eINSTANCE.createConfiguration(), MetadataTypeBuilder.TypeTarget.METADATA);
+
+        assertTrue(failure.platformFailure);
+        assertSame(crash, failure.cause);
+    }
+
+    @Test
+    public void testUnknownNameStaysTheCallersRefusal()
+    {
+        // The real provider THROWS for a name it does not index and has no description for it.
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+        Mockito.doThrow(new IllegalArgumentException("Can't create proxy for unknown name 'Nonsense'")) //$NON-NLS-1$
+            .when(provider).createProxy(Mockito.anyString());
+
+        MetadataTypeBuilder.Result failure = appendKind(json("{\"kind\":\"Nonsense\"}").getAsJsonObject(), //$NON-NLS-1$
+            "Nonsense", provider, MdClassFactory.eINSTANCE.createConfiguration(), //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.FORM_ATTRIBUTE);
+
+        assertFalse(failure.platformFailure);
+        assertNull(failure.cause);
+        assertTrue(failure.error, failure.error.startsWith("Unknown type kind 'Nonsense'.")); //$NON-NLS-1$
     }
 
     // ---- ValueTable / ValueTree in-memory collections (issue #295) --------------------------------

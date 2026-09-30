@@ -2196,7 +2196,7 @@ public final class PredefinedWriter
             MetadataTypeBuilder.build(valueType, props.config, props.version, props.isExtensionProject);
         if (result.platformFailure)
         {
-            throw new IllegalStateException("Cannot build 'valueType': " + result.error); //$NON-NLS-1$
+            throw result.asException("Cannot build 'valueType': " + result.error); //$NON-NLS-1$
         }
         if (result.error != null)
         {
