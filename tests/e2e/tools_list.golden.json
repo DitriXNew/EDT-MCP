@@ -686,6 +686,28 @@
           },
           "type": "array"
         },
+        "markerCount": {
+          "type": "integer"
+        },
+        "markers": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "markersIncomplete": {
+          "type": "boolean"
+        },
+        "markersIncompleteReason": {
+          "enum": [
+            "readFailed",
+            "objectUnresolved",
+            "validationUnobservable",
+            "validationPending",
+            "checksDisabled"
+          ],
+          "type": "string"
+        },
         "message": {
           "type": "string"
         },
@@ -3808,6 +3830,28 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "markerCount": {
+          "type": "integer"
+        },
+        "markers": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "markersIncomplete": {
+          "type": "boolean"
+        },
+        "markersIncompleteReason": {
+          "enum": [
+            "readFailed",
+            "objectUnresolved",
+            "validationUnobservable",
+            "validationPending",
+            "checksDisabled"
+          ],
+          "type": "string"
         },
         "message": {
           "type": "string"

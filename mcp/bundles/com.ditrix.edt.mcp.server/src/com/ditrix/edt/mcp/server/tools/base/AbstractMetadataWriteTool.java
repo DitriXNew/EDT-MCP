@@ -6,8 +6,11 @@
 
 package com.ditrix.edt.mcp.server.tools.base;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -27,6 +30,7 @@ import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.WrittenObjectMarkers;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -371,8 +375,82 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
             // extension and not - which is why the outcome only clears the "established" flag.
             drainEstablished &= waitWithin(deadlineAtMs, projectName) == BuildUtils.DiskExportState.DRAINED;
         }
-        return scope.markErrorAfterRecordedWrite(
-            publish(verdict, refreshAfterExportAwait(params, result, drainEstablished)));
+        return scope.markErrorAfterRecordedWrite(attachWrittenObjectMarkers(params, verdict, scope,
+            publish(verdict, refreshAfterExportAwait(params, result, drainEstablished))));
+    }
+
+    /** The FQN a metadata write addresses; decides whether {@code Configuration} is its target. */
+    private static final String KEY_FQN = "fqn"; //$NON-NLS-1$
+
+    /**
+     * Whether a successful write reports the EDT markers of the top objects it exported (#643).
+     *
+     * @return {@code true} to add {@code markersIncomplete} / {@code markerCount} / {@code markers}
+     */
+    protected boolean reportsWrittenObjectMarkers()
+    {
+        return false;
+    }
+
+    /** @return the validation budget of the marker report; overridden only by tests */
+    protected long markerDeadlineMs()
+    {
+        return WrittenObjectMarkers.VALIDATION_BUDGET_MS;
+    }
+
+    /** @return the platform seam of the marker report; overridden only by tests */
+    protected WrittenObjectMarkers.Environment markerEnvironment()
+    {
+        return WrittenObjectMarkers.PLATFORM;
+    }
+
+    /**
+     * Adds the written objects' markers to a success, after the export barrier and off the UI
+     * thread. Only the projects this call wrote (never cascade participants), only the top objects
+     * it exported; a call that exported nothing gets none of the fields. Never turns a success into
+     * an error.
+     */
+    private String attachWrittenObjectMarkers(Map<String, String> params, WriteScope.Verdict verdict,
+        WriteScope scope, String result)
+    {
+        if (!reportsWrittenObjectMarkers())
+        {
+            return result;
+        }
+        JsonObject success = successObject(result);
+        if (success == null)
+        {
+            return result;
+        }
+        Map<String, List<String>> slice = new LinkedHashMap<>();
+        for (String projectName : verdict.written())
+        {
+            List<String> fqns = WrittenObjectMarkers.slice(scope.exportedTopObjects(projectName),
+                params.get(KEY_FQN));
+            if (!fqns.isEmpty())
+            {
+                slice.put(projectName, fqns);
+            }
+        }
+        if (slice.isEmpty())
+        {
+            return result;
+        }
+        long budgetMs = markerDeadlineMs();
+        WrittenObjectMarkers.Report report;
+        try
+        {
+            report = WrittenObjectMarkers.collect(markerEnvironment(), slice, budgetMs);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logWarning("Could not collect the markers of the written objects: " + e); //$NON-NLS-1$
+            List<String> objects = new ArrayList<>();
+            slice.values().forEach(objects::addAll);
+            report = WrittenObjectMarkers.readFailed(objects, budgetMs);
+        }
+        WrittenObjectMarkers.attach(success, report);
+        return GsonProvider.toJson(success);
     }
 
     /**

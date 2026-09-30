@@ -140,7 +140,7 @@ public final class CommandInterfaceAddress
         return ownerFqn() + '.' + (kind == Kind.MAIN_SECTION ? MAIN_SECTION_TOKEN : COMMAND_INTERFACE_TOKEN);
     }
 
-    private static boolean isConfigurationToken(String token)
+    static boolean isConfigurationToken(String token)
     {
         String t = token.trim().toLowerCase(Locale.ROOT);
         return t.equals("configuration") || t.equals(RU_CONFIGURATION); //$NON-NLS-1$

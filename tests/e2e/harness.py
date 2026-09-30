@@ -2846,6 +2846,96 @@ def poll_disk_count(rel_path, substr, expected, timeout=10, stable_for=1.0, ctx=
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Written-object marker report of create_metadata / modify_metadata (#643)
+# ──────────────────────────────────────────────────────────────────────────────
+MARKER_FIELDS = ("markersIncomplete", "markersIncompleteReason", "markerCount", "markers")
+MARKER_REASONS = frozenset({"validationPending", "validationUnobservable", "objectUnresolved",
+                            "readFailed", "checksDisabled"})
+MARKER_ROW_KEYS = frozenset({"object", "severity", "checkId", "message", "location", "hasQuickFix"})
+MARKER_MAX_ROWS = 20
+
+
+def assert_marker_contract(structured, ctx=""):
+    """Assert the #643 marker members of a write success and return (incomplete, rows).
+
+    The flag is a real boolean, the reason is present IFF the flag is true and is one of the
+    documented values, markerCount >= len(markers), at most 20 rows, each row carries exactly
+    the documented keys."""
+    if not isinstance(structured, dict):
+        _fail("a write success must carry structuredContent [%s]: %r" % (ctx, structured))
+    incomplete = structured.get("markersIncomplete")
+    if not isinstance(incomplete, bool):
+        _fail("markersIncomplete must be a boolean on a write that exported an object [%s]: %r"
+              % (ctx, structured))
+    reason = structured.get("markersIncompleteReason")
+    if incomplete and reason not in MARKER_REASONS:
+        _fail("markersIncomplete:true needs a documented reason [%s], got %r" % (ctx, reason))
+    if not incomplete and "markersIncompleteReason" in structured:
+        _fail("a complete report must not carry a reason [%s]: %r" % (ctx, reason))
+    rows = structured.get("markers")
+    count = structured.get("markerCount")
+    if not isinstance(rows, list) or not isinstance(count, int) or isinstance(count, bool):
+        _fail("markers must be a list and markerCount an integer [%s]: %r" % (ctx, structured))
+    if len(rows) > MARKER_MAX_ROWS or count < len(rows):
+        _fail("at most %d rows and markerCount >= rows [%s]: count=%r rows=%d"
+              % (MARKER_MAX_ROWS, ctx, count, len(rows)))
+    for row in rows:
+        if not isinstance(row, dict) or not MARKER_ROW_KEYS.issuperset(row.keys()) \
+                or not {"object", "checkId", "message", "location", "hasQuickFix"}.issubset(row.keys()):
+            _fail("a marker row must be {object, severity, checkId, message, location, hasQuickFix} "
+                  "[%s]: %r" % (ctx, row))
+    return incomplete, rows
+
+
+def assert_no_marker_fields(structured, ctx=""):
+    """A response that wrote no object (or is not a create/modify success) carries none of the four."""
+    present = [k for k in MARKER_FIELDS if isinstance(structured, dict) and k in structured]
+    if present:
+        _fail("unexpected marker members %s [%s]: %r" % (present, ctx, structured))
+
+
+def project_error_rows(fqn, project=PROJECT, include_modules=False):
+    """The settled `get_project_errors objectFqns=[fqn]` rows as (checkId, message, location).
+
+    BSL-module rows (a non-empty Module path cell) are left out unless asked for: they are keyed
+    by module URI and are outside the write tools' per-object slice."""
+    r = call("get_project_errors", {"projectName": project, "objectFqns": [fqn],
+                                    "limit": 1000})
+    assert_ok(r, "get_project_errors objectFqns=[%s]" % fqn)
+    structured = r.structured if isinstance(r.structured, dict) else {}
+    report = structured.get("report") if isinstance(structured.get("report"), str) else (r.text or "")
+    rows = []
+    header_seen = False
+    for line in report.splitlines():
+        cells = split_markdown_row(line)
+        if not cells:
+            continue
+        if not header_seen:
+            header_seen = cells[0] == "Description"
+            continue
+        if set("".join(cells)) <= set("-: "):
+            continue  # the separator row
+        if len(cells) < 5:
+            continue
+        message, location, module_path, check = cells[0], cells[1], cells[2], cells[4]
+        if module_path and not include_modules:
+            continue
+        rows.append((check.strip("`"), message, location))
+    return rows
+
+
+def poll_project_error_check(fqn, check_id, timeout=60, project=PROJECT):
+    """Poll get_project_errors objectFqns=[fqn] until a `check_id` row shows up; True when it did."""
+    deadline = time.time() + timeout
+    while True:
+        if any(row[0] == check_id for row in project_error_rows(fqn, project)):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(2)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Live-infobase helpers (used only by the gated test_live_roundtrip.py suite)
 # ──────────────────────────────────────────────────────────────────────────────
 def parse_yaxunit_counts(text):

@@ -68,6 +68,7 @@ import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
+import com.ditrix.edt.mcp.server.utils.WrittenObjectMarkers;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
@@ -287,7 +288,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     @Override
     public String getOutputSchema()
     {
-        return JsonSchemaBuilder.object()
+        return WrittenObjectMarkers.declareOutput(JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the node was created", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.ACTION, "'created' on success") //$NON-NLS-1$
             .stringProperty("fqn", "Normalized full-name FQN of the created node") //$NON-NLS-1$ //$NON-NLS-2$
@@ -334,8 +335,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 "Extension event call type written (Before/After/Instead), when an extension event " //$NON-NLS-1$
                 + "handler (form:EventHandlerExtension) was created") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable confirmation message") //$NON-NLS-1$
-            .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
+            .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION))
             .build();
+    }
+
+    @Override
+    protected boolean reportsWrittenObjectMarkers()
+    {
+        return true;
     }
 
     @Override

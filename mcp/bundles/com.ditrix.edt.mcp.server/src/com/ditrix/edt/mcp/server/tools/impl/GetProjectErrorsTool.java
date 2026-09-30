@@ -22,7 +22,6 @@ import java.util.Set;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
-import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 
 import com._1c.g5.v8.bm.integration.AbstractBmTask;
@@ -31,11 +30,9 @@ import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
-import com._1c.g5.v8.dt.validation.marker.IExtraInfoMap;
 import com._1c.g5.v8.dt.validation.marker.IMarkerManager;
 import com._1c.g5.v8.dt.validation.marker.Marker;
 import com._1c.g5.v8.dt.validation.marker.MarkerSeverity;
-import com._1c.g5.v8.dt.validation.marker.StandardExtraInfo;
 import com.e1c.g5.v8.dt.check.qfix.IFixRepository;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.e1c.g5.v8.dt.check.settings.CheckUid;
@@ -48,8 +45,8 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
-import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
+import com.ditrix.edt.mcp.server.utils.MarkerRows;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
@@ -2690,15 +2687,9 @@ public class GetProjectErrorsTool implements IMcpTool
     }
     
     /**
-     * Applies the severity/checkId/objects filters to a single marker and, if it passes,
-     * builds its {@link ErrorInfo}. Returns {@code null} when the marker is filtered out.
-     *
-     * <p>Must be called inside a BM read transaction so that
-     * {@link Marker#getObjectPresentation()} can resolve. The symbolic check id is resolved
-     * exactly once here and reused for both the checkId filter and the resulting
-     * {@link ErrorInfo}, avoiding a second {@link ICheckRepository#getUidForShortUid} call.
-     * The filter order (severity -> checkId -> objects) is preserved so the
-     * {@code unresolvedFilteredOut} counter keeps the same semantics.</p>
+     * Applies the severity/checkId/objects filters to a single marker and, if it passes, builds its
+     * {@link ErrorInfo}; {@code null} when filtered out. Must run inside a BM read transaction. The
+     * row building lives in {@link MarkerRows#buildIfMatches}.
      */
     static ErrorInfo buildIfMatches(Marker marker, MarkerSeverity severityFilter, String checkId,
         Set<String> objects, ICheckRepository checkRepository, IFixRepository fixRepository,
@@ -2711,103 +2702,17 @@ public class GetProjectErrorsTool implements IMcpTool
     /**
      * As {@link #buildIfMatches(Marker, MarkerSeverity, String, Set, ICheckRepository, IFixRepository, int[], int[])}
      * but threading {@code exactScope} into the objects filter (segment-boundary vs substring - see
-     * {@link #excludedByObjectsFilter(Set, boolean, String, int[], boolean)}).
+     * {@link MarkerRows#excludedByObjectsFilter(Set, boolean, String, int[], boolean)}).
      */
     static ErrorInfo buildIfMatches(Marker marker, MarkerSeverity severityFilter, String checkId,
         Set<String> objects, ICheckRepository checkRepository, IFixRepository fixRepository,
         int[] unresolvedShown, int[] unresolvedFilteredOut, boolean exactScope)
     {
-        // Severity filter
-        if (severityFilter != null && marker.getSeverity() != severityFilter)
-        {
-            return null;
-        }
-
-        // Resolve the check UID once; reused for the symbolic check id (display + checkId filter)
-        // AND for the hasQuickFix flag (does this check have a registered EDT auto-fix?).
-        String shortUid = marker.getCheckId() != null ? marker.getCheckId() : ""; //$NON-NLS-1$
-        CheckUid checkUid = resolveCheckUid(marker, shortUid, checkRepository);
-        String symbolicCheckId = checkUid != null ? checkUid.getCheckId() : null;
-        // Best-effort, like the object-presentation resolution below: a repository hiccup on ONE
-        // marker (stale registration, transient service state) must not abort the whole listing -
-        // just leave this row's flag unset.
-        boolean hasQuickFix = false;
-        if (checkUid != null && fixRepository != null)
-        {
-            try
-            {
-                hasQuickFix = fixRepository.hasFixes(checkUid);
-            }
-            catch (Exception e)
-            {
-                hasQuickFix = false;
-            }
-        }
-
-        // checkId filter: match either the short UID (e.g. "SU23") or the symbolic id
-        // (e.g. "semicolon-missing"). The short UID alone is rarely what callers type.
-        if (checkId != null && !checkId.isEmpty() && !checkIdMatches(shortUid, symbolicCheckId, checkId))
-        {
-            return null;
-        }
-        
-        // Resolve the object presentation once; reused for the objects filter and the ErrorInfo.
-        // Failure handling differs by context (see below), so we only record the outcome here.
-        String objectPresentation = null;
-        boolean presentationResolved;
-        try
-        {
-            String p = marker.getObjectPresentation();
-            objectPresentation = p != null ? p : ""; //$NON-NLS-1$
-            presentationResolved = true;
-        }
-        catch (Exception e)
-        {
-            presentationResolved = false;
-        }
-        
-        // Objects filter (FQN matching against the resolved object presentation)
-        if (excludedByObjectsFilter(objects, presentationResolved, objectPresentation, unresolvedFilteredOut,
-            exactScope))
-        {
-            return null;
-        }
-
-        // Build the ErrorInfo, reusing the already resolved symbolic check id and presentation.
-        ErrorInfo error = new ErrorInfo();
-        error.checkCode = shortUid;
-        error.checkId = symbolicCheckId;
-        error.hasDocumentation = symbolicCheckId != null && !symbolicCheckId.isEmpty()
-            && GetCheckDescriptionTool.hasCheckDocumentation(symbolicCheckId);
-        error.hasQuickFix = hasQuickFix;
-        error.message = marker.getMessage() != null ? marker.getMessage() : ""; //$NON-NLS-1$
-
-        // Structural locator: for a marker that points at a BSL text position the
-        // module path + 1-based line live in the marker's own extraInfo map (no model
-        // read), so they are safe to read regardless of the transaction boundary. Both
-        // stay null for markers that do not resolve to a BSL module location.
-        populateModuleLocation(marker, error);
-        if (presentationResolved)
-        {
-            error.objectPresentation = objectPresentation;
-        }
-        else
-        {
-            // No objects filter was active (otherwise we would have returned above): keep the
-            // marker with a placeholder location instead of dropping it, and count it.
-            unresolvedShown[0]++;
-            error.objectPresentation = unresolvedPlaceholder(marker);
-        }
-        return error;
+        return MarkerRows.buildIfMatches(marker, severityFilter, checkId, objects, checkRepository,
+            fixRepository, unresolvedShown, unresolvedFilteredOut, exactScope, ErrorInfo::new);
     }
 
-    /**
-     * Decides whether the marker is excluded by an explicit objects filter, matching the
-     * resolved object presentation against the FQN variants. Returns {@code false} when no
-     * objects filter is active. As a side effect, increments {@code unresolvedFilteredOut}
-     * for a marker whose presentation could not be resolved while a filter is active (the
-     * marker is excluded but counted separately so the caller can warn about it).
-     */
+    /** @see MarkerRows#excludedByObjectsFilter(Set, boolean, String, int[], boolean) */
     static boolean excludedByObjectsFilter(Set<String> objects, boolean presentationResolved,
         String objectPresentation, int[] unresolvedFilteredOut)
     {
@@ -2815,49 +2720,12 @@ public class GetProjectErrorsTool implements IMcpTool
             unresolvedFilteredOut, false);
     }
 
-    /**
-     * As {@link #excludedByObjectsFilter(Set, boolean, String, int[])} but with an
-     * {@code exactScope} mode. When {@code false} (the default get_project_errors behavior) a
-     * variant matches by SUBSTRING ({@code contains}) - loose on purpose, so a caller filtering
-     * by {@code Catalog.Order} also sees markers on its members. When {@code true} a variant
-     * matches only at a SEGMENT BOUNDARY: the presentation must EQUAL the variant or start with
-     * {@code variant + "."} (the object itself or a member strictly under it) - so
-     * {@code XDTOPackage.P} no longer matches {@code XDTOPackage.P2}'s markers. Used by
-     * validate_xdto_package, which needs exact per-package scoping (a substring match across
-     * prefix-sharing package names is a false failure).
-     */
+    /** @see MarkerRows#excludedByObjectsFilter(Set, boolean, String, int[], boolean) */
     static boolean excludedByObjectsFilter(Set<String> objects, boolean presentationResolved,
         String objectPresentation, int[] unresolvedFilteredOut, boolean exactScope)
     {
-        if (objects.isEmpty())
-        {
-            return false;
-        }
-        if (!presentationResolved)
-        {
-            // Cannot resolve the location, so we cannot decide membership for an
-            // explicit object filter. The marker is excluded from the result; count it
-            // separately so the caller is warned that it was filtered out, not shown.
-            unresolvedFilteredOut[0]++;
-            return true;
-        }
-        if (objectPresentation.isEmpty())
-        {
-            return true;
-        }
-
-        String presentationLower = objectPresentation.toLowerCase(Locale.ROOT);
-        for (String fqnVariant : objects)
-        {
-            boolean matches = exactScope
-                ? presentationLower.equals(fqnVariant) || presentationLower.startsWith(fqnVariant + ".") //$NON-NLS-1$
-                : presentationLower.contains(fqnVariant);
-            if (matches)
-            {
-                return false;
-            }
-        }
-        return true;
+        return MarkerRows.excludedByObjectsFilter(objects, presentationResolved, objectPresentation,
+            unresolvedFilteredOut, exactScope);
     }
 
     /**
@@ -2870,41 +2738,16 @@ public class GetProjectErrorsTool implements IMcpTool
         return uid != null ? uid.getCheckId() : null;
     }
 
-    /**
-     * Resolves a marker's full {@link CheckUid} (e.g. {@code semicolon-missing}) from its short UID
-     * (e.g. {@code SU23}) via the check repository, or {@code null} when it cannot be resolved. The
-     * UID is the key both for the symbolic check id (display) and for {@code IFixRepository.hasFixes}
-     * (the quick-fix flag), so it is resolved once and reused.
-     */
+    /** @see MarkerRows#resolveCheckUid(Marker, String, ICheckRepository) */
     static CheckUid resolveCheckUid(Marker marker, String shortUid, ICheckRepository checkRepository)
     {
-        if (checkRepository == null || shortUid == null || shortUid.isEmpty() || marker.getProject() == null)
-        {
-            return null;
-        }
-        try
-        {
-            return checkRepository.getUidForShortUid(shortUid, marker.getProject());
-        }
-        catch (Exception e)
-        {
-            // Ignore - caller falls back to the short UID / no fix flag
-            return null;
-        }
+        return MarkerRows.resolveCheckUid(marker, shortUid, checkRepository);
     }
 
-    /**
-     * Returns true when the user supplied checkId substring matches either the marker
-     * short UID or its already resolved symbolic check id.
-     */
+    /** @see MarkerRows#checkIdMatches(String, String, String) */
     static boolean checkIdMatches(String shortUid, String symbolicCheckId, String checkId)
     {
-        String needle = checkId.toLowerCase(Locale.ROOT);
-        if (shortUid != null && shortUid.toLowerCase(Locale.ROOT).contains(needle))
-        {
-            return true;
-        }
-        return symbolicCheckId != null && symbolicCheckId.toLowerCase(Locale.ROOT).contains(needle);
+        return MarkerRows.checkIdMatches(shortUid, symbolicCheckId, checkId);
     }
 
     /**
@@ -2925,120 +2768,28 @@ public class GetProjectErrorsTool implements IMcpTool
         return symbolicCheckId != null && symbolicCheckId.toLowerCase(Locale.ROOT).equals(needle);
     }
 
-    /**
-     * Placeholder location for a marker whose {@link Marker#getObjectPresentation()} could not
-     * be resolved, so the marker is reported instead of being dropped.
-     */
+    /** @see MarkerRows#unresolvedPlaceholder(Marker) */
     static String unresolvedPlaceholder(Marker marker)
     {
-        IProject project = marker.getProject();
-        return "<unresolved: " + (project != null ? project.getName() : "?") + ">"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return MarkerRows.unresolvedPlaceholder(marker);
     }
-    
-    /**
-     * Populates the structural BSL locator ({@code modulePath} + {@code line}) on the
-     * {@link ErrorInfo} when the marker points at a position inside a BSL module, leaving
-     * both {@code null} otherwise.
-     *
-     * <p>The locator is read straight from the marker's {@link Marker#getExtraInfo()} map —
-     * {@link StandardExtraInfo#TEXT_URI_TO_PROBLEM} (the EMF platform URI of the problem) and
-     * {@link StandardExtraInfo#TEXT_LINE} (1-based line). EDT fills these for text/Xtext
-     * issues (e.g. BSL editor markers; see {@code BmAwareResourceValidatorListener}). Because
-     * the values are plain strings already stored on the marker, reading them touches NO
-     * model state and is therefore safe with respect to the BM read-transaction boundary.</p>
-     *
-     * <p>The module path is only set when the URI genuinely resolves to a {@code .bsl} module
-     * under the source folder, so it matches the {@code modulePath} shape accepted by
-     * {@code read_module_source} / {@code set_breakpoint}. The line is only set when the path
-     * is set, so a caller never gets a line without a module to apply it to.</p>
-     */
+
+    /** @see MarkerRows#populateModuleLocation(Marker, MarkerRows.Row) */
     static void populateModuleLocation(Marker marker, ErrorInfo error)
     {
-        IExtraInfoMap extraInfo = marker.getExtraInfo();
-        if (extraInfo == null)
-        {
-            return;
-        }
-
-        String uriToProblem = extraInfo.get(StandardExtraInfo.TEXT_URI_TO_PROBLEM);
-        String modulePath = resolveBslModulePath(uriToProblem);
-        if (modulePath == null)
-        {
-            // No BSL module location: leave both null rather than inventing a path.
-            return;
-        }
-        error.modulePath = modulePath;
-
-        Integer line = extraInfo.get(StandardExtraInfo.TEXT_LINE);
-        if (line != null && line.intValue() >= 1)
-        {
-            error.line = line;
-        }
+        MarkerRows.populateModuleLocation(marker, error);
     }
 
-    /**
-     * Derives a source-folder-relative BSL module path (the shape
-     * {@code read_module_source} / {@code set_breakpoint} accept, e.g.
-     * {@code "CommonModules/MyModule/Module.bsl"}) from an EMF problem URI string, or
-     * {@code null} when the URI is absent, unparseable, or does not point at a {@code .bsl}
-     * module under the source folder.
-     *
-     * <p>The URI is a platform resource URI like
-     * {@code platform:/resource/<Project>/src/<modulePath>.bsl#<fragment>}. The fragment is
-     * trimmed and the {@code <Project>/src/} prefix is stripped via
-     * {@link BslModuleUtils#extractModulePath(String)} (the single source of truth for the
-     * {@code /src/} assumption). A URI whose platform path contains no {@code /src/} segment,
-     * or whose file extension is not {@code bsl}, yields {@code null} — never a guessed path.</p>
-     */
+    /** @see MarkerRows#resolveBslModulePath(String) */
     static String resolveBslModulePath(String uriToProblem)
     {
-        if (uriToProblem == null || uriToProblem.isEmpty())
-        {
-            return null;
-        }
-        try
-        {
-            URI uri = URI.createURI(uriToProblem).trimFragment();
-            // Only BSL module problems carry a path read_module_source/set_breakpoint can use.
-            if (!"bsl".equalsIgnoreCase(uri.fileExtension())) //$NON-NLS-1$
-            {
-                return null;
-            }
-            // platform:/resource/<Project>/src/<modulePath>.bsl -> <Project>/src/<modulePath>.bsl
-            String platformString = uri.isPlatformResource() ? uri.toPlatformString(true) : null;
-            if (platformString == null || platformString.isEmpty())
-            {
-                return null;
-            }
-            // extractModulePath returns the part after "/src/"; require the segment to be
-            // present so we never hand back a project-relative or unrelated path.
-            String marker = "/" + BslModuleUtils.SOURCE_FOLDER + "/"; //$NON-NLS-1$ //$NON-NLS-2$
-            if (!platformString.contains(marker))
-            {
-                return null;
-            }
-            String modulePath = BslModuleUtils.extractModulePath(platformString);
-            return modulePath != null && !modulePath.isEmpty() ? modulePath : null;
-        }
-        catch (Exception e)
-        {
-            // A malformed URI is not actionable as a locator; fall back to no location.
-            return null;
-        }
+        return MarkerRows.resolveBslModulePath(uriToProblem);
     }
 
     /**
-     * Helper class to store error info.
+     * Helper class to store error info; the fields live in {@link MarkerRows.Row}.
      */
-    static class ErrorInfo
+    static class ErrorInfo extends MarkerRows.Row
     {
-        String checkCode;          // Short UID like "SU23"
-        String checkId;            // Symbolic ID like "bsl-legacy-check-expression-type"
-        String message;
-        String objectPresentation;
-        boolean hasDocumentation;  // Whether documentation exists for this check
-        String modulePath;         // Source-folder-relative BSL module path, or null
-        Integer line;              // 1-based line inside the module, or null
-        boolean hasQuickFix;       // Whether this check has an EDT auto-fix (apply via apply_quick_fix)
     }
 }

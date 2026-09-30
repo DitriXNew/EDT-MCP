@@ -217,8 +217,9 @@ public final class BmTransactions
         // remember to give one (issue #408). Recorded before the attempt, not after a successful
         // one: a refused submission is not evidence that this call did not write - the model change
         // stands - and for a list submission that threw part way through it is not even evidence
-        // that nothing was queued. No-op outside a write tool's call.
-        WriteScope.recordExportSubmission(project);
+        // that nothing was queued. The FQNs become the call's written-object slice (#643). No-op
+        // outside a write tool's call.
+        WriteScope.recordExportSubmission(project, topObjectFqns);
         try
         {
             IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();

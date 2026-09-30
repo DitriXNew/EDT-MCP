@@ -25,6 +25,10 @@ import uuid
 import xml.etree.ElementTree as ET
 
 from harness import (
+    E2ESkip,
+    assert_marker_contract,
+    assert_no_marker_fields,
+    project_error_rows,
     call,
     assert_ok,
     assert_error,
@@ -3584,3 +3588,89 @@ def test_fractional_value_for_a_long_property_is_refused_actionably():
     assert_error(r, "a fractional value is not a whole 64-bit number")
     assert_contains(r.text, "64-bit", "the error must name the kind of number it expected")
     assert_no_diff("a refused property must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# #643 - the written object's EDT markers after a modify
+# ──────────────────────────────────────────────────────────────────────────────
+
+# v8codestyle `db-object-anyref-type`: MAJOR, on a stored attribute typed AnyRef / an abstract ref.
+_ANYREF_CHECK = "db-object-anyref-type"
+_ANYREF_TYPES = ({"types": [{"kind": "AnyRef"}]}, {"types": [{"kind": "CatalogRef"}]})
+
+
+def _modify_markers(result, owner, ctx):
+    """Assert the marker contract of a modify success; return (incomplete, rows)."""
+    assert_ok(result, ctx)
+    incomplete, rows = assert_marker_contract(result.structured, ctx)
+    strays = [row for row in rows if row.get("object") != owner]
+    if strays:
+        _fail("every row must belong to the written top object %s [%s]: %r" % (owner, ctx, strays))
+    return incomplete, rows
+
+
+def _anyref_rows(rows, attr):
+    return [row for row in rows if row.get("checkId") == _ANYREF_CHECK and attr in (row.get("location") or "")]
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_markers_drop_a_fixed_marker_once_validation_is_confirmed():
+    """Staleness: after the AnyRef marker is fixed, a confirmed-complete answer must not still
+    report it - the pre-write marker is gone once EDT re-validated the object."""
+    owner = "Catalog.Catalog"
+    attr = "E2EMarkersAnyRef"
+    fqn = "%s.Attribute.%s" % (owner, attr)
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed attribute")
+    wait_for_project_ready()
+
+    refusals = []
+    dirty = None
+    for type_value in _ANYREF_TYPES:
+        r = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
+                                     "properties": [{"name": "type", "value": type_value}]})
+        if r.is_error:
+            refusals.append(r.error_text()[:160])
+            continue
+        dirty = _modify_markers(r, owner, "set an abstract reference type")
+        break
+    if dirty is None:
+        raise E2ESkip("no abstract reference type is accepted on a stored attribute here: %r" % refusals)
+    wait_for_project_ready()
+    deadline = time.time() + 60
+    while not any(check == _ANYREF_CHECK and attr in location
+                  for check, _message, location in project_error_rows(owner)):
+        if time.time() >= deadline:
+            raise E2ESkip("check %s does not run on this stand (no marker on %s after 60s)"
+                          % (_ANYREF_CHECK, fqn))
+        time.sleep(2)
+    if not dirty[0] and not _anyref_rows(dirty[1], attr):
+        _fail("FALSE CLEAN: markersIncomplete:false without the %s marker EDT reports on %s: %r"
+              % (_ANYREF_CHECK, fqn, dirty[1]))
+
+    confirmed = 0
+    for length in (10, 11, 12):
+        r = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn, "properties": [
+            {"name": "type", "value": {"types": [{"kind": "String", "length": length}]}}]})
+        incomplete, rows = _modify_markers(r, owner, "fix the type to String(%d)" % length)
+        wait_for_project_ready()
+        if incomplete:
+            continue
+        confirmed += 1
+        stale = _anyref_rows(rows, attr)
+        if stale:
+            _fail("STALE: a confirmed-complete answer still reports the fixed %s marker: %r"
+                  % (_ANYREF_CHECK, stale))
+    if not confirmed:
+        _fail("no modify out of 3 came back markersIncomplete:false - an implementation that "
+              "always answers 'incomplete' must not pass")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_error_carries_no_marker_fields():
+    fqn = "Catalog.Catalog.Attribute.E2EMarkersNoSuchAttr"
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
+                                 "properties": [{"name": "comment", "value": "x"}]})
+    e = assert_error(r, "modify a missing attribute")
+    assert_error_quality(e, names=["E2EMarkersNoSuchAttr"], ctx="missing modify target")
+    assert_no_marker_fields(r.structured, "an error reports no markers")
+    assert_no_diff("a refused modify must not touch disk")

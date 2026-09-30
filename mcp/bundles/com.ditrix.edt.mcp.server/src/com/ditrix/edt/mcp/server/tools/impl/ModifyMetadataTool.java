@@ -108,6 +108,7 @@ import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
+import com.ditrix.edt.mcp.server.utils.WrittenObjectMarkers;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -415,7 +416,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     @Override
     public String getOutputSchema()
     {
-        return JsonSchemaBuilder.object()
+        return WrittenObjectMarkers.declareOutput(JsonSchemaBuilder.object()
             .booleanProperty("success", "Whether the properties were set", true) //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(McpKeys.ACTION, "'modified' on success; 'unchanged' when a 'commands' change " //$NON-NLS-1$
                 + "requested only what the section already had") //$NON-NLS-1$
@@ -475,8 +476,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 "Where a moved form item ended up (when 'parent'/'position' moved a form item), e.g. " //$NON-NLS-1$
                 + "\"group 'Main' at index 1\"") //$NON-NLS-1$
             .stringProperty(McpKeys.MESSAGE, "Human-readable confirmation message") //$NON-NLS-1$
-            .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
+            .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION))
             .build();
+    }
+
+    @Override
+    protected boolean reportsWrittenObjectMarkers()
+    {
+        return true;
     }
 
     @Override

@@ -35,6 +35,11 @@ import xml.etree.ElementTree as ET
 
 from harness import (
     E2ECallTimeout,
+    E2ESkip,
+    assert_marker_contract,
+    assert_no_marker_fields,
+    poll_project_error_check,
+    project_error_rows,
     call,
     assert_ok,
     assert_error,
@@ -2612,3 +2617,104 @@ def test_nested_chain_reproduces_the_dead_end_parent_shape_of_342():
         "the ё-spelled chain must not be reported missing: %r" % (g.structured,)
     assert g.structured.get("objectsResolved") == [requested], \
         "the ё-spelled chain must resolve through the parent's е twin: %r" % (g.structured,)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# #643 - the written object's EDT markers, with an honest markersIncomplete
+#
+# A create success reports the validation markers of the top objects it exported. The flag is
+# the contract: false only when EDT confirmed the object's validation, and then the list IS
+# EDT's current view of the object. These tests check that against get_project_errors, and the
+# lie detector requires at least one confirmed-complete answer so an implementation that always
+# answers "incomplete" cannot pass.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# v8codestyle `mdo-name-length`: CRITICAL, NORMAL complexity, on a Name longer than 80 chars.
+_NAME_LENGTH_CHECK = "mdo-name-length"
+_LIE_DETECTOR_ATTEMPTS = 5
+
+
+def _markers_of(result, fqn, ctx):
+    """Assert the marker contract of a create success; return (incomplete, rows)."""
+    assert_ok(result, ctx)
+    incomplete, rows = assert_marker_contract(result.structured, ctx)
+    strays = [row for row in rows if row.get("object") != fqn]
+    if strays:
+        _fail("every row must belong to the written object %s (never the incidental "
+              "Configuration) [%s]: %r" % (fqn, ctx, strays))
+    return incomplete, rows
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_markers_are_never_a_false_clean():
+    """The lie detector: a Name over 80 chars gets EDT's `mdo-name-length` marker. A response
+    with markersIncomplete:false that lacks it - while EDT does report it - is a false clean."""
+    wait_for_project_ready()
+    attempts = []
+    for attempt in range(_LIE_DETECTOR_ATTEMPTS):
+        fqn = "Catalog.E2EMarkersLongName%s%d" % ("Abcdefghij" * 7, attempt)
+        r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
+        if r.is_error:
+            raise E2ESkip("create_metadata refuses a Name over 80 characters on this stand, so "
+                          "the mdo-name-length case cannot be expressed: %s" % r.error_text()[:200])
+        incomplete, rows = _markers_of(r, fqn, "create %s" % fqn)
+        attempts.append((fqn, incomplete, any(row.get("checkId") == _NAME_LENGTH_CHECK for row in rows)))
+        wait_for_project_ready()
+
+    complete = [a for a in attempts if not a[1]]
+    if not complete:
+        _fail("no attempt out of %d came back markersIncomplete:false - an implementation that "
+              "always answers 'incomplete' must not pass: %r" % (len(attempts), attempts))
+    # Ground truth: the check must really run here, or the case proves nothing.
+    if not poll_project_error_check(attempts[0][0], _NAME_LENGTH_CHECK, timeout=60):
+        raise E2ESkip("check %s does not run on this stand (no marker on %s after 60s)"
+                      % (_NAME_LENGTH_CHECK, attempts[0][0]))
+    false_clean = [fqn for fqn, _incomplete, has_row in complete
+                   if not has_row and poll_project_error_check(fqn, _NAME_LENGTH_CHECK, timeout=30)]
+    if false_clean:
+        _fail("FALSE CLEAN: markersIncomplete:false without the %s marker EDT reports for %s"
+              % (_NAME_LENGTH_CHECK, false_clean))
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_complete_markers_equal_settled_project_errors():
+    """A confirmed-complete list is EDT's view of the object: the same (checkId, message) set as
+    get_project_errors objectFqns once everything settled - including when both are empty."""
+    wait_for_project_ready()
+    compared = 0
+    for attempt in range(3):
+        fqn = "Constant.E2EMarkersPlain%d" % attempt
+        r = call("create_metadata", {"projectName": PROJECT, "fqn": fqn})
+        incomplete, rows = _markers_of(r, fqn, "create %s" % fqn)
+        wait_for_project_ready()
+        if incomplete or r.structured["markerCount"] > len(rows):
+            continue
+        mine = sorted((row["checkId"], row["message"].replace("\r", "").replace("\n", " ").strip())
+                      for row in rows)
+        settled = sorted((check, message) for check, message, _location in project_error_rows(fqn))
+        if mine != settled:
+            _fail("a complete marker list must equal the settled get_project_errors view of %s:\n"
+                  "response: %r\nsettled:  %r" % (fqn, mine, settled))
+        compared += 1
+    if not compared:
+        _fail("no create of a plain Constant came back complete in 3 attempts - the marker report "
+              "never confirmed validation on the small fixture")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_in_an_extension_reports_the_extension_object():
+    """The written project is the extension: its own model, its own markers, its own FQN."""
+    fqn = "DataProcessor.E2EMarkersExtDp"
+    r = call("create_metadata", {"projectName": TESTS_PROJECT, "fqn": fqn})
+    _markers_of(r, fqn, "create %s in the extension" % fqn)
+    assert r.structured.get("writtenProjects") == [TESTS_PROJECT], \
+        "the extension is the written project: %r" % (r.structured,)
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_error_carries_no_marker_fields():
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog"})
+    e = assert_error(r, "create an object that already exists")
+    assert_error_quality(e, names=["Catalog.Catalog"], suggests=["already exists"], ctx="duplicate create")
+    assert_no_marker_fields(r.structured, "an error reports no markers")
+    assert_no_diff("a refused create must not touch disk")

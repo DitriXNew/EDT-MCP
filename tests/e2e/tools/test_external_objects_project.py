@@ -30,7 +30,7 @@ from harness import (
     call, assert_ok, assert_error, assert_error_quality, assert_contains,
     assert_not_contains, assert_no_diff, assert_no_diff_rel, poll_diff_contains_rel,
     read_fixture_file, reset_fixture_rel, wait_for_project_ready, e2e_test, PROJECT,
-    EXT_OBJECTS_PROJECT, EXT_OBJECTS_REL, _fail,
+    EXT_OBJECTS_PROJECT, EXT_OBJECTS_REL, _fail, assert_marker_contract,
 )
 
 # The Russian TYPE tokens for the two external-objects types. The bilingual token catalogue
@@ -794,3 +794,27 @@ def test_extobj_go_to_definition_never_suggests_from_the_base_configuration():
                     "the suggestion must come from the project's own objects")
     assert_no_diff("a read tool must not touch the base project on disk")
     assert_no_diff_rel(EXT_OBJECTS_REL, "a read tool must not touch the external-objects project")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_extobj_create_reports_the_external_object_markers():
+    """#643 on an external-objects project: the markers are scoped to the external object
+    itself, resolved in that project's own model."""
+    reset_fixture_rel(EXT_OBJECTS_REL)
+    owner = "ExternalDataProcessor.ExtProc"
+    fqn = owner + ".Attribute.E2eMarkersAttr"
+    created = call("create_metadata", {"projectName": EXT_OBJECTS_PROJECT, "fqn": fqn})
+    try:
+        assert_ok(created, "create an attribute on an external data processor")
+        _incomplete, rows = assert_marker_contract(created.structured, "external-object create")
+        strays = [row for row in rows if row.get("object") != owner]
+        if strays:
+            _fail("every row must belong to %s: %r" % (owner, strays))
+        poll_diff_contains_rel(EXT_OBJECTS_REL, "E2eMarkersAttr",
+                               ctx="the attribute must reach the .mdo on disk")
+    finally:
+        removed = call("delete_metadata",
+                       {"projectName": EXT_OBJECTS_PROJECT, "fqn": fqn, "confirm": True})
+        assert_ok(removed, "delete the attribute again")
+    assert_no_diff_rel(EXT_OBJECTS_REL, "the create/delete round trip must leave no diff")
+    assert_no_diff("the base project must never be touched by this test")

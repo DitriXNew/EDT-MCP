@@ -6,6 +6,10 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -56,6 +60,21 @@ public final class BuildUtils
      * starting a second one would add another Job nobody can stop.
      */
     private static final ConcurrentMap<String, ExportWaitSlot> EXPORT_WAIT_RETURNED = new ConcurrentHashMap<>();
+
+    /** Slot-key prefix of the per-object validation wait, kept apart from the export slot. */
+    private static final String VALIDATION_SLOT_PREFIX = "validation:"; //$NON-NLS-1$
+
+    /**
+     * The derived-data segments EDT's validation runs under: the check framework's model checks
+     * (critical-data-integrity, normal, complex) and the legacy EMF validators. Mirrored, not
+     * imported, for the same reason as {@link #EXPORT_OBJECTS_SEGMENT}: the declaring classes are
+     * internal. The BSL language checks are left out - their markers are keyed by module URI, not by
+     * a BM top object. A segment that does not apply to an object is never pending for it, so one
+     * list serves every object kind.
+     */
+    private static final List<String> VALIDATION_SEGMENTS = List.of("CDI_CHECKS_SEGMENT", //$NON-NLS-1$
+        "M_CHECKS_SEGMENT", "CM_CHECKS_SEGMENT", "MD_VAL", "MD_EXT_VAL", "FORM_VAL", "XDTO_VAL", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        "STYLE_VAL", "CMI_VAL", "AGGR_VAL"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
 
     private BuildUtils()
@@ -317,6 +336,113 @@ public final class BuildUtils
         return DiskExportState.PENDING;
     }
 
+    /** How a bounded {@link #waitForObjectValidation} ended. */
+    public enum ValidationState
+    {
+        /** EDT confirmed the validation segments computed for every named object. */
+        COMPLETE,
+        /** Not confirmed within the deadline, or a previous wait for the project is still out. */
+        PENDING,
+        /** Could not be asked at all (no derived-data service, not a DT project, job never ran). */
+        UNOBSERVABLE
+    }
+
+    /**
+     * Waits until EDT has validated the given top objects - per object, not project-wide.
+     * <p>
+     * {@code IDerivedDataManager.waitComputation(Map, long)} first drains the accumulated change
+     * contexts, then waits until none of {@link #VALIDATION_SEGMENTS} is pending for the named
+     * objects, raising their pipeline priority meanwhile. Its timeout is advisory (it retries once),
+     * so it runs inside a {@link BoundedJob}, with at most one outstanding validation wait per
+     * project, exactly like {@link #waitForDiskExport}. Must not be called inside a BM transaction.
+     *
+     * @param project the workspace project owning the objects
+     * @param topObjectIds BM ids of the top objects to wait for; empty yields UNOBSERVABLE
+     * @param timeoutMs the hard deadline in milliseconds
+     * @return how the wait ended; never {@code null}
+     */
+    public static ValidationState waitForObjectValidation(IProject project, Collection<Long> topObjectIds,
+        long timeoutMs)
+    {
+        if (topObjectIds == null || topObjectIds.isEmpty())
+        {
+            // The platform rejects an empty scope; there is nothing to observe.
+            return ValidationState.UNOBSERVABLE;
+        }
+        IDerivedDataManager ddManager;
+        try
+        {
+            ddManager = resolveDerivedDataManager(project);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logWarning("Could not resolve the derived data manager for validation: " + e); //$NON-NLS-1$
+            return ValidationState.UNOBSERVABLE;
+        }
+        if (ddManager == null)
+        {
+            return ValidationState.UNOBSERVABLE;
+        }
+
+        long platformTimeoutMs = platformTimeoutMs(timeoutMs);
+        String key = project.getName();
+        AtomicBoolean returned = beginValidationWait(key, platformTimeoutMs);
+        if (returned == null)
+        {
+            Activator.logInfo("A previous validation wait for " + key //$NON-NLS-1$
+                + " has not returned yet; not starting another one"); //$NON-NLS-1$
+            return ValidationState.PENDING;
+        }
+
+        Map<Long, Collection<String>> scope = new LinkedHashMap<>();
+        for (Long id : topObjectIds)
+        {
+            scope.put(id, VALIDATION_SEGMENTS);
+        }
+        boolean[] complete = new boolean[1];
+        BoundedJob.Result result = BoundedJob.run("Waiting for the validation of written objects in " + key, //$NON-NLS-1$
+            platformTimeoutMs, monitor -> {
+                try
+                {
+                    complete[0] = ddManager.waitComputation(scope, platformTimeoutMs);
+                }
+                finally
+                {
+                    returned.set(true);
+                }
+            });
+        if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
+        {
+            // Never ran and never will: nothing outstanding, reopen at once (see waitForDiskExport).
+            returned.set(true);
+        }
+        if (result.getOutcome() == BoundedJob.Outcome.COMPLETED && result.getFailure() == null)
+        {
+            return complete[0] ? ValidationState.COMPLETE : ValidationState.PENDING;
+        }
+        if (result.getFailure() != null || result.getOutcome() == BoundedJob.Outcome.NOT_RUN)
+        {
+            // The pipeline was never successfully asked: unobserved, not pending. Not an ERROR -
+            // it degrades a write's marker report, it does not fail the write.
+            Activator.logWarning("Validation wait for " + key + " was not observable (" //$NON-NLS-1$ //$NON-NLS-2$
+                + result.getOutcome() + ", " + result.getFailure() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+            return ValidationState.UNOBSERVABLE;
+        }
+        return ValidationState.PENDING;
+    }
+
+    /**
+     * The timeout handed to the platform: always positive, because EDT 2026.1.1 asserts
+     * {@code timeout > 0} in {@code waitComputationExt}.
+     *
+     * @param timeoutMs the requested deadline
+     * @return a deadline of at least one millisecond
+     */
+    static long platformTimeoutMs(long timeoutMs)
+    {
+        return Math.max(1L, timeoutMs);
+    }
+
     /**
      * Claims the single export-wait slot for a project.
      * <p>
@@ -331,12 +457,31 @@ public final class BuildUtils
      */
     static AtomicBoolean beginExportWait(String projectName, long timeoutMs)
     {
+        return beginWait(projectName, timeoutMs);
+    }
+
+    /**
+     * Claims the single validation-wait slot for a project. A separate key from the export slot, so
+     * the two waits of one write never block each other.
+     *
+     * @param projectName the project whose slot to claim
+     * @param timeoutMs the wait's deadline, which also sizes how long an unreturned claim holds
+     * @return the flag the wait must set when it returns, or {@code null} when a previous
+     *     validation wait for this project has not come back yet
+     */
+    static AtomicBoolean beginValidationWait(String projectName, long timeoutMs)
+    {
+        return beginWait(VALIDATION_SLOT_PREFIX + projectName, timeoutMs);
+    }
+
+    private static AtomicBoolean beginWait(String slotKey, long timeoutMs)
+    {
         AtomicBoolean[] granted = new AtomicBoolean[1];
         long reopenAtMs = System.currentTimeMillis() + slotHoldMs(timeoutMs);
         // compute(), not get()+put(): the map holds the bin lock across the whole decision, so two
         // writes finishing together cannot both see a free slot and both schedule a Job. A
         // check-then-act here would have made the limit hold only when it was not needed.
-        EXPORT_WAIT_RETURNED.compute(projectName, (name, prior) -> {
+        EXPORT_WAIT_RETURNED.compute(slotKey, (name, prior) -> {
             if (prior != null && !prior.returned.get() && System.currentTimeMillis() < prior.reopenAtMs)
             {
                 return prior;
