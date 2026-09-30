@@ -52,6 +52,7 @@ import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
+import com.ditrix.edt.mcp.server.utils.ExternalObjectRoots;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.Refusals;
@@ -437,14 +438,18 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 normFqn, subsystemChain, props, expectedNotExists, normReport));
         }
 
+        // A new ROOT of an external-objects project (issue #658): it joins the project itself, not
+        // a Configuration collection, so it bypasses the collection-based create target below.
+        EClass externalRoot = externalRootEClass(ctx.scope.isExternalObjects(), normFqn);
+        if (externalRoot != null)
+        {
+            return createExternalRoot(ctx, projectName, normFqn, externalRoot, props, expectedNotExists,
+                normReport);
+        }
+
         CreateTarget target = MetadataNodeResolver.resolveForCreate(ctx.scope, normFqn);
         if (target == null)
         {
-            String standalone = standaloneTopLevelRefusal(normFqn);
-            if (standalone != null)
-            {
-                return standalone;
-            }
             String wrongKind = unsupportedChildKindRefusal(ctx.scope, normFqn);
             if (wrongKind != null)
             {
@@ -520,39 +525,22 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      * @return the ready-to-return JSON error
      */
     /**
-     * The refusal for a TOP-level FQN naming a STANDALONE type - an {@code ExternalDataProcessor} /
-     * {@code ExternalReport}, which is the ROOT of an external-objects project rather than an entry
-     * in a {@code Configuration} collection.
+     * The root EClass when {@code normFqn} is a two-segment {@code ExternalDataProcessor.<Name>} /
+     * {@code ExternalReport.<Name>} addressed at an external-objects project (type token in either
+     * language).
      *
-     * <p>Such an object is created together with its project (or supplied by an {@code .epf}/{@code
-     * .erf} import), not by adding a row to a configuration collection, so this tool cannot make one
-     * - and says which tool does what instead of leaving the caller with the generic "cannot resolve
-     * a create target". Its MEMBERS (attributes, tabular sections, forms and their content) ARE
-     * creatable once the object exists; that is the rest of issue #309.</p>
-     *
+     * @param externalObjects whether the project is an external-objects project
      * @param normFqn the normalized FQN
-     * @return the ready-to-return JSON error, or {@code null} when the FQN is not a standalone
-     *     top-level address (the caller then falls through to the generic message)
+     * @return the root EClass, or {@code null} when this is not a new-root address
      */
-    static String standaloneTopLevelRefusal(String normFqn)
+    static EClass externalRootEClass(boolean externalObjects, String normFqn)
     {
-        String[] parts = normFqn.split("\\."); //$NON-NLS-1$
-        if (parts.length != 2)
+        if (!externalObjects || normFqn == null)
         {
             return null;
         }
-        MetadataTypeUtils.MetadataTypeInfo info = MetadataTypeUtils.resolve(parts[0]);
-        if (info == null || !info.isStandalone())
-        {
-            return null;
-        }
-        return ToolResult.error("create_metadata cannot create a top-level '" //$NON-NLS-1$
-            + info.getEnglishSingular() + "': it is the ROOT object of an external-objects project, " //$NON-NLS-1$
-            + "not an entry in a configuration collection. Call create_project with " //$NON-NLS-1$
-            + "projectKind=externalObjects and externalObject='" + normFqn //$NON-NLS-1$
-            + "' to seed it, or import an existing .epf/.erf. Its members " //$NON-NLS-1$
-            + "('" + normFqn + ".Attribute.X', '" + normFqn + ".Form.Y', form content) can be " //$NON-NLS-1$ //$NON-NLS-2$
-            + "created here once the object exists.").toJson(); //$NON-NLS-1$
+        String[] parts = normFqn.split("\\.", -1); //$NON-NLS-1$
+        return parts.length == 2 ? ExternalObjectRoots.rootEClass(parts[0]) : null;
     }
 
     /**
@@ -1099,6 +1087,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String configFeatureName = req.target.configFeatureName;
         final IModelObjectFactory factory = bm.factory;
         final Version version = bm.version;
+        final IV8Project v8Project = bm.v8Project;
         // Needed to name the external-property content of a CommonForm, of an XDTOPackage and the
         // rights model of a Role (all below); resolved up front like the rest of the BM services
         // this method uses, not inside the transaction.
@@ -1134,7 +1123,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 {
                     throw new RuntimeException("Configuration not found in transaction"); //$NON-NLS-1$
                 }
-                MdObject newObject = (MdObject)factory.create(eClass, version);
+                MdObject newObject = newTopObject(factory, eClass, v8Project);
                 if (newObject == null)
                 {
                     throw new RuntimeException("the EDT factory cannot create a '" + eClass.getName() //$NON-NLS-1$
@@ -1343,7 +1332,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
 
         final long parentBmId = ((IBmObject)parent).bmGetId();
         final IModelObjectFactory factory = bm.factory;
-        final Version version = bm.version;
+        final IV8Project v8Project = bm.v8Project;
         final Props props = req.props;
         // The chain FQN's type token is the metamodel's own name for the class - the spelling EDT
         // serializes into 'parentSubsystem' - so the canonical address is read off the metamodel
@@ -1362,7 +1351,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 }
                 Subsystem owner = (Subsystem)txParent;
                 String ownerFqn = ((IBmObject)owner).bmGetFqn();
-                Object created = factory.create(eClass, version);
+                Object created = newTopObject(factory, eClass, v8Project);
                 if (!(created instanceof Subsystem))
                 {
                     throw new RuntimeException("the EDT factory cannot create a '" + eClass.getName() //$NON-NLS-1$
@@ -1414,6 +1403,120 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return null;
         }
         return (EClass)collection.getEType();
+    }
+
+    /**
+     * Creates a detached TOP object through the project-aware factory overload, so the platform type
+     * initializer sees the project and applies its project-dependent defaults (issue #644).
+     *
+     * @return the new object, or {@code null} when the factory declines the type
+     */
+    static MdObject newTopObject(IModelObjectFactory factory, EClass eClass, IV8Project v8Project)
+    {
+        return factory.create(eClass, v8Project);
+    }
+
+    /**
+     * Creates a new ROOT ({@code ExternalDataProcessor} / {@code ExternalReport}) in an existing
+     * external-objects project, the way EDT's "New" wizard does: the project-aware factory builds
+     * the default content, the root is attached under its standalone FQN, and the project picks it
+     * up from the attach event. There is no Configuration here, so only the root's own file is
+     * exported.
+     *
+     * @param ctx the resolved external-objects project
+     * @param normFqn the normalized two-segment FQN
+     * @param eClass the root EClass the FQN's type token names
+     * @return the create-result JSON (success or a ready-to-return error)
+     */
+    private String createExternalRoot(ProjectContext ctx, String projectName, String normFqn, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        EClass eClass, Props props, boolean expectedNotExists, MdNameNormalizer.Report normReport)
+    {
+        final String name = normFqn.substring(normFqn.indexOf('.') + 1);
+        if (!isValidIdentifier(name))
+        {
+            return invalidNameError(name);
+        }
+        String clash = externalRootNameClash(ctx.scope.allExternalObjects(), eClass, name, normFqn,
+            projectName, expectedNotExists);
+        if (clash != null)
+        {
+            return clash;
+        }
+
+        final String synonymLanguage;
+        try
+        {
+            synonymLanguage = ctx.scope.resolveSynonymLanguage(props.synonym, props.language,
+                "the synonym"); //$NON-NLS-1$
+        }
+        catch (IllegalArgumentException e)
+        {
+            return ToolResult.error(e.getMessage()).toJson();
+        }
+
+        BmContext bm = resolveBmContext(ctx.project, projectName);
+        if (bm.hasError())
+        {
+            return bm.error;
+        }
+        final IModelObjectFactory factory = bm.factory;
+        final IV8Project v8Project = bm.v8Project;
+        final String rootFqn = eClass.getName() + "." + name; //$NON-NLS-1$
+        try
+        {
+            BmTransactions.<Void>write(bm.bmModel, "CreateExternalObjectRoot", (tx, pm) -> //$NON-NLS-1$
+            {
+                MdObject root = ExternalObjectRoots.newRoot(factory, eClass, name, v8Project);
+                if (root == null)
+                {
+                    throw new RuntimeException("the EDT factory cannot create a '" + eClass.getName() //$NON-NLS-1$
+                        + "' object"); //$NON-NLS-1$
+                }
+                applyScalarProps(root, props, synonymLanguage);
+                tx.attachTopObject((IBmObject)root, rootFqn);
+                factory.fillDefaultReferences(root);
+                return null;
+            });
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Error creating external object root", e); //$NON-NLS-1$
+            return ToolResult.error("Failed to create object: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
+        }
+
+        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, Collections.singletonList(rootFqn));
+        List<String> localesMissing = synonymLanguage == null ? null
+            : ctx.scope.localesMissing(Collections.singletonList(synonymLanguage));
+        return success(new SuccessInfo(rootFqn, eClass, name, persisted, props, synonymLanguage,
+            localesMissing, ctx.scope.isDeclaredButUnused(synonymLanguage), null, normReport));
+    }
+
+    /**
+     * The refusal when {@code name} is already taken by a root of the project. EDT's own wizard
+     * forbids a name any root already has, whatever its type and case, so this does too.
+     *
+     * @param roots the project's current roots
+     * @return the ready-to-return JSON error, or {@code null} when the name is free
+     */
+    static String externalRootNameClash(java.util.Collection<? extends MdObject> roots, EClass eClass,
+        String name, String normFqn, String projectName, boolean expectedNotExists)
+    {
+        for (MdObject existing : roots)
+        {
+            if (existing == null || !name.equalsIgnoreCase(existing.getName()))
+            {
+                continue;
+            }
+            if (existing.eClass() == eClass)
+            {
+                return duplicateError(normFqn, expectedNotExists);
+            }
+            return ToolResult.error("Project '" + projectName + "' already has " //$NON-NLS-1$ //$NON-NLS-2$
+                + existing.eClass().getName() + "." + existing.getName() //$NON-NLS-1$
+                + ": the roots of one external-objects project need distinct names whatever their " //$NON-NLS-1$
+                + "type. Choose another name for the new " + eClass.getName() + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return null;
     }
 
     /**
@@ -2472,6 +2575,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         IModelObjectFactory factory;
         IBmModel bmModel;
         Version version;
+        /** The project handed to the factory's type initializers (issue #644). */
+        IV8Project v8Project;
         /** Non-null when resolution failed: a JSON error to return verbatim. */
         String error;
 
@@ -2503,6 +2608,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             ctx.error = ToolResult.error(ERR_NO_V8_PROJECT + projectName).toJson();
             return ctx;
         }
+        ctx.v8Project = v8Project;
         ctx.version = v8Project.getVersion();
         ctx.bmModel = bmModelManager.getModel(project);
         if (ctx.bmModel == null)

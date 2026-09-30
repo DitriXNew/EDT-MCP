@@ -10,16 +10,33 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 import java.lang.reflect.Field;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
+import org.eclipse.emf.ecore.EClass;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
+import com._1c.g5.v8.dt.core.platform.IV8Project;
+import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataProcessor;
+import com._1c.g5.v8.dt.metadata.mdclass.ExternalReport;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ReturnValuesReuse;
+import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool.CommonModuleFlags;
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool.CommonModuleKind;
@@ -99,18 +116,76 @@ public class CreateMetadataToolTest
     }
 
     @Test
-    public void testStandaloneRootRefusalPointsToCreateProjectExternalObject()
+    public void testTopObjectIsCreatedThroughTheProjectAwareFactoryOverload()
     {
-        String fqn = "ExternalDataProcessor.MyProc"; //$NON-NLS-1$
-        String result = CreateMetadataTool.standaloneTopLevelRefusal(fqn);
-        assertNotNull(result);
-        assertTrue("refusal must point to create_project", result.contains("create_project")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("refusal must name the externalObjects project kind", //$NON-NLS-1$
-            result.contains("projectKind=externalObjects")); //$NON-NLS-1$
-        assertTrue("refusal must give the new externalObject parameter value", //$NON-NLS-1$
-            result.contains("externalObject='" + fqn + "'")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertFalse("refusal must no longer send the caller to the EDT UI", //$NON-NLS-1$
-            result.contains("Create it in EDT")); //$NON-NLS-1$
+        // Issue #644: the version-only overload hands the type initializer a NULL project, so
+        // project-dependent defaults (a catalog's data lock control mode, ...) are skipped.
+        IModelObjectFactory factory = mock(IModelObjectFactory.class);
+        IV8Project project = mock(IV8Project.class);
+        EClass eClass = MdClassPackage.Literals.CATALOG;
+        MdObject catalog = MdClassFactory.eINSTANCE.createCatalog();
+        doReturn(catalog).when(factory).create(eClass, project);
+
+        MdObject created = CreateMetadataTool.newTopObject(factory, eClass, project);
+
+        assertSame("the object the project-aware overload built must be returned", catalog, created); //$NON-NLS-1$
+        verify(factory).create(eClass, project);
+        verify(factory, never()).create(any(EClass.class), any(Version.class));
+    }
+
+    @Test
+    public void testExternalRootAddressIsRecognizedOnlyInAnExternalObjectsProject()
+    {
+        assertEquals(MdClassPackage.Literals.EXTERNAL_DATA_PROCESSOR,
+            CreateMetadataTool.externalRootEClass(true, "ExternalDataProcessor.MyProc")); //$NON-NLS-1$
+        assertEquals(MdClassPackage.Literals.EXTERNAL_REPORT,
+            CreateMetadataTool.externalRootEClass(true, "ExternalReport.MyReport")); //$NON-NLS-1$
+        assertNull("a configuration project never takes this branch", //$NON-NLS-1$
+            CreateMetadataTool.externalRootEClass(false, "ExternalDataProcessor.MyProc")); //$NON-NLS-1$
+        assertNull("a member address is not a new root", //$NON-NLS-1$
+            CreateMetadataTool.externalRootEClass(true, "ExternalDataProcessor.MyProc.Attribute.A")); //$NON-NLS-1$
+        assertNull("a configuration type is not an external root", //$NON-NLS-1$
+            CreateMetadataTool.externalRootEClass(true, "Catalog.Products")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExternalRootAddressAcceptsTheRussianTypeTokens()
+    {
+        assertEquals(MdClassPackage.Literals.EXTERNAL_DATA_PROCESSOR,
+            CreateMetadataTool.externalRootEClass(true, "\u0412\u043D\u0435\u0448\u043D\u044F\u044F\u041E\u0431\u0440\u0430\u0431\u043E\u0442\u043A\u0430.MyProc")); //$NON-NLS-1$
+        assertEquals(MdClassPackage.Literals.EXTERNAL_REPORT,
+            CreateMetadataTool.externalRootEClass(true, "\u0412\u043D\u0435\u0448\u043D\u0438\u0439\u041E\u0442\u0447\u0435\u0442.MyReport")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testExternalRootNameClashRefusesEveryTypeCaseInsensitively()
+    {
+        ExternalDataProcessor proc = MdClassFactory.eINSTANCE.createExternalDataProcessor();
+        proc.setName("Loader"); //$NON-NLS-1$
+        ExternalReport report = MdClassFactory.eINSTANCE.createExternalReport();
+        report.setName("Summary"); //$NON-NLS-1$
+        List<MdObject> roots = Arrays.asList(proc, report);
+        EClass edp = MdClassPackage.Literals.EXTERNAL_DATA_PROCESSOR;
+
+        assertNull("a free name must pass", CreateMetadataTool.externalRootNameClash(roots, edp, //$NON-NLS-1$
+            "Fresh", "ExternalDataProcessor.Fresh", "P", false)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        String sameType = CreateMetadataTool.externalRootNameClash(roots, edp, "LOADER", //$NON-NLS-1$
+            "ExternalDataProcessor.LOADER", "P", false); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("the same name in another case is a duplicate", sameType); //$NON-NLS-1$
+        assertTrue(sameType, sameType.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue(sameType, sameType.contains("already exists: ExternalDataProcessor.LOADER")); //$NON-NLS-1$
+
+        String stale = CreateMetadataTool.externalRootNameClash(roots, edp, "Loader", //$NON-NLS-1$
+            "ExternalDataProcessor.Loader", "P", true); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(stale, stale.contains("Precondition failed")); //$NON-NLS-1$
+
+        String otherType = CreateMetadataTool.externalRootNameClash(roots, edp, "Summary", //$NON-NLS-1$
+            "ExternalDataProcessor.Summary", "P", false); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("a report of the same name blocks a data processor too", otherType); //$NON-NLS-1$
+        assertTrue(otherType, otherType.contains("ExternalReport.Summary")); //$NON-NLS-1$
+        assertTrue(otherType, otherType.contains("distinct names")); //$NON-NLS-1$
+        assertFalse(otherType, otherType.contains("already exists")); //$NON-NLS-1$
     }
 
     @Test

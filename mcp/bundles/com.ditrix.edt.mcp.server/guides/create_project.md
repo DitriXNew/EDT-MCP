@@ -13,7 +13,8 @@ a base project, or an external data processors/reports project.
 - **externalObjects** — create an external data processors/reports project. The project
   may be seeded with its root `ExternalDataProcessor` / `ExternalReport` in the same call,
   after which its members are ready for authoring via `create_metadata`. Omit the root when
-  creating an empty project for a later `.epf` / `.erf` import.
+  creating an empty project for a later `.epf` / `.erf` import. More roots are added to the
+  existing project with `create_metadata` (`fqn: 'ExternalDataProcessor.<Name>'`).
 
 The `name` must not already exist as a workspace project (the tool rejects duplicates).
 

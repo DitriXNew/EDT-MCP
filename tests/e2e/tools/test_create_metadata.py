@@ -220,6 +220,38 @@ def test_create_persists_object_and_configuration_to_disk():
                        ctx="create must add the Configuration.mdo collection reference")
 
 
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_created_catalog_inherits_the_configuration_lock_mode():
+    """#644: the type initializer must receive the project, as in EDT's own "New" wizard.
+
+    TestConfiguration's Configuration.mdo sets dataLockControlMode=Managed, and CatalogInitializer
+    copies it onto a new catalog ONLY when it is handed the project. With the version-only factory
+    overload the property stayed at its Automatic default, which EDT never produces here."""
+    name = "E2ELockModeCatalog"
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog." + name})
+    assert_ok(r, "create Catalog.%s" % name)
+    mdo = poll_disk_contains("src/Catalogs/%s/%s.mdo" % (name, name),
+                             "<dataLockControlMode>Managed</dataLockControlMode>",
+                             ctx="the new catalog must carry the configuration's Managed lock mode")
+    assert_not_contains(mdo, "<dataLockControlMode>Automatic",
+                        "the Automatic default must not be what reached disk")
+    assert_contains(_objects_text("catalogs"), name, "MODEL read-back: the new catalog must resolve")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_created_common_command_gets_the_default_command_group():
+    """#644: CommonCommandInitializer resolves its default group through the project; without the
+    project the new command had no group at all, unlike one created in EDT."""
+    name = "E2EGroupedCommonCommand"
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "CommonCommand." + name})
+    assert_ok(r, "create CommonCommand.%s" % name)
+    poll_disk_contains("src/CommonCommands/%s/%s.mdo" % (name, name),
+                       "<group>ActionsPanelTools</group>",
+                       ctx="the new common command must be placed in the ActionsPanelTools group")
+    assert_contains(_objects_text("commonCommands"), name,
+                    "MODEL read-back: the new common command must resolve")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Happy — members addressed by FQN (the add_metadata_attribute fold + new kinds)
 # ──────────────────────────────────────────────────────────────────────────────

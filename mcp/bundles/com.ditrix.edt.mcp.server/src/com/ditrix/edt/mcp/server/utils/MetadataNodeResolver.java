@@ -548,10 +548,10 @@ public final class MetadataNodeResolver
      * The {@link #resolveForCreate(Configuration, String)} variant that resolves the parent against
      * whichever ROOT the project has (issue #309).
      *
-     * <p>A TOP-level create still requires a {@code Configuration} collection to put the object in,
-     * so a top-level FQN of a STANDALONE type (an external data processor / report, which is a
-     * project root rather than a configuration entry) does not resolve here - the caller reports
-     * that, rather than silently creating nothing.</p>
+     * <p>A TOP-level target is a {@code Configuration} collection entry, so a top-level FQN of a
+     * STANDALONE type (an external data processor / report, which is a project root rather than a
+     * configuration entry) does not resolve here; {@code create_metadata} creates such a root by a
+     * separate branch.</p>
      *
      * @param scope the resolution root (may be {@code null})
      * @param fqn the full-name FQN of the node to create
@@ -574,11 +574,9 @@ public final class MetadataNodeResolver
         {
             if (scope.isExternalObjects())
             {
-                // An external-objects project has NO configuration to add a top object to, and
-                // its own roots are created with the project (create_project / an .epf import),
-                // never here. Handing back a target anyway made createTopLevel treat this root as
-                // a Configuration and die with a raw ClassCastException; answering "no target"
-                // lets the caller get the refusal that names the project kind instead.
+                // An external-objects project has NO configuration to add a top object to; its
+                // roots are not collection entries. Handing back a target made createTopLevel
+                // treat this root as a Configuration and die with a raw ClassCastException.
                 return null;
             }
             String type = MetadataTypeUtils.toEnglishSingular(parts[0]);
