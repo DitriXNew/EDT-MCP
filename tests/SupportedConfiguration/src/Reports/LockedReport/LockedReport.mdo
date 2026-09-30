@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:Report xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="ec45fd06-a50f-5328-a456-d6b13b26af98">
+  <producedTypes>
+    <objectType typeId="1b16c495-926a-5698-8ad1-030d33fb163d" valueTypeId="431a554f-1d25-507b-8935-6dc414599eb5"/>
+    <managerType typeId="6b2e789b-3055-585d-b4fe-614c17f7b5f0" valueTypeId="309d5269-a042-5adf-b82c-4c61872abd36"/>
+  </producedTypes>
+  <name>LockedReport</name>
+  <synonym>
+    <key>en</key>
+    <value>Locked report</value>
+  </synonym>
+  <useStandardCommands>true</useStandardCommands>
+</mdclass:Report>

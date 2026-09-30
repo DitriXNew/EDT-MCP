@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:Role xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="1403d35a-915e-5049-9639-b5d2c0afb95d">
+  <name>OpenRole</name>
+  <synonym>
+    <key>en</key>
+    <value>OpenRole</value>
+  </synonym>
+</mdclass:Role>

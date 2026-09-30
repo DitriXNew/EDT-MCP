@@ -279,3 +279,6 @@ There is no automatic undo: to revert a change, call modify_metadata again with 
 ## Predefined items
 
 A PREDEFINED item is addressed through its owner's member FQN and is edited like any other member.
+
+## Vendor support
+A configuration on vendor support can lock objects. Modifying an object or a member whose nearest object (for a form member, the form) is locked by its support rule is refused before anything is changed. The error names the object and says nothing was changed. The way out is a configuration extension (adopt the object with adopt_metadata_object and change the adopted copy) or the user allowing changes in EDT's support settings; this server never changes support settings. If EDT's support check cannot be answered, the write is refused too. A configuration extension and an external data processor/report project are never under vendor support.

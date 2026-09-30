@@ -66,3 +66,6 @@ In every case verify the model before retrying: a retry against an already-renam
 - maxResults only narrows the displayed preview slice; it has no effect when confirm=true and no effect on contentHash.
 - An unsupported child type or a malformed FQN is rejected with guidance on the accepted 'Type.Name' / 'Type.Name.ChildType.ChildName' / form-element shapes.
 - For a form element the rename is scoped to that form (its model plus its module), and a string literal naming the element is never rewritten - grep for the old name if the form's code builds item names as text.
+
+## Vendor support
+A configuration on vendor support can lock objects. Renaming an object (or a form element) whose support rule does not allow changes is refused before the refactoring is built, preview included. A rename that would have to edit a locked referencing object is reported by EDT's own refactoring. The error names the object and says nothing was changed. The way out is a configuration extension (adopt the object with adopt_metadata_object and change the adopted copy) or the user allowing changes in EDT's support settings; this server never changes support settings. If EDT's support check cannot be answered, the write is refused too. A configuration extension and an external data processor/report project are never under vendor support.

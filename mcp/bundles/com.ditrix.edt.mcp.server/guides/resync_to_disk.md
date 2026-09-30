@@ -35,3 +35,6 @@ JSON: `success`, `objectsExported` (the missing subset by default; every object 
 - An `undetermined` entry whose `reason` says the object exists is a stale link, not an orphan: `clean_project` re-reads the role and re-links it. Until then, as with an `absent` one, EDT cannot edit that role's rights.
 - Types with no `src/` directory layout (Language, Style, the Configuration root) are skipped, not reported as missing.
 - After it returns, re-check with `get_project_errors` / `get_problem_summary`; once the dangling entries are removed the `md-reference-intergrity` warnings should be gone and `update_database` / `export_configuration_to_xml` should unblock.
+
+## Vendor support
+The orphaned role-rights sweep leaves a role that vendor support locks untouched: its entries stay, are reported with the reason, and the result carries a warning naming the role. The other roles are cleaned as usual. Allow changes to the role in EDT's support settings to clean it too.

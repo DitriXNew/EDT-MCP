@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<distributionSupport:DistributionSupport xmlns:distributionSupport="http://g5.1c.ru/v8/dt/distribution/model" version="6" fileState="Distributive">
+  <parentConfigurationInfos id="c838bbae-76df-56d3-9508-67ff470766b2" storeMode="Self" configRelease="1.0.0.1" providerName="E2E vendor" configName="SupportedConfiguration" configVersion="a1fa6ff2-709d-5853-98d1-ee0beb081274">
+    <rules newObjectsWithFreeMode="ChangesAllowed" newObjectsWithWarningMode="ChangesAllowed"/>
+    <supportLanguages/>
+    <items userId="8a4093e3-41be-523e-b4ea-150759165539" parentId="8a4093e3-41be-523e-b4ea-150759165539" used="true"/>
+    <items userId="fcade6ac-9a21-5f43-93ca-546559fe6f92" parentId="fcade6ac-9a21-5f43-93ca-546559fe6f92" userMode="ChangesAllowed" used="true"/>
+    <items userId="a3f3eff0-002d-531b-8b6e-361a2f04d498" parentId="a3f3eff0-002d-531b-8b6e-361a2f04d498" used="true"/>
+    <items userId="4f0fff34-1230-5f95-aeca-75e70e8569fa" parentId="4f0fff34-1230-5f95-aeca-75e70e8569fa" used="true"/>
+    <items userId="170e2161-3332-5e35-bd99-c5c1da9584cf" parentId="170e2161-3332-5e35-bd99-c5c1da9584cf" userMode="ChangesAllowed" used="true"/>
+    <items userId="05d04be3-18d4-5352-abdc-e64887eb9ea7" parentId="05d04be3-18d4-5352-abdc-e64887eb9ea7" userMode="ChangesAllowed" used="true"/>
+    <items userId="89fe810c-e820-5524-a46c-c6f0e9e12b59" parentId="89fe810c-e820-5524-a46c-c6f0e9e12b59" used="true"/>
+    <items userId="0e6cf0b1-1a8c-51ac-ae40-908227da9d53" parentId="0e6cf0b1-1a8c-51ac-ae40-908227da9d53" used="true"/>
+    <items userId="0aae648e-5c86-5a15-81e2-6f3299dd5e57" parentId="0aae648e-5c86-5a15-81e2-6f3299dd5e57" used="true"/>
+    <items userId="746f3f8f-e000-5b03-ab64-abc5063f6dbe" parentId="746f3f8f-e000-5b03-ab64-abc5063f6dbe" userMode="ChangesAllowed" used="true"/>
+    <items userId="b60990a2-39a0-551c-a3b8-921a98a1aa1d" parentId="b60990a2-39a0-551c-a3b8-921a98a1aa1d" used="true"/>
+    <items userId="1403d35a-915e-5049-9639-b5d2c0afb95d" parentId="1403d35a-915e-5049-9639-b5d2c0afb95d" userMode="ChangesAllowed" used="true"/>
+    <items userId="ec45fd06-a50f-5328-a456-d6b13b26af98" parentId="ec45fd06-a50f-5328-a456-d6b13b26af98" used="true"/>
+  </parentConfigurationInfos>
+</distributionSupport:DistributionSupport>

@@ -29,7 +29,9 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.WrittenObjectMarkers;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -794,8 +796,37 @@ public abstract class AbstractMetadataWriteTool implements IMcpTool
         {
             ctx.error = ToolResult.error("'" + fqn + "' cannot be addressed in project " //$NON-NLS-1$ //$NON-NLS-2$
                 + "'" + projectName + "'." + hint).toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            return ctx;
         }
+        // Vendor support, checked here for the same reason as the hint: every FQN branch of a
+        // writer gets its context from this call, before it writes anything (issue #642).
+        ctx.error = vendorSupportRefusal(ctx.scope, fqn);
         return ctx;
+    }
+
+    /**
+     * What this tool's FQN-addressed call does to its target, for the vendor-support check.
+     * The default is {@link VendorSupportGuard.Intent#NONE}: not checked.
+     *
+     * @return the write intent
+     */
+    protected VendorSupportGuard.Intent writeIntent()
+    {
+        return VendorSupportGuard.Intent.NONE;
+    }
+
+    /**
+     * The vendor-support refusal for this tool's write to {@code fqn}, as ready JSON.
+     *
+     * @param scope the project's resolution root
+     * @param fqn the addressed FQN
+     * @return the error JSON, or {@code null} when the write may proceed
+     */
+    final String vendorSupportRefusal(MetadataScope scope, String fqn)
+    {
+        String refusal = VendorSupportGuard.refusalForFqn(scope, MetadataTypeUtils.normalizeFqn(fqn),
+            writeIntent());
+        return refusal == null ? null : ToolResult.error(refusal).toJson();
     }
 
     private ProjectContext resolveProjectRoot(String projectName, boolean allowNoConfiguration)

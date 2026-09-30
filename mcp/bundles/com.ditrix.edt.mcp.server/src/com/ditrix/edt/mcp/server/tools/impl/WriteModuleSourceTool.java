@@ -26,6 +26,7 @@ import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.preferences.IScopeContext;
 import org.eclipse.core.runtime.preferences.InstanceScope;
 
+import com._1c.g5.v8.dt.bsl.model.Module;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -37,6 +38,7 @@ import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.InvalidFileCharacters;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 
 /**
  * Tool to write BSL source code to 1C metadata object modules.
@@ -192,6 +194,13 @@ public class WriteModuleSourceTool implements IMcpTool
                 ". Only 'replace' mode can create new files.").toJson(); //$NON-NLS-1$
         }
 
+        // 6. Vendor support: the module and the object that owns it must be editable (#642).
+        String locked = vendorSupportRefusal(ctx, file, fileExists);
+        if (locked != null)
+        {
+            return locked;
+        }
+
         AtomicBoolean mutationEntered = new AtomicBoolean();
         AtomicBoolean mutationCommitted = new AtomicBoolean();
         try
@@ -208,6 +217,29 @@ public class WriteModuleSourceTool implements IMcpTool
                     : ToolResult.error("Failed to write file: " + e.getMessage()); //$NON-NLS-1$
             return error.toJson();
         }
+    }
+
+    /**
+     * The vendor-support refusal for writing {@code file}, as ready JSON: the module (when it
+     * exists) and the object that owns it must be editable. Fails closed when the project's
+     * metadata root cannot be read.
+     *
+     * @param ctx the resolved project
+     * @param file the module file
+     * @param fileExists whether the file exists (a new module has no parsed model yet)
+     * @return the error JSON, or {@code null} when the write may proceed
+     */
+    private static String vendorSupportRefusal(ProjectContext ctx, IFile file, boolean fileExists)
+    {
+        ProjectContext.ConfigurationResult root = ctx.resolveMetadataRoot();
+        if (!root.ok())
+        {
+            return root.errorJson();
+        }
+        Module module = fileExists && !root.scope().isExternalObjects() ? BslModuleUtils.loadModule(file) : null;
+        String refusal = VendorSupportGuard.refusalForModule(ctx.project(), root.scope(),
+            file.getProjectRelativePath().toString(), module);
+        return refusal == null ? null : ToolResult.error(refusal).toJson();
     }
 
     /**

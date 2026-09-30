@@ -207,8 +207,9 @@ class RunAllRatchetTest(unittest.TestCase):
         harness = mock.Mock()
         harness.PROJECT = "Base"
         harness.EXT_OBJECTS_PROJECT = "ExternalObjects"
+        harness.OPTIONAL_FIXTURE_PROJECTS = ("ExternalObjects",)
         harness.ALL_FIXTURE_PROJECTS = ["Base", "Extension", "ExternalObjects"]
-        harness.external_objects_model_synced.return_value = True
+        harness.optional_model_synced.return_value = True
         harness.confirmed_mutation_tools.return_value = frozenset({"modify_metadata"})
         harness.mutation_kind_violation_tools.return_value = ("modify_metadata",)
         harness.mutations_unresolved.return_value = False
@@ -232,7 +233,7 @@ class RunAllRatchetTest(unittest.TestCase):
 
     def test_kind_violation_skips_unsynced_external_objects_named_only_by_refused_call(self):
         harness = self._mutation_harness()
-        harness.external_objects_model_synced.return_value = False
+        harness.optional_model_synced.return_value = False
         # Another call produced the confirmed mutation that triggered this branch. The refused
         # call only named ExternalObjects, so it is present in the attempted-target union but not
         # in the per-call outcome-evidenced set.
@@ -245,7 +246,7 @@ class RunAllRatchetTest(unittest.TestCase):
 
     def test_kind_violation_resets_unsynced_external_objects_named_by_evidenced_call(self):
         harness = self._mutation_harness()
-        harness.external_objects_model_synced.return_value = False
+        harness.optional_model_synced.return_value = False
         harness.mutated_fixture_projects.return_value = frozenset({"ExternalObjects"})
         harness.evidenced_mutation_fixture_projects.return_value = frozenset(
             {"ExternalObjects"})
@@ -258,7 +259,7 @@ class RunAllRatchetTest(unittest.TestCase):
 
     def test_kind_violation_skips_unsynced_external_objects_when_call_did_not_target_it(self):
         harness = self._mutation_harness()
-        harness.external_objects_model_synced.return_value = False
+        harness.optional_model_synced.return_value = False
         harness.mutated_fixture_projects.return_value = frozenset({"Base"})
 
         RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "action"})
@@ -270,6 +271,16 @@ class RunAllRatchetTest(unittest.TestCase):
         # assertion is therefore on the decision, not on which accessor was consulted to reach it.
         harness.reset_all_fixtures.assert_called_once_with()
         harness.reset_model.assert_called_once_with(["Base", "Extension"])
+
+    def test_each_optional_fixture_is_judged_on_its_own_sync(self):
+        harness = self._mutation_harness()
+        harness.OPTIONAL_FIXTURE_PROJECTS = ("ExternalObjects", "Supported")
+        harness.ALL_FIXTURE_PROJECTS = ["Base", "Extension", "ExternalObjects", "Supported"]
+        harness.optional_model_synced.side_effect = lambda project: project == "Supported"
+
+        RUN_ALL._reset_after_write(harness, {"name": "writer", "kind": "action"})
+
+        harness.reset_model.assert_called_once_with(["Base", "Extension", "Supported"])
 
     def test_kind_violation_model_reset_failure_propagates(self):
         class E2EModelResetFailed(Exception):
@@ -298,7 +309,7 @@ class RunAllRatchetTest(unittest.TestCase):
         harness.mutation_kind_violation_tools.return_value = ()
         harness.model_is_pristine.return_value = False
         harness.reset_fixture.return_value = True
-        harness.external_objects_model_synced.return_value = False
+        harness.optional_model_synced.return_value = False
         harness.mutated_fixture_projects.return_value = frozenset({"Base"})
         harness.mutation_could_have_cascaded.return_value = True
 

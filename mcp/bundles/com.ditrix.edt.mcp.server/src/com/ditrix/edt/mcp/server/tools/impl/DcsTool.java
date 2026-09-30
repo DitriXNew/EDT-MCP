@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.swt.widgets.Display;
 
+import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
@@ -60,6 +61,7 @@ import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -702,6 +704,11 @@ public class DcsTool implements IMcpTool
             {
                 outcome = BmTransactions.write(model, "DcsSchemaWrite", (tx, monitor) -> //$NON-NLS-1$
                 {
+                    String locked = vendorSupportRefusal(tx, context, target, address);
+                    if (locked != null)
+                    {
+                        throw DcsWriteFailure.message(locked);
+                    }
                     DcsRootReader.Result current = DcsRootReader.read(tx, target);
                     if (!current.isSuccess())
                     {
@@ -918,6 +925,11 @@ public class DcsTool implements IMcpTool
         boolean formPersisted = FormElementWriter.writeEditableForm(fctx, "DcsDynamicListWrite", //$NON-NLS-1$
             (formModel, tx) ->
             {
+                String locked = vendorSupportRefusal(tx, context, target, address);
+                if (locked != null)
+                {
+                    throw new FormValidationException(ToolResult.error(locked).toJson());
+                }
                 EObject member = FormElementWriter.resolveFormMember(formModel, ref);
                 if (member == null)
                 {
@@ -1083,6 +1095,11 @@ public class DcsTool implements IMcpTool
         boolean persisted = FormElementWriter.writeEditableForm(fctx,
             "DcsFormConditionalAppearanceWrite", (formModel, tx) -> //$NON-NLS-1$
             {
+                String locked = vendorSupportRefusal(tx, context, target, address);
+                if (locked != null)
+                {
+                    throw new FormValidationException(ToolResult.error(locked).toJson());
+                }
                 if (!(formModel instanceof Form))
                 {
                     throw new FormValidationException(ToolResult.error("Form target '" //$NON-NLS-1$
@@ -1458,6 +1475,27 @@ public class DcsTool implements IMcpTool
         {
             return new DcsWriteFailure(errorJson);
         }
+    }
+
+    /**
+     * The vendor-support refusal for a DCS write, judged inside the write transaction on the
+     * metadata object that owns the root: its template, its form, or the report itself (#642).
+     */
+    private static String vendorSupportRefusal(IBmTransaction tx, ProjectContext.ConfigurationResult context,
+        DcsTargetResolver.Target target, DcsAddress address)
+    {
+        Long id = target.bmId(DcsTargetResolver.BmRole.TEMPLATE);
+        if (id == null)
+        {
+            id = target.bmId(DcsTargetResolver.BmRole.MD_FORM);
+        }
+        if (id == null)
+        {
+            id = target.bmId(DcsTargetResolver.BmRole.ROOT_OWNER);
+        }
+        EObject owner = id == null ? null : tx.getObjectById(id.longValue());
+        return VendorSupportGuard.refusalFor(owner, context.scope(), target.normalizedRootFqn(),
+            String.valueOf(address), "changed"); //$NON-NLS-1$
     }
 
     private static String resolveLanguage(ProjectContext.ConfigurationResult context, String requested)

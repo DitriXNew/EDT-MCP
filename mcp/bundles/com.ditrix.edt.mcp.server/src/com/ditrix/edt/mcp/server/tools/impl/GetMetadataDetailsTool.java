@@ -64,6 +64,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.RoleRightsReader;
+import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.XdtoStructureReader;
 
 /**
@@ -412,6 +413,8 @@ public class GetMetadataDetailsTool implements IMcpTool
             .append(ExtensionOriginUtils.originLabel(mdObject.getObjectBelonging(),
                 ctx.isExtensionProject, ctx.scope.isExternalObjects()))
             .append("\n"); //$NON-NLS-1$
+        // Present only for an object vendor support locks, so an agent sees it before writing (#642).
+        sb.append(VendorSupportGuard.detailsLine(mdObject, ctx.scope));
         sb.append(SECTION_SEPARATOR);
     }
 
@@ -591,6 +594,7 @@ public class GetMetadataDetailsTool implements IMcpTool
             .append(ExtensionOriginUtils.originLabel(role.getObjectBelonging(),
                 ctx.isExtensionProject, ctx.scope.isExternalObjects()))
             .append("\n"); //$NON-NLS-1$
+        sb.append(VendorSupportGuard.detailsLine(role, ctx.scope));
         sb.append(SECTION_SEPARATOR);
     }
 

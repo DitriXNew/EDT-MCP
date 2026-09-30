@@ -61,9 +61,11 @@ import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 
 /**
  * Domain service backing {@code rename_metadata_object}: resolves the target, builds the LTK
@@ -163,6 +165,15 @@ public class MetadataRenameService
         Configuration config = resolved.configuration();
 
         objectFqn = MetadataTypeUtils.normalizeFqn(objectFqn);
+
+        // Vendor support, before any refactoring exists: EDT's rename checks only the referencing
+        // objects, never the renamed one itself (#642).
+        String locked = VendorSupportGuard.refusalForFqn(MetadataScope.of(project, config), objectFqn,
+            VendorSupportGuard.Intent.MODIFY, "renamed"); //$NON-NLS-1$
+        if (locked != null)
+        {
+            return ToolResult.error(locked).toJson();
+        }
 
         // A FQN addressing a FORM element (attribute / column / command / field / button / group /
         // decoration / table) is handled by a dedicated branch BEFORE the mdclass path, mirroring how

@@ -48,3 +48,6 @@ FQN cannot resolve, and the failure row says which project kind holds that type.
 - An unconfigured `language` yields empty synonyms, not an error.
 - A malformed FQN (no `.`) is reported as `Invalid FQN`; a well-formed but unknown one as `Object not found` - both in the `## Errors` table, never as prose in the body.
 - The DCS template render requires the object's own template FQN (`Report.X.Template.Name`, `CommonTemplate.Name`); the owning Report's FQN alone (`Report.X`) still shows only the report's basic info (it does not enumerate the schema's content).
+
+## Vendor support
+For an object that a configuration on vendor support locks, the output carries one line: `**Vendor support:** not editable, not deletable` (or `editable, not deletable` when only a delete is locked), with `(the configuration itself is locked)` when the whole configuration is. No line means the object may be changed. The writing tools refuse a change EDT's support settings do not allow.

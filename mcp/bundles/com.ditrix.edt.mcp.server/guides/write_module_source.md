@@ -133,3 +133,6 @@ Insert a new method before an existing anchor:
 ## Addressing the module
 
 `modulePath` and the `objectName` + `moduleType` pair are mutually exclusive - give one shape or the other, never both.
+
+## Vendor support
+A configuration on vendor support can lock objects. Writing a module is refused when the object that owns it (a common module, a catalog for its object module, a form for its form module; the configuration for its own modules) or the module itself is locked by its support rule. The file is not touched. The error names the object and says nothing was changed. The way out is a configuration extension (adopt the object with adopt_metadata_object and change the adopted copy) or the user allowing changes in EDT's support settings; this server never changes support settings. If EDT's support check cannot be answered, the write is refused too. A configuration extension and an external data processor/report project are never under vendor support.

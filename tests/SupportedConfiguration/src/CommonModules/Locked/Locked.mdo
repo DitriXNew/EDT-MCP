@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:CommonModule xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="0aae648e-5c86-5a15-81e2-6f3299dd5e57">
+  <name>Locked</name>
+  <synonym>
+    <key>en</key>
+    <value>Locked</value>
+  </synonym>
+  <server>true</server>
+</mdclass:CommonModule>

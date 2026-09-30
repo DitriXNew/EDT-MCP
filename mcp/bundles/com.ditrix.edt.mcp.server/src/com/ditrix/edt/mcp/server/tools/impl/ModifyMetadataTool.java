@@ -106,6 +106,7 @@ import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
+import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 import com.ditrix.edt.mcp.server.utils.WrittenObjectMarkers;
@@ -478,6 +479,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .stringProperty(McpKeys.MESSAGE, "Human-readable confirmation message") //$NON-NLS-1$
             .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION))
             .build();
+    }
+
+    /** Vendor support is checked when the context is resolved (issue #642). */
+    @Override
+    protected VendorSupportGuard.Intent writeIntent()
+    {
+        return VendorSupportGuard.Intent.MODIFY;
     }
 
     @Override

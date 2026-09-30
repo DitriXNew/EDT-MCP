@@ -47,6 +47,8 @@ import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.v8.dt.refactoring.core.CleanReferenceProblem;
+import com._1c.g5.v8.dt.refactoring.core.DeletionForbiddenProblem;
+import com._1c.g5.v8.dt.refactoring.core.EditingForbiddenProblem;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringItem;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringProblem;
@@ -80,6 +82,7 @@ import com.ditrix.edt.mcp.server.utils.PersistedContents;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
 import com.ditrix.edt.mcp.server.utils.SecureXml;
+import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 import com.google.gson.JsonObject;
@@ -383,10 +386,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             + "WITHOUT confirm to preview what will be removed, then again with confirm=true to apply. A " //$NON-NLS-1$
             + "reference EDT cannot auto-clean leaves the delete BLOCKED and lists the referring " //$NON-NLS-1$
             + "objects; an EDT platform prohibition is listed separately and also blocks. force=true " //$NON-NLS-1$
-            + "overrides either block and leaves only genuine incoming references dangling. " //$NON-NLS-1$
-            + "EXCEPTION - an owned FORM object, a FORM " //$NON-NLS-1$
-            + "member or an XDTO package member is removed straight from its container: NOTHING blocks " //$NON-NLS-1$
-            + "it (force is ignored) and no cross-object cascade runs, so references from elsewhere (a " //$NON-NLS-1$
+            + "overrides either block and leaves only genuine incoming references dangling, but never " //$NON-NLS-1$
+            + "vendor support: a delete touching an object whose support rule forbids changes is " //$NON-NLS-1$
+            + "refused. EXCEPTION - an owned FORM object, a FORM " //$NON-NLS-1$
+            + "member or an XDTO package member is removed straight from its container: nothing else " //$NON-NLS-1$
+            + "blocks it (force is ignored) and no cross-object cascade runs, so references from elsewhere (a " //$NON-NLS-1$
             + "field's dataPath, a command, an XDTO type) are left broken - re-check with " //$NON-NLS-1$
             + "get_metadata_details (find_references takes TOP-level FQNs only, not these members). " //$NON-NLS-1$
             + "Parameters and examples: get_tool_guide('delete_metadata')."; //$NON-NLS-1$
@@ -406,7 +410,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 "true = execute the deletion; default false = preview only.") //$NON-NLS-1$
             .booleanProperty("force", //$NON-NLS-1$
                 "true = delete despite incoming references the refactoring cannot auto-clean or " //$NON-NLS-1$
-                + "platform prohibitions (only the incoming references are left dangling). Default " //$NON-NLS-1$
+                + "platform prohibitions (only the incoming references are left dangling); never " //$NON-NLS-1$
+                + "overrides a vendor-support lock. Default " //$NON-NLS-1$
                 + "false = on confirm=true either condition BLOCKS deletion and is listed under its " //$NON-NLS-1$
                 + "own output fields (independent of 'confirm', which is the preview gate).") //$NON-NLS-1$
             .integerProperty(KEY_TIMEOUT,
@@ -564,7 +569,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .stringProperty(KEY_REFACTORING_TITLE, "Title of the delete refactoring (preview)") //$NON-NLS-1$
             .objectArrayProperty(KEY_ITEMS, "Metadata items the deletion would remove (preview)") //$NON-NLS-1$
             .booleanProperty(KEY_BLOCKING, "Whether blockingReferences or platformProhibitions BLOCK " //$NON-NLS-1$
-                + "the delete; a confirm=true delete is refused unless force=true") //$NON-NLS-1$
+                + "the delete; a confirm=true delete is refused unless force=true, and always when a " //$NON-NLS-1$
+                + "prohibition is a vendor-support lock") //$NON-NLS-1$
             .objectArrayProperty("blockingReferences", "Genuine incoming references, represented only " //$NON-NLS-1$ //$NON-NLS-2$
                 + "by EDT CleanReferenceProblem entries, that the refactoring cannot auto-clean: listed " //$NON-NLS-1$
                 + "in the preview, the reason a delete is refused (action='blocked'), or left dangling " //$NON-NLS-1$
@@ -575,7 +581,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .integerProperty("affectedReferencesCount", "Deprecated alias of blockingReferencesCount " //$NON-NLS-1$ //$NON-NLS-2$
                 + "(the same count), kept for one release for wire compatibility") //$NON-NLS-1$
             .objectArrayProperty(KEY_PLATFORM_PROHIBITIONS, "EDT refactoring problems other than " //$NON-NLS-1$
-                + "CleanReferenceProblem: platform prohibitions, not incoming references") //$NON-NLS-1$
+                + "CleanReferenceProblem: platform prohibitions, not incoming references; an entry " //$NON-NLS-1$
+                + "with supportLock=true is a vendor-support lock, which force does not override") //$NON-NLS-1$
             .integerProperty(KEY_PLATFORM_PROHIBITIONS_COUNT, "Count of platform prohibitions") //$NON-NLS-1$
             .booleanProperty("forced", "Whether the delete was forced past a reference or platform block") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty(KEY_PERSISTED, "Present and false only for a partial forced-delete result: " //$NON-NLS-1$
@@ -617,6 +624,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return null;
         }
         return cascadeSettler.settle(projectName, SETTLE_TIMEOUT_MS);
+    }
+
+    /** Vendor support is checked when the context is resolved (issue #642). */
+    @Override
+    protected VendorSupportGuard.Intent writeIntent()
+    {
+        return VendorSupportGuard.Intent.DELETE;
     }
 
     @Override
@@ -849,9 +863,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         String projectName = project.getName();
         // EDT's own problem check: genuine incoming references and platform prohibitions are both
         // blocking conditions, but they remain distinct in the response. 'confirm' is the preview
-        // gate; 'force' overrides either block.
+        // gate; 'force' overrides either block - except a vendor-support lock, which it never does.
         RefactoringProblems problems = collectRefactoringProblems(refactoring);
-        if (problems.blocksDelete() && !force)
+        if (problems.blocksDelete() && (!force || problems.supportLocks > 0))
         {
             ToolResult blocked = ToolResult.error(blockedMessage(fqn, problems))
                 .put(McpKeys.ACTION, "blocked") //$NON-NLS-1$
@@ -1349,10 +1363,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /** The two semantically different categories returned by EDT's refactoring status. */
-    private static final class RefactoringProblems
+    static final class RefactoringProblems
     {
         final List<Map<String, Object>> references = new ArrayList<>();
         final List<Map<String, Object>> prohibitions = new ArrayList<>();
+        /** How many of {@link #prohibitions} are vendor-support locks, which force never overrides. */
+        int supportLocks;
 
         boolean blocksDelete()
         {
@@ -1360,13 +1376,49 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
     }
 
+    /** Prohibition key: set on an entry that is a vendor-support lock. */
+    static final String KEY_SUPPORT_LOCK = "supportLock"; //$NON-NLS-1$
+
+    /** The way out of a vendor-support lock, which force=true does not offer. */
+    private static final String SUPPORT_LOCK_REMEDY = " Make the change in a configuration extension " //$NON-NLS-1$
+        + "instead, or ask the user to allow changes to the locked objects in EDT's support settings " //$NON-NLS-1$
+        + "(Configuration > Support > Support settings)."; //$NON-NLS-1$
+
+    /**
+     * Whether a refactoring problem is a vendor-support lock. EDT raises
+     * {@link EditingForbiddenProblem} / {@link DeletionForbiddenProblem} from its editing-support
+     * check, and once from a file-read failure; asking that check again about the problem's object
+     * tells the two apart. Package-visible for tests.
+     *
+     * @param problem the refactoring problem
+     * @return {@code true} for a support lock (including one the check cannot answer)
+     */
+    static boolean isSupportLock(IRefactoringProblem problem)
+    {
+        boolean deletion = problem instanceof DeletionForbiddenProblem;
+        if (!deletion && !(problem instanceof EditingForbiddenProblem))
+        {
+            return false;
+        }
+        EObject object;
+        try
+        {
+            object = problem.getObject();
+        }
+        catch (RuntimeException e) // NOSONAR an unreadable object cannot prove the lock away
+        {
+            object = null;
+        }
+        return VendorSupportGuard.confirmsLock(object, deletion);
+    }
+
     /**
      * Splits the refactoring's blocking problems by the one verified semantic discriminator the EDT
      * API provides here: {@link CleanReferenceProblem} is a genuine incoming reference; every other
-     * {@link IRefactoringProblem} is a platform prohibition. No unverified platform subtype list is
-     * encoded. Never throws on a single odd problem.
+     * {@link IRefactoringProblem} is a platform prohibition, marked when it is a vendor-support lock
+     * ({@link #isSupportLock}). Never throws on a single odd problem. Package-visible for tests.
      */
-    private static RefactoringProblems collectRefactoringProblems(IRefactoring refactoring)
+    static RefactoringProblems collectRefactoringProblems(IRefactoring refactoring)
     {
         RefactoringProblems result = new RefactoringProblems();
 
@@ -1390,6 +1442,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             }
             else
             {
+                if (isSupportLock(problem))
+                {
+                    description.put(KEY_SUPPORT_LOCK, Boolean.TRUE);
+                    result.supportLocks++;
+                }
                 result.prohibitions.add(description);
             }
         }
@@ -1402,6 +1459,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             return "Preview of delete refactoring. References listed above will be cleaned up. " //$NON-NLS-1$
                 + "Call with confirm=true to apply."; //$NON-NLS-1$
+        }
+        if (problems.supportLocks > 0)
+        {
+            return "Preview of delete refactoring. EDT reports " + problems.supportLocks //$NON-NLS-1$
+                + " vendor-support lock(s) (platformProhibitions entries with supportLock=true): a " //$NON-NLS-1$
+                + "confirm=true delete will be BLOCKED, and force=true does not override vendor " //$NON-NLS-1$
+                + "support." + SUPPORT_LOCK_REMEDY; //$NON-NLS-1$
         }
         if (problems.references.isEmpty())
         {
@@ -1422,6 +1486,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     private static String blockedMessage(String fqn, RefactoringProblems problems)
     {
+        if (problems.supportLocks > 0)
+        {
+            return "Cannot delete '" + fqn + "': EDT reports " + problems.supportLocks //$NON-NLS-1$ //$NON-NLS-2$
+                + " vendor-support lock(s) on objects the delete would change (platformProhibitions " //$NON-NLS-1$
+                + "entries with supportLock=true), and force=true does not override vendor support. " //$NON-NLS-1$
+                + "Nothing was deleted." + SUPPORT_LOCK_REMEDY; //$NON-NLS-1$
+        }
         if (problems.references.isEmpty())
         {
             return "Cannot delete '" + fqn + "': EDT reports " + problems.prohibitions.size() //$NON-NLS-1$ //$NON-NLS-2$
