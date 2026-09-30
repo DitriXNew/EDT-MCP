@@ -21,6 +21,7 @@ import static org.mockito.Mockito.verify;
 
 import java.lang.reflect.Field;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -28,6 +29,8 @@ import java.util.Map;
 import org.eclipse.emf.ecore.EClass;
 import org.junit.Test;
 
+import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.metadata.mdclass.ExternalDataProcessor;
@@ -186,6 +189,28 @@ public class CreateMetadataToolTest
         assertTrue(otherType, otherType.contains("ExternalReport.Summary")); //$NON-NLS-1$
         assertTrue(otherType, otherType.contains("distinct names")); //$NON-NLS-1$
         assertFalse(otherType, otherType.contains("already exists")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTakenRootIsReadFromTheWriteTransactionForBothRootTypes()
+    {
+        // The in-transaction re-check must ask the BM for BOTH root FQNs of the name, ignoring case:
+        // the project's own root registry can lag a commit.
+        IBmTransaction tx = mock(IBmTransaction.class);
+        IBmObject report = mock(IBmObject.class);
+        doReturn("ExternalReport.Loader").when(report).bmGetFqn(); //$NON-NLS-1$
+        doReturn(Collections.emptyIterator()).when(tx)
+            .getTopObjectsByFqnIgnoreCase("ExternalDataProcessor.LOADER"); //$NON-NLS-1$
+        doReturn(Collections.singletonList(report).iterator()).when(tx)
+            .getTopObjectsByFqnIgnoreCase("ExternalReport.LOADER"); //$NON-NLS-1$
+
+        assertEquals("ExternalReport.Loader", CreateMetadataTool.takenRootFqn(tx, "LOADER")); //$NON-NLS-1$ //$NON-NLS-2$
+        verify(tx).getTopObjectsByFqnIgnoreCase("ExternalDataProcessor.LOADER"); //$NON-NLS-1$
+        verify(tx).getTopObjectsByFqnIgnoreCase("ExternalReport.LOADER"); //$NON-NLS-1$
+
+        IBmTransaction empty = mock(IBmTransaction.class);
+        doReturn(Collections.emptyIterator()).when(empty).getTopObjectsByFqnIgnoreCase(any(String.class));
+        assertNull("a free name must pass", CreateMetadataTool.takenRootFqn(empty, "Fresh")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

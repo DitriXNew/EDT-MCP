@@ -1473,6 +1473,13 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             BmTransactions.<Void>write(bm.bmModel, "CreateExternalObjectRoot", (tx, pm) -> //$NON-NLS-1$
             {
+                // Re-checked under the write lock: the project's root registry above may lag a commit
+                // (EDT 2026.1 updates it asynchronously), and the attach only rejects the exact FQN.
+                String taken = takenRootFqn(tx, name);
+                if (taken != null)
+                {
+                    throw new RootNameTakenException(taken);
+                }
                 MdObject root = ExternalObjectRoots.newRoot(factory, eClass, name, v8Project);
                 if (root == null)
                 {
@@ -1487,6 +1494,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         }
         catch (Exception e)
         {
+            for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause())
+            {
+                if (t instanceof RootNameTakenException)
+                {
+                    return rootClashError(((RootNameTakenException)t).takenFqn, eClass, normFqn,
+                        projectName, expectedNotExists);
+                }
+            }
             Activator.logError("Error creating external object root", e); //$NON-NLS-1$
             return ToolResult.error("Failed to create object: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
@@ -1510,20 +1525,62 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     {
         for (MdObject existing : roots)
         {
-            if (existing == null || !name.equalsIgnoreCase(existing.getName()))
+            if (existing != null && name.equalsIgnoreCase(existing.getName()))
             {
-                continue;
+                return rootClashError(existing.eClass().getName() + "." + existing.getName(), eClass, //$NON-NLS-1$
+                    normFqn, projectName, expectedNotExists);
             }
-            if (existing.eClass() == eClass)
-            {
-                return duplicateError(normFqn, expectedNotExists);
-            }
-            return ToolResult.error("Project '" + projectName + "' already has " //$NON-NLS-1$ //$NON-NLS-2$
-                + existing.eClass().getName() + "." + existing.getName() //$NON-NLS-1$
-                + ": the roots of one external-objects project need distinct names whatever their " //$NON-NLS-1$
-                + "type. Choose another name for the new " + eClass.getName() + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
         }
         return null;
+    }
+
+    /**
+     * The committed root top object already holding {@code name} (either root type, any case), read
+     * from the write transaction itself so the check and the attach are atomic.
+     *
+     * @return that root's FQN, or {@code null} when the name is free
+     */
+    static String takenRootFqn(IBmTransaction tx, String name)
+    {
+        for (EClass rootType : new EClass[] { MdClassPackage.Literals.EXTERNAL_DATA_PROCESSOR,
+            MdClassPackage.Literals.EXTERNAL_REPORT })
+        {
+            java.util.Iterator<IBmObject> hits =
+                tx.getTopObjectsByFqnIgnoreCase(rootType.getName() + "." + name); //$NON-NLS-1$
+            if (hits != null && hits.hasNext())
+            {
+                IBmObject hit = hits.next();
+                String fqn = hit == null ? null : hit.bmGetFqn();
+                return fqn != null ? fqn : rootType.getName() + "." + name; //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+
+    /** The name-clash refusal for an existing root {@code existingFqn} ({@code Type.Name}). */
+    private static String rootClashError(String existingFqn, EClass eClass, String normFqn,
+        String projectName, boolean expectedNotExists)
+    {
+        if (existingFqn.startsWith(eClass.getName() + ".")) //$NON-NLS-1$
+        {
+            return duplicateError(normFqn, expectedNotExists);
+        }
+        return ToolResult.error("Project '" + projectName + "' already has " + existingFqn //$NON-NLS-1$ //$NON-NLS-2$
+            + ": the roots of one external-objects project need distinct names whatever their " //$NON-NLS-1$
+            + "type. Choose another name for the new " + eClass.getName() + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Carries a root-name clash found inside the write transaction out of the BM task. */
+    private static final class RootNameTakenException extends RuntimeException
+    {
+        private static final long serialVersionUID = 1L;
+        final String takenFqn;
+
+        RootNameTakenException(String takenFqn)
+        {
+            super("An external-objects root named like the new one already exists: " + takenFqn); //$NON-NLS-1$
+            this.takenFqn = takenFqn;
+        }
     }
 
     /**
