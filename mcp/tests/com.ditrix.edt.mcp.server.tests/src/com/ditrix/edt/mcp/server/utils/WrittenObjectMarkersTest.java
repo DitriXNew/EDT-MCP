@@ -61,11 +61,13 @@ public class WrittenObjectMarkersTest
         RuntimeException readFailure;
         final List<Collection<Long>> waits = new ArrayList<>();
         final List<Long> waitTimeouts = new ArrayList<>();
+        final List<Long> readTimeouts = new ArrayList<>();
         int reads;
 
         @Override
-        public Map<String, Long> resolveTopObjects(String projectName, List<String> fqns)
+        public Map<String, Long> resolveTopObjects(String projectName, List<String> fqns, long timeoutMs)
         {
+            readTimeouts.add(Long.valueOf(timeoutMs));
             if (resolveFailure != null)
             {
                 throw resolveFailure;
@@ -91,8 +93,9 @@ public class WrittenObjectMarkersTest
 
         @Override
         public WrittenObjectMarkers.ProjectMarkers read(String projectName, Map<String, Long> topObjectIds,
-            int maxRows)
+            int maxRows, long timeoutMs)
         {
+            readTimeouts.add(Long.valueOf(timeoutMs));
             reads++;
             if (readFailure != null)
             {
@@ -148,7 +151,7 @@ public class WrittenObjectMarkersTest
         assertEquals(0, json.get(WrittenObjectMarkers.KEY_COUNT).getAsInt());
         assertEquals(0, json.getAsJsonArray(WrittenObjectMarkers.KEY_MARKERS).size());
         String message = json.get("message").getAsString(); //$NON-NLS-1$
-        assertTrue(message, message.startsWith("Created Catalog.X ")); //$NON-NLS-1$
+        assertTrue(message, message.startsWith("Created Catalog.X. EDT validation")); //$NON-NLS-1$
         assertTrue(message, message.contains("finished: no markers")); //$NON-NLS-1$
         assertEquals(Collections.singletonList(Collections.singletonList(7L)), env.waits);
     }
@@ -224,6 +227,68 @@ public class WrittenObjectMarkersTest
         assertTrue(json.get(WrittenObjectMarkers.KEY_INCOMPLETE).getAsBoolean());
         assertEquals("readFailed", json.get(WrittenObjectMarkers.KEY_REASON).getAsString()); //$NON-NLS-1$
         assertTrue(json.get("message").getAsString().contains("could not be read")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAResolutionThatTimesOutIsPendingNotFailed()
+    {
+        ScriptedEnvironment env = new ScriptedEnvironment();
+        env.resolveFailure = new WrittenObjectMarkers.ReadTimedOut("model busy"); //$NON-NLS-1$
+
+        Report report = WrittenObjectMarkers.collect(env, slice("Catalog.X"), BUDGET_MS); //$NON-NLS-1$
+
+        assertEquals("a read stuck behind a model service operation is not confirmed, not broken", //$NON-NLS-1$
+            Reason.VALIDATION_PENDING, report.reason());
+        assertTrue(env.waits.isEmpty());
+        assertEquals(0, env.reads);
+    }
+
+    @Test
+    public void testAMarkerReadThatTimesOutIsPending()
+    {
+        ScriptedEnvironment env = new ScriptedEnvironment();
+        env.ids.put("Catalog.X", 7L); //$NON-NLS-1$
+        env.readFailure = new WrittenObjectMarkers.ReadTimedOut("model busy"); //$NON-NLS-1$
+
+        JsonObject json = attached(WrittenObjectMarkers.collect(env, slice("Catalog.X"), BUDGET_MS)); //$NON-NLS-1$
+
+        assertTrue(json.get(WrittenObjectMarkers.KEY_INCOMPLETE).getAsBoolean());
+        assertEquals("validationPending", json.get(WrittenObjectMarkers.KEY_REASON).getAsString()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testEveryBmReadIsBounded()
+    {
+        ScriptedEnvironment env = new ScriptedEnvironment();
+        env.ids.put("Catalog.X", 7L); //$NON-NLS-1$
+
+        WrittenObjectMarkers.collect(env, slice("Catalog.X"), BUDGET_MS); //$NON-NLS-1$
+
+        assertEquals("the resolve and the read each get a deadline", 2, env.readTimeouts.size()); //$NON-NLS-1$
+        for (Long timeout : env.readTimeouts)
+        {
+            assertTrue(String.valueOf(timeout), timeout.longValue() >= WrittenObjectMarkers.MIN_READ_MS
+                && timeout.longValue() <= BUDGET_MS);
+        }
+    }
+
+    @Test
+    public void testASpentBudgetStillGivesTheReadItsFloor()
+    {
+        assertEquals(WrittenObjectMarkers.MIN_READ_MS, WrittenObjectMarkers.readTimeoutMs(-5_000L));
+        assertEquals(WrittenObjectMarkers.MIN_READ_MS, WrittenObjectMarkers.readTimeoutMs(0L));
+        assertEquals(BUDGET_MS, WrittenObjectMarkers.readTimeoutMs(BUDGET_MS));
+    }
+
+    @Test
+    public void testTheSentenceIsJoinedAsASentence()
+    {
+        assertEquals("Created Catalog.X. S.", WrittenObjectMarkers.join("Created Catalog.X", "S.")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("no double period", "Done. S.", WrittenObjectMarkers.join("Done.", "S.")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertEquals("Done. S.", WrittenObjectMarkers.join("Done.  ", "S.")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("Done! S.", WrittenObjectMarkers.join("Done!", "S.")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("S.", WrittenObjectMarkers.join(null, "S.")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("S.", WrittenObjectMarkers.join(" ", "S.")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     @Test

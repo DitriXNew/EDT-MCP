@@ -15,6 +15,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 
@@ -63,6 +65,9 @@ public final class WrittenObjectMarkers
 
     /** Below this a slice of the shared budget cannot observe a drain; not started. */
     private static final long MIN_USEFUL_WAIT_MS = 1_000L;
+
+    /** The least a bounded BM read gets, so a spent budget still reads the snapshot. */
+    static final long MIN_READ_MS = 2_000L;
 
     /** The configuration's own top-object FQN. */
     static final String CONFIGURATION_FQN = "Configuration"; //$NON-NLS-1$
@@ -190,7 +195,27 @@ public final class WrittenObjectMarkers
         }
     }
 
-    /** The platform calls, behind a seam so the decision can be tested without a live EDT. */
+    /**
+     * A bounded BM read did not finish in time (or a previous one for the project is still out):
+     * the report is {@link Reason#VALIDATION_PENDING}, not a failure.
+     */
+    public static final class ReadTimedOut extends RuntimeException
+    {
+        private static final long serialVersionUID = 1L;
+
+        /**
+         * @param message what timed out
+         */
+        public ReadTimedOut(String message)
+        {
+            super(message);
+        }
+    }
+
+    /**
+     * The platform calls, behind a seam so the decision can be tested without a live EDT. The two
+     * BM reads are bounded: past {@code timeoutMs} they throw {@link ReadTimedOut}.
+     */
     public interface Environment
     {
         /**
@@ -198,9 +223,11 @@ public final class WrittenObjectMarkers
          *
          * @param projectName the project
          * @param fqns the top-object FQNs
+         * @param timeoutMs the deadline, positive
          * @return FQN to BM top-object id
+         * @throws ReadTimedOut when not resolved in time
          */
-        Map<String, Long> resolveTopObjects(String projectName, List<String> fqns);
+        Map<String, Long> resolveTopObjects(String projectName, List<String> fqns, long timeoutMs);
 
         /**
          * Waits, outside any transaction, for EDT to validate the objects.
@@ -219,9 +246,11 @@ public final class WrittenObjectMarkers
          * @param projectName the project
          * @param topObjectIds FQN to BM top-object id
          * @param maxRows the cap
+         * @param timeoutMs the deadline, positive
          * @return the total and the kept rows
+         * @throws ReadTimedOut when not read in time
          */
-        ProjectMarkers read(String projectName, Map<String, Long> topObjectIds, int maxRows);
+        ProjectMarkers read(String projectName, Map<String, Long> topObjectIds, int maxRows, long timeoutMs);
 
         /** @return whether the check framework is disabled globally */
         boolean checksDisabled();
@@ -338,7 +367,8 @@ public final class WrittenObjectMarkers
             objects.addAll(fqns);
             try
             {
-                Map<String, Long> ids = env.resolveTopObjects(projectName, fqns);
+                Map<String, Long> ids = env.resolveTopObjects(projectName, fqns,
+                    readTimeoutMs(deadlineAtMs - System.currentTimeMillis()));
                 unresolved |= ids.size() < fqns.size();
                 if (ids.isEmpty())
                 {
@@ -352,13 +382,21 @@ public final class WrittenObjectMarkers
                 unobservable |= state == BuildUtils.ValidationState.UNOBSERVABLE;
                 pending |= state == BuildUtils.ValidationState.PENDING;
                 long waitedMs = System.currentTimeMillis() - startedAtMs;
-                ProjectMarkers read = env.read(projectName, ids, MAX_ROWS);
+                ProjectMarkers read = env.read(projectName, ids, MAX_ROWS,
+                    readTimeoutMs(deadlineAtMs - System.currentTimeMillis()));
                 count += read.total;
                 rows.addAll(read.rows);
                 // The timing line the validation budget is tuned from.
                 Activator.logInfo("Written-object validation in " + projectName + ": " + state + " after " //$NON-NLS-1$ //$NON-NLS-2$
                     + waitedMs + "ms (budget " + budgetMs + "ms, " + ids.size() + " object(s), " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                     + read.total + " marker(s))"); //$NON-NLS-1$
+            }
+            catch (ReadTimedOut e)
+            {
+                // The model is busy (a service operation holds new transactions): not confirmed.
+                pending = true;
+                Activator.logInfo("Markers of the objects written in " + projectName + " not read in time: " //$NON-NLS-1$ //$NON-NLS-2$
+                    + e.getMessage());
             }
             catch (RuntimeException e)
             {
@@ -372,6 +410,19 @@ public final class WrittenObjectMarkers
         rows.sort(ROW_ORDER);
         List<Row> kept = rows.size() > MAX_ROWS ? new ArrayList<>(rows.subList(0, MAX_ROWS)) : rows;
         return new Report(reason, count, kept, objects, budgetMs);
+    }
+
+    /**
+     * The deadline of one bounded BM read: what is left of the budget, but at least
+     * {@link #MIN_READ_MS}, so a spent budget still reads the snapshot and a wedged read still
+     * returns promptly.
+     *
+     * @param remainingMs what is left of the shared budget, may be negative
+     * @return the read deadline
+     */
+    static long readTimeoutMs(long remainingMs)
+    {
+        return Math.max(MIN_READ_MS, remainingMs);
     }
 
     /**
@@ -463,11 +514,28 @@ public final class WrittenObjectMarkers
         }
         success.add(KEY_MARKERS, array);
 
-        String sentence = sentence(report);
         String existing = success.has(McpKeys.MESSAGE) && success.get(McpKeys.MESSAGE).isJsonPrimitive()
             ? success.get(McpKeys.MESSAGE).getAsString() : null;
-        success.addProperty(McpKeys.MESSAGE,
-            existing == null || existing.isEmpty() ? sentence : existing + ' ' + sentence);
+        success.addProperty(McpKeys.MESSAGE, join(existing, sentence(report)));
+    }
+
+    /**
+     * Appends a sentence to a message, closing the message with a period unless it already ends
+     * with sentence punctuation.
+     *
+     * @param existing the message, may be {@code null} or blank
+     * @param sentence the sentence to append
+     * @return the joined message
+     */
+    static String join(String existing, String sentence)
+    {
+        if (existing == null || existing.isBlank())
+        {
+            return sentence;
+        }
+        String base = existing.stripTrailing();
+        char last = base.charAt(base.length() - 1);
+        return (last == '.' || last == '!' || last == '?' ? base : base + '.') + ' ' + sentence;
     }
 
     /**
@@ -527,20 +595,22 @@ public final class WrittenObjectMarkers
     public static final Environment PLATFORM = new Environment()
     {
         @Override
-        public Map<String, Long> resolveTopObjects(String projectName, List<String> fqns)
+        public Map<String, Long> resolveTopObjects(String projectName, List<String> fqns, long timeoutMs)
         {
-            IBmModel model = modelOf(projectName);
-            return BmTransactions.read(model, "ResolveWrittenTopObjects", (tx, pm) -> { //$NON-NLS-1$
-                Map<String, Long> ids = new LinkedHashMap<>();
-                for (String fqn : fqns)
-                {
-                    IBmObject object = tx.getTopObjectByFqn(fqn);
-                    if (object != null)
+            return bounded(projectName, "Resolving the written objects", timeoutMs, () -> { //$NON-NLS-1$
+                IBmModel model = modelOf(projectName);
+                return BmTransactions.read(model, "ResolveWrittenTopObjects", (tx, pm) -> { //$NON-NLS-1$
+                    Map<String, Long> ids = new LinkedHashMap<>();
+                    for (String fqn : fqns)
                     {
-                        ids.put(fqn, Long.valueOf(object.bmGetId()));
+                        IBmObject object = tx.getTopObjectByFqn(fqn);
+                        if (object != null)
+                        {
+                            ids.put(fqn, Long.valueOf(object.bmGetId()));
+                        }
                     }
-                }
-                return ids;
+                    return ids;
+                });
             });
         }
 
@@ -555,7 +625,14 @@ public final class WrittenObjectMarkers
         }
 
         @Override
-        public ProjectMarkers read(String projectName, Map<String, Long> topObjectIds, int maxRows)
+        public ProjectMarkers read(String projectName, Map<String, Long> topObjectIds, int maxRows,
+            long timeoutMs)
+        {
+            return bounded(projectName, "Reading the markers of the written objects", timeoutMs, //$NON-NLS-1$
+                () -> readNow(projectName, topObjectIds, maxRows));
+        }
+
+        private ProjectMarkers readNow(String projectName, Map<String, Long> topObjectIds, int maxRows)
         {
             ProjectContext context = ProjectContext.of(projectName);
             IMarkerManager markerManager = Activator.getDefault().getMarkerManager();
@@ -621,4 +698,55 @@ public final class WrittenObjectMarkers
             return resolution.getModel();
         }
     };
+
+    /**
+     * Runs a read-only BM step in a {@link BoundedJob}: opening a transaction waits without a timeout
+     * while a service operation holds the model, so the caller must not. At most one such read per
+     * project is outstanding; an abandoned one only reads and its result is dropped.
+     *
+     * @param projectName the project, the slot key
+     * @param what the job name
+     * @param timeoutMs the deadline, positive
+     * @param work the read
+     * @return the read's result
+     * @throws ReadTimedOut when the deadline elapsed or a previous read is still out
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> T bounded(String projectName, String what, long timeoutMs, Supplier<T> work)
+    {
+        AtomicBoolean returned = BuildUtils.beginMarkerRead(projectName, timeoutMs);
+        if (returned == null)
+        {
+            throw new ReadTimedOut("a previous marker read for " + projectName + " has not returned yet"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        Object[] value = new Object[1];
+        BoundedJob.Result result = BoundedJob.run(what + " in " + projectName, timeoutMs, monitor -> { //$NON-NLS-1$
+            try
+            {
+                value[0] = work.get();
+            }
+            finally
+            {
+                returned.set(true);
+            }
+        });
+        if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
+        {
+            // Never ran and never will: reopen the slot at once.
+            returned.set(true);
+        }
+        if (result.getOutcome() == BoundedJob.Outcome.COMPLETED && result.getFailure() == null)
+        {
+            return (T) value[0];
+        }
+        if (result.getFailure() != null)
+        {
+            throw new IllegalStateException(what + " failed: " + result.getFailure(), result.getFailure()); //$NON-NLS-1$
+        }
+        if (result.getOutcome() == BoundedJob.Outcome.NOT_RUN)
+        {
+            throw new IllegalStateException(what + " never ran"); //$NON-NLS-1$
+        }
+        throw new ReadTimedOut(what + ": " + result.getOutcome() + " after " + result.getElapsedMs() + "ms"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
 }

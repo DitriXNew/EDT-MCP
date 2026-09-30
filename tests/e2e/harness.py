@@ -2913,6 +2913,13 @@ def assert_marker_contract(structured, ctx=""):
                 or not {"object", "checkId", "message", "location", "hasQuickFix"}.issubset(row.keys()):
             _fail("a marker row must be {object, severity, checkId, message, location, hasQuickFix} "
                   "[%s]: %r" % (ctx, row))
+    # The marker sentence is appended as a sentence: "Created X. EDT ...", never "Created X EDT".
+    message = structured.get("message")
+    if isinstance(message, str):
+        joined = re.search(r"(\S)( +)EDT (validation of|reports) ", message)
+        if joined and (joined.group(1) not in ".!?" or joined.group(2) != " "
+                       or ".. EDT" in message):
+            _fail("the marker sentence must follow a closed sentence [%s]: %r" % (ctx, message))
     return incomplete, rows
 
 

@@ -52,7 +52,7 @@ public class AbstractMetadataWriteToolMarkersTest
         RuntimeException failure;
 
         @Override
-        public Map<String, Long> resolveTopObjects(String projectName, List<String> fqns)
+        public Map<String, Long> resolveTopObjects(String projectName, List<String> fqns, long timeoutMs)
         {
             timeline.add("resolve:" + projectName); //$NON-NLS-1$
             resolvedFor.add(projectName);
@@ -79,7 +79,7 @@ public class AbstractMetadataWriteToolMarkersTest
 
         @Override
         public WrittenObjectMarkers.ProjectMarkers read(String projectName, Map<String, Long> topObjectIds,
-            int maxRows)
+            int maxRows, long timeoutMs)
         {
             return new WrittenObjectMarkers.ProjectMarkers(0, new ArrayList<>());
         }
