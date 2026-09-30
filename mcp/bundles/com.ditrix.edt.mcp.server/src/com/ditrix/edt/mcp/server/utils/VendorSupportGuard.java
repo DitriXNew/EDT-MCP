@@ -7,9 +7,11 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
@@ -21,6 +23,9 @@ import com._1c.g5.v8.dt.core.model.IModelEditingSupport;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.refactoring.core.DeletionForbiddenProblem;
+import com._1c.g5.v8.dt.refactoring.core.EditingForbiddenProblem;
+import com._1c.g5.v8.dt.refactoring.core.IRefactoringProblem;
 import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
 
@@ -204,6 +209,55 @@ public final class VendorSupportGuard
     }
 
     /**
+     * The refusal for writing a module file: {@link #refusalForModule} with the module loaded when
+     * the file exists.
+     *
+     * @param project the project that owns {@code file}
+     * @param scope that project's resolution root (an external-objects scope is never asked)
+     * @param file the module file
+     * @return the refusal message, or {@code null} when the write may proceed
+     */
+    public static String refusalForModuleFile(IProject project, MetadataScope scope, IFile file)
+    {
+        if (scope == null || scope.isExternalObjects())
+        {
+            return null;
+        }
+        EObject module = file.exists() ? BslModuleUtils.loadModule(file) : null;
+        return refusalForModule(project, scope, file.getProjectRelativePath().toString(), module);
+    }
+
+    /**
+     * The refusal for a write whose target could not be judged at all (fail closed).
+     *
+     * @param callerAddress the address the call named
+     * @param verb the past participle naming the operation
+     * @param cause why the check could not be made
+     * @return the refusal message
+     */
+    public static String uncheckedRefusal(String callerAddress, String verb, String cause)
+    {
+        return checkFailed(callerAddress, verb, cause);
+    }
+
+    /**
+     * The refusal for a write whose CASCADE would change objects vendor support locks: the caller
+     * lists them before changing anything.
+     *
+     * @param callerAddress the address the call named
+     * @param verb the past participle naming the operation
+     * @param cascade what the cascade would do to them, e.g. "its namespace change would rewrite XDTO packages"
+     * @param lockedNames the locked objects the cascade would change (at least one)
+     * @return the refusal message
+     */
+    public static String cascadeRefusal(String callerAddress, String verb, String cascade, List<String> lockedNames)
+    {
+        return "'" + callerAddress + "' cannot be " + verb + ": " + cascade + " " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            + String.join(", ", lockedNames) //$NON-NLS-1$
+            + ", which vendor support does not allow changing (or that could not be checked)." + REMEDY; //$NON-NLS-1$
+    }
+
+    /**
      * Whether EDT allows editing {@code object}; {@code false} also when that cannot be established.
      *
      * @param object the object to ask about
@@ -250,6 +304,34 @@ public final class VendorSupportGuard
         {
             return true;
         }
+    }
+
+    /**
+     * Whether a refactoring problem is a vendor-support lock. EDT raises
+     * {@link EditingForbiddenProblem} / {@link DeletionForbiddenProblem} from its editing-support
+     * check - and still performs the edit - and once from a file-read failure; asking that check
+     * again about the problem's object tells the two apart.
+     *
+     * @param problem the refactoring problem
+     * @return {@code true} for a support lock (including one the check cannot answer)
+     */
+    public static boolean isSupportLockProblem(IRefactoringProblem problem)
+    {
+        boolean deletion = problem instanceof DeletionForbiddenProblem;
+        if (!deletion && !(problem instanceof EditingForbiddenProblem))
+        {
+            return false;
+        }
+        EObject object;
+        try
+        {
+            object = problem.getObject();
+        }
+        catch (RuntimeException e) // NOSONAR an unreadable object cannot prove the lock away
+        {
+            object = null;
+        }
+        return confirmsLock(object, deletion);
     }
 
     /**

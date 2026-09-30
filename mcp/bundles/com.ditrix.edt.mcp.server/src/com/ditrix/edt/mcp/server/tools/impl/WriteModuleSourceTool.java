@@ -26,7 +26,6 @@ import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.preferences.IScopeContext;
 import org.eclipse.core.runtime.preferences.InstanceScope;
 
-import com._1c.g5.v8.dt.bsl.model.Module;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -185,6 +184,11 @@ public class WriteModuleSourceTool implements IMcpTool
 
         // 5. Get file
         IFile file = BslModuleUtils.resolveModuleFile(project, req.modulePath);
+        String outside = outsideProjectError(project, file, req.modulePath);
+        if (outside != null)
+        {
+            return outside;
+        }
         boolean fileExists = file.exists();
 
         // For non-replace modes, file must exist
@@ -220,6 +224,36 @@ public class WriteModuleSourceTool implements IMcpTool
     }
 
     /**
+     * Refuses a module path that resolves to no file, or to a file of another project: an
+     * absolute path resolves across the whole workspace, so without this check the write -
+     * and its vendor-support guard - would judge the named project while changing another.
+     *
+     * @param project the named project
+     * @param file the resolved module file, may be {@code null}
+     * @param modulePath the requested path, for the message
+     * @return the error JSON, or {@code null} when the file belongs to {@code project}
+     */
+    static String outsideProjectError(IProject project, IFile file, String modulePath)
+    {
+        if (file == null)
+        {
+            return ToolResult.error("File not found: " + modulePath //$NON-NLS-1$
+                + ". Pass a src/-relative module path of project '" + project.getName() //$NON-NLS-1$
+                + "', e.g. 'CommonModules/MyModule/Module.bsl'.").toJson(); //$NON-NLS-1$
+        }
+        IProject owner = file.getProject();
+        if (owner == null || !owner.equals(project))
+        {
+            return ToolResult.error("modulePath '" + modulePath + "' is a file of project '" //$NON-NLS-1$ //$NON-NLS-2$
+                + (owner == null ? "?" : owner.getName()) + "', not of '" + project.getName() //$NON-NLS-1$ //$NON-NLS-2$
+                + "'. Nothing was changed. Pass projectName='" //$NON-NLS-1$
+                + (owner == null ? "?" : owner.getName()) //$NON-NLS-1$
+                + "' and a src/-relative modulePath.").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
      * The vendor-support refusal for writing {@code file}, as ready JSON: the module (when it
      * exists) and the object that owns it must be editable. Fails closed when the project's
      * metadata root cannot be read.
@@ -236,9 +270,7 @@ public class WriteModuleSourceTool implements IMcpTool
         {
             return root.errorJson();
         }
-        Module module = fileExists && !root.scope().isExternalObjects() ? BslModuleUtils.loadModule(file) : null;
-        String refusal = VendorSupportGuard.refusalForModule(ctx.project(), root.scope(),
-            file.getProjectRelativePath().toString(), module);
+        String refusal = VendorSupportGuard.refusalForModuleFile(ctx.project(), root.scope(), file);
         return refusal == null ? null : ToolResult.error(refusal).toJson();
     }
 

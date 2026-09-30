@@ -208,6 +208,36 @@ def test_vendor_module_write_refused_for_a_locked_owner():
     _assert_byte_identical(before, "refused module writes")
 
 
+@e2e_test(tool="write_module_source", kind="write")
+def test_vendor_module_write_through_another_projects_name_refused():
+    """An absolute modulePath resolves across the whole workspace: naming another (unsupported)
+    project must not judge that project while the write lands in the locked module."""
+    before = _start()
+    target = os.path.join(SUPPORTED_DIR, "src", "CommonModules", "Locked", "Module.bsl")
+    r = call("write_module_source", {"projectName": PROJECT, "modulePath": target, "mode": "replace",
+                                     "source": "// e2e vendor\n", "overwrite": True})
+    err = assert_error(r, "write a locked module under another project's name")
+    assert_error_quality(err, names=[SUPPORTED_PROJECT, PROJECT], suggests=["Nothing was changed"],
+                         ctx="a module of another project")
+    _assert_byte_identical(before, "a module write under another project's name")
+    assert_no_diff("the named project is not touched either")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write")
+def test_vendor_rename_refused_when_it_would_update_a_locked_referrer():
+    """The attribute is editable, but its rename would also update the locked role that grants a
+    right on it: EDT records that as a problem and performs the edit anyway. The preview is asked
+    first, so an EDT that reports no problem fails here without renaming anything."""
+    before = _start()
+    fqn = "Catalog.Open.Attribute.Note"
+    for confirm in (False, True):
+        err = _refused("rename_metadata_object",
+                       {"objectFqn": fqn, "newName": "E2EVendorNote", "confirm": confirm},
+                       [fqn, "LockedRole"], "rename past a locked referrer (confirm=%s)" % confirm)
+        assert_contains(err, "would update references inside", "the refusal names the cascade")
+    _assert_byte_identical(before, "refused renames past a locked referrer")
+
+
 @e2e_test(tool="dcs", kind="write")
 def test_vendor_dcs_write_refused_for_a_locked_report():
     """The report has no DCS yet, so the write would CREATE its main template - on a locked report."""

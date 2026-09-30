@@ -15,6 +15,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.function.Predicate;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EList;
@@ -2432,10 +2434,30 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         Configuration cfg = (Configuration)cfgObj;
         long changedPkgBmId = ((IBmObject)changedPkg).bmGetId();
+        List<XDTOPackage> siblings = new ArrayList<>();
         for (XDTOPackage other : cfg.getXDTOPackages())
         {
-            if (!(other instanceof IBmObject) || ((IBmObject)other).bmGetId() == changedPkgBmId)
+            if (other instanceof IBmObject && ((IBmObject)other).bmGetId() != changedPkgBmId)
             {
+                siblings.add(other);
+            }
+        }
+        // Vendor support (#642), before any sibling is touched: a locked sibling that references the
+        // old namespace refuses the whole modify (the throw rolls back the target's own change too).
+        List<String> locked = lockedReferrers(siblings, oldNamespace, ModifyMetadataTool::attachedContent,
+            VendorSupportGuard::allowsEdit);
+        if (!locked.isEmpty())
+        {
+            throw new XdtoWriteException(ToolResult.error(VendorSupportGuard.cascadeRefusal(
+                "XDTOPackage." + changedPkg.getName(), "changed", //$NON-NLS-1$ //$NON-NLS-2$
+                "its namespace change would rewrite the XDTO packages that reference '" + oldNamespace //$NON-NLS-1$
+                    + "':", locked)).toJson()); //$NON-NLS-1$
+        }
+        for (XDTOPackage other : siblings)
+        {
+            if (attachedContent(other) != null && !VendorSupportGuard.allowsEdit(other))
+            {
+                // Locked and not referencing the old namespace: not even the self-repair below.
                 continue;
             }
             // A sibling with NO attached content cannot reference any namespace - skip it WITHOUT
@@ -2483,6 +2505,39 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 cascadedNamesOut.add(other.getName());
             }
         }
+    }
+
+    /**
+     * The locked siblings a namespace cascade would rewrite: those whose content references
+     * {@code oldNamespace} and that {@code editable} does not allow changing. Read-only.
+     *
+     * @param siblings the other XDTO packages of the configuration
+     * @param oldNamespace the namespace being replaced
+     * @param contentOf a sibling's attached content, or {@code null} when it has none
+     * @param editable whether a package may be changed
+     * @return the FQNs of the locked referrers, in configuration order
+     */
+    static List<String> lockedReferrers(List<XDTOPackage> siblings, String oldNamespace,
+        Function<XDTOPackage, com._1c.g5.v8.dt.xdto.model.Package> contentOf,
+        Predicate<XDTOPackage> editable)
+    {
+        List<String> locked = new ArrayList<>();
+        for (XDTOPackage other : siblings)
+        {
+            com._1c.g5.v8.dt.xdto.model.Package content = contentOf.apply(other);
+            if (content != null && XdtoWriter.referencesNamespace(content, oldNamespace) && !editable.test(other))
+            {
+                locked.add("XDTOPackage." + other.getName()); //$NON-NLS-1$
+            }
+        }
+        return locked;
+    }
+
+    /** A package's content when it is attached as a top object (what the cascade may rewrite). */
+    private static com._1c.g5.v8.dt.xdto.model.Package attachedContent(XDTOPackage pkg)
+    {
+        com._1c.g5.v8.dt.xdto.model.Package content = pkg.getPackage();
+        return content instanceof IBmObject && ((IBmObject)content).bmIsTop() ? content : null;
     }
 
     /**

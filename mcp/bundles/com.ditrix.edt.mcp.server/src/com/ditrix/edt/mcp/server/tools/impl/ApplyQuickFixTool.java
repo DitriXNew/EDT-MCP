@@ -12,9 +12,13 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.function.Function;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.emf.ecore.EObject;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.FrameworkUtil;
 
@@ -32,6 +36,9 @@ import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.tools.impl.GetProjectErrorsTool.ErrorInfo;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.e1c.g5.v8.dt.check.qfix.FixProcessHandle;
 import com.e1c.g5.v8.dt.check.qfix.FixVariantDescriptor;
 import com.e1c.g5.v8.dt.check.qfix.IFixManager;
@@ -74,6 +81,7 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
     private static final String KEY_PROJECT = "projectName"; //$NON-NLS-1$
     private static final String KEY_CHECK_ID = "checkId"; //$NON-NLS-1$
     private static final String KEY_MODULE_PATH = "modulePath"; //$NON-NLS-1$
+    private static final String FIXED = "fixed"; //$NON-NLS-1$
     private static final String KEY_LINE = "line"; //$NON-NLS-1$
     private static final String KEY_INDEX = "index"; //$NON-NLS-1$
     private static final String KEY_VARIANT = "variant"; //$NON-NLS-1$
@@ -258,7 +266,75 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
         }
         MarkerMatch chosen = matches.get(chosenIdx);
 
+        String locked = vendorSupportRefusal(project, ctx.scope, chosen);
+        if (locked != null)
+        {
+            return locked;
+        }
         return applyFix(fixManager, dtProject, chosen, variant, projectName);
+    }
+
+    /**
+     * The vendor-support refusal for fixing {@code chosen} (#642), as ready JSON: a BSL marker is
+     * judged like write_module_source judges its module, any other marker on the object EDT
+     * resolves for it. Fails closed when the target cannot be resolved.
+     *
+     * @param project the project the marker belongs to
+     * @param scope that project's resolution root
+     * @param chosen the marker about to be fixed
+     * @return the error JSON, or {@code null} when the fix may proceed
+     */
+    static String vendorSupportRefusal(IProject project, MetadataScope scope, MarkerMatch chosen)
+    {
+        if (scope == null || scope.isExternalObjects())
+        {
+            return null;
+        }
+        String refusal;
+        if (chosen.modulePath != null && !chosen.modulePath.isEmpty())
+        {
+            IFile file = BslModuleUtils.resolveModuleFile(project, chosen.modulePath);
+            refusal = file == null
+                ? VendorSupportGuard.uncheckedRefusal(chosen.location(), FIXED, "the module file was not found") //$NON-NLS-1$
+                : VendorSupportGuard.refusalForModuleFile(project, scope, file);
+        }
+        else
+        {
+            refusal = markerTargetRefusal(chosen.marker, scope, chosen.location());
+        }
+        return refusal == null ? null : ToolResult.error(refusal).toJson();
+    }
+
+    /**
+     * The refusal for fixing an object-level marker, judged on the object EDT's marker provider
+     * resolves (inside the provider's own read of the model). A marker whose object does not
+     * resolve is refused: the fix could change anything the check covers.
+     *
+     * @param marker the marker about to be fixed
+     * @param scope the project's resolution root
+     * @param address how to name the target in the refusal
+     * @return the refusal message, or {@code null} when the fix may proceed
+     */
+    static String markerTargetRefusal(Marker marker, MetadataScope scope, String address)
+    {
+        String verdict;
+        try
+        {
+            // "" = allowed; null = the provider resolved no object (or never called back).
+            verdict = marker.provideObject((Function<EObject, String>)object -> object == null ? null
+                : Objects.requireNonNullElse(
+                    VendorSupportGuard.refusalFor(object, scope, address, address, FIXED), "")); //$NON-NLS-1$
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logWarning("Vendor-support check of a quick-fix target failed: " + e.getMessage()); //$NON-NLS-1$
+            return VendorSupportGuard.uncheckedRefusal(address, FIXED, "the marker's object could not be read"); //$NON-NLS-1$
+        }
+        if (verdict == null)
+        {
+            return VendorSupportGuard.uncheckedRefusal(address, FIXED, "the marker's object could not be resolved"); //$NON-NLS-1$
+        }
+        return verdict.isEmpty() ? null : verdict;
     }
 
     /**

@@ -1395,21 +1395,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     static boolean isSupportLock(IRefactoringProblem problem)
     {
-        boolean deletion = problem instanceof DeletionForbiddenProblem;
-        if (!deletion && !(problem instanceof EditingForbiddenProblem))
-        {
-            return false;
-        }
-        EObject object;
-        try
-        {
-            object = problem.getObject();
-        }
-        catch (RuntimeException e) // NOSONAR an unreadable object cannot prove the lock away
-        {
-            object = null;
-        }
-        return VendorSupportGuard.confirmsLock(object, deletion);
+        return VendorSupportGuard.isSupportLockProblem(problem);
     }
 
     /**

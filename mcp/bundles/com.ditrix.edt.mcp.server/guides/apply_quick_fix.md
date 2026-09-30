@@ -75,6 +75,9 @@ A JSON result:
   next to read-only tools like `get_project_errors`. An installation that saved one of those presets
   before this tool existed is migrated once, on upgrade, to disable it there too.
 
+## Vendor support
+A configuration on vendor support can lock objects. A fix is refused when the marker's target is locked by its support rule: a BSL marker is judged like write_module_source (the module and the object that owns it), any other marker on the object EDT resolves for it. A marker whose object cannot be resolved is refused too. Nothing is changed. The way out is a configuration extension (adopt the object with adopt_metadata_object and change the adopted copy) or the user allowing changes in EDT's support settings; this server never changes support settings.
+
 ## Maintainer note
 After adding/changing this tool, the `tools/list` golden snapshot (`tools_list.golden.json`) MUST be
 regenerated against the live server on the EDT stand — it cannot be hand-edited.

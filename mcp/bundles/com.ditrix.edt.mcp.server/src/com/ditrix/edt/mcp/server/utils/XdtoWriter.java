@@ -784,7 +784,26 @@ public final class XdtoWriter
      */
     public static boolean rewriteNamespaceReferences(Package content, String oldNs, String newNs)
     {
-        if (content == null || oldNs == null || newNs == null)
+        return newNs != null && walkNamespaceReferences(content, oldNs, newNs);
+    }
+
+    /**
+     * Whether {@code content} holds any reference {@link #rewriteNamespaceReferences} would rewrite -
+     * the same walk, read-only, so a caller can judge a package before changing anything.
+     *
+     * @param content the package content to inspect
+     * @param ns the namespace to look for
+     * @return {@code true} when an import or a QName carries {@code ns}
+     */
+    public static boolean referencesNamespace(Package content, String ns)
+    {
+        return walkNamespaceReferences(content, ns, null);
+    }
+
+    /** The shared walk: rewrites to {@code newNs}, or only detects when {@code newNs} is null. */
+    private static boolean walkNamespaceReferences(Package content, String oldNs, String newNs)
+    {
+        if (content == null || oldNs == null)
         {
             return false;
         }
@@ -793,7 +812,10 @@ public final class XdtoWriter
         {
             if (oldNs.equals(dependency.getNamespace()))
             {
-                dependency.setNamespace(newNs);
+                if (newNs != null)
+                {
+                    dependency.setNamespace(newNs);
+                }
                 changed = true;
             }
         }
@@ -842,14 +864,18 @@ public final class XdtoWriter
         return changed;
     }
 
-    /** Moves {@code qname} from {@code oldNs} to {@code newNs}; {@code false} when null/other ns. */
+    /** Moves {@code qname} from {@code oldNs} to {@code newNs} (a null {@code newNs} only detects);
+     * {@code false} when null/other ns. */
     private static boolean retargetQName(QName qname, String oldNs, String newNs)
     {
         if (qname == null || !oldNs.equals(qname.getNsUri()))
         {
             return false;
         }
-        qname.setNsUri(newNs);
+        if (newNs != null)
+        {
+            qname.setNsUri(newNs);
+        }
         return true;
     }
 
@@ -864,18 +890,8 @@ public final class XdtoWriter
             {
                 changed |= rewriteTypeTree(property.getTypeDefs(), oldNs, newNs);
             }
-            QName type = property.getType();
-            if (type != null && oldNs.equals(type.getNsUri()))
-            {
-                type.setNsUri(newNs);
-                changed = true;
-            }
-            QName ref = property.getRef();
-            if (ref != null && oldNs.equals(ref.getNsUri()))
-            {
-                ref.setNsUri(newNs);
-                changed = true;
-            }
+            changed |= retargetQName(property.getType(), oldNs, newNs);
+            changed |= retargetQName(property.getRef(), oldNs, newNs);
         }
         return changed;
     }

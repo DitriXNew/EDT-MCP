@@ -33,8 +33,10 @@ import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.google.gson.JsonObject;
 
 /**
@@ -218,6 +220,17 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 .put(KEY_PERSISTED, true)
                 .put("message", "'" + normFqn + "' is already adopted in extension '" + extName + "'.") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 .toJson();
+        }
+
+        // Vendor support (#642): the base side is only read, but the extension itself can be a
+        // vendor-supported one whose root does not allow new objects.
+        Configuration extensionRoot = target.getConfiguration();
+        String locked = VendorSupportGuard.refusalFor(extensionRoot,
+            MetadataScope.of(target.getProject(), extensionRoot), "the extension '" + extName + "'", //$NON-NLS-1$ //$NON-NLS-2$
+            normFqn, "adopted"); //$NON-NLS-1$
+        if (locked != null)
+        {
+            return ToolResult.error(locked).toJson();
         }
 
         // The service runs its own BM write task on the extension's model, but exposes no rollback
