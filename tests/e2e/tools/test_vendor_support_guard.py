@@ -250,6 +250,25 @@ def test_vendor_dcs_write_refused_for_a_locked_report():
     _assert_byte_identical(before, "a refused DCS write")
 
 
+@e2e_test(tool="translate_configuration", kind="write-metadata")
+def test_vendor_in_place_translation_refused_for_a_locked_configuration():
+    """The fixture declares English, so synchronizing 'en' writes the locked configuration's own
+    objects: refused before LanguageTool is touched (so the verdict holds whether or not it is
+    installed). A language the configuration does not declare can only go to a dependent
+    translation project and is not a vendor-support question."""
+    before = _start()
+    r = call("translate_configuration", {"projectName": SUPPORTED_PROJECT, "targetLanguages": ["en"]})
+    err = assert_error(r, "translate a locked configuration in place")
+    assert_error_quality(err, names=[SUPPORTED_PROJECT, "in place"],
+                         suggests=["vendor support", "Nothing was changed", "dependent translation project"],
+                         ctx="an in-place translation of a locked configuration")
+    _assert_byte_identical(before, "a refused in-place translation")
+    other = call("translate_configuration", {"projectName": SUPPORTED_PROJECT, "targetLanguages": ["de"]})
+    text = other.error_text() if other.is_error else (other.text or "")
+    assert_not_contains(text, "vendor support",
+                        "an undeclared target language is not refused for vendor support")
+
+
 # ==================== the read side ====================
 
 @e2e_test(tool="get_metadata_details", kind="read")

@@ -62,3 +62,6 @@ Pre-fill from a provider:
 - Wrong project type is the most common mistake: this runs on the configuration project, never on the dictionary storage project where the files live.
 - If the project is still indexing, the tool may report that EDT has not resolved an IDtProject yet - retry after indexing completes.
 - If LanguageTool is not installed the call fails with a clear "install LanguageTool" message.
+
+## Vendor support
+This tool writes only translation storage files (`.lstr`/`.trans`/`.dict`), never the configuration's metadata objects or modules - the fill-up modes only set the storage's target values. Vendor support therefore never refuses it, including on a configuration it locks. Writing the translations back into the configuration is `translate_configuration`, which is checked.
