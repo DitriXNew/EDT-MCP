@@ -11,6 +11,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.eclipse.core.runtime.NullProgressMonitor;
@@ -23,6 +24,7 @@ import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.md.extension.adopt.IModelObjectAdopter;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -116,6 +118,77 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     + "wait is skipped where the export state cannot be observed", false) //$NON-NLS-1$
             .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
             .build();
+    }
+
+    /**
+     * The vendor-support refusal for adopting {@code source} into {@code target}: asked about the
+     * extension object that receives the copy. Fails closed when that cannot be read.
+     */
+    private static String adoptionRefusal(IModelObjectAdopter adopter, EObject source, IExtensionProject target,
+        String normFqn)
+    {
+        Configuration extensionRoot = target.getConfiguration();
+        String extName = target.getProject().getName();
+        EObject receiver;
+        try
+        {
+            receiver = adoptionReceiver(source,
+                parent -> adopter.isAdoptable(parent) ? adopter.getAdopted(parent, target) : null, extensionRoot);
+        }
+        catch (RuntimeException e)
+        {
+            return VendorSupportGuard.uncheckedRefusal(normFqn, "adopted", //$NON-NLS-1$
+                "the extension's copy of its parent could not be read: " + e.getMessage()); //$NON-NLS-1$
+        }
+        String label = receiver == extensionRoot ? "the extension '" + extName + "'" //$NON-NLS-1$ //$NON-NLS-2$
+            : "its adopted parent '" + (receiver instanceof MdObject ? ((MdObject)receiver).getName() : "?") //$NON-NLS-1$ //$NON-NLS-2$
+                + "' in the extension '" + extName + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+        return VendorSupportGuard.refusalFor(receiver, MetadataScope.of(target.getProject(), extensionRoot),
+            label, normFqn, "adopted"); //$NON-NLS-1$
+    }
+
+    /**
+     * The extension object an adoption adds {@code source} to, the way EDT's adopter walks it: the
+     * copy of the nearest ancestor already adopted, else the extension's root (a new top object).
+     * Package-visible for tests.
+     *
+     * @param source the base object to adopt
+     * @param adoptedOf a base object's copy in the extension, or {@code null} when it has none
+     * @param extensionRoot the extension's configuration
+     * @return the receiving object
+     */
+    static EObject adoptionReceiver(EObject source, Function<EObject, EObject> adoptedOf, EObject extensionRoot)
+    {
+        EObject current = source;
+        while (true)
+        {
+            EObject parent = parentMdObject(current);
+            if (parent == null || parent instanceof Configuration)
+            {
+                return extensionRoot;
+            }
+            EObject adopted = adoptedOf.apply(parent);
+            if (adopted != null)
+            {
+                return adopted;
+            }
+            current = parent;
+        }
+    }
+
+    /** The metadata object that holds {@code child} (a subsystem's parent subsystem), or {@code null}. */
+    private static EObject parentMdObject(EObject child)
+    {
+        if (child instanceof Subsystem && ((Subsystem)child).getParentSubsystem() != null)
+        {
+            return ((Subsystem)child).getParentSubsystem();
+        }
+        EObject container = child.eContainer();
+        while (container != null && !(container instanceof MdObject))
+        {
+            container = container.eContainer();
+        }
+        return container;
     }
 
     @Override
@@ -222,12 +295,10 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 .toJson();
         }
 
-        // Vendor support (#642): the base side is only read, but the extension itself can be a
-        // vendor-supported one whose root does not allow new objects.
-        Configuration extensionRoot = target.getConfiguration();
-        String locked = VendorSupportGuard.refusalFor(extensionRoot,
-            MetadataScope.of(target.getProject(), extensionRoot), "the extension '" + extName + "'", //$NON-NLS-1$ //$NON-NLS-2$
-            normFqn, "adopted"); //$NON-NLS-1$
+        // Vendor support (#642): the base side is only read. What changes is the extension object
+        // that receives the copy - an already-adopted ancestor (EDT adds the child to it), else the
+        // extension's root - and an extension can have vendor support of its own.
+        String locked = adoptionRefusal(adopter, source, target, normFqn);
         if (locked != null)
         {
             return ToolResult.error(locked).toJson();

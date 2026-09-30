@@ -91,7 +91,7 @@ A JSON result:
   before this tool existed is migrated once, on upgrade, to disable it there too.
 
 ## Vendor support
-A configuration on vendor support can lock objects. A fix is refused when the marker's target is locked by its support rule: a BSL marker is judged like write_module_source (the module and the object that owns it), any other marker on the object EDT resolves for it. A marker whose object cannot be resolved is refused too. Nothing is changed. The way out is a configuration extension (adopt the object with adopt_metadata_object and change the adopted copy) or the user allowing changes in EDT's support settings; this server never changes support settings.
+A configuration on vendor support can lock objects. A fix is refused when the marker's target is locked by its support rule: a BSL marker is judged like write_module_source (the module and the object that owns it), any other marker on the object EDT resolves for it. EDT does not say what a fix variant does - one removes the object through a delete refactoring - so an object-level fix needs the object to be both editable and deletable; a fix on an editable top object of a locked configuration is therefore refused as well. A marker whose object cannot be resolved is refused too. Nothing is changed. The way out is a configuration extension (adopt the object with adopt_metadata_object and change the adopted copy) or the user allowing changes in EDT's support settings; this server never changes support settings.
 
 ## Maintainer note
 After adding/changing this tool, the `tools/list` golden snapshot (`tools_list.golden.json`) MUST be

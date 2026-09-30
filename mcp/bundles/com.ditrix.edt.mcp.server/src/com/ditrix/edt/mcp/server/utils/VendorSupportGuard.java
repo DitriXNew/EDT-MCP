@@ -21,6 +21,8 @@ import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.model.EditingMode;
 import com._1c.g5.v8.dt.core.model.IModelEditingSupport;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.core.platform.IExtensionProject;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.refactoring.core.DeletionForbiddenProblem;
@@ -38,8 +40,9 @@ import com.ditrix.edt.mcp.server.Activator;
  * object the operation changes. It FAILS CLOSED: no service, or a service that throws, refuses.</p>
  *
  * <p>An external-objects project is never asked: it has no support settings, and the
- * configuration its context carries is the linked BASE one. An extension project is asked about
- * its own objects, which the platform always reports editable.</p>
+ * configuration its context carries is the linked BASE one. A configuration extension can be
+ * under vendor support of its own and is asked like a configuration; its refusal does not
+ * suggest an extension as the way out.</p>
  */
 public final class VendorSupportGuard
 {
@@ -65,6 +68,12 @@ public final class VendorSupportGuard
         + "copy, or create new objects in the extension project), or ask the user to allow " //$NON-NLS-1$
         + "changes in EDT's support settings (Configuration > Support > Support settings); this " //$NON-NLS-1$
         + "server does not change support settings."; //$NON-NLS-1$
+
+    /** The remedy of a lock refusal inside a configuration extension, which cannot adopt into itself. */
+    private static final String EXTENSION_REMEDY = " Nothing was changed. The extension is itself under " //$NON-NLS-1$
+        + "vendor support, so adopting into it is no way out: ask the user to allow changes in EDT's " //$NON-NLS-1$
+        + "support settings of the extension (Configuration > Support > Support settings); this server " //$NON-NLS-1$
+        + "does not change support settings."; //$NON-NLS-1$
 
     /** Test seam: replaces the platform service lookup when set. */
     private static final AtomicReference<Supplier<IModelEditingSupport>> SERVICE = new AtomicReference<>();
@@ -165,6 +174,28 @@ public final class VendorSupportGuard
             return null;
         }
         return check(object, false, label, scope.configuration(), callerAddress, verb);
+    }
+
+    /**
+     * The refusal for an operation that may edit OR delete {@code object} and does not say which
+     * (a quick-fix variant): both of EDT's verdicts must allow it.
+     *
+     * @param object the object the operation acts on
+     * @param scope the project's resolution root (an external-objects scope is never asked)
+     * @param label how to name {@code object} in the refusal
+     * @param callerAddress the address the caller used
+     * @param verb the past participle naming the operation
+     * @return the refusal message, or {@code null} when the operation may proceed
+     */
+    public static String refusalForEditOrDelete(EObject object, MetadataScope scope, String label,
+        String callerAddress, String verb)
+    {
+        if (object == null || scope == null || scope.isExternalObjects())
+        {
+            return null;
+        }
+        String refusal = check(object, false, label, scope.configuration(), callerAddress, verb);
+        return refusal != null ? refusal : check(object, true, label, scope.configuration(), callerAddress, verb);
     }
 
     /**
@@ -536,7 +567,23 @@ public final class VendorSupportGuard
                 + " (it, one of its members, or the object that contains it is locked by its support rule)" //$NON-NLS-1$
             : subject + " is under vendor support and its support rule does not allow changes"; //$NON-NLS-1$
         return "'" + callerAddress + "' cannot be " + verb + ": " + reason + "." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            + configurationClause(support, object, configuration) + REMEDY;
+            + configurationClause(support, object, configuration) + remedyFor(configuration);
+    }
+
+    /** The way out of a lock: an extension for a configuration, the support settings for an extension. */
+    private static String remedyFor(Configuration configuration)
+    {
+        Activator activator = configuration == null ? null : Activator.getDefault();
+        IV8ProjectManager manager = activator == null ? null : activator.getV8ProjectManager();
+        try
+        {
+            return manager != null && manager.getProject(configuration) instanceof IExtensionProject
+                ? EXTENSION_REMEDY : REMEDY;
+        }
+        catch (RuntimeException e) // NOSONAR the remedy is advice; the refusal stands without the right one
+        {
+            return REMEDY;
+        }
     }
 
     /** The "configuration itself is locked" sentence, computed only for a refusal. */

@@ -307,8 +307,9 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
 
     /**
      * The refusal for fixing an object-level marker, judged on the object EDT's marker provider
-     * resolves (inside the provider's own read of the model). A marker whose object does not
-     * resolve is refused: the fix could change anything the check covers.
+     * resolves (inside the provider's own read of the model). A fix variant does not say what it
+     * does - one removes the object through a delete refactoring - so both editing and deleting
+     * the object must be allowed. A marker whose object does not resolve is refused.
      *
      * @param marker the marker about to be fixed
      * @param scope the project's resolution root
@@ -323,7 +324,7 @@ public class ApplyQuickFixTool extends AbstractMetadataWriteTool
             // "" = allowed; null = the provider resolved no object (or never called back).
             verdict = marker.provideObject((Function<EObject, String>)object -> object == null ? null
                 : Objects.requireNonNullElse(
-                    VendorSupportGuard.refusalFor(object, scope, address, address, FIXED), "")); //$NON-NLS-1$
+                    VendorSupportGuard.refusalForEditOrDelete(object, scope, address, address, FIXED), "")); //$NON-NLS-1$
         }
         catch (RuntimeException e)
         {
