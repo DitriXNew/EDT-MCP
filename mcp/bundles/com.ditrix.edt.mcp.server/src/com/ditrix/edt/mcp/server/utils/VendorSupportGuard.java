@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IFile;
@@ -286,6 +287,59 @@ public final class VendorSupportGuard
         return "'" + callerAddress + "' cannot be " + verb + ": " + cascade + " " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             + String.join(", ", lockedNames) //$NON-NLS-1$
             + ", which vendor support does not allow changing (or that could not be checked)." + REMEDY; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal for adopting into an extension: any vendor support on the extension refuses, since
+     * EDT's adopter may also change objects there (a receiving parent, a dependency) that cannot be
+     * listed before it runs. Unanswerable counts as supported.
+     *
+     * @param extensionName the target extension project's name
+     * @param callerAddress the address the call named
+     * @param underSupport whether the extension is under vendor support (may throw)
+     * @return the refusal message, or {@code null} when the adoption may proceed
+     */
+    public static String adoptionRefusal(String extensionName, String callerAddress, BooleanSupplier underSupport)
+    {
+        boolean supported;
+        try
+        {
+            supported = underSupport.getAsBoolean();
+        }
+        catch (RuntimeException e) // NOSONAR fail closed: an unanswerable question is a "yes"
+        {
+            Log.log(new Status(IStatus.WARNING, Log.pluginId(),
+                "Vendor-support check failed for adopting " + callerAddress, e)); //$NON-NLS-1$
+            return checkFailed(callerAddress, "adopted", //$NON-NLS-1$
+                "the support settings of the extension '" + extensionName + "' could not be read: " //$NON-NLS-1$ //$NON-NLS-2$
+                    + PlatformFailures.describe(e));
+        }
+        if (!supported)
+        {
+            return null;
+        }
+        return "'" + callerAddress + "' cannot be adopted: the extension '" + extensionName //$NON-NLS-1$ //$NON-NLS-2$
+            + "' is under vendor support, and an adoption can also change objects in it that cannot be " //$NON-NLS-1$
+            + "listed before it runs (the adopted parent that receives the copy, a command group or other " //$NON-NLS-1$
+            + "object the adopted one depends on), so no adoption into a supported extension is attempted." //$NON-NLS-1$
+            + EXTENSION_REMEDY;
+    }
+
+    /**
+     * Whether a configuration (or extension) root carries vendor support: its support settings are
+     * set. A superset of EDT's own test, which also ignores a non-native root and an unresolved link.
+     *
+     * @param root the configuration root, read inside a transaction
+     * @return {@code true} when support settings are present
+     * @throws IllegalStateException when there is no root to ask
+     */
+    public static boolean underVendorSupport(Configuration root)
+    {
+        if (root == null)
+        {
+            throw new IllegalStateException("the extension has no configuration root"); //$NON-NLS-1$
+        }
+        return root.getDistributionSettings() != null;
     }
 
     /**

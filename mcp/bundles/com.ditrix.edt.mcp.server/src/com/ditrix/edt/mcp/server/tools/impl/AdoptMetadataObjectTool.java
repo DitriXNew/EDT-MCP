@@ -11,20 +11,20 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.ecore.EObject;
 
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.core.platform.IExtensionProject;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.md.extension.adopt.IModelObjectAdopter;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
-import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -35,7 +35,6 @@ import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
-import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
@@ -67,6 +66,9 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
 
     /** Output key: the object's belonging marker (ADOPTED). */
     private static final String KEY_OBJECT_BELONGING = "objectBelonging"; //$NON-NLS-1$
+
+    /** The BM FQN of a project's configuration root. */
+    private static final String EXTENSION_ROOT_FQN = "Configuration"; //$NON-NLS-1$
 
     /** Output key: whether the change was exported to disk. */
     private static final String KEY_PERSISTED = "persisted"; //$NON-NLS-1$
@@ -121,74 +123,21 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * The vendor-support refusal for adopting {@code source} into {@code target}: asked about the
-     * extension object that receives the copy. Fails closed when that cannot be read.
+     * Whether the target extension is under vendor support, read from its root inside a read
+     * transaction on the extension's model. Throws when that cannot be read (the caller fails closed).
      */
-    private static String adoptionRefusal(IModelObjectAdopter adopter, EObject source, IExtensionProject target,
-        String normFqn)
+    private static boolean extensionUnderVendorSupport(IExtensionProject target)
     {
-        Configuration extensionRoot = target.getConfiguration();
-        String extName = target.getProject().getName();
-        EObject receiver;
-        try
+        IBmModelManager modelManager = Activator.getDefault().getBmModelManager();
+        IBmModel model = modelManager != null ? modelManager.getModel(target.getProject()) : null;
+        if (model == null)
         {
-            receiver = adoptionReceiver(source,
-                parent -> adopter.isAdoptable(parent) ? adopter.getAdopted(parent, target) : null, extensionRoot);
+            throw new IllegalStateException("the extension's model is not available"); //$NON-NLS-1$
         }
-        catch (RuntimeException e)
-        {
-            return VendorSupportGuard.uncheckedRefusal(normFqn, "adopted", //$NON-NLS-1$
-                "the extension's copy of its parent could not be read: " + e.getMessage()); //$NON-NLS-1$
-        }
-        String label = receiver == extensionRoot ? "the extension '" + extName + "'" //$NON-NLS-1$ //$NON-NLS-2$
-            : "its adopted parent '" + (receiver instanceof MdObject ? ((MdObject)receiver).getName() : "?") //$NON-NLS-1$ //$NON-NLS-2$
-                + "' in the extension '" + extName + "'"; //$NON-NLS-1$ //$NON-NLS-2$
-        return VendorSupportGuard.refusalFor(receiver, MetadataScope.of(target.getProject(), extensionRoot),
-            label, normFqn, "adopted"); //$NON-NLS-1$
-    }
-
-    /**
-     * The extension object an adoption adds {@code source} to, the way EDT's adopter walks it: the
-     * copy of the nearest ancestor already adopted, else the extension's root (a new top object).
-     * Package-visible for tests.
-     *
-     * @param source the base object to adopt
-     * @param adoptedOf a base object's copy in the extension, or {@code null} when it has none
-     * @param extensionRoot the extension's configuration
-     * @return the receiving object
-     */
-    static EObject adoptionReceiver(EObject source, Function<EObject, EObject> adoptedOf, EObject extensionRoot)
-    {
-        EObject current = source;
-        while (true)
-        {
-            EObject parent = parentMdObject(current);
-            if (parent == null || parent instanceof Configuration)
-            {
-                return extensionRoot;
-            }
-            EObject adopted = adoptedOf.apply(parent);
-            if (adopted != null)
-            {
-                return adopted;
-            }
-            current = parent;
-        }
-    }
-
-    /** The metadata object that holds {@code child} (a subsystem's parent subsystem), or {@code null}. */
-    private static EObject parentMdObject(EObject child)
-    {
-        if (child instanceof Subsystem && ((Subsystem)child).getParentSubsystem() != null)
-        {
-            return ((Subsystem)child).getParentSubsystem();
-        }
-        EObject container = child.eContainer();
-        while (container != null && !(container instanceof MdObject))
-        {
-            container = container.eContainer();
-        }
-        return container;
+        Boolean supported = BmTransactions.read(model, "AdoptVendorSupportCheck", //$NON-NLS-1$
+            (tx, pm) -> VendorSupportGuard.underVendorSupport(
+                (Configuration)tx.getTopObjectByFqn(EXTENSION_ROOT_FQN)));
+        return Boolean.TRUE.equals(supported);
     }
 
     @Override
@@ -295,10 +244,11 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 .toJson();
         }
 
-        // Vendor support (#642): the base side is only read. What changes is the extension object
-        // that receives the copy - an already-adopted ancestor (EDT adds the child to it), else the
-        // extension's root - and an extension can have vendor support of its own.
-        String locked = adoptionRefusal(adopter, source, target, normFqn);
+        // Vendor support (#642): the base side is only read. The adopter may change more of the
+        // extension than the copy (the receiving parent, dependencies it adopts along), none of it
+        // listable in advance - so a supported extension refuses every adoption.
+        String locked = VendorSupportGuard.adoptionRefusal(extName, normFqn,
+            () -> extensionUnderVendorSupport(target));
         if (locked != null)
         {
             return ToolResult.error(locked).toJson();

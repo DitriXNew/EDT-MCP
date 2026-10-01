@@ -15,6 +15,8 @@ per-object mode - the rules allow changes, and each item without userMode is loc
   editable: Catalog.Open (+ its attribute Note), CommonModule.Open, Role.OpenRole, the language.
   Role.LockedRole holds an attribute right on Catalog.Open.Attribute.Note, so deleting that
   (editable) attribute has to change a locked role - the delete's support-derived prohibition.
+  Deleting ANY attribute of a top object also removes that object's derived field, which EDT
+  judges as deleting the object itself: with the configuration locked, no such delete passes.
 
 Anti-cheat: every refusal is checked for its wording AND for the fixture being byte-identical
 afterwards (a content hash of every file, not only git status), and the editable controls must
@@ -158,8 +160,9 @@ def test_vendor_delete_refused_in_preview_and_with_force():
 @e2e_test(tool="delete_metadata", kind="write")
 def test_vendor_force_does_not_lift_a_support_prohibition_on_a_referencing_object():
     """The attribute itself may be deleted, but EDT's refactoring would have to change the locked
-    role that grants a right on it: a support-derived platform prohibition, marked supportLock
-    and not forceable. Preview first, so an EDT that reported nothing fails here without deleting."""
+    role that grants a right on it (and remove Catalog.Open's derived field): support-derived platform
+    prohibitions, marked supportLock and not forceable. Preview first, so an EDT that reported
+    nothing fails here without deleting."""
     before = _start()
     fqn = "Catalog.Open.Attribute.Note"
     preview = call("delete_metadata", {"projectName": SUPPORTED_PROJECT, "fqn": fqn})
@@ -306,14 +309,24 @@ def test_vendor_editable_objects_still_take_writes():
     assert_ok(call("create_metadata", {"projectName": SUPPORTED_PROJECT, "fqn": fqn}),
               "create a member of an editable catalog")
     poll_diff_contains_rel(SUPPORTED_REL, "E2EVendorOpenAttr", ctx="the attribute reaches Open.mdo")
-    assert_ok(call("delete_metadata",
-                   {"projectName": SUPPORTED_PROJECT, "fqn": fqn, "confirm": True}),
-              "delete the new member again")
-    deadline = time.time() + 10
-    while "E2EVendorOpenAttr" in read_fixture_file(SUPPORTED_REL, "src/Catalogs/Open/Open.mdo"):
-        if time.time() > deadline:
-            _fail("the deleted attribute is still in Open.mdo")
-        time.sleep(0.5)
+    # Deleting it again is NOT an editable control: the delete also removes Catalog.Open's derived
+    # field for the attribute, and EDT judges that removal as deleting Catalog.Open, which the
+    # locked configuration root forbids (EDT's own delete wizard cannot finish it either).
+    before = _settled_hashes()
+    blocked = call("delete_metadata",
+                   {"projectName": SUPPORTED_PROJECT, "fqn": fqn, "confirm": True})
+    err = assert_error(blocked, "delete a member of an editable catalog of a locked configuration")
+    assert_error_quality(err, names=[fqn], suggests=["force=true does not override vendor support",
+                                                     "Nothing was deleted"], ctx="blocked member delete")
+    locks = [(p.get("problemType"), p.get("targetObject"))
+             for p in ((blocked.structured or {}).get("platformProhibitions") or [])
+             if p.get("supportLock") is True]
+    if locks != [("DeletionForbiddenProblem", "Catalog.Open")]:
+        _fail("the only lock must be EDT's deletion prohibition on Catalog.Open: %r" % blocked.structured)
+    if _settled_hashes() != before:
+        _fail("a blocked delete must leave the fixture as it was")
+    assert_contains(read_fixture_file(SUPPORTED_REL, "src/Catalogs/Open/Open.mdo"), "E2EVendorOpenAttr",
+                    "the blocked delete keeps the attribute")
 
     assert_ok(call("write_module_source", {
         "projectName": SUPPORTED_PROJECT, "modulePath": "CommonModules/Open/Module.bsl",

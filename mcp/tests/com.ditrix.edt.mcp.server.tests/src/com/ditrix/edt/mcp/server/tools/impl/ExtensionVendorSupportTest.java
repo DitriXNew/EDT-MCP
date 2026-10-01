@@ -6,19 +6,19 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.function.Function;
 
+import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.InternalEObject;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -26,27 +26,28 @@ import org.junit.Test;
 import com._1c.g5.v8.dt.core.model.EditingMode;
 import com._1c.g5.v8.dt.core.model.IModelEditingSupport;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
-import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
-import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.validation.marker.Marker;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
+import com.e1c.g5.v8.dt.distribution.model.DistributionSupport;
+import com.e1c.g5.v8.dt.distribution.model.DistributionSupportFactory;
 
 /**
- * A configuration extension can have vendor support of its own (EDT's DistributionSupportManager
- * answers for extension projects too): adoption is judged on the extension object that receives
- * the copy, and a quick fix whose variant may delete needs the delete permission as well (#642).
+ * Vendor support in a configuration extension (#642): an adoption into an extension with support
+ * settings is refused outright, because the adopter may change objects that cannot be listed
+ * before it runs; and a quick fix whose variant may delete needs the delete permission as well.
  */
 public class ExtensionVendorSupportTest
 {
+    private static final String EXTENSION = "SalesExtension"; //$NON-NLS-1$
+    private static final String WEIGHT = "Catalog.Products.Attribute.Weight"; //$NON-NLS-1$
+
     private IModelEditingSupport support;
     private Configuration base;
     private Configuration extensionRoot;
     private Catalog products;
-    private CatalogAttribute weight;
-    private Map<EObject, EObject> adopted;
 
     @Before
     public void setUp()
@@ -59,11 +60,7 @@ public class ExtensionVendorSupportTest
         extensionRoot = MdClassFactory.eINSTANCE.createConfiguration();
         products = MdClassFactory.eINSTANCE.createCatalog();
         products.setName("Products"); //$NON-NLS-1$
-        weight = MdClassFactory.eINSTANCE.createCatalogAttribute();
-        weight.setName("Weight"); //$NON-NLS-1$
-        products.getAttributes().add(weight);
         base.getCatalogs().add(products);
-        adopted = new HashMap<>();
     }
 
     @After
@@ -72,57 +69,65 @@ public class ExtensionVendorSupportTest
         VendorSupportGuard.setServiceForTests(null);
     }
 
-    // ==================== adopt_metadata_object: the receiving object ====================
+    // ==================== adopt_metadata_object: one rule, no receiver walk ====================
 
     @Test
-    public void testAMemberOfAnAdoptedObjectIsReceivedByTheAdoptedCopy()
+    public void testAnExtensionWithoutSupportSettingsTakesAdoptions()
     {
-        Catalog adoptedProducts = MdClassFactory.eINSTANCE.createCatalog();
-        adopted.put(products, adoptedProducts);
-
-        assertSame("EDT adds the child to the existing adopted parent - that is what changes", //$NON-NLS-1$
-            adoptedProducts, AdoptMetadataObjectTool.adoptionReceiver(weight, adopted::get, extensionRoot));
+        assertFalse(VendorSupportGuard.underVendorSupport(extensionRoot));
+        assertNull(VendorSupportGuard.adoptionRefusal(EXTENSION, WEIGHT,
+            () -> VendorSupportGuard.underVendorSupport(extensionRoot)));
     }
 
     @Test
-    public void testAMemberOfANotYetAdoptedObjectIsReceivedByTheExtensionRoot()
+    public void testAnExtensionWithSupportSettingsRefusesEveryAdoption()
     {
-        assertSame(extensionRoot, AdoptMetadataObjectTool.adoptionReceiver(weight, adopted::get, extensionRoot));
+        extensionRoot.setDistributionSettings(DistributionSupportFactory.eINSTANCE.createDistributionSupport());
+        // Every object EDT's own check could be asked about says "editable": the rule must not ask them.
+        assertTrue(VendorSupportGuard.underVendorSupport(extensionRoot));
+
+        String refusal = VendorSupportGuard.adoptionRefusal(EXTENSION, WEIGHT,
+            () -> VendorSupportGuard.underVendorSupport(extensionRoot));
+
+        assertNotNull("support anywhere in the extension refuses, whatever the receiver says", refusal); //$NON-NLS-1$
+        assertTrue(refusal, refusal.startsWith("'" + WEIGHT + "' cannot be adopted: the extension '" //$NON-NLS-1$ //$NON-NLS-2$
+            + EXTENSION + "' is under vendor support")); //$NON-NLS-1$
+        assertTrue("the refusal says why the receiver is not asked", //$NON-NLS-1$
+            refusal.contains("cannot be listed before it runs")); //$NON-NLS-1$
+        assertTrue(refusal.contains("Nothing was changed.")); //$NON-NLS-1$
+        assertFalse("an extension cannot adopt into itself - no adopt advice", //$NON-NLS-1$
+            refusal.contains("adopt_metadata_object")); //$NON-NLS-1$
     }
 
     @Test
-    public void testATopObjectIsReceivedByTheExtensionRoot()
+    public void testAnUnresolvedSupportLinkStillRefuses()
     {
-        assertSame(extensionRoot, AdoptMetadataObjectTool.adoptionReceiver(products, adopted::get, extensionRoot));
+        DistributionSupport settings = DistributionSupportFactory.eINSTANCE.createDistributionSupport();
+        ((InternalEObject)settings).eSetProxyURI(URI.createURI("bm://ext/Configuration.distr#/")); //$NON-NLS-1$
+        extensionRoot.setDistributionSettings(settings);
+
+        assertTrue("EDT ignores an unresolved link; failing closed does not", //$NON-NLS-1$
+            VendorSupportGuard.underVendorSupport(extensionRoot));
     }
 
     @Test
-    public void testANestedSubsystemIsReceivedByItsAdoptedParentSubsystem()
+    public void testAnUnreadableSupportStateRefuses()
     {
-        Subsystem sales = MdClassFactory.eINSTANCE.createSubsystem();
-        Subsystem orders = MdClassFactory.eINSTANCE.createSubsystem();
-        sales.getSubsystems().add(orders);
-        orders.setParentSubsystem(sales);
-        Subsystem adoptedSales = MdClassFactory.eINSTANCE.createSubsystem();
-        adopted.put(sales, adoptedSales);
+        String refusal = VendorSupportGuard.adoptionRefusal(EXTENSION, WEIGHT, () -> {
+            throw new IllegalStateException("model is rebuilding"); //$NON-NLS-1$
+        });
 
-        assertSame(adoptedSales, AdoptMetadataObjectTool.adoptionReceiver(orders, adopted::get, extensionRoot));
+        assertNotNull("an unanswerable check refuses", refusal); //$NON-NLS-1$
+        assertTrue(refusal, refusal.startsWith("Cannot check whether '" + WEIGHT + "' may be adopted")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(refusal, refusal.contains("the support settings of the extension '" + EXTENSION //$NON-NLS-1$
+            + "' could not be read")); //$NON-NLS-1$
     }
 
     @Test
-    public void testALockedAdoptedParentRefusesTheAdoption()
+    public void testAMissingExtensionRootRefuses()
     {
-        Catalog adoptedProducts = MdClassFactory.eINSTANCE.createCatalog();
-        adopted.put(products, adoptedProducts);
-        when(support.canEdit(adoptedProducts, EditingMode.DIRECT)).thenReturn(false);
-        EObject receiver = AdoptMetadataObjectTool.adoptionReceiver(weight, adopted::get, extensionRoot);
-
-        String refusal = VendorSupportGuard.refusalFor(receiver, MetadataScope.ofConfiguration(extensionRoot),
-            "its adopted parent 'Products'", "Catalog.Products.Attribute.Weight", "adopted"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-
-        assertNotNull("an editable extension root must not hide the locked adopted parent", refusal); //$NON-NLS-1$
-        assertTrue(refusal, refusal.startsWith("'Catalog.Products.Attribute.Weight' cannot be adopted: " //$NON-NLS-1$
-            + "its adopted parent 'Products' is under vendor support")); //$NON-NLS-1$
+        assertNotNull(VendorSupportGuard.adoptionRefusal(EXTENSION, WEIGHT,
+            () -> VendorSupportGuard.underVendorSupport(null)));
     }
 
     // ==================== apply_quick_fix: a variant may delete ====================
