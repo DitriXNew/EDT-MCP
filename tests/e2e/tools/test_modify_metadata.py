@@ -28,6 +28,7 @@ from harness import (
     E2ESkip,
     assert_marker_contract,
     assert_no_marker_fields,
+    poll_project_error_check,
     project_error_rows,
     call,
     assert_ok,
