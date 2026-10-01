@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mdclass:Catalog xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:core="http://g5.1c.ru/v8/dt/mcore" xmlns:mdclass="http://g5.1c.ru/v8/dt/metadata/mdclass" uuid="170e2161-3332-5e35-bd99-c5c1da9584cf">
+  <producedTypes>
+    <objectType typeId="9906a6df-a673-59ea-800e-0d0085562864" valueTypeId="4a8d4373-33b3-5ba4-83ee-b3d2b755b16a"/>
+    <refType typeId="0d5feec5-8d82-5441-8da2-633802760eac" valueTypeId="afa449f1-7681-52a3-9ad1-fc6c9c0202d7"/>
+    <selectionType typeId="65da0712-b65f-501c-a96a-735db392dfaf" valueTypeId="92085851-9d50-596e-98f3-65892dc4bae8"/>
+    <listType typeId="73b21680-d764-5580-a848-4b84d8bd781b" valueTypeId="444b0239-aac9-5139-a0bd-4d6dbc36e79a"/>
+    <managerType typeId="8a3f0237-cc59-51b0-b4d7-c9331d0eccf6" valueTypeId="121920c3-9121-58da-9a89-3f0289293a11"/>
+  </producedTypes>
+  <name>Open</name>
+  <synonym>
+    <key>en</key>
+    <value>Open</value>
+  </synonym>
+  <useStandardCommands>true</useStandardCommands>
+  <inputByString>Catalog.Open.StandardAttribute.Code</inputByString>
+  <inputByString>Catalog.Open.StandardAttribute.Description</inputByString>
+  <fullTextSearchOnInputByString>DontUse</fullTextSearchOnInputByString>
+  <createOnInput>Use</createOnInput>
+  <dataLockControlMode>Managed</dataLockControlMode>
+  <fullTextSearch>Use</fullTextSearch>
+  <levelCount>2</levelCount>
+  <foldersOnTop>true</foldersOnTop>
+  <codeLength>9</codeLength>
+  <descriptionLength>25</descriptionLength>
+  <codeType>String</codeType>
+  <codeAllowedLength>Variable</codeAllowedLength>
+  <checkUnique>true</checkUnique>
+  <autonumbering>true</autonumbering>
+  <defaultPresentation>AsDescription</defaultPresentation>
+  <editType>InDialog</editType>
+  <choiceMode>BothWays</choiceMode>
+  <attributes uuid="05d04be3-18d4-5352-abdc-e64887eb9ea7">
+    <name>Note</name>
+    <synonym>
+      <key>en</key>
+      <value>Note</value>
+    </synonym>
+    <type>
+      <types>String</types>
+      <stringQualifiers>
+        <length>10</length>
+      </stringQualifiers>
+    </type>
+    <minValue xsi:type="core:UndefinedValue"/>
+    <maxValue xsi:type="core:UndefinedValue"/>
+    <fillValue xsi:type="core:StringValue"/>
+    <fullTextSearch>Use</fullTextSearch>
+    <dataHistory>Use</dataHistory>
+  </attributes>
+</mdclass:Catalog>

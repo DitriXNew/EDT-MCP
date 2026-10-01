@@ -45,11 +45,16 @@ import org.w3c.dom.Element;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
+import com._1c.g5.v8.bm.core.IBmEngine;
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.dt.core.model.EditingMode;
+import com._1c.g5.v8.dt.core.model.IModelEditingSupport;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
+import com._1c.g5.v8.dt.refactoring.core.DeletionForbiddenProblem;
+import com._1c.g5.v8.dt.refactoring.core.EditingForbiddenProblem;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoring;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringProblem;
 import com._1c.g5.v8.dt.refactoring.core.RefactoringStatus;
@@ -64,6 +69,7 @@ import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter.FormObjectRef;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
+import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 
 /**
@@ -1953,6 +1959,133 @@ public class DeleteMetadataToolTest
             + message, message.contains("incoming reference")); //$NON-NLS-1$
         assertFalse("a prohibition-only preview must not say the node is referenced: " + message, //$NON-NLS-1$
             message.contains("referenced by")); //$NON-NLS-1$
+    }
+
+    // ==================== vendor support: force never overrides a support lock (#642) ====================
+
+    /** An EditingForbidden / DeletionForbidden problem whose object is a mocked BM object. */
+    private static IRefactoringProblem forbiddenProblem(boolean deletion, EObject[] objectHolder)
+    {
+        IBmObject object = mock(IBmObject.class);
+        IBmEngine engine = mock(IBmEngine.class);
+        when(object.bmGetEngine()).thenReturn(engine);
+        when(object.bmGetId()).thenReturn(Long.valueOf(42L));
+        when(engine.getObjectById(42L)).thenReturn(object);
+        objectHolder[0] = object;
+        return deletion ? new DeletionForbiddenProblem(object) : new EditingForbiddenProblem(object);
+    }
+
+    private static GenericDeleteFixture forbiddenDelete(ExportOrderRecorder recorder, boolean deletion,
+        boolean locked)
+    {
+        GenericDeleteFixture fixture =
+            genericDelete(recorder, DestructiveConsentGate.ConsentDecision.ALLOW, null);
+        EObject[] object = new EObject[1];
+        RefactoringStatus status = new RefactoringStatus();
+        status.addProblem(forbiddenProblem(deletion, object));
+        when(fixture.refactoring.getStatus()).thenReturn(status);
+        when(fixture.refactoring.getTitle()).thenReturn("Delete metadata node"); //$NON-NLS-1$
+        IModelEditingSupport support = mock(IModelEditingSupport.class);
+        when(support.canEdit(object[0], EditingMode.DIRECT)).thenReturn(Boolean.valueOf(!locked));
+        when(support.canDelete(object[0], EditingMode.DIRECT)).thenReturn(Boolean.valueOf(!locked));
+        VendorSupportGuard.setServiceForTests(() -> support);
+        return fixture;
+    }
+
+    @Test
+    public void testForceDoesNotOverrideAVendorSupportLock()
+    {
+        for (boolean deletion : new boolean[] {false, true})
+        {
+            ExportOrderRecorder recorder = new ExportOrderRecorder();
+            try
+            {
+                GenericDeleteFixture fixture = forbiddenDelete(recorder, deletion, true);
+
+                JsonObject result = JsonParser.parseString(fixture.run("Configuration", true, true)) //$NON-NLS-1$
+                    .getAsJsonObject();
+
+                assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+                assertEquals("blocked", result.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+                assertTrue(result.get("platformProhibitions").getAsJsonArray().get(0) //$NON-NLS-1$
+                    .getAsJsonObject().get("supportLock").getAsBoolean()); //$NON-NLS-1$
+                String error = result.get("error").getAsString(); //$NON-NLS-1$
+                assertTrue(error, error.contains("force=true does not override vendor support")); //$NON-NLS-1$
+                assertTrue(error, error.contains("Nothing was deleted")); //$NON-NLS-1$
+                assertFalse("a forced delete past a support lock must never perform: " + recorder.calls, //$NON-NLS-1$
+                    recorder.calls.contains("perform")); //$NON-NLS-1$
+                assertTrue("nothing may be exported either: " + recorder.calls, recorder.calls.isEmpty()); //$NON-NLS-1$
+            }
+            finally
+            {
+                VendorSupportGuard.setServiceForTests(null);
+            }
+        }
+    }
+
+    @Test
+    public void testAForbiddenProblemOnAnEditableObjectIsStillForceable()
+    {
+        // EDT also raises EditingForbiddenProblem from a file-read failure (WSDefinitions); when the
+        // editing-support check says the object IS editable, it is not a support lock.
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        try
+        {
+            GenericDeleteFixture fixture = forbiddenDelete(recorder, false, false);
+
+            JsonObject preview = JsonParser.parseString(fixture.run("Configuration", false)).getAsJsonObject(); //$NON-NLS-1$
+            assertFalse(preview.get("platformProhibitions").getAsJsonArray().get(0) //$NON-NLS-1$
+                .getAsJsonObject().has("supportLock")); //$NON-NLS-1$
+
+            JsonObject result = JsonParser.parseString(fixture.run("Configuration", true, true)) //$NON-NLS-1$
+                .getAsJsonObject();
+            assertTrue(result.get("success").getAsBoolean()); //$NON-NLS-1$
+            assertEquals("executed", result.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(recorder.calls.contains("perform")); //$NON-NLS-1$
+        }
+        finally
+        {
+            VendorSupportGuard.setServiceForTests(null);
+        }
+    }
+
+    @Test
+    public void testThePreviewSaysForceWillNotHelpAgainstASupportLock()
+    {
+        ExportOrderRecorder recorder = new ExportOrderRecorder();
+        try
+        {
+            GenericDeleteFixture fixture = forbiddenDelete(recorder, true, true);
+
+            JsonObject result = JsonParser.parseString(fixture.run("Configuration", false)).getAsJsonObject(); //$NON-NLS-1$
+
+            assertTrue(result.get("blocking").getAsBoolean()); //$NON-NLS-1$
+            String message = result.get("message").getAsString(); //$NON-NLS-1$
+            assertTrue(message, message.contains("force=true does not override vendor support")); //$NON-NLS-1$
+            assertFalse("the preview must not advise force for a support lock: " + message, //$NON-NLS-1$
+                message.contains("unless force=true")); //$NON-NLS-1$
+        }
+        finally
+        {
+            VendorSupportGuard.setServiceForTests(null);
+        }
+    }
+
+    @Test
+    public void testAnUnanswerableSupportCheckCountsAsALock()
+    {
+        // Fail closed: without the service, a forbidden problem cannot be proved to be something else.
+        VendorSupportGuard.setServiceForTests(() -> null);
+        try
+        {
+            assertTrue(DeleteMetadataTool.isSupportLock(forbiddenProblem(false, new EObject[1])));
+            assertFalse("any other problem type is never a support lock", //$NON-NLS-1$
+                DeleteMetadataTool.isSupportLock(new TestPlatformProblem(mock(EObject.class))));
+        }
+        finally
+        {
+            VendorSupportGuard.setServiceForTests(null);
+        }
     }
 
     @Test

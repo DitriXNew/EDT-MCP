@@ -168,6 +168,10 @@ public final class FormElementWriter
     /** The concrete form-attribute EClass (the base is not exposed by every model). */
     private static final String ECLASS_FORM_ATTRIBUTE = "FormAttribute"; //$NON-NLS-1$
     private static final String ECLASS_FORM_ITEM = "FormItem"; //$NON-NLS-1$
+    /** The form-model interface that declares {@code items} (Form, every Group, Table, Addition). */
+    private static final String ECLASS_FORM_ITEM_CONTAINER = "FormItemContainer"; //$NON-NLS-1$
+    /** The form-model interface that declares {@code handlers} (Form, FormField, Table, every ext-info). */
+    private static final String ECLASS_EVENT_HANDLER_CONTAINER = "EventHandlerContainer"; //$NON-NLS-1$
     private static final String ECLASS_FORM_FIELD = "FormField"; //$NON-NLS-1$
     private static final String ECLASS_USUAL_GROUP_EXT_INFO = "UsualGroupExtInfo"; //$NON-NLS-1$
     private static final String ECLASS_LABEL_DECORATION_EXT_INFO = "LabelDecorationExtInfo"; //$NON-NLS-1$
@@ -3822,6 +3826,12 @@ public final class FormElementWriter
         EStructuralFeature itemsFeature = container.eClass().getEStructuralFeature(FEATURE_ITEMS);
         if (!(itemsFeature instanceof EReference) || !itemsFeature.isMany())
         {
+            if (container == formModel || isOrInherits(container.eClass(), ECLASS_FORM_ITEM_CONTAINER))
+            {
+                // The root and every declared item container always carry the list: the model's shape.
+                throw modelLacks("The form model's " + container.eClass().getName() + "." + FEATURE_ITEMS //$NON-NLS-1$ //$NON-NLS-2$
+                    + " is not an item list."); //$NON-NLS-1$
+            }
             return "The parent '" + parentLabel + "' (" + container.eClass().getName() //$NON-NLS-1$ //$NON-NLS-2$
                 + ") cannot hold nested items."; //$NON-NLS-1$
         }
@@ -5546,6 +5556,7 @@ public final class FormElementWriter
         }
         if (!bindsHandlers(container))
         {
+            raiseIfDeclaredHandlerContainer(container);
             return "The form element '" + container.eClass().getName() //$NON-NLS-1$
                 + "' cannot hold event handlers."; //$NON-NLS-1$
         }
@@ -6097,6 +6108,32 @@ public final class FormElementWriter
         }
         EObject ext = singleReference(element, FEATURE_EXT_INFO);
         return ext != null && holdsHandlerList(ext);
+    }
+
+    /**
+     * Where {@link #bindsHandlers} said no: a declared handler container (element or ext-info) without
+     * its list is the model's shape and raises; otherwise the caller's refusal stands.
+     */
+    private static void raiseIfDeclaredHandlerContainer(EObject element)
+    {
+        EObject declared = declaresHandlers(element) ? element : null;
+        EObject ext = declared == null ? singleReference(element, FEATURE_EXT_INFO) : null;
+        if (ext != null && declaresHandlers(ext))
+        {
+            declared = ext;
+        }
+        if (declared != null)
+        {
+            throw modelLacks("The form model's " + declared.eClass().getName() + "." + KEY_HANDLERS //$NON-NLS-1$ //$NON-NLS-2$
+                + " is not a handler list."); //$NON-NLS-1$
+        }
+    }
+
+    /** Whether the form model declares {@code object}'s class a holder of {@code handlers}. */
+    private static boolean declaresHandlers(EObject object)
+    {
+        return "Form".equals(object.eClass().getName()) //$NON-NLS-1$
+            || isOrInherits(object.eClass(), ECLASS_EVENT_HANDLER_CONTAINER);
     }
 
     /**
@@ -7841,6 +7878,7 @@ public final class FormElementWriter
         }
         if (!bindsHandlers(container))
         {
+            raiseIfDeclaredHandlerContainer(container);
             return "The form element '" + container.eClass().getName() //$NON-NLS-1$
                 + "' cannot hold event handlers."; //$NON-NLS-1$
         }
@@ -7876,6 +7914,12 @@ public final class FormElementWriter
         EStructuralFeature cmdFeat = button.eClass().getEStructuralFeature("commandName"); //$NON-NLS-1$
         if (!(cmdFeat instanceof EReference))
         {
+            if (isOrInherits(button.eClass(), ELEM_BUTTON))
+            {
+                // A Button always refers its command: a missing reference is the model's shape.
+                throw modelLacks("The form model's " + button.eClass().getName() //$NON-NLS-1$
+                    + ".commandName is not a reference."); //$NON-NLS-1$
+            }
             return "The form item '" + button.eClass().getName() //$NON-NLS-1$
                 + "' has no 'commandName' reference; only a Button runs a form command."; //$NON-NLS-1$
         }

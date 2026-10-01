@@ -367,10 +367,12 @@ jobs:
           # ask now refuses instead of allowing (issue #566) - this variable is what grants consent
           # for an unattended run, and it must stay set.
           export EDT_MCP_DESTRUCTIVE_CONSENT=allow
-          # Three fixture projects, one per EDT project KIND: the base configuration, the
+          # Four fixture projects: one per EDT project KIND - the base configuration, the
           # extension, and the external-objects project (issue #309 - a project whose roots are
-          # its own external data processors / reports, which resolves nothing like the other two).
-          export EDT_MCP_IMPORT_PROJECTS="$GITHUB_WORKSPACE/tests/TestConfiguration:$GITHUB_WORKSPACE/tests/tests:$GITHUB_WORKSPACE/tests/ExternalObjects"
+          # its own external data processors / reports, which resolves nothing like the other two) -
+          # plus a second base configuration on vendor support (issue #642: a Configuration.distr
+          # that locks some objects, for the writing tools' support guard).
+          export EDT_MCP_IMPORT_PROJECTS="$GITHUB_WORKSPACE/tests/TestConfiguration:$GITHUB_WORKSPACE/tests/tests:$GITHUB_WORKSPACE/tests/ExternalObjects:$GITHUB_WORKSPACE/tests/SupportedConfiguration"
           echo "[edt] importing: $EDT_MCP_IMPORT_PROJECTS"
           # EDT runs Apache Ignite (BM store) which needs java.nio/sun.nio.ch opened and the
           # module system relaxed — exactly the flags EDT's own 1cedt.ini ships (the set is

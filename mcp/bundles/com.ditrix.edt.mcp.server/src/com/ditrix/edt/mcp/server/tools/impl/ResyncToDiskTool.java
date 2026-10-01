@@ -47,6 +47,7 @@ import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
 import com.ditrix.edt.mcp.server.utils.RoleRightsOrphans;
+import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -141,6 +142,13 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
 
     /** Cap on how many FQNs are listed back in the JSON to keep responses bounded. */
     private static final int MAX_LISTED_FQNS = 500;
+
+    /** The danglingWarning when vendor support kept the entries a cleanup was asked to remove. */
+    static final String LOCKED_DANGLING_WARNING = "The dangling references were not removed: the " //$NON-NLS-1$
+        + "configuration is under vendor support and its support rule does not allow changes (or that " //$NON-NLS-1$
+        + "could not be checked). Nothing was changed in Configuration.mdo. Ask the user to allow changes " //$NON-NLS-1$
+        + "in EDT's support settings (Configuration > Support > Support settings), then run resync_to_disk " //$NON-NLS-1$
+        + "again with cleanDanglingReferences=true; this server does not change support settings."; //$NON-NLS-1$
 
     /**
      * Total time budget (ms) to wait for the post-export {@code .mdo} flush to be
@@ -840,7 +848,8 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
      * and no removal. When {@code remove} is {@code false} the method only reports
      * what is dangling (no model change, no re-export). The operation is
      * idempotent: a clean Configuration yields {@code found == 0} and makes no
-     * change.
+     * change. A removal into a configuration vendor support does not allow to change
+     * only reports, in a read, with {@link #LOCKED_DANGLING_WARNING}.
      *
      * @param config the project configuration (a {@link IBmObject})
      * @param bmModel the project BM model
@@ -849,7 +858,7 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
      *            only report them
      * @return the {@link DanglingResult} (never {@code null})
      */
-    private static DanglingResult cleanDanglingReferences(Configuration config, IBmModel bmModel,
+    static DanglingResult cleanDanglingReferences(Configuration config, IBmModel bmModel,
         IProject project, boolean remove)
     {
         DanglingResult result = new DanglingResult();
@@ -859,6 +868,17 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             return result;
         }
         final long configBmId = ((IBmObject)config).bmGetId();
+
+        // A configuration vendor support locks keeps its entries: scanned in a read, reported, never removed.
+        if (remove && !configurationEditable(bmModel, configBmId))
+        {
+            scanReportOnly(result, bmModel, configBmId);
+            if (result.found > 0 && result.warning == null)
+            {
+                result.warning = LOCKED_DANGLING_WARNING;
+            }
+            return result;
+        }
 
         // Detection (and, when remove=true, mutation) run inside one BM write task so
         // the same transaction that observes the proxies also removes them atomically.
@@ -902,6 +922,45 @@ public class ResyncToDiskTool extends AbstractMetadataWriteTool
             }
         }
         return result;
+    }
+
+    /** Whether EDT allows editing the configuration; a check that throws counts as "no" (fail closed). */
+    private static boolean configurationEditable(IBmModel bmModel, long configBmId)
+    {
+        try
+        {
+            return BmTransactions.read(bmModel, "DanglingVendorSupportCheck", //$NON-NLS-1$
+                (tx, pm) -> Boolean.valueOf(VendorSupportGuard.allowsEdit(tx.getObjectById(configBmId))))
+                .booleanValue();
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Vendor-support check for the dangling cleanup failed", e); //$NON-NLS-1$
+            return false;
+        }
+    }
+
+    /** Scans for dangling entries in a read transaction, changing nothing. */
+    private static void scanReportOnly(DanglingResult result, IBmModel bmModel, long configBmId)
+    {
+        try
+        {
+            BmTransactions.read(bmModel, "FindDanglingReferences", (tx, pm) -> //$NON-NLS-1$
+            {
+                Configuration cfg = (Configuration)tx.getObjectById(configBmId);
+                if (cfg == null)
+                {
+                    result.warning = "Configuration not found in transaction; dangling-reference scan skipped."; //$NON-NLS-1$
+                    return Boolean.FALSE;
+                }
+                return Boolean.valueOf(scanAndRemove(cfg, tx, false, result));
+            });
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("Error scanning dangling references in Configuration", e); //$NON-NLS-1$
+            result.warning = unwrapCauseMessage(e);
+        }
     }
 
     /**

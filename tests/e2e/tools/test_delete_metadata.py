@@ -27,6 +27,7 @@ Fixture inventory (TestConfiguration, English Names):
 
 from harness import (
     call,
+    assert_no_marker_fields,
     assert_ok,
     assert_error,
     assert_error_quality,
@@ -974,3 +975,15 @@ def test_preview_of_a_collection_attribute_lists_its_columns():
     names = [str(item.get("name")) for item in (r.structured.get("items") or [])]
     assert col in names, \
         "the preview must list the column the delete will remove: %r" % (names,)
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_success_carries_no_marker_fields():
+    """#643 reports markers for create/modify only: a delete's consequences land on its REFERRERS,
+    which blockingReferences already names, so a delete success carries none of the four members."""
+    settle_or_fail("this delete")
+    r = call("delete_metadata", {"projectName": PROJECT, "fqn": "CommonModule.Calc", "confirm": True})
+    assert_ok(r, "delete CommonModule.Calc (confirm=true)")
+    assert r.structured.get("action") == "executed", "must take the execute branch: %r" % (r.structured,)
+    assert_no_marker_fields(r.structured, "a delete success reports no written-object markers")
+    assert_not_contains(_list_commonmodules(), "| Calc ", "MODEL read-back: CommonModule.Calc is gone")

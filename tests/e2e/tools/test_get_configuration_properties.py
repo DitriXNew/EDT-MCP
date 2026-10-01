@@ -33,6 +33,8 @@ These are the discriminating values asserted below: a broken tool that returned 
 no-op / wrong project / empty body would FAIL these (mutation thinking).
 """
 
+import re
+
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
     assert_contains, assert_not_contains, assert_no_diff, wait_for_project_ready,
@@ -46,33 +48,20 @@ from harness import (
 
 @e2e_test(tool="get_configuration_properties", kind="read")
 def test_default_project_returns_fixture_properties():
-    # projectName omitted -> tool falls back to the first IConfigurationProject.
-    # In this single-project fixture that resolves to TestConfiguration, so the
-    # body MUST carry the fixture's real, discriminating property values.
+    # projectName omitted -> the first IConfigurationProject in the workspace. Which one
+    # that is depends on the workspace (CI imports several base configurations), so the
+    # default answer must equal the explicit answer for the project it names.
     r = call("get_configuration_properties", {})
     assert_ok(r, "get_configuration_properties default project")
-    # name: read from configuration.getName() — proves the Configuration object
-    # was actually read (not an echo: we passed no projectName at all).
-    assert_contains(r.text, "name: TestConfiguration",
-                    "YAML must report the configuration name from the model")
-    # compatibilityMode is fixture-specific (8.5.1) — a wrong/empty model read
-    # would not produce this exact value.
-    assert_contains(r.text, "compatibilityMode:",
-                    "YAML must include the compatibilityMode key")
-    assert_contains(r.text, "8.5.1",
-                    "compatibilityMode must be the fixture's 8.5.1")
-    # defaultLanguage is reported by language CODE (the synonym map key), not name
-    # — the bilingual contract. Fixture default language code is 'en'.
-    assert_contains(r.text, "defaultLanguage: en",
-                    "defaultLanguage must be the language CODE 'en', not the name")
-    assert_contains(r.text, "defaultLanguageName: English",
-                    "defaultLanguageName must be the human-readable name 'English'")
-    # projectName is echoed from configProject.getProject().getName() — proves the
-    # fallback actually resolved a concrete project.
-    assert_contains(r.text, "projectName: TestConfiguration",
-                    "resolved project name must be echoed back")
-    # Regression guard: a BASE configuration must NOT carry the extension-only fields
-    # (those are emitted only for a configuration extension, see the extension test).
+    m = re.search(r"^projectName: (\S+)$", r.text, re.MULTILINE)
+    assert m, "the default answer must echo the project it resolved: %r" % r.text[:400]
+    explicit = call("get_configuration_properties", {"projectName": m.group(1)})
+    assert_ok(explicit, "get_configuration_properties for the defaulted project")
+    assert r.text == explicit.text, \
+        "the default answer must be the resolved project's own properties:\n%s\n---\n%s" % (
+            r.text, explicit.text)
+    assert_contains(r.text, "name: ", "YAML must report the configuration name from the model")
+    # The fallback picks a BASE configuration, never an extension.
     assert_not_contains(r.text, "projectKind: Extension",
                         "a base configuration must not be tagged as an Extension")
     assert_not_contains(r.text, "namePrefix:",
@@ -104,6 +93,22 @@ def test_explicit_project_returns_synonym_and_runmode():
                     "usePurposes list block must be emitted")
     assert_contains(r.text, "PersonalComputer",
                     "usePurposes must contain the fixture's PersonalComputer")
+    # compatibilityMode is fixture-specific (8.5.1) - a wrong/empty model read
+    # would not produce this exact value.
+    assert_contains(r.text, "compatibilityMode:",
+                    "YAML must include the compatibilityMode key")
+    assert_contains(r.text, "8.5.1",
+                    "compatibilityMode must be the fixture's 8.5.1")
+    # defaultLanguage is reported by language CODE (the synonym map key), not name
+    # - the bilingual contract. Fixture default language code is 'en'.
+    assert_contains(r.text, "defaultLanguage: en",
+                    "defaultLanguage must be the language CODE 'en', not the name")
+    assert_contains(r.text, "defaultLanguageName: English",
+                    "defaultLanguageName must be the human-readable name 'English'")
+    assert_contains(r.text, "projectName: " + PROJECT,
+                    "resolved project name must be echoed back")
+    assert_not_contains(r.text, "projectKind: Extension",
+                        "a base configuration must not be tagged as an Extension")
     assert_no_diff("a read tool must not touch the project on disk")
 
 

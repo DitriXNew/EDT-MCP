@@ -220,6 +220,9 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 .toJson();
         }
 
+        // Vendor support (#642) does not apply: the base side is only read, and EDT reads support
+        // only for a NATIVE configuration root - an extension's root is ADOPTED, so nothing here locks.
+
         // The service runs its own BM write task on the extension's model, but exposes no rollback
         // outcome if it throws. Record the opaque interval before entering it; the known write
         // declaration immediately after a normal return takes precedence.

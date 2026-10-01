@@ -102,14 +102,19 @@ The synonym EMap is keyed by the language CODE (`ru`/`en`), never the language n
 A `language` CODE must be one the configuration DECLARES (`get_configuration_properties` lists them all under `languages`). An undeclared code is REJECTED with the declared list: the platform has no fallback between locale codes, so a value stored under a code nothing declares is simply never displayed - a blank label whose cause is invisible until someone opens the form. A declared code given in a different case is accepted and stored under the configuration's own spelling. After a localized write the result echoes the `language` used and `localesMissing` - the languages the configuration USES that still have no translation. A language is "in use" when the configuration's OWN synonym is filled in for it: a multilingual configuration worked on in a single-language branch declares the others but is not translated into them, and nobody wants to be nagged about those. Writing a value UNDER such a language is legal (it is declared, so it will display) but comes back with `localeUnusedInConfiguration: true` - ASK the user whether translating into it is really wanted before filling in more: it may be a single-language build, or a language this configuration does not support yet.
 
 ## External-objects projects
+With `projectName` naming an external-objects project, a top-level `ExternalDataProcessor.<Name>`
+or `ExternalReport.<Name>` (the TYPE token may be Russian: `ВнешняяОбработка` / `ВнешнийОтчет`)
+adds a new ROOT to that project, with the default content of EDT's "New" wizard (uuid, produced
+types, contained objects) plus the optional `synonym` / `comment`. The Name must be free among ALL
+roots of the project, whatever their type. No module file is created; write the object module
+with `write_module_source`. A NEW project with its first root comes from `create_project`
+(`projectKind=externalObjects`, `externalObject`).
+
 Members of an external data processor / report are created the same way as a configuration
 object's - `ExternalDataProcessor.<Name>.Attribute.<Attr>`, `....Form.<F>`, and the
-form content under it. Two limits are structural, not gaps in addressing:
-- the ROOT object itself cannot be created here; seed it with `create_project` using
-  `projectKind=externalObjects` and `externalObject='ExternalDataProcessor.<Name>'` (or
-  `ExternalReport.<Name>`), or import an existing `.epf` / `.erf`;
-- an external data processor / report has no `Command` collection in the platform model, so
-  `....Command.<Name>` is refused with the list of kinds the object does accept.
+form content under it. One limit is structural, not a gap in addressing: an external data
+processor / report has no `Command` collection in the platform model, so `....Command.<Name>` is
+refused with the list of kinds the object does accept.
 
 ## Examples
 - Top object: `{projectName: 'P', fqn: 'Catalog.Products'}`
@@ -124,7 +129,9 @@ form content under it. Two limits are structural, not gaps in addressing:
 - Nested subsystem: `{projectName: 'P', fqn: 'Subsystem.Sales.Subsystem.Orders', properties: [{name: 'synonym', value: 'Orders', language: 'en'}]}`
 
 ## Result
-JSON with `action='created'`, the normalized `fqn`, `kind` (the EClass - `EventHandlerExtension` for an extension event handler), `name`, `persisted`, and (when a synonym was written) the echoed `synonym` + resolved `language`. An extension event handler also echoes the written `callType`. After a create run get_project_errors to verify.
+JSON with `action='created'`, the normalized `fqn`, `kind` (the EClass - `EventHandlerExtension` for an extension event handler), `name`, `persisted`, and (when a synonym was written) the echoed `synonym` + resolved `language`. An extension event handler also echoes the written `callType`.
+
+**Validation markers of the written objects.** A success that exported a top object also carries `markersIncomplete`, `markerCount` and `markers`: the EDT validation markers of the top objects this call wrote (the object, the owner of a written member, a written form's content; `Configuration` only when it is the target or the only object written). `markers` holds at most 20 rows `{object, severity, checkId, message, location, hasQuickFix}`, most severe first; a `markerCount` above its length means the list was truncated (the `message` says "Showing 20 of N"). The tool waits up to 10 s for EDT to confirm the validation of those objects. `markersIncomplete:false` means EDT confirmed it and the list is EDT's current view of them. `markersIncomplete:true`, with `markersIncompleteReason` `validationPending` / `validationUnobservable` / `objectUnresolved` / `readFailed` / `checksDisabled`, means the list may be stale or incomplete - an empty list is then NOT clean: re-check with `get_project_errors` `objectFqns`. Either way the list leaves out BSL module markers and the markers a write causes on OTHER objects (referrers, adopting extensions); `get_project_errors` answers those. A call that wrote nothing (e.g. `action='unchanged'`) carries none of these fields.
 
 ## Gotchas
 - A node whose FQN already resolves is rejected as a duplicate.
@@ -146,3 +153,6 @@ call fails with "Cannot resolve a create target".
 
 A nested XDTO property is addressed through the full member chain:
 `XDTOPackage.<Package>.ObjectType.<Type>.Property.<Name>`.
+
+## Vendor support
+A configuration on vendor support can lock objects. A new top-level object needs the configuration to allow changes; a new member needs its owning object (for a form member, the form) to allow changes. Otherwise the call is refused before anything is created. The error names the object and says nothing was changed. The way out is a configuration extension (adopt the object with adopt_metadata_object and change the adopted copy) or the user allowing changes in EDT's support settings; this server never changes support settings. If EDT's support check cannot be answered, the write is refused too. A configuration extension and an external data processor/report project are never under vendor support: EDT applies support only to a configuration's own (native) root, never inside an extension, which is why an extension is the way to change a supported configuration.

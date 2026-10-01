@@ -608,6 +608,39 @@ class FixtureResetTest(unittest.TestCase):
 
         reset_rel.assert_not_called()
 
+    @staticmethod
+    def _expected_cleanup_calls(reset_all):
+        """The mandatory projects ignore every optional one; each optional one ignores the rest."""
+        optional = set(HARNESS.OPTIONAL_FIXTURE_PROJECTS)
+        return [
+            mock.call(HARNESS.PROJECT, reset_all, ignore_projects=optional),
+            mock.call(HARNESS.TESTS_PROJECT, reset_all, ignore_projects=optional),
+        ] + [mock.call(project, reset_all, ignore_projects=optional - {project})
+             for project in HARNESS.OPTIONAL_FIXTURE_PROJECTS]
+
+    def test_the_vendor_support_fixture_is_an_optional_fixture(self):
+        self.assertEqual((HARNESS.EXT_OBJECTS_PROJECT, HARNESS.SUPPORTED_PROJECT),
+                         HARNESS.OPTIONAL_FIXTURE_PROJECTS)
+        self.assertEqual(HARNESS.SUPPORTED_REL,
+                         HARNESS.FIXTURE_REL_BY_PROJECT[HARNESS.SUPPORTED_PROJECT])
+        self.assertIn(HARNESS.SUPPORTED_REL, HARNESS.ALL_FIXTURE_RELS)
+        self.assertIn(HARNESS.SUPPORTED_PROJECT, HARNESS.NON_BASE_PROBE_FQNS)
+
+    def test_one_failed_optional_sync_does_not_cost_the_other_its_baseline(self):
+        def clean_result(project, _revert, ignore_projects=()):
+            if project == HARNESS.EXT_OBJECTS_PROJECT:
+                raise RuntimeError("fixture is not loaded")
+            return (True, 1, 0, None)
+
+        with mock.patch.object(HARNESS, "reset_all_fixtures"), \
+                mock.patch.object(HARNESS, "_revert_and_clean", side_effect=clean_result), \
+                mock.patch.object(HARNESS, "wait_for_project_ready", return_value=True), \
+                mock.patch("builtins.print"):
+            HARNESS.final_cleanup()
+
+        self.assertFalse(HARNESS.optional_model_synced(HARNESS.EXT_OBJECTS_PROJECT))
+        self.assertTrue(HARNESS.optional_model_synced(HARNESS.SUPPORTED_PROJECT))
+
     def test_final_cleanup_synchronizes_external_objects_on_the_happy_path(self):
         synced = (True, 1, 0, None)
         with mock.patch.object(HARNESS, "reset_all_fixtures") as reset_all, \
@@ -615,13 +648,7 @@ class FixtureResetTest(unittest.TestCase):
                 mock.patch.object(HARNESS, "wait_for_project_ready", return_value=True):
             HARNESS.final_cleanup()
 
-        self.assertEqual([
-            mock.call(HARNESS.PROJECT, reset_all,
-                      ignore_projects={HARNESS.EXT_OBJECTS_PROJECT}),
-            mock.call(HARNESS.TESTS_PROJECT, reset_all,
-                      ignore_projects={HARNESS.EXT_OBJECTS_PROJECT}),
-            mock.call(HARNESS.EXT_OBJECTS_PROJECT, reset_all),
-        ], clean.call_args_list)
+        self.assertEqual(self._expected_cleanup_calls(reset_all), clean.call_args_list)
 
     def test_final_cleanup_does_not_raise_when_external_objects_sync_fails(self):
         def clean_result(project, _revert, ignore_projects=()):
@@ -635,13 +662,7 @@ class FixtureResetTest(unittest.TestCase):
                 mock.patch("builtins.print") as output:
             HARNESS.final_cleanup()
 
-        self.assertEqual([
-            mock.call(HARNESS.PROJECT, reset_all,
-                      ignore_projects={HARNESS.EXT_OBJECTS_PROJECT}),
-            mock.call(HARNESS.TESTS_PROJECT, reset_all,
-                      ignore_projects={HARNESS.EXT_OBJECTS_PROJECT}),
-            mock.call(HARNESS.EXT_OBJECTS_PROJECT, reset_all),
-        ], clean.call_args_list)
+        self.assertEqual(self._expected_cleanup_calls(reset_all), clean.call_args_list)
         self.assertIn("skipped", output.call_args.args[0].lower())
         self.assertIn("fixture is not loaded", output.call_args.args[0])
 
@@ -702,7 +723,9 @@ class FixtureResetTest(unittest.TestCase):
 | %s | ready | Configuration | Yes | Yes |
 | %s | ready | Extension | Yes | Yes |
 | %s | building | External objects | Yes | Yes |
-""" % (HARNESS.PROJECT, HARNESS.TESTS_PROJECT, HARNESS.EXT_OBJECTS_PROJECT)
+| %s | ready | Configuration | Yes | Yes |
+""" % (HARNESS.PROJECT, HARNESS.TESTS_PROJECT, HARNESS.EXT_OBJECTS_PROJECT,
+       HARNESS.SUPPORTED_PROJECT)
 
         def ready(timeout=None, failure_details=None, progress=None, ignore_projects=()):
             blocking = []
@@ -720,11 +743,14 @@ class FixtureResetTest(unittest.TestCase):
                 mock.patch("builtins.print"):
             HARNESS.final_cleanup()
 
+        # The building ExternalObjects is never cleaned, and it does not block the other optional
+        # fixture's attempt either.
         self.assertEqual([
             mock.call("clean_project", {"projectName": HARNESS.PROJECT}),
             mock.call("clean_project", {"projectName": HARNESS.TESTS_PROJECT}),
+            mock.call("clean_project", {"projectName": HARNESS.SUPPORTED_PROJECT}),
         ], call.call_args_list)
-        self.assertEqual(4, reset_all.call_count)
+        self.assertEqual(5, reset_all.call_count)
 
     def test_baseline_skips_external_objects_after_its_sync_failed(self):
         def clean_result(project, _revert, ignore_projects=()):
@@ -734,6 +760,7 @@ class FixtureResetTest(unittest.TestCase):
             HARNESS.PROJECT: "base inventory",
             HARNESS.TESTS_PROJECT: "tests inventory",
             HARNESS.EXT_OBJECTS_PROJECT: "stale external inventory",
+            HARNESS.SUPPORTED_PROJECT: "supported inventory",
         }
 
         with mock.patch.object(HARNESS, "reset_all_fixtures"), \
@@ -755,10 +782,12 @@ class FixtureResetTest(unittest.TestCase):
         self.assertEqual({
             HARNESS.PROJECT: "base inventory",
             HARNESS.TESTS_PROJECT: "tests inventory",
+            HARNESS.SUPPORTED_PROJECT: "supported inventory",
         }, captured)
         self.assertEqual({
             HARNESS.PROJECT: "base details",
             HARNESS.TESTS_PROJECT: "base details",
+            HARNESS.SUPPORTED_PROJECT: "base details",
         }, captured_details)
 
     def test_baseline_records_external_objects_after_its_sync_succeeded(self):
@@ -766,6 +795,7 @@ class FixtureResetTest(unittest.TestCase):
             HARNESS.PROJECT: "base inventory",
             HARNESS.TESTS_PROJECT: "tests inventory",
             HARNESS.EXT_OBJECTS_PROJECT: "external inventory",
+            HARNESS.SUPPORTED_PROJECT: "supported inventory",
         }
 
         with mock.patch.object(HARNESS, "reset_all_fixtures"), \
@@ -784,12 +814,14 @@ class FixtureResetTest(unittest.TestCase):
             captured = dict(HARNESS._BASELINE_INVENTORY_BY_PROJECT)
             captured_details = dict(HARNESS._BASELINE_DETAILS_BY_PROJECT)
 
-        self.assertIn(mock.call(HARNESS.EXT_OBJECTS_PROJECT, mock.ANY), clean.call_args_list)
+        self.assertIn(mock.call(HARNESS.EXT_OBJECTS_PROJECT, mock.ANY, ignore_projects=mock.ANY),
+                      clean.call_args_list)
         self.assertEqual(inventories, captured)
         self.assertEqual({
             HARNESS.PROJECT: "base details",
             HARNESS.TESTS_PROJECT: "base details",
             HARNESS.EXT_OBJECTS_PROJECT: "base details",
+            HARNESS.SUPPORTED_PROJECT: "base details",
         }, captured_details)
 
     def test_non_base_verify_fails_when_clean_disk_inventory_differs(self):

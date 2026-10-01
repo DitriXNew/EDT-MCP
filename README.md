@@ -918,6 +918,23 @@ changed — with an error naming the tool, the 120 s budget, and the three ways 
 tool via Preferences (*Allow all* or per-tool), set `EDT_MCP_DESTRUCTIVE_CONSENT=allow` for unattended
 runs, or re-run the call and answer the dialog promptly.
 
+### Vendor support
+
+A configuration taken on vendor support can lock objects (its support rule does not allow
+changes). The writing tools respect that lock the way EDT's own editors do: `create_metadata`,
+`modify_metadata`, `delete_metadata`, `rename_metadata_object`, `write_module_source` and `dcs`
+refuse a write to a locked object with an error naming it, and change nothing;
+`translate_configuration` refuses an in-place run when the configuration or any object in it is
+locked, naming the first one; the orphaned role-rights sweep of `resync_to_disk` skips a locked
+role and says so, and its `cleanDanglingReferences` cleanup leaves a locked configuration's
+entries in place, reports them and says why. `delete_metadata` marks a
+support-derived platform prohibition `supportLock=true`, and `force=true` does not override it.
+When EDT's support check cannot be answered, the write is refused (fail closed). A configuration
+extension and an external data processor/report project are never locked. The way out is an
+extension (`adopt_metadata_object`) or the user allowing changes in EDT's support settings; the
+server never changes support settings itself. `get_metadata_details` shows one
+`Vendor support:` line for a locked object.
+
 ### Infobase authentication dialog
 
 When a target infobase has a **user list**, connecting to it during `update_database` or `launch`

@@ -18,3 +18,6 @@ JSON with `action` ('adopted', or 'alreadyAdopted' when it was already adopted),
 - This adopts the metadata OBJECT side only. Intercepting a BSL method (`&Before/&After/&Around/&ChangeAndValidate`) is NOT done here.
 - An object the platform reports as not adoptable is rejected with a clear error.
 - No automatic undo: an adopted copy is removed with delete_metadata against the extension.
+
+## Vendor support
+Vendor support never blocks an adoption: the base configuration is only read (adopting is the way to change a locked object), and EDT applies support only to a configuration's own (native) root, never inside the extension that receives the copy.

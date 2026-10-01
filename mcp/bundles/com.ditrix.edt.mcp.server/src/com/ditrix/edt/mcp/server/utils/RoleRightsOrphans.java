@@ -69,6 +69,10 @@ public final class RoleRightsOrphans
     /** Why an entry with no target is removable: it secures nothing. */
     static final String NO_TARGET_REASON = "the entry names no target"; //$NON-NLS-1$
 
+    /** Why a proven-absent entry was kept: its role may not be changed (issue #642). */
+    static final String LOCKED_ROLE_REASON = "not removed: the role is under vendor support and its " //$NON-NLS-1$
+        + "support rule does not allow changes"; //$NON-NLS-1$
+
     /** Why nothing is judged absent while the model is incomplete. */
     static final String NOT_READY_REASON =
         "the project model is not fully loaded; retry when it is ready"; //$NON-NLS-1$
@@ -178,6 +182,8 @@ public final class RoleRightsOrphans
         public final Set<String> changedRightsFqns = new LinkedHashSet<>();
         /** Top-object FQNs of the roles that lost an entry. */
         public final Set<String> changedRoleFqns = new LinkedHashSet<>();
+        /** Top-object FQNs of the roles whose proven-absent entries were kept: vendor support locks them. */
+        public final Set<String> lockedRoleFqns = new LinkedHashSet<>();
 
         /** @return how many entries were judged {@code verdict} */
         public int count(Verdict verdict)
@@ -238,9 +244,14 @@ public final class RoleRightsOrphans
             {
                 return sweep;
             }
+            // A role vendor support locks keeps its entries: skipped and reported, never an error.
             sweep.scan = BmTransactions.write(model, "CleanOrphanRoleRights", //$NON-NLS-1$
-                (tx, pm) -> scan(tx, ready, isBaseConfiguration(tx), true));
+                (tx, pm) -> scan(tx, ready, isBaseConfiguration(tx), true, VendorSupportGuard::allowsEdit));
             sweep.removedFromModel = !sweep.scan.removed.isEmpty();
+            if (!sweep.scan.lockedRoleFqns.isEmpty())
+            {
+                sweep.warning = lockedRolesWarning(sweep.scan.lockedRoleFqns);
+            }
         }
         catch (RuntimeException e)
         {
@@ -256,11 +267,22 @@ public final class RoleRightsOrphans
             fqns.addAll(sweep.scan.changedRightsFqns);
             if (!BmTransactions.forceExportToDisk(project, fqns))
             {
-                sweep.warning = "Orphaned entries were removed in the model but the export of the " //$NON-NLS-1$
+                // Appended, so the locked-roles warning set above is not lost.
+                String exportWarning = "Orphaned entries were removed in the model but the export of the " //$NON-NLS-1$
                     + "changed roles was not accepted; run resync_to_disk again or clean_project."; //$NON-NLS-1$
+                sweep.warning = sweep.warning == null ? exportWarning : sweep.warning + " " + exportWarning; //$NON-NLS-1$
             }
         }
         return sweep;
+    }
+
+    /** The sweep warning naming the roles whose entries vendor support kept. */
+    static String lockedRolesWarning(Set<String> roleFqns)
+    {
+        return "Orphaned entries were kept in " + String.join(", ", roleFqns) //$NON-NLS-1$ //$NON-NLS-2$
+            + ": the role is under vendor support and its support rule does not allow changes. The " //$NON-NLS-1$
+            + "other roles were cleaned. Allow changes to the role in EDT's support settings " //$NON-NLS-1$
+            + "(Configuration > Support > Support settings) and run the sweep again, or leave them."; //$NON-NLS-1$
     }
 
     /** @return whether the transaction's configuration is a base (native) configuration */
@@ -291,6 +313,23 @@ public final class RoleRightsOrphans
      */
     public static Scan scan(IBmTransaction tx, boolean modelReady, boolean baseConfiguration, boolean remove)
     {
+        return scan(tx, modelReady, baseConfiguration, remove, role -> true);
+    }
+
+    /**
+     * {@link #scan(IBmTransaction, boolean, boolean, boolean)} that keeps the proven-absent entries of
+     * a role {@code removable} rejects, marking them with {@link #LOCKED_ROLE_REASON}.
+     *
+     * @param tx the open transaction
+     * @param modelReady whether the project's model is fully loaded
+     * @param baseConfiguration whether the project is a base configuration
+     * @param remove remove the {@code ABSENT} entries
+     * @param removable whether a role may be changed; asked only for a role with an entry to remove
+     * @return the scan (never {@code null})
+     */
+    public static Scan scan(IBmTransaction tx, boolean modelReady, boolean baseConfiguration, boolean remove,
+        Predicate<Role> removable)
+    {
         Scan scan = new Scan();
         Iterator<IBmObject> roles = tx.getTopObjectIterator(MdClassPackage.Literals.ROLE);
         while (roles.hasNext())
@@ -311,14 +350,15 @@ public final class RoleRightsOrphans
                 : !baseConfiguration ? "an extension project: a target outside it cannot be judged absent" //$NON-NLS-1$
                     : role.getObjectBelonging() != ObjectBelonging.NATIVE
                         ? "an adopted role: its rights belong to the base configuration" : null; //$NON-NLS-1$
-            scanRole(tx, role, (RoleDescription)role.getRights(), blocker, notReady, remove, scan);
+            scanRole(tx, role, (RoleDescription)role.getRights(), blocker, notReady, remove, removable, scan);
         }
         return scan;
     }
 
     private static void scanRole(IBmTransaction tx, Role role, RoleDescription description, String blocker, // NOSONAR one cohesive per-role pass
-        String notReady, boolean remove, Scan scan)
+        String notReady, boolean remove, Predicate<Role> removable, Scan scan)
     {
+        Boolean roleRemovable = null;
         String roleFqn = fqnOf(role);
         List<ObjectRights> toRemove = new ArrayList<>();
         List<Entry> removedHere = new ArrayList<>();
@@ -342,10 +382,24 @@ public final class RoleRightsOrphans
                 collectRlsFields(roleFqn, targetLabel, objectRights, scan);
                 continue;
             }
+            boolean kept = false;
+            if (remove && judgement.verdict == Verdict.ABSENT)
+            {
+                if (roleRemovable == null)
+                {
+                    roleRemovable = Boolean.valueOf(removable.test(role));
+                }
+                if (!roleRemovable.booleanValue())
+                {
+                    judgement = new Judgement(Verdict.ABSENT, LOCKED_ROLE_REASON);
+                    scan.lockedRoleFqns.add(roleFqn);
+                    kept = true;
+                }
+            }
             Entry entry = new Entry(roleFqn, targetLabel, judgement, rightsOf(objectRights),
                 hasRls(objectRights));
             scan.entries.add(entry);
-            if (remove && judgement.verdict == Verdict.ABSENT)
+            if (remove && judgement.verdict == Verdict.ABSENT && !kept)
             {
                 toRemove.add(objectRights);
                 removedHere.add(entry);

@@ -6,6 +6,11 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -56,6 +61,24 @@ public final class BuildUtils
      * starting a second one would add another Job nobody can stop.
      */
     private static final ConcurrentMap<String, ExportWaitSlot> EXPORT_WAIT_RETURNED = new ConcurrentHashMap<>();
+
+    /** Slot-key prefix of the per-object validation wait, kept apart from the export slot. */
+    private static final String VALIDATION_SLOT_PREFIX = "validation:"; //$NON-NLS-1$
+
+    /** Slot-key prefix of the bounded marker read of a write, apart from both waits. */
+    private static final String MARKER_READ_SLOT_PREFIX = "markers:"; //$NON-NLS-1$
+
+    /**
+     * The derived-data segments EDT's validation runs under: the check framework's model checks
+     * (critical-data-integrity, normal, complex) and the validator segments. Mirrored, not imported,
+     * for the same reason as {@link #EXPORT_OBJECTS_SEGMENT}: the declaring classes are internal.
+     * The BSL language checks are left out - their markers are keyed by module URI, not by a BM top
+     * object. A segment that does not apply to an object is never pending for it, so one list serves
+     * every object kind. Only the ids a project's pipeline registers are ever sent (see
+     * {@link #registeredSegments}).
+     */
+    static final List<String> VALIDATION_SEGMENTS = List.of("CDI_CHECKS_SEGMENT", //$NON-NLS-1$
+        "M_CHECKS_SEGMENT", "CM_CHECKS_SEGMENT", "XDTO_VAL", "STYLE_VAL", "CMI_VAL", "AGGR_VAL"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
 
 
     private BuildUtils()
@@ -317,6 +340,270 @@ public final class BuildUtils
         return DiskExportState.PENDING;
     }
 
+    /** How a bounded {@link #waitForObjectValidation} ended. */
+    public enum ValidationState
+    {
+        /** EDT confirmed the validation segments computed for every named object. */
+        COMPLETE,
+        /** Not confirmed within the deadline, or a previous wait for the project is still out. */
+        PENDING,
+        /**
+         * Could not be asked or answered: no derived-data service, not a DT project, no registered
+         * validation segment, a failed (broken) record, or the job never ran.
+         */
+        UNOBSERVABLE
+    }
+
+    /**
+     * The derived-data calls one validation wait makes; a seam so the segment guard is testable
+     * without a live pipeline.
+     */
+    interface ValidationPipeline
+    {
+        /**
+         * @param segmentId a segment id
+         * @return whether this project's pipeline registers it; {@code false} when unprovable
+         */
+        boolean registers(String segmentId);
+
+        /**
+         * {@code IDerivedDataManager.waitComputation(Map, long)}.
+         *
+         * @param scope per top-object id, registered segment ids only
+         * @param timeoutMs the platform timeout, positive
+         * @return the platform's answer
+         * @throws InterruptedException when the waiting thread is interrupted
+         */
+        boolean waitComputation(Map<Long, Collection<String>> scope, long timeoutMs) throws InterruptedException;
+
+        /**
+         * {@code IDerivedDataManager.isComputed(long, Collection)}: none of the segments is still
+         * pending on the object's record.
+         *
+         * @param topObjectId the BM top-object id
+         * @param segmentIds registered segment ids, not empty
+         * @return whether the object's record has none of them pending
+         */
+        boolean isComputed(long topObjectId, Collection<String> segmentIds);
+    }
+
+    /**
+     * Waits until EDT has validated the given top objects - per object, not project-wide.
+     * <p>
+     * {@code IDerivedDataManager.waitComputation(Map, long)} first drains the accumulated change
+     * contexts, then waits until none of the registered {@link #VALIDATION_SEGMENTS} is pending for
+     * the named objects, raising their pipeline priority meanwhile. Its timeout is advisory (it
+     * retries once), so it runs inside a {@link BoundedJob}, with at most one outstanding validation
+     * wait per project, exactly like {@link #waitForDiskExport}. Must not be called inside a BM
+     * transaction.
+     *
+     * @param project the workspace project owning the objects
+     * @param topObjectIds BM ids of the top objects to wait for; empty yields UNOBSERVABLE
+     * @param timeoutMs the hard deadline in milliseconds
+     * @return how the wait ended; never {@code null}
+     */
+    public static ValidationState waitForObjectValidation(IProject project, Collection<Long> topObjectIds,
+        long timeoutMs)
+    {
+        if (topObjectIds == null || topObjectIds.isEmpty())
+        {
+            // The platform rejects an empty scope; there is nothing to observe.
+            return ValidationState.UNOBSERVABLE;
+        }
+        IDerivedDataManager ddManager;
+        try
+        {
+            ddManager = resolveDerivedDataManager(project);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logWarning("Could not resolve the derived data manager for validation: " + e); //$NON-NLS-1$
+            return ValidationState.UNOBSERVABLE;
+        }
+        if (ddManager == null)
+        {
+            return ValidationState.UNOBSERVABLE;
+        }
+        return waitForObjectValidation(pipelineOf(ddManager), project.getName(), topObjectIds, timeoutMs);
+    }
+
+    /**
+     * The bounded wait over a {@link ValidationPipeline}: slot, job, outcome mapping.
+     *
+     * @param pipeline the project's derived-data calls
+     * @param key the project name, the slot key
+     * @param topObjectIds BM ids of the top objects, not empty
+     * @param timeoutMs the hard deadline in milliseconds
+     * @return how the wait ended; never {@code null}
+     */
+    static ValidationState waitForObjectValidation(ValidationPipeline pipeline, String key,
+        Collection<Long> topObjectIds, long timeoutMs)
+    {
+        long platformTimeoutMs = platformTimeoutMs(timeoutMs);
+        AtomicBoolean returned = beginValidationWait(key, platformTimeoutMs);
+        if (returned == null)
+        {
+            Activator.logInfo("A previous validation wait for " + key //$NON-NLS-1$
+                + " has not returned yet; not starting another one"); //$NON-NLS-1$
+            return ValidationState.PENDING;
+        }
+
+        ValidationState[] state = { ValidationState.PENDING };
+        BoundedJob.Result result = BoundedJob.run("Waiting for the validation of written objects in " + key, //$NON-NLS-1$
+            platformTimeoutMs, monitor -> {
+                try
+                {
+                    state[0] = validate(pipeline, topObjectIds, platformTimeoutMs);
+                }
+                finally
+                {
+                    returned.set(true);
+                }
+            });
+        if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
+        {
+            // Never ran and never will: nothing outstanding, reopen at once (see waitForDiskExport).
+            returned.set(true);
+        }
+        if (result.getOutcome() == BoundedJob.Outcome.COMPLETED && result.getFailure() == null)
+        {
+            if (state[0] == ValidationState.UNOBSERVABLE)
+            {
+                Activator.logInfo("Validation of the written objects in " + key //$NON-NLS-1$
+                    + " is not observable: no registered validation segment, or a failed record"); //$NON-NLS-1$
+            }
+            return state[0];
+        }
+        if (result.getFailure() != null || result.getOutcome() == BoundedJob.Outcome.NOT_RUN)
+        {
+            // The pipeline was never successfully asked: unobserved, not pending. Not an ERROR -
+            // it degrades a write's marker report, it does not fail the write.
+            Activator.logWarning("Validation wait for " + key + " was not observable (" //$NON-NLS-1$ //$NON-NLS-2$
+                + result.getOutcome() + ", " + result.getFailure() + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+            return ValidationState.UNOBSERVABLE;
+        }
+        return ValidationState.PENDING;
+    }
+
+    /**
+     * One wait, run inside the bounded job: registered segments only, then the platform wait, then
+     * the record re-check.
+     * <p>
+     * An unregistered id must never reach the platform: on EDT 2026.2.1
+     * {@code AsyncProcessingPipeline.increasePriority(Map)} queues it in the priority task queue
+     * even without a segment group, and {@code PriorityTaskQueue.hasAllowedPriorityTasks} then
+     * dereferences its missing dependency set on every scheduling pass.
+     * <p>
+     * {@code waitComputation} counts a BROKEN record (a validator failed three times) as done
+     * while the failed segment stays unconfirmed on it, so a {@code true} is re-checked per object
+     * with {@code isComputed(long, Collection)}, which ignores the broken flag.
+     *
+     * @param pipeline the project's derived-data calls
+     * @param topObjectIds BM ids of the top objects, not empty
+     * @param platformTimeoutMs the platform timeout, positive
+     * @return how the wait ended
+     * @throws InterruptedException when the job thread is interrupted
+     */
+    static ValidationState validate(ValidationPipeline pipeline, Collection<Long> topObjectIds,
+        long platformTimeoutMs) throws InterruptedException
+    {
+        List<String> segments = registeredSegments(pipeline);
+        if (segments.isEmpty())
+        {
+            return ValidationState.UNOBSERVABLE;
+        }
+        Map<Long, Collection<String>> scope = new LinkedHashMap<>();
+        for (Long id : topObjectIds)
+        {
+            scope.put(id, segments);
+        }
+        if (!pipeline.waitComputation(scope, platformTimeoutMs))
+        {
+            return ValidationState.PENDING;
+        }
+        for (Long id : topObjectIds)
+        {
+            if (!pipeline.isComputed(id.longValue(), segments))
+            {
+                return ValidationState.UNOBSERVABLE;
+            }
+        }
+        return ValidationState.COMPLETE;
+    }
+
+    /**
+     * The {@link #VALIDATION_SEGMENTS} this project's pipeline registers.
+     *
+     * @param pipeline the project's derived-data calls
+     * @return the registered ids, in list order; empty when none is provably registered
+     */
+    static List<String> registeredSegments(ValidationPipeline pipeline)
+    {
+        List<String> registered = new ArrayList<>();
+        for (String segmentId : VALIDATION_SEGMENTS)
+        {
+            if (pipeline.registers(segmentId))
+            {
+                registered.add(segmentId);
+            }
+        }
+        return registered;
+    }
+
+    /**
+     * The production {@link ValidationPipeline}.
+     * <p>
+     * EDT has no API that lists a pipeline's segments. {@code IDerivedDataManager.isComputed(String...)}
+     * reaches {@code AsyncProcessingPipeline.isSegmentComputed}, which asserts "Unsupported segment
+     * is specified" on the same map whose entries are added together with the segment group and
+     * the dependency set; so a probe that returns proves the id is registered, and a throw of any
+     * kind counts as unregistered.
+     */
+    private static ValidationPipeline pipelineOf(IDerivedDataManager ddManager)
+    {
+        return new ValidationPipeline()
+        {
+            @Override
+            public boolean registers(String segmentId)
+            {
+                try
+                {
+                    ddManager.isComputed(new String[] { segmentId });
+                    return true;
+                }
+                catch (RuntimeException e)
+                {
+                    return false;
+                }
+            }
+
+            @Override
+            public boolean waitComputation(Map<Long, Collection<String>> scope, long timeoutMs)
+                throws InterruptedException
+            {
+                return ddManager.waitComputation(scope, timeoutMs);
+            }
+
+            @Override
+            public boolean isComputed(long topObjectId, Collection<String> segmentIds)
+            {
+                return ddManager.isComputed(topObjectId, segmentIds);
+            }
+        };
+    }
+
+    /**
+     * The timeout handed to the platform: always positive, because EDT 2026.1.1 asserts
+     * {@code timeout > 0} in {@code waitComputationExt}.
+     *
+     * @param timeoutMs the requested deadline
+     * @return a deadline of at least one millisecond
+     */
+    static long platformTimeoutMs(long timeoutMs)
+    {
+        return Math.max(1L, timeoutMs);
+    }
+
     /**
      * Claims the single export-wait slot for a project.
      * <p>
@@ -331,12 +618,45 @@ public final class BuildUtils
      */
     static AtomicBoolean beginExportWait(String projectName, long timeoutMs)
     {
+        return beginWait(projectName, timeoutMs);
+    }
+
+    /**
+     * Claims the single validation-wait slot for a project. A separate key from the export slot, so
+     * the two waits of one write never block each other.
+     *
+     * @param projectName the project whose slot to claim
+     * @param timeoutMs the wait's deadline, which also sizes how long an unreturned claim holds
+     * @return the flag the wait must set when it returns, or {@code null} when a previous
+     *     validation wait for this project has not come back yet
+     */
+    static AtomicBoolean beginValidationWait(String projectName, long timeoutMs)
+    {
+        return beginWait(VALIDATION_SLOT_PREFIX + projectName, timeoutMs);
+    }
+
+    /**
+     * Claims the single bounded-marker-read slot for a project, so reads stuck behind a model
+     * service operation do not pile up one job per write.
+     *
+     * @param projectName the project whose slot to claim
+     * @param timeoutMs the read's deadline, which also sizes how long an unreturned claim holds
+     * @return the flag the read must set when it returns, or {@code null} when a previous read for
+     *     this project has not come back yet
+     */
+    static AtomicBoolean beginMarkerRead(String projectName, long timeoutMs)
+    {
+        return beginWait(MARKER_READ_SLOT_PREFIX + projectName, timeoutMs);
+    }
+
+    private static AtomicBoolean beginWait(String slotKey, long timeoutMs)
+    {
         AtomicBoolean[] granted = new AtomicBoolean[1];
         long reopenAtMs = System.currentTimeMillis() + slotHoldMs(timeoutMs);
         // compute(), not get()+put(): the map holds the bin lock across the whole decision, so two
         // writes finishing together cannot both see a free slot and both schedule a Job. A
         // check-then-act here would have made the limit hold only when it was not needed.
-        EXPORT_WAIT_RETURNED.compute(projectName, (name, prior) -> {
+        EXPORT_WAIT_RETURNED.compute(slotKey, (name, prior) -> {
             if (prior != null && !prior.returned.get() && System.currentTimeMillis() < prior.reopenAtMs)
             {
                 return prior;

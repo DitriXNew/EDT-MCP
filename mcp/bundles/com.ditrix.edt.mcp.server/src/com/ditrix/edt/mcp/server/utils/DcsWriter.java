@@ -414,7 +414,8 @@ public final class DcsWriter
 
     /**
      * Shared parameter-type resolver used by the {@code dcs} tool. It deliberately routes through
-     * the one metadata type grammar in {@link MetadataTypeBuilder}.
+     * the one metadata type grammar in {@link MetadataTypeBuilder}. A caller's bad spec is returned
+     * as a failed resolution; a platform failure is RAISED unmarked, so the tool logs it at ERROR.
      */
     public static TypeResolver typeResolver(Configuration configuration, Version version)
     {
@@ -426,6 +427,10 @@ public final class DcsWriter
             }
             MetadataTypeBuilder.Result result = MetadataTypeBuilder.build(valueTypeSpec, configuration,
                 version, false, MetadataTypeBuilder.TypeTarget.DCS_PARAMETER);
+            if (result.platformFailure)
+            {
+                throw result.asException("Cannot build the parameter type: " + result.error); //$NON-NLS-1$
+            }
             return result.error != null ? TypeResolution.failed(result.error)
                 : TypeResolution.of(result.typeDescription);
         };

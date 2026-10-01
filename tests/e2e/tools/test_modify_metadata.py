@@ -25,6 +25,11 @@ import uuid
 import xml.etree.ElementTree as ET
 
 from harness import (
+    E2ESkip,
+    assert_marker_contract,
+    assert_no_marker_fields,
+    poll_project_error_check,
+    project_error_rows,
     call,
     assert_ok,
     assert_error,
@@ -3584,3 +3589,82 @@ def test_fractional_value_for_a_long_property_is_refused_actionably():
     assert_error(r, "a fractional value is not a whole 64-bit number")
     assert_contains(r.text, "64-bit", "the error must name the kind of number it expected")
     assert_no_diff("a refused property must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# #643 - the written object's EDT markers after a modify
+# ──────────────────────────────────────────────────────────────────────────────
+
+# `md-list-object-presentation`: a Catalog with neither an object nor a list presentation. A fresh
+# Catalog carries it, and setting `objectPresentation` through modify_metadata clears it.
+_PRESENTATION_CHECK = "md-list-object-presentation"
+_PRESENTATION_ATTEMPTS = 4
+
+
+def _modify_markers(result, owner, ctx):
+    """Assert the marker contract of a modify success; return (incomplete, rows)."""
+    assert_ok(result, ctx)
+    incomplete, rows = assert_marker_contract(result.structured, ctx)
+    strays = [row for row in rows if row.get("object") != owner]
+    if strays:
+        _fail("every row must belong to the written top object %s [%s]: %r" % (owner, ctx, strays))
+    return incomplete, rows
+
+
+def _has_check(rows, check_id):
+    return [row for row in rows if row.get("checkId") == check_id]
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_markers_drop_a_fixed_marker_once_validation_is_confirmed():
+    """Staleness: a fresh Catalog carries `md-list-object-presentation`; once modify_metadata sets
+    its objectPresentation, a confirmed-complete answer must no longer report it, and the settled
+    get_project_errors must agree."""
+    # Preconditions are read-only and checked BEFORE the first write: the check must run here.
+    wait_for_project_ready()
+    if not poll_project_error_check("Catalog.Catalog", _PRESENTATION_CHECK, timeout=60):
+        raise E2ESkip("check %s does not run on this stand (no marker on Catalog.Catalog after 60s)"
+                      % _PRESENTATION_CHECK)
+
+    confirmed = 0
+    for attempt in range(_PRESENTATION_ATTEMPTS):
+        owner = "Catalog.E2EMarkersPres%d" % attempt
+        created = call("create_metadata", {"projectName": PROJECT, "fqn": owner})
+        create_incomplete, create_rows = _modify_markers(created, owner, "create %s" % owner)
+        wait_for_project_ready()
+        if not create_incomplete and not _has_check(create_rows, _PRESENTATION_CHECK):
+            _fail("FALSE CLEAN: markersIncomplete:false on create without the %s marker a fresh "
+                  "Catalog carries: %r" % (_PRESENTATION_CHECK, create_rows))
+        if not poll_project_error_check(owner, _PRESENTATION_CHECK, timeout=60):
+            _fail("a fresh Catalog %s must carry %s (it does on Catalog.Catalog)"
+                  % (owner, _PRESENTATION_CHECK))
+
+        r = call("modify_metadata", {"projectName": PROJECT, "fqn": owner, "properties": [
+            {"name": "objectPresentation", "value": "E2E presentation %d" % attempt}]})
+        incomplete, rows = _modify_markers(r, owner, "set objectPresentation on %s" % owner)
+        wait_for_project_ready()
+        if incomplete:
+            continue
+        confirmed += 1
+        stale = _has_check(rows, _PRESENTATION_CHECK)
+        if stale:
+            _fail("STALE: a confirmed-complete answer still reports the fixed %s marker: %r"
+                  % (_PRESENTATION_CHECK, stale))
+        if poll_project_error_check(owner, _PRESENTATION_CHECK, timeout=0):
+            _fail("the settled get_project_errors still reports the fixed %s marker on %s while "
+                  "the modify answered complete" % (_PRESENTATION_CHECK, owner))
+        break
+    if not confirmed:
+        _fail("no modify out of %d came back markersIncomplete:false - an implementation that "
+              "always answers 'incomplete' must not pass" % _PRESENTATION_ATTEMPTS)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_error_carries_no_marker_fields():
+    fqn = "Catalog.Catalog.Attribute.E2EMarkersNoSuchAttr"
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": fqn,
+                                 "properties": [{"name": "comment", "value": "x"}]})
+    e = assert_error(r, "modify a missing attribute")
+    assert_error_quality(e, names=["E2EMarkersNoSuchAttr"], ctx="missing modify target")
+    assert_no_marker_fields(r.structured, "an error reports no markers")
+    assert_no_diff("a refused modify must not touch disk")

@@ -48,12 +48,12 @@ import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.ExternalObjectRoots;
 import com.ditrix.edt.mcp.server.utils.LifecycleWaiter;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
-import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils.MetadataTypeInfo;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 
 /**
@@ -635,17 +635,8 @@ public class CreateProjectTool implements IMcpTool
             return ExternalObjectSpec.failure(invalidExternalObjectShape(value));
         }
 
-        MetadataTypeInfo info = MetadataTypeUtils.resolve(parts[0]);
-        EClass eClass;
-        if (info == MetadataTypeInfo.EXTERNAL_DATA_PROCESSOR)
-        {
-            eClass = MdClassPackage.Literals.EXTERNAL_DATA_PROCESSOR;
-        }
-        else if (info == MetadataTypeInfo.EXTERNAL_REPORT)
-        {
-            eClass = MdClassPackage.Literals.EXTERNAL_REPORT;
-        }
-        else
+        EClass eClass = ExternalObjectRoots.rootEClass(parts[0]);
+        if (eClass == null)
         {
             return ExternalObjectSpec.failure(invalidExternalObjectShape(value));
         }
@@ -660,7 +651,7 @@ public class CreateProjectTool implements IMcpTool
                 + "'ExternalReport.<Name>'.").toJson()); //$NON-NLS-1$
         }
 
-        return ExternalObjectSpec.success(eClass, objectName, info.getEnglishSingular() + "." + objectName, //$NON-NLS-1$
+        return ExternalObjectSpec.success(eClass, objectName, eClass.getName() + "." + objectName, //$NON-NLS-1$
             normReport);
     }
 
@@ -1178,13 +1169,7 @@ public class CreateProjectTool implements IMcpTool
      */
     static MdObject createExternalObjectRoot(IModelObjectFactory factory, ExternalObjectSpec spec, Version version)
     {
-        MdObject root = factory.create(spec.eClass, version);
-        if (root != null)
-        {
-            factory.fillDefaultReferences(root);
-            root.setName(spec.objectName);
-        }
-        return root;
+        return ExternalObjectRoots.newRootForNewProject(factory, spec.eClass, spec.objectName, version);
     }
 
     /**

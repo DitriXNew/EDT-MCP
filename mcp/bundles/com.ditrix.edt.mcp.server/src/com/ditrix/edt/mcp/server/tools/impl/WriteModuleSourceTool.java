@@ -37,6 +37,7 @@ import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.InvalidFileCharacters;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 
 /**
  * Tool to write BSL source code to 1C metadata object modules.
@@ -183,6 +184,11 @@ public class WriteModuleSourceTool implements IMcpTool
 
         // 5. Get file
         IFile file = BslModuleUtils.resolveModuleFile(project, req.modulePath);
+        String outside = outsideProjectError(project, file, req.modulePath);
+        if (outside != null)
+        {
+            return outside;
+        }
         boolean fileExists = file.exists();
 
         // For non-replace modes, file must exist
@@ -190,6 +196,13 @@ public class WriteModuleSourceTool implements IMcpTool
         {
             return ToolResult.error("File not found: src/" + req.modulePath + //$NON-NLS-1$
                 ". Only 'replace' mode can create new files.").toJson(); //$NON-NLS-1$
+        }
+
+        // 6. Vendor support: the module and the object that owns it must be editable (#642).
+        String locked = vendorSupportRefusal(ctx, file, fileExists);
+        if (locked != null)
+        {
+            return locked;
         }
 
         AtomicBoolean mutationEntered = new AtomicBoolean();
@@ -208,6 +221,57 @@ public class WriteModuleSourceTool implements IMcpTool
                     : ToolResult.error("Failed to write file: " + e.getMessage()); //$NON-NLS-1$
             return error.toJson();
         }
+    }
+
+    /**
+     * Refuses a module path that resolves to no file, or to a file of another project: an
+     * absolute path resolves across the whole workspace, so without this check the write -
+     * and its vendor-support guard - would judge the named project while changing another.
+     *
+     * @param project the named project
+     * @param file the resolved module file, may be {@code null}
+     * @param modulePath the requested path, for the message
+     * @return the error JSON, or {@code null} when the file belongs to {@code project}
+     */
+    static String outsideProjectError(IProject project, IFile file, String modulePath)
+    {
+        if (file == null)
+        {
+            return ToolResult.error("File not found: " + modulePath //$NON-NLS-1$
+                + ". Pass a src/-relative module path of project '" + project.getName() //$NON-NLS-1$
+                + "', e.g. 'CommonModules/MyModule/Module.bsl'.").toJson(); //$NON-NLS-1$
+        }
+        IProject owner = file.getProject();
+        if (owner == null || !owner.equals(project))
+        {
+            return ToolResult.error("modulePath '" + modulePath + "' is a file of project '" //$NON-NLS-1$ //$NON-NLS-2$
+                + (owner == null ? "?" : owner.getName()) + "', not of '" + project.getName() //$NON-NLS-1$ //$NON-NLS-2$
+                + "'. Nothing was changed. Pass projectName='" //$NON-NLS-1$
+                + (owner == null ? "?" : owner.getName()) //$NON-NLS-1$
+                + "' and a src/-relative modulePath.").toJson(); //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * The vendor-support refusal for writing {@code file}, as ready JSON: the module (when it
+     * exists) and the object that owns it must be editable. Fails closed when the project's
+     * metadata root cannot be read.
+     *
+     * @param ctx the resolved project
+     * @param file the module file
+     * @param fileExists whether the file exists (a new module has no parsed model yet)
+     * @return the error JSON, or {@code null} when the write may proceed
+     */
+    private static String vendorSupportRefusal(ProjectContext ctx, IFile file, boolean fileExists)
+    {
+        ProjectContext.ConfigurationResult root = ctx.resolveMetadataRoot();
+        if (!root.ok())
+        {
+            return root.errorJson();
+        }
+        String refusal = VendorSupportGuard.refusalForModuleFile(ctx.project(), root.scope(), file);
+        return refusal == null ? null : ToolResult.error(refusal).toJson();
     }
 
     /**

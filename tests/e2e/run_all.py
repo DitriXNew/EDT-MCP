@@ -212,10 +212,13 @@ def _run_test_unit(harness, t):
         # The runner aborts on this, so no later test inherits the state either.
         raise
     except harness.E2ESkip:
-        # A skip is not a failed write - it is a test that decided there was nothing to do
-        # (an unsupported seed that committed nothing). Paying the full cleanup budget for it
-        # would be waste at best, and at worst would turn a legitimate skip into a
-        # reset-failed / call-timeout if clean_project happens to be refused just then.
+        # A skip before any write committed nothing: paying the full cleanup budget for it would
+        # be waste, and could turn a legitimate skip into a reset-failed if clean_project is
+        # refused just then. A skip AFTER a write is different: the model still carries it, and
+        # the next test's git revert would run under that model with no clean_project behind it.
+        # So reset on EVIDENCE of a mutation, never on the skip alone.
+        if harness.confirmed_mutation_tools() or harness.mutations_unresolved():
+            _reset_after_write(harness, t)
         raise
     except BaseException:
         # Any OTHER failure still leaves the write applied, exactly like a passing test does.
@@ -259,19 +262,13 @@ def _reset_after_write(harness, t):
         # the hole. A confirmed fixture write bypasses the pristine shortcut, so restore disk and
         # model here whatever the test called itself.
         #
-        # The violating test did not declare its writes, so reset every mandatory fixture. The
-        # optional ExternalObjects model is reset when setup synchronized it or the outcome of a
-        # call that named it supplied mutation evidence.
+        # The violating test did not declare its writes, so reset every mandatory fixture. An
+        # optional fixture's model is reset when setup synchronized it or the outcome of a call
+        # that named it supplied mutation evidence.
         if not harness.reset_all_fixtures():
             return
-        evidenced_projects = harness.evidenced_mutation_fixture_projects()
-        reset_projects = [
-            project for project in harness.ALL_FIXTURE_PROJECTS
-            if project != harness.EXT_OBJECTS_PROJECT
-            or harness.external_objects_model_synced()
-            or project in evidenced_projects
-        ]
-        # A failed optional setup sync does not prove ExternalObjects is absent: clean_project or
+        reset_projects = _available_fixture_projects(harness)
+        # A failed optional setup sync does not prove an optional fixture is absent: clean_project or
         # its readiness wait may only have failed transiently. Include it when the SAME call that
         # named it succeeded, reported a commit/write target, or said its outcome was unknown. A
         # refusal merely naming an absent project supplies none of that evidence, so the setup
@@ -310,20 +307,26 @@ def _reset_after_write(harness, t):
     if harness.mutation_could_have_cascaded():
         # The server waits for EDT's cascade participants but deliberately leaves them out of
         # writtenProjects or, for a rename, publishes no write targets at all. Do not invent a
-        # client-side target. Reset every fixture model known to be available instead; the optional
-        # ExternalObjects project stays out unless setup synchronized it or call-correlated evidence
+        # client-side target. Reset every fixture model known to be available instead; an optional
+        # fixture project stays out unless setup synchronized it or call-correlated evidence
         # says a request may actually have reached it.
-        evidenced_projects = harness.evidenced_mutation_fixture_projects()
-        reset_projects = [
-            project for project in harness.ALL_FIXTURE_PROJECTS
-            if project != harness.EXT_OBJECTS_PROJECT
-            or harness.external_objects_model_synced()
-            or project in evidenced_projects
-        ]
+        reset_projects = _available_fixture_projects(harness)
     else:
         reset_projects = sorted(
             {harness.PROJECT} | harness.mutated_fixture_projects())
     harness.reset_model(reset_projects)
+
+
+def _available_fixture_projects(harness):
+    """Every mandatory fixture, plus each OPTIONAL one whose model setup synchronized or whose
+    name a call with mutation evidence carried - an absent optional fixture is never reset."""
+    evidenced_projects = harness.evidenced_mutation_fixture_projects()
+    return [
+        project for project in harness.ALL_FIXTURE_PROJECTS
+        if project not in harness.OPTIONAL_FIXTURE_PROJECTS
+        or harness.optional_model_synced(project)
+        or project in evidenced_projects
+    ]
 
 
 # Names of the tests whose model reset was skipped — reported at the end so the shortcut is

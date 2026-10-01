@@ -13,7 +13,9 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 import org.eclipse.core.resources.IProject;
@@ -283,6 +285,84 @@ public class RoleRightsOrphansTest
             assertTrue("the edit preflight must pass once the entry is gone", //$NON-NLS-1$
                 RoleRightsWriter.unresolvedTargets(description).isEmpty());
         }
+    }
+
+    // ==================== vendor support: a locked role keeps its entries (#642) ====================
+
+    @Test
+    public void testALockedRoleKeepsItsOrphansAndSaysWhy()
+    {
+        RoleDescription description = RightsFactory.eINSTANCE.createRoleDescription();
+        description.getRights().add(entry(proxy("Catalog.Gone"), false)); //$NON-NLS-1$
+        description.getRights().add(entry(null, false));
+        Role role = role(description);
+        roles(role);
+        List<Role> asked = new ArrayList<>();
+
+        Scan scan = RoleRightsOrphans.scan(tx, true, true, true, r -> {
+            asked.add(r);
+            return false;
+        });
+
+        assertEquals("the role is asked once, not once per entry", List.of(role), asked); //$NON-NLS-1$
+        assertEquals(2, description.getRights().size());
+        assertTrue(scan.removed.isEmpty());
+        assertTrue(scan.changedRoleFqns.isEmpty());
+        assertTrue(scan.changedRightsFqns.isEmpty());
+        assertEquals(1, scan.lockedRoleFqns.size());
+        assertEquals(2, scan.count(Verdict.ABSENT));
+        for (RoleRightsOrphans.Entry entry : scan.entries)
+        {
+            assertEquals(RoleRightsOrphans.LOCKED_ROLE_REASON, entry.reason);
+        }
+    }
+
+    @Test
+    public void testTheSupportCheckIsAskedOnlyWhenARoleHasSomethingToRemove()
+    {
+        topObject("Catalog.Products", catalog("Products")); //$NON-NLS-1$ //$NON-NLS-2$
+        RoleDescription description = RightsFactory.eINSTANCE.createRoleDescription();
+        description.getRights().add(entry(MdClassFactory.eINSTANCE.createCatalog(), false));
+        description.getRights().add(entry(proxy("Catalog.Products"), false)); //$NON-NLS-1$
+        roles(role(description));
+        List<Role> asked = new ArrayList<>();
+
+        RoleRightsOrphans.scan(tx, true, true, true, asked::add);
+        assertTrue("no ABSENT entry, so no support question: " + asked, asked.isEmpty()); //$NON-NLS-1$
+
+        roles(role(withOrphan()));
+        RoleRightsOrphans.scan(tx, true, true, false, asked::add);
+        assertTrue("a report never asks: " + asked, asked.isEmpty()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnEditableRoleIsCleanedAsBefore()
+    {
+        RoleDescription description = withOrphan();
+        roles(role(description));
+
+        Scan scan = RoleRightsOrphans.scan(tx, true, true, true, r -> true);
+
+        assertEquals(1, scan.removed.size());
+        assertTrue(description.getRights().isEmpty());
+        assertTrue(scan.lockedRoleFqns.isEmpty());
+    }
+
+    @Test
+    public void testTheLockedRolesWarningNamesTheRolesAndTheWayOut()
+    {
+        String warning = RoleRightsOrphans.lockedRolesWarning(new LinkedHashSet<>(List.of("Role.A", "Role.B"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue(warning, warning.startsWith("Orphaned entries were kept in Role.A, Role.B: the role is " //$NON-NLS-1$
+            + "under vendor support")); //$NON-NLS-1$
+        assertTrue(warning, warning.contains("Support settings")); //$NON-NLS-1$
+    }
+
+    private static RoleDescription withOrphan()
+    {
+        RoleDescription description = RightsFactory.eINSTANCE.createRoleDescription();
+        description.getRights().add(entry(proxy("Catalog.Gone"), false)); //$NON-NLS-1$
+        return description;
     }
 
     @Test

@@ -61,9 +61,11 @@ import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 
 /**
  * Domain service backing {@code rename_metadata_object}: resolves the target, builds the LTK
@@ -164,6 +166,15 @@ public class MetadataRenameService
 
         objectFqn = MetadataTypeUtils.normalizeFqn(objectFqn);
 
+        // Vendor support, before any refactoring exists: EDT's rename checks only the referencing
+        // objects, never the renamed one itself (#642).
+        String locked = VendorSupportGuard.refusalForFqn(MetadataScope.of(project, config), objectFqn,
+            VendorSupportGuard.Intent.MODIFY, "renamed"); //$NON-NLS-1$
+        if (locked != null)
+        {
+            return ToolResult.error(locked).toJson();
+        }
+
         // A FQN addressing a FORM element (attribute / column / command / field / button / group /
         // decoration / table) is handled by a dedicated branch BEFORE the mdclass path, mirroring how
         // delete_metadata dispatches the same shapes: form elements live on the form's content model,
@@ -245,6 +256,11 @@ public class MetadataRenameService
             return ToolResult.error("Failed to create rename refactoring for: " + objectFqn).toJson(); //$NON-NLS-1$
         }
 
+        String lockedReferrers = supportLockRefusal(objectFqn, refactorings);
+        if (lockedReferrers != null)
+        {
+            return ToolResult.error(lockedReferrers).toJson();
+        }
         if (!confirm)
         {
             // Preview mode - collect all items and problems
@@ -390,6 +406,11 @@ public class MetadataRenameService
                 return ToolResult.error(target.error).toJson();
             }
             Collection<IRefactoring> refactorings = Collections.singletonList(target.refactoring);
+            String lockedReferrers = supportLockRefusal(normFqn, refactorings);
+            if (lockedReferrers != null)
+            {
+                return ToolResult.error(lockedReferrers).toJson();
+            }
             if (!confirm)
             {
                 return renderPreview(normFqn, newName, target.oldName, refactorings, maxResults,
@@ -409,6 +430,61 @@ public class MetadataRenameService
             return ToolResult.error("Failed to rename form element: " //$NON-NLS-1$
                 + causeMessage(e)).toJson();
         }
+    }
+
+    /**
+     * The refusal for a rename whose cascade would update references inside objects vendor support
+     * locks: EDT's rename records those as {@link com._1c.g5.v8.dt.refactoring.core.EditingForbiddenProblem}
+     * and still performs the edit, so the tool refuses before preview or perform (#642).
+     *
+     * @param objectFqn the renamed object's FQN
+     * @param refactorings the prepared refactorings
+     * @return the refusal message, or {@code null} when no problem is a support lock
+     */
+    static String supportLockRefusal(String objectFqn, Collection<IRefactoring> refactorings)
+    {
+        Set<String> locked = new java.util.LinkedHashSet<>();
+        for (IRefactoring refactoring : refactorings)
+        {
+            RefactoringStatus status = refactoring.getStatus();
+            Collection<IRefactoringProblem> problems = status == null ? null : status.getProblems();
+            if (problems == null)
+            {
+                continue;
+            }
+            for (IRefactoringProblem problem : problems)
+            {
+                if (VendorSupportGuard.isSupportLockProblem(problem))
+                {
+                    locked.add(lockedObjectLabel(problem));
+                }
+            }
+        }
+        return locked.isEmpty() ? null
+            : VendorSupportGuard.cascadeRefusal(objectFqn, "renamed", //$NON-NLS-1$
+                "the rename would update references inside", new ArrayList<>(locked)); //$NON-NLS-1$
+    }
+
+    /** The FQN of the top object a support-lock problem names (bmGetFqn is for top objects only). */
+    private static String lockedObjectLabel(IRefactoringProblem problem)
+    {
+        try
+        {
+            if (problem.getObject() instanceof IBmObject bmObject)
+            {
+                IBmObject top = bmObject.bmIsTop() ? bmObject : bmObject.bmGetTopObject();
+                String fqn = top == null ? null : top.bmGetFqn();
+                if (fqn != null)
+                {
+                    return fqn;
+                }
+            }
+        }
+        catch (RuntimeException e) // NOSONAR a label only
+        {
+            // fall through to the generic label
+        }
+        return "an object EDT could not name"; //$NON-NLS-1$
     }
 
     /**
