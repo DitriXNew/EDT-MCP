@@ -38,3 +38,5 @@ JSON: `success`, `objectsExported` (the missing subset by default; every object 
 
 ## Vendor support
 The orphaned role-rights sweep leaves a role that vendor support locks untouched: its entries stay, are reported with the reason, and the result carries a warning naming the role. The other roles are cleaned as usual. Allow changes to the role in EDT's support settings to clean it too.
+
+With `cleanDanglingReferences=true`, a configuration that vendor support does not allow to change (or whose check cannot be answered) keeps its dangling entries: they are still listed in `danglingFound` / `danglingDetails`, nothing is removed, and `danglingWarning` says why. The rest of the resync runs as usual. Ask the user to allow changes in EDT's support settings, then run the cleanup again.
