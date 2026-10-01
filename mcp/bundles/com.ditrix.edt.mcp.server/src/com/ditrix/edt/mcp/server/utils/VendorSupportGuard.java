@@ -7,7 +7,10 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
@@ -16,18 +19,23 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EReference;
+import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.model.EditingMode;
 import com._1c.g5.v8.dt.core.model.IModelEditingSupport;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.refactoring.core.DeletionForbiddenProblem;
 import com._1c.g5.v8.dt.refactoring.core.EditingForbiddenProblem;
 import com._1c.g5.v8.dt.refactoring.core.IRefactoringProblem;
 import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
+import com.e1c.g5.v8.dt.distribution.model.DistributionSupport;
 
 /**
  * Refuses a write into an object that vendor support does not allow to change.
@@ -300,6 +308,116 @@ public final class VendorSupportGuard
         {
             return false;
         }
+    }
+
+    /**
+     * The first object of {@code configuration} that EDT does not allow to edit, for a write that
+     * touches every object. EDT locks per object, so an editable root proves nothing; a
+     * configuration that is not on support is not walked. Runs inside a read of the project's model
+     * when there is one; a walk that fails is answered as locked (fail closed).
+     *
+     * @param project the project holding the configuration, or {@code null} for a bare configuration
+     * @param configuration the configuration to walk
+     * @return the address of the locked (or unanswerable) object, or {@code null} when none is locked
+     */
+    public static String firstLockedObject(IProject project, Configuration configuration)
+    {
+        if (configuration == null)
+        {
+            return null;
+        }
+        try
+        {
+            IBmModel model = modelOf(project);
+            return model == null ? firstLockedIn(configuration)
+                : BmTransactions.read(model, "VendorSupportWalk", (tx, monitor) -> firstLockedIn(configuration)); //$NON-NLS-1$
+        }
+        catch (RuntimeException e)
+        {
+            Log.log(new Status(IStatus.WARNING, Log.pluginId(),
+                "Vendor-support walk failed for " + configuration.getName(), e)); //$NON-NLS-1$
+            return "one of its objects (the support check failed: " + PlatformFailures.describe(e) + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /**
+     * Whether EDT keeps support settings for {@code configuration}: only a native root carries
+     * them, and only one with a parent configuration is on support (EDT's own "on support" test).
+     *
+     * @param configuration the configuration
+     * @return {@code true} when its objects may carry per-object locks
+     */
+    static boolean isOnSupport(Configuration configuration)
+    {
+        if (configuration == null || configuration.getObjectBelonging() != ObjectBelonging.NATIVE)
+        {
+            return false;
+        }
+        DistributionSupport settings = configuration.getDistributionSettings();
+        return settings != null && !settings.eIsProxy() && !settings.getParentConfigurationInfos().isEmpty();
+    }
+
+    private static String firstLockedIn(Configuration configuration)
+    {
+        if (!isOnSupport(configuration))
+        {
+            return null;
+        }
+        Set<EObject> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        String locked = firstLockedBelow(configuration, seen);
+        if (locked != null)
+        {
+            return locked;
+        }
+        for (EReference reference : configuration.eClass().getEAllReferences())
+        {
+            // Top objects are non-containment collections of the root; derived/transient ones are skipped unread.
+            if (reference.isContainment() || !reference.isMany() || reference.isDerived() || reference.isTransient()
+                || !MdClassPackage.Literals.MD_OBJECT.isSuperTypeOf(reference.getEReferenceType()))
+            {
+                continue;
+            }
+            for (Object element : (List<?>)configuration.eGet(reference))
+            {
+                if (!(element instanceof MdObject) || ((MdObject)element).eIsProxy() || !seen.add((MdObject)element))
+                {
+                    continue;
+                }
+                MdObject top = (MdObject)element;
+                locked = !allowsEdit(top) ? objectAddress(top) : firstLockedBelow(top, seen);
+                if (locked != null)
+                {
+                    return locked;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** The first locked MdObject among {@code owner}'s persisted descendants. */
+    private static String firstLockedBelow(EObject owner, Set<EObject> seen)
+    {
+        for (EObject child : PersistedContents.descendants(owner))
+        {
+            if (child instanceof MdObject && seen.add(child) && !allowsEdit(child))
+            {
+                return objectAddress((MdObject)child);
+            }
+        }
+        return null;
+    }
+
+    /** The FQN-style address of a walked object: its type and name, then {@code Kind.Name} per level. */
+    private static String objectAddress(MdObject object)
+    {
+        EObject container = object.eContainer();
+        EStructuralFeature feature = object.eContainingFeature();
+        if (container instanceof MdObject && !(container instanceof Configuration) && feature != null)
+        {
+            return objectAddress((MdObject)container) + '.'
+                + MetadataNodeResolver.kindTokenForFeature(feature.getName()) + '.' + object.getName();
+        }
+        return object.eClass().getName() + '.' + object.getName();
     }
 
     /**

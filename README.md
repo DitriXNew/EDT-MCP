@@ -923,8 +923,10 @@ runs, or re-run the call and answer the dialog promptly.
 A configuration taken on vendor support can lock objects (its support rule does not allow
 changes). The writing tools respect that lock the way EDT's own editors do: `create_metadata`,
 `modify_metadata`, `delete_metadata`, `rename_metadata_object`, `write_module_source` and `dcs`
-refuse a write to a locked object with an error naming it, and change nothing; the orphaned
-role-rights sweep of `resync_to_disk` skips a locked role and says so. `delete_metadata` marks a
+refuse a write to a locked object with an error naming it, and change nothing;
+`translate_configuration` refuses an in-place run when the configuration or any object in it is
+locked, naming the first one; the orphaned role-rights sweep of `resync_to_disk` skips a locked
+role and says so. `delete_metadata` marks a
 support-derived platform prohibition `supportLock=true`, and `force=true` does not override it.
 When EDT's support check cannot be answered, the write is refused (fail closed). A configuration
 extension and an external data processor/report project are never locked. The way out is an

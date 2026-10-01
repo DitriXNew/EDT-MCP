@@ -315,7 +315,7 @@ public final class MetadataNodeResolver
      * @param featureName the containment feature name
      * @return the kind token
      */
-    private static String kindTokenForFeature(String featureName)
+    public static String kindTokenForFeature(String featureName)
     {
         String singular = featureName.endsWith("s") //$NON-NLS-1$
             ? featureName.substring(0, featureName.length() - 1) : featureName;

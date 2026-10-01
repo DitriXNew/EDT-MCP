@@ -245,8 +245,8 @@ public class TranslateConfigurationTool implements IMcpTool
 
     /**
      * The refusal for synchronizing {@code declaredTargets} in place when vendor support locks the
-     * configuration (#642). LanguageTool exposes no per-object scope for the run, so the whole
-     * configuration is asked; an unanswerable check refuses.
+     * configuration (#642). LanguageTool exposes no per-object scope for the run, so the root and,
+     * for a configuration on support, every one of its objects is asked; an unanswerable check refuses.
      *
      * @param scope the source project's resolution root
      * @param projectName the project the call named
@@ -260,13 +260,28 @@ public class TranslateConfigurationTool implements IMcpTool
             return null;
         }
         Configuration configuration = scope.configuration();
-        if (configuration == null || VendorSupportGuard.allowsEdit(configuration))
+        if (configuration == null)
         {
             return null;
         }
+        String rule;
+        if (!VendorSupportGuard.allowsEdit(configuration))
+        {
+            rule = "does not allow changes"; //$NON-NLS-1$
+        }
+        else
+        {
+            // An editable root can still hold locked objects, and the run writes into every one.
+            String locked = VendorSupportGuard.firstLockedObject(scope.project(), configuration);
+            if (locked == null)
+            {
+                return null;
+            }
+            rule = "does not allow changing " + locked; //$NON-NLS-1$
+        }
         return "'" + projectName + "' cannot be translated into " + String.join(", ", declaredTargets) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + " in place: the configuration '" + configuration.getName() //$NON-NLS-1$
-            + "' is under vendor support and its support rule does not allow changes (or that could not " //$NON-NLS-1$
+            + "' is under vendor support and its support rule " + rule + " (or that could not " //$NON-NLS-1$ //$NON-NLS-2$
             + "be checked), and synchronizing a language the configuration declares writes that " //$NON-NLS-1$
             + "language's synonyms and strings into its objects. Nothing was changed. Translate into a " //$NON-NLS-1$
             + "dependent translation project instead (a target language this configuration does not " //$NON-NLS-1$
