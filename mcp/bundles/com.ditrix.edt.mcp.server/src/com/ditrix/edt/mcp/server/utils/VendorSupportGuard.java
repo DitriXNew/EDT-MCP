@@ -9,7 +9,6 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IFile;
@@ -22,8 +21,6 @@ import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.model.EditingMode;
 import com._1c.g5.v8.dt.core.model.IModelEditingSupport;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
-import com._1c.g5.v8.dt.core.platform.IExtensionProject;
-import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.refactoring.core.DeletionForbiddenProblem;
@@ -41,9 +38,8 @@ import com.ditrix.edt.mcp.server.Activator;
  * object the operation changes. It FAILS CLOSED: no service, or a service that throws, refuses.</p>
  *
  * <p>An external-objects project is never asked: it has no support settings, and the
- * configuration its context carries is the linked BASE one. A configuration extension can be
- * under vendor support of its own and is asked like a configuration; its refusal does not
- * suggest an extension as the way out.</p>
+ * configuration its context carries is the linked BASE one. An extension project is asked about
+ * its own objects, which the platform always reports editable.</p>
  */
 public final class VendorSupportGuard
 {
@@ -69,12 +65,6 @@ public final class VendorSupportGuard
         + "copy, or create new objects in the extension project), or ask the user to allow " //$NON-NLS-1$
         + "changes in EDT's support settings (Configuration > Support > Support settings); this " //$NON-NLS-1$
         + "server does not change support settings."; //$NON-NLS-1$
-
-    /** The remedy of a lock refusal inside a configuration extension, which cannot adopt into itself. */
-    private static final String EXTENSION_REMEDY = " Nothing was changed. The extension is itself under " //$NON-NLS-1$
-        + "vendor support, so adopting into it is no way out: ask the user to allow changes in EDT's " //$NON-NLS-1$
-        + "support settings of the extension (Configuration > Support > Support settings); this server " //$NON-NLS-1$
-        + "does not change support settings."; //$NON-NLS-1$
 
     /** Test seam: replaces the platform service lookup when set. */
     private static final AtomicReference<Supplier<IModelEditingSupport>> SERVICE = new AtomicReference<>();
@@ -287,59 +277,6 @@ public final class VendorSupportGuard
         return "'" + callerAddress + "' cannot be " + verb + ": " + cascade + " " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             + String.join(", ", lockedNames) //$NON-NLS-1$
             + ", which vendor support does not allow changing (or that could not be checked)." + REMEDY; //$NON-NLS-1$
-    }
-
-    /**
-     * The refusal for adopting into an extension: any vendor support on the extension refuses, since
-     * EDT's adopter may also change objects there (a receiving parent, a dependency) that cannot be
-     * listed before it runs. Unanswerable counts as supported.
-     *
-     * @param extensionName the target extension project's name
-     * @param callerAddress the address the call named
-     * @param underSupport whether the extension is under vendor support (may throw)
-     * @return the refusal message, or {@code null} when the adoption may proceed
-     */
-    public static String adoptionRefusal(String extensionName, String callerAddress, BooleanSupplier underSupport)
-    {
-        boolean supported;
-        try
-        {
-            supported = underSupport.getAsBoolean();
-        }
-        catch (RuntimeException e) // NOSONAR fail closed: an unanswerable question is a "yes"
-        {
-            Log.log(new Status(IStatus.WARNING, Log.pluginId(),
-                "Vendor-support check failed for adopting " + callerAddress, e)); //$NON-NLS-1$
-            return checkFailed(callerAddress, "adopted", //$NON-NLS-1$
-                "the support settings of the extension '" + extensionName + "' could not be read: " //$NON-NLS-1$ //$NON-NLS-2$
-                    + PlatformFailures.describe(e));
-        }
-        if (!supported)
-        {
-            return null;
-        }
-        return "'" + callerAddress + "' cannot be adopted: the extension '" + extensionName //$NON-NLS-1$ //$NON-NLS-2$
-            + "' is under vendor support, and an adoption can also change objects in it that cannot be " //$NON-NLS-1$
-            + "listed before it runs (the adopted parent that receives the copy, a command group or other " //$NON-NLS-1$
-            + "object the adopted one depends on), so no adoption into a supported extension is attempted." //$NON-NLS-1$
-            + EXTENSION_REMEDY;
-    }
-
-    /**
-     * Whether a configuration (or extension) root carries vendor support: its support settings are
-     * set. A superset of EDT's own test, which also ignores a non-native root and an unresolved link.
-     *
-     * @param root the configuration root, read inside a transaction
-     * @return {@code true} when support settings are present
-     * @throws IllegalStateException when there is no root to ask
-     */
-    public static boolean underVendorSupport(Configuration root)
-    {
-        if (root == null)
-        {
-            throw new IllegalStateException("the extension has no configuration root"); //$NON-NLS-1$
-        }
-        return root.getDistributionSettings() != null;
     }
 
     /**
@@ -621,23 +558,7 @@ public final class VendorSupportGuard
                 + " (it, one of its members, or the object that contains it is locked by its support rule)" //$NON-NLS-1$
             : subject + " is under vendor support and its support rule does not allow changes"; //$NON-NLS-1$
         return "'" + callerAddress + "' cannot be " + verb + ": " + reason + "." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            + configurationClause(support, object, configuration) + remedyFor(configuration);
-    }
-
-    /** The way out of a lock: an extension for a configuration, the support settings for an extension. */
-    private static String remedyFor(Configuration configuration)
-    {
-        Activator activator = configuration == null ? null : Activator.getDefault();
-        IV8ProjectManager manager = activator == null ? null : activator.getV8ProjectManager();
-        try
-        {
-            return manager != null && manager.getProject(configuration) instanceof IExtensionProject
-                ? EXTENSION_REMEDY : REMEDY;
-        }
-        catch (RuntimeException e) // NOSONAR the remedy is advice; the refusal stands without the right one
-        {
-            return REMEDY;
-        }
+            + configurationClause(support, object, configuration) + REMEDY;
     }
 
     /** The "configuration itself is locked" sentence, computed only for a refusal. */

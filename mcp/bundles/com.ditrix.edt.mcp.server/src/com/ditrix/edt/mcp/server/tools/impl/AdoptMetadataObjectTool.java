@@ -17,8 +17,6 @@ import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.ecore.EObject;
 
 import com._1c.g5.v8.bm.core.IBmObject;
-import com._1c.g5.v8.bm.integration.IBmModel;
-import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.core.platform.IExtensionProject;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
@@ -37,7 +35,6 @@ import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
-import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.google.gson.JsonObject;
 
 /**
@@ -66,9 +63,6 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
 
     /** Output key: the object's belonging marker (ADOPTED). */
     private static final String KEY_OBJECT_BELONGING = "objectBelonging"; //$NON-NLS-1$
-
-    /** The BM FQN of a project's configuration root. */
-    private static final String EXTENSION_ROOT_FQN = "Configuration"; //$NON-NLS-1$
 
     /** Output key: whether the change was exported to disk. */
     private static final String KEY_PERSISTED = "persisted"; //$NON-NLS-1$
@@ -120,24 +114,6 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     + "wait is skipped where the export state cannot be observed", false) //$NON-NLS-1$
             .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
             .build();
-    }
-
-    /**
-     * Whether the target extension is under vendor support, read from its root inside a read
-     * transaction on the extension's model. Throws when that cannot be read (the caller fails closed).
-     */
-    private static boolean extensionUnderVendorSupport(IExtensionProject target)
-    {
-        IBmModelManager modelManager = Activator.getDefault().getBmModelManager();
-        IBmModel model = modelManager != null ? modelManager.getModel(target.getProject()) : null;
-        if (model == null)
-        {
-            throw new IllegalStateException("the extension's model is not available"); //$NON-NLS-1$
-        }
-        Boolean supported = BmTransactions.read(model, "AdoptVendorSupportCheck", //$NON-NLS-1$
-            (tx, pm) -> VendorSupportGuard.underVendorSupport(
-                (Configuration)tx.getTopObjectByFqn(EXTENSION_ROOT_FQN)));
-        return Boolean.TRUE.equals(supported);
     }
 
     @Override
@@ -244,15 +220,8 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 .toJson();
         }
 
-        // Vendor support (#642): the base side is only read. The adopter may change more of the
-        // extension than the copy (the receiving parent, dependencies it adopts along), none of it
-        // listable in advance - so a supported extension refuses every adoption.
-        String locked = VendorSupportGuard.adoptionRefusal(extName, normFqn,
-            () -> extensionUnderVendorSupport(target));
-        if (locked != null)
-        {
-            return ToolResult.error(locked).toJson();
-        }
+        // Vendor support (#642) does not apply: the base side is only read, and EDT reads support
+        // only for a NATIVE configuration root - an extension's root is ADOPTED, so nothing here locks.
 
         // The service runs its own BM write task on the extension's model, but exposes no rollback
         // outcome if it throws. Record the opaque interval before entering it; the known write

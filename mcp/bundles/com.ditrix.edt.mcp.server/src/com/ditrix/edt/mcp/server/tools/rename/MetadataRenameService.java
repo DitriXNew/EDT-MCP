@@ -18,7 +18,6 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
-import java.util.function.Predicate;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
@@ -34,9 +33,6 @@ import com._1c.g5.v8.dt.bsl.model.Module;
 import com._1c.g5.v8.dt.common.StringUtils;
 import com._1c.g5.v8.dt.form.refactoring.IFormRefactoringService;
 import com._1c.g5.v8.dt.mcore.NamedElement;
-import com._1c.g5.v8.dt.core.platform.IExtensionProject;
-import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
-import com._1c.g5.v8.dt.md.extension.adopt.IModelObjectAdopter;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -261,10 +257,6 @@ public class MetadataRenameService
         }
 
         String lockedReferrers = supportLockRefusal(objectFqn, refactorings);
-        if (lockedReferrers == null)
-        {
-            lockedReferrers = adoptedCounterpartRefusal(project, objectFqn, targetObject);
-        }
         if (lockedReferrers != null)
         {
             return ToolResult.error(lockedReferrers).toJson();
@@ -471,77 +463,6 @@ public class MetadataRenameService
         return locked.isEmpty() ? null
             : VendorSupportGuard.cascadeRefusal(objectFqn, "renamed", //$NON-NLS-1$
                 "the rename would update references inside", new ArrayList<>(locked)); //$NON-NLS-1$
-    }
-
-    /**
-     * The refusal for renaming an object whose adopted counterpart in an extension is locked: EDT's
-     * rename renames every counterpart as well and checks only referrers, never those targets.
-     * Fails closed when the counterparts cannot be read.
-     */
-    private static String adoptedCounterpartRefusal(IProject project, String objectFqn, MdObject targetObject)
-    {
-        List<String> locked;
-        try
-        {
-            locked = lockedCounterparts(adoptedCounterparts(project, targetObject), VendorSupportGuard::allowsEdit);
-        }
-        catch (RuntimeException e)
-        {
-            return VendorSupportGuard.uncheckedRefusal(objectFqn, "renamed", //$NON-NLS-1$
-                "its adopted counterparts in the extensions could not be read: " + e.getMessage()); //$NON-NLS-1$
-        }
-        return locked.isEmpty() ? null
-            : VendorSupportGuard.cascadeRefusal(objectFqn, "renamed", //$NON-NLS-1$
-                "the rename would also rename its adopted counterpart in", locked); //$NON-NLS-1$
-    }
-
-    /** The target's adopted copy in each extension of {@code project}, keyed by how to name it. */
-    private static Map<String, EObject> adoptedCounterparts(IProject project, MdObject targetObject)
-    {
-        IV8ProjectManager projects = Activator.getDefault().getV8ProjectManager();
-        IModelObjectAdopter adopter = com._1c.g5.wiring.ServiceAccess.get(IModelObjectAdopter.class);
-        if (projects == null || adopter == null)
-        {
-            throw new IllegalStateException("the V8 project manager or the model object adopter is not available"); //$NON-NLS-1$
-        }
-        Map<String, EObject> result = new LinkedHashMap<>();
-        if (!adopter.isAdoptable(targetObject))
-        {
-            return result;
-        }
-        for (IExtensionProject extension : projects.getProjects(IExtensionProject.class))
-        {
-            if (!project.equals(extension.getParentProject()))
-            {
-                continue;
-            }
-            EObject adopted = adopter.getAdopted(targetObject, extension);
-            if (adopted != null)
-            {
-                result.put("the extension '" + extension.getProject().getName() + "'", adopted); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-        }
-        return result;
-    }
-
-    /**
-     * The counterparts {@code editable} does not allow changing, by their labels. Package-visible
-     * for tests.
-     *
-     * @param counterparts the adopted copies, keyed by how to name them
-     * @param editable whether an object may be changed
-     * @return the labels of the locked ones
-     */
-    static List<String> lockedCounterparts(Map<String, EObject> counterparts, Predicate<EObject> editable)
-    {
-        List<String> locked = new ArrayList<>();
-        counterparts.forEach((label, object) -> {
-            if (!editable.test(object))
-            {
-                locked.add(label);
-            }
-        });
-        return locked;
     }
 
     /** The FQN of the top object a support-lock problem names (bmGetFqn is for top objects only). */

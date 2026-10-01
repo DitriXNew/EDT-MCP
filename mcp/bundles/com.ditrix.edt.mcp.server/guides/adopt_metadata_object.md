@@ -20,4 +20,4 @@ JSON with `action` ('adopted', or 'alreadyAdopted' when it was already adopted),
 - No automatic undo: an adopted copy is removed with delete_metadata against the extension.
 
 ## Vendor support
-Adoption only reads the base configuration, so vendor support on it never blocks an adoption - adopting is the way to change a locked object. An extension with vendor support settings of its own refuses EVERY adoption, whichever of its objects are locked: an adoption can change more of the extension than the new copy (the adopted parent that receives it, a command group or other object it depends on, adopted along), and those cannot be listed before it runs. Nothing is changed; the way out is the user allowing changes in the extension's support settings.
+Vendor support never blocks an adoption: the base configuration is only read (adopting is the way to change a locked object), and EDT applies support only to a configuration's own (native) root, never inside the extension that receives the copy.

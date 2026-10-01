@@ -14,11 +14,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.function.Function;
 
-import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
-import org.eclipse.emf.ecore.InternalEObject;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -31,22 +32,16 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.validation.marker.Marker;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
-import com.e1c.g5.v8.dt.distribution.model.DistributionSupport;
-import com.e1c.g5.v8.dt.distribution.model.DistributionSupportFactory;
 
 /**
- * Vendor support in a configuration extension (#642): an adoption into an extension with support
- * settings is refused outright, because the adopter may change objects that cannot be listed
- * before it runs; and a quick fix whose variant may delete needs the delete permission as well.
+ * Vendor support around extensions (#642): an adoption writes only into the extension, which EDT
+ * never locks, so it is not checked; a quick fix whose variant may delete needs the delete
+ * permission as well as the edit one.
  */
 public class ExtensionVendorSupportTest
 {
-    private static final String EXTENSION = "SalesExtension"; //$NON-NLS-1$
-    private static final String WEIGHT = "Catalog.Products.Attribute.Weight"; //$NON-NLS-1$
-
     private IModelEditingSupport support;
     private Configuration base;
-    private Configuration extensionRoot;
     private Catalog products;
 
     @Before
@@ -57,7 +52,6 @@ public class ExtensionVendorSupportTest
         when(support.canDelete(any(), any())).thenReturn(true);
         VendorSupportGuard.setServiceForTests(() -> support);
         base = MdClassFactory.eINSTANCE.createConfiguration();
-        extensionRoot = MdClassFactory.eINSTANCE.createConfiguration();
         products = MdClassFactory.eINSTANCE.createCatalog();
         products.setName("Products"); //$NON-NLS-1$
         base.getCatalogs().add(products);
@@ -69,65 +63,22 @@ public class ExtensionVendorSupportTest
         VendorSupportGuard.setServiceForTests(null);
     }
 
-    // ==================== adopt_metadata_object: one rule, no receiver walk ====================
+    // ==================== adopt_metadata_object: support does not apply ====================
 
     @Test
-    public void testAnExtensionWithoutSupportSettingsTakesAdoptions()
+    public void testAdoptionNeverConsultsVendorSupport() throws IOException
     {
-        assertFalse(VendorSupportGuard.underVendorSupport(extensionRoot));
-        assertNull(VendorSupportGuard.adoptionRefusal(EXTENSION, WEIGHT,
-            () -> VendorSupportGuard.underVendorSupport(extensionRoot)));
-    }
-
-    @Test
-    public void testAnExtensionWithSupportSettingsRefusesEveryAdoption()
-    {
-        extensionRoot.setDistributionSettings(DistributionSupportFactory.eINSTANCE.createDistributionSupport());
-        // Every object EDT's own check could be asked about says "editable": the rule must not ask them.
-        assertTrue(VendorSupportGuard.underVendorSupport(extensionRoot));
-
-        String refusal = VendorSupportGuard.adoptionRefusal(EXTENSION, WEIGHT,
-            () -> VendorSupportGuard.underVendorSupport(extensionRoot));
-
-        assertNotNull("support anywhere in the extension refuses, whatever the receiver says", refusal); //$NON-NLS-1$
-        assertTrue(refusal, refusal.startsWith("'" + WEIGHT + "' cannot be adopted: the extension '" //$NON-NLS-1$ //$NON-NLS-2$
-            + EXTENSION + "' is under vendor support")); //$NON-NLS-1$
-        assertTrue("the refusal says why the receiver is not asked", //$NON-NLS-1$
-            refusal.contains("cannot be listed before it runs")); //$NON-NLS-1$
-        assertTrue(refusal.contains("Nothing was changed.")); //$NON-NLS-1$
-        assertFalse("an extension cannot adopt into itself - no adopt advice", //$NON-NLS-1$
-            refusal.contains("adopt_metadata_object")); //$NON-NLS-1$
-    }
-
-    @Test
-    public void testAnUnresolvedSupportLinkStillRefuses()
-    {
-        DistributionSupport settings = DistributionSupportFactory.eINSTANCE.createDistributionSupport();
-        ((InternalEObject)settings).eSetProxyURI(URI.createURI("bm://ext/Configuration.distr#/")); //$NON-NLS-1$
-        extensionRoot.setDistributionSettings(settings);
-
-        assertTrue("EDT ignores an unresolved link; failing closed does not", //$NON-NLS-1$
-            VendorSupportGuard.underVendorSupport(extensionRoot));
-    }
-
-    @Test
-    public void testAnUnreadableSupportStateRefuses()
-    {
-        String refusal = VendorSupportGuard.adoptionRefusal(EXTENSION, WEIGHT, () -> {
-            throw new IllegalStateException("model is rebuilding"); //$NON-NLS-1$
-        });
-
-        assertNotNull("an unanswerable check refuses", refusal); //$NON-NLS-1$
-        assertTrue(refusal, refusal.startsWith("Cannot check whether '" + WEIGHT + "' may be adopted")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue(refusal, refusal.contains("the support settings of the extension '" + EXTENSION //$NON-NLS-1$
-            + "' could not be read")); //$NON-NLS-1$
-    }
-
-    @Test
-    public void testAMissingExtensionRootRefuses()
-    {
-        assertNotNull(VendorSupportGuard.adoptionRefusal(EXTENSION, WEIGHT,
-            () -> VendorSupportGuard.underVendorSupport(null)));
+        // EDT reads support only for a NATIVE configuration root; an extension's root is ADOPTED,
+        // so nothing an adoption writes can be locked and the tool has nothing to ask.
+        byte[] bytes;
+        try (InputStream in = AdoptMetadataObjectTool.class.getResourceAsStream("AdoptMetadataObjectTool.class")) //$NON-NLS-1$
+        {
+            assertNotNull("the compiled tool must be readable", in); //$NON-NLS-1$
+            bytes = in.readAllBytes();
+        }
+        assertFalse("adopt_metadata_object must not refuse on vendor support", //$NON-NLS-1$
+            new String(bytes, StandardCharsets.ISO_8859_1).contains(
+                VendorSupportGuard.class.getName().replace('.', '/')));
     }
 
     // ==================== apply_quick_fix: a variant may delete ====================
