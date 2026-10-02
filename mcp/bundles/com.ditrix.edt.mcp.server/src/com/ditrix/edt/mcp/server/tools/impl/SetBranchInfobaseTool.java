@@ -30,6 +30,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
+import com.ditrix.edt.mcp.server.utils.git.BranchContexts;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -38,7 +39,8 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  * Attaches or detaches an EXISTING infobase (application) to/from a specific git
  * branch <em>context</em>, so the binding {@code list_git_branches} reports and
  * {@code switch_git_branch} follows automatically is recorded for that branch
- * (issue #281 phase 2).
+ * (issue #281 phase 2). The binding is stored under {@code refs/heads/<branch>}, the
+ * context EDT itself reads for the checked-out branch (#684, {@link BranchContexts}).
  * <p>
  * This is a pure EDT workspace-metadata write via
  * {@link IInfobaseAssociationManager} - it never opens or authenticates against a
@@ -58,7 +60,10 @@ public class SetBranchInfobaseTool implements IMcpTool
     /** MCP tool name. */
     public static final String NAME = "set_branch_infobase"; //$NON-NLS-1$
 
-    /** Input param: short branch name whose context to bind/unbind. */
+    /**
+     * Input param: the branch whose context to bind/unbind - its short name or its
+     * {@code refs/heads/...} ref; the binding is stored under the full ref ({@link BranchContexts}).
+     */
     private static final String KEY_BRANCH = "branch"; //$NON-NLS-1$
 
     /** Input param: {@code attach} (default) or {@code detach}. */
@@ -126,6 +131,9 @@ public class SetBranchInfobaseTool implements IMcpTool
             .objectProperty(KEY_BOUND,
                 "Read-back of the branch context after the change: {infobases: [...], " //$NON-NLS-1$
                 + "defaultInfobase}. Proves the base is now bound (attach) or gone (detach).") //$NON-NLS-1$
+            .stringProperty(McpKeys.MESSAGE,
+                "Present only when the change needs a note: a detach removed a legacy short-key binding, " //$NON-NLS-1$
+                + "or an attach succeeded but EDT did not record the requested default.") //$NON-NLS-1$
             .build();
     }
 
@@ -155,6 +163,14 @@ public class SetBranchInfobaseTool implements IMcpTool
             return actionError;
         }
         boolean attach = action == null || action.isEmpty() || ACTION_ATTACH.equalsIgnoreCase(action);
+
+        // A pure input check, before any repository access: a remote ref, a tag or a blank name can
+        // never be a branch context.
+        BranchContexts.Resolution branchTarget = BranchContexts.resolve(branch);
+        if (!branchTarget.ok())
+        {
+            return ToolResult.error(branchTarget.error()).toJson();
+        }
 
         GitRepositoryResolver.Resolution resolution = GitRepositoryResolver.resolve(projectName);
         if (!resolution.ok())
@@ -201,8 +217,33 @@ public class SetBranchInfobaseTool implements IMcpTool
         {
             return appRef.error();
         }
-        InfobaseReference ref = appRef.reference();
-        InfobaseAssociationContext ctx = InfobaseAssociationContext.of(branch);
+        return applyResolved(assocManager, project, branch, applicationId, appRef.reference(), attach, setDefault);
+    }
+
+    /**
+     * The binding change itself, with the association manager and the application's infobase already
+     * resolved (unit-testable without a live workspace).
+     * <p>
+     * Attach, set-default and the read-back use the context EDT itself keys the branch by,
+     * {@code refs/heads/<branch>} ({@link BranchContexts}) - a binding under the short name would
+     * never become the current context (#684). Detach removes the binding under that context first;
+     * when there is none, it removes one an older version of this tool wrote under the bare short name,
+     * and says so, so such entries can be cleaned up. Nothing is migrated automatically. A default EDT
+     * refuses after a successful attach (it records one only for an infobase also bound to the
+     * checked-out branch) leaves the attach in place and is reported in the answer's message, not as
+     * a failure; a platform failure storing the default is reported there too, and logged.
+     */
+    static String applyResolved(IInfobaseAssociationManager assocManager, IProject project, String branch,
+        String applicationId, InfobaseReference ref, boolean attach, boolean setDefault)
+    {
+        BranchContexts.Resolution resolution = BranchContexts.resolve(branch);
+        if (!resolution.ok())
+        {
+            return ToolResult.error(resolution.error()).toJson();
+        }
+        BranchContexts.Target target = resolution.target();
+        InfobaseAssociationContext ctx = target.context();
+        String note = null;
 
         try
         {
@@ -211,18 +252,31 @@ public class SetBranchInfobaseTool implements IMcpTool
                 assocManager.associate(project, ref, InfobaseAssociationSettings.alreadySynchronized(ctx));
                 if (setDefault)
                 {
-                    assocManager.setDefaultInfobase(project, ref, ctx);
+                    note = setDefaultAfterAttach(assocManager, project, applicationId, ref, target);
                 }
             }
             else
             {
-                if (!isCurrentlyBound(assocManager, project, ctx, ref))
+                InfobaseAssociationContext legacy = target.legacyContext();
+                if (isCurrentlyBound(assocManager, project, ctx, ref))
                 {
-                    return ToolResult.error("Application '" + applicationId + "' is not bound to branch " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "context '" + branch + "'; nothing to detach. Use list_git_branches to see " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "current bindings.").toJson(); //$NON-NLS-1$
+                    assocManager.dissociate(project, ref, ctx);
                 }
-                assocManager.dissociate(project, ref, ctx);
+                else if (legacy != null && isCurrentlyBound(assocManager, project, legacy, ref))
+                {
+                    assocManager.dissociate(project, ref, legacy);
+                    ctx = legacy;
+                    note = "Removed the binding stored under the legacy short key '" + target.shortName() //$NON-NLS-1$
+                        + "' (written by an older version of this tool; EDT never read it as a branch " //$NON-NLS-1$
+                        + "context). No binding existed under '" + target.fullRef() + "'."; //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                else
+                {
+                    return ToolResult.error("Application '" + applicationId + "' is not bound to branch '" //$NON-NLS-1$ //$NON-NLS-2$
+                        + target.shortName() + "' (context '" + target.fullRef() + "'), nor under the legacy " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "short key '" + target.shortName() + "'; nothing to detach. Use list_git_branches " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "to see current bindings.").toJson(); //$NON-NLS-1$
+                }
             }
         }
         catch (InfobaseAssociationException e)
@@ -243,7 +297,40 @@ public class SetBranchInfobaseTool implements IMcpTool
         {
             ok.put(KEY_BOUND, bound);
         }
+        if (note != null)
+        {
+            ok.put(McpKeys.MESSAGE, note);
+        }
         return ok.toJson();
+    }
+
+    /**
+     * Records the requested default after a successful attach. EDT refuses a default for a branch that
+     * is not checked out, unless the checked-out branch already has this base bound
+     * ({@link BranchContexts#defaultNotSetNote}); the attach then stands, and the
+     * refusal is returned as the answer's note instead of turning a done attach into a failure.
+     *
+     * @return {@code null} when the default was recorded, otherwise the note for the answer
+     */
+    private static String setDefaultAfterAttach(IInfobaseAssociationManager assocManager, IProject project,
+        String applicationId, InfobaseReference ref, BranchContexts.Target target)
+    {
+        try
+        {
+            assocManager.setDefaultInfobase(project, ref, target.context());
+            return null;
+        }
+        catch (IllegalArgumentException e)
+        {
+            // EDT's refusal (the base is not bound to the checked-out branch): a remedy, not a fault.
+            return BranchContexts.defaultNotSetNote(applicationId, target, e);
+        }
+        catch (InfobaseAssociationException e)
+        {
+            Activator.logError("set_branch_infobase: setDefault failed for branch '" + target.shortName() //$NON-NLS-1$
+                + "', application '" + applicationId + "'", e); //$NON-NLS-1$ //$NON-NLS-2$
+            return BranchContexts.defaultNotSetNote(applicationId, target, e);
+        }
     }
 
     /**
