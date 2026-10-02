@@ -6,22 +6,33 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.AutoConfirmerArmCounts;
+import com.ditrix.edt.mcp.server.utils.LaunchUpdateDialogAutoConfirmer;
 
 /**
  * Ratchet tests for {@link BuildExternalObjectsTool} that exercise tool metadata, the
@@ -319,6 +330,196 @@ public class BuildExternalObjectsToolTest
             names.add(matcher.group(1));
         }
         return names;
+    }
+
+    // ==================== #618: release the auto-confirmer only when it armed ====================
+
+    /**
+     * A headless arm is a no-op. Releasing after it anyway would take one count from a concurrent
+     * launch that did arm, and that launch's modals would stop being auto-answered.
+     */
+    @Test
+    public void testANoOpArmIsNotReleased()
+    {
+        List<String> events = new ArrayList<>();
+
+        String interrupted = BuildExternalObjectsTool.scheduleAndJoinArmed(arm(events, false),
+            disarm(events), schedule(events, null), join(events, false), onInterrupted(events));
+
+        assertNull("a wait that ended normally reports no interruption", interrupted);
+        assertEquals("a no-op arm must not be released", Arrays.asList("arm", "schedule", "join"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            events);
+    }
+
+    /** An arm that took effect is released exactly once, after the wait. */
+    @Test
+    public void testAnArmThatTookEffectIsReleasedOnceAfterTheWait()
+    {
+        List<String> events = new ArrayList<>();
+
+        BuildExternalObjectsTool.scheduleAndJoinArmed(arm(events, true), disarm(events),
+            schedule(events, null), join(events, false), onInterrupted(events));
+
+        assertEquals("arm, then schedule and wait, then release once",
+            Arrays.asList("arm", "schedule", "join", "disarm"), events); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    /**
+     * Scheduling stands inside the {@code try} the release guards: when it throws, the arm it
+     * followed is still released instead of being held for the rest of the session.
+     */
+    @Test
+    public void testASchedulingFailureStillReleasesTheArm()
+    {
+        List<String> events = new ArrayList<>();
+        IllegalStateException failure = new IllegalStateException("job manager is shut down"); //$NON-NLS-1$
+
+        try
+        {
+            BuildExternalObjectsTool.scheduleAndJoinArmed(arm(events, true), disarm(events),
+                schedule(events, failure), join(events, false), onInterrupted(events));
+            fail("the scheduling failure must propagate"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertSame(failure, e);
+        }
+
+        assertEquals("a scheduling failure must still release the arm",
+            Arrays.asList("arm", "schedule", "disarm"), events); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * An interrupted wait builds its response and restores the interrupt flag, then releases the
+     * arm — the order the inline code had.
+     */
+    @Test
+    public void testAnInterruptedWaitReportsAndThenReleases()
+    {
+        List<String> events = new ArrayList<>();
+
+        String interrupted = BuildExternalObjectsTool.scheduleAndJoinArmed(arm(events, true),
+            disarm(events), schedule(events, null), join(events, true), onInterrupted(events));
+        boolean flagRestored = Thread.interrupted();
+
+        assertEquals("interrupted-response", interrupted); //$NON-NLS-1$
+        assertTrue("the interrupt flag must be restored", flagRestored);
+        assertEquals("respond to the interruption, then release",
+            Arrays.asList("arm", "schedule", "join", "interrupted", "disarm"), events); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+    }
+
+    /**
+     * The production arm hands back what the auto-confirmer reported instead of assuming success:
+     * no workbench runs here, so it must report that nothing was armed.
+     */
+    @Test
+    public void testTheProductionArmReportsAHeadlessNoOp()
+    {
+        assertFalse("the build's arm must report the auto-confirmer's own result",
+            BuildExternalObjectsTool.armLaunchDialogs());
+    }
+
+    /**
+     * The pair {@code runBuild} hands the seam, end to end: the build's own arm is a headless
+     * no-op, so its release must leave alone the arms a concurrent launch holds. A pair that
+     * assumed its arm succeeded would take one count of each matcher from that launch.
+     */
+    @Test
+    public void testTheBuildLeavesAConcurrentLaunchsArmsAlone()
+    {
+        int[] before = AutoConfirmerArmCounts.counts();
+        AutoConfirmerArmCounts.arm(true, true, true);
+        try
+        {
+            List<String> events = new ArrayList<>();
+
+            String interrupted = BuildExternalObjectsTool.scheduleAndJoinBuild(
+                schedule(events, null), join(events, false), onInterrupted(events));
+
+            assertNull("a wait that ended normally reports no interruption", interrupted);
+            assertEquals("the build is scheduled and awaited", Arrays.asList("schedule", "join"), //$NON-NLS-1$ //$NON-NLS-2$
+                events);
+            assertArrayEquals("the concurrent launch's arms must survive the build's release",
+                new int[] { before[0] + 1, before[1] + 1, before[2] + 1 },
+                AutoConfirmerArmCounts.counts());
+        }
+        finally
+        {
+            // Give back only what the simulated launch still holds.
+            int[] after = AutoConfirmerArmCounts.counts();
+            LaunchUpdateDialogAutoConfirmer.disarm(after[0] > before[0], after[1] > before[1],
+                after[2] > before[2]);
+        }
+    }
+
+    /**
+     * The build's release gives back every matcher its arm takes when a display is present —
+     * update, session and restructure. A release narrower than the arm would leave the rest armed
+     * for every later modal of the session.
+     */
+    @Test
+    public void testTheBuildsReleaseGivesBackEveryMatcherItsArmTakes()
+    {
+        int[] before = AutoConfirmerArmCounts.counts();
+        // What armLaunchDialogs() takes when it does arm; headless it cannot, so take it here.
+        AutoConfirmerArmCounts.arm(true, true, true);
+        try
+        {
+            BuildExternalObjectsTool.disarmLaunchDialogs();
+
+            assertArrayEquals("the release must give back the update, session and restructure arms",
+                before, AutoConfirmerArmCounts.counts());
+        }
+        finally
+        {
+            int[] after = AutoConfirmerArmCounts.counts();
+            LaunchUpdateDialogAutoConfirmer.disarm(after[0] > before[0], after[1] > before[1],
+                after[2] > before[2]);
+        }
+    }
+
+    private static BooleanSupplier arm(List<String> events, boolean result)
+    {
+        return () -> {
+            events.add("arm"); //$NON-NLS-1$
+            return result;
+        };
+    }
+
+    private static Runnable disarm(List<String> events)
+    {
+        return () -> events.add("disarm"); //$NON-NLS-1$
+    }
+
+    private static Runnable schedule(List<String> events, RuntimeException failure)
+    {
+        return () -> {
+            events.add("schedule"); //$NON-NLS-1$
+            if (failure != null)
+            {
+                throw failure;
+            }
+        };
+    }
+
+    private static BuildExternalObjectsTool.InterruptibleJoin join(List<String> events,
+        boolean interrupt)
+    {
+        return () -> {
+            events.add("join"); //$NON-NLS-1$
+            if (interrupt)
+            {
+                throw new InterruptedException("test"); //$NON-NLS-1$
+            }
+        };
+    }
+
+    private static Supplier<String> onInterrupted(List<String> events)
+    {
+        return () -> {
+            events.add("interrupted"); //$NON-NLS-1$
+            return "interrupted-response"; //$NON-NLS-1$
+        };
     }
 
     private static boolean isLowerCamelCase(String name)
