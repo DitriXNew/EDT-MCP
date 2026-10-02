@@ -837,24 +837,108 @@ public class ProjectStateCheckerTest
     @Test
     public void modelDataIsComputedWhenItsSegmentsAre()
     {
-        assertTrue(ProjectStateChecker.isModelDataComputed(managerThatAnswers(true, false)));
+        assertTrue(ProjectStateChecker.isModelDataComputed(managerThatAnswers(true, false, false)));
     }
 
     /** Validation still running is irrelevant; an uncomputed model segment is not. */
     @Test
     public void pendingModelSegmentsAreNotReady()
     {
-        assertFalse(ProjectStateChecker.isModelDataComputed(managerThatAnswers(false, false)));
+        assertFalse(ProjectStateChecker.isModelDataComputed(managerThatAnswers(false, false, false)));
     }
 
     /**
-     * An ACTIVE model synchronisation is tracked separately from the pipeline, so its contexts may
-     * not be enqueued yet and the segments would still read as computed for the PREVIOUS model.
+     * Issue #699, THE regression pin: the cached {@code isModelSyncActive} flag is written only when
+     * derived-data work is scheduled, activated or recovered, or a computation ends or is unblocked,
+     * and the end of a background synchronisation does not refresh it. With nothing scheduled ({@code isAllComputed()} true) and the model segments
+     * computed, a flag left {@code true} must not keep every metadata write refused forever.
      */
     @Test
-    public void activeModelSynchronisationIsNeverReady()
+    public void aStaleSyncFlagWithAnEmptyPipelineIsReady()
     {
-        assertFalse(ProjectStateChecker.isModelDataComputed(managerThatAnswers(true, true)));
+        assertTrue(ProjectStateChecker.isModelDataComputed(managerThatAnswers(true, true, true)));
+    }
+
+    /**
+     * A synchronisation WITH scheduled work is the case the flag exists for: its contexts are in the
+     * pipeline, the segments may still read as computed for the PREVIOUS model, and the gate must
+     * stay shut.
+     */
+    @Test
+    public void aSyncFlagWithScheduledWorkIsNotReady()
+    {
+        assertFalse(ProjectStateChecker.isModelDataComputed(managerThatAnswers(true, true, false)));
+    }
+
+    /**
+     * Without the sync flag, scheduled work in the pipeline does not refuse: the pipeline probe only
+     * qualifies the flag, it is not a gate of its own (validation running after the build must not
+     * hold model edits back).
+     */
+    @Test
+    public void withoutASyncFlagScheduledWorkDoesNotRefuse()
+    {
+        assertTrue(ProjectStateChecker.isModelDataComputed(managerThatAnswers(true, false, false)));
+    }
+
+    /** Without the sync flag, an empty pipeline still does not stand in for the model segments. */
+    @Test
+    public void withoutASyncFlagAnEmptyPipelineStillNeedsTheSegments()
+    {
+        assertFalse(ProjectStateChecker.isModelDataComputed(managerThatAnswers(false, false, true)));
+    }
+
+    /** An empty pipeline admits a stale flag, never an uncomputed model segment. */
+    @Test
+    public void anEmptyPipelineDoesNotBypassTheSegmentCheck()
+    {
+        assertFalse(ProjectStateChecker.isModelDataComputed(managerThatAnswers(false, true, true)));
+    }
+
+    /**
+     * A status that cannot be read is still never proof of readiness - even with an empty pipeline
+     * and computed segments, which is exactly the state the stale-flag admission lets through.
+     */
+    @Test
+    public void anUnreadableStatusStaysNotReadyEvenWithAnEmptyPipeline()
+    {
+        IDerivedDataManager noStatus = managerThatAnswers(true, false, true);
+        when(noStatus.getDerivedDataStatus()).thenReturn(null);
+        assertFalse(ProjectStateChecker.isModelDataComputed(noStatus));
+
+        IDerivedDataManager throwing = managerThatAnswers(true, false, true);
+        when(throwing.getDerivedDataStatus()).thenThrow(new IllegalStateException("no status")); //$NON-NLS-1$
+        assertFalse(ProjectStateChecker.isModelDataComputed(throwing));
+    }
+
+    /** A pipeline probe that throws is not an empty pipeline: the flag still holds the gate shut. */
+    @Test
+    public void aThrowingPipelineProbeIsNotReady()
+    {
+        IDerivedDataManager manager = managerThatAnswers(true, true, true);
+        when(manager.isAllComputed()).thenThrow(new IllegalStateException("no pipeline")); //$NON-NLS-1$
+        assertFalse(ProjectStateChecker.isModelDataComputed(manager));
+    }
+
+    /**
+     * The SECOND read of the flag (after the segment check) goes through the same predicate: a flag
+     * that flips to {@code true} between the two reads with nothing scheduled is the same stale
+     * flag, and must not refuse.
+     */
+    @Test
+    public void aFlagThatFlipsBetweenTheReadsWithAnEmptyPipelineIsReady()
+    {
+        assertTrue(ProjectStateChecker.isModelDataComputed(managerWhoseFlagFlips(true)));
+    }
+
+    /**
+     * ...while a flag that flips to {@code true} between the two reads with work scheduled is a
+     * synchronisation that started during the probe, and the second read must still refuse it.
+     */
+    @Test
+    public void aFlagThatFlipsBetweenTheReadsWithScheduledWorkIsNotReady()
+    {
+        assertFalse(ProjectStateChecker.isModelDataComputed(managerWhoseFlagFlips(false)));
     }
 
     /**
@@ -872,7 +956,7 @@ public class ProjectStateCheckerTest
         when(throwing.getDerivedDataStatus()).thenThrow(new IllegalStateException("no pipeline")); //$NON-NLS-1$
         assertFalse(ProjectStateChecker.isModelDataComputed(throwing));
 
-        IDerivedDataManager unsupported = managerThatAnswers(true, false);
+        IDerivedDataManager unsupported = managerThatAnswers(true, false, false);
         when(unsupported.isComputed(ArgumentMatchers.<java.util.Collection<String>> any()))
             .thenThrow(new IllegalArgumentException("Unsupported segment is specified")); //$NON-NLS-1$
         assertFalse(ProjectStateChecker.isModelDataComputed(unsupported));
@@ -882,7 +966,7 @@ public class ProjectStateCheckerTest
     @Test
     public void theProbeAsksOnlyForTheModelSegments()
     {
-        IDerivedDataManager manager = managerThatAnswers(true, false);
+        IDerivedDataManager manager = managerThatAnswers(true, false, false);
 
         ProjectStateChecker.isModelDataComputed(manager);
 
@@ -895,7 +979,14 @@ public class ProjectStateCheckerTest
             asked.getValue().contains("L_CHECKS_SEGMENT")); //$NON-NLS-1$
     }
 
-    private static IDerivedDataManager managerThatAnswers(boolean computed, boolean syncActive)
+    /**
+     * @param computed what {@code isComputed(MODEL_SEGMENTS)} answers
+     * @param syncActive what the CACHED {@code DerivedDataStatus.isModelSyncActive()} answers
+     * @param allComputed what the live {@code isAllComputed()} answers - {@code true} means nothing
+     *     is scheduled in the pipeline
+     */
+    private static IDerivedDataManager managerThatAnswers(boolean computed, boolean syncActive,
+        boolean allComputed)
     {
         DerivedDataStatus status = mock(DerivedDataStatus.class);
         when(status.isModelSyncActive()).thenReturn(syncActive);
@@ -903,6 +994,21 @@ public class ProjectStateCheckerTest
         when(manager.getDerivedDataStatus()).thenReturn(status);
         when(manager.isComputed(ArgumentMatchers.<java.util.Collection<String>> any()))
             .thenReturn(computed);
+        when(manager.isAllComputed()).thenReturn(allComputed);
+        return manager;
+    }
+
+    /**
+     * Model segments computed; the cached sync flag reads {@code false} on the first read and
+     * {@code true} on every later one - a flag that flips between the gate's two reads.
+     *
+     * @param allComputed what the live {@code isAllComputed()} answers
+     */
+    private static IDerivedDataManager managerWhoseFlagFlips(boolean allComputed)
+    {
+        IDerivedDataManager manager = managerThatAnswers(true, false, allComputed);
+        DerivedDataStatus status = manager.getDerivedDataStatus();
+        when(status.isModelSyncActive()).thenReturn(false, true);
         return manager;
     }
 }
