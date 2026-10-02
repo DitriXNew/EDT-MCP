@@ -20,7 +20,6 @@ import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
-import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.model.EditingMode;
@@ -410,14 +409,7 @@ public final class VendorSupportGuard
     /** The FQN-style address of a walked object: its type and name, then {@code Kind.Name} per level. */
     private static String objectAddress(MdObject object)
     {
-        EObject container = object.eContainer();
-        EStructuralFeature feature = object.eContainingFeature();
-        if (container instanceof MdObject && !(container instanceof Configuration) && feature != null)
-        {
-            return objectAddress((MdObject)container) + '.'
-                + MetadataNodeResolver.kindTokenForFeature(feature.getName()) + '.' + object.getName();
-        }
-        return object.eClass().getName() + '.' + object.getName();
+        return MetadataNodeResolver.addressOf(object);
     }
 
     /**

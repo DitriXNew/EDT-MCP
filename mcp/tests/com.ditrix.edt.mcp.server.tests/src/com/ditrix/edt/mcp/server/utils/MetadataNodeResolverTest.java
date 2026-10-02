@@ -14,12 +14,37 @@ import static org.junit.Assert.assertTrue;
 
 import static org.mockito.Mockito.mock;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.core.platform.IExternalObjectProject;
+import com._1c.g5.v8.dt.metadata.mdclass.AccountingRegister;
+import com._1c.g5.v8.dt.metadata.mdclass.AccumulationRegister;
+import com._1c.g5.v8.dt.metadata.mdclass.CalculationRegister;
+import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
+import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
+import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
+import com._1c.g5.v8.dt.metadata.mdclass.CatalogTabularSection;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfAccounts;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.Cube;
+import com._1c.g5.v8.dt.metadata.mdclass.Dimension;
+import com._1c.g5.v8.dt.metadata.mdclass.Document;
+import com._1c.g5.v8.dt.metadata.mdclass.DocumentJournal;
+import com._1c.g5.v8.dt.metadata.mdclass.DocumentTabularSection;
+import com._1c.g5.v8.dt.metadata.mdclass.HTTPService;
+import com._1c.g5.v8.dt.metadata.mdclass.InformationRegister;
+import com._1c.g5.v8.dt.metadata.mdclass.IntegrationService;
+import com._1c.g5.v8.dt.metadata.mdclass.IntegrationServiceChannel;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.Method;
+import com._1c.g5.v8.dt.metadata.mdclass.TabularSectionAttribute;
+import com._1c.g5.v8.dt.metadata.mdclass.Task;
+import com._1c.g5.v8.dt.metadata.mdclass.URLTemplate;
+import com._1c.g5.v8.dt.metadata.mdclass.WebService;
 
 /**
  * Tests for the pure, model-independent logic of {@link MetadataNodeResolver}: FQN arity validation
@@ -346,5 +371,177 @@ public class MetadataNodeResolverTest
         assertNull(r.node);
         assertEquals("Catalog.X", r.fqn); //$NON-NLS-1$
         assertFalse(r.yoFallback);
+    }
+
+    // ==================== addressOf / resolvableAddressOf (#685) ====================
+
+    @Test
+    public void testAddressOfNamesEveryLevelByItsKindToken()
+    {
+        Document sale = named(MdClassFactory.eINSTANCE.createDocument(), "Sale"); //$NON-NLS-1$
+        DocumentTabularSection goods = named(MdClassFactory.eINSTANCE.createDocumentTabularSection(), "Goods"); //$NON-NLS-1$
+        sale.getTabularSections().add(goods);
+        TabularSectionAttribute price = named(MdClassFactory.eINSTANCE.createTabularSectionAttribute(), "Price"); //$NON-NLS-1$
+        goods.getAttributes().add(price);
+
+        assertEquals("Document.Sale.TabularSection.Goods.Attribute.Price", MetadataNodeResolver.addressOf(price)); //$NON-NLS-1$
+        assertEquals("Document.Sale.TabularSection.Goods.Attribute.Price", //$NON-NLS-1$
+            MetadataNodeResolver.resolvableAddressOf(price));
+        assertEquals("Document.Sale", MetadataNodeResolver.resolvableAddressOf(sale)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheAddressUsesTheProgrammaticNameNotTheSynonym()
+    {
+        Catalog goods = named(MdClassFactory.eINSTANCE.createCatalog(), "Goods"); //$NON-NLS-1$
+        CatalogAttribute weight = named(MdClassFactory.eINSTANCE.createCatalogAttribute(), "Weight"); //$NON-NLS-1$
+        weight.getSynonym().put("en", "Item weight"); //$NON-NLS-1$ //$NON-NLS-2$
+        goods.getAttributes().add(weight);
+
+        assertEquals("Catalog.Goods.Attribute.Weight", MetadataNodeResolver.resolvableAddressOf(weight)); //$NON-NLS-1$
+        assertEquals("Catalog.Goods.Attribute.Weight", MetadataNodeResolver.addressOf(weight)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolvableAddressIsNullForAKindTheGrammarLacks()
+    {
+        IntegrationService bus = named(MdClassFactory.eINSTANCE.createIntegrationService(), "Bus"); //$NON-NLS-1$
+        IntegrationServiceChannel in = named(MdClassFactory.eINSTANCE.createIntegrationServiceChannel(), "In"); //$NON-NLS-1$
+        bus.getIntegrationServiceChannels().add(in);
+        Catalog goods = named(MdClassFactory.eINSTANCE.createCatalog(), "Goods"); //$NON-NLS-1$
+        CatalogForm item = named(MdClassFactory.eINSTANCE.createCatalogForm(), "Item"); //$NON-NLS-1$
+        goods.getForms().add(item);
+
+        assertNull(MetadataNodeResolver.resolvableAddressOf(in));
+        assertNull(MetadataNodeResolver.resolvableAddressOf(item));
+        // The label form still prints every level - that is what the vendor-support refusals name.
+        assertEquals("IntegrationService.Bus.IntegrationServiceChannel.In", MetadataNodeResolver.addressOf(in)); //$NON-NLS-1$
+        assertEquals("Catalog.Goods.Form.Item", MetadataNodeResolver.addressOf(item)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolvableAddressIsNullBelowAnOwnerThatIsNotAConfigurationType()
+    {
+        // A cube's dimensions sit in a collection the grammar knows, but a Cube is not a top-level
+        // configuration type: "Cube.Sales.Dimension.Region" would not resolve.
+        Cube sales = named(MdClassFactory.eINSTANCE.createCube(), "Sales"); //$NON-NLS-1$
+        Dimension region = named(MdClassFactory.eINSTANCE.createDimension(), "Region"); //$NON-NLS-1$
+        sales.getDimensions().add(region);
+
+        assertNull(MetadataNodeResolver.resolvableAddressOf(region));
+    }
+
+    @Test
+    public void testResolvableAddressIsNullForAnUnnamedLevel()
+    {
+        Catalog unnamed = MdClassFactory.eINSTANCE.createCatalog();
+        CatalogAttribute weight = named(MdClassFactory.eINSTANCE.createCatalogAttribute(), "Weight"); //$NON-NLS-1$
+        unnamed.getAttributes().add(weight);
+        Catalog goods = named(MdClassFactory.eINSTANCE.createCatalog(), "Goods"); //$NON-NLS-1$
+        CatalogAttribute anonymous = MdClassFactory.eINSTANCE.createCatalogAttribute();
+        goods.getAttributes().add(anonymous);
+
+        assertNull(MetadataNodeResolver.resolvableAddressOf(weight));
+        assertNull(MetadataNodeResolver.resolvableAddressOf(anonymous));
+        assertNull(MetadataNodeResolver.resolvableAddressOf(null));
+    }
+
+    /**
+     * The contract: for every subordinate kind a role right can name and the writer can address, the
+     * printed address resolves back to the SAME object through {@link MetadataNodeResolver#resolveExisting}.
+     */
+    @Test
+    public void testEverySubordinateKindRoundTripsThroughResolveExisting()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        config.setName("Cfg"); //$NON-NLS-1$
+        MdClassFactory f = MdClassFactory.eINSTANCE;
+        List<MdObject> targets = new ArrayList<>();
+
+        Catalog catalog = named(f.createCatalog(), "Goods"); //$NON-NLS-1$
+        config.getCatalogs().add(catalog);
+        targets.add(catalog);
+        targets.add(add(catalog.getAttributes(), named(f.createCatalogAttribute(), "Weight"))); //$NON-NLS-1$
+        CatalogTabularSection lines = add(catalog.getTabularSections(),
+            named(f.createCatalogTabularSection(), "Lines")); //$NON-NLS-1$
+        targets.add(lines);
+        targets.add(add(lines.getAttributes(), named(f.createTabularSectionAttribute(), "Qty"))); //$NON-NLS-1$
+        targets.add(add(catalog.getCommands(), named(f.createCatalogCommand(), "Print"))); //$NON-NLS-1$
+
+        Document document = named(f.createDocument(), "Sale"); //$NON-NLS-1$
+        config.getDocuments().add(document);
+        targets.add(add(document.getAttributes(), named(f.createDocumentAttribute(), "Customer"))); //$NON-NLS-1$
+        DocumentTabularSection goods = add(document.getTabularSections(),
+            named(f.createDocumentTabularSection(), "Goods")); //$NON-NLS-1$
+        targets.add(goods);
+        targets.add(add(goods.getAttributes(), named(f.createTabularSectionAttribute(), "Price"))); //$NON-NLS-1$
+
+        InformationRegister prices = named(f.createInformationRegister(), "Prices"); //$NON-NLS-1$
+        config.getInformationRegisters().add(prices);
+        targets.add(add(prices.getDimensions(), named(f.createInformationRegisterDimension(), "Product"))); //$NON-NLS-1$
+        targets.add(add(prices.getResources(), named(f.createInformationRegisterResource(), "Price"))); //$NON-NLS-1$
+        targets.add(add(prices.getAttributes(), named(f.createInformationRegisterAttribute(), "Note"))); //$NON-NLS-1$
+
+        AccumulationRegister stock = named(f.createAccumulationRegister(), "Stock"); //$NON-NLS-1$
+        config.getAccumulationRegisters().add(stock);
+        targets.add(add(stock.getDimensions(), named(f.createAccumulationRegisterDimension(), "Item"))); //$NON-NLS-1$
+        targets.add(add(stock.getResources(), named(f.createAccumulationRegisterResource(), "Qty"))); //$NON-NLS-1$
+
+        AccountingRegister ledger = named(f.createAccountingRegister(), "Ledger"); //$NON-NLS-1$
+        config.getAccountingRegisters().add(ledger);
+        targets.add(add(ledger.getDimensions(), named(f.createAccountingRegisterDimension(), "Company"))); //$NON-NLS-1$
+        targets.add(add(ledger.getResources(), named(f.createAccountingRegisterResource(), "Amount"))); //$NON-NLS-1$
+
+        CalculationRegister payroll = named(f.createCalculationRegister(), "Payroll"); //$NON-NLS-1$
+        config.getCalculationRegisters().add(payroll);
+        targets.add(add(payroll.getDimensions(), named(f.createCalculationRegisterDimension(), "Employee"))); //$NON-NLS-1$
+        targets.add(add(payroll.getRecalculations(), named(f.createRecalculation(), "Again"))); //$NON-NLS-1$
+
+        ChartOfAccounts accounts = named(f.createChartOfAccounts(), "Main"); //$NON-NLS-1$
+        config.getChartsOfAccounts().add(accounts);
+        targets.add(add(accounts.getAccountingFlags(), named(f.createAccountingFlag(), "Currency"))); //$NON-NLS-1$
+        targets.add(add(accounts.getExtDimensionAccountingFlags(),
+            named(f.createExtDimensionAccountingFlag(), "Amount"))); //$NON-NLS-1$
+
+        Task task = named(f.createTask(), "Approve"); //$NON-NLS-1$
+        config.getTasks().add(task);
+        targets.add(add(task.getAddressingAttributes(), named(f.createAddressingAttribute(), "Performer"))); //$NON-NLS-1$
+
+        DocumentJournal journal = named(f.createDocumentJournal(), "All"); //$NON-NLS-1$
+        config.getDocumentJournals().add(journal);
+        targets.add(add(journal.getColumns(), named(f.createColumn(), "Partner"))); //$NON-NLS-1$
+
+        WebService ws = named(f.createWebService(), "Exchange"); //$NON-NLS-1$
+        config.getWebServices().add(ws);
+        targets.add(add(ws.getOperations(), named(f.createOperation(), "Ping"))); //$NON-NLS-1$
+
+        HTTPService http = named(f.createHTTPService(), "Api"); //$NON-NLS-1$
+        config.getHttpServices().add(http);
+        URLTemplate items = add(http.getUrlTemplates(), named(f.createURLTemplate(), "Items")); //$NON-NLS-1$
+        Method get = add(items.getMethods(), named(f.createMethod(), "Get")); //$NON-NLS-1$
+        targets.add(get);
+
+        for (MdObject target : targets)
+        {
+            String address = MetadataNodeResolver.resolvableAddressOf(target);
+            assertNotNull("no address for " + target.eClass().getName() + " " + target.getName(), address); //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, address);
+            assertNotNull(address + " does not resolve", node); //$NON-NLS-1$
+            assertTrue(address + " resolves to another object", node.object == target); //$NON-NLS-1$
+        }
+        assertEquals("HTTPService.Api.UrlTemplate.Items.Method.Get", //$NON-NLS-1$
+            MetadataNodeResolver.resolvableAddressOf(get));
+    }
+
+    private static <T extends MdObject> T named(T object, String name)
+    {
+        object.setName(name);
+        return object;
+    }
+
+    private static <T> T add(List<? super T> list, T element)
+    {
+        list.add(element);
+        return element;
     }
 }
