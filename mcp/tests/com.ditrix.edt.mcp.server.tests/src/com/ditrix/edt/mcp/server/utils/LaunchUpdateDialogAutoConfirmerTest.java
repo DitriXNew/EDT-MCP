@@ -1349,4 +1349,73 @@ public class LaunchUpdateDialogAutoConfirmerTest
         queued.get().run();
         assertTrue("the work the caller chose not to wait for still runs", ran.get());
     }
+
+    // ==================== #618: every arm overload reports whether it armed ====================
+
+    /*
+     * The four short arm overloads used to be void and dropped the result of the arm they delegate
+     * to. A caller then could not tell a headless no-op from a real arm, released unconditionally,
+     * and took one count from a concurrent launch that DID arm. No workbench runs in this harness,
+     * so each overload must report false here; one test per overload so a mutation of any single
+     * one fails by name.
+     */
+
+    @Test
+    public void testTheNoArgumentArmReportsAHeadlessNoOp()
+    {
+        assertFalse("arm() must report that nothing was armed without a workbench display",
+            LaunchUpdateDialogAutoConfirmer.arm());
+    }
+
+    @Test
+    public void testTheTwoArgumentArmReportsAHeadlessNoOp()
+    {
+        assertFalse("arm(update, session) must report that nothing was armed without a display",
+            LaunchUpdateDialogAutoConfirmer.arm(true, true));
+    }
+
+    @Test
+    public void testTheThreeArgumentArmReportsAHeadlessNoOp()
+    {
+        assertFalse("arm(update, session, restructure) must report that nothing was armed without a display",
+            LaunchUpdateDialogAutoConfirmer.arm(true, true, true));
+    }
+
+    @Test
+    public void testTheFourArgumentArmReportsAHeadlessNoOp()
+    {
+        assertFalse("arm(update, session, restructure, policy) must report that nothing was armed without a display",
+            LaunchUpdateDialogAutoConfirmer.arm(true, true, true, ExternalInfobaseChangesPolicy.OVERRIDE));
+    }
+
+    /**
+     * Demonstrates why the reported result matters: a caller that conditions its release on it
+     * leaves intact the count a concurrent launch took in between. The condition is written here,
+     * in the test, so what this pins is the returned value; the production caller's own condition
+     * is pinned in {@code BuildExternalObjectsToolTest}.
+     */
+    @Test
+    public void testANoOpArmDoesNotReleaseTheCountAConcurrentLaunchTook()
+    {
+        int before = LaunchUpdateDialogAutoConfirmer.armCountsForTest()[0];
+        boolean armed = LaunchUpdateDialogAutoConfirmer.arm(true, true, true);
+        // A concurrent launch arms for real between this caller's arm and its finally.
+        LaunchUpdateDialogAutoConfirmer.armMatchersForTest(true, false, false);
+        try
+        {
+            if (armed)
+            {
+                LaunchUpdateDialogAutoConfirmer.disarm(true, true, true);
+            }
+            assertEquals("the concurrent launch's update arm must survive this caller's release",
+                before + 1, LaunchUpdateDialogAutoConfirmer.armCountsForTest()[0]);
+        }
+        finally
+        {
+            // Give back exactly the count the simulated concurrent launch took.
+            LaunchUpdateDialogAutoConfirmer.disarm(true, false, false);
+        }
+        assertEquals("the test must leave the shared count as it found it", before,
+            LaunchUpdateDialogAutoConfirmer.armCountsForTest()[0]);
+    }
 }

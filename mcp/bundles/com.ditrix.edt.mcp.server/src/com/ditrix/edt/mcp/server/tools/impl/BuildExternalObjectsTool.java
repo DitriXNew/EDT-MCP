@@ -20,6 +20,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -556,22 +558,16 @@ public class BuildExternalObjectsTool implements IMcpTool
         };
 
         // Arm the launch update + restructure auto-confirmers around the whole build (the dump may
-        // route through EDT's "Application update" / "Restructure data" modals). Disarm in finally.
-        LaunchUpdateDialogAutoConfirmer.arm(true, true, true);
-        buildJob.setUser(false);
-        McpJobs.schedule(buildJob);
-        try
+        // route through EDT's "Application update" / "Restructure data" modals).
+        String interrupted = scheduleAndJoinBuild(() -> {
+                buildJob.setUser(false);
+                McpJobs.schedule(buildJob);
+            },
+            () -> buildJob.join(BUILD_TIMEOUT_MS, new NullProgressMonitor()),
+            () -> inFlightBuildError(bc, "External object build was interrupted.")); //$NON-NLS-1$
+        if (interrupted != null)
         {
-            buildJob.join(BUILD_TIMEOUT_MS, new NullProgressMonitor());
-        }
-        catch (InterruptedException e)
-        {
-            Thread.currentThread().interrupt();
-            return inFlightBuildError(bc, "External object build was interrupted."); //$NON-NLS-1$
-        }
-        finally
-        {
-            LaunchUpdateDialogAutoConfirmer.disarm(true, true, true);
+            return interrupted;
         }
 
         if (buildJob.getState() != Job.NONE)
@@ -596,6 +592,92 @@ public class BuildExternalObjectsTool implements IMcpTool
         }
 
         return buildResponse(bc, results, System.currentTimeMillis() - buildStartMs);
+    }
+
+    /** A wait that can be interrupted: {@link Job#join(long, IProgressMonitor)} as a seam. */
+    @FunctionalInterface
+    interface InterruptibleJoin
+    {
+        /**
+         * Waits.
+         *
+         * @throws InterruptedException when the waiting thread is interrupted
+         */
+        void join() throws InterruptedException;
+    }
+
+    /**
+     * Schedules the build and waits for it inside the launch-dialog auto-confirmer window.
+     *
+     * <p>The arm is taken immediately before the {@code try} whose {@code finally} releases it, and
+     * the release runs only when the arm reported that it armed something. An arm without a
+     * workbench display is a no-op; releasing after it anyway would take one count from a
+     * concurrent launch that did arm, and that launch's modals would stop being auto-answered.
+     * Scheduling stands inside the {@code try}, so a scheduling failure still releases the arm.
+     *
+     * @param arm takes the arm and reports whether it armed anything
+     * @param disarm releases the arm
+     * @param schedule schedules the build job
+     * @param join waits for the build job
+     * @param onInterrupted builds the response for an interrupted wait
+     * @return the interrupted-wait response, or {@code null} when the wait ended without an
+     *         interruption (finished or timed out)
+     */
+    static String scheduleAndJoinArmed(BooleanSupplier arm, Runnable disarm, Runnable schedule,
+        InterruptibleJoin join, Supplier<String> onInterrupted)
+    {
+        boolean autoConfirmerArmed = arm.getAsBoolean();
+        try
+        {
+            schedule.run();
+            join.join();
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return onInterrupted.get();
+        }
+        finally
+        {
+            if (autoConfirmerArmed)
+            {
+                disarm.run();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * {@link #scheduleAndJoinArmed} with the build's own arm and release — the one call
+     * {@code runBuild} makes, so the pair it passes is the pair the tests exercise.
+     *
+     * @param schedule schedules the build job
+     * @param join waits for the build job
+     * @param onInterrupted builds the response for an interrupted wait
+     * @return the interrupted-wait response, or {@code null} when the wait ended without an
+     *         interruption
+     */
+    static String scheduleAndJoinBuild(Runnable schedule, InterruptibleJoin join,
+        Supplier<String> onInterrupted)
+    {
+        return scheduleAndJoinArmed(BuildExternalObjectsTool::armLaunchDialogs,
+            BuildExternalObjectsTool::disarmLaunchDialogs, schedule, join, onInterrupted);
+    }
+
+    /**
+     * Arms the update, session and restructure matchers for the build.
+     *
+     * @return what the auto-confirmer reported: {@code true} only when it armed anything
+     */
+    static boolean armLaunchDialogs()
+    {
+        return LaunchUpdateDialogAutoConfirmer.arm(true, true, true);
+    }
+
+    /** Releases the arm {@link #armLaunchDialogs()} took: the same three matchers. */
+    static void disarmLaunchDialogs()
+    {
+        LaunchUpdateDialogAutoConfirmer.disarm(true, true, true);
     }
 
     /**

@@ -429,8 +429,8 @@ public final class LaunchUpdateDialogAutoConfirmer
      * "Реорганизация информации"). While {@code > 0} the listener auto-presses that
      * modal's default "Accept" button. Armed alongside the update matcher by the
      * back-compat {@link #arm(boolean, boolean)} (a restructure is a consequence of an
-     * update), and independently by {@code update_database} via
-     * {@link #arm(boolean, boolean, boolean)}.
+     * update), and independently by {@code update_database} through the seven-argument
+     * {@code arm} overload.
      */
     private static int restructureArmCount;
 
@@ -960,16 +960,20 @@ public final class LaunchUpdateDialogAutoConfirmer
     }
 
     /**
-     * Arms the update-dialog matcher only — the back-compat entry point. MUST be
-     * paired with {@link #disarm()}. Equivalent to {@code arm(true, false)}: the
-     * "Application update" modal is auto-confirmed, the code-1003 modal is NOT.
-     * Kept for callers that need only the update modal pressed unconditionally;
-     * the YAXUnit tools now gate both matchers per call site via
-     * {@link #arm(boolean, boolean)}.
+     * Arms the update-dialog matcher only — the back-compat entry point. Pair it with
+     * {@link #disarm()}, called only when this returned {@code true}. Equivalent to
+     * {@code arm(true, false)}: the "Application update" modal is auto-confirmed, the
+     * code-1003 modal is NOT. Kept for callers that need only the update modal pressed
+     * unconditionally; the YAXUnit tools gate both matchers per call site through the
+     * seven-argument overload.
+     *
+     * @return {@code true} when this call armed anything; {@code false} when no workbench
+     *         display was available. Call the matching {@code disarm} only on {@code true}: a
+     *         release after a no-op arm takes the count of a concurrent caller that did arm
      */
-    public static void arm()
+    public static boolean arm()
     {
-        arm(true, false);
+        return arm(true, false);
     }
 
     /**
@@ -982,9 +986,9 @@ public final class LaunchUpdateDialogAutoConfirmer
     }
 
     /**
-     * Arms the auto-confirmer with independently-selectable matchers. MUST be
-     * paired with {@link #disarm(boolean, boolean)} (same flags) in a
-     * {@code finally} block around the {@code launch()} call. Reentrant per
+     * Arms the auto-confirmer with independently-selectable matchers. Pair it with
+     * {@link #disarm(boolean, boolean)} (same flags) in a {@code finally} block around the
+     * {@code launch()} call, run only when this returned {@code true}. Reentrant per
      * matcher: nested/concurrent launches share one {@link Display} filter, which
      * is installed while EITHER matcher has an outstanding arm.
      *
@@ -1007,39 +1011,46 @@ public final class LaunchUpdateDialogAutoConfirmer
      *
      * @param updateDialog arm the "Application update" TITLE matcher
      * @param sessionDialog arm the code-1003 "Debug session already exists" BODY matcher
+     * @return {@code true} when this call armed anything; {@code false} when it requested nothing
+     *         or no workbench display was available. Call the matching {@code disarm} only on
+     *         {@code true}
      */
-    public static void arm(boolean updateDialog, boolean sessionDialog)
+    public static boolean arm(boolean updateDialog, boolean sessionDialog)
     {
         // A DB restructure is a consequence of the same DB update, so the existing
         // launch callers (which arm the update matcher around their pre-launch update)
         // get the restructure matcher for free, gated on the update flag.
-        arm(updateDialog, sessionDialog, updateDialog);
+        return arm(updateDialog, sessionDialog, updateDialog);
     }
 
     /**
      * Arms the auto-confirmer with all three independently-selectable matchers — the
      * "Application update" TITLE, the code-1003 "Debug session already exists" BODY,
      * and the DB-restructure ("Restructure data" / "Реорганизация информации") TITLE.
-     * MUST be paired with {@link #disarm(boolean, boolean, boolean)} (same flags) in a
-     * {@code finally} block. {@code update_database} arms ONLY the restructure matcher
-     * ({@code arm(false, false, true)}) around its {@code IApplicationManager.update}
-     * call; the launch paths arm update+restructure together via the two-arg overload.
+     * Pair it with {@link #disarm(boolean, boolean, boolean)} (same flags) in a
+     * {@code finally} block, run only when this returned {@code true}. Outside this class its only
+     * caller is {@code build_external_objects}, which arms all three around its build; the
+     * launch, YAXUnit and {@code update_database} paths go through the seven-argument overload
+     * because they also arm the conflict and port-conflict matchers.
      * Reentrant per matcher; no-op headless / all-false; never throws.
      *
      * @param updateDialog arm the "Application update" TITLE matcher
      * @param sessionDialog arm the code-1003 "Debug session already exists" BODY matcher
      * @param restructureDialog arm the DB-restructure TITLE matcher (press "Accept")
+     * @return {@code true} when this call armed anything; {@code false} when it requested nothing
+     *         or no workbench display was available. Call the matching {@code disarm} only on
+     *         {@code true}
      */
-    public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog)
+    public static boolean arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog)
     {
-        arm(updateDialog, sessionDialog, restructureDialog, null);
+        return arm(updateDialog, sessionDialog, restructureDialog, null);
     }
 
     /**
      * Arms the auto-confirmer with all three boolean matchers plus the external-changes
-     * conflict matcher, whose press is policy-driven. MUST be paired with
+     * conflict matcher, whose press is policy-driven. Pair it with
      * {@link #disarm(boolean, boolean, boolean, ExternalInfobaseChangesPolicy)} passing the
-     * SAME arguments, in a {@code finally} block.
+     * SAME arguments, in a {@code finally} block, run only when this returned {@code true}.
      *
      * <p>The conflict matcher is armed only when {@code conflictPolicy} is non-{@code null}
      * — a caller that leaves it {@code null} keeps EDT's "Infobase configuration changes"
@@ -1055,11 +1066,14 @@ public final class LaunchUpdateDialogAutoConfirmer
      *            is degraded to {@link ExternalInfobaseChangesPolicy#CANCEL} — nothing can be
      *            proven to be this caller's. Use the five-argument overload to allow a writing
      *            answer.
+     * @return {@code true} when this call armed anything; {@code false} when it requested nothing
+     *         or no workbench display was available. Call the matching {@code disarm} only on
+     *         {@code true}
      */
-    public static void arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
+    public static boolean arm(boolean updateDialog, boolean sessionDialog, boolean restructureDialog,
         ExternalInfobaseChangesPolicy conflictPolicy)
     {
-        arm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, null);
+        return arm(updateDialog, sessionDialog, restructureDialog, conflictPolicy, null);
     }
 
     /**
@@ -3124,6 +3138,43 @@ public final class LaunchUpdateDialogAutoConfirmer
         synchronized (LOCK)
         {
             return PORT_CONFLICT_ARMS.size();
+        }
+    }
+
+    /**
+     * Test seam: takes one arm of each selected matcher exactly as a successful {@code arm} does —
+     * the arm of a concurrent launch, which a headless {@code arm} cannot make. Release it with
+     * {@code disarm} passing the same flags.
+     */
+    static void armMatchersForTest(boolean updateDialog, boolean sessionDialog,
+        boolean restructureDialog)
+    {
+        synchronized (LOCK)
+        {
+            if (updateDialog)
+            {
+                updateArmCount++;
+            }
+            if (sessionDialog)
+            {
+                sessionArmCount++;
+            }
+            if (restructureDialog)
+            {
+                restructureArmCount++;
+            }
+        }
+    }
+
+    /**
+     * Test seam: the outstanding arms of the update, session and restructure matchers, in that
+     * order.
+     */
+    static int[] armCountsForTest()
+    {
+        synchronized (LOCK)
+        {
+            return new int[] { updateArmCount, sessionArmCount, restructureArmCount };
         }
     }
 
