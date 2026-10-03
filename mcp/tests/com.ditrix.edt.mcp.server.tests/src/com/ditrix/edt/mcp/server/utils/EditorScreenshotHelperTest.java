@@ -8,6 +8,8 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
@@ -16,6 +18,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.PaletteData;
 import org.junit.Test;
+
+import com._1c.g5.v8.dt.form.model.Form;
+import com._1c.g5.v8.dt.form.model.FormFactory;
+import com._1c.g5.v8.dt.form.model.FormField;
+import com._1c.g5.v8.dt.form.model.FormGroup;
 
 /**
  * Unit tests for the render-readiness polling and the screenshot identity guard in
@@ -438,6 +445,16 @@ public class EditorScreenshotHelperTest
         {
             return new FakeNativeRenderEvent();
         }
+
+        /** The ids a select-by-id event carries; {@code null} for an update event. */
+        int[] selectedIds;
+
+        public static FakeNativeRenderEvent buildSelectByIdEvent(long formId, int[] ids)
+        {
+            FakeNativeRenderEvent event = new FakeNativeRenderEvent();
+            event.selectedIds = ids;
+            return event;
+        }
     }
 
     /** Controller stand-in recording which mapping class the helper requested the root for. */
@@ -553,5 +570,128 @@ public class EditorScreenshotHelperTest
             EditorScreenshotHelper.ensureRenderedFormImage(rep, SHORT_TIMEOUT_MS, false));
         assertTrue("a rebuildInternal of a foreign shape must route to the async fallback", //$NON-NLS-1$
             rep.asyncRebuilds.get() >= 1);
+    }
+
+    // ==================== showElement: form item lookup ====================
+
+    @Test
+    public void testFindFormItemInNestedPages()
+    {
+        Form form = FormFactory.eINSTANCE.createForm();
+        FormGroup pages = FormFactory.eINSTANCE.createFormGroup();
+        pages.setName("Pages"); //$NON-NLS-1$
+        FormGroup page = FormFactory.eINSTANCE.createFormGroup();
+        page.setName("СтраницаДоставка"); //$NON-NLS-1$
+        FormField field = FormFactory.eINSTANCE.createFormField();
+        field.setName("DeliveryAddress"); //$NON-NLS-1$
+        page.getItems().add(field);
+        pages.getItems().add(page);
+        form.getItems().add(pages);
+
+        // 1C names are case-insensitive, Russian names included.
+        assertSame(page, EditorScreenshotHelper.findFormItem(form,
+            "страницадоставка")); //$NON-NLS-1$
+        assertSame(field, EditorScreenshotHelper.findFormItem(form, "deliveryaddress")); //$NON-NLS-1$
+        assertNull(EditorScreenshotHelper.findFormItem(form, "Missing")); //$NON-NLS-1$
+    }
+
+    // ==================== showElement: resolve, switch, restore ====================
+
+    /** A representation whose {@code form} field holds a real form model with one nested page. */
+    private static final class FakeFormRepresentation
+    {
+        @SuppressWarnings("unused") // read reflectively (getRepresentationForm)
+        final Form form;
+
+        FakeFormRepresentation(Form form)
+        {
+            this.form = form;
+        }
+    }
+
+    private static Form formWithPage(String pageName, int pageId)
+    {
+        Form form = FormFactory.eINSTANCE.createForm();
+        FormGroup pages = FormFactory.eINSTANCE.createFormGroup();
+        pages.setName("Pages"); //$NON-NLS-1$
+        FormGroup page = FormFactory.eINSTANCE.createFormGroup();
+        page.setName(pageName);
+        page.setId(pageId);
+        pages.getItems().add(page);
+        form.getItems().add(pages);
+        return form;
+    }
+
+    private static EditorScreenshotHelper.ShowElementTarget resolvedPage(int pageId)
+    {
+        EditorScreenshotHelper.ShowElementTarget target = EditorScreenshotHelper.resolveShowElement(
+            new FakeFormRepresentation(formWithPage("Delivery", pageId)), "Delivery", //$NON-NLS-1$ //$NON-NLS-2$
+            NativeRenderModeProbe.NativeRenderMode.ON);
+        assertNull(target.getError());
+        return target;
+    }
+
+    @Test
+    public void testResolveShowElementFindsItemId()
+    {
+        assertEquals(7, resolvedPage(7).getItemId());
+    }
+
+    @Test
+    public void testResolveShowElementUnknownNameNamesTheValue()
+    {
+        EditorScreenshotHelper.ShowElementTarget target = EditorScreenshotHelper.resolveShowElement(
+            new FakeFormRepresentation(formWithPage("Delivery", 7)), "NoSuchPage", //$NON-NLS-1$ //$NON-NLS-2$
+            NativeRenderModeProbe.NativeRenderMode.ON);
+        assertNotNull(target.getError());
+        assertTrue(target.getError().contains("'NoSuchPage' was not found")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveShowElementWithoutFormModel()
+    {
+        EditorScreenshotHelper.ShowElementTarget target = EditorScreenshotHelper.resolveShowElement(
+            new FakeRepresentation(), "Delivery", NativeRenderModeProbe.NativeRenderMode.ON); //$NON-NLS-1$
+        assertEquals("The form model of the WYSIWYG editor is not available", target.getError()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveShowElementRefusedInJavaRenderMode()
+    {
+        // The Java render does not switch pages on a select-by-id render; a success here would return
+        // the default page for the requested one.
+        EditorScreenshotHelper.ShowElementTarget target = EditorScreenshotHelper.resolveShowElement(
+            new FakeFormRepresentation(formWithPage("Delivery", 7)), "Delivery", //$NON-NLS-1$ //$NON-NLS-2$
+            NativeRenderModeProbe.NativeRenderMode.OFF);
+        assertNotNull(target.getError());
+        assertTrue(target.getError().contains("-DnativeFormLayoutRender=false")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testShowFormElementFailsWhenRenderIsUnreachable()
+    {
+        // FakeRepresentation has no synchronous render hooks; showElement has no async fallback.
+        String error = EditorScreenshotHelper.showFormElement(new FakeRepresentation(), resolvedPage(7),
+            "Delivery", SHORT_TIMEOUT_MS); //$NON-NLS-1$
+        assertNotNull(error);
+        assertTrue(error.contains("could not be re-rendered to show element 'Delivery'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testShowFormElementSelectsThenClearsThenRestores()
+    {
+        FakeSyncRepresentation rep = new FakeSyncRepresentation();
+
+        assertNull(EditorScreenshotHelper.showFormElement(rep, resolvedPage(7), "Delivery", //$NON-NLS-1$
+            SHORT_TIMEOUT_MS));
+        // The last render is the update-only one with an empty selection: pages stay, frame goes.
+        assertEquals(Boolean.TRUE, rep.lastUpdateOnly);
+        assertEquals(0, ((FakeNativeRenderEvent)rep.lastEvent).selectedIds.length);
+
+        assertTrue(EditorScreenshotHelper.restoreDefaultPages(rep, SHORT_TIMEOUT_MS));
+        // Restoring is a plain full render (update event), which brings back the default pages.
+        assertEquals(Boolean.FALSE, rep.lastUpdateOnly);
+        assertNull(((FakeNativeRenderEvent)rep.lastEvent).selectedIds);
+        assertEquals(0, rep.asyncRebuilds.get());
     }
 }

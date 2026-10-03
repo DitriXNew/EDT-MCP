@@ -153,6 +153,72 @@ def test_capture_commonform_real_image_or_clean_render_sentinel():
     assert_no_diff("a screenshot read must not touch the project on disk")
 
 
+# Sentinels raised BEFORE the showElement lookup (no editor/representation at all).
+# The render-gate sentinel "Form image data is not available" is deliberately absent:
+# showElement is resolved before the render gate, so an unknown name must never
+# surface as a render failure.
+_NO_EDITOR_SENTINELS = (
+    "WYSIWYG viewer is not available",
+    "WYSIWYG page is not available",
+    "WYSIWYG representation is not available",
+)
+
+
+@e2e_test(tool="get_form_screenshot", kind="read")
+def test_show_element_unknown_name_errors_and_names_value():
+    """An unknown showElement must fail fast with an error naming the value. It is
+    resolved from the form model before the render gate, so it does not depend on
+    the render JVM flag: the only other acceptable outcome is that the editor
+    itself could not be opened (no form model to search)."""
+    r = call("get_form_screenshot", {
+        "projectName": PROJECT,
+        "formPath": "CommonForm.Form",
+        "showElement": "NoSuchElementXyz",
+    })
+    assert_error(r)
+    err = r.error_text()
+    if not any(s in err for s in _NO_EDITOR_SENTINELS):
+        assert "'NoSuchElementXyz' was not found" in err, (
+            "an unknown showElement must name the value in a not-found error, not a "
+            "render failure; got: %r" % (err[:300])
+        )
+        assert "get_metadata_details" in err, (
+            "the not-found error must point at the tool that lists element names; "
+            "got: %r" % (err[:300])
+        )
+    assert_no_diff("a screenshot read must not touch the project on disk")
+
+
+@e2e_test(tool="get_form_screenshot", kind="read")
+def test_show_element_known_name_real_image_or_clean_render_sentinel():
+    """showElement with an element that exists (the decoration "OK" of the fixture
+    CommonForm.Form, matched case-insensitively) gives a real PNG, or a clean
+    render sentinel / render error when the native render is unavailable. It must
+    never report the element as missing."""
+    r = call("get_form_screenshot", {
+        "projectName": PROJECT,
+        "formPath": "CommonForm.Form",
+        "showElement": "ok",
+    })
+    if r.is_error:
+        err = r.error_text()
+        assert "was not found" not in err, (
+            "an existing element must not be reported as missing; got: %r" % (err[:300])
+        )
+        assert (any(s in err for s in _RENDER_UNAVAILABLE_SENTINELS + _NO_EDITOR_SENTINELS)
+                or "could not be re-rendered" in err
+                or "needs the native form render" in err), (
+            "a failed showElement capture must be a documented render outcome; got: %r"
+            % (err[:300])
+        )
+    else:
+        blob = _blob(r)
+        assert blob and blob.startswith(_PNG_B64_PREFIX), (
+            "success must carry a real PNG blob; got prefix %r" % ((blob or "")[:16])
+        )
+    assert_no_diff("a screenshot read must not touch the project on disk")
+
+
 @e2e_test(tool="get_form_screenshot", kind="read")
 def test_no_formpath_captures_active_or_clean_no_active_sentinel():
     """Boundary: omit formPath entirely. This is NOT an error condition — it is
