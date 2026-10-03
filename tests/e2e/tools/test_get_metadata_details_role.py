@@ -8,7 +8,7 @@ to RoleRightsReader, which renders one document - `# Role Rights: <fqn>`, then `
 `Role.getRights()` is not a concrete RoleDescription renders the single note
 `_(this role has no editable rights model)_` instead, and nothing else.
 
-This file covers the five things only the wire can prove about that reader:
+This file covers the six things only the wire can prove about that reader:
 
   * the created empty state - a role created by create_metadata already carries a concrete rights
     model, so the caller sees the full document with an empty matrix and the default properties;
@@ -24,7 +24,10 @@ This file covers the five things only the wire can prove about that reader:
     (RoleRightsReader.rightNameOf reads Right.getNameRu() for "ru", Right.getName() otherwise).
     Both fixtures declare a single Language.English with code `en`, so this bilingual read is the
     only assertion in the whole suite that can observe that wiring at all. The language is always
-    chosen by CODE (`en` / `ru`), never by a language display name (CLAUDE.md don't #2).
+    chosen by CODE (`en` / `ru`), never by a language display name (CLAUDE.md don't #2);
+  * the Object cell of a SUBORDINATE target (#685) - a right on `Catalog.<C>.Attribute.<A>` is
+    listed under that full address, the form modify_metadata accepts in `rights[].object`, and the
+    cell as read is written back to remove the right.
 
 The whole-call negative matrix for this tool (missing projectName, missing/empty objectFqns, a
 non-existent project, the per-object `## Errors` channel) lives in test_get_metadata_details.py and
@@ -58,6 +61,13 @@ and the test flips `setForNewObjects` BETWEEN its two writes - which is why it s
 modify_metadata calls instead of one. Ordering inside a single call cannot substitute:
 RoleRightsWriter.apply runs rights[] BEFORE roleProperties, so a flag sent alongside the cells
 arrives too late to change their default.
+
+For a SUBORDINATE target (an attribute / tabular section / dimension / resource) the same default
+comes from `RoleDescription.isSetForAttributesByDefault()` instead, and a role created by
+create_metadata has that flag false too - so on a fresh role `unset` on an attribute IS the default
+and is pruned. test_role_rights_read_attribute_row_carries_its_full_address relies on exactly
+that; the measurement is recorded in test_modify_metadata_role_rights.py's module docstring
+(WHAT THE PLATFORM DOES WITH A RIGHT VALUE).
 """
 
 import os
@@ -68,6 +78,7 @@ from harness import (
     assert_contains,
     assert_not_contains,
     poll_disk_contains,
+    poll_disk_lacks,
     split_markdown_row,
     wait_for_project_ready,
     e2e_test,
@@ -436,3 +447,69 @@ def test_role_rights_read_language_code_selects_right_names():
         "the language='ru' read must name the same right by its Russian platform name; it named "
         "%r (a fallback to the English %r means the code never reached the reader)"
         % (ru_names, _RIGHT_READ))
+
+
+# ---------------------------------------------------------------------------
+# The Object cell of a subordinate target (#685)
+# ---------------------------------------------------------------------------
+
+@e2e_test(tool="get_metadata_details", kind="write-metadata")
+def test_role_rights_read_attribute_row_carries_its_full_address():
+    """A right on an ATTRIBUTE is listed under the attribute's full address, not the catalog's.
+
+    The issue's reproduction (#685): a role grants Read on a catalog and View on one of its
+    attributes. On disk Rights.rights holds two distinct `<object>` nodes, but the reader used to
+    name a non-top target by its TOP object's FQN, so both rows read `Catalog.<C>` and the attribute
+    row could not be told from a right on the catalog itself. The Object cell is now the address
+    modify_metadata accepts in `rights[].object`, and the test proves that symmetry by feeding the
+    cell it READ back into a write: `unset` on the attribute equals its default on a fresh role
+    (setForAttributesByDefault is false - see this module's PLATFORM TRUTH, last paragraph), so the platform
+    prunes the cell and drops the emptied object node, and the second read no longer lists it while
+    the catalog's row stays.
+
+    Cells are pinned whole (object + right + value), never as substrings: the catalog's FQN is a
+    prefix of the attribute's address, so a substring check could not tell the two rows apart.
+    Everything this test creates (catalog, attribute, role) is reverted by the write-metadata reset."""
+    role_name = "E2ERoleSubordinateAddress"
+    role_fqn = _seed_role(role_name)
+    catalog_fqn = _seed_catalog("E2ERightsAddrCatalog")
+    attribute_fqn = catalog_fqn + ".Attribute.Kod2"
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": attribute_fqn})
+    assert_ok(r, "seed " + attribute_fqn)
+    wait_for_project_ready()
+
+    _write_rights(role_fqn, [
+        {"object": catalog_fqn, "right": _RIGHT_READ, "value": "set"},
+        {"object": attribute_fqn, "right": "View", "value": "set"},
+    ])
+    poll_disk_contains(_rights_file(role_name), "<name>%s</name>" % attribute_fqn,
+                       ctx="the attribute's own object node must reach the role's rights resource")
+    poll_disk_contains(_rights_file(role_name), "<name>%s</name>" % catalog_fqn,
+                       ctx="the catalog's object node must reach the role's rights resource")
+
+    rows = _matrix_rows(_read_role(role_fqn, full=True))
+    assert _cell(rows, catalog_fqn, _RIGHT_READ) == _ALLOWED, (
+        "the catalog's right must stay under the catalog's FQN; rows were %r" % (rows,))
+    assert _cell(rows, attribute_fqn, "View") == _ALLOWED, (
+        "the attribute's right must be listed under its full address %r; rows were %r"
+        % (attribute_fqn, rows))
+    assert _cell(rows, catalog_fqn, "View") is None, (
+        "the attribute's View right must not be filed under the catalog's FQN; rows were %r" % (rows,))
+    assert attribute_fqn in _matrix_objects(rows) and catalog_fqn in _matrix_objects(rows), (
+        "the two targets must render two DISTINCT Object cells; objects were %r"
+        % (_matrix_objects(rows),))
+
+    # Read -> write symmetry: the Object cell exactly as it was READ is a valid rights[].object.
+    read_address = [obj for obj, right, _v in rows if right == "View"]
+    assert read_address == [attribute_fqn], (
+        "exactly one View row, named by the attribute's address, was expected; got %r" % (read_address,))
+    _write_rights(role_fqn, [{"object": read_address[0], "right": "View", "value": "unset"}])
+    poll_disk_lacks(_rights_file(role_name), "<name>%s</name>" % attribute_fqn,
+                    ctx="unset equals the attribute's default on a fresh role, so the platform must "
+                        "prune the cell and drop the emptied object node")
+
+    after = _matrix_rows(_read_role(role_fqn, full=True))
+    assert _cell(after, attribute_fqn, "View") is None, (
+        "the right removed through the address the reader printed must be gone; rows were %r" % (after,))
+    assert _cell(after, catalog_fqn, _RIGHT_READ) == _ALLOWED, (
+        "removing the attribute's right must leave the catalog's right in place; rows were %r" % (after,))

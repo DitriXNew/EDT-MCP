@@ -14,6 +14,7 @@ import org.eclipse.emf.ecore.EObject;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.dt.mcore.DuallyNamedElement;
 import com._1c.g5.v8.dt.metadata.mdclass.AbstractRoleDescription;
+import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.rights.model.ObjectRight;
 import com._1c.g5.v8.dt.rights.model.ObjectRights;
 import com._1c.g5.v8.dt.rights.model.RestrictionTemplate;
@@ -454,9 +455,14 @@ public final class RoleRightsReader
     // ==================== transaction-bound EObject helpers ====================
 
     /**
-     * @return the guarded object's metadata FQN - its BM FQN when it is a top object, else the FQN of the
-     *         top object it belongs to (a sub-object such as an attribute), else its EClass name. The
-     *         object is transaction-bound, so this must run inside the read boundary.
+     * @return the guarded object's metadata address, as the Object cell of both the matrix and the RLS
+     *         table: its BM FQN when it is a top object; for a subordinate object (an attribute, a
+     *         tabular section and its attributes, a register dimension / resource, a command ...) its
+     *         full address {@code Catalog.X.Attribute.Y} - the very form {@code rights[].object} of
+     *         {@code modify_metadata} accepts, so a cell read here can be written back; for a
+     *         subordinate the writer cannot address (a standard attribute, an integration service
+     *         channel, a cube dimension) the FQN of the top object it belongs to; else its EClass name.
+     *         The object is transaction-bound, so this must run inside the read boundary.
      */
     private static String objectFqnOf(EObject object)
     {
@@ -478,6 +484,11 @@ public final class RoleRightsReader
                 {
                     return safeFqn(bm.bmGetFqn(), object);
                 }
+                String address = subordinateAddress(object);
+                if (address != null)
+                {
+                    return address;
+                }
                 IBmObject top = bm.bmGetTopObject();
                 if (top != null)
                 {
@@ -495,6 +506,16 @@ public final class RoleRightsReader
     private static String safeFqn(String fqn, EObject fallback)
     {
         return fqn != null && !fqn.isEmpty() ? fqn : fallback.eClass().getName();
+    }
+
+    /**
+     * @return the address a subordinate metadata object resolves back to through the writer's own
+     *         resolver ({@link MetadataNodeResolver#resolvableAddressOf}), or {@code null} when it is
+     *         not a metadata object or has no such address
+     */
+    private static String subordinateAddress(EObject object)
+    {
+        return object instanceof MdObject ? MetadataNodeResolver.resolvableAddressOf((MdObject)object) : null;
     }
 
     /**
