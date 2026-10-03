@@ -32,6 +32,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.MarkdownUtils;
+import com.ditrix.edt.mcp.server.utils.git.BranchContexts;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
 
 /**
@@ -55,8 +56,6 @@ public class ListGitBranchesTool implements IMcpTool
 {
     /** MCP tool name. */
     public static final String NAME = "list_git_branches"; //$NON-NLS-1$
-
-    private static final String REFS_HEADS = "refs/heads/"; //$NON-NLS-1$
 
     private static final String REFS_REMOTES = "refs/remotes/"; //$NON-NLS-1$
 
@@ -141,7 +140,7 @@ public class ListGitBranchesTool implements IMcpTool
         // ref is refs/heads/... on a named branch, or the same SHA when detached.
         String currentShort = repo.getBranch();
         String fullBranch = repo.getFullBranch();
-        boolean detached = fullBranch == null || !fullBranch.startsWith(REFS_HEADS);
+        boolean detached = fullBranch == null || !fullBranch.startsWith(BranchContexts.REFS_HEADS);
 
         md.append("**Current:** ") //$NON-NLS-1$
             .append(detached ? "(detached HEAD at " + currentShort + ")" : currentShort) //$NON-NLS-1$ //$NON-NLS-2$
@@ -172,10 +171,10 @@ public class ListGitBranchesTool implements IMcpTool
             String refName = ref.getName();
             String type;
             String shortName;
-            if (refName.startsWith(REFS_HEADS))
+            if (refName.startsWith(BranchContexts.REFS_HEADS))
             {
                 type = "local"; //$NON-NLS-1$
-                shortName = refName.substring(REFS_HEADS.length());
+                shortName = refName.substring(BranchContexts.REFS_HEADS.length());
             }
             else if (refName.startsWith(REFS_REMOTES))
             {
@@ -196,14 +195,21 @@ public class ListGitBranchesTool implements IMcpTool
     /**
      * Best-effort application-binding section: enumerates
      * {@link IInfobaseAssociationManager#getAssociationContexts(IProject)} and, for
-     * each context, the bound infobases + the default one. Any failure (manager
+     * each context, the bound infobases + the default one. A branch context
+     * ({@code refs/heads/X}) is shown as {@code X}; any other key is shown as is with
+     * a marker ({@link BranchContexts#displayName}) - notably a legacy short-name key an
+     * older version of our tools wrote, which matches no branch (#684). Any failure (manager
      * absent, not EGit-shared, {@link InfobaseAssociationException}) degrades to a
      * "bindings unavailable" note rather than a tool error - the branch list above
      * must stay useful regardless.
      */
     private String renderBindings(IProject project)
     {
-        IInfobaseAssociationManager assocManager = Activator.getDefault().getInfobaseAssociationManager();
+        return renderBindings(Activator.getDefault().getInfobaseAssociationManager(), project);
+    }
+
+    static String renderBindings(IInfobaseAssociationManager assocManager, IProject project)
+    {
         if (assocManager == null)
         {
             return "*bindings unavailable: IInfobaseAssociationManager service is not available.*\n"; //$NON-NLS-1$
@@ -234,10 +240,10 @@ public class ListGitBranchesTool implements IMcpTool
         return md.toString();
     }
 
-    private String renderBindingRow(IInfobaseAssociationManager assocManager, IProject project,
+    private static String renderBindingRow(IInfobaseAssociationManager assocManager, IProject project,
         InfobaseAssociationContext ctx)
     {
-        String branchName = ctx.getContext().orElse("(default)"); //$NON-NLS-1$
+        String branchName = BranchContexts.displayName(ctx);
         String infobasesCell;
         String defaultCell = ""; //$NON-NLS-1$
         try

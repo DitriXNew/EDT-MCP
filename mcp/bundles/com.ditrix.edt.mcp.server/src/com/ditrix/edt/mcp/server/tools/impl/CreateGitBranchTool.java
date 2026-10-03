@@ -38,6 +38,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
+import com.ditrix.edt.mcp.server.utils.git.BranchContexts;
 import com.ditrix.edt.mcp.server.utils.git.GitCheckoutSupport;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
 import com.e1c.g5.dt.applications.IApplication;
@@ -92,8 +93,6 @@ public class CreateGitBranchTool implements IMcpTool
 
     /** Read-back key: the context's default infobase name (may be {@code null}). */
     private static final String KEY_DEFAULT_INFOBASE = "defaultInfobase"; //$NON-NLS-1$
-
-    private static final String REFS_HEADS = "refs/heads/"; //$NON-NLS-1$
 
     /** Literal reported as {@link #KEY_START_POINT} when no explicit start point was given. */
     private static final String HEAD_LITERAL = "HEAD"; //$NON-NLS-1$
@@ -216,6 +215,7 @@ public class CreateGitBranchTool implements IMcpTool
         }
 
         boolean hasStartPoint = startPoint != null && !startPoint.isEmpty();
+        Ref created;
         try
         {
             CreateBranchCommand cmd = Git.wrap(repo).branchCreate().setName(branch);
@@ -223,7 +223,7 @@ public class CreateGitBranchTool implements IMcpTool
             {
                 cmd.setStartPoint(startPoint);
             }
-            cmd.call();
+            created = cmd.call();
         }
         catch (RefAlreadyExistsException e)
         {
@@ -257,7 +257,9 @@ public class CreateGitBranchTool implements IMcpTool
 
         if (applicationId != null && !applicationId.isEmpty())
         {
-            bindApplication(project, branch, applicationId, setDefault, ok, warnings);
+            // The binding goes on the ref JGit actually created (refs/heads/<name>), the key EDT reads.
+            String createdRef = created != null ? created.getName() : BranchContexts.REFS_HEADS + branch;
+            bindApplication(project, branch, createdRef, applicationId, setDefault, ok, warnings);
         }
 
         if (!warnings.isEmpty())
@@ -275,7 +277,7 @@ public class CreateGitBranchTool implements IMcpTool
      */
     private static boolean performCheckout(IProject project, Repository repo, String branch, List<String> warnings)
     {
-        String fullRef = REFS_HEADS + branch;
+        String fullRef = BranchContexts.REFS_HEADS + branch;
         GitCheckoutSupport.CheckoutOutcome outcome = GitCheckoutSupport.checkout(project, repo, fullRef);
 
         if (outcome.timedOut())
@@ -316,14 +318,18 @@ public class CreateGitBranchTool implements IMcpTool
     }
 
     /**
-     * Attaches {@code applicationId} to the new branch's context
-     * ({@code InfobaseAssociationContext.of(branch)} - the same context whether or
-     * not the branch was also checked out). A resolution or association failure
+     * Attaches {@code applicationId} to the new branch's context - the created full ref
+     * {@code refs/heads/<branch>}, the key EDT itself reads for a checked-out branch (#684,
+     * {@link BranchContexts}); the same context whether or not the branch was also checked
+     * out. A resolution or association failure
      * never fails the already-successful branch creation - it is appended to
-     * {@code warnings} and {@link #KEY_BOUND} is simply omitted.
+     * {@code warnings} and {@link #KEY_BOUND} is simply omitted. A refused default after a
+     * successful attach (EDT records a default only for an infobase also bound to the checked-out
+     * branch) is a warning too, and {@link #KEY_BOUND} is still reported - the attach stands; a
+     * platform failure storing the default is such a warning as well, and is logged.
      */
-    private static void bindApplication(IProject project, String branch, String applicationId, boolean setDefault,
-        ToolResult ok, List<String> warnings)
+    private static void bindApplication(IProject project, String branch, String createdRef, String applicationId,
+        boolean setDefault, ToolResult ok, List<String> warnings)
     {
         IInfobaseAssociationManager assocManager = Activator.getDefault().getInfobaseAssociationManager();
         if (assocManager == null)
@@ -339,15 +345,30 @@ public class CreateGitBranchTool implements IMcpTool
             warnings.add(appRef.warning());
             return;
         }
+        bindResolved(assocManager, project, branch, createdRef, applicationId, appRef.reference(),
+            setDefault, ok, warnings);
+    }
 
-        InfobaseAssociationContext ctx = InfobaseAssociationContext.of(branch);
+    /**
+     * The binding itself, with the association manager and the application's infobase already
+     * resolved (unit-testable without a live workspace). {@code createdRef} is the ref that was
+     * created ({@code refs/heads/<branch>}); the binding, the default and the read-back all use it.
+     */
+    static void bindResolved(IInfobaseAssociationManager assocManager, IProject project, String branch,
+        String createdRef, String applicationId, InfobaseReference ref, boolean setDefault, ToolResult ok,
+        List<String> warnings)
+    {
+        BranchContexts.Resolution resolution = BranchContexts.resolve(createdRef);
+        if (!resolution.ok())
+        {
+            warnings.add("Branch '" + branch + "' was created, but application '" + applicationId //$NON-NLS-1$ //$NON-NLS-2$
+                + "' was not attached to it: " + resolution.error()); //$NON-NLS-1$
+            return;
+        }
+        InfobaseAssociationContext ctx = resolution.target().context();
         try
         {
-            assocManager.associate(project, appRef.reference(), InfobaseAssociationSettings.alreadySynchronized(ctx));
-            if (setDefault)
-            {
-                assocManager.setDefaultInfobase(project, appRef.reference(), ctx);
-            }
+            assocManager.associate(project, ref, InfobaseAssociationSettings.alreadySynchronized(ctx));
         }
         catch (InfobaseAssociationException e)
         {
@@ -356,6 +377,27 @@ public class CreateGitBranchTool implements IMcpTool
             warnings.add("Branch '" + branch + "' was created, but attaching application '" + applicationId //$NON-NLS-1$ //$NON-NLS-2$
                 + "' failed: " + e.getMessage()); //$NON-NLS-1$
             return;
+        }
+        if (setDefault)
+        {
+            // The attach above is done: a refused default must neither hide it nor fail the creation.
+            // EDT refuses a default for a branch that is not checked out, unless the checked-out branch
+            // already has this base bound (BranchContexts#defaultNotSetNote).
+            try
+            {
+                assocManager.setDefaultInfobase(project, ref, ctx);
+            }
+            catch (IllegalArgumentException e)
+            {
+                // EDT's refusal (the base is not bound to the checked-out branch): a remedy, not a fault.
+                warnings.add(BranchContexts.defaultNotSetNote(applicationId, resolution.target(), e));
+            }
+            catch (InfobaseAssociationException e)
+            {
+                Activator.logError("create_git_branch: setDefault failed for branch '" + branch //$NON-NLS-1$
+                    + "', application '" + applicationId + "'", e); //$NON-NLS-1$ //$NON-NLS-2$
+                warnings.add(BranchContexts.defaultNotSetNote(applicationId, resolution.target(), e));
+            }
         }
 
         Map<String, Object> bound = readBack(assocManager, project, ctx);
