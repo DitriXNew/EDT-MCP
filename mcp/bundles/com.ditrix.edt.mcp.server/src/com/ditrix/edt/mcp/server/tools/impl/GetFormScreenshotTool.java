@@ -31,6 +31,9 @@ public class GetFormScreenshotTool implements IMcpTool
     /** Input param: form FQN to open and capture. */
     private static final String KEY_FORM_PATH = "formPath"; //$NON-NLS-1$
 
+    /** Input param: form element whose page must be shown before the capture. */
+    private static final String KEY_SHOW_ELEMENT = "showElement"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -56,6 +59,9 @@ public class GetFormScreenshotTool implements IMcpTool
             .stringProperty(KEY_FORM_PATH,
                 "Form FQN (e.g. 'Catalog.Products.Forms.ItemForm' or 'CommonForm.MyForm'); " + //$NON-NLS-1$
                 "if omitted, captures the active form editor.") //$NON-NLS-1$
+            .stringProperty(KEY_SHOW_ELEMENT,
+                "Name of a form element (e.g. a page) to bring into view before capture: every " + //$NON-NLS-1$
+                "enclosing Pages group switches to the page holding it.") //$NON-NLS-1$
             .booleanProperty("refresh", //$NON-NLS-1$
                 "Force a real WYSIWYG re-render before capture; fails with an explicit error instead " + //$NON-NLS-1$
                 "of returning a stale image when the re-render cannot be completed (default: false)") //$NON-NLS-1$
@@ -88,6 +94,7 @@ public class GetFormScreenshotTool implements IMcpTool
     {
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String formPath = JsonUtils.extractStringArgument(params, KEY_FORM_PATH);
+        String showElement = JsonUtils.extractStringArgument(params, KEY_SHOW_ELEMENT);
         boolean refresh = "true".equalsIgnoreCase(JsonUtils.extractStringArgument(params, "refresh")); //$NON-NLS-1$ //$NON-NLS-2$
 
         if (formPath != null && !formPath.isEmpty()
@@ -103,7 +110,7 @@ public class GetFormScreenshotTool implements IMcpTool
         }
 
         AtomicReference<CaptureResult> resultRef = new AtomicReference<>();
-        display.syncExec(() -> resultRef.set(captureScreenshot(projectName, formPath, refresh)));
+        display.syncExec(() -> resultRef.set(captureScreenshot(projectName, formPath, showElement, refresh)));
 
         CaptureResult result = resultRef.get();
         if (!result.isSuccess())
@@ -117,7 +124,8 @@ public class GetFormScreenshotTool implements IMcpTool
     /**
      * Main capture logic. Runs on the UI thread.
      */
-    private CaptureResult captureScreenshot(String projectName, String formPath, boolean refresh)
+    private CaptureResult captureScreenshot(String projectName, String formPath, String showElement,
+        boolean refresh)
     {
         try
         {
@@ -158,6 +166,18 @@ public class GetFormScreenshotTool implements IMcpTool
                     + "try again once the requested form's editor is fully open.").toJson()); //$NON-NLS-1$
             }
 
+            // Resolve showElement before the render gate: an unknown name must fail fast with the
+            // not-found error, not wait for the render or turn into the render-unavailable error.
+            EditorScreenshotHelper.ShowElementTarget showTarget = null;
+            if (showElement != null && !showElement.isEmpty())
+            {
+                showTarget = EditorScreenshotHelper.resolveShowElement(representation, showElement);
+                if (showTarget.getError() != null)
+                {
+                    return CaptureResult.error(ToolResult.error(showTarget.getError()).toJson());
+                }
+            }
+
             if (refresh)
             {
                 EditorScreenshotHelper.refreshViewer(wysiwygViewer);
@@ -190,13 +210,36 @@ public class GetFormScreenshotTool implements IMcpTool
                 return renderGate;
             }
 
+            // After the (possibly forced) render: a full re-render shows the designer's default pages
+            // again, so the requested page is switched last and read straight from that render.
+            if (showTarget != null)
+            {
+                String showError = EditorScreenshotHelper.showFormElement(representation, showTarget, showElement);
+                if (showError != null)
+                {
+                    EditorScreenshotHelper.restoreDefaultPages(representation);
+                    return CaptureResult.error(ToolResult.error(showError).toJson());
+                }
+            }
+
             ImageDataResult imageResult = readValidImageData(representation, wysiwygViewer, rendered, formRequested);
             if (imageResult.error != null)
             {
+                if (showTarget != null)
+                {
+                    EditorScreenshotHelper.restoreDefaultPages(representation);
+                }
                 return imageResult.error;
             }
 
+            // Encode before restoring: the native render reuses the ImageData instance.
             String base64 = EditorScreenshotHelper.encodePng(imageResult.imageData);
+            if (showTarget != null)
+            {
+                // The switch applies to this capture only: bring the default pages back in the editor
+                // and in the buffer a later capture without showElement would read.
+                EditorScreenshotHelper.restoreDefaultPages(representation);
+            }
             return CaptureResult.success(base64);
         }
         catch (Exception e)
