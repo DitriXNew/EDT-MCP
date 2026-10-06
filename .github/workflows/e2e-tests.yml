@@ -3,7 +3,7 @@ name: E2E Tests (reusable)
 # REUSABLE workflow (on: workflow_call) — invoked by the thin caller workflow
 # e2e-2026.2.yml (parameterized by EDT version so it stays ready for a future matrix),
 # which gives the gate its OWN status badge. Black-box e2e gate on a STOCK
-# GitHub-hosted runner (ubuntu-latest):
+# GitHub-hosted runner (pinned to ubuntu-24.04, not ubuntu-latest, which moves to Ubuntu 26):
 # no docker image, no self-hosted runner. The `build` job builds the plugin; the `e2e`
 # job boots a headless EDT (inlined setup, numbered steps 1/8…8/8 — each phase is a
 # separate line in the Actions UI so you can see what is cached vs what runs),
@@ -71,7 +71,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -121,7 +121,7 @@ jobs:
 
   e2e:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     name: "e2e (shard ${{ matrix.shard }})"
     # SHARDED across runners, which is also what makes it safe. The suite is serial by
     # construction - every test resets the same git fixture and the same EDT workspace, so two
@@ -521,7 +521,7 @@ jobs:
   report:
     needs: e2e
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       checks: write
