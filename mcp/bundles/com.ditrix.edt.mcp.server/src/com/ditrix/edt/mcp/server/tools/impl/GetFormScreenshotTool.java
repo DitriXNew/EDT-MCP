@@ -31,6 +31,9 @@ public class GetFormScreenshotTool implements IMcpTool
     /** Input param: form FQN to open and capture. */
     private static final String KEY_FORM_PATH = "formPath"; //$NON-NLS-1$
 
+    /** Input param: screen resolution preset for this capture only. */
+    private static final String KEY_RESOLUTION = "resolution"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -59,6 +62,10 @@ public class GetFormScreenshotTool implements IMcpTool
             .booleanProperty("refresh", //$NON-NLS-1$
                 "Force a real WYSIWYG re-render before capture; fails with an explicit error instead " + //$NON-NLS-1$
                 "of returning a stale image when the re-render cannot be completed (default: false)") //$NON-NLS-1$
+            .stringProperty(KEY_RESOLUTION,
+                "Screen resolution preset for this capture only: its index or a part of its text " + //$NON-NLS-1$
+                "(e.g. '1680x1050'), as in the form editor's resolution list. The editor preset is " + //$NON-NLS-1$
+                "restored afterwards. An unknown value fails and lists the presets.") //$NON-NLS-1$
             .build();
     }
 
@@ -89,6 +96,7 @@ public class GetFormScreenshotTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, "projectName"); //$NON-NLS-1$
         String formPath = JsonUtils.extractStringArgument(params, KEY_FORM_PATH);
         boolean refresh = "true".equalsIgnoreCase(JsonUtils.extractStringArgument(params, "refresh")); //$NON-NLS-1$ //$NON-NLS-2$
+        String resolution = JsonUtils.extractStringArgument(params, KEY_RESOLUTION);
 
         if (formPath != null && !formPath.isEmpty()
             && (projectName == null || projectName.isEmpty()))
@@ -103,7 +111,7 @@ public class GetFormScreenshotTool implements IMcpTool
         }
 
         AtomicReference<CaptureResult> resultRef = new AtomicReference<>();
-        display.syncExec(() -> resultRef.set(captureScreenshot(projectName, formPath, refresh)));
+        display.syncExec(() -> resultRef.set(captureScreenshot(projectName, formPath, refresh, resolution)));
 
         CaptureResult result = resultRef.get();
         if (!result.isSuccess())
@@ -117,8 +125,13 @@ public class GetFormScreenshotTool implements IMcpTool
     /**
      * Main capture logic. Runs on the UI thread.
      */
-    private CaptureResult captureScreenshot(String projectName, String formPath, boolean refresh)
+    private CaptureResult captureScreenshot(String projectName, String formPath, boolean refresh,
+        String resolution)
     {
+        // Set once the editor preset was switched for this capture; restored in finally.
+        Object resolutionViewer = null;
+        Object resolutionRepresentation = null;
+        int savedResolution = -1;
         try
         {
             boolean formRequested = formPath != null && !formPath.isEmpty();
@@ -158,7 +171,31 @@ public class GetFormScreenshotTool implements IMcpTool
                     + "try again once the requested form's editor is fully open.").toJson()); //$NON-NLS-1$
             }
 
-            if (refresh)
+            if (resolution != null && !resolution.isEmpty())
+            {
+                // The form is laid out for the preset's screen size, so the capture shows what a client
+                // at that resolution sees. Unknown values fail before anything is changed.
+                String[] presets = EditorScreenshotHelper.getResolutionPresets(representation);
+                int index = EditorScreenshotHelper.findResolutionPreset(presets, resolution);
+                if (index < 0)
+                {
+                    return CaptureResult.error(ToolResult.error("Unknown resolution '" + resolution //$NON-NLS-1$
+                        + "'. Pass a preset index or a part of its text. Presets: " //$NON-NLS-1$
+                        + EditorScreenshotHelper.describeResolutionPresets(presets)).toJson());
+                }
+                int current = EditorScreenshotHelper.getViewerResolution(wysiwygViewer);
+                if (current != index)
+                {
+                    savedResolution = current;
+                    resolutionViewer = wysiwygViewer;
+                    resolutionRepresentation = representation;
+                    EditorScreenshotHelper.setViewerResolution(wysiwygViewer, index);
+                    // The buffer still holds the old preset's layout: a real re-render is required.
+                    refresh = true;
+                }
+            }
+
+            if (refresh && resolutionViewer == null)
             {
                 EditorScreenshotHelper.refreshViewer(wysiwygViewer);
             }
@@ -208,6 +245,16 @@ public class GetFormScreenshotTool implements IMcpTool
             Activator.logError("Failed to capture form screenshot", e); //$NON-NLS-1$
             return CaptureResult.error(
                 ToolResult.error("Failed to capture form screenshot: " + e.getMessage()).toJson()); //$NON-NLS-1$
+        }
+        finally
+        {
+            if (resolutionViewer != null)
+            {
+                // The preset applies to this capture only: the user's editor and later captures keep
+                // the preset they had.
+                EditorScreenshotHelper.restoreViewerResolution(resolutionViewer, resolutionRepresentation,
+                    savedResolution);
+            }
         }
     }
 
