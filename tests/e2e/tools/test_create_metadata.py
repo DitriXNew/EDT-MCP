@@ -1047,13 +1047,20 @@ def test_create_data_processor_form_members_allocate_form_ids_issue_189():
     # attribute ids against item ids.
 
     before = tree_snapshot()
+    action_fqn = "%s.Command.%s.Handler.Action" % (form_fqn, cmd)
     dup = call("create_metadata", {
         "projectName": PROJECT,
-        "fqn": "%s.Command.%s.Handler.Action" % (form_fqn, cmd),
+        "fqn": action_fqn,
     })
     err = assert_error(dup, "duplicate command Action handler")
-    assert_error_quality(err, suggests=["already exists"],
-                         ctx="duplicate Action handler must be a clean rejected call")
+    # Issue #628: the refusal names the procedure the action is bound to and the route that changes
+    # it, on the address the caller sent (the create_metadata -> writer FQN wiring).
+    assert_error_quality(err, names=[proc], suggests=[
+        "already exists",
+        "bound to procedure '%s'" % proc,
+        "modify_metadata on '%s' with a 'procedure' property" % action_fqn,
+        "delete_metadata"],
+        ctx="duplicate Action handler must be a clean rejected call that names the binding")
     assert_tree_unchanged(before, "duplicate Action handler rejection must not mutate the dirty setup")
 
 
@@ -1550,6 +1557,32 @@ def test_create_form_event_handler():
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_form_event_handler_duplicate_names_the_bound_procedure():
+    # Issue #628 (the sibling of the command-action duplicate): a second binding of a form event names
+    # the procedure the event is already bound to and the route that changes it, on the address the
+    # caller sent - instead of a bare "already exists" that left the caller to discover the binding.
+    handler_fqn = "Catalog.Catalog.Form.ItemForm.Handler.OnOpen"
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": handler_fqn,
+        "properties": [{"name": "procedure", "value": "DupOnOpenProc"}]}), "bind OnOpen")
+    wait_for_project_ready()
+    poll_diff_contains("DupOnOpenProc", ctx="the first binding must reach disk")
+    # The binding dirties the tree; the refused duplicate must add nothing on top of it.
+    before = tree_snapshot()
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": handler_fqn,
+        "properties": [{"name": "procedure", "value": "OtherOnOpenProc"}]})
+    e = assert_error(r, "a second OnOpen binding")
+    assert_error_quality(e, names=["DupOnOpenProc"], suggests=[
+        "already exists",
+        "bound to procedure 'DupOnOpenProc'",
+        "modify_metadata on '%s' with a 'procedure' property" % handler_fqn,
+        "delete_metadata"],
+        ctx="a second binding of an event must name the bound procedure and the route")
+    assert_tree_unchanged(before, "a refused duplicate binding must change nothing")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
 def test_create_form_event_handler_by_russian_name_on_english_config():
     # Issue #157 remark: configurations also exist in ENGLISH — event names must resolve in BOTH script
     # variants. TestConfiguration is an English config; binding by the RUSSIAN event name 'ПриОткрытии'
@@ -1899,13 +1932,19 @@ def test_create_form_command_action_handler():
         "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
     assert_ok(r3, "read the form structure back")
     assert_contains(r3.text, proc, "the commands table must show the bound action handler")
-    # A second Action on the same command is a clean duplicate error.
+    # A second Action on the same command is a clean duplicate error - and (issue #628) it names the
+    # procedure the action is bound to and the route that changes it, on the address the caller sent.
+    handler_fqn = "Catalog.Catalog.Form.ItemForm.Command.%s.Handler.Action" % cmd
     r4 = call("create_metadata", {
         "projectName": PROJECT,
-        "fqn": "Catalog.Catalog.Form.ItemForm.Command.%s.Handler.Action" % cmd})
+        "fqn": handler_fqn})
     e = assert_error(r4, "duplicate Action handler")
-    assert_error_quality(e, suggests=["already exists"],
-                         ctx="a second Action on the same command must be rejected")
+    assert_error_quality(e, names=[proc], suggests=[
+        "already exists",
+        "bound to procedure '%s'" % proc,
+        "modify_metadata on '%s' with a 'procedure' property" % handler_fqn,
+        "delete_metadata"],
+        ctx="a second Action on the same command must be rejected, naming the binding and its route")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")

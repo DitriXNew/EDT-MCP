@@ -703,6 +703,114 @@ public class ModifyMetadataToolTest
             Arrays.asList(prop("visible", "false"), prop("handler", "MyProc")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
     }
 
+    // ---- a form COMMAND's action is its handler member, not a property (issue #628) ---------------
+
+    /** The designer's Russian "Action" ("Dejstvie"), spelled in code points: no raw Cyrillic here. */
+    private static final String RU_ACTION = "\u0414\u0435\u0439\u0441\u0442\u0432\u0438\u0435"; //$NON-NLS-1$
+
+    /**
+     * The names a caller reaches for when it takes a form command's action for a property: the
+     * designer's {@code Action} in any case, its Russian spelling in any case, and the handler-rebind
+     * names {@code procedure} / {@code handler}. Each is reported as the caller spelled it, wherever it
+     * sits in the batch (issue #628).
+     */
+    @Test
+    public void testFormCommandActionSpellingsAreRecognized()
+    {
+        for (String spelling : new String[] { "action", "Action", "ACTION", "procedure", "Procedure", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            "handler", "HANDLER", RU_ACTION, RU_ACTION.toLowerCase(java.util.Locale.ROOT) }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            assertEquals(spelling, ModifyMetadataTool.firstCommandActionProperty(
+                Collections.singletonList(prop(spelling, "Proc")))); //$NON-NLS-1$
+        }
+        assertEquals("the first action-like name is reported wherever it sits", "action", //$NON-NLS-1$ //$NON-NLS-2$
+            ModifyMetadataTool.firstCommandActionProperty(
+                Arrays.asList(prop("title", "T"), prop("action", "Proc")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    /**
+     * EXACT names only: {@code actionPurpose} is a real FormCommand property, so a batch carrying it -
+     * and other ordinary properties - must still reach the property pipeline rather than be refused
+     * as an attempt to set the action (issue #628).
+     */
+    @Test
+    public void testAPropertyThatOnlyStartsLikeActionIsNotTheAction()
+    {
+        assertNull(ModifyMetadataTool.firstCommandActionProperty(Arrays.asList(
+            prop("actionPurpose", "ForList"), prop("title", "T"), prop("use", "true")))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        assertNull(ModifyMetadataTool.firstCommandActionProperty(Collections.emptyList()));
+    }
+
+    /**
+     * The refusal names the handler member that IS the command's action and both routes to it - the
+     * clauses the bare assignable list never carried, which is why the reporter read it as "the
+     * action cannot be set through MCP" (issue #628). The old wording's words are deliberately not
+     * the proof: it said "not assignable on FormCommand" and named the property too.
+     */
+    @Test
+    public void testTheActionRefusalNamesTheHandlerMember()
+    {
+        JsonObject result = JsonParser.parseString(ModifyMetadataTool.commandActionPropertyRefusal(
+            "DataProcessor.Obj.Form.F.Command.C1", "action")).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a refusal is an error result", result.get("success").getAsBoolean()); //$NON-NLS-1$ //$NON-NLS-2$
+        String error = result.get("error").getAsString(); //$NON-NLS-1$
+        assertTrue(error, error.contains(
+            "is its handler member 'DataProcessor.Obj.Form.F.Command.C1.Handler.Action'")); //$NON-NLS-1$
+        assertTrue(error, error.contains("Bind it with create_metadata on that FQN")); //$NON-NLS-1$
+        assertTrue(error, error.contains("defaults to the command name")); //$NON-NLS-1$
+        assertTrue(error, error.contains(
+            "rebind it with modify_metadata on that FQN and a 'procedure' property")); //$NON-NLS-1$
+        assertTrue("the property the caller sent is named", error.contains("Property 'action'")); //$NON-NLS-1$ //$NON-NLS-2$
+        // The rebind does not reach every action: an extension's interception list holds no single
+        // handler to rename, and the text is the same whatever the command holds - so it says which
+        // action the rebind is for, and what removes the other.
+        assertTrue(error, error.contains("An action that holds no single handler (an extension's " //$NON-NLS-1$
+            + "interception list) cannot be rebound - remove it with delete_metadata on that FQN.")); //$NON-NLS-1$
+    }
+
+    /**
+     * Only a form COMMAND has an action, so only there are the action-like names routed to its handler
+     * member. On every other kind they are ordinary unknown properties: the pipeline refuses them with
+     * that member's own assignable list, and a field's {@code procedure} must never be answered with a
+     * {@code ...Field.Price.Handler.Action} address that cannot exist (issue #628).
+     */
+    @Test
+    public void testOnlyAFormCommandRoutesItsActionProperties()
+    {
+        List<JsonObject> batch = Arrays.asList(prop("procedure", "P"), prop("action", "A")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertEquals("procedure", ModifyMetadataTool.commandActionPropertyOf( //$NON-NLS-1$
+            FormElementWriter.Kind.COMMAND, batch));
+        for (FormElementWriter.Kind kind : FormElementWriter.Kind.values())
+        {
+            if (kind != FormElementWriter.Kind.COMMAND)
+            {
+                assertNull(kind.name(), ModifyMetadataTool.commandActionPropertyOf(kind, batch));
+            }
+        }
+        assertNull("an unrecognized kind token has no action either", //$NON-NLS-1$
+            ModifyMetadataTool.commandActionPropertyOf(null, batch));
+    }
+
+    /**
+     * The guide carries the same route where an agent looks before it tries a property: the
+     * Validation exception, the "Not supported here" entry and a rebind example (issue #628). The
+     * bare {@code Catalog.X.Form.F.Command.<Name>.Handler.Action} address is NOT pinned - the rebind
+     * section named it before this change, so it would prove nothing.
+     */
+    @Test
+    public void testTheGuideRoutesACommandActionToItsHandlerMember()
+    {
+        String guide = new ModifyMetadataTool().getGuide();
+        assertTrue(guide.contains("The one exception is a form COMMAND's action")); //$NON-NLS-1$
+        assertTrue(guide.contains("is the command's handler member, not an assignable property")); //$NON-NLS-1$
+        assertTrue(guide.contains(
+            "BIND it with create_metadata on `Catalog.X.Form.F.Command.<Name>.Handler.Action`")); //$NON-NLS-1$
+        assertTrue(guide.contains("Command.Refresh.Handler.Action")); //$NON-NLS-1$
+        assertTrue(guide.contains("REBIND an existing single-handler action here")); //$NON-NLS-1$
+        assertTrue(guide.contains("an extension's interception action (a list of handlers) cannot be " //$NON-NLS-1$
+            + "rebound - remove it with delete_metadata on that FQN")); //$NON-NLS-1$
+    }
+
     // ===== normalizeStringPropertyValue (scoped yo->ye normalization for free STRINGs) =====
 
     @Test

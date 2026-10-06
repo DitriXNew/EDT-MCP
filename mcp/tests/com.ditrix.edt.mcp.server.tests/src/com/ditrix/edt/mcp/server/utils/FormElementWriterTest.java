@@ -1000,6 +1000,311 @@ public class FormElementWriterTest
         assertTrue(err.contains("command action")); //$NON-NLS-1$
     }
 
+    // ---- a duplicate binding names what is bound and the route that changes it (issue #628) -------
+
+    /** The address a caller sends to bind (and, per the refusal, to rebind) the Print command's action. */
+    private static final String PRINT_ACTION_FQN = "Catalog.C.Form.F.Command.Print.Handler.Action"; //$NON-NLS-1$
+
+    /** A form holding the command {@code Print}; returns the command. */
+    private static EObject newPrintCommand()
+    {
+        EObject form = newForm();
+        assertNull(FormElementWriter.createMember(form, Kind.COMMAND, "Print", null, null, //$NON-NLS-1$
+            null, null, false, null));
+        return FormElementWriter.findFormCommand(form, "Print"); //$NON-NLS-1$
+    }
+
+    /** The procedure name the command's single action handler is bound to. */
+    private static Object actionProcedureOf(EObject command)
+    {
+        EObject action = (EObject)command.eGet(feature(command, "action")); //$NON-NLS-1$
+        EObject handler = (EObject)action.eGet(feature(action, "handler")); //$NON-NLS-1$
+        return handler.eGet(feature(handler, "name")); //$NON-NLS-1$
+    }
+
+    /**
+     * Gives {@code command} an extension's interception action: a
+     * {@code FormExtensionCommandHandlerContainer} whose {@code handlers} list holds one
+     * {@code CommandHandlerExtension} per name - the shape EDT writes when an extension intercepts an
+     * adopted command.
+     */
+    private static EObject interceptAction(EObject command, String... procedures)
+    {
+        EObject container = newObject(modelClass("FormExtensionCommandHandlerContainer")); //$NON-NLS-1$
+        for (String procedure : procedures)
+        {
+            EObject handler = newObject(modelClass("CommandHandlerExtension")); //$NON-NLS-1$
+            handler.eSet(feature(handler, "name"), procedure); //$NON-NLS-1$
+            addTo(container, "handlers", handler); //$NON-NLS-1$
+        }
+        command.eSet(feature(command, "action"), container); //$NON-NLS-1$
+        return container;
+    }
+
+    /**
+     * A second create of a command's action names the command, the procedure the action is bound to
+     * (the get_metadata_details "Action handler" text) and the route that changes it, on the very
+     * address the caller sent - the reporter could not tell what was bound, nor how to change it, from
+     * a bare "already exists". The binding itself is left alone.
+     */
+    @Test
+    public void testASecondActionNamesTheBoundProcedureAndTheRebindRoute()
+    {
+        EObject command = newPrintCommand();
+        assertNull(FormElementWriter.createHandler(command, "Action", "PrintNow", null, "en", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            new String[1], PRINT_ACTION_FQN));
+
+        String dup = FormElementWriter.createHandler(command, "Action", "PrintLater", null, "en", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            new String[1], PRINT_ACTION_FQN);
+
+        assertNotNull(dup);
+        assertTrue(dup, dup.contains("The action of form command 'Print' already exists")); //$NON-NLS-1$
+        assertTrue(dup, dup.contains("it is bound to procedure 'PrintNow'")); //$NON-NLS-1$
+        assertTrue(dup, dup.contains("call modify_metadata on '" + PRINT_ACTION_FQN //$NON-NLS-1$
+            + "' with a 'procedure' property")); //$NON-NLS-1$
+        assertTrue(dup, dup.contains("call delete_metadata on it")); //$NON-NLS-1$
+        assertEquals("a refused duplicate leaves the binding alone", "PrintNow", //$NON-NLS-1$ //$NON-NLS-2$
+            actionProcedureOf(command));
+    }
+
+    /**
+     * A caller that does not know the handler FQN (the 7-argument overload) still gets a route that
+     * works: the same address it just used.
+     */
+    @Test
+    public void testWithoutAnAddressTheRouteIsTheSameHandlerFqn()
+    {
+        EObject command = newPrintCommand();
+        assertNull(FormElementWriter.createHandler(command, "Action", "PrintNow", null, "en", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            new String[1]));
+
+        String dup = FormElementWriter.createHandler(command, "Action", null, null, "en", null, //$NON-NLS-1$ //$NON-NLS-2$
+            new String[1]);
+
+        assertNotNull(dup);
+        assertTrue(dup, dup.contains("it is bound to procedure 'PrintNow'")); //$NON-NLS-1$
+        assertTrue(dup, dup.contains(
+            "call modify_metadata on this same handler FQN with a 'procedure' property")); //$NON-NLS-1$
+        assertFalse(dup, dup.contains("'null'")); //$NON-NLS-1$
+    }
+
+    /** A bound action whose handler carries no procedure name is described as exactly that. */
+    @Test
+    public void testAnActionWithoutAProcedureNameSaysSo()
+    {
+        EObject command = newPrintCommand();
+        assertNull(FormElementWriter.createHandler(command, "Action", null, null, "en", null)); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject action = (EObject)command.eGet(feature(command, "action")); //$NON-NLS-1$
+        EObject handler = (EObject)action.eGet(feature(action, "handler")); //$NON-NLS-1$
+        handler.eSet(feature(handler, "name"), ""); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String dup = FormElementWriter.commandActionExistsRefusal(command, PRINT_ACTION_FQN);
+
+        assertTrue(dup, dup.contains("it is bound to a handler with no procedure name")); //$NON-NLS-1$
+        assertFalse(dup, dup.contains("procedure ''")); //$NON-NLS-1$
+    }
+
+    /**
+     * The route the refusal names really rebinds a command's action: modify_metadata on that FQN with
+     * a {@code procedure} reaches {@link FormElementWriter#rebindHandler}, which renames the bound
+     * procedure - addressed by the English leaf and by the Russian one alike. Green before #628 too: it
+     * guards the promise the new text makes, so a refusal can never send a caller down a dead route.
+     */
+    @Test
+    public void testTheRouteTheRefusalNamesRebindsTheCommandAction()
+    {
+        EObject command = newPrintCommand();
+        assertNull(FormElementWriter.createHandler(command, "Action", "PrintNow", null, "en", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            new String[1], PRINT_ACTION_FQN));
+
+        assertNull(FormElementWriter.rebindHandler(command, "Action", "PrintLater")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("PrintLater", actionProcedureOf(command)); //$NON-NLS-1$
+
+        String ruAction = fromCp(0x0414, 0x0435, 0x0439, 0x0441, 0x0442, 0x0432, 0x0438, 0x0435);
+        assertNull(FormElementWriter.rebindHandler(command, ruAction, "PrintAgain")); //$NON-NLS-1$
+        assertEquals("PrintAgain", actionProcedureOf(command)); //$NON-NLS-1$
+    }
+
+    /**
+     * An extension's interception action holds a LIST of handlers, which modify_metadata cannot
+     * rebind: its duplicate refusal names those handlers and offers only the removal, never the
+     * rebind route that would fail on it.
+     */
+    @Test
+    public void testAnInterceptionActionIsNotOfferedARebind()
+    {
+        EObject command = newPrintCommand();
+        EObject action = interceptAction(command, "BeforePrint", "AfterPrint"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String dup = FormElementWriter.createHandler(command, "Action", null, null, "en", null, //$NON-NLS-1$ //$NON-NLS-2$
+            new String[1], PRINT_ACTION_FQN);
+
+        assertNotNull(dup);
+        assertTrue(dup, dup.contains("The action of form command 'Print' already exists")); //$NON-NLS-1$
+        assertTrue(dup, dup.contains("it holds the extension interception handlers 'BeforePrint, AfterPrint'")); //$NON-NLS-1$
+        assertTrue(dup, dup.contains("call delete_metadata on '" + PRINT_ACTION_FQN + "'")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(dup, dup.contains("with a 'procedure' property")); //$NON-NLS-1$
+        assertSame("the interception action is left alone", action, //$NON-NLS-1$
+            command.eGet(feature(command, "action"))); //$NON-NLS-1$
+    }
+
+    /**
+     * Rebinding an interception action says why it cannot be done and how to get rid of it. It used to
+     * answer "No event handler ... Use create_metadata ... to bind it first" - and create_metadata
+     * then refused the action as existing: a loop the caller could not leave.
+     */
+    @Test
+    public void testRebindingAnInterceptionActionSaysWhyItCannot()
+    {
+        EObject command = newPrintCommand();
+        EObject action = interceptAction(command, "BeforePrint", "AfterPrint"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String err = FormElementWriter.rebindHandler(command, "Action", "PrintLater"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull(err);
+        assertTrue(err, err.contains("holds extension interception handlers ('BeforePrint, AfterPrint')")); //$NON-NLS-1$
+        assertTrue(err, err.contains("remove the action with delete_metadata on this FQN")); //$NON-NLS-1$
+        assertFalse(err, err.contains("No event handler")); //$NON-NLS-1$
+        assertFalse(err, err.contains("create_metadata")); //$NON-NLS-1$
+        assertSame(action, command.eGet(feature(command, "action"))); //$NON-NLS-1$
+    }
+
+    /**
+     * An action that exists but carries no handler at all is not sent STRAIGHT to create_metadata
+     * either: that create is refused while the action exists, so the old advice would loop here too.
+     * Only a MISSING action keeps the "bind it first" answer; this one is removed first - delete
+     * takes an action of any shape - and only then bound afresh.
+     */
+    @Test
+    public void testRebindingAnActionWithoutAHandlerRoutesThroughDelete()
+    {
+        EObject command = newPrintCommand();
+        assertTrue(FormElementWriter.rebindHandler(command, "Action", "PrintLater") //$NON-NLS-1$ //$NON-NLS-2$
+            .contains("Use create_metadata on the handler FQN to bind it first")); //$NON-NLS-1$
+
+        command.eSet(feature(command, "action"), //$NON-NLS-1$
+            newObject(modelClass("FormCommandHandlerContainer"))); //$NON-NLS-1$
+        String err = FormElementWriter.rebindHandler(command, "Action", "PrintLater"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull(err);
+        assertFalse(err, err.contains("bind it first")); //$NON-NLS-1$
+        assertFalse(err, err.contains("No event handler")); //$NON-NLS-1$
+        assertTrue(err, err.contains("This command's action exists")); //$NON-NLS-1$
+        assertTrue(err, err.contains("remove the action with delete_metadata on this FQN, then bind it " //$NON-NLS-1$
+            + "with create_metadata on this FQN")); //$NON-NLS-1$
+    }
+
+    /**
+     * The same action - existing, holding no handler (the form metamodel's {@code handler} is
+     * optional) - met by a second CREATE: there is no procedure to name or rebind, so the refusal
+     * names the route that does work on it, on the address the caller sent: delete it, then repeat
+     * the create. It used to stop at a bare "already exists".
+     */
+    @Test
+    public void testADuplicateOfAnActionWithoutAHandlerNamesDeleteThenCreate()
+    {
+        EObject command = newPrintCommand();
+        command.eSet(feature(command, "action"), //$NON-NLS-1$
+            newObject(modelClass("FormCommandHandlerContainer"))); //$NON-NLS-1$
+
+        String dup = FormElementWriter.createHandler(command, "Action", "PrintNow", null, "en", null, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            new String[1], PRINT_ACTION_FQN);
+
+        assertNotNull(dup);
+        assertTrue(dup, dup.contains(
+            "The action of form command 'Print' already exists but holds no single handler")); //$NON-NLS-1$
+        assertTrue(dup, dup.contains("remove it with delete_metadata on '" + PRINT_ACTION_FQN //$NON-NLS-1$
+            + "', then repeat this create_metadata call")); //$NON-NLS-1$
+        assertFalse(dup, dup.contains("with a 'procedure' property")); //$NON-NLS-1$
+    }
+
+    /**
+     * The delete route the refusals name works on an action of EVERY shape: delete_metadata resolves
+     * the handler FQN through {@link FormElementWriter#findFormHandler}, which hands it the command's
+     * action itself, and removes that - after which the create binds a fresh action. Green before
+     * #628 too: it guards the promise the texts make, as the rebind guard above does for the rebind.
+     */
+    @Test
+    public void testTheDeleteRouteRemovesAnActionOfEveryShape()
+    {
+        EObject single = newPrintCommand();
+        assertNull(FormElementWriter.createHandler(single, "Action", "PrintNow", null, "en", null)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        EObject empty = newPrintCommand();
+        empty.eSet(feature(empty, "action"), newObject(modelClass("FormCommandHandlerContainer"))); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject intercepted = newPrintCommand();
+        interceptAction(intercepted, "BeforePrint"); //$NON-NLS-1$
+
+        for (EObject command : new EObject[] { single, empty, intercepted })
+        {
+            EObject action = (EObject)command.eGet(feature(command, "action")); //$NON-NLS-1$
+            assertSame(action, FormElementWriter.findFormHandler(command, "Action")); //$NON-NLS-1$
+            FormElementWriter.removeFormMember(command.eContainer(), action);
+            assertNull("the action is gone", command.eGet(feature(command, "action"))); //$NON-NLS-1$ //$NON-NLS-2$
+            assertNull(FormElementWriter.createHandler(command, "Action", "PrintAgain", null, "en", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                null, new String[1], PRINT_ACTION_FQN));
+            assertEquals("PrintAgain", actionProcedureOf(command)); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The sibling duplicate - a second plain binding of an element / form event - names the procedure
+     * the event is bound to and the route that changes it, on the address the caller sent; without
+     * one it falls back to "this same handler FQN". The route is real: rebindHandler re-points it.
+     */
+    @Test
+    public void testASecondBindingOfAnEventNamesItsProcedureAndTheRoute()
+    {
+        HandlerModel m = newHandlerModel(false);
+        String fqn = "Catalog.C.Form.F.Field.Price.Handler.OnChange"; //$NON-NLS-1$
+        assertNull(FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+            "OnChange", "PriceOnChange", null, new String[1], fqn)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String dup = FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+            "OnChange", "Other", null, new String[1], fqn); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertNotNull(dup);
+        assertTrue(dup, dup.contains("An event handler for 'OnChange' already exists on this element")); //$NON-NLS-1$
+        assertTrue(dup, dup.contains("it is bound to procedure 'PriceOnChange'")); //$NON-NLS-1$
+        assertTrue(dup, dup.contains("call modify_metadata on '" + fqn + "' with a 'procedure' property")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(dup, dup.contains("call delete_metadata on it")); //$NON-NLS-1$
+        String withoutAddress = FormElementWriter.bindEventHandler(m.container, m.handlersFeat,
+            m.event, "OnChange", "Other", null, new String[1]); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(withoutAddress, withoutAddress.contains(
+            "call modify_metadata on this same handler FQN with a 'procedure' property")); //$NON-NLS-1$
+        List<?> handlers = (List<?>)m.container.eGet(m.handlersFeat);
+        assertEquals("nothing is appended by a refused duplicate", 1, handlers.size()); //$NON-NLS-1$
+
+        assertNull(FormElementWriter.rebindHandler(m.container, "OnChange", "PriceChanged")); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject handler = (EObject)handlers.get(0);
+        assertEquals("PriceChanged", handler.eGet(feature(handler, "name"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * When an extension's interception handler of the same event comes FIRST, the handler FQN reaches
+     * that one - rebind and delete both resolve the first binding of the event - so naming the route
+     * would steer the caller into changing the wrong handler. The bound procedure is still named.
+     */
+    @Test
+    public void testAnEventFirstBoundByAnInterceptionIsNotOfferedTheRouteThatMissesIt()
+    {
+        HandlerModel m = newHandlerModel(true);
+        assertNull(FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+            "OnChange", "ext_OnChangeAfter", "After", new String[1])); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNull(FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+            "OnChange", "BaseOnChange", null, new String[1])); //$NON-NLS-1$ //$NON-NLS-2$
+        EObject interception = (EObject)((List<?>)m.container.eGet(m.handlersFeat)).get(0);
+        assertSame("the handler FQN resolves to the interception handler", interception, //$NON-NLS-1$
+            FormElementWriter.findFormHandler(m.container, "OnChange")); //$NON-NLS-1$
+
+        String dup = FormElementWriter.bindEventHandler(m.container, m.handlersFeat, m.event,
+            "OnChange", "Other", null, new String[1], "Catalog.C.Form.F.Field.Price.Handler.OnChange"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        assertNotNull(dup);
+        assertTrue(dup, dup.contains("it is bound to procedure 'BaseOnChange'")); //$NON-NLS-1$
+        assertFalse(dup, dup.contains("modify_metadata")); //$NON-NLS-1$
+        assertFalse(dup, dup.contains("delete_metadata")); //$NON-NLS-1$
+    }
+
     // ---- general extInfo access (ensureExtInfo / resolveExtInfoEClass, #235) ----------------------
 
     @Test
@@ -4680,7 +4985,8 @@ public class FormElementWriterTest
      * the Form (items / attributes / formCommands / autoCommandBar), FormItem subtypes (Button with
      * its type / placement enums, FormGroup with its group type, AutoCommandBar), the FormCommand with
      * its {@code action} containment ({@code FormCommandHandlerContainer} holding a
-     * {@code CommandHandler}) and {@code use} AdjustableBoolean. Lets the reflective write logic be
+     * {@code CommandHandler}, or an extension's {@code FormExtensionCommandHandlerContainer} holding a
+     * list of {@code CommandHandlerExtension}) and {@code use} AdjustableBoolean. Lets the reflective write logic be
      * tested without the real {@code com._1c.g5.v8.dt.form.model} package.
      */
     private static final class FormLikeModel
@@ -4829,6 +5135,18 @@ public class FormElementWriterTest
             formCommandHandlerContainer.getESuperTypes().add(handlerContainer);
             formCommandHandlerContainer.getEStructuralFeatures().add(
                 containment(f, "handler", commandHandler, false)); //$NON-NLS-1$
+
+            // An extension's interception of an adopted command (Form.xcore): a LIST of
+            // CommandHandlerExtension, each a CommandHandler plus a call type. The call type is left
+            // out - nothing under test reads it; the procedure names are what the writer reports.
+            EClass commandHandlerExtension = f.createEClass();
+            commandHandlerExtension.setName("CommandHandlerExtension"); //$NON-NLS-1$
+            commandHandlerExtension.getESuperTypes().add(commandHandler);
+            EClass formExtensionCommandHandlerContainer = f.createEClass();
+            formExtensionCommandHandlerContainer.setName("FormExtensionCommandHandlerContainer"); //$NON-NLS-1$
+            formExtensionCommandHandlerContainer.getESuperTypes().add(handlerContainer);
+            formExtensionCommandHandlerContainer.getEStructuralFeatures().add(
+                containment(f, "handlers", commandHandlerExtension, true)); //$NON-NLS-1$
 
             EClass command = f.createEClass();
             command.setName("Command"); //$NON-NLS-1$
@@ -5113,6 +5431,8 @@ public class FormElementWriterTest
             pkg.getEClassifiers().add(commandHandler);
             pkg.getEClassifiers().add(handlerContainer);
             pkg.getEClassifiers().add(formCommandHandlerContainer);
+            pkg.getEClassifiers().add(commandHandlerExtension);
+            pkg.getEClassifiers().add(formExtensionCommandHandlerContainer);
             pkg.getEClassifiers().add(command);
             pkg.getEClassifiers().add(formCommand);
             pkg.getEClassifiers().add(formStandardCommand);
@@ -8109,5 +8429,51 @@ public class FormElementWriterTest
             bound, FormElementWriter.findFormHandler(m.form, "BeforeWriteAtServer")); //$NON-NLS-1$
         assertNull("an event nothing is bound to still answers null", //$NON-NLS-1$
             FormElementWriter.findFormHandler(m.form, "OnReadAtServer")); //$NON-NLS-1$
+    }
+
+    /**
+     * A duplicate refused inside the root's extInfo names its route only when the handler FQN reaches
+     * the very binding the refusal names (issue #628). The FQN of a form event resolves through the
+     * form ROOT - {@link FormElementWriter#resolveHandlerContainer} hands rebind and delete the root,
+     * whose own list {@link FormElementWriter#findFormHandler} reads first - so the check must ask the
+     * root, not the extInfo the binding was attempted on. A binding that lives only inside the extInfo
+     * is reached that way and gets the route; in the mixed state an older build left (#592: the same
+     * event bound in BOTH lists) the extInfo's own binding is the one refused, the FQN reaches the
+     * root's, and naming the route would steer the caller into changing a binding the refusal does
+     * not name.
+     */
+    @Test
+    public void testADuplicateInsideTheExtInfoIsRoutedOnlyWhereTheRootReachesIt()
+    {
+        FormRootModel m = newFormRootModel("InformationRegisterRecordManager.MyRegister", true); //$NON-NLS-1$
+        FormElementWriter.syncFormExtInfo(m.form);
+        String fqn = "InformationRegister.MyRegister.Form.RecordForm.Handler.BeforeWriteAtServer"; //$NON-NLS-1$
+        assertNull(FormElementWriter.bindEventHandler(m.extInfo(), m.extInfoHandlers(), m.event,
+            "BeforeWriteAtServer", "ExtBeforeWrite", null, new String[1], fqn)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        String routed = FormElementWriter.bindEventHandler(m.extInfo(), m.extInfoHandlers(), m.event,
+            "BeforeWriteAtServer", "Other", null, new String[1], fqn); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull(routed);
+        assertTrue(routed, routed.contains("it is bound to procedure 'ExtBeforeWrite'")); //$NON-NLS-1$
+        assertTrue(routed, routed.contains("call modify_metadata on '" + fqn //$NON-NLS-1$
+            + "' with a 'procedure' property")); //$NON-NLS-1$
+
+        // The legacy mixed state, built by hand: the guard (rightly) refuses to create it.
+        EClass handlerType = ((EReference)m.rootHandlers).getEReferenceType();
+        EObject atRoot = handlerType.getEPackage().getEFactoryInstance().create(handlerType);
+        atRoot.eSet(handlerType.getEStructuralFeature("event"), m.event); //$NON-NLS-1$
+        atRoot.eSet(handlerType.getEStructuralFeature("name"), "RootBeforeWrite"); //$NON-NLS-1$ //$NON-NLS-2$
+        @SuppressWarnings("unchecked")
+        List<EObject> rootList = (List<EObject>)m.form.eGet(m.rootHandlers);
+        rootList.add(atRoot);
+        assertSame("the handler FQN now reaches the ROOT's binding", atRoot, //$NON-NLS-1$
+            FormElementWriter.findFormHandler(m.form, "BeforeWriteAtServer")); //$NON-NLS-1$
+
+        String unrouted = FormElementWriter.bindEventHandler(m.extInfo(), m.extInfoHandlers(),
+            m.event, "BeforeWriteAtServer", "Other", null, new String[1], fqn); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull(unrouted);
+        assertTrue(unrouted, unrouted.contains("it is bound to procedure 'ExtBeforeWrite'")); //$NON-NLS-1$
+        assertFalse(unrouted, unrouted.contains("modify_metadata")); //$NON-NLS-1$
+        assertFalse(unrouted, unrouted.contains("delete_metadata")); //$NON-NLS-1$
     }
 }

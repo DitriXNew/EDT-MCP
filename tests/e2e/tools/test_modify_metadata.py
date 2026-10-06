@@ -1845,6 +1845,83 @@ def test_modify_form_command_title():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_form_command_action_property_names_the_handler_member():
+    # Issue #628: a form command's action is its handler member, not a property. The names a caller
+    # reaches for - the designer's Action (in either language) and the rebind 'procedure' - are
+    # refused with that member's address and both routes, instead of the bare assignable list whose
+    # 'actionPurpose' read as "the action cannot be set through MCP". This is the only pin of the
+    # check's wiring into the form-member path: the unit tests feed the static seams directly.
+    cmd = "ActPropCmd"
+    cmd_fqn = "Catalog.Catalog.Form.ItemForm.Command." + cmd
+    handler_fqn = cmd_fqn + ".Handler.Action"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": cmd_fqn}),
+              "seed form command")
+    wait_for_project_ready()
+    # The seeding dirties the tree; the refused calls below must add nothing on top of it.
+    before = tree_snapshot()
+    for prop in ("action", "procedure", "Действие"):
+        r = call("modify_metadata", {
+            "projectName": PROJECT, "fqn": cmd_fqn,
+            "properties": [{"name": prop, "value": "ActPropProc"}]})
+        e = assert_error(r, "'%s' on a form command" % prop)
+        assert_error_quality(e, names=[prop], suggests=[
+            "is its handler member '%s'" % handler_fqn,
+            "bind it with create_metadata on that fqn",
+            "rebind it with modify_metadata on that fqn and a 'procedure' property",
+            "cannot be rebound - remove it with delete_metadata on that fqn"],
+            ctx="'%s' on a command must be routed to the command's handler member" % prop)
+    # Negative control: a real FormCommand property that merely starts like 'action' still reaches
+    # the ordinary property pipeline and is judged as the enum it is.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": cmd_fqn,
+        "properties": [{"name": "actionPurpose", "value": "NoSuch_zz"}]})
+    e = assert_error(r, "an invalid actionPurpose value")
+    assert_error_quality(e, names=["NoSuch_zz", "actionPurpose"], suggests=["Allowed"],
+                         ctx="actionPurpose is an ordinary enum property, not the action")
+    assert_not_contains(e, "Handler.Action", "actionPurpose must not be routed to the handler member")
+    assert_tree_unchanged(before, "a refused action property must change nothing")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_action_property_on_a_missing_command_keeps_not_found():
+    # Issue #628 precedence: the action-property refusal is decided on the RESOLVED command, so an
+    # address that names no command still answers "not found" - never a route to the handler member
+    # of a command that does not exist.
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command.NoSuchCmd628",
+        "properties": [{"name": "action", "value": "X"}]})
+    e = assert_error(r, "'action' on a missing form command")
+    assert_error_quality(e, names=["NoSuchCmd628"], suggests=["Form member not found"],
+                         ctx="a missing command keeps its own answer")
+    assert_not_contains(e, "Handler.Action", "a missing command must not be given a handler route")
+    assert_no_diff("a refused call on a missing command must change nothing")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_modify_action_property_on_a_non_command_member_keeps_the_assignable_list():
+    # Issue #628 negative control by KIND: only a form COMMAND has an action, so the action-like names
+    # sent to any other member - an existing field and the form's main attribute - are not routed to a
+    # '...Handler.Action' member that cannot exist; the ordinary pipeline refuses them with that
+    # member's own assignable list. This is the only pin of the KIND that reaches the check: the unit
+    # tests feed the kind to the static seam directly.
+    for fqn in ("Catalog.Catalog.Form.ItemForm.Field.Description",
+                "Catalog.Catalog.Form.ItemForm.Attribute.Object"):
+        for prop in ("procedure", "action"):
+            r = call("modify_metadata", {
+                "projectName": PROJECT, "fqn": fqn,
+                "properties": [{"name": prop, "value": "NoRouteProc628"}]})
+            e = assert_error(r, "'%s' on the non-command member %s" % (prop, fqn))
+            assert_error_quality(e, names=[prop],
+                                 suggests=["not assignable", "Assignable properties"],
+                                 ctx="a non-command member keeps the ordinary refusal")
+            assert_not_contains(e, "Handler.Action",
+                                "a non-command member must not be routed to a handler member")
+            assert_not_contains(e, "handler member",
+                                "a non-command member has no action to route")
+    assert_no_diff("refused action-like properties on non-command members must change nothing")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_move_form_button_into_auto_command_bar():
     # Reparent an EXISTING button into the form's command bar via the 'parent' property - the move
     # half of the #138 reporter's manual XML edits (new buttons can be parented at creation; this
@@ -2356,6 +2433,43 @@ def test_rebind_item_level_handler_procedure_roundtrip():
         "the rebind must force-export the .form to disk: %r" % (r.structured,)
     poll_diff_contains("RbProc2", ctx="the new handler procedure name must land in the .form on disk")
     assert_not_contains(diff(), "RbProc1", "the old procedure name must be replaced on disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_rebind_form_command_action_procedure_roundtrip():
+    # Issue #628: the route both refusals name - modify_metadata on '...Command.<C>.Handler.Action'
+    # with a 'procedure' property - really re-points a command's action at another procedure. No other
+    # test rebinds a command action, so this proves the advertised route end to end.
+    cmd = "RbActCmd"
+    handler_fqn = "Catalog.Catalog.Form.ItemForm.Command.%s.Handler.Action" % cmd
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command." + cmd}),
+        "seed form command")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": handler_fqn,
+        "properties": [{"name": "procedure", "value": "RbActOld"}]}),
+        "bind the command's action to RbActOld")
+    wait_for_project_ready()
+    poll_disk_contains(_ITEM_FORM, "RbActOld", ctx="the first binding must reach disk")
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": handler_fqn,
+        "properties": [{"name": "procedure", "value": "RbActNew"}]})
+    assert_ok(r, "rebind the command's action to RbActNew")
+    assert r.structured.get("action") == "modified", "must report modified: %r" % (r.structured,)
+    assert r.structured.get("applied") == ["procedure"], \
+        "the rebind must report procedure as applied: %r" % (r.structured,)
+    assert r.structured.get("persisted") is True, \
+        "the rebind must force-export the .form to disk: %r" % (r.structured,)
+    form_text = poll_disk_contains(_ITEM_FORM, "RbActNew",
+                                   ctx="the new action procedure must land in the .form on disk")
+    assert_not_contains(form_text, "RbActOld", "the old action procedure must be replaced on disk")
+    details = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_ok(details, "read the form structure back")
+    assert_contains(details.text, "RbActNew",
+                    "the Commands table must show the rebound action handler")
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

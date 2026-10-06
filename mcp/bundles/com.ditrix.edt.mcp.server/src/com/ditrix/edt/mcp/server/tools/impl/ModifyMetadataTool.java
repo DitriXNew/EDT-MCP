@@ -3733,6 +3733,19 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                             ref.name, normFqn),
                             ". Use get_metadata_details to list the members.")).toJson()); //$NON-NLS-1$
                 }
+                // A form COMMAND's action is its handler member ('...Command.<Name>.Handler.Action'),
+                // not a property-bag value (issue #628): its property spellings are refused with that
+                // member's route instead of the bare assignable list, which read as "impossible
+                // here". Decided on the RESOLVED command, so a missing form / command / wrong kind
+                // keeps its own answer above; any other kind has no action, so there the same names
+                // go on to the ordinary pipeline and its own assignable list.
+                String actionProperty = commandActionPropertyOf(
+                    FormElementWriter.kindForToken(ref.kindToken), properties);
+                if (actionProperty != null)
+                {
+                    throw new FormValidationException(
+                        commandActionPropertyRefusal(normFqn, actionProperty));
+                }
                 return member;
             }, null);
     }
@@ -4965,6 +4978,75 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
         }
         return null;
+    }
+
+    /**
+     * The first property name that asks to set a form COMMAND's action, or {@code null} when none
+     * does (issue #628). A command's action is its handler member, not a property, so these names are
+     * refused with that member's route on a command: the designer's {@code Action} - in any case, or
+     * its Russian spelling: the leaf {@link FormElementWriter#isActionToken} accepts - and the
+     * handler-rebind names {@code procedure} / {@code handler}. EXACT names only, so a real
+     * FormCommand property that merely starts alike ({@code actionPurpose}) still reaches the
+     * property pipeline. Package-visible for tests.
+     *
+     * @param properties the requested property changes
+     * @return the first such name as the caller spelled it, or {@code null}
+     */
+    static String firstCommandActionProperty(List<JsonObject> properties)
+    {
+        for (JsonObject prop : properties)
+        {
+            String name = asString(prop.get("name")); //$NON-NLS-1$
+            if (PROP_PROCEDURE.equalsIgnoreCase(name) || PROP_HANDLER.equalsIgnoreCase(name)
+                || FormElementWriter.isActionToken(name))
+            {
+                return name;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The action-like property (see {@link #firstCommandActionProperty}) a batch sends to a form
+     * member of {@code kind}, or {@code null} (issue #628). Only a form COMMAND has an action: on any
+     * other kind these names are ordinary unknown properties, refused by the property pipeline with
+     * that member's own assignable list - never with a {@code ...Handler.Action} address the member
+     * cannot have. Package-visible for tests.
+     *
+     * @param kind the member's kind ({@link FormElementWriter#kindForToken}), may be {@code null}
+     * @param properties the requested property changes
+     * @return the first action-like name on a command, or {@code null}
+     */
+    static String commandActionPropertyOf(FormElementWriter.Kind kind, List<JsonObject> properties)
+    {
+        return kind == FormElementWriter.Kind.COMMAND ? firstCommandActionProperty(properties) : null;
+    }
+
+    /**
+     * The refusal for an action-like property on a form COMMAND (issue #628): instead of the bare
+     * assignable list - whose {@code actionPurpose} the reporter read as "the action cannot be set
+     * through MCP" - it names the handler member that IS the command's action and the routes to it:
+     * create_metadata binds it, modify_metadata with a {@code procedure} property rebinds a
+     * single-handler action, and an action without one - an extension's interception list, which
+     * {@link FormElementWriter#rebindHandler} cannot rename - is removed with delete_metadata, which
+     * takes an action of any shape. The text is the same whatever the command's action is, so each
+     * clause says which action it applies to. Package-visible for tests.
+     *
+     * @param commandFqn the FQN of the command the property was sent to
+     * @param propertyName the property name as the caller spelled it
+     * @return the ready JSON error
+     */
+    static String commandActionPropertyRefusal(String commandFqn, String propertyName)
+    {
+        String handlerFqn = commandFqn + ".Handler.Action"; //$NON-NLS-1$
+        return ToolResult.error("Property '" + propertyName + "' is not assignable on FormCommand: " //$NON-NLS-1$ //$NON-NLS-2$
+            + "a form command's action (the designer's Action property, the BSL procedure the command " //$NON-NLS-1$
+            + "runs) is its handler member '" + handlerFqn + "'. Bind it with create_metadata on that " //$NON-NLS-1$ //$NON-NLS-2$
+            + "FQN (the optional 'procedure' property names the procedure and defaults to the command " //$NON-NLS-1$
+            + "name); if the command already has an action, rebind it with modify_metadata on that FQN " //$NON-NLS-1$
+            + "and a 'procedure' property. An action that holds no single handler (an extension's " //$NON-NLS-1$
+            + "interception list) cannot be rebound - remove it with delete_metadata on that FQN.") //$NON-NLS-1$
+            .toJson();
     }
 
     /** Whether any property in the list re-points a button at a form command ({@code command}). */
