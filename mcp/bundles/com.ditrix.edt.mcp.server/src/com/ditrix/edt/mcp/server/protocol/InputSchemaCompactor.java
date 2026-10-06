@@ -145,7 +145,7 @@ public final class InputSchemaCompactor
         // user carries a CROSS-FIELD rule as well as the credential fact: for a standalone
         // server the credentials are accepted only with mode='register' and rejected for a
         // newly created one, so a schema-valid create+credentials call fails before creating.
-        keep.put("create_infobase", asSet("infobaseFile", "user")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        keep.put("create_infobase", asSet("infobaseFile", "infobaseServer", "infobaseRef", "user")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
         // The lost-update guard: what the hash is and where it comes from.
         // mode defaults to searchReplace, and THAT mode requires oldSource - so a call carrying
         // only the two declared required parameters looks schema-valid and fails at runtime.
