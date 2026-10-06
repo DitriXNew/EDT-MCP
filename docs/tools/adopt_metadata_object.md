@@ -22,6 +22,7 @@ Creates the adopted copy in the extension with `objectBelonging=Adopted` and an 
 
 ## Cascade
 Adopting a MEMBER (or a nested object) implicitly adopts the owning object too (the parent must exist in the extension to host the member) - this mirrors the platform behaviour.
+A NESTED subsystem is addressed by its whole chain, exactly as list_subsystems prints it (`Subsystem.Sales.Subsystem.Orders`, any depth; each type token English or Russian) - a bare `Subsystem.Orders` names a top-level subsystem only. Adopting it first adopts every parent subsystem the extension does not have yet, and `fqn` in the result is that canonical chain.
 
 ## Result
 JSON with `action` ('adopted', or 'alreadyAdopted' when it was already adopted), the adopted `fqn`, the `extensionProject`, `objectBelonging='ADOPTED'`, and `persisted`. After an adopt, run get_project_errors on the extension to confirm the adoption is valid.
@@ -29,7 +30,7 @@ JSON with `action` ('adopted', or 'alreadyAdopted' when it was already adopted),
 ## Notes & gotchas
 - This adopts the metadata OBJECT side only. Intercepting a BSL method (`&Before/&After/&Around/&ChangeAndValidate`) is NOT done here.
 - An object the platform reports as not adoptable is rejected with a clear error.
-- No automatic undo: an adopted copy is removed with delete_metadata against the extension.
+- No automatic undo: an adopted copy is removed with delete_metadata against the extension - except a NESTED subsystem, whose chain delete_metadata cannot address yet (remove that copy in EDT).
 
 ## Vendor support
 Vendor support never blocks an adoption: the base configuration is only read (adopting is the way to change a locked object), and EDT applies support only to a configuration's own (native) root, never inside the extension that receives the copy.

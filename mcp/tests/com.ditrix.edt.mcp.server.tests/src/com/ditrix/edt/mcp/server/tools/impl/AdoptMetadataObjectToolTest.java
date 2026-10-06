@@ -9,21 +9,41 @@ package com.ditrix.edt.mcp.server.tools.impl;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
+import java.util.Arrays;
+
+import org.eclipse.emf.ecore.EObject;
+import org.junit.Before;
 import org.junit.Test;
 
+import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
+import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
+import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
  * Lightweight contract tests for {@link AdoptMetadataObjectTool}: tool metadata and JSON schema,
  * without needing the Eclipse/EDT runtime. The {@code execute()} path requires a live workbench +
  * BM model + an extension project, so the actual adopt behaviour (objectBelonging=ADOPTED,
- * extendedConfigurationObject link, multi-extension selection) is covered by the E2E suite.
+ * extendedConfigurationObject link, multi-extension selection) is covered by the E2E suite; the
+ * pure steps around it - which source an FQN resolves to, the address the result echoes, the
+ * not-found refusal and the files an adoption exports - are pinned here headlessly (issue #708).
  */
 import java.util.Collections;
 
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 import java.util.ArrayList;
 
@@ -88,4 +108,358 @@ public class AdoptMetadataObjectToolTest
         assertTrue(schema.contains("\"persisted\"")); //$NON-NLS-1$
     }
 
+    // ==================== source resolution (issue #708) ====================
+    //
+    // An in-memory configuration: Sales -> Orders -> Backlog, the reporter's Russian pair
+    // Планирование -> ПланированиеЗапасов, and Catalog Goods with Attribute Weight and Form ItemForm.
+    // Like the platform model, a nested subsystem is NOT contained by its parent: the parent only
+    // lists it (Subsystem.subsystems is a reference), and the child points back (parentSubsystem).
+    // Russian tokens and names are Unicode escapes so a non-UTF-8 build cannot corrupt them.
+
+    /** "Подсистема" (Subsystem). */
+    private static final String RU_SUBSYSTEM = "\u041f\u043e\u0434\u0441\u0438\u0441\u0442\u0435\u043c\u0430"; //$NON-NLS-1$
+    /** "Подсистемы" (Subsystems). */
+    private static final String RU_SUBSYSTEMS = "\u041f\u043e\u0434\u0441\u0438\u0441\u0442\u0435\u043c\u044b"; //$NON-NLS-1$
+    /** "Справочник" (Catalog). */
+    private static final String RU_CATALOG = "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a"; //$NON-NLS-1$
+    /** "Форма" (Form). */
+    private static final String RU_FORM = "\u0424\u043e\u0440\u043c\u0430"; //$NON-NLS-1$
+    /** "Формы" (Forms). */
+    private static final String RU_FORMS = "\u0424\u043e\u0440\u043c\u044b"; //$NON-NLS-1$
+    /** "Планирование" - the reporter's parent subsystem. */
+    private static final String RU_PLANNING =
+        "\u041f\u043b\u0430\u043d\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435"; //$NON-NLS-1$
+    /** "ПланированиеЗапасов" - the reporter's nested subsystem. */
+    private static final String RU_STOCK_PLANNING = RU_PLANNING + "\u0417\u0430\u043f\u0430\u0441\u043e\u0432"; //$NON-NLS-1$
+
+    /** The not-found text every address had before #708, kept byte for byte for a non-subsystem one. */
+    private static final String OLD_NOT_FOUND_TAIL = ". Check the FQN: 'Type.Name' for a top object " //$NON-NLS-1$
+        + "(e.g. 'Catalog.Products'), 'Type.Name.Kind.Name' for a member (e.g. " //$NON-NLS-1$
+        + "'Catalog.Products.Attribute.Weight'), 'Type.Name.Form.FormName' for a form (e.g. " //$NON-NLS-1$
+        + "'Catalog.Products.Form.ItemForm')."; //$NON-NLS-1$
+
+    private Configuration config;
+    private Catalog goods;
+    private CatalogAttribute weight;
+    private CatalogForm itemForm;
+    private Subsystem sales;
+    private Subsystem orders;
+    private Subsystem backlog;
+    private Subsystem planning;
+    private Subsystem stockPlanning;
+
+    @Before
+    public void setUpModel()
+    {
+        config = MdClassFactory.eINSTANCE.createConfiguration();
+        config.setName("Cfg"); //$NON-NLS-1$
+        goods = MdClassFactory.eINSTANCE.createCatalog();
+        goods.setName("Goods"); //$NON-NLS-1$
+        weight = MdClassFactory.eINSTANCE.createCatalogAttribute();
+        weight.setName("Weight"); //$NON-NLS-1$
+        goods.getAttributes().add(weight);
+        itemForm = MdClassFactory.eINSTANCE.createCatalogForm();
+        itemForm.setName("ItemForm"); //$NON-NLS-1$
+        goods.getForms().add(itemForm);
+        config.getCatalogs().add(goods);
+
+        sales = subsystem("Sales", null); //$NON-NLS-1$
+        orders = subsystem("Orders", sales); //$NON-NLS-1$
+        backlog = subsystem("Backlog", orders); //$NON-NLS-1$
+        config.getSubsystems().add(sales);
+        planning = subsystem(RU_PLANNING, null);
+        stockPlanning = subsystem(RU_STOCK_PLANNING, planning);
+        config.getSubsystems().add(planning);
+    }
+
+    /** A subsystem linked under {@code parent} both ways, as the platform links a nested one. */
+    private static Subsystem subsystem(String name, Subsystem parent)
+    {
+        Subsystem subsystem = MdClassFactory.eINSTANCE.createSubsystem();
+        subsystem.setName(name);
+        if (parent != null)
+        {
+            parent.getSubsystems().add(subsystem);
+            subsystem.setParentSubsystem(parent);
+        }
+        return subsystem;
+    }
+
+    /** Resolves {@code fqn} the way the tool does: normalized first, then the source resolution. */
+    private EObject resolve(String fqn)
+    {
+        return AdoptMetadataObjectTool.resolveAdoptionSource(config, MetadataTypeUtils.normalizeFqn(fqn));
+    }
+
+    @Test
+    public void testANestedSubsystemChainResolvesTheNestedSubsystem()
+    {
+        assertSame(orders, resolve("Subsystem.Sales.Subsystem.Orders")); //$NON-NLS-1$
+        assertSame("every level of a deeper chain is walked", backlog, //$NON-NLS-1$
+            resolve("Subsystem.Sales.Subsystem.Orders.Subsystem.Backlog")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testANestedSubsystemResolvesWhateverTheTokenLanguageNumberOrCase()
+    {
+        assertSame("Russian tokens", orders, resolve(RU_SUBSYSTEM + ".Sales." + RU_SUBSYSTEM + ".Orders")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertSame("Russian then English", orders, resolve(RU_SUBSYSTEM + ".Sales.Subsystem.Orders")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertSame("English then Russian", orders, resolve("Subsystem.Sales." + RU_SUBSYSTEM + ".Orders")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertSame("English plurals", orders, resolve("Subsystems.Sales.Subsystems.Orders")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertSame("a Russian plural", orders, resolve("Subsystem.Sales." + RU_SUBSYSTEMS + ".Orders")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertSame("lower case throughout", orders, resolve("subsystem.sales.subsystem.orders")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testEverySpellingTheIssueTriedReachesTheRussianNestedSubsystem()
+    {
+        // #708 step 2: the chain exactly as list_subsystems printed it, then the Russian and the
+        // plural spellings - every one of them answered "Object not found".
+        assertSame(stockPlanning, resolve("Subsystem." + RU_PLANNING + ".Subsystem." + RU_STOCK_PLANNING)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertSame(stockPlanning, resolve(RU_SUBSYSTEM + "." + RU_PLANNING + "." + RU_SUBSYSTEM + "." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + RU_STOCK_PLANNING));
+        assertSame(stockPlanning, resolve("Subsystem." + RU_PLANNING + ".Subsystems." + RU_STOCK_PLANNING)); //$NON-NLS-1$ //$NON-NLS-2$
+        // ...and the fourth spelling stays a miss: a bare child names a TOP-level subsystem only.
+        assertNull(resolve("Subsystem." + RU_STOCK_PLANNING)); //$NON-NLS-1$
+        // Step 4, the control: the top-level parent was always adoptable.
+        assertSame(planning, resolve("Subsystem." + RU_PLANNING)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATopLevelSubsystemStillResolves()
+    {
+        assertSame(sales, resolve("Subsystem.Sales")); //$NON-NLS-1$
+        assertSame(sales, resolve(RU_SUBSYSTEM + ".Sales")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAMissingNestedSubsystemIsNotFoundNeverItsParent()
+    {
+        assertNull("a missing leaf must not answer with its parent", //$NON-NLS-1$
+            resolve("Subsystem.Sales.Subsystem.Missing")); //$NON-NLS-1$
+        assertNull("a missing leaf two levels down", //$NON-NLS-1$
+            resolve("Subsystem.Sales.Subsystem.Orders.Subsystem.Missing")); //$NON-NLS-1$
+        assertNull("a missing parent", resolve("Subsystem.Missing.Subsystem.Orders")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testABareNestedChildIsNotFound()
+    {
+        // Same-named children can live under different parents, so the bare name is not guessed.
+        assertNull(resolve("Subsystem.Orders")); //$NON-NLS-1$
+        assertNull(resolve("Subsystem.Backlog")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTopObjectsMembersAndFormsResolveAsBefore()
+    {
+        assertSame(goods, resolve("Catalog.Goods")); //$NON-NLS-1$
+        assertSame(goods, resolve(RU_CATALOG + ".Goods")); //$NON-NLS-1$
+        assertSame(weight, resolve("Catalog.Goods.Attribute.Weight")); //$NON-NLS-1$
+        assertSame(itemForm, resolve("Catalog.Goods.Form.ItemForm")); //$NON-NLS-1$
+        assertSame(itemForm, resolve("Catalog.Goods.Forms.ItemForm")); //$NON-NLS-1$
+        assertNull(resolve("Catalog.Goods.Attribute.Missing")); //$NON-NLS-1$
+        assertNull(resolve("Catalog.Goods.Form.Missing")); //$NON-NLS-1$
+        assertNull(resolve("Catalog.Missing")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheRussianFormTokenAddressesTheForm()
+    {
+        // The guide promises bilingual KIND tokens; the form branch used to accept only 'Form'/'Forms'.
+        assertSame(itemForm, resolve(RU_CATALOG + ".Goods." + RU_FORM + ".ItemForm")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertSame(itemForm, resolve("Catalog.Goods." + RU_FORMS + ".ItemForm")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ==================== the echoed address ====================
+
+    @Test
+    public void testASubsystemIsNamedByItsCanonicalChainOfStoredNames()
+    {
+        // The caller's mixed spelling and letter case come back as list_subsystems prints the chain.
+        assertEquals("Subsystem.Sales.Subsystem.Orders", AdoptMetadataObjectTool.canonicalFqn(config, //$NON-NLS-1$
+            MetadataTypeUtils.normalizeFqn(RU_SUBSYSTEM + ".sales." + RU_SUBSYSTEMS + ".orders"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Subsystem." + RU_PLANNING + ".Subsystem." + RU_STOCK_PLANNING, //$NON-NLS-1$ //$NON-NLS-2$
+            AdoptMetadataObjectTool.canonicalFqn(config, MetadataTypeUtils.normalizeFqn(
+                RU_SUBSYSTEM + "." + RU_PLANNING + "." + RU_SUBSYSTEM + "." + RU_STOCK_PLANNING))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("Subsystem.Sales.Subsystem.Orders.Subsystem.Backlog", //$NON-NLS-1$
+            AdoptMetadataObjectTool.canonicalFqn(config, "Subsystem.sales.Subsystem.orders.Subsystem.backlog")); //$NON-NLS-1$
+        assertEquals("Subsystem.Sales", AdoptMetadataObjectTool.canonicalFqn(config, "Subsystem.sales")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAnyOtherSourceKeepsItsNormalizedFqn()
+    {
+        assertEquals("Catalog.Goods.Attribute.Weight", //$NON-NLS-1$
+            AdoptMetadataObjectTool.canonicalFqn(config, "Catalog.Goods.Attribute.Weight")); //$NON-NLS-1$
+        assertEquals("Catalog.goods", AdoptMetadataObjectTool.canonicalFqn(config, "Catalog.goods")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ==================== every result names the source by it (the wiring) ====================
+
+    private static JsonObject json(String result)
+    {
+        return JsonParser.parseString(result).getAsJsonObject();
+    }
+
+    @Test
+    public void testEveryResultNamesASubsystemByItsCanonicalChain()
+    {
+        // Not the naming helper but its wiring: the address each result carries comes with the source.
+        AdoptMetadataObjectTool.AdoptionSource source = AdoptMetadataObjectTool.AdoptionSource.resolve(config,
+            MetadataTypeUtils.normalizeFqn(RU_SUBSYSTEM + ".sales." + RU_SUBSYSTEMS + ".orders")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull(source);
+        assertSame(orders, source.object);
+        String chain = "Subsystem.Sales.Subsystem.Orders"; //$NON-NLS-1$
+
+        JsonObject adopted = json(AdoptMetadataObjectTool.adoptedResult(source, "Ext", true)); //$NON-NLS-1$
+        assertTrue(adopted.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("adopted", adopted.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(chain, adopted.get("fqn").getAsString()); //$NON-NLS-1$
+        assertEquals("Ext", adopted.get("extensionProject").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("ADOPTED", adopted.get("objectBelonging").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(adopted.get("persisted").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(json(AdoptMetadataObjectTool.adoptedResult(source, "Ext", false)) //$NON-NLS-1$
+            .get("persisted").getAsBoolean()); //$NON-NLS-1$
+
+        JsonObject already = json(AdoptMetadataObjectTool.alreadyAdoptedResult(source, "Ext")); //$NON-NLS-1$
+        assertTrue(already.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("alreadyAdopted", already.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(chain, already.get("fqn").getAsString()); //$NON-NLS-1$
+        assertEquals("'" + chain + "' is already adopted in extension 'Ext'.", //$NON-NLS-1$ //$NON-NLS-2$
+            already.get("message").getAsString()); //$NON-NLS-1$
+        assertEquals("Ext", already.get("extensionProject").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("ADOPTED", already.get("objectBelonging").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(already.get("persisted").getAsBoolean()); //$NON-NLS-1$
+
+        JsonObject refusal = json(AdoptMetadataObjectTool.notAdoptableError(source));
+        assertFalse(refusal.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("'" + chain + "' cannot be adopted into an extension " //$NON-NLS-1$ //$NON-NLS-2$
+            + "(the platform reports it is not adoptable).", refusal.get("error").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAnyOtherSourceIsNamedByItsNormalizedFqnAndAMissIsNoSource()
+    {
+        AdoptMetadataObjectTool.AdoptionSource attribute = AdoptMetadataObjectTool.AdoptionSource.resolve(config,
+            MetadataTypeUtils.normalizeFqn(RU_CATALOG + ".Goods.Attribute.Weight")); //$NON-NLS-1$
+        assertNotNull(attribute);
+        assertSame(weight, attribute.object);
+        assertEquals("Catalog.Goods.Attribute.Weight", attribute.fqn); //$NON-NLS-1$
+        // A miss is no source at all - not a source without an object, which the caller would adopt.
+        assertNull(AdoptMetadataObjectTool.AdoptionSource.resolve(config, "Subsystem.Sales.Subsystem.Missing")); //$NON-NLS-1$
+        assertNull(AdoptMetadataObjectTool.AdoptionSource.resolve(config, "Catalog.Missing")); //$NON-NLS-1$
+    }
+
+    // ==================== the not-found refusal ====================
+
+    @Test
+    public void testANotFoundSubsystemAddressSaysHowANestedOneIsAddressed()
+    {
+        // The issue's fourth spelling: a bare child. The refusal must teach the chain, not only 'Type.Name'.
+        String fqn = "Subsystem." + RU_STOCK_PLANNING; //$NON-NLS-1$
+        String message = AdoptMetadataObjectTool.sourceNotFound(fqn);
+        assertTrue(message, message.startsWith("Object not found: " + fqn + OLD_NOT_FOUND_TAIL)); //$NON-NLS-1$
+        assertTrue(message, message.contains("A nested subsystem is addressed by its whole chain")); //$NON-NLS-1$
+        assertTrue(message, message.contains("'Subsystem.<Parent>.Subsystem.<Child>'")); //$NON-NLS-1$
+        assertTrue(message, message.contains("exactly as list_subsystems prints it")); //$NON-NLS-1$
+        assertTrue("a missing nested chain gets it too", AdoptMetadataObjectTool //$NON-NLS-1$
+            .sourceNotFound("Subsystem.Sales.Subsystem.Missing").contains("list_subsystems")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAnyOtherNotFoundAddressKeepsTheOldTextExactly()
+    {
+        assertEquals("Object not found: Catalog.Missing" + OLD_NOT_FOUND_TAIL, //$NON-NLS-1$
+            AdoptMetadataObjectTool.sourceNotFound("Catalog.Missing")); //$NON-NLS-1$
+        assertEquals("Object not found: Catalog.Goods.Form.Missing" + OLD_NOT_FOUND_TAIL, //$NON-NLS-1$
+            AdoptMetadataObjectTool.sourceNotFound("Catalog.Goods.Form.Missing")); //$NON-NLS-1$
+    }
+
+    // ==================== the exported files ====================
+
+    @Test
+    public void testTheAncestorWalkFollowsParentSubsystemNearestFirst()
+    {
+        assertEquals(Arrays.asList(orders, sales), AdoptMetadataObjectTool.subsystemAncestors(backlog));
+        assertEquals(Collections.singletonList(sales), AdoptMetadataObjectTool.subsystemAncestors(orders));
+        assertTrue(AdoptMetadataObjectTool.subsystemAncestors(sales).isEmpty());
+        assertTrue("not a subsystem", AdoptMetadataObjectTool.subsystemAncestors(goods).isEmpty()); //$NON-NLS-1$
+        assertTrue(AdoptMetadataObjectTool.subsystemAncestors(null).isEmpty());
+    }
+
+    @Test(timeout = 10000)
+    public void testTheAncestorWalkStopsOnACycle()
+    {
+        Subsystem first = subsystem("First", null); //$NON-NLS-1$
+        Subsystem second = subsystem("Second", first); //$NON-NLS-1$
+        first.setParentSubsystem(second);
+        assertEquals(Collections.singletonList(first), AdoptMetadataObjectTool.subsystemAncestors(second));
+    }
+
+    @Test
+    public void testAnAdoptedNestedSubsystemExportsEveryParentAboveIt()
+    {
+        // After the platform's cascade every parent is new in the extension, and each one's .mdo lists
+        // its child in <subsystems>; the configuration lists the top-level one.
+        Subsystem root = bmSubsystem("Subsystem.Sales", null); //$NON-NLS-1$
+        Subsystem middle = bmSubsystem("Subsystem.Sales.Subsystem.Orders", root); //$NON-NLS-1$
+        Subsystem leaf = bmSubsystem("Subsystem.Sales.Subsystem.Orders.Subsystem.Backlog", middle); //$NON-NLS-1$
+
+        assertEquals(Arrays.asList("Subsystem.Sales.Subsystem.Orders.Subsystem.Backlog", //$NON-NLS-1$
+            "Subsystem.Sales.Subsystem.Orders", "Subsystem.Sales", "Configuration"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            AdoptMetadataObjectTool.dirtyFqns(leaf, bmConfiguration()));
+        assertEquals(Arrays.asList("Subsystem.Sales.Subsystem.Orders", "Subsystem.Sales", "Configuration"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            AdoptMetadataObjectTool.dirtyFqns(middle, bmConfiguration()));
+    }
+
+    @Test
+    public void testAnyOtherAdoptionExportsItsTopObjectAndTheConfigurationOnly()
+    {
+        assertEquals(Arrays.asList("Subsystem.Sales", "Configuration"), //$NON-NLS-1$ //$NON-NLS-2$
+            AdoptMetadataObjectTool.dirtyFqns(bmSubsystem("Subsystem.Sales", null), bmConfiguration())); //$NON-NLS-1$
+
+        IBmObject catalog = mock(IBmObject.class, withSettings().extraInterfaces(EObject.class));
+        when(catalog.bmGetTopObject()).thenReturn(catalog);
+        when(catalog.bmGetFqn()).thenReturn("Catalog.Goods"); //$NON-NLS-1$
+        IBmObject attribute = mock(IBmObject.class, withSettings().extraInterfaces(EObject.class));
+        when(attribute.bmGetTopObject()).thenReturn(catalog);
+        assertEquals("a member exports its top object", Arrays.asList("Catalog.Goods", "Configuration"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            AdoptMetadataObjectTool.dirtyFqns(attribute, bmConfiguration()));
+        assertEquals("no configuration, no configuration entry", Collections.singletonList("Catalog.Goods"), //$NON-NLS-1$ //$NON-NLS-2$
+            AdoptMetadataObjectTool.dirtyFqns(catalog, null));
+    }
+
+    @Test
+    public void testAnUnresolvedParentIsNotAskedForItsFqn()
+    {
+        // A proxy is not an attached BM object: bmGetFqn() would throw after the adoption committed.
+        Subsystem proxy = mock(Subsystem.class, withSettings().extraInterfaces(IBmObject.class));
+        when(proxy.eIsProxy()).thenReturn(true);
+        when(((IBmObject)proxy).bmGetFqn()).thenThrow(new IllegalStateException("not attached")); //$NON-NLS-1$
+        Subsystem child = bmSubsystem("Subsystem.Gone.Subsystem.Child", proxy); //$NON-NLS-1$
+
+        assertTrue(AdoptMetadataObjectTool.subsystemAncestors(child).isEmpty());
+        assertEquals(Arrays.asList("Subsystem.Gone.Subsystem.Child", "Configuration"), //$NON-NLS-1$ //$NON-NLS-2$
+            AdoptMetadataObjectTool.dirtyFqns(child, bmConfiguration()));
+    }
+
+    /** A subsystem as the adopter returns it: an attached BM top object with an FQN and a parent link. */
+    private static Subsystem bmSubsystem(String fqn, Subsystem parent)
+    {
+        Subsystem subsystem = mock(Subsystem.class, withSettings().extraInterfaces(IBmObject.class));
+        IBmObject bm = (IBmObject)subsystem;
+        when(bm.bmGetTopObject()).thenReturn(bm);
+        when(bm.bmGetFqn()).thenReturn(fqn);
+        when(subsystem.getParentSubsystem()).thenReturn(parent);
+        return subsystem;
+    }
+
+    /** The extension's configuration as a BM top object. */
+    private static Configuration bmConfiguration()
+    {
+        Configuration configuration = mock(Configuration.class, withSettings().extraInterfaces(IBmObject.class));
+        when(((IBmObject)configuration).bmGetFqn()).thenReturn("Configuration"); //$NON-NLS-1$
+        return configuration;
+    }
 }

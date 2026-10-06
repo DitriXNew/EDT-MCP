@@ -10,6 +10,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.util.ArrayList;
@@ -43,11 +44,15 @@ import com._1c.g5.v8.dt.metadata.mdclass.InformationRegisterDimension;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.ReturnValuesReuse;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.utils.MetadataScopeTestFixtures;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
+import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
+import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.google.gson.JsonPrimitive;
 
 /**
@@ -1015,5 +1020,180 @@ public class GetMetadataDetailsToolTest
         assertNull(md);
         assertEquals(1, failures.size());
         assertTrue(failures.get(0)[1].contains("Owner object not found")); //$NON-NLS-1$
+    }
+
+    // ==================== nested subsystem chain (issue #708) ====================
+    //
+    // The default view resolved an object from the first two FQN segments only, so the address of a
+    // NESTED subsystem rendered its parent. Sales -> Orders, linked like the platform model: the parent
+    // only lists the child (a reference, not a containment) and the child points back.
+
+    /** "Подсистема" (Subsystem), as Unicode escapes so a non-UTF-8 build cannot corrupt it. */
+    private static final String RU_SUBSYSTEM = "\u041f\u043e\u0434\u0441\u0438\u0441\u0442\u0435\u043c\u0430"; //$NON-NLS-1$
+
+    /** A configuration holding the top-level subsystem Sales with the nested Orders. */
+    private static Configuration salesWithOrders()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        config.setName("Cfg"); //$NON-NLS-1$
+        Subsystem sales = MdClassFactory.eINSTANCE.createSubsystem();
+        sales.setName("Sales"); //$NON-NLS-1$
+        Subsystem orders = MdClassFactory.eINSTANCE.createSubsystem();
+        orders.setName("Orders"); //$NON-NLS-1$
+        sales.getSubsystems().add(orders);
+        orders.setParentSubsystem(sales);
+        config.getSubsystems().add(sales);
+        return config;
+    }
+
+    private static Subsystem sales(Configuration config)
+    {
+        return config.getSubsystems().get(0);
+    }
+
+    /** Runs the default view for one FQN; vendor support is not asked (no editing service). */
+    private static String renderDefaultView(MetadataScope scope, String fqn, List<String[]> failures)
+    {
+        GetMetadataDetailsTool.RenderContext ctx =
+            new GetMetadataDetailsTool.RenderContext(null, scope, null, "en", false, false, false, 0); //$NON-NLS-1$
+        StringBuilder sb = new StringBuilder();
+        VendorSupportGuard.setServiceForTests(() -> null);
+        try
+        {
+            new GetMetadataDetailsTool().processFqn(fqn, sb, failures, ctx);
+        }
+        finally
+        {
+            VendorSupportGuard.setServiceForTests(null);
+        }
+        return sb.toString();
+    }
+
+    @Test
+    public void testANestedSubsystemChainResolvesTheNestedSubsystemNotItsParent()
+    {
+        Configuration config = salesWithOrders();
+        Subsystem orders = sales(config).getSubsystems().get(0);
+        MetadataScope scope = MetadataScope.ofConfiguration(config);
+
+        assertSame(orders, GetMetadataDetailsTool.resolveNestedSubsystem(scope,
+            SubsystemUtils.nestedChain("Subsystem.Sales.Subsystem.Orders"))); //$NON-NLS-1$
+        assertSame(orders, GetMetadataDetailsTool.resolveNestedSubsystem(scope, SubsystemUtils.nestedChain(
+            MetadataTypeUtils.normalizeFqn(RU_SUBSYSTEM + ".sales." + RU_SUBSYSTEM + ".orders")))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("a missing leaf must not answer with its parent", //$NON-NLS-1$
+            GetMetadataDetailsTool.resolveNestedSubsystem(scope,
+                SubsystemUtils.nestedChain("Subsystem.Sales.Subsystem.Missing"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnExternalObjectsProjectNeverResolvesANestedChainInItsLinkedBase()
+    {
+        // The linked base configuration is not this project's root (issue #309).
+        MetadataScope external = MetadataScopeTestFixtures.externalObjectsWithBase(salesWithOrders());
+
+        assertNull(GetMetadataDetailsTool.resolveNestedSubsystem(external,
+            SubsystemUtils.nestedChain("Subsystem.Sales.Subsystem.Orders"))); //$NON-NLS-1$
+        List<String[]> failures = new ArrayList<>();
+        assertEquals("", renderDefaultView(external, "Subsystem.Sales.Subsystem.Orders", failures)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, failures.size());
+        assertTrue(failures.get(0)[1], failures.get(0)[1].contains("EXTERNAL-OBJECTS")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheDefaultViewRendersTheNestedSubsystemNotItsParent()
+    {
+        MetadataScope scope = MetadataScope.ofConfiguration(salesWithOrders());
+        for (String fqn : new String[] { "Subsystem.Sales.Subsystem.Orders", //$NON-NLS-1$
+            RU_SUBSYSTEM + ".Sales." + RU_SUBSYSTEM + ".Orders" }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            List<String[]> failures = new ArrayList<>();
+            String md = renderDefaultView(scope, fqn, failures);
+
+            assertTrue("no failure expected for " + fqn + ": " + failures, failures.isEmpty()); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(md, md.contains("## Subsystem: Orders")); //$NON-NLS-1$
+            assertFalse("the parent must not be rendered for the child's address: " + md, //$NON-NLS-1$
+                md.contains("## Subsystem: Sales")); //$NON-NLS-1$
+            assertTrue(md, md.contains("**Origin:** core")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testAMissingNestedChainIsAFailureRowNeverItsParent()
+    {
+        List<String[]> failures = new ArrayList<>();
+        String md = renderDefaultView(MetadataScope.ofConfiguration(salesWithOrders()),
+            "Subsystem.Sales.Subsystem.Missing", failures); //$NON-NLS-1$
+
+        assertEquals("nothing may be rendered for an address that resolves to nothing", "", md); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, failures.size());
+        assertEquals("Subsystem.Sales.Subsystem.Missing", failures.get(0)[0]); //$NON-NLS-1$
+        String reason = failures.get(0)[1];
+        assertTrue(reason, reason.startsWith("Subsystem not found")); //$NON-NLS-1$
+        assertTrue(reason, reason.contains("'Subsystem.<Parent>.Subsystem.<Child>'")); //$NON-NLS-1$
+        assertTrue(reason, reason.contains("list_subsystems")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATopLevelSubsystemStillRendersThroughTheDefaultView()
+    {
+        List<String[]> failures = new ArrayList<>();
+        String md = renderDefaultView(MetadataScope.ofConfiguration(salesWithOrders()), "Subsystem.Sales", failures); //$NON-NLS-1$
+
+        assertTrue("no failure expected: " + failures, failures.isEmpty()); //$NON-NLS-1$
+        assertTrue(md, md.contains("## Subsystem: Sales")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testASubsystemAddressThatIsNoWholeChainIsAFailureRowNeverItsFirstLevel()
+    {
+        // A chain cut short, or one with a foreign segment: resolveObject reads the first two segments
+        // only, so it rendered Sales for every one of these.
+        MetadataScope scope = MetadataScope.ofConfiguration(salesWithOrders());
+        for (String fqn : new String[] { "Subsystem.Sales.Subsystem", //$NON-NLS-1$
+            "Subsystem.Sales.Subsystem.Orders.Subsystem", //$NON-NLS-1$
+            RU_SUBSYSTEM + ".Sales." + RU_SUBSYSTEM, //$NON-NLS-1$
+            "Subsystem.Sales.Attribute.Weight" }) //$NON-NLS-1$
+        {
+            List<String[]> failures = new ArrayList<>();
+            String md = renderDefaultView(scope, fqn, failures);
+
+            assertEquals("nothing may be rendered for " + fqn, "", md); //$NON-NLS-1$ //$NON-NLS-2$
+            assertEquals(fqn, 1, failures.size());
+            assertEquals(fqn, failures.get(0)[0]);
+            String reason = failures.get(0)[1];
+            assertTrue(reason, reason.startsWith("Not a subsystem address")); //$NON-NLS-1$
+            assertTrue(reason, reason.contains("'Subsystem.<Parent>.Subsystem.<Child>'")); //$NON-NLS-1$
+            assertTrue(reason, reason.contains("list_subsystems")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testAnExternalObjectsProjectKeepsItsOwnReasonForACutSubsystemAddress()
+    {
+        // The project holds no subsystems at all, which is the reason worth giving there (issue #309).
+        List<String[]> failures = new ArrayList<>();
+        String md = renderDefaultView(MetadataScopeTestFixtures.externalObjectsWithBase(salesWithOrders()),
+            "Subsystem.Sales.Subsystem", failures); //$NON-NLS-1$
+
+        assertEquals("", md); //$NON-NLS-1$
+        assertEquals(1, failures.size());
+        assertTrue(failures.get(0)[1], failures.get(0)[1].contains("EXTERNAL-OBJECTS")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOnlyASubsystemAddressGoingPastItsNameWithoutAChainIsMalformed()
+    {
+        assertTrue(GetMetadataDetailsTool.isMalformedSubsystemChain("Subsystem.Sales.Subsystem")); //$NON-NLS-1$
+        assertTrue(GetMetadataDetailsTool.isMalformedSubsystemChain(RU_SUBSYSTEM + ".Sales.Attribute.Weight")); //$NON-NLS-1$
+        assertFalse("a top-level subsystem", GetMetadataDetailsTool.isMalformedSubsystemChain("Subsystem.Sales")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a whole chain", //$NON-NLS-1$
+            GetMetadataDetailsTool.isMalformedSubsystemChain("Subsystem.Sales.Subsystem.Orders")); //$NON-NLS-1$
+        assertFalse("a whole Russian chain", GetMetadataDetailsTool.isMalformedSubsystemChain( //$NON-NLS-1$
+            RU_SUBSYSTEM + ".Sales." + RU_SUBSYSTEM + ".Orders")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("not a subsystem address", //$NON-NLS-1$
+            GetMetadataDetailsTool.isMalformedSubsystemChain("Catalog.Goods.Attribute.Weight")); //$NON-NLS-1$
+        assertFalse(GetMetadataDetailsTool.isMalformedSubsystemChain("Catalog.Goods.Subsystem")); //$NON-NLS-1$
+        assertFalse(GetMetadataDetailsTool.isMalformedSubsystemChain("Subsystem")); //$NON-NLS-1$
+        assertFalse(GetMetadataDetailsTool.isMalformedSubsystemChain(null));
     }
 }

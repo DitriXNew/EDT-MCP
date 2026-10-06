@@ -762,3 +762,56 @@ def test_get_metadata_details_renders_xdto_structure():
     assert_contains(row, "string", "the property row must show its XSD string type")
     # (No assert_no_diff: the test intentionally seeds a fresh XDTO package + members, so the tree
     # is dirty by design -- kind="write-metadata" resets it after the test.)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# NESTED SUBSYSTEM chain (issue #708) — the nested subsystem, never its parent.
+# The default view resolved an object from the first two FQN segments only, so the
+# chain of a NESTED subsystem rendered its PARENT: a confident answer about
+# something else. The fixture's only subsystem is Subsystem.Subsystem.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# "Подсистема" - the Russian type token, written as escapes.
+_RU_SUBSYSTEM = "\u041f\u043e\u0434\u0441\u0438\u0441\u0442\u0435\u043c\u0430"
+
+
+@e2e_test(tool="get_metadata_details", kind="write-metadata")
+def test_nested_subsystem_chain_renders_the_nested_subsystem_not_its_parent():
+    child = "E2EDetailsNested"
+    fqn = "Subsystem.Subsystem.Subsystem." + child
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}),
+              "seed the nested subsystem " + fqn)
+    wait_for_project_ready()
+
+    for address in (fqn, "%s.Subsystem.%s.%s" % (_RU_SUBSYSTEM, _RU_SUBSYSTEM, child)):
+        r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [address]})
+        assert_ok(r, "get_metadata_details on the nested chain " + address)
+        if "## Errors" in r.text:
+            raise AssertionError(address + " should resolve, but a ## Errors section was emitted:\n"
+                                 + r.text[:400])
+        assert_contains(r.text, "## Subsystem: " + child,
+                        "the NESTED subsystem must be rendered for its chain: " + address)
+        assert_contains(r.text, "| Name | %s |" % child, "its own Name row: " + address)
+        assert_not_contains(r.text, "## Subsystem: Subsystem",
+                            "the parent must not be rendered for the child's address: " + address)
+    # (No assert_no_diff: the nested subsystem is seeded on purpose - kind="write-metadata" resets it.)
+
+
+@e2e_test(tool="get_metadata_details", kind="read")
+def test_missing_nested_subsystem_chain_is_an_errors_row_not_its_parent():
+    # A chain to a child that does not exist, and a chain cut short after the existing parent: both
+    # used to render the parent Subsystem.Subsystem from their first two segments.
+    for bad, reason in (("Subsystem.Subsystem.Subsystem.NoSuchNested_e2e", "Subsystem not found"),
+                        ("Subsystem.Subsystem.Subsystem", "Not a subsystem address")):
+        r = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [bad]})
+        # A per-object miss stays in-band: the call succeeds and the FQN lands in ## Errors.
+        assert_ok(r, "a miss is reported in-band, not as a whole-call error: " + bad)
+        assert_contains(r.text, "## Errors", "a miss must produce the ## Errors section: " + bad)
+        assert_contains(r.text, bad, "the failures table must name the address")
+        assert_contains(r.text, reason, "the reason must say what is wrong with " + bad)
+        assert_contains(r.text, "list_subsystems",
+                        "the reason must point at the tool that lists nested subsystems: " + bad)
+        # '**Origin:**' is emitted only when an OBJECT's details were rendered - here, the parent's.
+        assert_not_contains(r.text, "**Origin:**",
+                            "the existing parent must not be rendered for " + bad)
+    assert_no_diff("a lookup miss must not change the project")
