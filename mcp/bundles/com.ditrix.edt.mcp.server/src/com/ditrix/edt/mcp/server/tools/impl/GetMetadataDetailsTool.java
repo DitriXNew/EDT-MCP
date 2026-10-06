@@ -64,6 +64,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.RoleRightsReader;
+import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.XdtoStructureReader;
 
@@ -80,6 +81,16 @@ public class GetMetadataDetailsTool implements IMcpTool
 
     /** Placeholder for an absent/empty value in the type-specific property tables below. */
     private static final String DASH = "-"; //$NON-NLS-1$
+
+    /** The failure reason of a nested-subsystem chain that addresses no existing subsystem. */
+    static final String NESTED_SUBSYSTEM_NOT_FOUND = "Subsystem not found - no subsystem exists at this " //$NON-NLS-1$
+        + "chain. A nested subsystem is addressed by its whole chain from a top-level subsystem " //$NON-NLS-1$
+        + "('Subsystem.<Parent>.Subsystem.<Child>'); use list_subsystems to list the existing ones"; //$NON-NLS-1$
+
+    /** The failure reason of a subsystem address that goes on past its name without being a chain. */
+    static final String MALFORMED_SUBSYSTEM_CHAIN = "Not a subsystem address - a top-level subsystem is " //$NON-NLS-1$
+        + "'Subsystem.<Name>', a nested one its whole chain with a type token before every name " //$NON-NLS-1$
+        + "('Subsystem.<Parent>.Subsystem.<Child>'); use list_subsystems to list the existing ones"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -269,9 +280,9 @@ public class GetMetadataDetailsTool implements IMcpTool
      * Renders a single FQN of the request into {@code sb}, or records a {@code {fqn, reason}}
      * row in {@code failures} when it cannot be resolved. Extracted verbatim from the
      * {@link #getMetadataDetailsInternal} loop body; a per-object failure is not a whole-call
-     * failure, so this method never throws on a resolution miss.
+     * failure, so this method never throws on a resolution miss. Package-visible for tests.
      */
-    private void processFqn(String fqn, StringBuilder sb, List<String[]> failures, RenderContext ctx)
+    void processFqn(String fqn, StringBuilder sb, List<String[]> failures, RenderContext ctx)
     {
         // A section's command interface renders its commands by panel group (issue #666). Checked
         // first: it is its own top object, and no other view has anything to say about it.
@@ -372,10 +383,25 @@ public class GetMetadataDetailsTool implements IMcpTool
             return;
         }
 
-        MdObject mdObject = resolveObject(ctx.scope, fqn);
+        // A NESTED subsystem chain must not fall through to resolveObject either: a nested subsystem is
+        // its own top object that its parent only REFERS to, and resolveObject reads only the first two
+        // segments - so it rendered the PARENT for the child's address (issue #708). The chain resolves
+        // through the shared subsystem walk instead, and a chain that addresses nothing is a failure
+        // row, never one of its parents.
+        String[] nestedChain = SubsystemUtils.nestedChain(MetadataTypeUtils.normalizeFqn(fqn));
+        // Nor may a subsystem address that goes on past 'Subsystem.<Name>' without being a whole chain
+        // (one cut short, or with a foreign segment): resolveObject would render its FIRST level.
+        if (nestedChain == null && isMalformedSubsystemChain(fqn) && !ctx.scope.isExternalObjects())
+        {
+            failures.add(new String[] { fqn, MALFORMED_SUBSYSTEM_CHAIN });
+            return;
+        }
+        MdObject mdObject = nestedChain != null ? resolveNestedSubsystem(ctx.scope, nestedChain)
+            : resolveObject(ctx.scope, fqn);
         if (mdObject == null)
         {
-            failures.add(new String[] { fqn, describeResolutionFailure(fqn, ctx.scope) });
+            failures.add(new String[] { fqn, nestedChain != null && !ctx.scope.isExternalObjects()
+                ? NESTED_SUBSYSTEM_NOT_FOUND : describeResolutionFailure(fqn, ctx.scope) });
             return;
         }
 
@@ -1455,6 +1481,49 @@ public class GetMetadataDetailsTool implements IMcpTool
         }
 
         return scope.findObject(mdType, mdName);
+    }
+
+    /**
+     * Resolves the NESTED subsystem a parsed chain addresses (see {@link SubsystemUtils#nestedChain}),
+     * through the same walk {@code create_metadata} and {@code modify_metadata} use: the subsystem at
+     * the chain's LAST level, or {@code null} when any level is missing - never one of its parents. An
+     * external-objects project holds no subsystems, and the configuration its scope carries is the
+     * linked BASE one, which is never a resolution root there. Package-visible for tests.
+     *
+     * @param scope the project's resolution root (may be {@code null})
+     * @param chain the parsed chain of subsystem names
+     * @return the nested subsystem, or {@code null} when the chain does not resolve here
+     */
+    static MdObject resolveNestedSubsystem(MetadataScope scope, String[] chain)
+    {
+        if (scope == null || scope.isExternalObjects() || chain == null)
+        {
+            return null;
+        }
+        return SubsystemUtils.resolveByPath(scope.configuration(), chain, chain.length);
+    }
+
+    /**
+     * Whether {@code fqn} starts with a subsystem type token and goes on past {@code Subsystem.<Name>}
+     * without being a whole chain of subsystems - a chain cut short ({@code Subsystem.Sales.Subsystem})
+     * or one with a foreign segment ({@code Subsystem.Sales.Attribute.Weight}). Below a subsystem
+     * nothing but a nested subsystem has an address (its command interface is taken before this is
+     * asked), so such an address names nothing - and {@link #resolveObject}, which reads only the
+     * first two segments, would render its FIRST level for it. Package-visible for tests.
+     *
+     * @param fqn the requested FQN (may be {@code null})
+     * @return {@code true} for a subsystem address that no subsystem walk can take
+     */
+    static boolean isMalformedSubsystemChain(String fqn)
+    {
+        String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
+        if (normFqn == null)
+        {
+            return false;
+        }
+        String[] parts = normFqn.split("\\."); //$NON-NLS-1$
+        return parts.length > 2 && SubsystemUtils.isSubsystemTypeToken(parts[0])
+            && SubsystemUtils.nestedChain(normFqn) == null;
     }
 
     /**
