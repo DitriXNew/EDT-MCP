@@ -7,7 +7,7 @@ name: MCP Conformance (reusable)
 # the committed baseline of intentional gaps, so the gate catches protocol REGRESSIONS
 # — not the known, deliberate gaps.
 #
-# Runs entirely on STOCK GitHub-hosted runners (ubuntu-latest): no docker image, no
+# Runs entirely on STOCK GitHub-hosted runners (ubuntu-24.04, pinned): no docker image, no
 # self-hosted runner. The `build` job builds the MCP plugin; the `conformance` job then
 # uses the `setup-edt` composite to materialize Eclipse + 1C:EDT of inputs.edt (from the
 # public p2) + the built plugin, boots EDT headless under Xvfb, and the conformance
@@ -55,7 +55,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -105,7 +105,7 @@ jobs:
 
   conformance:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
