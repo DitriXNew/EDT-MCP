@@ -811,20 +811,31 @@ public final class MetadataTypeUtils
      */
     public static MdObject findObject(Configuration config, String typeName, String objectName)
     {
-        List<? extends MdObject> objects = getObjects(config, typeName);
-        if (objects == null || objectName == null)
+        return findByName(getObjects(config, typeName), objectName);
+    }
+
+    /**
+     * The one "object by Name" rule over any collection of metadata objects: the first whose
+     * programmatic Name equals {@code name}, ignoring case.
+     *
+     * @param <T> the object type
+     * @param objects the candidates, may be {@code null}
+     * @param name the name to find, may be {@code null}
+     * @return the object, or {@code null}
+     */
+    public static <T extends MdObject> T findByName(Iterable<? extends T> objects, String name)
+    {
+        if (objects == null || name == null)
         {
             return null;
         }
-
-        for (MdObject obj : objects)
+        for (T obj : objects)
         {
-            if (objectName.equalsIgnoreCase(obj.getName()))
+            if (obj != null && name.equalsIgnoreCase(obj.getName()))
             {
                 return obj;
             }
         }
-
         return null;
     }
 
@@ -840,16 +851,29 @@ public final class MetadataTypeUtils
     public static List<String> findSimilarObjects(Configuration config, String typeName,
                                                    String name, int maxResults)
     {
+        return similarNames(getObjects(config, typeName), name, maxResults);
+    }
+
+    /**
+     * The Names of the objects {@link #isSimilarName similar} to {@code name}, in the collection's
+     * order, at most {@code maxResults} of them.
+     *
+     * @param objects the candidates, may be {@code null}
+     * @param name the name that was not found, may be {@code null}
+     * @param maxResults the most names to return
+     * @return the names, never {@code null}
+     */
+    public static List<String> similarNames(Iterable<? extends MdObject> objects, String name,
+        int maxResults)
+    {
         List<String> similar = new ArrayList<>();
-        List<? extends MdObject> objects = getObjects(config, typeName);
         if (objects == null || name == null)
         {
             return similar;
         }
-
         for (MdObject obj : objects)
         {
-            String objName = obj.getName();
+            String objName = obj == null ? null : obj.getName();
             if (isSimilarName(objName, name))
             {
                 similar.add(objName);
@@ -859,7 +883,6 @@ public final class MetadataTypeUtils
                 }
             }
         }
-
         return similar;
     }
 

@@ -368,31 +368,7 @@ public final class MetadataScope
         {
             return MetadataTypeUtils.findSimilarObjects(configuration, typeToken, name, maxResults);
         }
-        List<String> similar = new ArrayList<>();
-        List<? extends MdObject> candidates = objects(typeToken);
-        if (candidates == null || name == null)
-        {
-            return similar;
-        }
-        String lower = name.toLowerCase();
-        for (MdObject candidate : candidates)
-        {
-            String candidateName = candidate.getName();
-            if (candidateName == null)
-            {
-                continue;
-            }
-            String candidateLower = candidateName.toLowerCase();
-            if (candidateLower.contains(lower) || lower.contains(candidateLower))
-            {
-                similar.add(candidateName);
-                if (similar.size() >= maxResults)
-                {
-                    break;
-                }
-            }
-        }
-        return similar;
+        return MetadataTypeUtils.similarNames(objects(typeToken), name, maxResults);
     }
 
     /**

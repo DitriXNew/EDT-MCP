@@ -322,6 +322,33 @@ public class MetadataScopeTest
     }
 
     /**
+     * External-object suggestions follow the shared similar-name rule: case-insensitive substring
+     * either way, in the root's order, cut at the limit.
+     */
+    @Test
+    public void testExternalObjectSuggestionsKeepOrderBothDirectionsAndTheLimit()
+    {
+        MetadataScope scope = MetadataScopeTestFixtures.externalObjects(
+            processor("ExtProcAlpha"), processor("Other"), processor("Ext"), processor("EXTRA")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+        assertEquals(Arrays.asList("ExtProcAlpha", "Ext", "EXTRA"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            scope.findSimilarObjects("ExternalDataProcessor", "ext", 10)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Arrays.asList("ExtProcAlpha", "Ext"), //$NON-NLS-1$ //$NON-NLS-2$
+            scope.findSimilarObjects("ExternalDataProcessor", "ext", 2)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("a candidate contained in the name matches too", //$NON-NLS-1$
+            Arrays.asList("ExtProcAlpha", "Ext"), //$NON-NLS-1$ //$NON-NLS-2$
+            scope.findSimilarObjects("ExternalDataProcessor", "extprocalphaBeta", 10)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(scope.findSimilarObjects("ExternalDataProcessor", null, 10).isEmpty()); //$NON-NLS-1$
+    }
+
+    private static ExternalDataProcessor processor(String name)
+    {
+        ExternalDataProcessor processor = MdClassFactory.eINSTANCE.createExternalDataProcessor();
+        processor.setName(name);
+        return processor;
+    }
+
+    /**
      * The base project is a POINTER, never a root. An external-objects project's answer must
      * not contain the base configuration's objects - but a refusal may NAME the project that
      * does hold them, which is the difference between a dead end and the next call

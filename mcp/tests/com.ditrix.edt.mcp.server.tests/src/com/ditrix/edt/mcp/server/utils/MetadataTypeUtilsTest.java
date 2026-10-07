@@ -1373,4 +1373,22 @@ public class MetadataTypeUtilsTest
         assertFalse(MetadataTypeUtils.isSimilarName(null, "Blue")); //$NON-NLS-1$
         assertFalse(MetadataTypeUtils.isSimilarName("Blue", null)); //$NON-NLS-1$
     }
+
+    @Test
+    public void testTheCollectionNameRulesSkipNullsAndIgnoreCase()
+    {
+        com._1c.g5.v8.dt.metadata.mdclass.Catalog alpha =
+            com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createCatalog();
+        alpha.setName("Alpha"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.metadata.mdclass.Catalog alphabet =
+            com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createCatalog();
+        alphabet.setName("Alphabet"); //$NON-NLS-1$
+        List<com._1c.g5.v8.dt.metadata.mdclass.Catalog> objects = Arrays.asList(null, alpha, alphabet);
+        assertSame(alpha, MetadataTypeUtils.findByName(objects, "ALPHA")); //$NON-NLS-1$
+        assertNull(MetadataTypeUtils.findByName(objects, "Beta")); //$NON-NLS-1$
+        assertNull(MetadataTypeUtils.findByName(null, "Alpha")); //$NON-NLS-1$
+        assertEquals(Arrays.asList("Alpha", "Alphabet"), //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataTypeUtils.similarNames(objects, "alp", 5)); //$NON-NLS-1$
+        assertEquals(Arrays.asList("Alpha"), MetadataTypeUtils.similarNames(objects, "alp", 1)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 }
