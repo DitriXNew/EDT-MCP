@@ -45,6 +45,7 @@ import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.form.model.AbstractDataPath;
 import com._1c.g5.v8.dt.form.model.AbstractFormAttribute;
+import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.form.model.FormAttributeAdditionalColumns;
 import com._1c.g5.v8.dt.form.model.FormChoiceParameterLink;
 import com._1c.g5.v8.dt.form.model.FormField;
@@ -1349,21 +1350,33 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
         if (drainEstablished)
         {
-            // EDT writes Form.form and deletes the detached file as separate exports; a failed form
+            // EDT writes each form file and deletes the detached file as separate exports; a failed form
             // write drains too and would leave the old form naming a missing file.
-            String formFile = formCheck == null ? null : resultString(formCheck, FORM_CHECK_FILE);
-            RegistrationState formState = formFile == null ? RegistrationState.UNVERIFIABLE
-                : formAttributeState(formBytes(projectName, formFile), resultString(formCheck, FORM_CHECK_ATTRIBUTE),
-                    resultString(formCheck, FORM_CHECK_COLUMN));
-            if (formState != RegistrationState.ABSENT)
+            List<String> formFiles = new ArrayList<>();
+            JsonElement listed = formCheck == null ? null : formCheck.get(FORM_CHECK_FILES);
+            if (listed != null && listed.isJsonArray())
+            {
+                listed.getAsJsonArray().forEach(file -> formFiles.add(file.getAsString()));
+            }
+            if (formFiles.isEmpty())
             {
                 confirmed = false;
-                String form = formFile == null ? "The form's Form.form" : "Form.form " + formFile; //$NON-NLS-1$ //$NON-NLS-2$
-                notes.append(' ').append(formState == RegistrationState.PRESENT
-                    ? form + " still declares the deleted attribute after EDT's export; EDT may have failed " //$NON-NLS-1$
-                        + "to write it - check the EDT log and re-check before relying on it." //$NON-NLS-1$
-                    : form + " could not be read after EDT's export, so it is not confirmed free of the " //$NON-NLS-1$
-                        + "deleted attribute; re-check it before relying on it."); //$NON-NLS-1$
+                notes.append(" The form's Form.form could not be resolved, so it is not confirmed free of the " //$NON-NLS-1$
+                    + "deleted attribute; re-check it before relying on it."); //$NON-NLS-1$
+            }
+            for (String formFile : formFiles)
+            {
+                RegistrationState formState = formAttributeState(formBytes(projectName, formFile),
+                    resultString(formCheck, FORM_CHECK_ATTRIBUTE), resultString(formCheck, FORM_CHECK_COLUMN));
+                if (formState != RegistrationState.ABSENT)
+                {
+                    confirmed = false;
+                    notes.append(" Form.form ").append(formFile).append(formState == RegistrationState.PRESENT //$NON-NLS-1$
+                        ? " still declares the deleted attribute after EDT's export; EDT may have failed " //$NON-NLS-1$
+                            + "to write it - check the EDT log and re-check before relying on it." //$NON-NLS-1$
+                        : " could not be read after EDT's export, so it is not confirmed free of the " //$NON-NLS-1$
+                            + "deleted attribute; re-check it before relying on it."); //$NON-NLS-1$
+                }
             }
         }
         String message = resultString(result, McpKeys.MESSAGE);
@@ -2392,7 +2405,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /** Internal result member: the Form.form and attribute (column) the hook re-reads; always stripped there. */
     private static final String KEY_FORM_CHECK = "formCheck"; //$NON-NLS-1$
-    private static final String FORM_CHECK_FILE = "file"; //$NON-NLS-1$
+    private static final String FORM_CHECK_FILES = "files"; //$NON-NLS-1$
     private static final String FORM_CHECK_ATTRIBUTE = "attribute"; //$NON-NLS-1$
     private static final String FORM_CHECK_COLUMN = "column"; //$NON-NLS-1$
 
@@ -2532,6 +2545,28 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         for (FormAttributeDeletion.Detached detached : plan.detached)
         {
             files.put(detached, deleter.fileOf(detached.object));
+        }
+        return files;
+    }
+
+    /**
+     * The form files the delete writes: the content form's own and, in an adopted form, its base-form
+     * copy - a separate top object EDT's delete also edits. Empty when the content form's is unresolved.
+     */
+    private static List<IFile> formFilesOf(EObject formModel, FormAttributeDeleter deleter)
+    {
+        List<IFile> files = new ArrayList<>();
+        IFile own = deleter.fileOf(formModel);
+        if (own == null)
+        {
+            return files;
+        }
+        files.add(own);
+        Form baseForm = formModel instanceof Form ? ((Form)formModel).getBaseForm() : null;
+        IFile base = baseForm == null || baseForm.eIsProxy() ? null : deleter.fileOf(baseForm);
+        if (base != null)
+        {
+            files.add(base);
         }
         return files;
     }
@@ -2778,7 +2813,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         AttributeDeleteOutcome outcome = new AttributeDeleteOutcome();
         if (!plan.detached.isEmpty())
         {
-            outcome.formFile = deleter.fileOf(formModel);
+            outcome.formFiles.addAll(formFilesOf(formModel, deleter));
         }
         outcome.main = FormElementWriter.isMainAttribute(target);
         outcome.rootExtInfo = rootExtInfoKind(formModel);
@@ -2970,17 +3005,16 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         final List<Map<String, Object>> detached = new ArrayList<>();
         /** The file of each {@link #detached} object, read before the detach; {@code null} when unresolved. */
         final List<IFile> detachedFiles = new ArrayList<>();
-        /** The form's own Form.form, resolved only when something is detached; {@code null} when unresolved. */
-        IFile formFile;
+        /** The form files the delete writes, resolved only when something is detached; empty when unresolved. */
+        final List<IFile> formFiles = new ArrayList<>();
 
-        /** What the hook re-reads: the Form.form path and the deleted attribute (and column). */
+        /** What the hook re-reads: the form files and the deleted attribute (and column). */
         Map<String, Object> formCheck(FormElementWriter.FormMemberRef ref)
         {
             Map<String, Object> check = new java.util.LinkedHashMap<>();
-            if (formFile != null)
-            {
-                check.put(FORM_CHECK_FILE, fileLabelOf(formFile));
-            }
+            List<String> files = new ArrayList<>();
+            formFiles.forEach(file -> files.add(fileLabelOf(file)));
+            check.put(FORM_CHECK_FILES, files);
             boolean column = ref.ownerAttributeName != null;
             check.put(FORM_CHECK_ATTRIBUTE, column ? ref.ownerAttributeName : ref.name);
             if (column)

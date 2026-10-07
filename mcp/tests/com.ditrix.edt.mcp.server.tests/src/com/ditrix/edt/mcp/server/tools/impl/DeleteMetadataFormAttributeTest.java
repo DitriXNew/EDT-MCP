@@ -834,6 +834,8 @@ public class DeleteMetadataFormAttributeTest
 
     private static final String FORM_FILE = "src/Catalogs/Catalog/Forms/ItemForm/Form.form"; //$NON-NLS-1$
 
+    private static final String BASE_FORM_FILE = "src/Catalogs/Catalog/Forms/ItemForm/BaseForm/Form.form"; //$NON-NLS-1$
+
     private static final String FORM_WITHOUT_LIST = "<form:Form xmlns:form='http://g5.1c.ru/v8/dt/form'>" //$NON-NLS-1$
         + "<attributes><name>Object</name></attributes></form:Form>"; //$NON-NLS-1$
 
@@ -848,13 +850,21 @@ public class DeleteMetadataFormAttributeTest
     /** The confirmed dynamic-list delete's response, as execute returns it before the barrier. */
     private static String listDeleteResult(IFile settingsFile, boolean persisted)
     {
+        return listDeleteResult(settingsFile, persisted, false);
+    }
+
+    /** ... optionally in an adopted form whose base-form copy is stored in {@link #BASE_FORM_FILE}. */
+    private static String listDeleteResult(IFile settingsFile, boolean persisted, boolean adopted)
+    {
         DataCompositionSettings settings = DcsFactory.eINSTANCE.createDataCompositionSettings();
         Form form = listForm(settings);
+        Form base = adopted ? F.createForm() : null;
+        form.setBaseForm(base);
         FormAttribute list = named(form, "List"); //$NON-NLS-1$
         IFile formFile = fileAt(FORM_FILE);
-        DeleteMetadataTool.FormAttributeDeleter platform =
-            filedDeleter(object -> object == settings ? settingsFile : object == form ? formFile : null,
-                new ArrayList<>());
+        IFile baseFile = fileAt(BASE_FORM_FILE);
+        DeleteMetadataTool.FormAttributeDeleter platform = filedDeleter(object -> object == settings ? settingsFile
+            : object == form ? formFile : object == base ? baseFile : null, new ArrayList<>());
         DeleteMetadataTool.AttributeDeleteOutcome outcome = DeleteMetadataTool.deleteAttributeInTx(form, list,
             null, platform, LIST_FQN, preview(form, list, platform).scope);
         return DeleteMetadataTool.formDeleteResult(LIST_FQN, FormElementWriter.parse(LIST_FQN), false,
@@ -948,7 +958,8 @@ public class DeleteMetadataFormAttributeTest
         String raw = listDeleteResult(settingsFile(), true);
         JsonObject executed = JsonParser.parseString(raw).getAsJsonObject();
         assertFalse("nothing is observed before the barrier", detachedItem(executed).has("fileRemoval")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals(FORM_FILE, executed.getAsJsonObject("formCheck").get("file").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("[\"" + FORM_FILE + "\"]", //$NON-NLS-1$ //$NON-NLS-2$
+            executed.getAsJsonObject("formCheck").get("files").toString()); //$NON-NLS-1$ //$NON-NLS-2$
         JsonObject answered = JsonParser.parseString(new DiskTool(order, DiskExportState.DRAINED,
             Map.of(SETTINGS_FILE, Boolean.FALSE)).drive(raw)).getAsJsonObject();
         assertEquals("observed after the drain", //$NON-NLS-1$
@@ -976,6 +987,29 @@ public class DeleteMetadataFormAttributeTest
     }
 
     @Test
+    public void testAnAdoptedFormChecksItsBaseFormCopyToo()
+    {
+        // EDT's delete of an adopted attribute also edits the base-form copy, a separate top object.
+        String raw = listDeleteResult(settingsFile(), true, true);
+        assertEquals("[\"" + FORM_FILE + "\",\"" + BASE_FORM_FILE + "\"]", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            JsonParser.parseString(raw).getAsJsonObject().getAsJsonObject("formCheck").get("files").toString()); //$NON-NLS-1$ //$NON-NLS-2$
+
+        JsonObject stale = JsonParser.parseString(new DiskTool(new ArrayList<>(), DiskExportState.DRAINED,
+            Map.of(SETTINGS_FILE, Boolean.FALSE),
+            Map.of(FORM_FILE, bytes(FORM_WITHOUT_LIST), BASE_FORM_FILE, bytes(FORM_WITH_LIST))).drive(raw))
+                .getAsJsonObject();
+        assertPartial(stale, "Form.form " + BASE_FORM_FILE + " still declares the deleted attribute"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(stale.toString(), stale.get("message").getAsString() //$NON-NLS-1$
+            .contains("Form.form " + FORM_FILE + " still declares")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        JsonObject clean = JsonParser.parseString(new DiskTool(new ArrayList<>(), DiskExportState.DRAINED,
+            Map.of(SETTINGS_FILE, Boolean.FALSE),
+            Map.of(FORM_FILE, bytes(FORM_WITHOUT_LIST), BASE_FORM_FILE, bytes(FORM_WITHOUT_LIST))).drive(raw))
+                .getAsJsonObject();
+        assertFalse("both files rewritten: the success stays intact", clean.has("persisted")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
     public void testAnUnreadableFormMakesTheResultPartial()
     {
         for (Map<String, byte[]> forms : List.of(Map.<String, byte[]>of(),
@@ -993,10 +1027,10 @@ public class DeleteMetadataFormAttributeTest
     public void testTheFormCheckNamesTheColumnAndReadsIt() throws Exception
     {
         DeleteMetadataTool.AttributeDeleteOutcome outcome = new DeleteMetadataTool.AttributeDeleteOutcome();
-        outcome.formFile = fileAt(FORM_FILE);
+        outcome.formFiles.add(fileAt(FORM_FILE));
         Map<String, Object> check = outcome.formCheck(
             FormElementWriter.parse("Catalog.Catalog.Form.ItemForm.Attribute.Rows.Column.Sub")); //$NON-NLS-1$
-        assertEquals(Map.of("file", FORM_FILE, "attribute", "Rows", "column", "Sub"), check); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        assertEquals(Map.of("files", List.of(FORM_FILE), "attribute", "Rows", "column", "Sub"), check); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
 
         byte[] form = bytes("<form:Form xmlns:form='http://g5.1c.ru/v8/dt/form'><items><name>List</name></items>" //$NON-NLS-1$
             + "<attributes><name>Rows</name><columns><name>Sub</name></columns></attributes></form:Form>"); //$NON-NLS-1$
