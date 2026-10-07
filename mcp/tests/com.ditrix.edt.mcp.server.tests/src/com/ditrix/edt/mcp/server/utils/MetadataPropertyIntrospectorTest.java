@@ -1389,6 +1389,17 @@ public class MetadataPropertyIntrospectorTest
     }
 
     @Test
+    public void testARoleValueThatCannotBeIdentifiedIsAFailedReadNotAnEqualValue()
+    {
+        StandardCommand command = MdClassFactory.eINSTANCE.createStandardCommand();
+        AdjustableBoolean flag = MdClassFactory.eINSTANCE.createAdjustableBoolean();
+        flag.getFor().add(MdClassFactory.eINSTANCE.createForRoleType());
+        command.setVisible(flag);
+
+        assertTrue(MetadataPropertyIntrospector.find(command, "visible").readFailed); //$NON-NLS-1$
+    }
+
+    @Test
     public void testUseAlwaysCurrentValueIsWhatThePlatformReports()
     {
         UseAlwaysPlatformFake platform = new UseAlwaysPlatformFake();
@@ -1409,7 +1420,7 @@ public class MetadataPropertyIntrospectorTest
 
             PropertyInfo useAlways = MetadataPropertyIntrospector.find(attribute, "useAlways"); //$NON-NLS-1$
             assertEquals("{\"Object.Code\":false,\"Object.Gone\":\"unresolved\"}", useAlways.currentValue); //$NON-NLS-1$
-            assertEquals("Object.Code\nObject.Gone", useAlways.valueIdentity); //$NON-NLS-1$
+            assertEquals("[[\"Object.Code\",false],[\"Object.Gone\",\"unresolved\"]]", useAlways.valueIdentity); //$NON-NLS-1$
         }
         finally
         {

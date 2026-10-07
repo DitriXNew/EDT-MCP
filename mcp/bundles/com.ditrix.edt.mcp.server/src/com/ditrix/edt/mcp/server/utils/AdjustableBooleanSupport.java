@@ -6,16 +6,23 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+
+import org.eclipse.emf.common.util.URI;
+import org.eclipse.emf.ecore.InternalEObject;
 
 import com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.ForRoleType;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
@@ -259,15 +266,46 @@ public final class AdjustableBooleanSupport
     }
 
     /**
-     * The order-independent identity of a flag: {@link #render} with the roles sorted, so two sides
-     * storing the same role values in another order compare equal.
+     * The order-independent identity of a flag: {@link #render} with the roles sorted, plus the values
+     * of roles that do not resolve, keyed by their proxy URI - {@link #render} cannot name those, but
+     * a comparison must still see them.
      *
      * @param value the flag, may be {@code null}
      * @return the identity, or {@code null} for no flag
+     * @throws IllegalStateException when a role value names a role that is neither resolved nor a proxy
      */
     public static String identity(AdjustableBoolean value)
     {
-        return value == null ? null : toText(value.isCommon(), new TreeMap<>(roleValues(value)));
+        if (value == null)
+        {
+            return null;
+        }
+        String resolved = toText(value.isCommon(), new TreeMap<>(roleValues(value)));
+        List<String> unresolved = new ArrayList<>();
+        for (ForRoleType forRole : value.getFor())
+        {
+            Role role = forRole.getRole();
+            if (isResolved(role))
+            {
+                continue;
+            }
+            URI uri = role instanceof InternalEObject ? ((InternalEObject)role).eProxyURI() : null;
+            if (uri == null)
+            {
+                throw new IllegalStateException("A per-role value names a role that is neither resolved " //$NON-NLS-1$
+                    + "nor a reference, so the flag cannot be compared."); //$NON-NLS-1$
+            }
+            JsonArray entry = new JsonArray();
+            entry.add("proxy:" + uri); //$NON-NLS-1$
+            entry.add(forRole.isValue());
+            unresolved.add(entry.toString());
+        }
+        if (unresolved.isEmpty())
+        {
+            return resolved;
+        }
+        Collections.sort(unresolved);
+        return resolved + " unresolved:[" + String.join(",", unresolved) + "]"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     private static String toText(boolean common, Map<String, Boolean> roles)

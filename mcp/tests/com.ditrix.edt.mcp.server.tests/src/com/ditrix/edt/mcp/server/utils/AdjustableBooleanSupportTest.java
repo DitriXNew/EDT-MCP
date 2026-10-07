@@ -136,6 +136,37 @@ public class AdjustableBooleanSupportTest
     }
 
     @Test
+    public void testTheIdentityKeepsAnUnresolvedRolesValue()
+    {
+        Configuration config = config("Manager"); //$NON-NLS-1$
+        AdjustableBoolean on = MdClassFactory.eINSTANCE.createAdjustableBoolean();
+        on.getFor().add(forRole(config.getRoles().get(0), true));
+        on.getFor().add(forRole(proxyRole("Gone"), true)); //$NON-NLS-1$
+        AdjustableBoolean off = MdClassFactory.eINSTANCE.createAdjustableBoolean();
+        off.getFor().add(forRole(proxyRole("Gone"), false)); //$NON-NLS-1$
+        off.getFor().add(forRole(config.getRoles().get(0), true));
+
+        assertEquals("the reader sees the same resolved values", //$NON-NLS-1$
+            AdjustableBooleanSupport.render(on), AdjustableBooleanSupport.render(off));
+        assertEquals("{\"common\":false,\"roles\":{\"Role.Manager\":true}} unresolved:" //$NON-NLS-1$
+            + "[[\"proxy:bm://TestConfiguration/Role.Gone\",true]]", AdjustableBooleanSupport.identity(on)); //$NON-NLS-1$
+        assertFalse("an unresolved role's value is part of the comparison", //$NON-NLS-1$
+            AdjustableBooleanSupport.identity(on).equals(AdjustableBooleanSupport.identity(off)));
+
+        off.getFor().get(0).setValue(true);
+        assertEquals("the same values in another order are one identity", //$NON-NLS-1$
+            AdjustableBooleanSupport.identity(on), AdjustableBooleanSupport.identity(off));
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void testARoleValueWithoutAnIdentifiableRoleCannotBeCompared()
+    {
+        AdjustableBoolean flag = MdClassFactory.eINSTANCE.createAdjustableBoolean();
+        flag.getFor().add(forRole(null, true));
+        AdjustableBooleanSupport.identity(flag);
+    }
+
+    @Test
     public void testBuildKeepsTheUnresolvedStoredValues()
     {
         Configuration config = config("Manager"); //$NON-NLS-1$

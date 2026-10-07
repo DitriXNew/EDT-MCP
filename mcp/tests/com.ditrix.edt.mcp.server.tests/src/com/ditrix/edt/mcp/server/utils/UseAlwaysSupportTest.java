@@ -214,21 +214,49 @@ public class UseAlwaysSupportTest
     }
 
     @Test
-    public void testALegacyMultiLanguageEntryIsRemovedWhicheverLanguageIsActive()
+    public void testALegacyEntryIsMatchedByItsActiveLanguageOnly()
     {
         Form form = FormFactory.eINSTANCE.createForm();
         FormAttribute object = attribute(form, "Object", "CatalogObject.Products"); //$NON-NLS-1$ //$NON-NLS-2$
         platform.field("Object.Code", "Object." + RU_CODE, UseAlways.Checked); //$NON-NLS-1$ //$NON-NLS-2$
-        // The active language (1) holds a stale spelling, so EDT's setter, which compares only the
-        // active segments, does not see the entry; the English spelling at index 0 is the field.
-        MultiLanguageDataPath legacy = multiLanguage(1, "Object.Code", "Object.OldCode"); //$NON-NLS-1$ //$NON-NLS-2$
-        object.getNotDefaultUseAlwaysAttributes().add(legacy);
+        platform.field("Object.Description", null, UseAlways.Checked); //$NON-NLS-1$
+        // The INACTIVE spelling names Code, the ACTIVE one (1) Description: EDT reads the entry as
+        // Description's, so checking Code must not touch it.
+        MultiLanguageDataPath other = multiLanguage(1, "Object.Code", "Object.Description"); //$NON-NLS-1$ //$NON-NLS-2$
+        // The active spelling is Code's Russian one: EDT's setter removes this entry for Code.
+        MultiLanguageDataPath own = multiLanguage(1, "Object.Stale", "Object." + RU_CODE); //$NON-NLS-1$ //$NON-NLS-2$
+        object.getNotDefaultUseAlwaysAttributes().add(other);
+        object.getNotDefaultUseAlwaysAttributes().add(own);
         assertEquals("the read follows the active language", //$NON-NLS-1$
-            Arrays.asList("Object", "OldCode"), UseAlwaysSupport.segmentsOf(legacy)); //$NON-NLS-1$ //$NON-NLS-2$
+            Arrays.asList("Object", "Description"), UseAlwaysSupport.segmentsOf(other)); //$NON-NLS-1$ //$NON-NLS-2$
 
         write(form, object, "{\"Object.Code\": true}"); //$NON-NLS-1$
-        assertTrue("the entry naming the field in any language is gone", //$NON-NLS-1$
-            object.getNotDefaultUseAlwaysAttributes().isEmpty());
+        assertEquals("only the entry EDT reads as Code's is gone; Description keeps its checkbox", //$NON-NLS-1$
+            Arrays.asList(other), new ArrayList<>(object.getNotDefaultUseAlwaysAttributes()));
+        assertEquals("{\"Object.Description\":false}", UseAlwaysSupport.render(object)[0]); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheIdentityCarriesTheStateAndTheCanonicalPath()
+    {
+        Form form = FormFactory.eINSTANCE.createForm();
+        FormAttribute english = attribute(form, "Object", "CatalogObject.Products"); //$NON-NLS-1$ //$NON-NLS-2$
+        Form otherForm = FormFactory.eINSTANCE.createForm();
+        FormAttribute russian = attribute(otherForm, "Object", "CatalogObject.Products"); //$NON-NLS-1$ //$NON-NLS-2$
+        platform.field("Object.Code", "Object." + RU_CODE, UseAlways.Checked); //$NON-NLS-1$ //$NON-NLS-2$
+        english.getNotDefaultUseAlwaysAttributes().add(UseAlwaysPlatformFake.dataPath("Object.Code")); //$NON-NLS-1$
+        russian.getNotDefaultUseAlwaysAttributes().add(UseAlwaysPlatformFake.dataPath("Object." + RU_CODE)); //$NON-NLS-1$
+
+        String[] resolved = UseAlwaysSupport.render(english);
+        assertEquals("[[\"Object.Code\",false]]", resolved[1]); //$NON-NLS-1$
+        assertEquals("one field stored in either spelling is one state", //$NON-NLS-1$
+            resolved[1], UseAlwaysSupport.render(russian)[1]);
+
+        // The same stored path on a side where the platform does not resolve it is another value.
+        new UseAlwaysPlatformFake().install();
+        String[] unresolved = UseAlwaysSupport.render(english);
+        assertEquals("{\"Object.Code\":\"unresolved\"}", unresolved[0]); //$NON-NLS-1$
+        assertFalse("a resolution change must be a difference", resolved[1].equals(unresolved[1])); //$NON-NLS-1$
     }
 
     @Test
@@ -248,8 +276,9 @@ public class UseAlwaysSupportTest
         String[] rendered = UseAlwaysSupport.render(object);
         assertEquals("{\"Object.Total\":true,\"Object.Code\":false,\"Object.Gone\":\"unresolved\"," //$NON-NLS-1$
             + "\"Object.Owner.Code\":\"noCheckbox\"}", rendered[0]); //$NON-NLS-1$
-        assertEquals("the identity is the stored paths alone, sorted", //$NON-NLS-1$
-            "Object.Code\nObject.Gone\nObject.Owner.Code\nObject.Total", rendered[1]); //$NON-NLS-1$
+        assertEquals("the identity is the [path, state] pairs, sorted", //$NON-NLS-1$
+            "[[\"Object.Code\",false],[\"Object.Gone\",\"unresolved\"],[\"Object.Owner.Code\",\"noCheckbox\"]," //$NON-NLS-1$
+                + "[\"Object.Total\",true]]", rendered[1]); //$NON-NLS-1$
     }
 
     @Test

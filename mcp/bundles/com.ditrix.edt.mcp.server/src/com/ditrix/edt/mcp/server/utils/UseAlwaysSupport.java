@@ -8,10 +8,8 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeSet;
 import java.util.function.Supplier;
 
 import org.eclipse.emf.ecore.EObject;
@@ -33,8 +31,10 @@ import com._1c.g5.v8.dt.mcore.util.McoreUtil;
 import com._1c.g5.v8.dt.metadata.mdclass.ScriptVariant;
 import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 
 /**
  * A form attribute's "Use always" checkboxes, exposed as the {@code useAlways} property:
@@ -263,8 +263,8 @@ public final class UseAlwaysSupport
     }
 
     /**
-     * Writes the plans through the platform's own setter. A legacy multi-language entry the platform
-     * does not recognize by its active spelling is removed too when the path must not be listed.
+     * Writes the plans through the platform's own setter and nothing else: which stored entry stands
+     * for a path - a legacy multi-language one by its active spelling - is EDT's call.
      *
      * @param formModel the form content model, in the write transaction
      * @param attribute the attribute, in the write transaction
@@ -283,18 +283,14 @@ public final class UseAlwaysSupport
                     + "' resolved when validated but not when written."); //$NON-NLS-1$
             }
             platform.useAlways.setUseAlwaysValue(info, plan.request.useAlways, form);
-            UseAlways def = platform.useAlways.getDefaultValue(info, form);
-            boolean listed = def == UseAlways.Checked ? !plan.request.useAlways : plan.request.useAlways;
-            if (!listed)
-            {
-                removeEverySpelling(attribute, spellings(info));
-            }
         }
     }
 
     /**
      * The stored paths with the state EDT reports for each, as {@code {path: true|false|"unresolved"|
-     * "noCheckbox"}} in stored order, and an identity of the stored paths alone, sorted.
+     * "noCheckbox"}} in stored order, and an identity of the same states as
+     * sorted {@code [path, state]} pairs, the path in the platform's English spelling (the stored one
+     * when unresolved) - a duplicate entry stays a difference.
      *
      * @param attribute the form attribute, in a read transaction
      * @return {text, identity}, or {@code null} when every path is at its default
@@ -318,7 +314,7 @@ public final class UseAlwaysSupport
         }
         Form form = (Form)formModel;
         JsonObject text = new JsonObject();
-        TreeSet<String> identity = new TreeSet<>();
+        List<String> identity = new ArrayList<>();
         try
         {
             Platform platform = Platform.current();
@@ -326,22 +322,27 @@ public final class UseAlwaysSupport
             {
                 List<String> segments = segmentsOf(path);
                 String joined = String.join(".", segments); //$NON-NLS-1$
-                identity.add(joined);
                 PropertyInfo info = segments.isEmpty() ? null
                     : platform.dataSources.findPropertyInfo(form, dataPath(segments));
                 UseAlways state = info == null ? null : platform.useAlways.getUseAlwaysValue(info, form);
+                JsonElement shown;
                 if (info == null)
                 {
-                    text.addProperty(joined, UNRESOLVED);
+                    shown = new JsonPrimitive(UNRESOLVED);
                 }
                 else if (state == UseAlways.Checked || state == UseAlways.Unchecked)
                 {
-                    text.addProperty(joined, state == UseAlways.Checked);
+                    shown = new JsonPrimitive(state == UseAlways.Checked);
                 }
                 else
                 {
-                    text.addProperty(joined, NO_CHECKBOX);
+                    shown = new JsonPrimitive(NO_CHECKBOX);
                 }
+                text.add(joined, shown);
+                JsonArray entry = new JsonArray();
+                entry.add(info == null ? joined : canonicalPath(info, joined));
+                entry.add(shown);
+                identity.add(entry.toString());
             }
         }
         catch (RuntimeException e)
@@ -350,7 +351,16 @@ public final class UseAlwaysSupport
                 + "' failed in the platform", e); //$NON-NLS-1$
             throw e;
         }
-        return new String[] { text.toString(), String.join("\n", identity) }; //$NON-NLS-1$
+        Collections.sort(identity);
+        return new String[] { text.toString(), "[" + String.join(",", identity) + "]" }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /** The platform's English spelling of a resolved path, the same whichever spelling is stored. */
+    private static String canonicalPath(PropertyInfo info, String fallback)
+    {
+        AbstractDataPath english = info.getDataPath(ScriptVariant.ENGLISH);
+        List<String> segments = english == null ? null : english.getSegments();
+        return segments == null || segments.isEmpty() ? fallback : String.join(".", segments); //$NON-NLS-1$
     }
 
     /**
@@ -435,18 +445,6 @@ public final class UseAlwaysSupport
             }
         }
         return spellings;
-    }
-
-    /** Removes every entry any spelling of which - every language of a legacy entry - is the path. */
-    private static void removeEverySpelling(FormAttribute attribute, List<List<String>> spellings)
-    {
-        for (Iterator<AbstractDataPath> it = attribute.getNotDefaultUseAlwaysAttributes().iterator(); it.hasNext();)
-        {
-            if (matchesAnySpelling(it.next(), spellings))
-            {
-                it.remove();
-            }
-        }
     }
 
     private static boolean matchesAnySpelling(AbstractDataPath entry, List<List<String>> spellings)
