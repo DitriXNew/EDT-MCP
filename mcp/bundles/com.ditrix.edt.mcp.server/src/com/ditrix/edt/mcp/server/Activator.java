@@ -31,7 +31,6 @@ import com._1c.g5.v8.dt.core.platform.IExtensionProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.core.platform.IWorkspaceOrchestrator;
 import com._1c.g5.v8.dt.form.refactoring.IFormRefactoringService;
-import com._1c.g5.v8.dt.form.service.attribute.FormAttributeManagementService;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
@@ -44,6 +43,7 @@ import com.ditrix.edt.mcp.server.bridge.EdtMcpBridge;
 import com.ditrix.edt.mcp.server.bridge.IEdtMcpBridge;
 import com.ditrix.edt.mcp.server.history.McpCallHistoryFileLog;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
+import com.ditrix.edt.mcp.server.utils.FormAttributeDeletion;
 import com.ditrix.edt.mcp.server.utils.Log;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -421,13 +421,13 @@ public class Activator extends AbstractUIPlugin
     }
 
     /**
-     * Returns EDT's FormAttributeManagementService - the form designer's attribute delete.
+     * Returns EDT's own form-attribute delete (the form designer's) with its read-only prediction.
      *
-     * @return the service or null if not available
+     * @return the deletion or null if not available
      */
-    public FormAttributeManagementService getFormAttributeManagementService()
+    public FormAttributeDeletion getFormAttributeDeletion()
     {
-        return services.getFormAttributeManagementService();
+        return services.getFormAttributeDeletion();
     }
 
     /**

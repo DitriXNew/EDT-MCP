@@ -14,6 +14,7 @@ import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Supplier;
 
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -41,7 +42,6 @@ import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.form.model.AbstractFormAttribute;
-import com._1c.g5.v8.dt.form.service.attribute.FormAttributeManagementService;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
@@ -74,6 +74,7 @@ import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.utils.FormAttributeDeletion;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormModelValidator;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
@@ -196,13 +197,19 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Deletes a form attribute or attribute column the way the form designer does. A package-private
-     * SEAM: production runs EDT's {@code FormAttributeManagementService.deleteAttribute} with
-     * {@code removeItems=true}; a unit test substitutes a recorder.
+     * Predicts and runs the delete of a form attribute or attribute column the way the form designer
+     * does. A package-private SEAM: production is {@link FormAttributeDeletion} (EDT's own service and
+     * collector); a unit test substitutes a fake.
      */
-    @FunctionalInterface
     interface FormAttributeDeleter
     {
+        /**
+         * @param formModel the tx-bound content form
+         * @param attribute the tx-bound attribute or column
+         * @return what the delete will remove and clear, read without mutating
+         */
+        FormAttributeDeletion.Plan plan(EObject formModel, EObject attribute);
+
         /**
          * @param tx the open BM write transaction
          * @param attribute the tx-bound attribute or column to delete (an {@code AbstractFormAttribute})
@@ -294,10 +301,25 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     private static FormAttributeDeleter platformFormAttributeDeleter()
     {
         Activator activator = Activator.getDefault();
-        FormAttributeManagementService service =
-            activator == null ? null : activator.getFormAttributeManagementService();
-        return service == null ? null
-            : (tx, attribute) -> service.deleteAttribute(tx, (AbstractFormAttribute)attribute, true);
+        FormAttributeDeletion deletion = activator == null ? null : activator.getFormAttributeDeletion();
+        if (deletion == null)
+        {
+            return null;
+        }
+        return new FormAttributeDeleter()
+        {
+            @Override
+            public FormAttributeDeletion.Plan plan(EObject formModel, EObject attribute)
+            {
+                return deletion.plan(formModel, attribute);
+            }
+
+            @Override
+            public void delete(IBmTransaction tx, EObject attribute)
+            {
+                deletion.delete(tx, attribute);
+            }
+        };
     }
 
     /**
@@ -1848,7 +1870,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     + " contained member(s) (" + data.describeDescendants() + ")" //$NON-NLS-1$ //$NON-NLS-2$
                     + data.truncationNote() + " from " + ref.formPath + '.') //$NON-NLS-1$
                 + data.boundItemsSentence(),
-            1 + data.descendants.size() + data.boundItemCount, Collections.singletonList(normFqn));
+            1 + data.descendants.size() + data.removedAlongCount(), Collections.singletonList(normFqn));
         return deleteWithConsent(preview, write);
     }
 
@@ -1976,7 +1998,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 }
                 if (!handler && target instanceof AbstractFormAttribute)
                 {
-                    readAttributeDeletePreview(formModel, target, d);
+                    readAttributeDeletePreview(formModel, target, requireAttributeDeleter(normFqn), d);
                 }
                 return d;
             });
@@ -1999,6 +2021,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         removed.add(head);
         removed.addAll(data.descendants);
         removed.addAll(data.boundItems);
+        removed.addAll(data.clearedItems);
 
         String memberWord = handler ? KEY_HANDLER : KEY_MEMBER;
         String consequences = data.attribute
@@ -2031,7 +2054,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * unbinds the ones whose path no longer resolves - the designer's delete; any other member is
      * removed directly, with the symmetric form-binding cleanup.
      */
-    private String performFormDelete(FormElementWriter.FormEditContext fctx, String normFqn,
+    String performFormDelete(FormElementWriter.FormEditContext fctx, String normFqn,
         FormElementWriter.FormMemberRef ref, boolean handler, Version version,
         FormAttributeDeleter attributeDeleter)
     {
@@ -2085,14 +2108,37 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     // ==================== FORM attribute (EDT's designer delete) ====================
 
-    /** How many bound / unbound items a form-attribute delete lists by name; the count is always exact. */
+    /** How many removed / cleared items a form-attribute delete lists; the counts are always exact. */
     static final int MAX_LISTED_BOUND_ITEMS = 50;
 
-    /** Item key: the data path an item was bound to. */
+    /** Item key: the data path an item is (or was) bound to. */
     private static final String KEY_DATA_PATH = "dataPath"; //$NON-NLS-1$
 
-    /** Item key: present and true on an item that was kept but lost its data path. */
+    /** Item key: present and true on an item that stays but loses its data path. */
     private static final String KEY_UNBOUND = "unbound"; //$NON-NLS-1$
+
+    /** Item key: present and true on a member removed only because a removed item contains it. */
+    private static final String KEY_CONTAINED = "contained"; //$NON-NLS-1$
+
+    /**
+     * The deleter for an attribute target, resolved inside the preview read; refuses (ERROR-logged)
+     * when EDT's delete is unavailable - there is no own predictor or remover to fall back to.
+     *
+     * @param normFqn the normalized FQN being deleted
+     * @return the deleter
+     * @throws FormValidationException carrying the refusal when it is unavailable
+     */
+    FormAttributeDeleter requireAttributeDeleter(String normFqn)
+    {
+        FormAttributeDeleter deleter = formAttributeDeleters.get();
+        if (deleter == null)
+        {
+            Activator.logError("delete_metadata: EDT's form-attribute delete is unavailable, refused " //$NON-NLS-1$
+                + normFqn, null);
+            throw new FormValidationException(attributeServiceUnavailable(normFqn));
+        }
+        return deleter;
+    }
 
     /**
      * The deleter for a confirmed attribute delete, resolved before the consent gate; {@code null}
@@ -2109,12 +2155,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             return null;
         }
-        FormAttributeDeleter deleter = formAttributeDeleters.get();
-        if (deleter == null)
-        {
-            throw new FormValidationException(attributeServiceUnavailable(normFqn));
-        }
-        return deleter;
+        return data.deleter != null ? data.deleter : requireAttributeDeleter(normFqn);
     }
 
     /** The refusal when EDT's form-attribute service cannot be reached. */
@@ -2127,39 +2168,67 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Fills the attribute half of a form-member preview: the items bound at or below the attribute
-     * (each as {name, type, dataPath}, the first {@link #MAX_LISTED_BOUND_ITEMS}; the count exact),
-     * whether it is the form's main attribute, and whether the delete keeps the bound items - EDT's
-     * delete leaves them in an extension form for an attribute adopted from the base form
-     * ({@code FormExtensionService.isPureExtensionObject}).
+     * Fills the attribute half of a form-member preview from EDT's own prediction ({@code plan}): the
+     * items its collector removes plus every named member inside them, and the items that stay with
+     * their data path cleared - each list capped at {@link #MAX_LISTED_BOUND_ITEMS}, the counts exact.
      *
      * @param formModel the tx-bound content form
      * @param attribute the attribute or column being deleted
+     * @param deleter EDT's delete (or a test fake)
      * @param data receives the findings
      */
-    static void readAttributeDeletePreview(EObject formModel, EObject attribute, FormDeletePreview data)
+    static void readAttributeDeletePreview(EObject formModel, EObject attribute, FormAttributeDeleter deleter,
+        FormDeletePreview data)
     {
         data.attribute = true;
+        data.deleter = deleter;
         data.main = FormElementWriter.isMainAttribute(attribute);
         data.rootExtInfo = rootExtInfoKind(formModel);
-        data.itemsKept = extensionKeepsBoundItems(formModel, attribute);
-        if (data.itemsKept)
+        FormAttributeDeletion.Plan plan = deleter.plan(formModel, attribute);
+        data.itemsKept = plan.itemsKept;
+        data.unresolved = plan.unresolved;
+        Set<EObject> roots = Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        roots.addAll(plan.bound);
+        for (EObject root : plan.bound)
         {
-            return;
+            if (hasAncestorIn(root, roots))
+            {
+                continue; // listed in the walk of the removed item that contains it
+            }
+            data.addRemoved(root, false);
+            List<EObject> inside = new ArrayList<>();
+            data.removalTruncated |= collectRemovedObjects(root, inside);
+            for (EObject member : inside)
+            {
+                data.addRemoved(member, !roots.contains(member));
+            }
         }
-        List<EObject> bound = FormElementWriter.findItemsBoundAtOrBelowAttribute(attribute);
-        data.boundItemCount = bound.size();
-        for (EObject item : bound.subList(0, Math.min(bound.size(), MAX_LISTED_BOUND_ITEMS)))
+        data.clearedCount = plan.cleared.size();
+        for (EObject item : plan.cleared.subList(0, Math.min(plan.cleared.size(), MAX_LISTED_BOUND_ITEMS)))
         {
-            data.boundItems.add(boundItem(item, FormStructureReader.dataPathOf(item), false));
+            data.clearedItems.add(itemEntry(item, FormAttributeDeletion.pathOf(item), false, true));
         }
     }
 
+    /** Whether a proper ancestor of {@code object} is in {@code roots}. */
+    private static boolean hasAncestorIn(EObject object, Set<EObject> roots)
+    {
+        for (EObject up = object.eContainer(); up != null; up = up.eContainer())
+        {
+            if (roots.contains(up))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
-     * Runs EDT's attribute delete on the tx-bound model and OBSERVES what it did: every persisted named
-     * data item is snapshotted with its path before the call, and afterwards is reported as removed
-     * (no longer in the form) or unbound (kept, path cleared). The attribute's own columns are read
-     * first. A service that left the attribute in place throws, rolling the transaction back.
+     * Runs EDT's attribute delete on the tx-bound model and OBSERVES what it did: every persisted
+     * named member of the form is snapshotted with its container and data path before the call, and
+     * afterwards is reported as removed (no longer in the form; {@code contained} when its container
+     * went too) or unbound (kept, path cleared). The attribute's own columns are read first. A delete
+     * that left the attribute in place throws, rolling the transaction back.
      *
      * @param formModel the tx-bound content form
      * @param target the tx-bound attribute or column
@@ -2175,14 +2244,16 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         outcome.main = FormElementWriter.isMainAttribute(target);
         outcome.rootExtInfo = rootExtInfoKind(formModel);
         collectRemovedMembers(target, outcome.columns);
-        Map<EObject, String> boundBefore = new java.util.LinkedHashMap<>();
-        for (EObject item : PersistedContents.descendants(formModel))
+        List<EObject> members = new ArrayList<>();
+        Map<EObject, EObject> containers = new java.util.IdentityHashMap<>();
+        Map<EObject, String> paths = new java.util.IdentityHashMap<>();
+        for (EObject member : PersistedContents.descendants(formModel))
         {
-            String path = FormStructureReader.dataPathOf(item);
-            if (!path.isEmpty() && ownNameOf(item) != null && item != target
-                && !EcoreUtil.isAncestor(target, item))
+            if (ownNameOf(member) != null && member != target && !EcoreUtil.isAncestor(target, member))
             {
-                boundBefore.put(item, path);
+                members.add(member);
+                containers.put(member, member.eContainer());
+                paths.put(member, FormAttributeDeletion.pathOf(member));
             }
         }
 
@@ -2194,26 +2265,35 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + normFqn + "' in the form, so nothing was changed. Delete it in the EDT form editor " //$NON-NLS-1$
                 + "and report the case.").toJson()); //$NON-NLS-1$
         }
-        for (Map.Entry<EObject, String> entry : boundBefore.entrySet())
+        for (EObject member : members)
         {
-            EObject item = entry.getKey();
-            if (!EcoreUtil.isAncestor(formModel, item))
+            String path = paths.get(member);
+            if (!EcoreUtil.isAncestor(formModel, member))
             {
-                outcome.removed.add(boundItem(item, entry.getValue(), false));
+                boolean contained = !EcoreUtil.isAncestor(formModel, containers.get(member));
+                outcome.removed.add(itemEntry(member, path, contained, false));
             }
-            else if (FormStructureReader.dataPathOf(item).isEmpty())
+            else if (!path.isEmpty() && FormAttributeDeletion.pathOf(member).isEmpty())
             {
-                outcome.unbound.add(boundItem(item, entry.getValue(), true));
+                outcome.unbound.add(itemEntry(member, path, false, true));
             }
         }
         return outcome;
     }
 
-    /** One {name, type, dataPath[, unbound]} entry for a bound item. */
-    private static Map<String, Object> boundItem(EObject item, String dataPath, boolean unbound)
+    /** One {name, type[, dataPath][, contained][, unbound]} entry for a form member. */
+    private static Map<String, Object> itemEntry(EObject item, String dataPath, boolean contained,
+        boolean unbound)
     {
         Map<String, Object> entry = formItem(ownNameOf(item), item.eClass().getName());
-        entry.put(KEY_DATA_PATH, dataPath);
+        if (dataPath != null && !dataPath.isEmpty())
+        {
+            entry.put(KEY_DATA_PATH, dataPath);
+        }
+        if (contained)
+        {
+            entry.put(KEY_CONTAINED, Boolean.TRUE);
+        }
         if (unbound)
         {
             entry.put(KEY_UNBOUND, Boolean.TRUE);
@@ -2229,38 +2309,18 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         return value instanceof EObject ? ((EObject)value).eClass().getName() : null;
     }
 
-    /**
-     * Whether EDT's delete keeps the items bound to {@code attribute}: in a form adopted by an
-     * extension (it holds a live {@code baseForm}) it removes them only for the extension's OWN
-     * attribute - a top-level attribute of that name with no {@code adopted} flag.
-     */
-    private static boolean extensionKeepsBoundItems(EObject formModel, EObject attribute)
+    /** Splits removal entries into the directly removed ones and those only contained in them. */
+    private static List<Map<String, Object>> entriesWhere(List<Map<String, Object>> entries, boolean contained)
     {
-        EStructuralFeature baseFeature = formModel.eClass().getEStructuralFeature("baseForm"); //$NON-NLS-1$
-        Object base = baseFeature instanceof EReference ? formModel.eGet(baseFeature) : null;
-        if (!(base instanceof EObject) || ((EObject)base).eIsProxy())
+        List<Map<String, Object>> picked = new ArrayList<>();
+        for (Map<String, Object> entry : entries)
         {
-            return false;
-        }
-        String name = ownNameOf(attribute);
-        EStructuralFeature attributes = formModel.eClass().getEStructuralFeature("attributes"); //$NON-NLS-1$
-        if (name == null || !(attributes instanceof EReference)
-            || !(formModel.eGet(attributes) instanceof List<?>))
-        {
-            return true;
-        }
-        for (Object candidate : (List<?>)formModel.eGet(attributes))
-        {
-            if (candidate instanceof EObject && name.equals(ownNameOf((EObject)candidate)))
+            if (Boolean.TRUE.equals(entry.get(KEY_CONTAINED)) == contained)
             {
-                EStructuralFeature adopted = ((EObject)candidate).eClass().getEStructuralFeature("adopted"); //$NON-NLS-1$
-                if (adopted == null || ((EObject)candidate).eGet(adopted) == null)
-                {
-                    return false;
-                }
+                picked.add(entry);
             }
         }
-        return true;
+        return picked;
     }
 
     /** What a confirmed form-attribute delete removed, observed on the model (no tx-bound EObject). */
@@ -2284,13 +2344,19 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         /** The message tail: what went with the attribute, and the main-attribute note. */
         String describe()
         {
+            List<Map<String, Object>> direct = entriesWhere(removed, false);
+            List<Map<String, Object>> inside = entriesWhere(removed, true);
             StringBuilder sb = new StringBuilder(" Deleted through EDT's form-attribute service"); //$NON-NLS-1$
             if (!columns.isEmpty())
             {
                 sb.append(", with ").append(columns.size()).append(" contained member(s)"); //$NON-NLS-1$ //$NON-NLS-2$
             }
-            sb.append(": ").append(removed.size()).append(" bound item(s) removed") //$NON-NLS-1$ //$NON-NLS-2$
-                .append(namesOf(removed));
+            sb.append(": ").append(direct.size()).append(" item(s) removed").append(namesOf(direct)); //$NON-NLS-1$ //$NON-NLS-2$
+            if (!inside.isEmpty())
+            {
+                sb.append(" with the ").append(inside.size()).append(" member(s) inside them") //$NON-NLS-1$ //$NON-NLS-2$
+                    .append(namesOf(inside));
+            }
             if (!unbound.isEmpty())
             {
                 sb.append(", ").append(unbound.size()) //$NON-NLS-1$
@@ -3718,6 +3784,25 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     private static boolean collectRemovedMembers(EObject root, List<Map<String, Object>> out)
     {
+        List<EObject> members = new ArrayList<>();
+        boolean truncated = collectRemovedObjects(root, members);
+        for (EObject member : members)
+        {
+            out.add(formItem(ownNameOf(member), member.eClass().getName()));
+        }
+        return truncated;
+    }
+
+    /**
+     * {@link #collectRemovedMembers} answering the members themselves, for a caller that has to tell
+     * them apart (the form-attribute delete dedupes the subtrees of the items it removes).
+     *
+     * @param root the element to descend from; it is NOT itself added
+     * @param out receives every named persisted descendant, depth-first in metamodel order
+     * @return {@code true} when the walk hit its bound and stopped
+     */
+    private static boolean collectRemovedObjects(EObject root, List<EObject> out)
+    {
         int visits = FormStructureReader.MAX_NODES;
         Deque<EObject> pending = new ArrayDeque<>();
         pushPersistedChildren(root, pending);
@@ -3725,10 +3810,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             visits--;
             EObject child = pending.pop();
-            String name = ownNameOf(child);
-            if (name != null)
+            if (ownNameOf(child) != null)
             {
-                out.add(formItem(name, child.eClass().getName()));
+                out.add(child);
             }
             pushPersistedChildren(child, pending);
         }
@@ -3792,6 +3876,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         /** Whether the target is a form attribute or column - deleted through EDT's service. */
         boolean attribute;
 
+        /** EDT's delete, resolved in the preview read for an attribute; {@code null} otherwise. */
+        FormAttributeDeleter deleter;
+
         /** Whether the target is the form's main attribute. */
         boolean main;
 
@@ -3801,13 +3888,49 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         /** Whether EDT's delete keeps the bound items (an attribute adopted by an extension form). */
         boolean itemsKept;
 
-        /** The first {@link #MAX_LISTED_BOUND_ITEMS} items bound to the attribute, {name, type, dataPath}. */
+        /** Whether the attribute's data path does not resolve, so EDT's delete takes no item. */
+        boolean unresolved;
+
+        /**
+         * What EDT's delete removes besides the attribute: the items its collector picks
+         * ({name, type, dataPath}) and the named members inside them ({@code contained: true}), the
+         * first {@link #MAX_LISTED_BOUND_ITEMS}.
+         */
         final List<Map<String, Object>> boundItems = new ArrayList<>();
 
-        /** How many items are bound to the attribute, listed or not. */
+        /** How many items EDT's collector removes, listed or not. */
         int boundItemCount;
 
-        /** The sentence naming the bound items the delete takes, or {@code ""} for a non-attribute. */
+        /** How many named members go only because a removed item contains them, listed or not. */
+        int containedCount;
+
+        /** Whether a walk below a removed item hit its node bound. */
+        boolean removalTruncated;
+
+        /** The first items that stay with their data path cleared ({@code unbound: true}). */
+        final List<Map<String, Object>> clearedItems = new ArrayList<>();
+
+        /** How many items stay with their data path cleared, listed or not. */
+        int clearedCount;
+
+        /** Counts a removed member and lists it while the list has room. */
+        void addRemoved(EObject member, boolean contained)
+        {
+            if (contained)
+            {
+                containedCount++;
+            }
+            else
+            {
+                boundItemCount++;
+            }
+            if (boundItems.size() < MAX_LISTED_BOUND_ITEMS)
+            {
+                boundItems.add(itemEntry(member, FormAttributeDeletion.pathOf(member), contained, false));
+            }
+        }
+
+        /** The sentence naming what the delete takes along, or {@code ""} for a non-attribute. */
         String boundItemsSentence()
         {
             if (!attribute)
@@ -3819,14 +3942,46 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 return " The attribute is adopted from the base form: EDT's delete keeps the items " //$NON-NLS-1$
                     + "bound to it and also drops it from the form's base-form copy."; //$NON-NLS-1$
             }
-            if (boundItemCount == 0)
+            if (unresolved)
+            {
+                return " EDT cannot resolve the attribute's data path, so its delete takes no form item " //$NON-NLS-1$
+                    + "with it."; //$NON-NLS-1$
+            }
+            if (boundItemCount == 0 && clearedCount == 0)
             {
                 return " No form item is bound to it."; //$NON-NLS-1$
             }
-            return " It also removes the " + boundItemCount + " item(s) bound to it" //$NON-NLS-1$ //$NON-NLS-2$
-                + namesOf(boundItems)
-                + (boundItemCount > boundItems.size() ? " - the first " + boundItems.size() + " listed" : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                + "; an item whose path no longer resolves is kept with its data path cleared instead."; //$NON-NLS-1$
+            StringBuilder sb = new StringBuilder();
+            if (boundItemCount > 0)
+            {
+                sb.append(" It also removes the ").append(boundItemCount).append(" item(s) bound to it") //$NON-NLS-1$ //$NON-NLS-2$
+                    .append(namesOf(entriesWhere(boundItems, false)));
+                if (containedCount > 0)
+                {
+                    sb.append(" and the ").append(containedCount).append(" member(s) inside them") //$NON-NLS-1$ //$NON-NLS-2$
+                        .append(namesOf(entriesWhere(boundItems, true)));
+                }
+                if (boundItems.size() < boundItemCount + containedCount)
+                {
+                    sb.append(" - the first ").append(boundItems.size()).append(" listed"); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                sb.append(truncationNoteFor(removalTruncated));
+            }
+            if (clearedCount > 0)
+            {
+                sb.append(boundItemCount > 0 ? ";" : "") //$NON-NLS-1$ //$NON-NLS-2$
+                    .append(' ').append(clearedCount)
+                    .append(" item(s) whose path starts with it but does not resolve stay with the data path " //$NON-NLS-1$
+                        + "cleared") //$NON-NLS-1$
+                    .append(namesOf(clearedItems));
+            }
+            return sb.append('.').toString();
+        }
+
+        /** What the delete REMOVES besides the attribute and its own columns - the consent count. */
+        int removedAlongCount()
+        {
+            return boundItemCount + containedCount;
         }
 
         /** The main-attribute note for the preview, or {@code ""}. */

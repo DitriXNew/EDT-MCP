@@ -6,6 +6,9 @@
 
 package com.ditrix.edt.mcp.server;
 
+import java.lang.reflect.Constructor;
+import java.util.Set;
+
 import org.eclipse.core.runtime.Platform;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
@@ -30,7 +33,11 @@ import com._1c.g5.v8.dt.core.platform.IExtensionProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.core.platform.IWorkspaceOrchestrator;
 import com._1c.g5.v8.dt.form.refactoring.IFormRefactoringService;
+import com._1c.g5.v8.dt.form.model.AbstractDataPath;
+import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.form.service.attribute.FormAttributeManagementService;
+import com._1c.g5.v8.dt.form.service.datasourceinfo.IDataSourceInfoAssociationService;
+import com._1c.g5.v8.dt.form.service.extension.IFormExtensionService;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.md.MdPlugin;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
@@ -46,6 +53,7 @@ import com.e1c.g5.dt.applications.IApplicationManager;
 import com.e1c.g5.v8.dt.check.ICheckScheduler;
 import com.e1c.g5.v8.dt.check.qfix.IFixManager;
 import com.e1c.g5.v8.dt.check.qfix.IFixRepository;
+import com.ditrix.edt.mcp.server.utils.FormAttributeDeletion;
 import com.ditrix.edt.mcp.server.utils.compare.ComparisonEngine;
 import com.e1c.g5.v8.dt.check.settings.ICheckRepository;
 import com.google.inject.Injector;
@@ -701,19 +709,24 @@ public class EdtServices
     /** The form bundle's activator, internal (not exported) - reached reflectively for its injector. */
     private static final String FORM_PLUGIN_CLASS = "com._1c.g5.v8.dt.internal.form.FormPlugin"; //$NON-NLS-1$
 
+    /** EDT's collector of the items an attribute delete removes - a private nested class. */
+    private static final String DELETE_ITEM_COLLECTOR_CLASS =
+        FormAttributeManagementService.class.getName() + "$DeleteDataItemByPathDathPrefixCommand"; //$NON-NLS-1$
+
     /**
-     * Returns EDT's {@link FormAttributeManagementService} - the service the form designer's
-     * "delete attribute" runs ({@code DeleteFormAttributeTask}): it removes the attribute together
-     * with its columns, the items bound to it and its ext-info object.
+     * Returns EDT's own form-attribute delete - {@link FormAttributeManagementService}, the service the
+     * form designer's "delete attribute" runs ({@code DeleteFormAttributeTask}) - together with the
+     * platform pieces that predict it without mutating: the data-source association and extension
+     * services and the delete's own item collector.
      * <p>
-     * It is a Guice singleton of the form bundle that is NOT registered as an OSGi service, and the
-     * bundle's activator ({@code FormPlugin}) sits in a non-exported package, so the injector is
-     * reached reflectively; the service class itself is exported and typed. Answers the instance the
-     * platform itself uses ({@code FormUtil.getFormAttributeService} reads the same injector).
+     * The services are Guice singletons of the form bundle and the management service is NOT an OSGi
+     * service; the bundle's activator ({@code FormPlugin}) sits in a non-exported package, so its
+     * injector is reached reflectively, and so is the collector, a private nested class of the
+     * management service. The instances are the ones the platform itself uses.
      *
-     * @return the service, or {@code null} when the form bundle or its injector is unavailable
+     * @return the deletion, or {@code null} (logged as an ERROR) when any piece is unavailable
      */
-    public FormAttributeManagementService getFormAttributeManagementService()
+    public FormAttributeDeletion getFormAttributeDeletion()
     {
         Bundle formBundle = Platform.getBundle(FORM_BUNDLE_ID);
         if (formBundle == null)
@@ -730,15 +743,36 @@ public class EdtServices
             Object injector = plugin == null ? null : pluginClass.getMethod("getInjector").invoke(plugin); //$NON-NLS-1$
             if (injector instanceof Injector)
             {
-                return ((Injector)injector).getInstance(FormAttributeManagementService.class);
+                Injector formInjector = (Injector)injector;
+                return new FormAttributeDeletion(formInjector.getInstance(FormAttributeManagementService.class),
+                    formInjector.getInstance(IDataSourceInfoAssociationService.class),
+                    formInjector.getInstance(IFormExtensionService.class), deleteItemCollectorConstructor());
             }
             Activator.logError("form bundle injector is not available", null); //$NON-NLS-1$
         }
         catch (Exception | LinkageError e) // NOSONAR an EDT that moved this internal API must answer null, not throw
         {
-            Activator.logError("Failed to obtain FormAttributeManagementService from the form injector", e); //$NON-NLS-1$
+            Activator.logError("Failed to obtain EDT's form-attribute delete from the form injector", e); //$NON-NLS-1$
         }
         return null;
+    }
+
+    /**
+     * The constructor of EDT's {@code DeleteDataItemByPathDathPrefixCommand(Set<DataItem>,
+     * AbstractDataPath, IDataSourceInfoAssociationService, Form)}, made accessible. It only resolves
+     * each item's path and adds the matches to the set; the delete removes them afterwards.
+     *
+     * @return the accessible constructor
+     * @throws ReflectiveOperationException when this EDT no longer has it
+     */
+    public static Constructor<?> deleteItemCollectorConstructor() throws ReflectiveOperationException
+    {
+        Class<?> collectorClass = Class.forName(DELETE_ITEM_COLLECTOR_CLASS, false,
+            FormAttributeManagementService.class.getClassLoader());
+        Constructor<?> constructor = collectorClass.getDeclaredConstructor(Set.class, AbstractDataPath.class,
+            IDataSourceInfoAssociationService.class, Form.class);
+        constructor.setAccessible(true); // NOSONAR the platform's own collector is private; no public twin exists
+        return constructor;
     }
 
     /**
