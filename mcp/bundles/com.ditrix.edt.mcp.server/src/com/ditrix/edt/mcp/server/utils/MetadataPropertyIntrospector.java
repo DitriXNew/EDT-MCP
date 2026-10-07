@@ -954,9 +954,17 @@ public final class MetadataPropertyIntrospector
                 case ADJUSTABLE_BOOLEAN:
                     return Rendered.of(renderAdjustableBoolean(value));
                 case COLOR:
-                    return Rendered.of(AppearanceValueBuilder.renderColor(value));
+                {
+                    // The slot holds a value (null was answered above): a broken reference that
+                    // renders to nothing is a FAILED read, not an unset property.
+                    String color = AppearanceValueBuilder.renderColor(value);
+                    return Rendered.present(color, color);
+                }
                 case FONT:
-                    return Rendered.of(AppearanceValueBuilder.renderFont(value));
+                {
+                    String font = AppearanceValueBuilder.renderFont(value);
+                    return Rendered.present(font, font);
+                }
                 default:
                     return Rendered.of(String.valueOf(value));
             }

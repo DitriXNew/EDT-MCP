@@ -1363,4 +1363,14 @@ public class MetadataTypeUtilsTest
         }
         return false;
     }
+
+    @Test
+    public void testIsSimilarNameIsACaseInsensitiveSubstringEitherWay()
+    {
+        assertTrue(MetadataTypeUtils.isSimilarName("AliceBlue", "blue")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(MetadataTypeUtils.isSimilarName("Blue", "AliceBlue")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(MetadataTypeUtils.isSimilarName("Red", "Blue")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(MetadataTypeUtils.isSimilarName(null, "Blue")); //$NON-NLS-1$
+        assertFalse(MetadataTypeUtils.isSimilarName("Blue", null)); //$NON-NLS-1$
+    }
 }

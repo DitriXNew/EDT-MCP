@@ -14,7 +14,6 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 import org.eclipse.emf.common.util.URI;
@@ -29,6 +28,7 @@ import org.mockito.Mockito;
 
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.form.model.FormFactory;
+import com._1c.g5.v8.dt.form.model.Button;
 import com._1c.g5.v8.dt.form.model.FormField;
 import com._1c.g5.v8.dt.form.model.InputFieldExtInfo;
 import com._1c.g5.v8.dt.mcore.ColorDef;
@@ -36,11 +36,12 @@ import com._1c.g5.v8.dt.mcore.ColorRef;
 import com._1c.g5.v8.dt.mcore.FontRef;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleItem;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com.ditrix.edt.mcp.server.utils.AppearanceValueBuilder;
-import com.ditrix.edt.mcp.server.utils.AppearanceValueBuilder.ConfigurationItems;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.PropertyInfo;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector.ValueKind;
@@ -152,6 +153,96 @@ public class ModifyMetadataToolAppearanceTest
     }
 
     @Test
+    public void testAConfigurationStyleFontIsBoundInsideTheTransactionWithItsOverrides()
+    {
+        StyleItem outside = fontItem("HeaderFont"); //$NON-NLS-1$
+        StyleItem inTx = fontItem("HeaderFont"); //$NON-NLS-1$
+        IBmTransaction tx = Mockito.mock(IBmTransaction.class);
+        Mockito.doReturn(inTx).when(tx).getObjectById(Mockito.anyLong());
+        FormField field = FormFactory.eINSTANCE.createFormField();
+
+        prepare(false, "titleFont", "{font:{style:'HeaderFont', italic:true}}", //$NON-NLS-1$ //$NON-NLS-2$
+            items(outside), catalogue("v8:/Fonts/Style/v8.3.27"), field).applyTo(field, tx); //$NON-NLS-1$
+
+        FontRef ref = (FontRef)field.getTitleFont();
+        assertSame("the stored reference is the in-transaction item's font, never the one read outside", //$NON-NLS-1$
+            inTx.getAppearanceItem(), ref.getFont());
+        assertTrue(ref.isSetItalic() && ref.isItalic());
+        assertFalse(ref.isSetBold());
+        assertEquals("Style.HeaderFont (italic)", //$NON-NLS-1$
+            MetadataPropertyIntrospector.find(field, "titleFont").currentValue); //$NON-NLS-1$
+        Mockito.verify(tx).getObjectById(((com._1c.g5.v8.bm.core.IBmObject)outside).bmGetId());
+    }
+
+    @Test
+    public void testAnItemThatStoppedHoldingAFontIsRefusedInsideTheTransaction()
+    {
+        StyleItem outside = fontItem("HeaderFont"); //$NON-NLS-1$
+        IBmTransaction tx = Mockito.mock(IBmTransaction.class);
+        Mockito.doReturn(styleItem("HeaderFont")).when(tx).getObjectById(Mockito.anyLong()); //$NON-NLS-1$
+        FormField field = FormFactory.eINSTANCE.createFormField();
+        ModifyMetadataTool.PreparedChange change = prepare(false, "titleFont", //$NON-NLS-1$
+            "{font:{style:'HeaderFont'}}", items(outside), catalogue("v8:/Fonts/Style/v8.3.27"), field); //$NON-NLS-1$ //$NON-NLS-2$
+        try
+        {
+            change.applyTo(field, tx);
+            org.junit.Assert.fail("a FontRef cannot be bound to an item that now holds a color"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            assertNotNull("a marked refusal, routed to INFO by Refusals.log", //$NON-NLS-1$
+                com.ditrix.edt.mcp.server.utils.Refusals.messageOf(expected));
+        }
+        assertFalse("nothing is written", //$NON-NLS-1$
+            field.eIsSet(field.eClass().getEStructuralFeature("titleFont"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testABrokenReferenceReadsAsFailedNotAsUnset()
+    {
+        FormField field = FormFactory.eINSTANCE.createFormField();
+        field.setTitleFont(McoreFactory.eINSTANCE.createFontRef());
+        field.setTitleTextColor(McoreFactory.eINSTANCE.createColorRef());
+        PropertyInfo font = MetadataPropertyIntrospector.find(field, "titleFont"); //$NON-NLS-1$
+        PropertyInfo color = MetadataPropertyIntrospector.find(field, "titleTextColor"); //$NON-NLS-1$
+        assertTrue("a stored reference naming nothing is a failed read", font.readFailed); //$NON-NLS-1$
+        assertTrue(color.readFailed);
+        assertFalse("an unset slot is absent, not failed", //$NON-NLS-1$
+            MetadataPropertyIntrospector.find(field, "titleBackColor").readFailed); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAPictureSharesTheContainedPathAndBindsTheInTransactionPicture()
+    {
+        Button button = FormFactory.eINSTANCE.createButton();
+        EStructuralFeature feature = button.eClass().getEStructuralFeature("picture"); //$NON-NLS-1$
+        assertNotNull("precondition: a button has a picture", feature); //$NON-NLS-1$
+        CommonPicture inTx = MdClassFactory.eINSTANCE.createCommonPicture();
+        IBmTransaction tx = Mockito.mock(IBmTransaction.class);
+        Mockito.doReturn(inTx).when(tx).getObjectById(42L);
+
+        ModifyMetadataTool.PreparedChange.picture(feature, null, Long.valueOf(42L)).applyTo(button, tx);
+
+        EObject pictureRef = (EObject)button.eGet(feature);
+        assertSame(inTx, pictureRef.eGet(McorePackage.Literals.PICTURE_REF__PICTURE, false));
+    }
+
+    @Test
+    public void testAPlatformPictureIsWrittenAsItsProxy()
+    {
+        Button button = FormFactory.eINSTANCE.createButton();
+        EStructuralFeature feature = button.eClass().getEStructuralFeature("picture"); //$NON-NLS-1$
+        // Any concrete Picture serves as the catalogue's proxy here; PictureDef itself is abstract.
+        EObject proxy = MdClassFactory.eINSTANCE.createCommonPicture();
+        ((InternalEObject)proxy).eSetProxyURI(URI.createURI("v8:/Pictures/v8.3.27#/StdPicture.Add")); //$NON-NLS-1$
+
+        ModifyMetadataTool.PreparedChange.picture(feature, proxy, null).applyTo(button, null);
+
+        EObject pictureRef = (EObject)button.eGet(feature);
+        assertSame(proxy, pictureRef.eGet(McorePackage.Literals.PICTURE_REF__PICTURE, false));
+    }
+
+    @Test
     public void testAFontReferenceWithOverridesIsWritten()
     {
         FormField field = FormFactory.eINSTANCE.createFormField();
@@ -183,7 +274,7 @@ public class ModifyMetadataToolAppearanceTest
     // ---- fixtures --------------------------------------------------------------------------------
 
     private static ModifyMetadataTool.PreparedChange prepare(boolean color, String property, String json,
-        ConfigurationItems items, IEObjectProvider catalogue, EObject holder)
+        Configuration items, IEObjectProvider catalogue, EObject holder)
     {
         List<ModifyMetadataTool.PreparedChange> out = new ArrayList<>();
         String error = ModifyMetadataTool.prepareAppearanceWith(color, property,
@@ -202,22 +293,22 @@ public class ModifyMetadataToolAppearanceTest
         return item;
     }
 
-    private static ConfigurationItems items(StyleItem... styleItems)
+    private static StyleItem fontItem(String name)
     {
-        return new ConfigurationItems()
-        {
-            @Override
-            public List<? extends EObject> styleItems()
-            {
-                return List.of(styleItems);
-            }
+        StyleItem item = MdClassFactory.eINSTANCE.createStyleItem();
+        item.setName(name);
+        item.setAppearanceItem(McoreFactory.eINSTANCE.createStyleFont());
+        return item;
+    }
 
-            @Override
-            public List<? extends EObject> paletteColors()
-            {
-                return Collections.emptyList();
-            }
-        };
+    private static Configuration items(StyleItem... styleItems)
+    {
+        Configuration configuration = MdClassFactory.eINSTANCE.createConfiguration();
+        for (StyleItem item : styleItems)
+        {
+            configuration.getStyleItems().add(item);
+        }
+        return configuration;
     }
 
     private static IEObjectProvider catalogue(String resource, String... names)

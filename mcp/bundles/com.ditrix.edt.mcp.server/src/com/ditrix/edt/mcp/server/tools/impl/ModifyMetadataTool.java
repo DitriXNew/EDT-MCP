@@ -2377,7 +2377,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             {
                 return ready;
             }
-            Activator.logError("Error modifying metadata", e); //$NON-NLS-1$
+            Refusals.log("Error modifying metadata", e); //$NON-NLS-1$
             return ToolResult.error("Failed to modify: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
@@ -3572,7 +3572,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             {
                 return validationJson;
             }
-            Activator.logError("Error modifying form root", e); //$NON-NLS-1$
+            Refusals.log("Error modifying form root", e); //$NON-NLS-1$
             return ToolResult.error("Failed to modify form root: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
     }
@@ -3693,7 +3693,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             {
                 return validationJson;
             }
-            Activator.logError("Error modifying form member", e); //$NON-NLS-1$
+            Refusals.log("Error modifying form member", e); //$NON-NLS-1$
             return ToolResult.error("Failed to modify form member: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
     }
@@ -6258,35 +6258,35 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // The designer offers configuration style / palette items only on an ordinary owner: a style
         // item or palette color of its own, and an external object (whose configuration lives in
         // another project), take platform values only.
-        AppearanceValueBuilder.ConfigurationItems items = target instanceof MdObject
-            || ctx.scope.isExternalObjects() ? null : AppearanceValueBuilder.itemsOf(ctx.config);
+        Configuration configuration = target instanceof MdObject || ctx.scope.isExternalObjects()
+            ? null : ctx.config;
         boolean color = info.valueKind == MetadataPropertyIntrospector.ValueKind.COLOR;
-        return prepareAppearanceWith(color, name, prop.get(KEY_VALUE), items,
+        return prepareAppearanceWith(color, name, prop.get(KEY_VALUE), configuration,
             color ? AppearanceValueBuilder.colorCatalogue(ctx.version)
                 : AppearanceValueBuilder.fontCatalogue(ctx.version),
             info.feature, out);
     }
 
     /**
-     * The {@link #prepareAppearance} body with the configuration items and the platform catalogue
+     * The {@link #prepareAppearance} body with the configuration and the platform catalogue
      * supplied, so a headless test can drive parse, refusal and the queued change end to end.
      *
      * @param color {@code true} for a COLOR property, {@code false} for a FONT one
      * @param name the property name
      * @param raw the property value as supplied
-     * @param items the configuration items a named value may reference, or {@code null}
+     * @param configuration the configuration a named value may reference, or {@code null}
      * @param catalogue the platform colour / font catalogue, may be {@code null}
      * @param feature the property's feature
      * @param out collects the prepared change
      * @return a JSON error, or {@code null} on success
      */
     static String prepareAppearanceWith(boolean color, String name, JsonElement raw, // NOSONAR the parameter list is the injected inputs of one property
-        AppearanceValueBuilder.ConfigurationItems items, IEObjectProvider catalogue,
+        Configuration configuration, IEObjectProvider catalogue,
         EStructuralFeature feature, List<PreparedChange> out)
     {
         AppearanceValueBuilder.Result built = color
-            ? AppearanceValueBuilder.buildColor(raw, items, catalogue)
-            : AppearanceValueBuilder.buildFont(raw, items, catalogue);
+            ? AppearanceValueBuilder.buildColor(raw, configuration, catalogue)
+            : AppearanceValueBuilder.buildFont(raw, configuration, catalogue);
         if (built.error != null)
         {
             return ToolResult.error("Invalid " + (color ? "color" : "font") + " for property '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -6781,7 +6781,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         private enum Kind
         {
             SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE, MANY_ENUM, MCORE_VALUE_LIST, STYLE_VALUE,
-            PICTURE, ADJUSTABLE_BOOLEAN, APPEARANCE
+            CONTAINED, ADJUSTABLE_BOOLEAN
+        }
+
+        /**
+         * Creates a CONTAINED change's value inside the write transaction, from the object its
+         * reference BM id re-fetches there ({@code null} when the change names none).
+         */
+        @FunctionalInterface
+        interface ContainedValue
+        {
+            /** @return the detached value to set, or {@code null} to unset the feature */
+            EObject create(EObject referencedInTx);
         }
 
         private final EStructuralFeature feature;
@@ -6881,28 +6892,48 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
 
         /**
-         * A picture change carries either a safe platform proxy in {@code scalarValue}, or one
-         * CommonPicture BM id in {@code referenceBmIds}. The PictureRef is built only in applyTo.
+         * A contained value that may point at a configuration object: the object crosses the
+         * prepare/write boundary only as {@code referenceBmId}, and {@code factory} builds the value
+         * in {@link #applyTo} from the object re-fetched inside the write transaction.
+         */
+        static PreparedChange contained(EStructuralFeature feature, Long referenceBmId,
+            ContainedValue factory)
+        {
+            List<Long> ids = referenceBmId == null ? null
+                : java.util.Collections.singletonList(referenceBmId);
+            return new PreparedChange(feature, Kind.CONTAINED, factory, null, null, ids, null, false);
+        }
+
+        /**
+         * A picture change: a safe platform proxy, or one CommonPicture BM id. The PictureRef is
+         * built only in applyTo.
          */
         static PreparedChange picture(EStructuralFeature feature, EObject platformPictureProxy,
             Long commonPictureBmId)
         {
-            List<Long> ids = commonPictureBmId == null ? null
-                : java.util.Collections.singletonList(commonPictureBmId);
-            return new PreparedChange(feature, Kind.PICTURE, platformPictureProxy, null, null, ids,
-                null, false);
+            return contained(feature, commonPictureBmId, picture -> {
+                EObject pictureRef = EcoreUtil.create(McorePackage.Literals.PICTURE_REF);
+                pictureRef.eSet(McorePackage.Literals.PICTURE_REF__PICTURE,
+                    picture != null ? picture : platformPictureProxy);
+                return pictureRef;
+            });
         }
 
         /**
-         * A contained colour / font change (issue #660): {@code value} is the detached Color / Font,
-         * or {@code null} to CLEAR the property (the automatic value). {@code itemBmId} names the
-         * configuration StyleItem / PaletteColor a ColorRef / FontRef points into; the reference is
-         * re-bound to that item's in-transaction appearance item in {@link #applyTo}.
+         * A contained colour / font change (issue #660): {@code value} is the detached Color / Font
+         * (holding no live object), or {@code null} to CLEAR the property (the automatic value).
+         * {@code itemBmId} names the configuration StyleItem / PaletteColor a ColorRef / FontRef is
+         * bound to, inside the write transaction.
          */
         static PreparedChange appearance(EStructuralFeature feature, EObject value, Long itemBmId)
         {
-            return new PreparedChange(feature, Kind.APPEARANCE, value, null, null,
-                itemBmId == null ? null : java.util.Collections.singletonList(itemBmId), null, false);
+            return contained(feature, itemBmId, item -> {
+                if (value != null && item != null)
+                {
+                    AppearanceValueBuilder.bind(value, item);
+                }
+                return value;
+            });
         }
 
         /** An ordered replacement list carrying only namespace strings and reference BM ids. */
@@ -7025,15 +7056,21 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     target.eSet(feature, scalarValue);
                     return;
                 }
-                case PICTURE:
+                case CONTAINED:
                 {
-                    // A platform picture stays a provider proxy. A CommonPicture is re-fetched by
-                    // bmId so no live object from the prepare transaction crosses this boundary.
-                    EObject picture = referenceBmIds == null ? (EObject)scalarValue
+                    // The referenced object is re-fetched by bmId so no live object from the
+                    // prepare transaction crosses this boundary; null unsets ('auto').
+                    EObject referenced = referenceBmIds == null ? null
                         : requireInTx(tx, referenceBmIds.get(0));
-                    EObject pictureRef = EcoreUtil.create(McorePackage.Literals.PICTURE_REF);
-                    pictureRef.eSet(McorePackage.Literals.PICTURE_REF__PICTURE, picture);
-                    target.eSet(feature, pictureRef);
+                    EObject value = ((ContainedValue)scalarValue).create(referenced);
+                    if (value == null)
+                    {
+                        target.eUnset(feature);
+                    }
+                    else
+                    {
+                        target.eSet(feature, value);
+                    }
                     return;
                 }
                 case ADJUSTABLE_BOOLEAN:
@@ -7046,20 +7083,6 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         throw new IllegalStateException("Cannot set '" + feature.getName() //$NON-NLS-1$
                             + "': its AdjustableBoolean type cannot be instantiated"); //$NON-NLS-1$
                     }
-                    return;
-                case APPEARANCE:
-                    if (scalarValue == null)
-                    {
-                        // 'auto': no stored value is what the platform reads as the automatic one.
-                        target.eUnset(feature);
-                        return;
-                    }
-                    if (referenceBmIds != null)
-                    {
-                        AppearanceValueBuilder.rebind((EObject)scalarValue,
-                            requireInTx(tx, referenceBmIds.get(0)));
-                    }
-                    target.eSet(feature, scalarValue);
                     return;
                 case SCALAR:
                 default:

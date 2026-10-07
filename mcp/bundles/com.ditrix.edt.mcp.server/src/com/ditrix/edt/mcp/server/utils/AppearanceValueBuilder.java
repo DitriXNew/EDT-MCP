@@ -7,10 +7,8 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -20,10 +18,8 @@ import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.InternalEObject;
-import org.eclipse.xtext.resource.IEObjectDescription;
 
 import com._1c.g5.v8.bm.core.BmUriUtil;
-import com._1c.g5.v8.dt.mcore.AutoColor;
 import com._1c.g5.v8.dt.mcore.Color;
 import com._1c.g5.v8.dt.mcore.ColorDef;
 import com._1c.g5.v8.dt.mcore.ColorRef;
@@ -31,10 +27,10 @@ import com._1c.g5.v8.dt.mcore.ColorValue;
 import com._1c.g5.v8.dt.mcore.Font;
 import com._1c.g5.v8.dt.mcore.FontDef;
 import com._1c.g5.v8.dt.mcore.FontRef;
-import com._1c.g5.v8.dt.mcore.FontValue;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.NamedElement;
+import com._1c.g5.v8.dt.mcore.StyleAppearanceItem;
 import com._1c.g5.v8.dt.mcore.StyleColor;
 import com._1c.g5.v8.dt.mcore.StyleFont;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -44,35 +40,30 @@ import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonPrimitive;
 
 /**
  * Builds and renders the value of a plain contained mcore {@link Color} or {@link Font} property - a
  * form item's {@code textColor}, {@code titleFont}, ... (issue #660) - in the EDT designer's grammar:
  *
  * <ul>
- * <li><b>Color</b> {@code {color:{red,green,blue}}} (a {@link ColorDef}); {@code {color:'auto'}} (clears
- * the property, which the platform reads as the automatic color - the designer's Clear); a NAMED color
- * {@code {color:'<Source>.<Name>'}} or {@code {color:{<source>:'<Name>'}}} (a {@link ColorRef}), where
- * the source is {@code Style} (a configuration style item, else a platform style color),
- * {@code Palette} (a configuration palette color, else a platform palette color), {@code Web} or
- * {@code Windows} (platform colors).</li>
+ * <li><b>Color</b> {@code {color:{red,green,blue}}} (a {@link ColorDef}); {@code {color:'auto'}}
+ * (clears the property - the designer's Clear); a NAMED color {@code {color:'<Source>.<Name>'}} or
+ * {@code {color:{<source>:'<Name>'}}} (a {@link ColorRef}), the source being {@code Style} (a
+ * configuration style item, else a platform style color), {@code Palette} (a configuration palette
+ * color, else a platform one), {@code Web} or {@code Windows}.</li>
  * <li><b>Font</b> an absolute {@code {font:{faceName?,height?,bold?,italic?,underline?,strikeout?,scale?}}}
- * (a {@link FontDef}); {@code {font:'auto'}} (clears); a font REFERENCE {@code {font:'<Source>.<Name>'}}
- * or {@code {font:{<source>:'<Name>', <overrides>?}}} (a {@link FontRef}) where the source is
- * {@code Style} (a configuration style item, else a platform style font) or {@code System} (a
- * platform system font), and each override present is stored as SET - an absent one stays inherited
- * from the referenced font, as in the designer.</li>
+ * (a {@link FontDef}); {@code {font:'auto'}} (clears); a REFERENCE {@code {font:'<Source>.<Name>'}} or
+ * {@code {font:{<source>:'<Name>', <overrides>?}}} (a {@link FontRef}), the source being {@code Style}
+ * (a configuration style item, else a platform style font) or {@code System}; only the overrides
+ * given are set, the rest stays inherited.</li>
  * </ul>
  *
- * <p>Platform names come from the versioned {@link IEObjectProvider} catalogue, which registers each
- * colour and font under its English name only ({@code Style.FormBackColor}, {@code Web.AliceBlue},
- * {@code System.DefaultGUIFont}); the value stored is the catalogue's own proxy, the same thing EDT's
- * form generator stores. A configuration item is referenced through its inferred appearance item; the
- * caller re-binds that reference inside its write transaction ({@link #rebind}).</p>
- *
- * <p>The shared {@link StyleValueBuilder#build} is reused only for the shapes that coincide (an RGB
- * colour and an absolute font); its behaviour for a StyleItem value and DCS is unchanged.</p>
+ * <p>Platform names come from {@link PlatformCatalogue} (English names only - the platform registers
+ * no others). A configuration item is found through the shared {@link StyleValueBuilder} lookup; the
+ * built reference then carries NO target: the caller {@link #bind binds} it to the item re-fetched
+ * inside its write transaction, so nothing read elsewhere is attached to the model. The RGB and font
+ * member shapes are parsed by {@link StyleValueBuilder}, whose StyleItem / DCS behaviour is
+ * unchanged.</p>
  */
 public final class AppearanceValueBuilder
 {
@@ -96,21 +87,6 @@ public final class AppearanceValueBuilder
 
     private static final String PALETTE = "Palette"; //$NON-NLS-1$
 
-    private static final String APPEARANCE_ITEM = "appearanceItem"; //$NON-NLS-1$
-
-    private static final String FACE_NAME = "faceName"; //$NON-NLS-1$
-
-    private static final String HEIGHT = "height"; //$NON-NLS-1$
-
-    private static final String SCALE = "scale"; //$NON-NLS-1$
-
-    private static final List<String> FONT_FLAGS =
-        List.of("bold", "italic", "underline", "strikeout"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-
-    /** The order the overrides of a font are rendered and validated in. */
-    private static final List<String> FONT_OVERRIDES = List.of(FACE_NAME, HEIGHT, "bold", "italic", //$NON-NLS-1$ //$NON-NLS-2$
-        "underline", "strikeout", SCALE); //$NON-NLS-1$ //$NON-NLS-2$
-
     /** Colour sources: the object-form member and the catalogue prefix it stands for. */
     private static final Map<String, String> COLOR_SOURCES = Map.of("style", STYLE, "palette", PALETTE, //$NON-NLS-1$ //$NON-NLS-2$
         "web", "Web", "windows", "Windows"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
@@ -132,16 +108,6 @@ public final class AppearanceValueBuilder
     /** How many candidate names a refusal lists before it summarizes the rest. */
     private static final int MAX_LISTED = 25;
 
-    /** The configuration items a named colour or font may reference. */
-    public interface ConfigurationItems
-    {
-        /** @return the configuration's style items (mdclass {@code StyleItem}), never {@code null} */
-        List<? extends EObject> styleItems();
-
-        /** @return the configuration's palette colors (mdclass {@code PaletteColor}), never {@code null} */
-        List<? extends EObject> paletteColors();
-    }
-
     /** A built value, a clear, or an actionable error. */
     public static final class Result
     {
@@ -151,16 +117,16 @@ public final class AppearanceValueBuilder
         /** {@code true} when the value is 'auto': the property is to be cleared. */
         public final boolean clear;
 
-        /** The detached Color / Font to set, or {@code null} for a clear or an error. */
+        /**
+         * The detached Color / Font to set, or {@code null} for a clear or an error. When
+         * {@link #configurationItem} is set it is a ColorRef / FontRef with NO target yet.
+         */
         public final EObject value;
 
-        /**
-         * The configuration StyleItem / PaletteColor whose appearance item {@link #value} references,
-         * or {@code null}: the caller re-binds the reference inside its write transaction.
-         */
-        public final EObject configurationItem;
+        /** The configuration StyleItem / PaletteColor {@link #value} is to be {@link #bind bound} to. */
+        public final MdObject configurationItem;
 
-        private Result(String error, boolean clear, EObject value, EObject configurationItem)
+        private Result(String error, boolean clear, EObject value, MdObject configurationItem)
         {
             this.error = error;
             this.clear = clear;
@@ -178,54 +144,36 @@ public final class AppearanceValueBuilder
             return new Result(null, true, null, null);
         }
 
-        static Result ok(EObject value, EObject configurationItem)
+        static Result ok(EObject value, MdObject configurationItem)
         {
             return new Result(null, false, value, configurationItem);
         }
     }
 
-    /** A catalogue hit: the platform proxy and the name the platform registers it under. */
-    private static final class PlatformHit
+    /** What a named value resolves against, and how it is told apart: colour or font. */
+    private static final class Kind
     {
-        final EObject proxy;
+        static final Kind COLOR_KIND = new Kind("color", McorePackage.Literals.COLOR, Color.class); //$NON-NLS-1$
 
-        final String name;
+        static final Kind FONT_KIND = new Kind("font", McorePackage.Literals.FONT, Font.class); //$NON-NLS-1$
 
-        PlatformHit(EObject proxy, String name)
+        final String label;
+
+        final EClass type;
+
+        final Class<?> valueClass;
+
+        private Kind(String label, EClass type, Class<?> valueClass)
         {
-            this.proxy = proxy;
-            this.name = name;
+            this.label = label;
+            this.type = type;
+            this.valueClass = valueClass;
         }
     }
 
     private AppearanceValueBuilder()
     {
         // utility class
-    }
-
-    /**
-     * The configuration items of a configuration, as a named colour or font sees them.
-     *
-     * @param configuration the configuration, may be {@code null} (then nothing resolves)
-     * @return the items
-     */
-    public static ConfigurationItems itemsOf(Configuration configuration)
-    {
-        return new ConfigurationItems()
-        {
-            @Override
-            public List<? extends EObject> styleItems()
-            {
-                return configuration == null ? Collections.emptyList() : configuration.getStyleItems();
-            }
-
-            @Override
-            public List<? extends EObject> paletteColors()
-            {
-                return configuration == null ? Collections.emptyList()
-                    : configuration.getPaletteColors();
-            }
-        };
     }
 
     /**
@@ -236,7 +184,7 @@ public final class AppearanceValueBuilder
      */
     public static IEObjectProvider colorCatalogue(Version version)
     {
-        return catalogue(McorePackage.Literals.COLOR, version);
+        return PlatformCatalogue.providerFor(McorePackage.Literals.COLOR, version);
     }
 
     /**
@@ -247,24 +195,7 @@ public final class AppearanceValueBuilder
      */
     public static IEObjectProvider fontCatalogue(Version version)
     {
-        return catalogue(McorePackage.Literals.FONT, version);
-    }
-
-    private static IEObjectProvider catalogue(EClass type, Version version)
-    {
-        if (version == null)
-        {
-            return null;
-        }
-        try
-        {
-            return IEObjectProvider.Registry.INSTANCE.get(type, version);
-        }
-        catch (RuntimeException e)
-        {
-            // A missing catalogue surfaces as the refusal of the named value; never an exception.
-            return null;
-        }
+        return PlatformCatalogue.providerFor(McorePackage.Literals.FONT, version);
     }
 
     // ---- colour ---------------------------------------------------------------------------------
@@ -273,12 +204,13 @@ public final class AppearanceValueBuilder
      * Builds a colour value.
      *
      * @param raw the property value as supplied ({@code {color: ...}})
-     * @param items the configuration items a style/palette name may reference, or {@code null} when
+     * @param configuration the configuration a style/palette name may reference, or {@code null} when
      *     the owner admits platform colors only
      * @param catalogue the platform colour catalogue, may be {@code null}
      * @return the built value, a clear, or an actionable error
      */
-    public static Result buildColor(JsonElement raw, ConfigurationItems items, IEObjectProvider catalogue)
+    public static Result buildColor(JsonElement raw, Configuration configuration,
+        IEObjectProvider catalogue)
     {
         JsonElement color = unwrap(raw, COLOR);
         if (color == null)
@@ -299,7 +231,8 @@ public final class AppearanceValueBuilder
             {
                 return Result.error("'" + text + "' is not a color. " + COLOR_FORMS); //$NON-NLS-1$ //$NON-NLS-2$
             }
-            return namedColor(source, text.substring(dot + 1).trim(), items, catalogue);
+            return named(Kind.COLOR_KIND, source, text.substring(dot + 1).trim(),
+                McoreFactory.eINSTANCE.createColorRef(), configuration, catalogue);
         }
         if (!color.isJsonObject())
         {
@@ -324,7 +257,8 @@ public final class AppearanceValueBuilder
                     + ":'<Name>'} with a non-empty name and no other member, got " + object + ". " //$NON-NLS-1$ //$NON-NLS-2$
                     + COLOR_FORMS);
             }
-            return namedColor(COLOR_SOURCES.get(sourceKey), name.trim(), items, catalogue);
+            return named(Kind.COLOR_KIND, COLOR_SOURCES.get(sourceKey), name.trim(),
+                McoreFactory.eINSTANCE.createColorRef(), configuration, catalogue);
         }
         for (String key : object.keySet())
         {
@@ -333,7 +267,7 @@ public final class AppearanceValueBuilder
                 return Result.error("Unknown color member '" + key + "'. " + COLOR_FORMS); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
-        // The RGB shape is the StyleItem one, so its parser and its refusals are shared.
+        // The RGB shape is the StyleItem one: its parser and its refusals are shared.
         JsonObject wrapped = new JsonObject();
         wrapped.add(COLOR, object);
         StyleValueBuilder.Result built = StyleValueBuilder.build(wrapped);
@@ -342,53 +276,8 @@ public final class AppearanceValueBuilder
             return Result.error(built.error);
         }
         Color def = built.value instanceof ColorValue ? ((ColorValue)built.value).getValue() : null;
-        return def instanceof ColorDef && !(def instanceof AutoColor) ? Result.ok(def, null)
+        return def instanceof ColorDef ? Result.ok(def, null)
             : Result.error("'color' could not be built from " + object + ". " + COLOR_FORMS); //$NON-NLS-1$ //$NON-NLS-2$
-    }
-
-    private static Result namedColor(String source, String name, ConfigurationItems items,
-        IEObjectProvider catalogue)
-    {
-        if (name.isEmpty())
-        {
-            return Result.error("A named color needs a name after '" + source + ".'. " + COLOR_FORMS); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        boolean styleSource = STYLE.equals(source);
-        if ((styleSource || PALETTE.equals(source)) && items != null)
-        {
-            // The configuration wins over the platform, as in the designer's lists.
-            EObject item = byName(styleSource ? items.styleItems() : items.paletteColors(), name);
-            if (item != null)
-            {
-                EObject appearance = appearanceOf(item);
-                if (!(appearance instanceof Color))
-                {
-                    return Result.error(source + " item '" + nameOf(item) + "' holds no color " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "(it is a font, or has no value yet). Set a color value on it, or name " //$NON-NLS-1$
-                        + "another " + source + " color."); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-                ColorRef ref = McoreFactory.eINSTANCE.createColorRef();
-                ref.setColor((Color)appearance);
-                return Result.ok(ref, item);
-            }
-        }
-        PlatformHit hit = platform(catalogue, source + "." + name, McorePackage.Literals.COLOR); //$NON-NLS-1$
-        if (hit == null)
-        {
-            List<String> known = new ArrayList<>();
-            if (items != null && (styleSource || PALETTE.equals(source)))
-            {
-                known.addAll(itemNames(styleSource ? items.styleItems() : items.paletteColors(),
-                    Color.class, source));
-            }
-            known.addAll(platformNames(catalogue, source));
-            return Result.error("Unknown " + source + " color '" + name + "'" //$NON-NLS-1$ //$NON-NLS-2$
-                + unknownTail(known, name, catalogue,
-                    items != null && (styleSource || PALETTE.equals(source))));
-        }
-        ColorRef ref = McoreFactory.eINSTANCE.createColorRef();
-        ref.setColor((Color)hit.proxy);
-        return Result.ok(ref, null);
     }
 
     // ---- font -----------------------------------------------------------------------------------
@@ -397,12 +286,13 @@ public final class AppearanceValueBuilder
      * Builds a font value.
      *
      * @param raw the property value as supplied ({@code {font: ...}})
-     * @param items the configuration items a style name may reference, or {@code null} when the owner
-     *     admits platform fonts only
+     * @param configuration the configuration a style name may reference, or {@code null} when the
+     *     owner admits platform fonts only
      * @param catalogue the platform font catalogue, may be {@code null}
      * @return the built value, a clear, or an actionable error
      */
-    public static Result buildFont(JsonElement raw, ConfigurationItems items, IEObjectProvider catalogue)
+    public static Result buildFont(JsonElement raw, Configuration configuration,
+        IEObjectProvider catalogue)
     {
         JsonElement font = unwrap(raw, FONT);
         if (font == null)
@@ -423,20 +313,19 @@ public final class AppearanceValueBuilder
             {
                 return Result.error("'" + text + "' is not a font. " + FONT_FORMS); //$NON-NLS-1$ //$NON-NLS-2$
             }
-            return fontRef(source, text.substring(dot + 1).trim(), new JsonObject(), items, catalogue);
+            return named(Kind.FONT_KIND, source, text.substring(dot + 1).trim(),
+                McoreFactory.eINSTANCE.createFontRef(), configuration, catalogue);
         }
         if (!font.isJsonObject())
         {
             return Result.error("'font' must be a string or an object, got " + describe(font) + ". " //$NON-NLS-1$ //$NON-NLS-2$
                 + FONT_FORMS);
         }
-        JsonObject object = font.getAsJsonObject();
+        JsonObject members = font.getAsJsonObject().deepCopy();
         String sourceKey = null;
-        JsonObject overrides = new JsonObject();
-        for (Map.Entry<String, JsonElement> member : object.entrySet())
+        for (String key : FONT_SOURCES.keySet())
         {
-            String key = member.getKey();
-            if (FONT_SOURCES.containsKey(key))
+            if (members.has(key))
             {
                 if (sourceKey != null)
                 {
@@ -444,225 +333,212 @@ public final class AppearanceValueBuilder
                         + "' and '" + key + "'. " + FONT_FORMS); //$NON-NLS-1$ //$NON-NLS-2$
                 }
                 sourceKey = key;
-                continue;
             }
-            if (!FONT_OVERRIDES.contains(key))
-            {
-                return Result.error("Unknown font member '" + key + "'. " + FONT_FORMS); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            String invalid = invalidOverride(key, member.getValue());
-            if (invalid != null)
-            {
-                return Result.error(invalid);
-            }
-            overrides.add(key, member.getValue());
         }
-        if (sourceKey != null)
+        JsonElement sourceName = sourceKey == null ? null : members.remove(sourceKey);
+        StyleValueBuilder.FontMembers parsed = StyleValueBuilder.parseFontMembers(members, true);
+        if (parsed.error != null)
         {
-            String name = strictString(object.get(sourceKey));
-            if (name == null || name.trim().isEmpty())
-            {
-                return Result.error("A font reference needs a non-empty name: {" + sourceKey //$NON-NLS-1$
-                    + ":'<Name>'}. " + FONT_FORMS); //$NON-NLS-1$
-            }
-            return fontRef(FONT_SOURCES.get(sourceKey), name.trim(), overrides, items, catalogue);
+            return Result.error(parsed.error + " " + FONT_FORMS); //$NON-NLS-1$
         }
-        return fontDef(overrides);
+        if (sourceKey == null)
+        {
+            if (parsed.isEmpty())
+            {
+                return Result.error("An absolute font needs at least one member. " + FONT_FORMS); //$NON-NLS-1$
+            }
+            FontDef def = McoreFactory.eINSTANCE.createFontDef();
+            StyleValueBuilder.applyFontMembers(def, parsed);
+            return Result.ok(def, null);
+        }
+        String name = strictString(sourceName);
+        if (name == null || name.trim().isEmpty())
+        {
+            return Result.error("A font reference needs a non-empty name: {" + sourceKey //$NON-NLS-1$
+                + ":'<Name>'}. " + FONT_FORMS); //$NON-NLS-1$
+        }
+        FontRef ref = McoreFactory.eINSTANCE.createFontRef();
+        StyleValueBuilder.applyFontMembers(ref, parsed);
+        return named(Kind.FONT_KIND, FONT_SOURCES.get(sourceKey), name.trim(), ref, configuration,
+            catalogue);
     }
 
-    private static Result fontDef(JsonObject members)
-    {
-        if (members.size() == 0)
-        {
-            return Result.error("An absolute font needs at least one member. " + FONT_FORMS); //$NON-NLS-1$
-        }
-        JsonObject withoutScale = members.deepCopy();
-        withoutScale.remove(SCALE);
-        FontDef def;
-        if (withoutScale.size() == 0)
-        {
-            def = McoreFactory.eINSTANCE.createFontDef();
-        }
-        else
-        {
-            // The absolute-font shape is the StyleItem one, so its parser is shared.
-            JsonObject wrapped = new JsonObject();
-            wrapped.add(FONT, withoutScale);
-            StyleValueBuilder.Result built = StyleValueBuilder.build(wrapped);
-            if (built.error != null)
-            {
-                return Result.error(built.error);
-            }
-            Font value = built.value instanceof FontValue ? ((FontValue)built.value).getValue() : null;
-            if (!(value instanceof FontDef))
-            {
-                return Result.error("'font' could not be built from " + members + ". " + FONT_FORMS); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-            def = (FontDef)value;
-        }
-        if (members.has(SCALE))
-        {
-            def.setScale(members.get(SCALE).getAsInt());
-        }
-        return Result.ok(def, null);
-    }
+    // ---- named values ---------------------------------------------------------------------------
 
-    private static Result fontRef(String source, String name, JsonObject overrides,
-        ConfigurationItems items, IEObjectProvider catalogue)
+    /**
+     * Resolves a named colour / font onto {@code ref}: a configuration item first for a source that
+     * has one (as the designer's merged list does), else the platform catalogue.
+     */
+    private static Result named(Kind kind, String source, String name, EObject ref, // NOSONAR one named lookup's inputs
+        Configuration configuration, IEObjectProvider catalogue)
     {
         if (name.isEmpty())
         {
-            return Result.error("A font reference needs a name after '" + source + ".'. " + FONT_FORMS); //$NON-NLS-1$ //$NON-NLS-2$
+            return Result.error("A named " + kind.label + " needs a name after '" + source + ".'. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + forms(kind));
         }
-        Font target = null;
-        EObject item = null;
-        boolean styleSource = STYLE.equals(source);
-        if (styleSource && items != null)
+        Configuration searched = hasConfigurationSource(kind, source) ? configuration : null;
+        MdObject item = searched == null ? null : configurationItem(searched, source, name);
+        if (item != null)
         {
-            item = byName(items.styleItems(), name);
-            if (item != null)
+            if (!kind.valueClass.isInstance(StyleValueBuilder.appearanceOf(item)))
             {
-                EObject appearance = appearanceOf(item);
-                if (!(appearance instanceof Font))
-                {
-                    return Result.error("Style item '" + nameOf(item) + "' holds no font (it is a " //$NON-NLS-1$ //$NON-NLS-2$
-                        + "color, or has no value yet). Set a font value on it, or name another " //$NON-NLS-1$
-                        + "Style font."); //$NON-NLS-1$
-                }
-                target = (Font)appearance;
+                return Result.error(source + " item '" + item.getName() + "' holds no " + kind.label //$NON-NLS-1$ //$NON-NLS-2$
+                    + " (it holds another kind of value, or none yet). Set a " + kind.label //$NON-NLS-1$
+                    + " value on it, or name another " + source + " " + kind.label + "."); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             }
+            // The target is bound inside the write transaction - see bind().
+            return Result.ok(ref, item);
         }
-        if (target == null)
+        PlatformCatalogue.Lookup found = PlatformCatalogue.find(catalogue, source + "." + name, kind.type); //$NON-NLS-1$
+        if (found.status == PlatformCatalogue.Status.FOUND)
         {
-            PlatformHit hit = platform(catalogue, source + "." + name, McorePackage.Literals.FONT); //$NON-NLS-1$
-            if (hit == null)
-            {
-                List<String> known = new ArrayList<>();
-                if (items != null && styleSource)
-                {
-                    known.addAll(itemNames(items.styleItems(), Font.class, source));
-                }
-                known.addAll(platformNames(catalogue, source));
-                return Result.error("Unknown " + source + " font '" + name + "'" //$NON-NLS-1$ //$NON-NLS-2$
-                    + unknownTail(known, name, catalogue, items != null && styleSource));
-            }
-            target = (Font)hit.proxy;
+            setTarget(ref, found.proxy);
+            return Result.ok(ref, null);
         }
-        FontRef ref = McoreFactory.eINSTANCE.createFontRef();
-        ref.setFont(target);
-        applyOverrides(ref, overrides);
-        return Result.ok(ref, item);
+        return Result.error("Unknown " + source + " " + kind.label + " '" + name + "'. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            + candidatesTail(kind, source, name, searched, catalogue, found.status));
     }
 
-    /** Sets exactly the overrides given: an absent one stays UNSET, i.e. inherited. */
-    private static void applyOverrides(FontRef ref, JsonObject overrides)
+    /** Whether a source has configuration items: Style (colours and fonts), Palette (colours). */
+    private static boolean hasConfigurationSource(Kind kind, String source)
     {
-        if (overrides.has(FACE_NAME))
-        {
-            ref.setFaceName(overrides.get(FACE_NAME).getAsString());
-        }
-        if (overrides.has(HEIGHT))
-        {
-            ref.setHeight(overrides.get(HEIGHT).getAsInt());
-        }
-        if (overrides.has("bold")) //$NON-NLS-1$
-        {
-            ref.setBold(overrides.get("bold").getAsBoolean()); //$NON-NLS-1$
-        }
-        if (overrides.has("italic")) //$NON-NLS-1$
-        {
-            ref.setItalic(overrides.get("italic").getAsBoolean()); //$NON-NLS-1$
-        }
-        if (overrides.has("underline")) //$NON-NLS-1$
-        {
-            ref.setUnderline(overrides.get("underline").getAsBoolean()); //$NON-NLS-1$
-        }
-        if (overrides.has("strikeout")) //$NON-NLS-1$
-        {
-            ref.setStrikeout(overrides.get("strikeout").getAsBoolean()); //$NON-NLS-1$
-        }
-        if (overrides.has(SCALE))
-        {
-            ref.setScale(overrides.get(SCALE).getAsInt());
-        }
+        return STYLE.equals(source) || PALETTE.equals(source) && kind == Kind.COLOR_KIND;
     }
 
-    /** Strict member typing: a font member that does not hold its own type is refused, not coerced. */
-    private static String invalidOverride(String key, JsonElement value)
+    private static MdObject configurationItem(Configuration configuration, String source, String name)
     {
-        if (FACE_NAME.equals(key))
-        {
-            String face = strictString(value);
-            return face == null || face.trim().isEmpty()
-                ? "Font 'faceName' must be a non-empty string, got " + describe(value) + "." : null; //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        if (FONT_FLAGS.contains(key))
-        {
-            return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isBoolean()
-                ? null : "Font '" + key + "' must be true or false, got " + describe(value) + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        }
-        Integer number = positiveInteger(value);
-        return number != null ? null
-            : "Font '" + key + "' must be a positive integer, got " + describe(value) + "."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return STYLE.equals(source) ? StyleValueBuilder.findStyleItem(configuration, name)
+            : StyleValueBuilder.findPaletteColor(configuration, name);
     }
-
-    // ---- transaction re-binding -----------------------------------------------------------------
 
     /**
-     * Points a built ColorRef / FontRef at the appearance item of {@code itemInTx} - the SAME
-     * configuration item re-fetched inside the write transaction - so no object read elsewhere is
-     * attached to the model.
+     * The refusal tail: what is known about the name, then the valid names - built by the SAME
+     * precedence and kind rule as resolution, so every listed name resolves when retried.
+     */
+    private static String candidatesTail(Kind kind, String source, String name, // NOSONAR one refusal's inputs
+        Configuration configuration, IEObjectProvider catalogue, PlatformCatalogue.Status status)
+    {
+        StringBuilder sb = new StringBuilder();
+        if (status == PlatformCatalogue.Status.UNAVAILABLE)
+        {
+            sb.append("The platform catalogue is unavailable for this project's platform version, " //$NON-NLS-1$
+                + "so platform names cannot be checked. "); //$NON-NLS-1$
+        }
+        Set<String> candidates = new LinkedHashSet<>();
+        Set<String> shadowed = new LinkedHashSet<>();
+        if (configuration != null)
+        {
+            List<? extends MdObject> items = STYLE.equals(source) ? configuration.getStyleItems()
+                : configuration.getPaletteColors();
+            for (MdObject item : items)
+            {
+                // A configuration item shadows the platform name it shares, whatever it holds.
+                shadowed.add(item.getName().toLowerCase());
+                if (kind.valueClass.isInstance(StyleValueBuilder.appearanceOf(item)))
+                {
+                    candidates.add(source + "." + item.getName()); //$NON-NLS-1$
+                }
+            }
+        }
+        String prefix = source + "."; //$NON-NLS-1$
+        List<String> platform = status == PlatformCatalogue.Status.UNAVAILABLE ? null
+            : PlatformCatalogue.names(catalogue, n -> n.startsWith(prefix)
+                && !shadowed.contains(n.substring(prefix.length()).toLowerCase()));
+        if (platform != null)
+        {
+            candidates.addAll(platform);
+        }
+        if (candidates.isEmpty())
+        {
+            return sb.append(forms(kind)).toString();
+        }
+        // Similar names first (the shared not-found suggestion rule), then the rest, bounded.
+        List<String> ordered = new ArrayList<>();
+        for (String candidate : candidates)
+        {
+            if (MetadataTypeUtils.isSimilarName(candidate.substring(prefix.length()), name))
+            {
+                ordered.add(candidate);
+            }
+        }
+        for (String candidate : candidates)
+        {
+            if (!ordered.contains(candidate))
+            {
+                ordered.add(candidate);
+            }
+        }
+        sb.append("Valid names: ").append(String.join(", ", //$NON-NLS-1$ //$NON-NLS-2$
+            ordered.subList(0, Math.min(MAX_LISTED, ordered.size()))));
+        if (ordered.size() > MAX_LISTED)
+        {
+            sb.append(", ... (").append(ordered.size() - MAX_LISTED).append(" more)"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return sb.append('.').toString();
+    }
+
+    private static String forms(Kind kind)
+    {
+        return kind == Kind.COLOR_KIND ? COLOR_FORMS : FONT_FORMS;
+    }
+
+    private static void setTarget(EObject ref, EObject target)
+    {
+        if (ref instanceof ColorRef)
+        {
+            ((ColorRef)ref).setColor((Color)target);
+        }
+        else
+        {
+            ((FontRef)ref).setFont((Font)target);
+        }
+    }
+
+    // ---- transaction binding --------------------------------------------------------------------
+
+    /**
+     * Points a built ColorRef / FontRef at the appearance item of {@code itemInTx} - the
+     * configuration item re-fetched inside the write transaction.
      *
      * @param value the built ColorRef / FontRef
      * @param itemInTx the StyleItem / PaletteColor re-fetched inside the write transaction
-     * @throws IllegalStateException when the item no longer holds a value of the right kind
+     * @throws IllegalStateException a {@link Refusals#state refusal} when the item no longer holds a
+     *     value of the reference's kind
      */
-    public static void rebind(EObject value, EObject itemInTx)
+    public static void bind(EObject value, EObject itemInTx)
     {
-        EObject appearance = appearanceOf(itemInTx);
-        if (value instanceof ColorRef && appearance instanceof Color)
+        StyleAppearanceItem appearance = itemInTx instanceof MdObject
+            ? StyleValueBuilder.appearanceOf((MdObject)itemInTx) : null;
+        boolean fits = value instanceof ColorRef ? appearance instanceof Color
+            : value instanceof FontRef && appearance instanceof Font;
+        if (!fits)
         {
-            ((ColorRef)value).setColor((Color)appearance);
-            return;
+            String name = itemInTx instanceof MdObject ? ((MdObject)itemInTx).getName() : null;
+            throw Refusals.state("The referenced item '" + name + "' no longer holds a " //$NON-NLS-1$ //$NON-NLS-2$
+                + (value instanceof ColorRef ? COLOR : FONT)
+                + ". Read its value with get_metadata_details and retry."); //$NON-NLS-1$
         }
-        if (value instanceof FontRef && appearance instanceof Font)
-        {
-            ((FontRef)value).setFont((Font)appearance);
-            return;
-        }
-        throw new IllegalStateException("The referenced item '" + nameOf(itemInTx) //$NON-NLS-1$
-            + "' no longer holds a value of the expected kind"); //$NON-NLS-1$
+        setTarget(value, appearance);
     }
 
     // ---- rendering ------------------------------------------------------------------------------
 
     /**
-     * Renders a contained colour in the form {@link #buildColor} accepts back: {@code RGB(r, g, b)},
-     * {@code Auto}, or the referenced color's {@code <Source>.<Name>}.
+     * Renders a contained colour in the form {@link #buildColor} accepts back: the referenced color's
+     * {@code <Source>.<Name>} for a reference, otherwise the shared
+     * {@link StyleValueBuilder#renderColor} ({@code RGB(r, g, b)}, {@code Auto}).
      *
      * @param value the feature value
-     * @return the rendering, or {@code null} when there is no colour
+     * @return the rendering, or {@code null} when nothing identifies the value
      */
     public static String renderColor(Object value)
     {
-        if (!(value instanceof Color))
-        {
-            return null;
-        }
-        if (value instanceof AutoColor)
-        {
-            return "Auto"; //$NON-NLS-1$
-        }
         if (value instanceof ColorRef)
         {
             return referenceName((EObject)value, McorePackage.Literals.COLOR_REF__COLOR);
         }
-        if (value instanceof ColorDef)
-        {
-            ColorDef def = (ColorDef)value;
-            return "RGB(" + def.getRed() + ", " + def.getGreen() + ", " + def.getBlue() + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        }
-        return ((EObject)value).eClass().getName();
+        return value instanceof Color ? StyleValueBuilder.renderColor((Color)value) : null;
     }
 
     /**
@@ -671,14 +547,10 @@ public final class AppearanceValueBuilder
      * parentheses, an automatic font as {@code Auto} with its overrides.
      *
      * @param value the feature value
-     * @return the rendering, or {@code null} when there is no font
+     * @return the rendering, or {@code null} when nothing identifies the value
      */
     public static String renderFont(Object value)
     {
-        if (!(value instanceof Font))
-        {
-            return null;
-        }
         if (value instanceof FontDef)
         {
             FontDef def = (FontDef)value;
@@ -690,9 +562,18 @@ public final class AppearanceValueBuilder
             }
             return scale == null ? members : members + ", " + scale; //$NON-NLS-1$
         }
+        if (!(value instanceof Font))
+        {
+            return null;
+        }
         EObject font = (EObject)value;
         String head = value instanceof FontRef
             ? referenceName(font, McorePackage.Literals.FONT_REF__FONT) : "Auto"; //$NON-NLS-1$
+        if (head == null)
+        {
+            // A reference that names no target is not identified by its overrides.
+            return null;
+        }
         String overrides = renderSetOverrides(font);
         return overrides.isEmpty() ? head : head + " (" + overrides + ")"; //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -700,7 +581,7 @@ public final class AppearanceValueBuilder
     private static String renderSetOverrides(EObject font)
     {
         StringBuilder sb = new StringBuilder();
-        for (String name : FONT_OVERRIDES)
+        for (String name : StyleValueBuilder.FONT_MEMBERS)
         {
             EStructuralFeature feature = font.eClass().getEStructuralFeature(name);
             if (feature == null || !font.eIsSet(feature))
@@ -709,7 +590,7 @@ public final class AppearanceValueBuilder
             }
             Object v = font.eGet(feature);
             String part;
-            if (FACE_NAME.equals(name))
+            if ("faceName".equals(name)) //$NON-NLS-1$
             {
                 part = "face='" + v + "'"; //$NON-NLS-1$ //$NON-NLS-2$
             }
@@ -719,8 +600,7 @@ public final class AppearanceValueBuilder
             }
             else if (v instanceof Float)
             {
-                float f = (Float)v;
-                part = name + "=" + (f == Math.rint(f) ? String.valueOf((int)f) : String.valueOf(f)); //$NON-NLS-1$
+                part = name + "=" + StyleValueBuilder.formatHeight((Float)v); //$NON-NLS-1$
             }
             else
             {
@@ -739,6 +619,9 @@ public final class AppearanceValueBuilder
      * The {@code <Source>.<Name>} of a colour / font reference. An unresolved proxy is named from its
      * URI before anything resolves it: a platform proxy carries the registered name as its fragment,
      * a configuration one the {@code StyleItem.<Name>} / {@code PaletteColor.<Name>} top object.
+     *
+     * @return the name, an explicit "Unresolved reference" text for an unnamed proxy, or {@code null}
+     *     when the reference holds no target at all
      */
     private static String referenceName(EObject owner, EReference feature)
     {
@@ -807,162 +690,6 @@ public final class AppearanceValueBuilder
         return name.indexOf('.') > 0 ? name : null;
     }
 
-    // ---- lookup helpers -------------------------------------------------------------------------
-
-    private static PlatformHit platform(IEObjectProvider catalogue, String fullName, EClass type)
-    {
-        if (catalogue == null)
-        {
-            return null;
-        }
-        try
-        {
-            // The catalogue index is exact and case-sensitive: the exact spelling is the fast path,
-            // anything else is answered by one pass over the descriptions.
-            EObject exact = catalogue.getProxy(fullName);
-            if (isProxyOf(exact, type))
-            {
-                return new PlatformHit(exact, fullName);
-            }
-            for (IEObjectDescription description : descriptions(catalogue))
-            {
-                String name = description.getName() == null ? null : description.getName().toString();
-                if (fullName.equalsIgnoreCase(name))
-                {
-                    EObject proxy = description.getEObjectOrProxy();
-                    if (isProxyOf(proxy, type))
-                    {
-                        return new PlatformHit(proxy, name);
-                    }
-                }
-            }
-        }
-        catch (RuntimeException e)
-        {
-            return null;
-        }
-        return null;
-    }
-
-    private static boolean isProxyOf(EObject value, EClass type)
-    {
-        return value != null && value.eIsProxy() && value.eClass() != null
-            && type.isSuperTypeOf(value.eClass());
-    }
-
-    private static List<String> platformNames(IEObjectProvider catalogue, String source)
-    {
-        Set<String> names = new LinkedHashSet<>();
-        if (catalogue == null)
-        {
-            return new ArrayList<>(names);
-        }
-        String prefix = source + "."; //$NON-NLS-1$
-        try
-        {
-            for (IEObjectDescription description : descriptions(catalogue))
-            {
-                String name = description.getName() == null ? null : description.getName().toString();
-                if (name != null && name.startsWith(prefix))
-                {
-                    names.add(name);
-                }
-            }
-        }
-        catch (RuntimeException e)
-        {
-            // An unreadable catalogue lists nothing; the refusal still names the accepted forms.
-        }
-        return new ArrayList<>(names);
-    }
-
-    private static Iterable<IEObjectDescription> descriptions(IEObjectProvider catalogue)
-    {
-        Iterable<IEObjectDescription> all = catalogue.getEObjectDescriptions(null);
-        return all == null ? Collections.emptyList() : all;
-    }
-
-    private static List<String> itemNames(List<? extends EObject> items, Class<?> valueType,
-        String source)
-    {
-        List<String> names = new ArrayList<>();
-        for (EObject item : items)
-        {
-            if (valueType.isInstance(appearanceOf(item)))
-            {
-                names.add(source + "." + nameOf(item)); //$NON-NLS-1$
-            }
-        }
-        return names;
-    }
-
-    private static EObject byName(List<? extends EObject> items, String name)
-    {
-        for (EObject item : items)
-        {
-            if (item != null && name.equalsIgnoreCase(nameOf(item)))
-            {
-                return item;
-            }
-        }
-        return null;
-    }
-
-    private static String nameOf(EObject item)
-    {
-        return item instanceof MdObject ? ((MdObject)item).getName() : null;
-    }
-
-    private static EObject appearanceOf(EObject item)
-    {
-        EStructuralFeature feature = item == null ? null
-            : item.eClass().getEStructuralFeature(APPEARANCE_ITEM);
-        Object value = feature == null ? null : item.eGet(feature);
-        return value instanceof EObject ? (EObject)value : null;
-    }
-
-    private static String unknownTail(List<String> known, String token, IEObjectProvider catalogue,
-        boolean configurationSearched)
-    {
-        StringBuilder sb = new StringBuilder(". "); //$NON-NLS-1$
-        if (catalogue == null)
-        {
-            sb.append("The platform catalogue is unavailable for this project's platform version. "); //$NON-NLS-1$
-        }
-        if (configurationSearched)
-        {
-            sb.append("Neither the configuration nor the platform registers that name. "); //$NON-NLS-1$
-        }
-        if (known.isEmpty())
-        {
-            return sb.append("No names of that source are available.").toString(); //$NON-NLS-1$
-        }
-        // Names that contain the token first: they are the likely intent; then the rest, bounded.
-        String needle = token.toLowerCase(Locale.ROOT);
-        List<String> ordered = new ArrayList<>();
-        for (String name : known)
-        {
-            if (name.toLowerCase(Locale.ROOT).contains(needle))
-            {
-                ordered.add(name);
-            }
-        }
-        for (String name : known)
-        {
-            if (!ordered.contains(name))
-            {
-                ordered.add(name);
-            }
-        }
-        sb.append("Valid names: "); //$NON-NLS-1$
-        sb.append(String.join(", ", ordered.subList(0, Math.min(MAX_LISTED, ordered.size())))); //$NON-NLS-1$
-        if (ordered.size() > MAX_LISTED)
-        {
-            sb.append(", ... (").append(ordered.size() - MAX_LISTED).append(" more)"); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        return sb.append('.').toString();
-    }
-
     // ---- JSON helpers ---------------------------------------------------------------------------
 
     private static JsonElement unwrap(JsonElement raw, String member)
@@ -997,30 +724,12 @@ public final class AppearanceValueBuilder
         return isString(element) ? element.getAsString() : null;
     }
 
-    private static Integer positiveInteger(JsonElement element)
-    {
-        if (element == null || !element.isJsonPrimitive() || !element.getAsJsonPrimitive().isNumber())
-        {
-            return null;
-        }
-        double d = element.getAsDouble();
-        if (d != Math.floor(d) || d < 1 || d > Integer.MAX_VALUE)
-        {
-            return null;
-        }
-        return Integer.valueOf((int)d);
-    }
-
     private static String describe(JsonElement element)
     {
         if (element == null || element.isJsonNull())
         {
             return "null"; //$NON-NLS-1$
         }
-        if (element instanceof JsonPrimitive && ((JsonPrimitive)element).isString())
-        {
-            return "'" + element.getAsString() + "'"; //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        return element.toString();
+        return isString(element) ? "'" + element.getAsString() + "'" : element.toString(); //$NON-NLS-1$ //$NON-NLS-2$
     }
 }

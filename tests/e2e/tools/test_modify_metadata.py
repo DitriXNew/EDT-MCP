@@ -563,6 +563,40 @@ def test_form_field_title_color_references_a_configuration_style_item():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_field_title_font_references_a_configuration_style_font_with_an_override():
+    style = "E2EHeaderFont"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "StyleItem." + style}),
+              "seed a style item")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "StyleItem." + style,
+        "properties": [{"name": "value",
+                        "value": {"font": {"faceName": "Arial", "height": 14, "bold": True}}}],
+    }), "make the style item a font")
+    wait_for_project_ready()
+
+    _set_field_props([{"name": "titleFont", "value": {"font": {"style": style, "italic": True}}}],
+                     "reference the configuration style font with an italic override")
+    poll_disk_contains(_ITEM_FORM, "Style." + style,
+                       ctx="the style-font reference must reach Form.form")
+    expected = ("core:FontRef", [("font", "Style." + style), ("italic", "true")])
+    assert _appearance_shape(_description_item(), "titleFont") == expected, \
+        "the style-font reference must be stored as Style.<Name> plus the one override: %r" % (
+            _appearance_shape(_description_item(), "titleFont"),)
+    _assert_assignable_current(_FIELD_FQN, "titleFont", "FONT", "Style." + style + " (italic)")
+
+    # The reference was bound to the item re-fetched in the write transaction: a reload reads it back.
+    wait_for_project_ready()
+    assert_ok(call("clean_project", {"projectName": PROJECT}),
+              "reload the persisted style-font reference from disk")
+    wait_for_project_ready()
+    assert _appearance_shape(_description_item(), "titleFont") == expected, \
+        "the reloaded Form.form must keep the style-font reference: %r" % (
+            _appearance_shape(_description_item(), "titleFont"),)
+    _assert_assignable_current(_FIELD_FQN, "titleFont", "FONT", "Style." + style + " (italic)")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_form_field_auto_color_clears_the_stored_value():
     _set_field_props([{"name": "titleTextColor", "value": {"color": "Web.AliceBlue"}}],
                      "seed a title color")

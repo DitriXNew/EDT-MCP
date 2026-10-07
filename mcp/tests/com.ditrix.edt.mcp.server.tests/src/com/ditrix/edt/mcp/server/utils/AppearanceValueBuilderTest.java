@@ -15,8 +15,6 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 
 import org.eclipse.emf.common.util.URI;
@@ -38,11 +36,11 @@ import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.StyleColor;
 import com._1c.g5.v8.dt.mcore.StyleFont;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.PaletteColor;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleItem;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
-import com.ditrix.edt.mcp.server.utils.AppearanceValueBuilder.ConfigurationItems;
 import com.ditrix.edt.mcp.server.utils.AppearanceValueBuilder.Result;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
@@ -191,10 +189,13 @@ public class AppearanceValueBuilderTest
         StyleItem brand = styleItem("BrandColor", McoreFactory.eINSTANCE.createStyleColor()); //$NON-NLS-1$
         Result r = color("{color:{style:'BrandColor'}}", items(brand), catalogue(COLORS_URI)); //$NON-NLS-1$
         assertNull(r.error);
-        assertSame("the ColorRef points at the style item's appearance item", //$NON-NLS-1$
-            brand.getAppearanceItem(), ((ColorRef)r.value).getColor());
-        assertSame("the item travels with the value for the in-transaction re-bind", brand, //$NON-NLS-1$
+        assertNull("nothing read outside the write transaction is attached to the value", //$NON-NLS-1$
+            ((ColorRef)r.value).eGet(McorePackage.Literals.COLOR_REF__COLOR, false));
+        assertSame("the item travels with the value for the in-transaction bind", brand, //$NON-NLS-1$
             r.configurationItem);
+        AppearanceValueBuilder.bind(r.value, brand);
+        assertSame("bound, the ColorRef points at the style item's appearance item", //$NON-NLS-1$
+            brand.getAppearanceItem(), ((ColorRef)r.value).getColor());
         assertEquals("Style.BrandColor", AppearanceValueBuilder.renderColor(r.value)); //$NON-NLS-1$
     }
 
@@ -206,6 +207,7 @@ public class AppearanceValueBuilderTest
         Result r = color("{color:'Style." + name + "'}", items(brand), catalogue(COLORS_URI)); //$NON-NLS-1$ //$NON-NLS-2$
         assertNull(r.error);
         assertSame(brand, r.configurationItem);
+        AppearanceValueBuilder.bind(r.value, brand);
         assertEquals("Style." + name, AppearanceValueBuilder.renderColor(r.value)); //$NON-NLS-1$
     }
 
@@ -217,7 +219,8 @@ public class AppearanceValueBuilderTest
             catalogue(COLORS_URI, "Style.FormBackColor")); //$NON-NLS-1$
         assertNull(r.error);
         assertSame(own, r.configurationItem);
-        assertFalse(((EObject)((ColorRef)r.value).getColor()).eIsProxy());
+        assertNull("the platform proxy is not taken: the item is bound in the write transaction", //$NON-NLS-1$
+            ((ColorRef)r.value).eGet(McorePackage.Literals.COLOR_REF__COLOR, false));
     }
 
     @Test
@@ -256,6 +259,35 @@ public class AppearanceValueBuilderTest
     }
 
     @Test
+    public void testAPlatformNameShadowedByAnItemOfTheOtherKindIsNotSuggested()
+    {
+        // Resolution takes the configuration item first, so 'Style.FormBackColor' would be refused
+        // as "holds no color": the candidate list must not offer it.
+        StyleItem shadow = styleItem("FormBackColor", McoreFactory.eINSTANCE.createStyleFont()); //$NON-NLS-1$
+        Result r = color("{color:{style:'Missing'}}", items(shadow), //$NON-NLS-1$
+            catalogue(COLORS_URI, "Style.FormBackColor", "Style.ButtonBackColor")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull(r.error);
+        assertTrue(r.error, r.error.contains("Valid names: Style.ButtonBackColor.")); //$NON-NLS-1$
+        assertFalse(r.error, r.error.contains("FormBackColor")); //$NON-NLS-1$
+        assertTrue("and the shadowed name itself is refused by the same rule", //$NON-NLS-1$
+            color("{color:'Style.FormBackColor'}", items(shadow), //$NON-NLS-1$
+                catalogue(COLORS_URI, "Style.FormBackColor")).error.contains("holds no color")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAThrowingCatalogueIsReportedAsUnavailableNotAsNoSuchName()
+    {
+        IEObjectProvider broken = Mockito.mock(IEObjectProvider.class);
+        Mockito.doThrow(new IllegalStateException("index not ready")).when(broken).getProxy(Mockito.anyString()); //$NON-NLS-1$
+        StyleItem brand = styleItem("BrandColor", McoreFactory.eINSTANCE.createStyleColor()); //$NON-NLS-1$
+        Result r = color("{color:{style:'Missing'}}", items(brand), broken); //$NON-NLS-1$
+        assertNotNull(r.error);
+        assertTrue(r.error, r.error.contains("catalogue is unavailable")); //$NON-NLS-1$
+        assertTrue("the configuration names are still known and listed", //$NON-NLS-1$
+            r.error.contains("Valid names: Style.BrandColor.")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testWithoutConfigurationItemsOnlyThePlatformAnswers()
     {
         // A style item's / palette color's own colour takes platform values only - the designer's rule.
@@ -270,11 +302,13 @@ public class AppearanceValueBuilderTest
         PaletteColor accent = MdClassFactory.eINSTANCE.createPaletteColor();
         accent.setName("Accent"); //$NON-NLS-1$
         accent.setAppearanceItem(McoreFactory.eINSTANCE.createPaletteColor());
-        ConfigurationItems items = items(Collections.emptyList(), List.of(accent));
+        Configuration items = items();
+        items.getPaletteColors().add(accent);
         Result r = color("{color:{palette:'Accent'}}", items, catalogue(COLORS_URI)); //$NON-NLS-1$
         assertNull(r.error);
-        assertSame(accent.getAppearanceItem(), ((ColorRef)r.value).getColor());
         assertSame(accent, r.configurationItem);
+        AppearanceValueBuilder.bind(r.value, accent);
+        assertSame(accent.getAppearanceItem(), ((ColorRef)r.value).getColor());
         assertEquals("Palette.Accent", AppearanceValueBuilder.renderColor(r.value)); //$NON-NLS-1$
     }
 
@@ -366,8 +400,9 @@ public class AppearanceValueBuilderTest
         Result r = font("{font:{style:'HeaderFont', underline:true}}", items(header), //$NON-NLS-1$
             catalogue(FONTS_URI, "Style.NormalTextFont")); //$NON-NLS-1$
         assertNull(r.error);
-        assertSame(header.getAppearanceItem(), ((FontRef)r.value).getFont());
         assertSame(header, r.configurationItem);
+        AppearanceValueBuilder.bind(r.value, header);
+        assertSame(header.getAppearanceItem(), ((FontRef)r.value).getFont());
         assertEquals("Style.HeaderFont (underline)", AppearanceValueBuilder.renderFont(r.value)); //$NON-NLS-1$
     }
 
@@ -395,29 +430,31 @@ public class AppearanceValueBuilderTest
     // ---- re-bind and rendering -------------------------------------------------------------------
 
     @Test
-    public void testRebindPointsTheReferenceAtTheInTransactionItem()
+    public void testBindPointsTheReferenceAtTheInTransactionItem()
     {
         StyleItem outside = styleItem("BrandColor", McoreFactory.eINSTANCE.createStyleColor()); //$NON-NLS-1$
         StyleItem inTx = styleItem("BrandColor", McoreFactory.eINSTANCE.createStyleColor()); //$NON-NLS-1$
         Result r = color("{color:{style:'BrandColor'}}", items(outside), catalogue(COLORS_URI)); //$NON-NLS-1$
-        AppearanceValueBuilder.rebind(r.value, inTx);
+        AppearanceValueBuilder.bind(r.value, inTx);
         assertSame(inTx.getAppearanceItem(), ((ColorRef)r.value).getColor());
     }
 
     @Test
-    public void testRebindRefusesAnItemOfTheOtherKind()
+    public void testBindRefusesAnItemOfTheOtherKindAsAMarkedRefusal()
     {
         StyleItem outside = styleItem("BrandColor", McoreFactory.eINSTANCE.createStyleColor()); //$NON-NLS-1$
         StyleItem nowAFont = styleItem("BrandColor", McoreFactory.eINSTANCE.createStyleFont()); //$NON-NLS-1$
         Result r = color("{color:{style:'BrandColor'}}", items(outside), catalogue(COLORS_URI)); //$NON-NLS-1$
         try
         {
-            AppearanceValueBuilder.rebind(r.value, nowAFont);
+            AppearanceValueBuilder.bind(r.value, nowAFont);
             fail("a ColorRef cannot be bound to a font"); //$NON-NLS-1$
         }
         catch (IllegalStateException expected)
         {
             assertTrue(expected.getMessage().contains("BrandColor")); //$NON-NLS-1$
+            assertNotNull("a refusal, logged at INFO - not an ERROR with a stack", //$NON-NLS-1$
+                Refusals.messageOf(expected));
         }
     }
 
@@ -439,6 +476,9 @@ public class AppearanceValueBuilderTest
         assertNull(AppearanceValueBuilder.renderColor(null));
         assertNull(AppearanceValueBuilder.renderFont(null));
         assertEquals("Absolute font", AppearanceValueBuilder.renderFont(McoreFactory.eINSTANCE.createFontDef())); //$NON-NLS-1$
+        assertNull("a reference with no target is not identified by its overrides", //$NON-NLS-1$
+            AppearanceValueBuilder.renderFont(McoreFactory.eINSTANCE.createFontRef()));
+        assertNull(AppearanceValueBuilder.renderColor(McoreFactory.eINSTANCE.createColorRef()));
     }
 
     @Test
@@ -451,12 +491,12 @@ public class AppearanceValueBuilderTest
 
     // ---- fixtures --------------------------------------------------------------------------------
 
-    private static Result color(String json, ConfigurationItems items, IEObjectProvider catalogue)
+    private static Result color(String json, Configuration items, IEObjectProvider catalogue)
     {
         return AppearanceValueBuilder.buildColor(parse(json), items, catalogue);
     }
 
-    private static Result font(String json, ConfigurationItems items, IEObjectProvider catalogue)
+    private static Result font(String json, Configuration items, IEObjectProvider catalogue)
     {
         return AppearanceValueBuilder.buildFont(parse(json), items, catalogue);
     }
@@ -481,27 +521,14 @@ public class AppearanceValueBuilderTest
         return item;
     }
 
-    private static ConfigurationItems items(StyleItem... styleItems)
+    private static Configuration items(StyleItem... styleItems)
     {
-        return items(Arrays.asList(styleItems), Collections.emptyList());
-    }
-
-    private static ConfigurationItems items(List<StyleItem> styleItems, List<PaletteColor> palette)
-    {
-        return new ConfigurationItems()
+        Configuration configuration = MdClassFactory.eINSTANCE.createConfiguration();
+        for (StyleItem item : styleItems)
         {
-            @Override
-            public List<? extends EObject> styleItems()
-            {
-                return styleItems;
-            }
-
-            @Override
-            public List<? extends EObject> paletteColors()
-            {
-                return palette;
-            }
-        };
+            configuration.getStyleItems().add(item);
+        }
+        return configuration;
     }
 
     /**

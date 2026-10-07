@@ -847,12 +847,10 @@ public final class MetadataTypeUtils
             return similar;
         }
 
-        String nameLower = name.toLowerCase();
         for (MdObject obj : objects)
         {
             String objName = obj.getName();
-            String objNameLower = objName.toLowerCase();
-            if (objNameLower.contains(nameLower) || nameLower.contains(objNameLower))
+            if (isSimilarName(objName, name))
             {
                 similar.add(objName);
                 if (similar.size() >= maxResults)
@@ -863,6 +861,25 @@ public final class MetadataTypeUtils
         }
 
         return similar;
+    }
+
+    /**
+     * The one "similar name" rule a not-found suggestion uses: a case-insensitive substring match
+     * in either direction.
+     *
+     * @param candidate a known name
+     * @param name the name that was not found
+     * @return whether {@code candidate} is worth suggesting for {@code name}
+     */
+    public static boolean isSimilarName(String candidate, String name)
+    {
+        if (candidate == null || name == null)
+        {
+            return false;
+        }
+        String candidateLower = candidate.toLowerCase();
+        String nameLower = name.toLowerCase();
+        return candidateLower.contains(nameLower) || nameLower.contains(candidateLower);
     }
 
     /**
