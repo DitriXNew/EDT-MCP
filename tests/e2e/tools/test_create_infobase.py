@@ -235,8 +235,86 @@ def test_standalone_register_without_database_errors_naming_path():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# LIVE ROUND-TRIP (Tier-2 — gated behind EDT_MCP_LIVE_INFOBASE=1)
+# CLUSTER REGISTRATION (no platform launch or database access)
 # ──────────────────────────────────────────────────────────────────────────────
+
+def _cluster_params(**overrides):
+    params = {"projectName": PROJECT, "mode": "register",
+              "infobaseServer": "localhost:1541", "infobaseRef": "McpRegistrationProbe"}
+    params.update(overrides)
+    return params
+
+
+@e2e_test(tool="create_infobase", kind="action")
+def test_server_registration_invalid_combinations():
+    cases = [
+        ({"mode": "create"}, ["register"], ["Create", "register"]),
+        ({"infobaseFile": "C:/infobases/probe"}, ["infobaseFile"], ["either", "not both"]),
+        ({"infobaseRef": ""}, ["infobaseRef"], ["required together"]),
+        ({"infobaseServer": ""}, ["infobaseServer"], ["required together"]),
+        ({"applicationKind": "standaloneServer"}, ["applicationKind"], ["infobase"]),
+        ({"infobaseServer": "https://host/base"}, ["infobaseServer"], ["plain", "not a URL"]),
+        ({"infobaseRef": 'base;Usr=probe'}, ["infobaseRef"], ["plain", "connection string"]),
+    ]
+    for overrides, names, suggests in cases:
+        result = call("create_infobase", _cluster_params(**overrides))
+        error = assert_error(result, "invalid cluster registration %r" % overrides)
+        assert_error_quality(error, names=names, suggests=suggests)
+    assert_no_diff("rejected cluster registration must not touch source files")
+
+
+@e2e_test(tool="create_infobase", kind="action")
+def test_server_registration_nonexistent_project():
+    result = call("create_infobase", _cluster_params(projectName=NONEXISTENT_PROJECT))
+    error = assert_error(result, "cluster registration project resolution")
+    assert_error_quality(error, names=[NONEXISTENT_PROJECT], suggests=["list_projects"])
+    assert_no_diff()
+
+
+@e2e_test(tool="create_infobase", kind="action")
+def test_server_registration_application_roundtrip():
+    """Register a synthetic address, read its real EDT binding, remove ONLY registration.
+
+    No database at this address is created, connected to, updated or deleted. This proves
+    registration independently of connectivity/runtime availability, including headless CI.
+    """
+    probe = "McpRegistrationProbe_" + os.urandom(8).hex()
+    name = "McpServerRegistration_" + probe
+    before = call("get_applications", {"projectName": PROJECT})
+    assert_ok(before, "probe must be absent before registration")
+    assert not any(app.get("name") == name for app in before.structured["applications"]), before.structured
+    application_id = None
+    try:
+        result = call("create_infobase", _cluster_params(infobaseName=name, infobaseRef=probe))
+        assert_ok(result, "register cluster address")
+        data = result.structured
+        assert data["action"] == "registered", data
+        assert data["infobaseServer"] == "localhost:1541", data
+        assert data["infobaseRef"] == probe, data
+        assert "infobaseFile" not in data, data
+        assert data["boundToProject"] is True, data
+        application_id = data["applicationId"]
+        apps = call("get_applications", {"projectName": PROJECT})
+        assert_ok(apps, "read cluster binding")
+        matches = [app for app in apps.structured["applications"] if app.get("id") == application_id]
+        assert len(matches) == 1, apps.structured
+        assert matches[0]["type"] == "com.e1c.g5.dt.applications.type.infobase", matches
+        assert matches[0]["name"] == name, matches
+    finally:
+        cleanup_apps = call("get_applications", {"projectName": PROJECT})
+        assert_ok(cleanup_apps, "read uniquely named probe for cleanup")
+        for app in cleanup_apps.structured["applications"]:
+            if app.get("name") == name:
+                removed = call("delete_infobase", {"projectName": PROJECT, "applicationId": app["id"],
+                                 "deleteRegistration": True, "confirm": True})
+                assert_ok(removed, "remove only synthetic cluster registration")
+    apps = call("get_applications", {"projectName": PROJECT})
+    assert_ok(apps, "verify cluster registration removal")
+    assert not any(app.get("id") == application_id for app in apps.structured["applications"]), apps.structured
+    assert_no_diff("cluster registration must not write source files")
+
+
+# LIVE ROUND-TRIP (Tier-2 — gated behind EDT_MCP_LIVE_INFOBASE=1)
 
 @e2e_test(tool="create_infobase", kind="action")
 def test_live_create_verify_delete_roundtrip():

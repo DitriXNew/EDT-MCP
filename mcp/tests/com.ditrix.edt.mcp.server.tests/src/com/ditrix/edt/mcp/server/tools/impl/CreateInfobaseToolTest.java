@@ -38,6 +38,7 @@ import com._1c.g5.v8.dt.platform.services.model.FileConnectionString;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.StoreResult;
+import com.ditrix.edt.mcp.server.utils.ServerInfobaseTarget;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -193,7 +194,7 @@ public class CreateInfobaseToolTest
         assertTrue("schema must declare a required array", requiredIdx >= 0); //$NON-NLS-1$
         String tail = schema.substring(requiredIdx);
         assertTrue("projectName must be required", tail.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("infobaseFile must be required", tail.contains("\"infobaseFile\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("server registration must not require infobaseFile", tail.contains("\"infobaseFile\"")); //$NON-NLS-1$ //$NON-NLS-2$
         // Optional parameters must NOT be in the required array.
         // The required block is between the first '[' and ']' after "required".
         int open = schema.indexOf('[', requiredIdx);
@@ -261,6 +262,59 @@ public class CreateInfobaseToolTest
         String result = new CreateInfobaseTool().execute(params);
         assertTrue("missing infobaseFile must produce an error", //$NON-NLS-1$
             result.contains("infobaseFile is required")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testServerParametersAreDeclaredAndOptional()
+    {
+        JsonObject schema = JsonParser.parseString(new CreateInfobaseTool().getInputSchema()).getAsJsonObject();
+        assertTrue(schema.getAsJsonObject("properties").has("infobaseServer")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(schema.getAsJsonObject("properties").has("infobaseRef")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, schema.getAsJsonArray("required").size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testServerCreateRejectedBeforeWorkspaceAccess()
+    {
+        Map<String, String> params = serverParams();
+        params.put("mode", "create"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateInfobaseTool().execute(params);
+        assertTrue(result.contains("mode='register'")); //$NON-NLS-1$
+        assertTrue(result.contains("\"success\":false")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testServerRegisterRequiresBothAddressParts()
+    {
+        Map<String, String> params = serverParams();
+        params.remove("infobaseRef"); //$NON-NLS-1$
+        assertTrue(new CreateInfobaseTool().execute(params).contains("required together")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFileAndServerAreMutuallyExclusive()
+    {
+        Map<String, String> params = serverParams();
+        params.put("infobaseFile", "C:/test-infobase"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(new CreateInfobaseTool().execute(params).contains("not both")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testClusterRegistrationCannotCreateStandaloneServer()
+    {
+        Map<String, String> params = serverParams();
+        params.put("applicationKind", "standaloneServer"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(new CreateInfobaseTool().execute(params).contains("require applicationKind='infobase'")); //$NON-NLS-1$
+    }
+
+    private static Map<String, String> serverParams()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "register"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseServer", "localhost:1541"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseRef", "TestInfobase"); //$NON-NLS-1$ //$NON-NLS-2$
+        return params;
     }
 
     @Test
@@ -1850,6 +1904,47 @@ public class CreateInfobaseToolTest
             json.has("applications")); //$NON-NLS-1$
         assertEquals("app-then-boom", json.get("applications").getAsJsonArray().get(0) //$NON-NLS-1$ //$NON-NLS-2$
             .getAsJsonObject().get("id").getAsString()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testServerResultReportsAddressAndVerifiedApplication() throws Exception
+    {
+        IProject project = mock(IProject.class);
+        IApplicationManager manager = mock(IApplicationManager.class);
+        ServerInfobaseTarget target = new ServerInfobaseTarget("localhost:1541", "TestInfobase"); //$NON-NLS-1$ //$NON-NLS-2$
+        InfobaseReference reference = target.reference("Server test"); //$NON-NLS-1$
+        IInfobaseApplication app = infobaseAppWithRef(reference);
+        when(app.getId()).thenReturn("server-app"); //$NON-NLS-1$
+        when(manager.getApplications(project)).thenReturn(Collections.singletonList(app));
+        CreateInfobaseTool.ResultContext context = new CreateInfobaseTool.ResultContext(
+            RB_PROJECT, null, "Server test", manager, project, target); //$NON-NLS-1$
+        JsonObject json = JsonParser.parseString(CreateInfobaseTool.buildSuccessResult(
+            context, reference, false, true, (String)null)).getAsJsonObject();
+        assertTrue(json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(json.get("boundToProject").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("server-app", json.get("applicationId").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("registered", json.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(target.server(), json.get("infobaseServer").getAsString()); //$NON-NLS-1$
+        assertEquals(target.infobase(), json.get("infobaseRef").getAsString()); //$NON-NLS-1$
+        assertFalse(json.has("infobaseFile")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testServerBindingRefusalKeepsServerAddress() throws Exception
+    {
+        IProject project = mock(IProject.class);
+        IApplicationManager manager = mock(IApplicationManager.class);
+        when(manager.getApplications(project)).thenReturn(Collections.emptyList());
+        ServerInfobaseTarget target = new ServerInfobaseTarget("localhost:1541", "TestInfobase"); //$NON-NLS-1$ //$NON-NLS-2$
+        CreateInfobaseTool.ResultContext context = new CreateInfobaseTool.ResultContext(
+            RB_PROJECT, null, "Server test", manager, project, target); //$NON-NLS-1$
+        JsonObject json = JsonParser.parseString(CreateInfobaseTool.buildSuccessResult(
+            context, target.reference("Server test"), false, true, (String)null)).getAsJsonObject(); //$NON-NLS-1$
+        assertFalse(json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(json.get("boundToProject").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(target.server(), json.get("infobaseServer").getAsString()); //$NON-NLS-1$
+        assertEquals(target.infobase(), json.get("infobaseRef").getAsString()); //$NON-NLS-1$
+        assertFalse(json.has("infobaseFile")); //$NON-NLS-1$
     }
 
     // -------------------- #412 helpers --------------------

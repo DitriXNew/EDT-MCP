@@ -5,7 +5,13 @@ Creates a new FILE infobase (1C:Enterprise database) OR registers an existing on
 - **`mode='create'` (default)** — makes a brand-new file infobase at `infobaseFile`. This launches the 1C platform (`1cv8 CREATEINFOBASE`), so a **registered 1C:Enterprise platform runtime** must be installed in EDT (Window > Preferences > 1C:Enterprise > Installed Installations). The tool probes for a platform first and fails FAST with an actionable error if none is registered.
 - **`mode='register'`** — adds an EXISTING file infobase already present at `infobaseFile` (the directory must contain a `1Cv8.1CD`). No platform launch happens, so this works even without a configured runtime.
 
-FILE infobases only. SERVER and WEB infobases are out of scope for v1 and are rejected with a clear "not yet supported" error.
+For an existing cluster/SQL infobase, use `mode='register'`, `infobaseServer` (for example `localhost:1541`) and `infobaseRef` (the cluster infobase name), without `infobaseFile`. This requires `applicationKind='infobase'`. Registration does not create a SQL database, test connectivity, change its configuration, run update handlers, or launch the platform. `boundToProject` verifies the EDT association, not database reachability. The returned `applicationId` can then be passed to `update_database` or `launch`; these separate operations need a configured runtime and appropriate credentials. Server creation, DBMS credentials and web-URL registration are out of scope.
+
+```text
+create_infobase projectName="MyProject" mode="register" infobaseServer="localhost:1541" infobaseRef="ExistingApp"
+```
+
+Server results carry `infobaseServer` and `infobaseRef` instead of `infobaseFile`, including when binding read-back reports a refusal. Do not pass a connection string or credentials in either address field. Optional `user`/`password`/`access` use the same EDT credential storage and verification as file registration; passwords are not echoed. An already registered address may be refused by EDT: use its existing application from `get_applications` rather than creating a duplicate.
 
 ## Application kind: infobase vs standalone server
 
@@ -71,7 +77,8 @@ Credentials for a registered standalone server are stored against the **applicat
 
 - **projectName** (required): the EDT configuration project to bind the infobase to. Must exist and be open (use `list_projects` to verify).
 - **mode** (optional, `create` | `register`, default `create`): create a new database, or register an existing one.
-- **infobaseFile** (required): absolute path to the infobase **directory**. For `create` it is created if absent and the `1Cv8.1CD` files are written into it; for `register` it must already contain a file infobase. Example: `C:\infobases\MyApp`.
+- **infobaseFile** (required for file targets): absolute path to the infobase **directory**. For `create` it is created if absent and the `1Cv8.1CD` files are written into it; for `register` it must already contain a file infobase. Example: `C:\infobases\MyApp`. Mutually exclusive with `infobaseServer` + `infobaseRef`.
+- **infobaseServer**, **infobaseRef** (required together for cluster targets): plain cluster address and existing infobase name. Only `mode='register'` and `applicationKind='infobase'` are supported; no SQL database is created.
 - **infobaseName** (optional): display name for the infobase in the EDT Infobases view. If omitted, a name is auto-generated.
 - **platform** (optional, `create` only): 1C platform version mask (e.g. `8.3.25`). If omitted, EDT resolves the best available installed version automatically.
 - **setDefault** (boolean, default false): set the infobase as the default application for the project afterwards.
@@ -109,7 +116,7 @@ The error case is not "nothing happened": the database is on disk and must not b
 
 - **Platform required for `create`**: if no 1C platform runtime is registered, `mode='create'` returns an actionable error. Use `mode='register'` for an existing infobase (no platform needed) or register a platform in EDT preferences.
 - **`register` needs an existing infobase**: the path must contain a `1Cv8.1CD`; otherwise the tool errors and points you to `mode='create'`.
-- **FILE only**: passing a server/web connection string as `infobaseFile` is not supported — use the dedicated server creation tooling for that.
+- **No server creation / web registration**: do not put a server/web connection string in `infobaseFile`. Register an existing cluster infobase with `infobaseServer` + `infobaseRef`; create its database separately.
 - **Timeout**: the background Job waits up to 120 seconds. The tool reports an honest timeout, not a fake success.
 - **Credential read-back timeout**: optional credential storage/read-back has its own 30-second bound. If that bound expires, the result still reports the infobase as created/registered, marks the credential state as undetermined, and tells you to run `set_infobase_credentials`; it never claims that credentials were stored.
 - **Created is not bound**: if the application never appears, the call is an ERROR even though the database was written (see "The three binding outcomes"). Branch on `boundToProject`, not on the message.

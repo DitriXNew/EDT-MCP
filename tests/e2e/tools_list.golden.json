@@ -397,10 +397,18 @@
           "type": "string"
         },
         "infobaseFile": {
-          "description": "Absolute path to the infobase directory. FILE infobases only - server/web are rejected.",
+          "description": "Absolute file-infobase directory. Required unless infobaseServer + infobaseRef are given.",
           "type": "string"
         },
         "infobaseName": {
+          "type": "string"
+        },
+        "infobaseRef": {
+          "description": "Existing infobase name on infobaseServer. Server registration requires applicationKind='infobase'; web URLs and connection strings are not accepted.",
+          "type": "string"
+        },
+        "infobaseServer": {
+          "description": "Existing cluster address, e.g. localhost:1541. Requires infobaseRef and mode='register'; mutually exclusive with infobaseFile. Does not create a server database.",
           "type": "string"
         },
         "mode": {
@@ -428,8 +436,7 @@
         }
       },
       "required": [
-        "projectName",
-        "infobaseFile"
+        "projectName"
       ],
       "type": "object"
     },
@@ -458,6 +465,12 @@
           "type": "string"
         },
         "infobaseName": {
+          "type": "string"
+        },
+        "infobaseRef": {
+          "type": "string"
+        },
+        "infobaseServer": {
           "type": "string"
         },
         "message": {
