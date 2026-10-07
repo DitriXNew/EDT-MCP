@@ -44,6 +44,7 @@ import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.Test;
 
+import com._1c.g5.v8.bm.core.IBmEngine;
 import com._1c.g5.v8.bm.core.IBmNamespace;
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
@@ -61,10 +62,12 @@ import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.form.model.FormAttribute;
 import com._1c.g5.v8.dt.form.model.FormAttributeAdditionalColumns;
 import com._1c.g5.v8.dt.form.model.FormAttributeColumn;
+import com._1c.g5.v8.dt.form.model.FormChoiceParameterLink;
 import com._1c.g5.v8.dt.form.model.FormFactory;
 import com._1c.g5.v8.dt.form.model.FormField;
 import com._1c.g5.v8.dt.form.model.FormItem;
 import com._1c.g5.v8.dt.form.model.FormItemContainer;
+import com._1c.g5.v8.dt.form.model.InputFieldExtInfo;
 import com._1c.g5.v8.dt.form.model.PropertyInfo;
 import com._1c.g5.v8.dt.form.model.Table;
 import com._1c.g5.v8.dt.form.service.attribute.FormAttributeManagementService;
@@ -282,10 +285,16 @@ public class DeleteMetadataFormAttributeTest
     private static DeleteMetadataTool.FormDeletePreview preview(Form form, EObject attribute,
         FormAttributeDeletion edt)
     {
+        return preview(form, attribute, deleter(edt, (tx, a) -> { }));
+    }
+
+    private static DeleteMetadataTool.FormDeletePreview preview(Form form, EObject attribute,
+        DeleteMetadataTool.FormAttributeDeleter deleter)
+    {
         DeleteMetadataTool.FormDeletePreview data = new DeleteMetadataTool.FormDeletePreview();
         data.found = true;
         data.type = attribute.eClass().getName();
-        DeleteMetadataTool.readAttributeDeletePreview(form, attribute, deleter(edt, (tx, a) -> { }), data);
+        DeleteMetadataTool.readAttributeDeletePreview(form, attribute, deleter, data);
         return data;
     }
 
@@ -764,7 +773,7 @@ public class DeleteMetadataFormAttributeTest
                 return file;
             }
         };
-        return DeleteMetadataTool.deleteAttributeInTx(form, list, null, platform, FQN, preview(form, list).scope);
+        return DeleteMetadataTool.deleteAttributeInTx(form, list, null, platform, FQN, preview(form, list, platform).scope);
     }
 
     private static IFile settingsFile()
@@ -996,6 +1005,261 @@ public class DeleteMetadataFormAttributeTest
         assertEquals("EDT's delete never ran", 0, deletes.get()); //$NON-NLS-1$
         assertSame("nothing was committed", live, committed.get()); //$NON-NLS-1$
         verifyNoMoreInteractions(project);
+    }
+
+    // ---- the detached object's file in the preview and the scope (review P2) ----------------------
+
+    /** A deleter whose prediction is EDT's, whose delete removes the attribute and whose files come from {@code files}. */
+    private static DeleteMetadataTool.FormAttributeDeleter filedDeleter(java.util.function.Function<EObject, IFile> files,
+        List<EObject> calls)
+    {
+        FormAttributeDeletion edt = edt();
+        return new DeleteMetadataTool.FormAttributeDeleter()
+        {
+            @Override
+            public FormAttributeDeletion.Plan plan(EObject formModel, EObject attribute)
+            {
+                return edt.plan(formModel, attribute);
+            }
+
+            @Override
+            public void delete(IBmTransaction tx, EObject attribute)
+            {
+                calls.add(attribute);
+                EcoreUtil.remove(attribute);
+            }
+
+            @Override
+            public IFile fileOf(EObject topObject)
+            {
+                return files.apply(topObject);
+            }
+        };
+    }
+
+    private static IFile fileAt(String path)
+    {
+        IFile file = mock(IFile.class);
+        when(file.getProjectRelativePath()).thenReturn(new Path(path));
+        return file;
+    }
+
+    @Test
+    public void testThePreviewNamesTheDetachedFileAndItsScopeHoldsIt()
+    {
+        DataCompositionSettings settings = DcsFactory.eINSTANCE.createDataCompositionSettings();
+        Form form = listForm(settings);
+        FormAttribute list = named(form, "List"); //$NON-NLS-1$
+        IFile file = settingsFile();
+        DeleteMetadataTool.FormDeletePreview data = preview(form, list,
+            filedDeleter(object -> object == settings ? file : null, new ArrayList<>()));
+
+        Map<String, Object> entry = data.detachedObjects.get(0);
+        assertEquals(SETTINGS_FILE, entry.get("file")); //$NON-NLS-1$
+        assertEquals(Boolean.TRUE, entry.get("deletedFromDisk")); //$NON-NLS-1$
+        String sentence = data.boundItemsSentence();
+        assertTrue(sentence, sentence.contains("Its file " + SETTINGS_FILE + " is deleted from disk.")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(data.scope.toString(), data.scope.stream().anyMatch(identity -> identity.endsWith(
+            "DynamicListExtInfo.listSettings[" + SETTINGS_FILE + "]:DataCompositionSettings"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        List<ConsentPreview> asked = new ArrayList<>();
+        new DeleteMetadataTool((name, preview) ->
+        {
+            asked.add(preview);
+            return DestructiveConsentGate.ConsentDecision.REJECT;
+        }).gateFormMemberDelete(FQN, FormElementWriter.parse(FQN), false, data, () -> "{}"); //$NON-NLS-1$
+        assertTrue(asked.get(0).getSubtitle(), asked.get(0).getSubtitle().contains(SETTINGS_FILE));
+    }
+
+    @Test
+    public void testAnUnresolvedDetachedFileIsDisclosedAsSuch()
+    {
+        Form form = listForm(DcsFactory.eINSTANCE.createDataCompositionSettings());
+        DeleteMetadataTool.FormDeletePreview data = preview(form, named(form, "List"), //$NON-NLS-1$
+            filedDeleter(object -> null, new ArrayList<>()));
+        Map<String, Object> entry = data.detachedObjects.get(0);
+        assertFalse(entry.containsKey("file")); //$NON-NLS-1$
+        assertFalse(entry.containsKey("deletedFromDisk")); //$NON-NLS-1$
+        assertTrue(data.boundItemsSentence(), data.boundItemsSentence().contains(
+            "The file of DynamicListExtInfo.listSettings could not be resolved, so none is deleted")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testASwappedDetachedObjectIsRefusedAndTheDisclosedFileIsTheOneRemoved()
+    {
+        DataCompositionSettings settings = DcsFactory.eINSTANCE.createDataCompositionSettings();
+        Form form = listForm(settings);
+        FormAttribute list = named(form, "List"); //$NON-NLS-1$
+        IFile file = settingsFile();
+        IFile other = fileAt("src/CommonTemplates/Other/Template.dcss"); //$NON-NLS-1$
+        List<EObject> calls = new ArrayList<>();
+        DeleteMetadataTool.FormAttributeDeleter platform =
+            filedDeleter(object -> object == settings ? file : other, calls);
+        List<String> authorized = preview(form, list, platform).scope;
+
+        // The extInfo now references another object, stored elsewhere.
+        ((DynamicListExtInfo)list.getExtInfo()).setListSettings(DcsFactory.eINSTANCE.createDataCompositionSettings());
+        try
+        {
+            DeleteMetadataTool.deleteAttributeInTx(form, list, null, platform, FQN, authorized);
+            fail("a swapped detached object must be refused"); //$NON-NLS-1$
+        }
+        catch (FormValidationException e)
+        {
+            assertTrue(e.json(), e.json().contains("The form changed since the preview")); //$NON-NLS-1$
+            assertTrue(e.json(), e.json().contains("src/CommonTemplates/Other/Template.dcss")); //$NON-NLS-1$
+            assertTrue(e.json(), e.json().contains(SETTINGS_FILE));
+        }
+        assertTrue("EDT's delete never ran", calls.isEmpty()); //$NON-NLS-1$
+
+        // Back to the disclosed object: the delete runs and removes exactly the disclosed file.
+        ((DynamicListExtInfo)list.getExtInfo()).setListSettings(settings);
+        DeleteMetadataTool.AttributeDeleteOutcome outcome =
+            DeleteMetadataTool.deleteAttributeInTx(form, list, null, platform, FQN, authorized);
+        List<IFile> removed = new ArrayList<>();
+        outcome.removeDetachedFiles(f ->
+        {
+            removed.add(f);
+            return DeleteMetadataTool.ResourceCleanup.REMOVED;
+        });
+        assertEquals(List.of(file), removed);
+        assertEquals(SETTINGS_FILE, outcome.detached.get(0).get("file")); //$NON-NLS-1$
+    }
+
+    /** Settings that are an attached BM object with the given id. */
+    private static DataCompositionSettings attachedSettings(long id)
+    {
+        DataCompositionSettings settings = mock(DataCompositionSettings.class,
+            withSettings().extraInterfaces(IBmObject.class));
+        when(settings.eClass()).thenReturn(DcsFactory.eINSTANCE.createDataCompositionSettings().eClass());
+        when(((IBmObject)settings).bmGetEngine()).thenReturn(mock(IBmEngine.class));
+        when(((IBmObject)settings).bmGetId()).thenReturn(id);
+        return settings;
+    }
+
+    @Test
+    public void testWithoutAFileTheScopeKeysTheDetachedObjectByItsBmId()
+    {
+        Form form = listForm(attachedSettings(41L));
+        FormAttribute list = named(form, "List"); //$NON-NLS-1$
+        List<EObject> calls = new ArrayList<>();
+        DeleteMetadataTool.FormAttributeDeleter platform = filedDeleter(object -> null, calls);
+        List<String> authorized = preview(form, list, platform).scope;
+        assertTrue(authorized.toString(), authorized.stream()
+            .anyMatch(identity -> identity.endsWith("DynamicListExtInfo.listSettings[id=41]:DataCompositionSettings"))); //$NON-NLS-1$
+
+        // Another BM object at the same feature, on an equal form (identities are names, not references).
+        Form swapped = listForm(attachedSettings(42L));
+        try
+        {
+            DeleteMetadataTool.deleteAttributeInTx(swapped, named(swapped, "List"), null, platform, FQN, authorized); //$NON-NLS-1$
+            fail("another BM object at the same feature must be refused"); //$NON-NLS-1$
+        }
+        catch (FormValidationException e)
+        {
+            assertTrue(e.json(), e.json().contains("The form changed since the preview")); //$NON-NLS-1$
+            assertTrue("the refusal names the feature, not the raw id", //$NON-NLS-1$
+                e.json().contains("(DynamicListExtInfo.listSettings)")); //$NON-NLS-1$
+        }
+        assertTrue(calls.isEmpty());
+    }
+
+    // ---- choice-parameter links EDT's cleaner drops from kept fields (review P2) ------------------
+
+    private static FormChoiceParameterLink link(String name, String... path)
+    {
+        FormChoiceParameterLink link = F.createFormChoiceParameterLink();
+        link.setName(name);
+        link.setDatapath(path(path));
+        return link;
+    }
+
+    /** Gives {@code field} an input extInfo holding {@code links}. */
+    private static InputFieldExtInfo withLinks(FormItem field, FormChoiceParameterLink... links)
+    {
+        InputFieldExtInfo extInfo = F.createInputFieldExtInfo();
+        for (FormChoiceParameterLink link : links)
+        {
+            extInfo.getChoiceParameterLinks().add(link);
+        }
+        ((FormField)field).setExtInfo(extInfo);
+        return extInfo;
+    }
+
+    @Test
+    public void testThePreviewDisclosesThatKeptFieldsMayLoseChoiceLinks()
+    {
+        Form form = itemForm("Object"); //$NON-NLS-1$
+        FormAttribute other = named(form, "Other"); //$NON-NLS-1$
+        String noLinks = preview(form, other).boundItemsSentence();
+        assertFalse("no link in the form, nothing to disclose", noLinks.contains("choice-parameter")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // A link on the field the delete REMOVES goes with that field: still nothing to disclose.
+        withLinks(item(form, "OtherField"), link("Filter.Owner", "Object")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse(preview(form, other).boundItemsSentence().contains("choice-parameter")); //$NON-NLS-1$
+
+        // A kept field (bound to Object) whose link points into the deleted attribute, and one elsewhere.
+        withLinks(item(form, "Code"), link("Filter.Owner", "Other"), link("Filter.Kind", "Object", "Kind")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+        DeleteMetadataTool.FormDeletePreview data = preview(form, other);
+        String sentence = data.boundItemsSentence();
+        assertTrue(sentence, sentence.contains("and drop the choice-parameter links of kept fields whose path " //$NON-NLS-1$
+            + "points into the attribute or stops resolving - the confirmed response lists them.")); //$NON-NLS-1$
+        assertEquals("the removed field + its own link; a kept field's links are disclosed, not counted", //$NON-NLS-1$
+            2, data.removedAlongCount());
+        assertEquals(List.of("OtherField", "Filter.Owner"), names(data.boundItems)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(List.of("Filter.Owner"), namesFlagged(data.boundItems, "contained")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(data.scope.toString(), data.scope.stream().anyMatch(identity ->
+            identity.contains("items[OtherField]/") && identity.contains("choiceParameterLinks[Filter.Owner]"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("no kept field's link enters the scope", //$NON-NLS-1$
+            data.scope.stream().anyMatch(identity -> identity.contains("items[Code]"))); //$NON-NLS-1$
+
+        List<ConsentPreview> asked = new ArrayList<>();
+        new DeleteMetadataTool((name, preview) ->
+        {
+            asked.add(preview);
+            return DestructiveConsentGate.ConsentDecision.REJECT;
+        }).gateFormMemberDelete(FQN, FormElementWriter.parse(FQN), false, data, () -> "{}"); //$NON-NLS-1$
+        assertTrue(asked.get(0).getSubtitle(), asked.get(0).getSubtitle().contains("choice-parameter links of kept fields")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheConfirmedDeleteReportsTheChoiceLinksEdtDropped()
+    {
+        Form form = itemForm("Object"); //$NON-NLS-1$
+        FormAttribute other = named(form, "Other"); //$NON-NLS-1$
+        withLinks(item(form, "OtherField"), link("Filter.Gone", "Object")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        InputFieldExtInfo code = withLinks(item(form, "Code"), //$NON-NLS-1$
+            link("Filter.Owner", "Other"), link("Filter.Kind", "Object", "Kind")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        List<String> authorized = preview(form, other).scope;
+
+        // Added after the preview: not part of the scope, so the delete runs and the drop is observed.
+        InputFieldExtInfo description = withLinks(item(form, "Description"), link("Filter.Late", "Other", "Ref")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        // Emulates EDT: the bound field goes, the cleaner drops the links into 'Other' from the kept fields.
+        DeleteMetadataTool.AttributeDeleteOutcome outcome = DeleteMetadataTool.deleteAttributeInTx(form, other, null,
+            deleter(edt(), (tx, attribute) ->
+            {
+                EcoreUtil.remove(item(form, "OtherField")); //$NON-NLS-1$
+                code.getChoiceParameterLinks().remove(0);
+                description.getChoiceParameterLinks().clear();
+                EcoreUtil.remove(attribute);
+            }), FQN, authorized);
+
+        assertEquals(List.of("Filter.Owner", "Filter.Late"), names(outcome.droppedLinks)); //$NON-NLS-1$ //$NON-NLS-2$
+        Map<String, Object> dropped = outcome.droppedLinks.get(0);
+        assertEquals("FormChoiceParameterLink", dropped.get("type")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Code", dropped.get("field")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Other", dropped.get("dataPath")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Description", outcome.droppedLinks.get(1).get("field")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Other.Ref", outcome.droppedLinks.get(1).get("dataPath")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("a link EDT kept is not reported", names(outcome.entries()).contains("Filter.Kind")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the removed field's link went with it", //$NON-NLS-1$
+            namesFlagged(outcome.removed, "contained").contains("Filter.Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(names(outcome.droppedLinks).contains("Filter.Gone")); //$NON-NLS-1$
+        assertTrue(names(outcome.entries()).containsAll(List.of("Filter.Owner", "Filter.Late"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(outcome.unbound.isEmpty());
+        String message = outcome.describe();
+        assertTrue(message, message.contains(
+            "2 choice-parameter link(s) dropped from kept fields (Filter.Owner, Filter.Late)")); //$NON-NLS-1$
     }
 
     // ---- the service seam ----------------------------------------------------------------------

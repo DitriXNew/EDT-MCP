@@ -136,7 +136,8 @@ public final class FormAttributeDeletion
      * Predicts the delete without mutating, step by step as {@code deleteAttribute} runs: the items
      * EDT's own collector picks (skipped for an attribute an extension form adopted), the owner's
      * additional columns a column's delete drops, and the extInfo object it detaches. Which surviving
-     * items EDT's cleaner unbinds is not predicted - the confirmed delete observes it.
+     * items EDT's cleaner unbinds, and which of their choice-parameter links it drops, is not
+     * predicted (its rule resolves element paths) - the confirmed delete observes it.
      *
      * @param formModel the tx-bound content {@code Form}
      * @param attributeObject the tx-bound attribute or column

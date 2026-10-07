@@ -569,6 +569,10 @@ def test_delete_dynamic_list_form_attribute_discloses_and_detaches_its_list_sett
     assert_contains(pv.structured.get("message", ""),
                     "It also detaches DynamicListExtInfo.listSettings (DataCompositionSettings)",
                     "the preview message must name the detached object")
+    assert [(it.get("file"), it.get("deletedFromDisk")) for it in detached] == [(settings_rel, True)], \
+        "the preview must name the file the confirm deletes: %r" % (pv.structured,)
+    assert_contains(pv.structured.get("message", ""), "Its file %s is deleted from disk." % settings_rel,
+                    "the preview message must name the file it deletes")
 
     r = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn, "confirm": True})
     assert_ok(r, "delete the dynamic-list attribute (confirm)")

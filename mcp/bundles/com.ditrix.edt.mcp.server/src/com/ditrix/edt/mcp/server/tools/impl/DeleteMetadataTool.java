@@ -44,6 +44,7 @@ import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.form.model.AbstractDataPath;
 import com._1c.g5.v8.dt.form.model.AbstractFormAttribute;
 import com._1c.g5.v8.dt.form.model.FormAttributeAdditionalColumns;
+import com._1c.g5.v8.dt.form.model.FormChoiceParameterLink;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
@@ -2158,6 +2159,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     /** Item key: what happened to that file - {@link ResourceCleanup} REMOVED / NOT_FOUND / FAILED. */
     private static final String KEY_FILE_REMOVAL = "fileRemoval"; //$NON-NLS-1$
 
+    /** Preview item key: true when the confirmed delete removes the detached object's {@code file}. */
+    private static final String KEY_DELETED_FROM_DISK = "deletedFromDisk"; //$NON-NLS-1$
+
+    /** Item key: the kept field a dropped choice-parameter link belonged to. */
+    private static final String KEY_FIELD = "field"; //$NON-NLS-1$
+
     /**
      * The deleter for an attribute target, resolved inside the preview read; refuses when EDT's
      * delete is unavailable - there is no own predictor or remover to fall back to. The refusal is
@@ -2210,7 +2217,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     /**
      * Fills the attribute half of a form-member preview from EDT's own prediction ({@code plan}): the
      * items its collector removes plus every named member inside them, the additional columns a
-     * column's delete drops, and the extInfo object it detaches - each list capped at
+     * column's delete drops, and the extInfo object it detaches with the file the confirmed delete
+     * removes - each list capped at
      * {@link #MAX_LISTED_BOUND_ITEMS}, the counts exact - and the {@link FormDeletePreview#scope} a
      * confirmed delete is checked against.
      *
@@ -2255,11 +2263,57 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 data.addAdditionalColumn(column, tablePath);
             }
         }
+        Map<FormAttributeDeletion.Detached, IFile> files = filesOf(plan, deleter);
         for (FormAttributeDeletion.Detached detached : plan.detached)
         {
-            data.detachedObjects.add(detachedEntry(detached));
+            Map<String, Object> entry = detachedEntry(detached);
+            IFile file = files.get(detached);
+            if (file != null)
+            {
+                entry.put(KEY_FILE, fileLabelOf(file));
+                entry.put(KEY_DELETED_FROM_DISK, Boolean.TRUE);
+            }
+            data.detachedObjects.add(entry);
         }
-        data.scope = scopeOf(formModel, attribute, plan);
+        // Which kept-field choice links EDT's cleaner drops hangs on its element-path resolution: disclosed, not predicted.
+        for (EObject member : PersistedContents.descendants(formModel))
+        {
+            if (member instanceof FormChoiceParameterLink && !hasAncestorIn(member, roots))
+            {
+                data.keptChoiceLinks = true;
+                break;
+            }
+        }
+        data.scope = scopeOf(formModel, attribute, plan, files);
+    }
+
+    /** The file of each detached object, resolved once per transaction; {@code null} when unresolved. */
+    private static Map<FormAttributeDeletion.Detached, IFile> filesOf(FormAttributeDeletion.Plan plan,
+        FormAttributeDeleter deleter)
+    {
+        Map<FormAttributeDeletion.Detached, IFile> files = new java.util.IdentityHashMap<>();
+        for (FormAttributeDeletion.Detached detached : plan.detached)
+        {
+            files.put(detached, deleter.fileOf(detached.object));
+        }
+        return files;
+    }
+
+    /** The project-relative path the preview, the scope and the removal report all name a file by. */
+    private static String fileLabelOf(IFile file)
+    {
+        return file.getProjectRelativePath().toString();
+    }
+
+    /** A detached object's scope key: its file, else its BM id while attached, else {@code ""}. */
+    private static String detachedKeyOf(EObject object, IFile file)
+    {
+        if (file != null)
+        {
+            return fileLabelOf(file);
+        }
+        return object instanceof IBmObject && ((IBmObject)object).bmGetEngine() != null
+            ? "id=" + ((IBmObject)object).bmGetId() : ""; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** Whether a proper ancestor of {@code object} is in {@code roots}. */
@@ -2279,16 +2333,18 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * Everything EDT's delete of {@code attribute} takes, as stable identities (containment path by
      * name, then EClass) that survive into another transaction: the attribute and its own members,
      * each removed item with its subtree, each dropped additional-column entry with its columns, and
-     * each detached extInfo object. The consent covers exactly this multiset: one identity per
-     * object, so same-named siblings count separately.
+     * each detached extInfo object keyed by its file (or BM id). The consent covers exactly this
+     * multiset: one identity per object, so same-named siblings count separately.
      *
      * @param formModel the tx-bound content form
      * @param attribute the attribute or column being deleted
      * @param plan EDT's prediction for it
+     * @param files the file of each detached object ({@link #filesOf})
      * @return the sorted identities
      * @throws FormValidationException when a walk hit its node bound - a cut scope authorizes nothing
      */
-    static List<String> scopeOf(EObject formModel, EObject attribute, FormAttributeDeletion.Plan plan)
+    static List<String> scopeOf(EObject formModel, EObject attribute, FormAttributeDeletion.Plan plan,
+        Map<FormAttributeDeletion.Detached, IFile> files)
     {
         List<EObject> walked = new ArrayList<>();
         walked.add(attribute);
@@ -2322,7 +2378,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         String owner = identityOf(formModel, attribute);
         for (FormAttributeDeletion.Detached detached : plan.detached)
         {
-            scope.add(owner + '/' + detached.extInfo + '.' + detached.feature + "[]:" //$NON-NLS-1$
+            scope.add(owner + '/' + detached.extInfo + '.' + detached.feature + '['
+                + detachedKeyOf(detached.object, files.get(detached)) + "]:" //$NON-NLS-1$
                 + detached.object.eClass().getName());
         }
         if (plan.itemsKept)
@@ -2375,7 +2432,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     /** A readable name for a scope identity: the last segment's name, else its feature. */
     private static String labelOf(String identity)
     {
-        String last = identity.substring(identity.lastIndexOf('/') + 1);
+        // A detached object's key is a file path: the last segment starts before its own '['.
+        int bracket = identity.lastIndexOf('[');
+        String last = identity.substring(identity.lastIndexOf('/', bracket < 0 ? identity.length() : bracket) + 1);
         int colon = last.lastIndexOf(':');
         if (colon > 0)
         {
@@ -2387,7 +2446,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return last;
         }
         String key = last.substring(open + 1, last.length() - 1);
-        return key.isEmpty() || key.startsWith("#") ? last.substring(0, open) : key; //$NON-NLS-1$
+        return key.isEmpty() || key.startsWith("#") || key.startsWith("id=") ? last.substring(0, open) : key; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
@@ -2445,9 +2504,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * Runs EDT's attribute delete on the tx-bound model and OBSERVES what it did. First the plan is
      * recomputed here and compared with {@code authorizedScope} - a delete that would now take more
      * (or less) than the consent covered is refused before anything changes. Then every persisted
-     * named member of the form is snapshotted with its nearest named container and its data path,
-     * and afterwards reported as removed ({@code contained} when that container went too) or unbound
-     * (kept, path cleared); each planned extInfo object is reported as detached or left attached. A
+     * named member of the form (and every choice-parameter link) is snapshotted with its nearest
+     * named container and its data path, and afterwards reported as removed ({@code contained} when
+     * that container went too), unbound (kept, path cleared) or, for a link of a kept field, dropped
+     * from it; each planned extInfo object is reported as detached or left attached. A
      * delete that left the attribute in place throws, rolling the transaction back.
      *
      * @param formModel the tx-bound content form
@@ -2456,13 +2516,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * @param deleter the platform delete (or a test fake)
      * @param normFqn the FQN, for the refusals
      * @param authorizedScope what the consent covered ({@link FormDeletePreview#scope})
-     * @return what was removed, unbound and detached
+     * @return what was removed, unbound, dropped and detached
      */
     static AttributeDeleteOutcome deleteAttributeInTx(EObject formModel, EObject target, IBmTransaction tx,
         FormAttributeDeleter deleter, String normFqn, List<String> authorizedScope)
     {
         FormAttributeDeletion.Plan plan = deleter.plan(formModel, target);
-        List<String> scope = scopeOf(formModel, target, plan);
+        // The files are resolved before the check, so the one removed is the one the scope disclosed.
+        Map<FormAttributeDeletion.Detached, IFile> files = filesOf(plan, deleter);
+        List<String> scope = scopeOf(formModel, target, plan, files);
         if (!scope.equals(authorizedScope))
         {
             throw new FormValidationException(scopeChangedError(normFqn, authorizedScope, scope));
@@ -2477,22 +2539,18 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         Map<EObject, String> tablePaths = new java.util.IdentityHashMap<>();
         for (EObject member : PersistedContents.descendants(formModel))
         {
-            if (ownNameOf(member) != null && member != target && !EcoreUtil.isAncestor(target, member))
+            boolean link = member instanceof FormChoiceParameterLink;
+            if ((link || ownNameOf(member) != null) && member != target && !EcoreUtil.isAncestor(target, member))
             {
                 members.add(member);
                 owners.put(member, namedOwnerOf(formModel, member));
-                paths.put(member, FormAttributeDeletion.pathOf(member));
+                paths.put(member, link ? dottedOf(((FormChoiceParameterLink)member).getDatapath())
+                    : FormAttributeDeletion.pathOf(member));
                 if (member.eContainer() instanceof FormAttributeAdditionalColumns)
                 {
                     tablePaths.put(member, tablePathOf(member.eContainer()));
                 }
             }
-        }
-
-        Map<FormAttributeDeletion.Detached, IFile> files = new java.util.IdentityHashMap<>();
-        for (FormAttributeDeletion.Detached detached : plan.detached)
-        {
-            files.put(detached, deleter.fileOf(detached.object));
         }
 
         deleter.delete(tx, target);
@@ -2510,6 +2568,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             {
                 EObject owner = owners.get(member);
                 boolean contained = owner != null && !EcoreUtil.isAncestor(formModel, owner);
+                if (member instanceof FormChoiceParameterLink && owner != null && !contained)
+                {
+                    // EDT's cleaner dropped it from a field the delete kept.
+                    Map<String, Object> entry = itemEntry(member, path, false, false);
+                    entry.put(KEY_FIELD, ownNameOf(owner));
+                    outcome.droppedLinks.add(entry);
+                    continue;
+                }
                 Map<String, Object> entry = itemEntry(member, path, contained, false);
                 if (tablePaths.containsKey(member))
                 {
@@ -2517,7 +2583,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 }
                 outcome.removed.add(entry);
             }
-            else if (!path.isEmpty() && FormAttributeDeletion.pathOf(member).isEmpty())
+            else if (!(member instanceof FormChoiceParameterLink) && !path.isEmpty()
+                && FormAttributeDeletion.pathOf(member).isEmpty())
             {
                 outcome.unbound.add(itemEntry(member, path, false, true));
             }
@@ -2553,8 +2620,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     /** The dotted table path of an additional-column entry, or {@code ""}. */
     private static String tablePathOf(EObject entry)
     {
-        AbstractDataPath path = entry instanceof FormAttributeAdditionalColumns
-            ? ((FormAttributeAdditionalColumns)entry).getTablePath() : null;
+        return dottedOf(entry instanceof FormAttributeAdditionalColumns
+            ? ((FormAttributeAdditionalColumns)entry).getTablePath() : null);
+    }
+
+    /** A data path's segments joined by dots, or {@code ""} for none. */
+    private static String dottedOf(AbstractDataPath path)
+    {
         return path == null ? "" : String.join(".", path.getSegments()); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
@@ -2628,6 +2700,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         final List<Map<String, Object>> columns = new ArrayList<>();
         final List<Map<String, Object>> removed = new ArrayList<>();
         final List<Map<String, Object>> unbound = new ArrayList<>();
+        /** The choice-parameter links EDT's cleaner dropped from kept fields ({@code field} names each). */
+        final List<Map<String, Object>> droppedLinks = new ArrayList<>();
         final List<Map<String, Object>> detached = new ArrayList<>();
         /** The file of each {@link #detached} object, read before the detach; {@code null} when unresolved. */
         final List<IFile> detachedFiles = new ArrayList<>();
@@ -2655,7 +2729,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                         .append(" could not be resolved - check the form folder for a leftover."); //$NON-NLS-1$
                     continue;
                 }
-                String path = file.getProjectRelativePath().toString();
+                String path = fileLabelOf(file);
                 ResourceCleanup cleanup = remover.apply(file);
                 entry.put(KEY_FILE, path);
                 entry.put(KEY_FILE_REMOVAL, cleanup.name());
@@ -2663,12 +2737,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             }
         }
 
-        /** The response's extra items: columns, the first removed / unbound members, detached objects. */
+        /** The response's extra items: columns, the first removed / unbound members and dropped links, detached objects. */
         List<Map<String, Object>> entries()
         {
             List<Map<String, Object>> all = new ArrayList<>(columns);
             all.addAll(removed.subList(0, Math.min(removed.size(), MAX_LISTED_BOUND_ITEMS)));
             all.addAll(unbound.subList(0, Math.min(unbound.size(), MAX_LISTED_BOUND_ITEMS)));
+            all.addAll(droppedLinks.subList(0, Math.min(droppedLinks.size(), MAX_LISTED_BOUND_ITEMS)));
             all.addAll(detached);
             return all;
         }
@@ -2693,6 +2768,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             {
                 sb.append(", ").append(unbound.size()) //$NON-NLS-1$
                     .append(" item(s) kept with their data path cleared").append(namesOf(unbound)); //$NON-NLS-1$
+            }
+            if (!droppedLinks.isEmpty())
+            {
+                sb.append(", ").append(droppedLinks.size()) //$NON-NLS-1$
+                    .append(" choice-parameter link(s) dropped from kept fields").append(namesOf(droppedLinks)); //$NON-NLS-1$
             }
             if (!detached.isEmpty())
             {
@@ -4276,6 +4356,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         /** The separate BM objects detached with the attribute's extInfo ({@code detached: true}). */
         final List<Map<String, Object>> detachedObjects = new ArrayList<>();
 
+        /** Whether a field the delete keeps has choice-parameter links EDT's cleaner may drop. */
+        boolean keptChoiceLinks;
+
         /**
          * What the consent covers for an attribute delete, as {@link #scopeOf} identities;
          * {@code null} for any other member. The confirmed delete recomputes it and refuses a change.
@@ -4357,6 +4440,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             {
                 sb.append(" It also detaches ").append(detachedNamesOf(detachedObjects)) //$NON-NLS-1$
                     .append(", stored as a separate object, with everything in it."); //$NON-NLS-1$
+                for (Map<String, Object> entry : detachedObjects)
+                {
+                    sb.append(entry.containsKey(KEY_FILE)
+                        ? " Its file " + entry.get(KEY_FILE) + " is deleted from disk." //$NON-NLS-1$ //$NON-NLS-2$
+                        : " The file of " + entry.get(KEY_EXT_INFO) + "." + entry.get("name") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                            + " could not be resolved, so none is deleted - check the form folder afterwards."); //$NON-NLS-1$
+                }
             }
             if (removalTruncated)
             {
@@ -4364,8 +4454,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             }
             if (!itemsKept && !unresolved)
             {
-                sb.append(" EDT may also clear the data path of items whose path stops resolving - the " //$NON-NLS-1$
-                    + "confirmed response lists them."); //$NON-NLS-1$
+                sb.append(" EDT may also clear the data path of items whose path stops resolving") //$NON-NLS-1$
+                    .append(keptChoiceLinks ? ", and drop the choice-parameter links of kept fields whose " //$NON-NLS-1$
+                        + "path points into the attribute or stops resolving" : "") //$NON-NLS-1$
+                    .append(" - the confirmed response lists them."); //$NON-NLS-1$
             }
             return sb.toString();
         }
