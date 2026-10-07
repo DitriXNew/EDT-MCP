@@ -1328,6 +1328,71 @@ public class MetadataPropertyIntrospectorTest
             flag.valueKind == ValueKind.ADJUSTABLE_BOOLEAN);
     }
 
+    @Test
+    public void testAdjustableBooleanCurrentValueShowsTheRoleValuesInTheWriteShape()
+    {
+        // Issue #719: once a role has a value of its own, Current is the {common, roles} object
+        // modify_metadata takes, so a reader sees the per-role values next to common.
+        com._1c.g5.v8.dt.metadata.mdclass.Role manager = MdClassFactory.eINSTANCE.createRole();
+        manager.setName("Manager"); //$NON-NLS-1$
+        StandardCommand command = MdClassFactory.eINSTANCE.createStandardCommand();
+        AdjustableBoolean flag = MdClassFactory.eINSTANCE.createAdjustableBoolean();
+        flag.setCommon(true);
+        com._1c.g5.v8.dt.metadata.mdclass.ForRoleType forRole = MdClassFactory.eINSTANCE.createForRoleType();
+        forRole.setRole(manager);
+        forRole.setValue(false);
+        flag.getFor().add(forRole);
+        command.setVisible(flag);
+
+        assertEquals("{\"common\":true,\"roles\":{\"Role.Manager\":false}}", //$NON-NLS-1$
+            MetadataPropertyIntrospector.find(command, "visible").currentValue); //$NON-NLS-1$
+    }
+
+    // ---- a form attribute's "Use always" checkboxes (issue #661) ---------------------------------
+
+    @Test
+    public void testTheUseAlwaysListIsPublishedAsUseAlways()
+    {
+        com._1c.g5.v8.dt.form.model.FormAttribute attribute =
+            com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE.createFormAttribute();
+        attribute.setName("Object"); //$NON-NLS-1$
+
+        PropertyInfo useAlways = MetadataPropertyIntrospector.findFeature(attribute, "useAlways"); //$NON-NLS-1$
+        assertNotNull("the use-always list must be assignable as useAlways", useAlways); //$NON-NLS-1$
+        assertEquals(ValueKind.USE_ALWAYS, useAlways.valueKind);
+        assertEquals("useAlways", useAlways.name); //$NON-NLS-1$
+        assertNull("the model feature name is not the wire name", //$NON-NLS-1$
+            MetadataPropertyIntrospector.findFeature(attribute, "notDefaultUseAlwaysAttributes")); //$NON-NLS-1$
+        List<String> names = MetadataPropertyIntrospector.assignableNames(attribute);
+        assertTrue(names.toString(), names.contains("useAlways")); //$NON-NLS-1$
+        assertFalse(names.toString(), names.contains("notDefaultUseAlwaysAttributes")); //$NON-NLS-1$
+        assertFalse("the sibling saved-data list stays out", names.contains("settingsSavedData")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testUseAlwaysCurrentValueIsTheEffectiveStateOfTheListedPaths()
+    {
+        com._1c.g5.v8.dt.form.model.FormAttribute attribute =
+            com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE.createFormAttribute();
+        attribute.setName("Object"); //$NON-NLS-1$
+        TypeDescription type = McoreFactory.eINSTANCE.createTypeDescription();
+        Type catalogObject = McoreFactory.eINSTANCE.createType();
+        catalogObject.setName("CatalogObject.Products"); //$NON-NLS-1$
+        type.getTypes().add(catalogObject);
+        attribute.setValueType(type);
+        assertNull("nothing listed - every path at its default", //$NON-NLS-1$
+            MetadataPropertyIntrospector.find(attribute, "useAlways").currentValue); //$NON-NLS-1$
+
+        com._1c.g5.v8.dt.form.model.DataPath code =
+            com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE.createDataPath();
+        code.getSegments().add("Object"); //$NON-NLS-1$
+        code.getSegments().add("Code"); //$NON-NLS-1$
+        attribute.getNotDefaultUseAlwaysAttributes().add(code);
+
+        assertEquals("an object root lists the paths NOT used always", "{\"Object.Code\":false}", //$NON-NLS-1$ //$NON-NLS-2$
+            MetadataPropertyIntrospector.find(attribute, "useAlways").currentValue); //$NON-NLS-1$
+    }
+
     /**
      * A synthetic holder carrying ONE reference named {@code flag} of the given target type and shape,
      * so the classification rule can be probed on each axis it tests (target type, containment,

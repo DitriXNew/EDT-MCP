@@ -1794,6 +1794,20 @@ public final class FormElementWriter
         return names;
     }
 
+    /**
+     * The first-level field names of a metadata object's data: its bindable attributes (custom and
+     * standard, see {@link #collectBindableSubAttributeNames}) plus its tabular sections.
+     *
+     * @param owner the metadata object
+     * @return the names (empty when none can be read)
+     */
+    public static Set<String> fieldNamesOf(EObject owner)
+    {
+        Set<String> names = collectBindableSubAttributeNames(owner);
+        addNamedElementNames(owner, "tabularSections", names); //$NON-NLS-1$
+        return names;
+    }
+
     /** Adds the {@code name} of each element of the owner's {@code featureName} list (best-effort). */
     private static void addNamedElementNames(EObject owner, String featureName, Set<String> out)
     {
@@ -4524,10 +4538,22 @@ public final class FormElementWriter
     /** Whether any remaining authored form item references the path. */
     private static boolean formReferencesDataPath(EObject formModel, List<String> path)
     {
+        return itemBoundTo(formModel, path) != null;
+    }
+
+    /**
+     * The first authored form item bound to {@code path} (segments compared case-insensitively).
+     *
+     * @param formModel the form content model
+     * @param path the data path segments
+     * @return the item, or {@code null} when no item is bound to the path
+     */
+    public static EObject itemBoundTo(EObject formModel, List<String> path)
+    {
         EClassifier formItem = formModel.eClass().getEPackage().getEClassifier(ECLASS_FORM_ITEM);
         if (!(formItem instanceof EClass))
         {
-            return false;
+            return null;
         }
         Deque<EObject> pending = new ArrayDeque<>();
         pushFormItems(formModel, (EClass)formItem, pending);
@@ -4536,11 +4562,11 @@ public final class FormElementWriter
             EObject item = pending.pop();
             if (sameDataPath(singleReference(item, "dataPath"), path)) //$NON-NLS-1$
             {
-                return true;
+                return item;
             }
             pushFormItems(item, (EClass)formItem, pending);
         }
-        return false;
+        return null;
     }
 
     /**
