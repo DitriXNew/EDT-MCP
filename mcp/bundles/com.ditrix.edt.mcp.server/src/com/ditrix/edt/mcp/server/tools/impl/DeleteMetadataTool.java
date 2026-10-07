@@ -22,8 +22,14 @@ import javax.xml.parsers.DocumentBuilderFactory;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IResourceRuleFactory;
+import org.eclipse.core.resources.IWorkspace;
+import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.ICoreRunnable;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
+import org.eclipse.core.runtime.jobs.ISchedulingRule;
+import org.eclipse.core.runtime.jobs.MultiRule;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EObject;
@@ -667,9 +673,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + "with supportLock=true is a vendor-support lock, which force does not override") //$NON-NLS-1$
             .integerProperty(KEY_PLATFORM_PROHIBITIONS_COUNT, "Count of platform prohibitions") //$NON-NLS-1$
             .booleanProperty("forced", "Whether the delete was forced past a reference or platform block") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty(KEY_PERSISTED, "Present and false only for a partial forced-delete result: " //$NON-NLS-1$
-                + "the model deletion completed, but its registering .mdo is still stale or could not " //$NON-NLS-1$
-                + "be verified after the export wait") //$NON-NLS-1$
+            .booleanProperty(KEY_PERSISTED, "Present and false only for a partial result: the model deletion " //$NON-NLS-1$
+                + "completed, but after the export wait a forced delete's registering .mdo is still stale or " //$NON-NLS-1$
+                + "unverified, or a form attribute's rewritten Form.form was not confirmed on disk") //$NON-NLS-1$
             .stringProperty(KEY_REGISTERING_FILE, "Project-relative .mdo path that still registers the " //$NON-NLS-1$
                 + "deleted node or could not be verified (partial forced-delete result only)") //$NON-NLS-1$
             .stringProperty(KEY_REGISTERING_CONTAINER, "FQN of the object serialized in registeringFile " //$NON-NLS-1$
@@ -1189,8 +1195,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
         // The model change completed. Do not turn that fact into a failure; state only that its
         // registering file is not confirmed current.
-        object.addProperty(KEY_PERSISTED, false);
-        String message = resultString(object, McpKeys.MESSAGE);
         String subject = registeringContainer == null || registeringContainer.isEmpty()
             ? "the object that registers it" : "'" + registeringContainer + "'"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         String verificationLag;
@@ -1212,8 +1216,23 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             // unnameable file; persisted=false supplies the structured partial-result signal.
             verificationLag = ""; //$NON-NLS-1$
         }
-        object.addProperty(McpKeys.MESSAGE, (message == null ? "" : message) + verificationLag); //$NON-NLS-1$
+        markNotPersisted(object, verificationLag);
         return GsonProvider.toJson(object);
+    }
+
+    /** The success clause a confirmed form-member delete ends its first sentence with. */
+    private static final String PERSISTED_CLAUSE = " and persisted to disk."; //$NON-NLS-1$
+
+    /**
+     * Marks a completed model change whose on-disk half is not confirmed: {@code persisted=false}, the
+     * success clause withdrawn, and {@code lag} appended to the message.
+     */
+    private static void markNotPersisted(JsonObject object, String lag)
+    {
+        object.addProperty(KEY_PERSISTED, false);
+        String message = resultString(object, McpKeys.MESSAGE);
+        object.addProperty(McpKeys.MESSAGE, (message == null ? "" //$NON-NLS-1$
+            : message.replace(PERSISTED_CLAUSE, " in the model; its export to disk is not confirmed.")) + lag); //$NON-NLS-1$
     }
 
     /** Resolves the registering container's project-relative {@code .mdo} path. */
@@ -1291,46 +1310,59 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Removes the detached files a confirmed form-attribute delete left for after the barrier: only
-     * when the drain was observed AND Form.form on disk no longer declares the attribute; otherwise
-     * each stays KEPT, as the delete already reported it.
+     * when the drain was observed AND Form.form on disk no longer declares the attribute. Otherwise
+     * each stays KEPT and the result becomes partial ({@code persisted=false}).
      */
     private void removeDetachedFilesAfterExport(JsonObject result, JsonObject pending, boolean drainEstablished)
     {
         String projectName = resultString(pending, PENDING_PROJECT);
         String formFile = resultString(pending, PENDING_FORM_FILE);
-        if (!drainEstablished || formFile == null)
-        {
-            return;
-        }
-        RegistrationState formState = formAttributeOnDisk(workspaceFile(projectName, formFile),
-            resultString(pending, PENDING_ATTRIBUTE), resultString(pending, PENDING_COLUMN));
-        if (formState != RegistrationState.ABSENT)
-        {
-            Activator.logWarning("delete_metadata: '" + formFile + "' was not confirmed rewritten without the " //$NON-NLS-1$ //$NON-NLS-2$
-                + "deleted attribute (" + formState + "), so its detached files are kept"); //$NON-NLS-1$ //$NON-NLS-2$
-            return;
-        }
-        Set<String> files = new java.util.HashSet<>();
+        Set<String> listedFiles = new java.util.HashSet<>();
         JsonElement listed = pending.get(PENDING_FILES);
         if (listed != null && listed.isJsonArray())
         {
-            listed.getAsJsonArray().forEach(file -> files.add(file.getAsString()));
+            listed.getAsJsonArray().forEach(file -> listedFiles.add(file.getAsString()));
         }
         JsonElement items = result.get(KEY_ITEMS);
-        String message = resultString(result, McpKeys.MESSAGE);
+        Map<String, JsonObject> targets = new java.util.LinkedHashMap<>();
         for (JsonElement element : items != null && items.isJsonArray() ? items.getAsJsonArray() : new JsonArray())
         {
             JsonObject item = element.isJsonObject() ? element.getAsJsonObject() : null;
             String path = item == null ? null : resultString(item, KEY_FILE);
-            if (path == null || !ResourceCleanup.KEPT.name().equals(resultString(item, KEY_FILE_REMOVAL))
-                || !files.remove(path))
+            if (path != null && ResourceCleanup.KEPT.name().equals(resultString(item, KEY_FILE_REMOVAL))
+                && listedFiles.remove(path))
             {
-                continue;
+                targets.put(path, item);
             }
-            IFile file = workspaceFile(projectName, path);
-            ResourceCleanup cleanup = file == null ? ResourceCleanup.FAILED : removeResource(file);
-            item.addProperty(KEY_FILE_REMOVAL, cleanup.name());
-            String subject = "Its file " + path; //$NON-NLS-1$
+        }
+        Map<String, ResourceCleanup> removed = new java.util.LinkedHashMap<>();
+        RegistrationState formState = RegistrationState.UNVERIFIABLE;
+        if (drainEstablished && formFile != null)
+        {
+            Map<String, IFile> files = new java.util.LinkedHashMap<>();
+            targets.keySet().forEach(path -> files.put(path, workspaceFile(projectName, path)));
+            formState = removeIfFormRewritten(workspaceFile(projectName, formFile),
+                resultString(pending, PENDING_ATTRIBUTE), resultString(pending, PENDING_COLUMN), files, removed);
+        }
+        if (formState != RegistrationState.ABSENT)
+        {
+            Activator.logWarning("delete_metadata: '" + formFile + "' was not confirmed rewritten without the " //$NON-NLS-1$ //$NON-NLS-2$
+                + "deleted attribute (" + (drainEstablished ? formState : "export not observed") //$NON-NLS-1$ //$NON-NLS-2$
+                + "), so its detached files are kept"); //$NON-NLS-1$
+            String form = formFile == null ? "the form" : "'" + formFile + "'"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            markNotPersisted(result, formState == RegistrationState.PRESENT
+                ? " The export of " + form + " did not remove the deleted attribute, so that file still " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "declares it; re-check it before relying on it." //$NON-NLS-1$
+                : " The export of " + form + " could not be verified, so that file may still declare the " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "deleted attribute; re-check it before relying on it."); //$NON-NLS-1$
+            return;
+        }
+        String message = resultString(result, McpKeys.MESSAGE);
+        for (Map.Entry<String, JsonObject> target : targets.entrySet())
+        {
+            ResourceCleanup cleanup = removed.getOrDefault(target.getKey(), ResourceCleanup.FAILED);
+            target.getValue().addProperty(KEY_FILE_REMOVAL, cleanup.name());
+            String subject = "Its file " + target.getKey(); //$NON-NLS-1$
             message = message == null ? null : message.replace(resourceCleanupMessage(ResourceCleanup.KEPT, subject),
                 resourceCleanupMessage(cleanup, subject));
         }
@@ -1338,6 +1370,50 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             result.addProperty(McpKeys.MESSAGE, message);
         }
+    }
+
+    /**
+     * Reads Form.form and, when it no longer declares the attribute, removes {@code files} - both
+     * under ONE workspace rule over the form and the files, recording each outcome in {@code removed}.
+     *
+     * @return the form's on-disk state, as read inside the rule
+     */
+    private static RegistrationState removeIfFormRewritten(IFile formFile, String attribute, String column,
+        Map<String, IFile> files, Map<String, ResourceCleanup> removed)
+    {
+        if (formFile == null || attribute == null)
+        {
+            return RegistrationState.UNVERIFIABLE;
+        }
+        RegistrationState[] state = { RegistrationState.UNVERIFIABLE };
+        try
+        {
+            IWorkspace workspace = formFile.getWorkspace();
+            IResourceRuleFactory rules = workspace.getRuleFactory();
+            ISchedulingRule rule = MultiRule.combine(rules.modifyRule(formFile), rules.refreshRule(formFile));
+            for (IFile file : files.values())
+            {
+                rule = file == null ? rule : MultiRule.combine(rule, rules.deleteRule(file));
+            }
+            ICoreRunnable checkThenRemove = monitor ->
+            {
+                state[0] = formAttributeOnDisk(formFile, attribute, column);
+                if (state[0] == RegistrationState.ABSENT)
+                {
+                    files.forEach((path, file) -> removed.put(path,
+                        file == null ? ResourceCleanup.FAILED : removeResource(file)));
+                }
+            };
+            // Atomic against resource-API writers (EDT's export, another request) only; a write that
+            // bypasses the workspace API is not serialized by a scheduling rule.
+            workspace.run(checkThenRemove, rule, IWorkspace.AVOID_UPDATE, null);
+        }
+        catch (CoreException | RuntimeException e)
+        {
+            Activator.logError("delete_metadata: could not run the Form.form check and detached-file " //$NON-NLS-1$
+                + "removal under a workspace rule", e); //$NON-NLS-1$
+        }
+        return state[0];
     }
 
     /** The workspace file at a project-relative path, or {@code null}; package-visible so a test serves its own. */
@@ -2261,7 +2337,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     {
         String head = "Deleted form " + (handler ? KEY_HANDLER : KEY_MEMBER) + " '" + ref.name //$NON-NLS-1$ //$NON-NLS-2$
             + "' (" + type + ") from " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
-            + (persisted ? " and persisted to disk." //$NON-NLS-1$
+            + (persisted ? PERSISTED_CLAUSE
                 : " (in-memory only; on-disk write did not complete - re-check before relying on " //$NON-NLS-1$
                     + "it)."); //$NON-NLS-1$
         ToolResult result = ToolResult.success()

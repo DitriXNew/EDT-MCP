@@ -16,6 +16,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
@@ -29,6 +30,7 @@ import static org.mockito.Mockito.withSettings;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -40,13 +42,19 @@ import java.util.function.BiConsumer;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IResourceRuleFactory;
+import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.ICoreRunnable;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.ISchedulingRule;
+import org.eclipse.core.runtime.jobs.MultiRule;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.Test;
+import org.mockito.ArgumentCaptor;
 import org.w3c.dom.Element;
 
 import com._1c.g5.v8.bm.core.IBmEngine;
@@ -834,7 +842,7 @@ public class DeleteMetadataFormAttributeTest
         // (d) persisted=false: KEPT, nothing left for the barrier, and a drained barrier still deletes nothing.
         List<String> order = new ArrayList<>();
         IFile file = existingFile(SETTINGS_FILE, order);
-        IFile form = formOnDisk(FORM_WITHOUT_LIST);
+        IFile form = formOnDisk(FORM_WITHOUT_LIST, order);
         String raw = listDeleteResult(file, form, false);
         JsonObject executed = JsonParser.parseString(raw).getAsJsonObject();
         assertFalse(raw, executed.has("pendingFileRemoval")); //$NON-NLS-1$
@@ -868,13 +876,30 @@ public class DeleteMetadataFormAttributeTest
         return file;
     }
 
-    /** Form.form whose on-disk content is {@code xml}. */
-    private static IFile formOnDisk(String xml) throws CoreException
+    /** Form.form whose on-disk content is {@code xml}; its workspace logs entering/leaving a rule into {@code order}. */
+    private static IFile formOnDisk(String xml, List<String> order) throws CoreException
     {
         IFile form = fileAt(FORM_FILE);
         when(form.exists()).thenReturn(true);
         when(form.getContents()).thenAnswer(
             invocation -> new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+        IResourceRuleFactory rules = mock(IResourceRuleFactory.class);
+        ISchedulingRule modify = mock(ISchedulingRule.class);
+        ISchedulingRule refresh = mock(ISchedulingRule.class);
+        ISchedulingRule delete = mock(ISchedulingRule.class);
+        when(rules.modifyRule(form)).thenReturn(modify);
+        when(rules.refreshRule(form)).thenReturn(refresh);
+        when(rules.deleteRule(any())).thenReturn(delete);
+        IWorkspace workspace = mock(IWorkspace.class);
+        when(workspace.getRuleFactory()).thenReturn(rules);
+        doAnswer(invocation ->
+        {
+            order.add("rule"); //$NON-NLS-1$
+            ((ICoreRunnable)invocation.getArgument(0)).run(null);
+            order.add("released"); //$NON-NLS-1$
+            return null;
+        }).when(workspace).run(any(ICoreRunnable.class), any(ISchedulingRule.class), anyInt(), any());
+        when(form.getWorkspace()).thenReturn(workspace);
         return form;
     }
 
@@ -953,7 +978,7 @@ public class DeleteMetadataFormAttributeTest
         // (a) + (e): execute only reports KEPT; the delete happens after the drain, on a Form.form without the attribute.
         List<String> order = new ArrayList<>();
         IFile file = existingFile(SETTINGS_FILE, order);
-        IFile form = formOnDisk(FORM_WITHOUT_LIST);
+        IFile form = formOnDisk(FORM_WITHOUT_LIST, order);
         String raw = listDeleteResult(file, form, true);
         verify(file, never()).delete(anyBoolean(), any());
         JsonObject executed = JsonParser.parseString(raw).getAsJsonObject();
@@ -962,7 +987,10 @@ public class DeleteMetadataFormAttributeTest
 
         JsonObject answered = JsonParser.parseString(
             new DiskTool(order, DiskExportState.DRAINED, file, form).drive(raw)).getAsJsonObject();
-        assertEquals("the file goes after the drain, not in execute", List.of("drained", "deleted"), order); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("the file goes after the drain, inside the rule", //$NON-NLS-1$
+            List.of("drained", "rule", "deleted", "released"), order); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertFalse("a confirmed removal leaves the success intact", answered.has("persisted")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(answered.toString(), answered.get("message").getAsString().contains(" and persisted to disk.")); //$NON-NLS-1$ //$NON-NLS-2$
         JsonObject item = detachedItem(answered);
         assertEquals(SETTINGS_FILE, item.get("file").getAsString()); //$NON-NLS-1$
         assertEquals("REMOVED", item.get("fileRemoval").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
@@ -978,7 +1006,7 @@ public class DeleteMetadataFormAttributeTest
         // (b) the export drained but Form.form still holds the attribute (a failed per-file write).
         List<String> order = new ArrayList<>();
         IFile file = existingFile(SETTINGS_FILE, order);
-        IFile form = formOnDisk(FORM_WITH_LIST);
+        IFile form = formOnDisk(FORM_WITH_LIST, order);
         JsonObject answered = JsonParser.parseString(new DiskTool(order, DiskExportState.DRAINED, file, form)
             .drive(listDeleteResult(file, form, true))).getAsJsonObject();
         verify(file, never()).delete(anyBoolean(), any());
@@ -987,6 +1015,35 @@ public class DeleteMetadataFormAttributeTest
         assertFalse(answered.has("pendingFileRemoval")); //$NON-NLS-1$
         assertTrue(answered.toString(), answered.get("message").getAsString().contains( //$NON-NLS-1$
             "Its file " + SETTINGS_FILE + " was kept: the form on disk was not confirmed rewritten")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the check ran inside the rule", List.of("drained", "rule", "released"), order); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        assertPartial(answered, "The export of '" + FORM_FILE + "' did not remove the deleted attribute"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A kept file makes the result partial: persisted=false, the success clause withdrawn, the lag stated. */
+    private static void assertPartial(JsonObject answered, String lag)
+    {
+        assertFalse(answered.toString(), answered.get("persisted").getAsBoolean()); //$NON-NLS-1$
+        String message = answered.get("message").getAsString(); //$NON-NLS-1$
+        assertFalse(message, message.contains("persisted to disk")); //$NON-NLS-1$
+        assertTrue(message, message.contains(" in the model; its export to disk is not confirmed.")); //$NON-NLS-1$
+        assertTrue(message, message.contains(lag));
+    }
+
+    @Test
+    public void testTheCheckAndTheRemovalRunUnderOneRuleCoveringTheFormAndTheFile() throws CoreException
+    {
+        List<String> order = new ArrayList<>();
+        IFile file = existingFile(SETTINGS_FILE, order);
+        IFile form = formOnDisk(FORM_WITHOUT_LIST, order);
+        new DiskTool(order, DiskExportState.DRAINED, file, form).drive(listDeleteResult(file, form, true));
+        ArgumentCaptor<ISchedulingRule> rule = ArgumentCaptor.forClass(ISchedulingRule.class);
+        verify(form.getWorkspace()).run(any(ICoreRunnable.class), rule.capture(), eq(IWorkspace.AVOID_UPDATE), any());
+        IResourceRuleFactory rules = form.getWorkspace().getRuleFactory();
+        List<ISchedulingRule> children = Arrays.asList(((MultiRule)rule.getValue()).getChildren());
+        assertTrue("covers writes to Form.form", children.contains(rules.modifyRule(form))); //$NON-NLS-1$
+        assertTrue("covers the refresh before the read", children.contains(rules.refreshRule(form))); //$NON-NLS-1$
+        assertTrue("covers the detached file's delete", children.contains(rules.deleteRule(file))); //$NON-NLS-1$
+        assertEquals(List.of("drained", "rule", "deleted", "released"), order); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
     }
 
     @Test
@@ -995,7 +1052,7 @@ public class DeleteMetadataFormAttributeTest
         // (c) UNOBSERVABLE establishes nothing about the disk, so nothing is read or deleted.
         List<String> order = new ArrayList<>();
         IFile file = existingFile(SETTINGS_FILE, order);
-        IFile form = formOnDisk(FORM_WITHOUT_LIST);
+        IFile form = formOnDisk(FORM_WITHOUT_LIST, order);
         JsonObject answered = JsonParser.parseString(new DiskTool(order, DiskExportState.UNOBSERVABLE, file, form)
             .drive(listDeleteResult(file, form, true))).getAsJsonObject();
         verify(file, never()).delete(anyBoolean(), any());
@@ -1003,6 +1060,7 @@ public class DeleteMetadataFormAttributeTest
         assertEquals(List.of("drained"), order); //$NON-NLS-1$
         assertEquals("KEPT", detachedItem(answered).get("fileRemoval").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse(answered.has("pendingFileRemoval")); //$NON-NLS-1$
+        assertPartial(answered, "The export of '" + FORM_FILE + "' could not be verified"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
