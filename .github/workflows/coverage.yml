@@ -50,6 +50,10 @@ jobs:
           java-version: 25
           cache: maven
 
+      # Maven is pinned, not the runner image's: see the action for why 3.10 breaks Tycho.
+      - name: Set up Maven
+        uses: ./.github/actions/setup-maven
+
       - name: Cache Tycho P2 repositories
         uses: actions/cache@v6
         with:
