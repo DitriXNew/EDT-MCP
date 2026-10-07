@@ -1014,9 +1014,10 @@ public final class EditorScreenshotHelper
         {
             if (object instanceof FormGroup group && group.getType() == ManagedFormGroupType.PAGES)
             {
-                for (EObject child : PersistedContents.of(group))
+                // Only the group's items are pages; its extended tooltip and context menu are not.
+                for (FormItem page : group.getItems())
                 {
-                    if (child instanceof FormItem page && page.getName() != null)
+                    if (page != null && page.getName() != null)
                     {
                         names.add(page.getName());
                     }
