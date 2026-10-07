@@ -22,14 +22,9 @@ import javax.xml.parsers.DocumentBuilderFactory;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
-import org.eclipse.core.resources.IResourceRuleFactory;
-import org.eclipse.core.resources.IWorkspace;
-import org.eclipse.core.runtime.CoreException;
-import org.eclipse.core.runtime.ICoreRunnable;
+import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
-import org.eclipse.core.runtime.jobs.ISchedulingRule;
-import org.eclipse.core.runtime.jobs.MultiRule;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EAttribute;
 import org.eclipse.emf.ecore.EObject;
@@ -674,8 +669,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .integerProperty(KEY_PLATFORM_PROHIBITIONS_COUNT, "Count of platform prohibitions") //$NON-NLS-1$
             .booleanProperty("forced", "Whether the delete was forced past a reference or platform block") //$NON-NLS-1$ //$NON-NLS-2$
             .booleanProperty(KEY_PERSISTED, "Present and false only for a partial result: the model deletion " //$NON-NLS-1$
-                + "completed, but after the export wait a forced delete's registering .mdo is still stale or " //$NON-NLS-1$
-                + "unverified, or a form attribute's rewritten Form.form was not confirmed on disk") //$NON-NLS-1$
+                + "completed, but a forced delete's registering .mdo is still stale or unverified after the " //$NON-NLS-1$
+                + "export wait, a form member's export could not be queued, or a detached form-attribute " //$NON-NLS-1$
+                + "file is still on disk or unverified after it") //$NON-NLS-1$
             .stringProperty(KEY_REGISTERING_FILE, "Project-relative .mdo path that still registers the " //$NON-NLS-1$
                 + "deleted node or could not be verified (partial forced-delete result only)") //$NON-NLS-1$
             .stringProperty(KEY_REGISTERING_CONTAINER, "FQN of the object serialized in registeringFile " //$NON-NLS-1$
@@ -1148,6 +1144,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * result is returned byte-for-byte unchanged: the temporary registering-file fields are removed.
      * A stale or unreadable registration remains a successful executed MODEL change, but gains
      * {@code persisted=false} and retains the exact file/container so clients can treat it as partial.
+     * A form-attribute delete's detached files are observed here instead ({@link #observeDetachedFiles}).
      */
     @Override
     protected String refreshAfterExportAwait(Map<String, String> params, String result,
@@ -1164,13 +1161,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + "on-disk verification", e); //$NON-NLS-1$
             return result;
         }
-        JsonElement pending = object.remove(KEY_PENDING_FILE_REMOVAL);
-        if (pending != null)
+        if (VAL_EXECUTED.equals(resultString(object, McpKeys.ACTION))
+            && observeDetachedFiles(JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME), object,
+                drainEstablished))
         {
-            if (pending.isJsonObject())
-            {
-                removeDetachedFilesAfterExport(object, pending.getAsJsonObject(), drainEstablished);
-            }
             return GsonProvider.toJson(object);
         }
         if (!VAL_EXECUTED.equals(resultString(object, McpKeys.ACTION))
@@ -1309,115 +1303,75 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Removes the detached files a confirmed form-attribute delete left for after the barrier: only
-     * when the drain was observed AND Form.form on disk no longer declares the attribute. Otherwise
-     * each stays KEPT and the result becomes partial ({@code persisted=false}).
+     * Observes, after the export barrier, each detached object's file a confirmed form-attribute delete
+     * named: EDT's own save deletes it. Gone is {@link DetachedFileState#REMOVED}; still there or
+     * unobservable makes the result partial ({@code persisted=false}). Nothing is deleted here.
+     *
+     * @return whether the result carried a detached object at all
      */
-    private void removeDetachedFilesAfterExport(JsonObject result, JsonObject pending, boolean drainEstablished)
+    private boolean observeDetachedFiles(String projectName, JsonObject result, boolean drainEstablished)
     {
-        String projectName = resultString(pending, PENDING_PROJECT);
-        String formFile = resultString(pending, PENDING_FORM_FILE);
-        Set<String> listedFiles = new java.util.HashSet<>();
-        JsonElement listed = pending.get(PENDING_FILES);
-        if (listed != null && listed.isJsonArray())
-        {
-            listed.getAsJsonArray().forEach(file -> listedFiles.add(file.getAsString()));
-        }
         JsonElement items = result.get(KEY_ITEMS);
-        Map<String, JsonObject> targets = new java.util.LinkedHashMap<>();
+        boolean seen = false;
+        boolean confirmed = true;
+        StringBuilder notes = new StringBuilder();
         for (JsonElement element : items != null && items.isJsonArray() ? items.getAsJsonArray() : new JsonArray())
         {
             JsonObject item = element.isJsonObject() ? element.getAsJsonObject() : null;
-            String path = item == null ? null : resultString(item, KEY_FILE);
-            if (path != null && ResourceCleanup.KEPT.name().equals(resultString(item, KEY_FILE_REMOVAL))
-                && listedFiles.remove(path))
+            if (item == null || !item.has(KEY_DETACHED))
             {
-                targets.put(path, item);
+                continue;
             }
+            seen = true;
+            String path = resultString(item, KEY_FILE);
+            if (path == null)
+            {
+                // Unresolved before the delete: already UNVERIFIED and noted in the message.
+                confirmed = false;
+                continue;
+            }
+            Boolean present = fileOnDisk(projectName, path);
+            DetachedFileState state = present == null ? DetachedFileState.UNVERIFIED
+                : present ? DetachedFileState.STILL_PRESENT : DetachedFileState.REMOVED;
+            item.addProperty(KEY_FILE_REMOVAL, state.name());
+            notes.append(' ').append(detachedFileMessage(state, path, drainEstablished));
+            confirmed &= state == DetachedFileState.REMOVED;
         }
-        Map<String, ResourceCleanup> removed = new java.util.LinkedHashMap<>();
-        RegistrationState formState = RegistrationState.UNVERIFIABLE;
-        if (drainEstablished && formFile != null)
+        if (!seen)
         {
-            Map<String, IFile> files = new java.util.LinkedHashMap<>();
-            targets.keySet().forEach(path -> files.put(path, workspaceFile(projectName, path)));
-            formState = removeIfFormRewritten(workspaceFile(projectName, formFile),
-                resultString(pending, PENDING_ATTRIBUTE), resultString(pending, PENDING_COLUMN), files, removed);
-        }
-        if (formState != RegistrationState.ABSENT)
-        {
-            Activator.logWarning("delete_metadata: '" + formFile + "' was not confirmed rewritten without the " //$NON-NLS-1$ //$NON-NLS-2$
-                + "deleted attribute (" + (drainEstablished ? formState : "export not observed") //$NON-NLS-1$ //$NON-NLS-2$
-                + "), so its detached files are kept"); //$NON-NLS-1$
-            String form = formFile == null ? "the form" : "'" + formFile + "'"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            markNotPersisted(result, formState == RegistrationState.PRESENT
-                ? " The export of " + form + " did not remove the deleted attribute, so that file still " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "declares it; re-check it before relying on it." //$NON-NLS-1$
-                : " The export of " + form + " could not be verified, so that file may still declare the " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "deleted attribute; re-check it before relying on it."); //$NON-NLS-1$
-            return;
+            return false;
         }
         String message = resultString(result, McpKeys.MESSAGE);
-        for (Map.Entry<String, JsonObject> target : targets.entrySet())
+        result.addProperty(McpKeys.MESSAGE, (message == null ? "" : message) + notes); //$NON-NLS-1$
+        if (!confirmed)
         {
-            ResourceCleanup cleanup = removed.getOrDefault(target.getKey(), ResourceCleanup.FAILED);
-            target.getValue().addProperty(KEY_FILE_REMOVAL, cleanup.name());
-            String subject = "Its file " + target.getKey(); //$NON-NLS-1$
-            message = message == null ? null : message.replace(resourceCleanupMessage(ResourceCleanup.KEPT, subject),
-                resourceCleanupMessage(cleanup, subject));
+            markNotPersisted(result, ""); //$NON-NLS-1$
         }
-        if (message != null)
+        return true;
+    }
+
+    /** What the observation saw for one detached file, as one sentence. */
+    private static String detachedFileMessage(DetachedFileState state, String path, boolean drainEstablished)
+    {
+        switch (state)
         {
-            result.addProperty(McpKeys.MESSAGE, message);
+        case REMOVED:
+            return "Its file " + path + " is not on disk after EDT's export."; //$NON-NLS-1$ //$NON-NLS-2$
+        case STILL_PRESENT:
+            return "Its file " + path + (drainEstablished //$NON-NLS-1$
+                ? " is still on disk after EDT's export finished; remove it or re-check before relying on it." //$NON-NLS-1$
+                : " is still on disk and EDT's export was not observed to finish; re-check it before relying on it."); //$NON-NLS-1$
+        case UNVERIFIED:
+        default:
+            return "Its file " + path + " could not be checked on disk; re-check it before relying on it."; //$NON-NLS-1$ //$NON-NLS-2$
         }
     }
 
     /**
-     * Reads Form.form and, when it no longer declares the attribute, removes {@code files} - both
-     * under ONE workspace rule over the form and the files, recording each outcome in {@code removed}.
-     *
-     * @return the form's on-disk state, as read inside the rule
+     * Whether a project-relative file exists on the file system - read directly, so no workspace rule
+     * is waited for; {@code null} when it cannot be observed. Package-visible so a test serves its own.
      */
-    private static RegistrationState removeIfFormRewritten(IFile formFile, String attribute, String column,
-        Map<String, IFile> files, Map<String, ResourceCleanup> removed)
-    {
-        if (formFile == null || attribute == null)
-        {
-            return RegistrationState.UNVERIFIABLE;
-        }
-        RegistrationState[] state = { RegistrationState.UNVERIFIABLE };
-        try
-        {
-            IWorkspace workspace = formFile.getWorkspace();
-            IResourceRuleFactory rules = workspace.getRuleFactory();
-            ISchedulingRule rule = MultiRule.combine(rules.modifyRule(formFile), rules.refreshRule(formFile));
-            for (IFile file : files.values())
-            {
-                rule = file == null ? rule : MultiRule.combine(rule, rules.deleteRule(file));
-            }
-            ICoreRunnable checkThenRemove = monitor ->
-            {
-                state[0] = formAttributeOnDisk(formFile, attribute, column);
-                if (state[0] == RegistrationState.ABSENT)
-                {
-                    files.forEach((path, file) -> removed.put(path,
-                        file == null ? ResourceCleanup.FAILED : removeResource(file)));
-                }
-            };
-            // Atomic against resource-API writers (EDT's export, another request) only; a write that
-            // bypasses the workspace API is not serialized by a scheduling rule.
-            workspace.run(checkThenRemove, rule, IWorkspace.AVOID_UPDATE, null);
-        }
-        catch (CoreException | RuntimeException e)
-        {
-            Activator.logError("delete_metadata: could not run the Form.form check and detached-file " //$NON-NLS-1$
-                + "removal under a workspace rule", e); //$NON-NLS-1$
-        }
-        return state[0];
-    }
-
-    /** The workspace file at a project-relative path, or {@code null}; package-visible so a test serves its own. */
-    IFile workspaceFile(String projectName, String path)
+    Boolean fileOnDisk(String projectName, String path)
     {
         if (projectName == null || path == null)
         {
@@ -1428,71 +1382,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             // Fully qualified: the inherited AbstractMetadataWriteTool.ProjectContext shadows the utils one.
             com.ditrix.edt.mcp.server.utils.ProjectContext context =
                 com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
-            return context.exists() ? context.project().getFile(new Path(path)) : null;
+            IPath location = context.exists() ? context.project().getFile(new Path(path)).getLocation() : null;
+            return location == null ? null : Boolean.valueOf(location.toFile().exists());
         }
         catch (RuntimeException e)
         {
-            Activator.logError("delete_metadata: could not resolve '" + path + "' in '" + projectName + "'", e); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            Activator.logError("delete_metadata: could not check '" + path + "' in '" + projectName + "'", e); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return null;
         }
-    }
-
-    /**
-     * Reads Form.form fresh from disk: ABSENT when it no longer declares the attribute (or the column
-     * under it), PRESENT when it does, UNVERIFIABLE when it cannot be read.
-     */
-    static RegistrationState formAttributeOnDisk(IFile formFile, String attribute, String column)
-    {
-        if (formFile == null || attribute == null)
-        {
-            return RegistrationState.UNVERIFIABLE;
-        }
-        try
-        {
-            // The export may write past the workspace, so sync the resource before reading it.
-            formFile.refreshLocal(IResource.DEPTH_ZERO, new NullProgressMonitor());
-            if (!formFile.exists())
-            {
-                return RegistrationState.UNVERIFIABLE;
-            }
-            try (InputStream input = formFile.getContents())
-            {
-                Element root = SecureXml.documentBuilderFactory().newDocumentBuilder().parse(input)
-                    .getDocumentElement();
-                return declaresFormAttribute(root, attribute, column) ? RegistrationState.PRESENT
-                    : RegistrationState.ABSENT;
-            }
-        }
-        catch (Exception e)
-        {
-            Activator.logError("delete_metadata: could not read '" + formFile.getProjectRelativePath() //$NON-NLS-1$
-                + "' to confirm the form attribute delete", e); //$NON-NLS-1$
-            return RegistrationState.UNVERIFIABLE;
-        }
-    }
-
-    /** Whether a Form.form root declares the attribute ({@code <attributes><name>}), or its column. */
-    static boolean declaresFormAttribute(Element root, String attribute, String column)
-    {
-        for (Element candidate : directChildren(root, "attributes")) //$NON-NLS-1$
-        {
-            if (!attribute.equalsIgnoreCase(directChildText(candidate, "name"))) //$NON-NLS-1$
-            {
-                continue;
-            }
-            if (column == null)
-            {
-                return true;
-            }
-            for (Element columnElement : directChildren(candidate, "columns")) //$NON-NLS-1$
-            {
-                if (column.equalsIgnoreCase(directChildText(columnElement, "name"))) //$NON-NLS-1$
-                {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     /** Package-visible pure XML check for the registering-file tests. */
@@ -2296,6 +2193,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     {
         final String[] capturedType = new String[1];
         final AttributeDeleteOutcome[] outcome = new AttributeDeleteOutcome[1];
+        // An attribute delete commits through the global editing context, as the designer's does, so
+        // EDT's own save also deletes the file of an extInfo object it detaches.
         boolean persisted = FormElementWriter.writeEditableForm(fctx, "DeleteFormMember", //$NON-NLS-1$
             (formModel, tx) ->
             {
@@ -2322,17 +2221,16 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 // Items are containments, so removing a Group/Table cascades its contained subtree.
                 // The writer also prunes dynamic-list UseAlways paths no remaining item references.
                 FormElementWriter.removeFormMember(formModel, target);
-            });
+            }, attributeDeleter != null);
 
-        return formDeleteResult(fctx.project.getName(), normFqn, ref, handler, capturedType[0], outcome[0],
-            persisted);
+        return formDeleteResult(normFqn, ref, handler, capturedType[0], outcome[0], persisted);
     }
 
     /**
-     * The confirmed form-member delete's response. A detached object's file is reported KEPT here: it is
-     * removed only after the export barrier, once Form.form is seen without the attribute.
+     * The confirmed form-member delete's response. A detached object's file carries no
+     * {@code fileRemoval} yet: {@link #refreshAfterExportAwait} observes it after the export barrier.
      */
-    static String formDeleteResult(String projectName, String normFqn, FormElementWriter.FormMemberRef ref,
+    static String formDeleteResult(String normFqn, FormElementWriter.FormMemberRef ref,
         boolean handler, String type, AttributeDeleteOutcome outcome, boolean persisted)
     {
         String head = "Deleted form " + (handler ? KEY_HANDLER : KEY_MEMBER) + " '" + ref.name //$NON-NLS-1$ //$NON-NLS-2$
@@ -2343,20 +2241,19 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_EXECUTED)
             .put("fqn", normFqn); //$NON-NLS-1$
+        if (!persisted)
+        {
+            // The structured partial-result signal, not only the prose above.
+            result.put(KEY_PERSISTED, false);
+        }
         if (outcome != null)
         {
-            // The form export skips the detached object's FQN; refreshAfterExportAwait removes its file.
-            outcome.removeDetachedFiles(file -> ResourceCleanup.KEPT);
+            outcome.recordDetachedFiles();
             List<Map<String, Object>> removed = new ArrayList<>();
             removed.add(formItem(ref.name, type));
             removed.addAll(outcome.entries());
             result.put(KEY_ITEMS, removed);
             head += outcome.describe();
-            Map<String, Object> pending = persisted ? outcome.pendingFileRemoval(projectName, ref) : null;
-            if (pending != null)
-            {
-                result.put(KEY_PENDING_FILE_REMOVAL, pending);
-            }
         }
         return result.put(McpKeys.MESSAGE, head).toJson();
     }
@@ -2390,18 +2287,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     /** Item key: the project-relative file a detached object was stored in. */
     private static final String KEY_FILE = "file"; //$NON-NLS-1$
 
-    /** Item key: what happened to that file - {@link ResourceCleanup} REMOVED / NOT_FOUND / FAILED. */
+    /** Item key: that file's state observed after the export - {@link DetachedFileState}. */
     private static final String KEY_FILE_REMOVAL = "fileRemoval"; //$NON-NLS-1$
 
-    /** Internal result member: what the post-barrier detached-file removal needs; always stripped there. */
-    private static final String KEY_PENDING_FILE_REMOVAL = "pendingFileRemoval"; //$NON-NLS-1$
-    private static final String PENDING_PROJECT = "project"; //$NON-NLS-1$
-    private static final String PENDING_FORM_FILE = "formFile"; //$NON-NLS-1$
-    private static final String PENDING_ATTRIBUTE = "attribute"; //$NON-NLS-1$
-    private static final String PENDING_COLUMN = "column"; //$NON-NLS-1$
-    private static final String PENDING_FILES = "files"; //$NON-NLS-1$
-
-    /** Preview item key: true when the confirmed delete removes the detached object's {@code file}. */
+    /** Preview item key: true when EDT's export of the confirmed delete removes the detached object's {@code file}. */
     private static final String KEY_DELETED_FROM_DISK = "deletedFromDisk"; //$NON-NLS-1$
 
     /** Item key: the kept field a dropped choice-parameter link belonged to. */
@@ -2781,10 +2670,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             throw new FormValidationException(scopeChangedError(normFqn, authorizedScope, scope));
         }
         AttributeDeleteOutcome outcome = new AttributeDeleteOutcome();
-        if (!plan.detached.isEmpty())
-        {
-            outcome.formFile = deleter.fileOf(formModel);
-        }
         outcome.main = FormElementWriter.isMainAttribute(target);
         outcome.rootExtInfo = rootExtInfoKind(formModel);
         collectRemovedMembers(target, outcome.columns);
@@ -2976,64 +2861,28 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         /** The file of each {@link #detached} object, read before the detach; {@code null} when unresolved. */
         final List<IFile> detachedFiles = new ArrayList<>();
         final List<Map<String, Object>> leftAttached = new ArrayList<>();
-        /** The form's own Form.form, read only when something is detached; {@code null} when unresolved. */
-        IFile formFile;
-        /** The message tail for the removal of the detached objects' files. */
+        /** The message tail for the detached objects whose file could not be resolved. */
         private final StringBuilder fileNotes = new StringBuilder();
 
         /**
-         * What the post-barrier removal needs: the project, the form file, the attribute (and column)
-         * to look for in it, and the detached files to remove; {@code null} when there is no file.
+         * Names each detached object's {@code file} on its entry for the post-barrier observation; an
+         * unresolved one is {@link DetachedFileState#UNVERIFIED} at once and noted in the message.
          */
-        Map<String, Object> pendingFileRemoval(String projectName, FormElementWriter.FormMemberRef ref)
-        {
-            List<String> files = new ArrayList<>();
-            for (Map<String, Object> entry : detached)
-            {
-                if (entry.get(KEY_FILE) != null)
-                {
-                    files.add(String.valueOf(entry.get(KEY_FILE)));
-                }
-            }
-            if (files.isEmpty())
-            {
-                return null;
-            }
-            Map<String, Object> pending = new java.util.LinkedHashMap<>();
-            pending.put(PENDING_PROJECT, projectName);
-            pending.put(PENDING_FORM_FILE, formFile == null ? null : fileLabelOf(formFile));
-            boolean column = ref.ownerAttributeName != null;
-            pending.put(PENDING_ATTRIBUTE, column ? ref.ownerAttributeName : ref.name);
-            pending.put(PENDING_COLUMN, column ? ref.name : null);
-            pending.put(PENDING_FILES, files);
-            return pending;
-        }
-
-        /**
-         * Removes each detached object's file and records what happened on its entry
-         * ({@code file}, {@code fileRemoval}) and in the message - only what was seen.
-         *
-         * @param remover deletes one file and answers the outcome
-         */
-        void removeDetachedFiles(java.util.function.Function<IFile, ResourceCleanup> remover)
+        void recordDetachedFiles()
         {
             for (int i = 0; i < detached.size(); i++)
             {
                 Map<String, Object> entry = detached.get(i);
                 IFile file = detachedFiles.get(i);
-                String what = entry.get(KEY_EXT_INFO) + "." + entry.get("name"); //$NON-NLS-1$ //$NON-NLS-2$
                 if (file == null)
                 {
-                    entry.put(KEY_FILE_REMOVAL, ResourceCleanup.FAILED.name());
-                    fileNotes.append(" The file of ").append(what) //$NON-NLS-1$
-                        .append(" could not be resolved - check the form folder for a leftover."); //$NON-NLS-1$
+                    entry.put(KEY_FILE_REMOVAL, DetachedFileState.UNVERIFIED.name());
+                    fileNotes.append(" The file of ").append(entry.get(KEY_EXT_INFO)).append('.') //$NON-NLS-1$
+                        .append(entry.get("name")) //$NON-NLS-1$
+                        .append(" could not be resolved, so its removal is not confirmed - check the form folder."); //$NON-NLS-1$
                     continue;
                 }
-                String path = fileLabelOf(file);
-                ResourceCleanup cleanup = remover.apply(file);
-                entry.put(KEY_FILE, path);
-                entry.put(KEY_FILE_REMOVAL, cleanup.name());
-                fileNotes.append(' ').append(resourceCleanupMessage(cleanup, "Its file " + path)); //$NON-NLS-1$
+                entry.put(KEY_FILE, fileLabelOf(file));
             }
         }
 
@@ -3903,9 +3752,18 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         /** No resource at the resolved path (nothing was removed). */
         NOT_FOUND,
         /** The path could not be resolved or the delete attempt failed. */
-        FAILED,
-        /** Not deleted on purpose: the on-disk form was not confirmed rewritten and may still reference it. */
-        KEPT
+        FAILED
+    }
+
+    /** A detached extInfo object's file as observed after the export barrier; EDT's save deletes it. */
+    enum DetachedFileState
+    {
+        /** Not on disk after the export. */
+        REMOVED,
+        /** Still on disk after the export: the result is partial. */
+        STILL_PRESENT,
+        /** The file could not be resolved or checked: the result is partial. */
+        UNVERIFIED
     }
 
     /** The message fragment describing the form-folder cleanup outcome (leading space included). */
@@ -3923,8 +3781,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return subject + " was removed from disk."; //$NON-NLS-1$
         case NOT_FOUND:
             return subject + " was not found on disk (nothing was removed)."; //$NON-NLS-1$
-        case KEPT:
-            return subject + " was kept: the form on disk was not confirmed rewritten and may still reference it."; //$NON-NLS-1$
         case FAILED:
         default:
             return subject + " could not be removed - check it manually."; //$NON-NLS-1$
@@ -4747,9 +4603,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 for (Map<String, Object> entry : detachedObjects)
                 {
                     sb.append(entry.containsKey(KEY_FILE)
-                        ? " Its file " + entry.get(KEY_FILE) + " is deleted from disk." //$NON-NLS-1$ //$NON-NLS-2$
+                        ? " Its file " + entry.get(KEY_FILE) + " is deleted from disk by EDT's export." //$NON-NLS-1$ //$NON-NLS-2$
                         : " The file of " + entry.get(KEY_EXT_INFO) + "." + entry.get("name") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                            + " could not be resolved, so none is deleted - check the form folder afterwards."); //$NON-NLS-1$
+                            + " could not be resolved, so its removal cannot be confirmed - check the form folder afterwards."); //$NON-NLS-1$
                 }
             }
             if (removalTruncated)
@@ -4763,6 +4619,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                         + "path points into the attribute or stops resolving" : "") //$NON-NLS-1$
                     .append(" - the confirmed response lists them."); //$NON-NLS-1$
             }
+            // The global editing context's commit saves another context that last modified the form.
+            sb.append(" An open editor of this form with unsaved changes has them saved with the delete " //$NON-NLS-1$
+                + "and loses its undo history."); //$NON-NLS-1$
             return sb.toString();
         }
 

@@ -1170,7 +1170,24 @@ public final class FormElementWriter
      */
     public static boolean writeEditableForm(FormEditContext ctx, String taskName, FormWork work)
     {
-        String contentFormFqn = BmTransactions.<String>write(ctx.bmModel, taskName, (tx, pm) ->
+        return writeEditableForm(ctx, taskName, work, false);
+    }
+
+    /**
+     * {@link #writeEditableForm(FormEditContext, String, FormWork)}, optionally committed through the
+     * model's global editing context ({@link BmTransactions#writeInGlobalContext}) so EDT's own save
+     * also deletes the files of the top objects the work detached.
+     *
+     * @param ctx the resolved context (see {@link #resolveForEdit})
+     * @param taskName a short BM task name for diagnostics
+     * @param work the mutation to run on the content form
+     * @param globalContext {@code true} to commit through the global editing context
+     * @return whether the export persisted the change to disk
+     */
+    public static boolean writeEditableForm(FormEditContext ctx, String taskName, FormWork work,
+        boolean globalContext)
+    {
+        BmTransactions.BmOperation<String> operation = (tx, pm) ->
         {
             EObject formModel = editableFormInTx(ctx, tx);
             work.run(formModel, tx);
@@ -1179,7 +1196,10 @@ public final class FormElementWriter
             normalizeFormCommandIds(formModel);
             // The content Form is a separate top object serialized to Form.form - export ITS fqn.
             return (formModel instanceof IBmObject) ? ((IBmObject)formModel).bmGetFqn() : null;
-        });
+        };
+        String contentFormFqn = globalContext
+            ? BmTransactions.writeInGlobalContext(ctx.bmModel, taskName, operation)
+            : BmTransactions.write(ctx.bmModel, taskName, operation);
         // The write is committed at this point whether or not an export can be submitted below, and
         // the export IS skipped when the content form has no FQN to name. Stating the project here
         // is what keeps that branch a write with a known scope instead of a call that says nothing

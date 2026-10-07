@@ -571,8 +571,9 @@ def test_delete_dynamic_list_form_attribute_discloses_and_detaches_its_list_sett
                     "the preview message must name the detached object")
     assert [(it.get("file"), it.get("deletedFromDisk")) for it in detached] == [(settings_rel, True)], \
         "the preview must name the file the confirm deletes: %r" % (pv.structured,)
-    assert_contains(pv.structured.get("message", ""), "Its file %s is deleted from disk." % settings_rel,
-                    "the preview message must name the file it deletes")
+    assert_contains(pv.structured.get("message", ""),
+                    "Its file %s is deleted from disk by EDT's export." % settings_rel,
+                    "the preview message must name the file EDT's export deletes")
 
     r = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn, "confirm": True})
     assert_ok(r, "delete the dynamic-list attribute (confirm)")
@@ -584,9 +585,10 @@ def test_delete_dynamic_list_form_attribute_discloses_and_detaches_its_list_sett
     removal = [(it.get("file"), it.get("fileRemoval"))
                for it in (r.structured.get("items") or []) if it.get("detached")]
     assert removal == [(settings_rel, "REMOVED")], \
-        "the response must report the settings file it removed: %r" % (r.structured,)
+        "the response must report the settings file observed gone after the export: %r" % (r.structured,)
+    assert "persisted" not in r.structured,         "a file observed gone leaves the result complete: %r" % (r.structured,)
     assert "pendingFileRemoval" not in (r.text or "") and "pendingFileRemoval" not in r.structured, \
-        "the post-export removal hand-off is internal and must not reach the caller: %r" % (r.structured,)
+        "no internal post-export member may reach the caller: %r" % (r.structured,)
     poll_disk_lacks(form_rel, "<name>List</name>", ctx="the attribute must be gone from Form.form")
     poll_disk_path_gone(settings_rel, ctx="the detached list settings must leave the disk with it")
     d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [form]})
