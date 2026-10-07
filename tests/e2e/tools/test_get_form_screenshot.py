@@ -62,7 +62,6 @@ FIXTURE TRUTH (TestConfiguration, English Names)
 
 from harness import (
     buffered_form_render_at_startup,
-    form_render_capable,
     native_form_layout_render_mode,
     E2ESkip,
     call,
@@ -160,33 +159,18 @@ def test_capture_commonform_real_image_or_clean_render_sentinel():
     assert_no_diff("a screenshot read must not touch the project on disk")
 
 
-# Sentinels raised BEFORE the showElement lookup (no editor/representation at all).
-# The render-gate sentinel "Form image data is not available" is deliberately absent:
-# showElement is resolved before the render gate, so an unknown name must never
-# surface as a render failure.
-_NO_EDITOR_SENTINELS = (
-    "WYSIWYG viewer is not available",
-    "WYSIWYG page is not available",
-    "WYSIWYG representation is not available",
-)
-
-
 @e2e_test(tool="get_form_screenshot", kind="read")
 def test_show_element_unknown_name_names_the_form_and_lists_its_pages():
-    """An unknown showElement fails fast, before the render gate, so it does not
-    depend on the buffered-render flag. The error names the value and the searched
-    form and lists the form's pages, so the caller needs no second call. An editor
-    that cannot be opened is excused only where get_server_status shows EDT is not
-    configured to render forms; there it is a skip, never a pass."""
-    capable = form_render_capable()
+    """An unknown showElement fails fast, before the render gate: opening the editor and
+    resolving the name need no image and no particular render mode, so nothing excuses
+    a missing not-found here. The error names the value and the searched form and lists
+    the form's pages, so the caller needs no second call."""
     r = call("get_form_screenshot", {
         "projectName": PROJECT,
         "formPath": "CommonForm.Form",
         "showElement": "NoSuchElementXyz",
     })
     err = assert_error(r, "unknown showElement")
-    if not capable and any(s in err for s in _NO_EDITOR_SENTINELS):
-        raise E2ESkip("EDT is not configured to render forms and the editor did not open: %s" % err[:200])
     assert "'NoSuchElementXyz' was not found in form 'CommonForm.Form'" in err, (
         "the not-found error must name the value and the searched form; got: %r" % (err[:400]))
     assert "Its pages: PageMain, PageExtra." in err, (
@@ -216,8 +200,9 @@ def test_show_element_switches_the_page_and_puts_the_editor_back():
     The prerequisites come from get_server_status, never from the tool's own failure:
       * Java render (-DnativeFormLayoutRender=false): a KNOWN name is refused with the
         restart advice - never a not-found, never the default page as success.
-      * Native render without -DnativeFormBufferedLayoutRender=true at startup: no form
-        image exists on this install, so the test is skipped before any capture.
+      * Native render with -DnativeFormBufferedLayoutRender reported OFF at startup: no
+        form image exists on this install, so the test is skipped before any capture.
+        A status that cannot be read fails the test instead.
       * Native render with the buffered image: every capture below MUST succeed. The form
         is opened, then everything runs on the ACTIVE editor (no formPath), so no capture
         reopens it and only the restore can bring it back:
@@ -233,10 +218,6 @@ def test_show_element_switches_the_page_and_puts_the_editor_back():
     re-selects the editor's last selection; other Pages groups return to their default
     pages); FormPageSwitchTest pins its render sequence, not native pixels."""
     mode = native_form_layout_render_mode()
-    if mode is None:
-        raise E2ESkip("EDT's form render mode could not be read from get_server_status, "
-                      "so the expected showElement outcome is unknown")
-
     if mode == "off":
         r = call("get_form_screenshot", {
             "projectName": PROJECT,
@@ -249,7 +230,7 @@ def test_show_element_switches_the_page_and_puts_the_editor_back():
         assert_no_diff("a screenshot read must not touch the project on disk")
         return
 
-    if buffered_form_render_at_startup() != "on":
+    if buffered_form_render_at_startup() == "off":
         raise E2ESkip("EDT started without -DnativeFormBufferedLayoutRender=true, so this "
                       "install produces no form image")
 

@@ -55,9 +55,7 @@ never mutate the project tree on disk.
 import re
 
 from harness import (
-    form_render_capable,
     native_form_layout_render_mode,
-    E2ESkip,
     call,
     assert_ok,
     assert_error_quality,
@@ -424,10 +422,8 @@ def _normalized_body(r):
 def test_show_element_unknown_name_names_the_form_and_lists_its_pages():
     """An unknown showElement fails with the same not-found error get_form_screenshot
     gives: it names the value and the searched form and lists the form's pages. It is
-    resolved by name before the layout is read and before any render-mode check, so a
-    missing layout never excuses it. An editor that cannot be opened is excused only
-    where get_server_status shows EDT is not configured to render forms (a skip)."""
-    capable = form_render_capable()
+    resolved by name before the layout is read and before any render-mode check, and
+    opening the editor needs no image, so nothing excuses a missing not-found here."""
     r = call("get_form_layout_snapshot", {
         "projectName": PROJECT,
         "formPath": "CommonForm.Form",
@@ -435,8 +431,6 @@ def test_show_element_unknown_name_names_the_form_and_lists_its_pages():
     })
     _assert_is_failure(r, "unknown showElement")
     body = _normalized_body(r)
-    if not capable and any(s in body for s in _EDITOR_UNAVAILABLE_SENTINELS):
-        raise E2ESkip("EDT is not configured to render forms and the editor did not open: %s" % body[:200])
     assert "'NoSuchElementXyz' was not found in form 'CommonForm.Form'" in body, (
         "the not-found error must name the value and the searched form:\n%s" % body[:600])
     assert "Its pages: PageMain, PageExtra." in body, (
@@ -445,14 +439,6 @@ def test_show_element_unknown_name_names_the_form_and_lists_its_pages():
                          ctx="unknown showElement names the value and the element-listing tool")
     assert_no_diff("snapshotting a form is read-only; nothing may change on disk")
 
-
-# The editor itself could not be opened. "WYSIWYG layout model is not available" is
-# deliberately absent: showElement is checked before the layout is read.
-_EDITOR_UNAVAILABLE_SENTINELS = (
-    "WYSIWYG page is not available",
-    "WYSIWYG viewer is not available",
-    "WYSIWYG representation is not available",
-)
 
 _BOUNDS_RE = (r"bounds: left: (-?\d+) top: (-?\d+) width: (\d+) height: (\d+) "
               r"right: (-?\d+) bottom: (-?\d+)")
@@ -468,12 +454,9 @@ def test_show_element_on_a_non_default_page_has_bounds_in_java_render_and_is_ref
         answered "no calculated bounds" fails here);
       * native render: no element has bounds on any page, so the call MUST be the
         explicit refusal pointing at get_form_screenshot.
-    An editor that cannot be opened is a skip only where get_server_status shows EDT
-    is not configured to render forms; on a capable install it fails."""
+    Neither branch needs a form image, so an editor that cannot be opened fails, and an
+    unreadable render mode fails the prerequisite check."""
     mode = native_form_layout_render_mode()
-    if mode is None:
-        raise E2ESkip("EDT's form render mode could not be read from get_server_status, "
-                      "so the expected showElement outcome is unknown")
     r = call("get_form_layout_snapshot", {
         "projectName": PROJECT,
         "formPath": "CommonForm.Form",
@@ -481,9 +464,6 @@ def test_show_element_on_a_non_default_page_has_bounds_in_java_render_and_is_ref
     })
     assert_ok(r, "snapshot with showElement")
     body = _normalized_body(r)
-    if ("success: false" in body and any(s in body for s in _EDITOR_UNAVAILABLE_SENTINELS)
-            and not form_render_capable()):
-        raise E2ESkip("EDT is not configured to render forms and the editor did not open: %s" % body[:200])
     assert "was not found" not in body, "an existing element must not be reported missing:\n%s" % body[:600]
 
     if mode == "on":
