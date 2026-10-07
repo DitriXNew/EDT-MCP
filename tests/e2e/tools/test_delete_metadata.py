@@ -585,6 +585,8 @@ def test_delete_dynamic_list_form_attribute_discloses_and_detaches_its_list_sett
                for it in (r.structured.get("items") or []) if it.get("detached")]
     assert removal == [(settings_rel, "REMOVED")], \
         "the response must report the settings file it removed: %r" % (r.structured,)
+    assert "pendingFileRemoval" not in (r.text or "") and "pendingFileRemoval" not in r.structured, \
+        "the post-export removal hand-off is internal and must not reach the caller: %r" % (r.structured,)
     poll_disk_lacks(form_rel, "<name>List</name>", ctx="the attribute must be gone from Form.form")
     poll_disk_path_gone(settings_rel, ctx="the detached list settings must leave the disk with it")
     d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [form]})
