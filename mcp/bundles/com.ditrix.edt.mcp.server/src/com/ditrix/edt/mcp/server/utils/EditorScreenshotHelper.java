@@ -674,26 +674,6 @@ public final class EditorScreenshotHelper
     // ==================== Image capture ====================
 
     /**
-     * Extracts the form image data from the WYSIWYG representation.
-     * This is the primary (preferred) capture method using {@code getFormImageData()}.
-     *
-     * @param wysiwygViewer the WYSIWYG viewer instance
-     * @return image data, or {@code null} if not available
-     */
-    public static ImageData extractFormImageData(Object wysiwygViewer) throws Exception
-    {
-        Object representation = ReflectionUtils.getFieldValue(wysiwygViewer, WYSIWYG_REPRESENTATION_FIELD);
-        if (representation == null)
-        {
-            return null;
-        }
-
-        // Trigger rebuild so the native render produces an up-to-date image, then read it.
-        rebuildRepresentation(representation);
-        return readFormImageData(representation);
-    }
-
-    /**
      * Returns the {@code com._1c.g5.v8.dt.form.model.Form} model that the WYSIWYG representation is
      * actually rendering, read from its {@code form} field. This is the authoritative subject of the
      * representation's render: in the representation's rebuild task ({@code FormWysiwygRepresentation$2})
@@ -921,7 +901,7 @@ public final class EditorScreenshotHelper
      * @param representation the {@code FormWysiwygRepresentation} instance
      * @return the current {@code formImageData} reference, or {@code null}
      */
-    private static ImageData getFormImageDataField(Object representation)
+    static ImageData getFormImageDataField(Object representation)
     {
         if (representation == null)
         {
@@ -1344,6 +1324,20 @@ public final class EditorScreenshotHelper
     {
         return renderSyncUntil(representation, selectedIds, updateOnly, deadline,
             outcome -> outcome == RenderOutcome.RENDERED, pump);
+    }
+
+    /**
+     * Drives a synchronous full render on the UI thread (retried while the model loads), so the layout
+     * read right after it is a whole generation produced during this call.
+     *
+     * @param representation the {@code FormWysiwygRepresentation} instance
+     * @return {@code true} when a render ran
+     */
+    public static boolean renderFormNow(Object representation)
+    {
+        return renderSyncUntilRendered(representation, null, false,
+            System.currentTimeMillis() + FRESH_RENDER_WAIT_TIMEOUT_MS,
+            EditorScreenshotHelper::processCurrentEvents).outcome == RenderOutcome.RENDERED;
     }
 
     /** Drains the pending events of the calling UI thread; a no-op off the UI thread. */

@@ -61,6 +61,8 @@ FIXTURE TRUTH (TestConfiguration, English Names)
 """
 
 from harness import (
+    native_form_layout_render_mode,
+    E2ESkip,
     call,
     assert_ok,
     assert_error,
@@ -196,70 +198,73 @@ def test_show_element_unknown_name_names_the_form_and_lists_its_pages():
     assert_no_diff("a screenshot read must not touch the project on disk")
 
 
+def _png(result, ctx):
+    """The PNG blob of a successful capture; fails the test on an error or a non-PNG blob."""
+    assert not result.is_error, "[%s] must capture; got: %r" % (ctx, result.error_text()[:300])
+    blob = _blob(result)
+    assert blob and blob.startswith(_PNG_B64_PREFIX), (
+        "[%s] must return a real PNG; got prefix %r" % (ctx, (blob or "")[:16]))
+    return blob
+
+
 @e2e_test(tool="get_form_screenshot", kind="read")
-def test_show_element_switches_the_page_and_the_editor_comes_back():
-    """showElement must really switch the page, and the editor must not stay on it.
+def test_show_element_switches_the_page_and_restores_the_editor_exactly():
+    """showElement must really switch the page, and the editor must come back exactly.
 
-    Render-dependent (module docstring): without a rendered image the default capture
-    already returns a documented render sentinel, and the rest cannot be observed.
-    With an image:
-      * showElement=PageExtra (and an element ON that page, case-insensitively)
-        returns a PNG that differs from the default capture - a switch that does
-        nothing returns the default page and fails here;
-      * a capture of the still-open editor right after (no formPath, no showElement,
-        no refresh) reads the buffer the restore re-rendered. Without the restore the
-        buffer still holds the PageExtra image, which this test rejects."""
-    default = call("get_form_screenshot", {
-        "projectName": PROJECT,
-        "formPath": "CommonForm.Form",
-    })
-    if default.is_error:
-        err = default.error_text()
-        assert any(s in err for s in _RENDER_UNAVAILABLE_SENTINELS), (
-            "a default capture of an existing form may only fail with a render "
-            "sentinel; got: %r" % (err[:300])
-        )
-        assert_no_diff("a screenshot read must not touch the project on disk")
-        return
-    default_blob = _blob(default)
-    assert default_blob and default_blob.startswith(_PNG_B64_PREFIX), (
-        "the default capture must be a real PNG; got prefix %r" % ((default_blob or "")[:16])
-    )
+    Branches on the render mode read independently from get_server_status:
+      * Java render (-DnativeFormLayoutRender=false): a KNOWN name is refused with the
+        restart advice - never a not-found, never the default page as success.
+      * Native render: the form is opened, then everything runs on the ACTIVE editor
+        (no formPath), so no capture reopens it and only the restore can bring it back:
+          - the active-editor capture is the baseline the editor shows;
+          - showElement=PageExtra differs from it (a no-op switch fails here);
+          - showElement=extrapagelabel (an element ON that page, case-insensitive)
+            gives the SAME image as the page itself: same page, selection frame
+            cleared both times;
+          - the active-editor capture afterwards equals the baseline pixel for pixel
+            (a missing or wrong restore fails here).
+    A native render that yields no image at all (no buffered render) is a SKIP: the
+    switch cannot be observed there."""
+    mode = native_form_layout_render_mode()
+    if mode is None:
+        raise E2ESkip("EDT's form render mode could not be read from get_server_status, "
+                      "so the expected showElement outcome is unknown")
 
-    shown_blobs = {}
-    for name in ("PageExtra", "extrapagelabel"):
+    if mode == "off":
         r = call("get_form_screenshot", {
             "projectName": PROJECT,
             "formPath": "CommonForm.Form",
-            "showElement": name,
+            "showElement": "ExtraPageLabel",
         })
-        # The default capture rendered, so the native render is up: the switch must work.
-        assert not r.is_error, (
-            "showElement=%r must capture once the default capture works; got: %r"
-            % (name, r.error_text()[:300])
-        )
-        blob = _blob(r)
-        assert blob and blob.startswith(_PNG_B64_PREFIX), (
-            "showElement=%r must return a real PNG; got prefix %r" % (name, (blob or "")[:16])
-        )
-        assert blob != default_blob, (
-            "showElement=%r returned the default page's image: the page was not switched" % name
-        )
-        shown_blobs[name] = blob
+        err = assert_error(r, "showElement in Java render mode")
+        if any(s in err for s in _NO_EDITOR_SENTINELS):
+            raise E2ESkip("the form editor could not be opened: %s" % err[:200])
+        assert "showElement needs the native form render" in err and "'ExtraPageLabel'" in err, (
+            "Java render mode must refuse a known showElement explicitly; got: %r" % err[:400])
+        assert_no_diff("a screenshot read must not touch the project on disk")
+        return
 
-    after = call("get_form_screenshot", {})
-    assert not after.is_error, (
-        "the CommonForm.Form editor is still open, so an active-editor capture must "
-        "succeed; got: %r" % (after.error_text()[:300])
-    )
-    after_blob = _blob(after)
-    assert after_blob and after_blob.startswith(_PNG_B64_PREFIX), (
-        "the active-editor capture must be a real PNG; got prefix %r" % ((after_blob or "")[:16])
-    )
-    assert after_blob != shown_blobs["extrapagelabel"], (
-        "after a showElement capture the editor still shows the switched page: the "
-        "restore did not run"
-    )
+    opened = call("get_form_screenshot", {"projectName": PROJECT, "formPath": "CommonForm.Form"})
+    if opened.is_error:
+        err = opened.error_text()
+        assert any(s in err for s in _RENDER_UNAVAILABLE_SENTINELS), (
+            "a capture of an existing form may only fail with a render sentinel; got: %r" % err[:300])
+        raise E2ESkip("the native render produced no image here (%s)" % err[:200])
+    _png(opened, "opening capture")
+
+    baseline = _png(call("get_form_screenshot", {}), "baseline capture of the active editor")
+    page = _png(call("get_form_screenshot", {"showElement": "PageExtra"}), "showElement=PageExtra")
+    element = _png(call("get_form_screenshot", {"showElement": "extrapagelabel"}),
+                   "showElement=extrapagelabel")
+    after = _png(call("get_form_screenshot", {}), "active-editor capture after showElement")
+
+    assert page != baseline, "showElement=PageExtra returned the page the editor showed: nothing was switched"
+    assert element == page, (
+        "an element on PageExtra must give the same image as the page itself (same page, "
+        "no selection frame); they differ")
+    assert after == baseline, (
+        "after showElement the editor must show exactly what it showed before; the "
+        "active-editor capture differs from the baseline")
     assert_no_diff("a screenshot read must not touch the project on disk")
 
 

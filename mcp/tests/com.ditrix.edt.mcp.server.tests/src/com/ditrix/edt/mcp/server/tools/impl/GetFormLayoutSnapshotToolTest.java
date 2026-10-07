@@ -19,6 +19,8 @@ import java.util.List;
 import java.util.Map;
 
 import org.junit.Test;
+import org.yaml.snakeyaml.DumperOptions;
+import org.yaml.snakeyaml.Yaml;
 
 import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.form.model.FormFactory;
@@ -254,6 +256,24 @@ public class GetFormLayoutSnapshotToolTest
         Map<String, Object> noBounds = new LinkedHashMap<>();
         noBounds.put("name", "Bare"); //$NON-NLS-1$ //$NON-NLS-2$
         assertNull(FormLayoutSnapshotService.findElementWithBounds(List.of(noBounds), "Bare")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testShownElementEntryIsDumpedWithoutYamlAliases()
+    {
+        Map<String, Object> label = element("ExtraPageLabel", 120, 18, null); //$NON-NLS-1$
+        Map<String, Object> entry = FormLayoutSnapshotService.shownElementEntry(label);
+        assertEquals("ExtraPageLabel", entry.get("name")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(label.get("bounds"), entry.get("bounds")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("shownElement", entry); //$NON-NLS-1$
+        result.put("elements", List.of(label)); //$NON-NLS-1$
+        DumperOptions options = new DumperOptions();
+        options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
+        String yaml = new Yaml(options).dump(result);
+        assertFalse("the bounds must be written out twice, not as an anchor and an alias:\n" + yaml, //$NON-NLS-1$
+            yaml.contains("&id") || yaml.contains("*id")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

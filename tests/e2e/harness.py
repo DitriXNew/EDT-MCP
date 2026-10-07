@@ -2483,6 +2483,32 @@ def final_cleanup():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Form render mode (an independent oracle for render-dependent form tests)
+# ──────────────────────────────────────────────────────────────────────────────
+def native_form_layout_render_mode():
+    """EDT's native form layout render mode as 'on' or 'off', or None when unreadable.
+
+    Read from get_server_status: formRenderFlags.nativeFormLayoutRender.atStartup is
+    EDT's own NativeRenderService.isNativeRender() at plugin activation, so EDT's
+    default (native when the property is absent) is reported correctly, and
+    forcedAtRuntime marks a later change of the live mode. Tests branch on this
+    instead of accepting whichever outcome a form tool happens to return."""
+    r = call("get_server_status", {})
+    if r.is_error or not isinstance(r.structured, dict):
+        return None
+    flags = r.structured.get("formRenderFlags")
+    state = flags.get("nativeFormLayoutRender") if isinstance(flags, dict) else None
+    if not isinstance(state, dict):
+        return None
+    mode = state.get("atStartup")
+    if mode not in ("on", "off"):
+        return None
+    if state.get("forcedAtRuntime") is True:
+        mode = "off" if mode == "on" else "on"
+    return mode
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Assertions
 # ──────────────────────────────────────────────────────────────────────────────
 def assert_ok(result, ctx=""):

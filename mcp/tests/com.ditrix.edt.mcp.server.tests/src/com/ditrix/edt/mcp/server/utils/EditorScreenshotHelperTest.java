@@ -573,6 +573,19 @@ public class EditorScreenshotHelperTest
             rep.asyncRebuilds.get() >= 1);
     }
 
+    @Test
+    public void testRenderFormNowRunsASynchronousFullRender()
+    {
+        // get_form_layout_snapshot's refresh: the layout it then reads comes from this render.
+        FakeSyncRepresentation rep = new FakeSyncRepresentation();
+
+        assertTrue(EditorScreenshotHelper.renderFormNow(rep));
+        assertEquals("a full layout/render pass", Boolean.FALSE, rep.lastUpdateOnly); //$NON-NLS-1$
+        assertEquals("no async rebuild is scheduled", 0, rep.asyncRebuilds.get()); //$NON-NLS-1$
+        assertFalse("without the synchronous hooks nothing is rendered", //$NON-NLS-1$
+            EditorScreenshotHelper.renderFormNow(new Object()));
+    }
+
     // ==================== showElement: resolution ====================
 
     /** A representation whose {@code form} field holds a real form model. */

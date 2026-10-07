@@ -149,6 +149,13 @@ public class FormLayoutSnapshotService
             if (refresh)
             {
                 EditorScreenshotHelper.refreshViewer(wysiwygViewer);
+                // The refresh above only schedules a rebuild; this one runs now, so the fields read
+                // below (with no event pumping in between) are one layout produced during this call.
+                if (!EditorScreenshotHelper.renderFormNow(representation))
+                {
+                    warnings.add("The form could not be re-rendered during this call, so the layout below may " //$NON-NLS-1$
+                        + "predate it. Retry the call."); //$NON-NLS-1$
+                }
             }
 
             Object hippoLayForm = ReflectionUtils.getFieldValue(representation, HIPPO_LAY_FORM_FIELD);
@@ -183,7 +190,7 @@ public class FormLayoutSnapshotService
                     NativeRenderModeProbe.getNativeRenderMode()));
             }
 
-            Map<String, Object> formSize = getFormSize(wysiwygViewer, refresh);
+            Map<String, Object> formSize = getFormSize(wysiwygViewer, representation, refresh);
 
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("success", true); //$NON-NLS-1$
@@ -196,10 +203,7 @@ public class FormLayoutSnapshotService
             result.put("boundsCoordinateSpace", "form WYSIWYG pixels"); //$NON-NLS-1$ //$NON-NLS-2$
             if (shownElement != null)
             {
-                Map<String, Object> shown = new LinkedHashMap<>();
-                shown.put("name", shownElement.get("name")); //$NON-NLS-1$ //$NON-NLS-2$
-                shown.put("bounds", shownElement.get("bounds")); //$NON-NLS-1$ //$NON-NLS-2$
-                result.put("shownElement", shown); //$NON-NLS-1$
+                result.put("shownElement", shownElementEntry(shownElement)); //$NON-NLS-1$
             }
             result.put("warnings", warnings); //$NON-NLS-1$
             result.put("elements", elements); //$NON-NLS-1$
@@ -280,6 +284,21 @@ public class FormLayoutSnapshotService
                 + "-DnativeFormLayoutRender=false, where every page is laid out and in the snapshot."; //$NON-NLS-1$
         }
         return null;
+    }
+
+    /**
+     * The {@code shownElement} entry: the element's name and a copy of its bounds (the same map twice in
+     * the dump would come out as a YAML anchor and alias).
+     *
+     * @param element the element found by {@link #findElementWithBounds}
+     * @return the entry
+     */
+    public static Map<String, Object> shownElementEntry(Map<String, Object> element)
+    {
+        Map<String, Object> shown = new LinkedHashMap<>();
+        shown.put("name", element.get("name")); //$NON-NLS-1$ //$NON-NLS-2$
+        shown.put("bounds", new LinkedHashMap<>((Map<?, ?>)element.get("bounds"))); //$NON-NLS-1$ //$NON-NLS-2$
+        return shown;
     }
 
     /**
@@ -1045,11 +1064,13 @@ public class FormLayoutSnapshotService
         }
     }
 
-    private Map<String, Object> getFormSize(Object wysiwygViewer, boolean refresh) throws Exception
+    /** The rendered size; read without a new render, so it matches the layout the elements came from. */
+    private Map<String, Object> getFormSize(Object wysiwygViewer, Object representation, boolean refresh)
+        throws Exception
     {
         if (refresh)
         {
-            ImageData imageData = EditorScreenshotHelper.extractFormImageData(wysiwygViewer);
+            ImageData imageData = EditorScreenshotHelper.readFormImageData(representation);
             if (imageData != null)
             {
                 return boundsMap(0, 0, imageData.width, imageData.height);

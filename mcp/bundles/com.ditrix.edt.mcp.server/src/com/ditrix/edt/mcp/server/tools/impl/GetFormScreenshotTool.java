@@ -237,41 +237,54 @@ public class GetFormScreenshotTool implements IMcpTool
         ImageDataResult imageResult = readValidImageData(representation, wysiwygViewer, rendered, formRequested);
         if (imageResult.error != null)
         {
-            return imageResult.error;
+            return CaptureResult.error(ToolResult.error(imageResult.error).toJson());
         }
         return CaptureResult.success(EditorScreenshotHelper.encodePng(imageResult.imageData));
     }
 
     /**
      * Captures with the page holding {@code target} shown. Runs after the (possibly forced) render,
-     * since a full render brings back the default pages. The editor is restored in {@code finally},
-     * after the image is encoded (the native render reuses the ImageData instance); a failed restore
-     * fails the call, because the editor and later captures would keep the switched page.
+     * since a full render brings back the default pages. The switch is shown inside the {@code try}
+     * whose {@code finally} restores the editor, after the image is encoded (the native render reuses
+     * the ImageData instance). A failed restore fails the call and is appended to any other failure:
+     * the editor and later captures would keep the switched page.
      */
-    private static CaptureResult captureShowingElement(Object representation, Object wysiwygViewer,
+    static CaptureResult captureShowingElement(Object representation, Object wysiwygViewer,
         boolean rendered, boolean formRequested, EditorScreenshotHelper.ShowElementTarget target)
-        throws Exception
     {
-        FormPageSwitch pageSwitch = FormPageSwitch.show(representation, target);
-        CaptureResult capture;
+        FormPageSwitch pageSwitch = FormPageSwitch.prepare(representation, target);
+        String failure = null;
+        String png = null;
         String restoreError;
         try
         {
-            capture = pageSwitch.getError() != null
-                ? CaptureResult.error(ToolResult.error(pageSwitch.getError()).toJson())
-                : captureImage(representation, wysiwygViewer, rendered, formRequested);
+            failure = pageSwitch.show();
+            if (failure == null)
+            {
+                ImageDataResult image = readValidImageData(representation, wysiwygViewer, rendered, formRequested);
+                failure = image.error;
+                png = image.error == null ? EditorScreenshotHelper.encodePng(image.imageData) : null;
+            }
+        }
+        catch (Exception e)
+        {
+            if (e instanceof InterruptedException)
+            {
+                Thread.currentThread().interrupt();
+            }
+            Activator.logError("Failed to capture form screenshot", e); //$NON-NLS-1$
+            failure = "Failed to capture form screenshot: " + e.getMessage(); //$NON-NLS-1$
         }
         finally
         {
             restoreError = pageSwitch.restore();
         }
-        // An image-read failure stays the reported error; the restore failure is logged.
-        if (restoreError == null || (!capture.isSuccess() && pageSwitch.getError() == null))
+        if (restoreError != null)
         {
-            return capture;
+            failure = failure == null ? restoreError : failure + " " + restoreError; //$NON-NLS-1$
         }
-        String message = pageSwitch.getError() != null ? pageSwitch.getError() + " " + restoreError : restoreError; //$NON-NLS-1$
-        return CaptureResult.error(ToolResult.error(message).toJson());
+        return failure == null ? CaptureResult.success(png)
+            : CaptureResult.error(ToolResult.error(failure).toJson());
     }
 
     /**
@@ -384,8 +397,8 @@ public class GetFormScreenshotTool implements IMcpTool
     /**
      * Reads the rendered image from the representation, applies the active-editor print fallback,
      * and validates the image dimensions. Returns a holder carrying either a valid {@link ImageData}
-     * or the same {@link CaptureResult} error the inline code produced (the contiguous
-     * "Form image data is not available" sentinel rules are preserved).
+     * or the error message (the contiguous "Form image data is not available" sentinel rules are
+     * preserved).
      */
     private static ImageDataResult readValidImageData(Object representation, Object wysiwygViewer,
         boolean rendered, boolean formRequested)
@@ -410,14 +423,13 @@ public class GetFormScreenshotTool implements IMcpTool
             {
                 // Same contiguous-sentinel rule as above: lead with the documented
                 // "Form image data is not available" phrase, then the wait-budget context.
-                return ImageDataResult.failed(CaptureResult.error(ToolResult.error(
+                return ImageDataResult.failed(
                     "Form image data is not available: the form did not finish rendering " + //$NON-NLS-1$
                     "in time, so no image could be captured. " + //$NON-NLS-1$
                     "Ensure EDT runs with buffered native render " + //$NON-NLS-1$
-                    "(VM option -DnativeFormBufferedLayoutRender=true) and try again.").toJson())); //$NON-NLS-1$
+                    "(VM option -DnativeFormBufferedLayoutRender=true) and try again."); //$NON-NLS-1$
             }
-            return ImageDataResult.failed(
-                CaptureResult.error(ToolResult.error("Form image data is not available").toJson())); //$NON-NLS-1$
+            return ImageDataResult.failed("Form image data is not available"); //$NON-NLS-1$
         }
 
         return ImageDataResult.image(imageData);
@@ -456,9 +468,10 @@ public class GetFormScreenshotTool implements IMcpTool
     private static final class ImageDataResult
     {
         final ImageData imageData;
-        final CaptureResult error;
+        /** The error message, or {@code null} when {@link #imageData} is set. */
+        final String error;
 
-        private ImageDataResult(ImageData imageData, CaptureResult error)
+        private ImageDataResult(ImageData imageData, String error)
         {
             this.imageData = imageData;
             this.error = error;
@@ -469,7 +482,7 @@ public class GetFormScreenshotTool implements IMcpTool
             return new ImageDataResult(imageData, null);
         }
 
-        static ImageDataResult failed(CaptureResult error)
+        static ImageDataResult failed(String error)
         {
             return new ImageDataResult(null, error);
         }
