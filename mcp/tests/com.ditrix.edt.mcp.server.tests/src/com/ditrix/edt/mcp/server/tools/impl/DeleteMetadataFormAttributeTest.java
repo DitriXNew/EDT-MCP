@@ -1164,6 +1164,35 @@ public class DeleteMetadataFormAttributeTest
         assertTrue(calls.isEmpty());
     }
 
+    @Test
+    public void testASwapToAnotherObjectAtTheSameFileIsRefused()
+    {
+        // A replaced object is stored at the same derived path: only its BM id tells the two apart.
+        IFile file = settingsFile();
+        List<EObject> calls = new ArrayList<>();
+        DeleteMetadataTool.FormAttributeDeleter platform = filedDeleter(object -> file, calls);
+        Form form = listForm(attachedSettings(41L));
+        DeleteMetadataTool.FormDeletePreview data = preview(form, named(form, "List"), platform); //$NON-NLS-1$
+        assertEquals(SETTINGS_FILE, data.detachedObjects.get(0).get("file")); //$NON-NLS-1$
+        assertTrue(data.scope.toString(), data.scope.stream().anyMatch(identity -> identity.endsWith(
+            "DynamicListExtInfo.listSettings[" + SETTINGS_FILE + " id=41]:DataCompositionSettings"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        Form swapped = listForm(attachedSettings(42L));
+        try
+        {
+            DeleteMetadataTool.deleteAttributeInTx(swapped, named(swapped, "List"), null, platform, FQN, data.scope); //$NON-NLS-1$
+            fail("another object at the same file must be refused"); //$NON-NLS-1$
+        }
+        catch (FormValidationException e)
+        {
+            assertTrue(e.json(), e.json().contains("The form changed since the preview")); //$NON-NLS-1$
+            assertTrue("the refusal names the file", e.json().contains("(" + SETTINGS_FILE + ")")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse("... without the raw id", e.json().contains("id=4")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        assertTrue("EDT's delete never ran", calls.isEmpty()); //$NON-NLS-1$
+        assertNotNull("the attribute survives", named(swapped, "List")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     // ---- choice-parameter links EDT's cleaner drops from kept fields (review P2) ------------------
 
     private static FormChoiceParameterLink link(String name, String... path)

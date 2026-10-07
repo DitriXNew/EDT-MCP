@@ -2305,16 +2305,20 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         return file.getProjectRelativePath().toString();
     }
 
-    /** A detached object's scope key: its file, else its BM id while attached, else {@code ""}. */
+    /** A detached object's scope key: {@code "<file> id=<n>"}, either part alone, or {@code ""}. */
     private static String detachedKeyOf(EObject object, IFile file)
     {
-        if (file != null)
+        String id = object instanceof IBmObject && ((IBmObject)object).bmGetEngine() != null
+            ? DETACHED_ID_PREFIX + ((IBmObject)object).bmGetId() : ""; //$NON-NLS-1$
+        if (file == null)
         {
-            return fileLabelOf(file);
+            return id;
         }
-        return object instanceof IBmObject && ((IBmObject)object).bmGetEngine() != null
-            ? "id=" + ((IBmObject)object).bmGetId() : ""; //$NON-NLS-1$ //$NON-NLS-2$
+        return id.isEmpty() ? fileLabelOf(file) : fileLabelOf(file) + ' ' + id;
     }
+
+    /** Marks the BM id part of a detached object's scope key. */
+    private static final String DETACHED_ID_PREFIX = "id="; //$NON-NLS-1$
 
     /** Whether a proper ancestor of {@code object} is in {@code roots}. */
     private static boolean hasAncestorIn(EObject object, Set<EObject> roots)
@@ -2446,7 +2450,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return last;
         }
         String key = last.substring(open + 1, last.length() - 1);
-        return key.isEmpty() || key.startsWith("#") || key.startsWith("id=") ? last.substring(0, open) : key; //$NON-NLS-1$ //$NON-NLS-2$
+        int id = key.lastIndexOf(' ' + DETACHED_ID_PREFIX);
+        if (id > 0)
+        {
+            return key.substring(0, id); // the file, without the BM id
+        }
+        return key.isEmpty() || key.startsWith("#") || key.startsWith(DETACHED_ID_PREFIX) ? last.substring(0, open) : key; //$NON-NLS-1$
     }
 
     /**
