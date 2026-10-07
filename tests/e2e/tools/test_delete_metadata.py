@@ -466,9 +466,10 @@ def test_delete_non_main_form_attribute_takes_only_its_own_bound_field():
 
 @e2e_test(tool="delete_metadata", kind="write-metadata")
 def test_delete_collection_form_attribute_discloses_and_takes_everything_inside_its_table():
-    # EDT removes a table bound to the attribute WITH its whole subtree - an unbound decoration inside
-    # it included - so the preview must disclose that member as well, flagged contained.
-    attr, col, tbl, hint = "DTRows", "DTPrice", "DTTable", "DTHint"
+    # EDT removes a table bound to the attribute WITH its whole subtree - a field inside it bound to
+    # ANOTHER attribute included - so the preview must disclose that member as well, flagged contained.
+    # (A table cannot hold a decoration; create_metadata refuses one there, as the designer does.)
+    attr, col, tbl, other, inner = "DTRows", "DTPrice", "DTTable", "DTOther", "DTOtherField"
     a = call("create_metadata", {
         "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
     assert_ok(a, "seed the attribute")
@@ -488,12 +489,13 @@ def test_delete_collection_form_attribute_discloses_and_takes_everything_inside_
         "properties": [{"name": "dataPath", "value": attr}]})
     assert_ok(t, "seed a table bound to the attribute")
     wait_for_project_ready()
-    d = call("create_metadata", {
-        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Decoration." + hint,
-        "properties": [{"name": "parent", "value": tbl}]})
-    assert_ok(d, "seed an unbound decoration inside the table")
+    _seed_form_attribute(other)
+    f = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field." + inner,
+        "properties": [{"name": "dataPath", "value": other}, {"name": "parent", "value": tbl}]})
+    assert_ok(f, "seed a field bound to another attribute inside the table")
     wait_for_project_ready()
-    poll_disk_contains(_FORM, "<name>%s</name>" % hint, ctx="the seeded decoration must be on disk")
+    poll_disk_contains(_FORM, "<name>%s</name>" % inner, ctx="the seeded field must be on disk")
     fqn = "Catalog.Catalog.Form.ItemForm.Attribute." + attr
 
     pv = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn})
@@ -501,9 +503,11 @@ def test_delete_collection_form_attribute_discloses_and_takes_everything_inside_
     items = pv.structured.get("items") or []
     assert _picked(pv.structured).get(tbl) == attr, \
         "the preview must list the table EDT removes with the attribute: %r" % (pv.structured,)
-    inside = [it.get("name") for it in items if it.get("contained")]
-    assert hint in inside, \
-        "the decoration inside the removed table must be disclosed, flagged contained: %r" % (items,)
+    inside = {it.get("name"): it.get("dataPath") for it in items if it.get("contained")}
+    assert inside.get(inner) == other, \
+        "the field inside the removed table must be disclosed, flagged contained, with its own " \
+        "binding: %r" % (items,)
+    assert inner not in _picked(pv.structured), "EDT's collector does not pick a field bound elsewhere"
     assert_contains(pv.structured.get("message", ""), "member(s) inside them",
                     "the preview message must count what goes with the removed table")
 
@@ -511,11 +515,12 @@ def test_delete_collection_form_attribute_discloses_and_takes_everything_inside_
     assert_ok(r, "delete the collection attribute (confirm)")
     assert r.structured.get("action") == "executed", "confirm must execute: %r" % (r.structured,)
     gone = [it.get("name") for it in (r.structured.get("items") or []) if it.get("contained")]
-    assert hint in gone, "the response must report the decoration it observed going: %r" % (r.structured,)
+    assert inner in gone, "the response must report the field it observed going: %r" % (r.structured,)
     poll_disk_lacks(_FORM, "<name>%s</name>" % tbl, ctx="the bound table must be gone")
     xml = read_disk(_FORM)
-    for name in (hint, attr, col):
+    for name in (inner, attr, col):
         assert_not_contains(xml, "<name>%s</name>" % name, "%s must be gone with the attribute" % name)
+    assert_contains(xml, "<name>%s</name>" % other, "the other attribute itself must survive")
     for name in _OBJECT_FIELDS:
         assert_contains(xml, "<name>%s</name>" % name, "a field bound elsewhere (%s) must survive" % name)
 
@@ -572,6 +577,10 @@ def test_delete_dynamic_list_form_attribute_discloses_and_detaches_its_list_sett
                     "the response must report the settings it observed detached")
     assert [it.get("name") for it in (r.structured.get("items") or []) if it.get("detached")] == \
         ["listSettings"], "the response items must carry the detached settings: %r" % (r.structured,)
+    removal = [(it.get("file"), it.get("fileRemoval"))
+               for it in (r.structured.get("items") or []) if it.get("detached")]
+    assert removal == [(settings_rel, "REMOVED")], \
+        "the response must report the settings file it removed: %r" % (r.structured,)
     poll_disk_lacks(form_rel, "<name>List</name>", ctx="the attribute must be gone from Form.form")
     poll_disk_path_gone(settings_rel, ctx="the detached list settings must leave the disk with it")
     d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [form]})

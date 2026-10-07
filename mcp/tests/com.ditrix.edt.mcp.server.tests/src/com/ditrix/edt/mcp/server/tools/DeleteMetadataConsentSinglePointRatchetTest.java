@@ -202,7 +202,7 @@ public class DeleteMetadataConsentSinglePointRatchetTest
         "FormElementWriter#writeMdForm", //$NON-NLS-1$
         "BmTransactions#write", //$NON-NLS-1$
         "BmTransactions#forceExportToDisk", //$NON-NLS-1$
-        "IFolder#delete"); //$NON-NLS-1$
+        "IResource#delete"); //$NON-NLS-1$
 
     /**
      * The export-submission seam (#408). It is NOT in {@link #MUTATIONS} and could not be: that

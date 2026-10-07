@@ -15,7 +15,12 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
@@ -28,8 +33,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Path;
+import org.eclipse.core.runtime.Status;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.Test;
@@ -721,6 +731,112 @@ public class DeleteMetadataFormAttributeTest
         assertEquals(List.of("listSettings"), names(outcome.leftAttached)); //$NON-NLS-1$
         assertTrue(outcome.describe(), outcome.describe()
             .contains("EDT left DynamicListExtInfo.listSettings (DataCompositionSettings) in the model")); //$NON-NLS-1$
+    }
+
+    // ---- the detached object's file: the form export never removes it (live finding) -------------
+
+    private static final String SETTINGS_FILE =
+        "src/Catalogs/Catalog/Forms/ItemForm/Attributes/List/ExtInfo/ListSettings.dcss"; //$NON-NLS-1$
+
+    /** A confirmed dynamic-list delete whose settings EDT stores in {@code file} (null: unresolved). */
+    private static DeleteMetadataTool.AttributeDeleteOutcome listDelete(IFile file)
+    {
+        Form form = listForm(DcsFactory.eINSTANCE.createDataCompositionSettings());
+        FormAttribute list = named(form, "List"); //$NON-NLS-1$
+        FormAttributeDeletion edt = edt();
+        DeleteMetadataTool.FormAttributeDeleter platform = new DeleteMetadataTool.FormAttributeDeleter()
+        {
+            @Override
+            public FormAttributeDeletion.Plan plan(EObject formModel, EObject attribute)
+            {
+                return edt.plan(formModel, attribute);
+            }
+
+            @Override
+            public void delete(IBmTransaction tx, EObject attribute)
+            {
+                EcoreUtil.remove(attribute);
+            }
+
+            @Override
+            public IFile fileOf(EObject topObject)
+            {
+                return file;
+            }
+        };
+        return DeleteMetadataTool.deleteAttributeInTx(form, list, null, platform, FQN, preview(form, list).scope);
+    }
+
+    private static IFile settingsFile()
+    {
+        IFile file = mock(IFile.class);
+        when(file.getProjectRelativePath()).thenReturn(new Path(SETTINGS_FILE));
+        return file;
+    }
+
+    @Test
+    public void testTheDetachedFileRemovalReportsWhatItSaw()
+    {
+        IFile file = settingsFile();
+        List<IFile> asked = new ArrayList<>();
+        for (DeleteMetadataTool.ResourceCleanup cleanup : DeleteMetadataTool.ResourceCleanup.values())
+        {
+            DeleteMetadataTool.AttributeDeleteOutcome outcome = listDelete(file);
+            outcome.removeDetachedFiles(f ->
+            {
+                asked.add(f);
+                return cleanup;
+            });
+            Map<String, Object> entry = outcome.detached.get(0);
+            assertEquals(SETTINGS_FILE, entry.get("file")); //$NON-NLS-1$
+            assertEquals(cleanup.name(), entry.get("fileRemoval")); //$NON-NLS-1$
+            String message = outcome.describe();
+            String expected = cleanup == DeleteMetadataTool.ResourceCleanup.REMOVED ? "was removed from disk."
+                : cleanup == DeleteMetadataTool.ResourceCleanup.NOT_FOUND
+                    ? "was not found on disk (nothing was removed)." //$NON-NLS-1$
+                    : "could not be removed - check it manually."; //$NON-NLS-1$
+            assertTrue(message, message.contains("Its file " + SETTINGS_FILE + " " + expected)); //$NON-NLS-1$ //$NON-NLS-2$
+            if (cleanup != DeleteMetadataTool.ResourceCleanup.REMOVED)
+            {
+                assertFalse("never claims a removal it did not see", message.contains("removed from disk")); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+        }
+        assertEquals("the file read before the detach is the one removed", List.of(file, file, file), asked); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnresolvedFileIsReportedNotRemoved()
+    {
+        DeleteMetadataTool.AttributeDeleteOutcome outcome = listDelete(null);
+        List<IFile> asked = new ArrayList<>();
+        outcome.removeDetachedFiles(f ->
+        {
+            asked.add(f);
+            return DeleteMetadataTool.ResourceCleanup.REMOVED;
+        });
+        assertTrue("nothing to remove without a file", asked.isEmpty()); //$NON-NLS-1$
+        assertEquals("FAILED", outcome.detached.get(0).get("fileRemoval")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(outcome.describe(), outcome.describe().contains(
+            "The file of DynamicListExtInfo.listSettings could not be resolved")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testRemoveResourceAnswersOnlyWhatItSaw() throws CoreException
+    {
+        IResource missing = mock(IResource.class);
+        when(missing.exists()).thenReturn(false);
+        assertEquals(DeleteMetadataTool.ResourceCleanup.NOT_FOUND, DeleteMetadataTool.removeResource(missing));
+        verify(missing, never()).delete(anyBoolean(), any());
+
+        IResource present = mock(IResource.class);
+        when(present.exists()).thenReturn(true);
+        assertEquals(DeleteMetadataTool.ResourceCleanup.REMOVED, DeleteMetadataTool.removeResource(present));
+        verify(present).delete(eq(true), any());
+
+        IResource locked = mock(IResource.class);
+        when(locked.exists()).thenReturn(true);
+        doThrow(new CoreException(new Status(IStatus.ERROR, "test", "locked"))).when(locked).delete(anyBoolean(), any()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(DeleteMetadataTool.ResourceCleanup.FAILED, DeleteMetadataTool.removeResource(locked));
     }
 
     // ---- consent vs write scope: the form changed between preview and confirm (review P1) --------

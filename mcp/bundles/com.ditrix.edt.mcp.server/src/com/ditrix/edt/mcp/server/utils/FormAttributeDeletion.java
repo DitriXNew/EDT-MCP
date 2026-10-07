@@ -12,11 +12,13 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
+import com._1c.g5.v8.dt.core.platform.IResourceLookup;
 import com._1c.g5.v8.dt.form.model.AbstractDataPath;
 import com._1c.g5.v8.dt.form.model.AbstractFormAttribute;
 import com._1c.g5.v8.dt.form.model.DataItem;
@@ -33,6 +35,8 @@ import com._1c.g5.v8.dt.form.service.item.FormItemVisitor;
 import com._1c.g5.v8.dt.form.service.item.IFormItemCommand;
 import com._1c.g5.v8.dt.form.util.DatapathUtil;
 import com._1c.g5.v8.dt.metadata.mdclass.ScriptVariant;
+import com._1c.g5.wiring.ServiceAccess;
+import com.ditrix.edt.mcp.server.Activator;
 
 /**
  * EDT's own delete of a form attribute or attribute column - the one the form designer runs
@@ -229,6 +233,32 @@ public final class FormAttributeDeletion
         catch (ReflectiveOperationException | RuntimeException e)
         {
             throw new IllegalStateException("EDT's form-item collector could not be created", e); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * The workspace file EDT stores an ATTACHED top object in, from EDT's own {@code IResourceLookup}.
+     * Read before a detach: the export skips an FQN whose object is gone, so the file is the caller's
+     * to remove.
+     *
+     * @param topObject an attached BM top object
+     * @return its file, or {@code null} when it is not attached or the lookup is unavailable
+     */
+    public static IFile fileOf(EObject topObject)
+    {
+        if (!(topObject instanceof IBmObject) || ((IBmObject)topObject).bmGetEngine() == null)
+        {
+            return null;
+        }
+        try
+        {
+            IResourceLookup lookup = ServiceAccess.get(IResourceLookup.class);
+            return lookup == null ? null : lookup.getPlatformResource(topObject);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("delete_metadata: EDT's resource lookup failed for a detached extInfo object", e); //$NON-NLS-1$
+            return null;
         }
     }
 
