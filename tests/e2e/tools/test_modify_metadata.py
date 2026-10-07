@@ -433,6 +433,176 @@ def test_malformed_form_field_picture_is_actionable_and_changes_nothing():
     assert_no_diff("a rejected picture value must not change the project")
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Form item Color / Font (#660) — the EDT designer's grammar, exact on-disk shape
+# ──────────────────────────────────────────────────────────────────────────────
+
+_FIELD_FQN = "Catalog.Catalog.Form.ItemForm.Field.Description"
+_XSI_TYPE = "{http://www.w3.org/2001/XMLSchema-instance}type"
+
+
+def _local(element):
+    return element.tag.rsplit("}", 1)[-1]
+
+
+def _description_item():
+    """The Description field's <items> element in the fixture Form.form."""
+    root = ET.fromstring(read_disk(_ITEM_FORM))
+    for item in root:
+        if _local(item) == "items" and item.findtext("name") == "Description":
+            return item
+    _fail("Form.form must still hold the Description field")
+
+
+def _appearance_shape(holder, tag):
+    """(xsi:type, [(child, text), ...]) of the ONE <tag> directly under holder, or None."""
+    found = [child for child in holder if _local(child) == tag]
+    if not found:
+        return None
+    assert len(found) == 1, "exactly one <%s> expected, got %d" % (tag, len(found))
+    element = found[0]
+    return element.get(_XSI_TYPE), [(_local(c), (c.text or "").strip()) for c in element]
+
+
+def _extinfo_of(item):
+    ext = [child for child in item if _local(child) == "extInfo"]
+    assert len(ext) == 1, "the Description field must keep exactly one <extInfo>"
+    return ext[0]
+
+
+def _assert_assignable_current(fqn, prop, kind, expected):
+    row = _assignable_row(fqn, prop)
+    assert row is not None, "%s must be listed by assignable:true" % prop
+    cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
+    assert cells[1] == kind, "%s must expose the %s kind: %r" % (prop, kind, row)
+    assert cells[2] == expected, "%s current value must be exactly %r, got: %r" % (prop, expected, row)
+
+
+def _set_field_props(props, ctx):
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": _FIELD_FQN, "properties": props})
+    assert_ok(r, ctx)
+    applied = r.structured.get("applied") or []
+    for p in props:
+        assert p["name"] in applied, "%s must be reported as applied: %r" % (p["name"], r.structured)
+    return r
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_field_title_color_takes_a_platform_web_color():
+    _set_field_props([{"name": "titleTextColor", "value": {"color": "Web.AliceBlue"}}],
+                     "set a platform web color as the field's title color")
+    poll_disk_contains(_ITEM_FORM, "<titleTextColor",
+                       ctx="the title color must reach Form.form")
+    assert _appearance_shape(_description_item(), "titleTextColor") == \
+        ("core:ColorRef", [("color", "Web.AliceBlue")]), \
+        "the title color must be stored as the designer stores it: %r" % (
+            _appearance_shape(_description_item(), "titleTextColor"),)
+    _assert_assignable_current(_FIELD_FQN, "titleTextColor", "COLOR", "Web.AliceBlue")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_field_color_and_font_on_ext_info_take_rgb_and_absolute_font():
+    _set_field_props([
+        {"name": "textColor", "value": {"color": {"red": 255, "green": 128, "blue": 64}}},
+        {"name": "font", "value": {"font": {"faceName": "Arial", "height": 12, "bold": True}}},
+    ], "set an RGB text color and an absolute font on the input field's extInfo")
+    poll_disk_contains(_ITEM_FORM, "<textColor", ctx="the text color must reach Form.form")
+    ext = _extinfo_of(_description_item())
+    assert _appearance_shape(ext, "textColor") == \
+        ("core:ColorDef", [("red", "255"), ("green", "128"), ("blue", "64")]), \
+        "the RGB color must land on the extInfo: %r" % (_appearance_shape(ext, "textColor"),)
+    assert _appearance_shape(ext, "font") == \
+        ("core:FontDef", [("faceName", "Arial"), ("height", "12.0"), ("bold", "true")]), \
+        "the absolute font must land on the extInfo: %r" % (_appearance_shape(ext, "font"),)
+    _assert_assignable_current(_FIELD_FQN, "textColor", "COLOR", "RGB(255, 128, 64)")
+    _assert_assignable_current(_FIELD_FQN, "font", "FONT", "face='Arial', height=12, bold")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_field_title_font_references_a_platform_style_font_with_one_override():
+    _set_field_props([{"name": "titleFont",
+                       "value": {"font": {"style": "NormalTextFont", "bold": True}}}],
+                     "set a style-font reference with a bold override")
+    poll_disk_contains(_ITEM_FORM, "<titleFont", ctx="the title font must reach Form.form")
+    # Only the given override is stored; italic/underline/strikeout stay inherited (absent).
+    assert _appearance_shape(_description_item(), "titleFont") == \
+        ("core:FontRef", [("font", "Style.NormalTextFont"), ("bold", "true")]), \
+        "the font reference must be stored as the designer stores it: %r" % (
+            _appearance_shape(_description_item(), "titleFont"),)
+    _assert_assignable_current(_FIELD_FQN, "titleFont", "FONT", "Style.NormalTextFont (bold)")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_field_title_color_references_a_configuration_style_item():
+    style = "E2EBrandColor"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "StyleItem." + style}),
+              "seed a style item")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "StyleItem." + style,
+        "properties": [{"name": "value", "value": {"color": {"red": 12, "green": 34, "blue": 56}}}],
+    }), "make the style item a color")
+    wait_for_project_ready()
+
+    _set_field_props([{"name": "titleTextColor", "value": {"color": {"style": style}}}],
+                     "reference the configuration style item from the field's title color")
+    poll_disk_contains(_ITEM_FORM, "Style." + style,
+                       ctx="the style-item reference must reach Form.form")
+    assert _appearance_shape(_description_item(), "titleTextColor") == \
+        ("core:ColorRef", [("color", "Style." + style)]), \
+        "the style-item reference must be stored as Style.<Name>: %r" % (
+            _appearance_shape(_description_item(), "titleTextColor"),)
+    _assert_assignable_current(_FIELD_FQN, "titleTextColor", "COLOR", "Style." + style)
+
+    # Same-session reads see the resolved item; a reload reads the persisted reference instead.
+    wait_for_project_ready()
+    assert_ok(call("clean_project", {"projectName": PROJECT}),
+              "reload the persisted style-item reference from disk")
+    wait_for_project_ready()
+    _assert_assignable_current(_FIELD_FQN, "titleTextColor", "COLOR", "Style." + style)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_field_auto_color_clears_the_stored_value():
+    _set_field_props([{"name": "titleTextColor", "value": {"color": "Web.AliceBlue"}}],
+                     "seed a title color")
+    poll_disk_contains(_ITEM_FORM, "<titleTextColor", ctx="the seeded title color must reach disk")
+    _set_field_props([{"name": "titleTextColor", "value": {"color": "auto"}}],
+                     "reset the title color to automatic")
+    deadline = time.time() + 10
+    while time.time() < deadline and _appearance_shape(_description_item(), "titleTextColor"):
+        time.sleep(0.5)
+    assert _appearance_shape(_description_item(), "titleTextColor") is None, \
+        "'auto' must remove the stored title color from Form.form"
+    _assert_assignable_current(_FIELD_FQN, "titleTextColor", "COLOR", "")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_field_unknown_platform_color_is_refused_with_valid_names_and_changes_nothing():
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": _FIELD_FQN,
+        "properties": [{"name": "titleTextColor", "value": {"color": "Web.NoSuchColorE2E"}}],
+    })
+    e = assert_error(r, "an unknown platform web color")
+    assert_error_quality(e, names=["titleTextColor", "NoSuchColorE2E"],
+                         suggests=["Valid names", "Web.AliceBlue"],
+                         ctx="an unknown color names the value and lists the platform's names")
+    assert_no_diff("a refused color must not change the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_field_unknown_font_member_is_refused_and_changes_nothing():
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": _FIELD_FQN,
+        "properties": [{"name": "titleFont", "value": {"font": {"style": "NormalTextFont",
+                                                                 "weight": 700}}}],
+    })
+    e = assert_error(r, "an unknown font member")
+    assert_error_quality(e, names=["titleFont", "weight"], suggests=["faceName", "{font:"],
+                         ctx="an unknown font member is named with the accepted shapes")
+    assert_no_diff("a refused font must not change the project")
+
+
 @e2e_test(tool="modify_metadata", kind="write-metadata")
 def test_set_web_service_parameter_qname_round_trips_compact_form():
     fqn = _seed_web_service_parameter("E2EQNameHappy")

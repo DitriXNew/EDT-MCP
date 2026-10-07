@@ -299,6 +299,35 @@ def test_assignable_on_form_root_lists_root_properties():
 
 
 @e2e_test(tool="get_metadata_details", kind="read")
+def test_assignable_on_form_field_lists_color_and_font_kinds():
+    # Issue #660: a form item's Color / Font properties - direct and on its extInfo - are listed
+    # with kinds COLOR / FONT and the value shape in the Allowed column.
+    fqn = "Catalog.Catalog.Form.ItemForm.Field.Description"
+    r = call("get_metadata_details", {
+        "projectName": PROJECT,
+        "objectFqns": [fqn],
+        "assignable": True,
+    })
+    assert_ok(r, "assignable schema for a form field")
+    rows = {}
+    for line in r.text.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 4:
+            rows[cells[0]] = cells
+    expected = {"titleTextColor": "COLOR", "titleBackColor": "COLOR", "titleFont": "FONT",
+                "textColor": "COLOR", "backColor": "COLOR", "borderColor": "COLOR", "font": "FONT"}
+    for name, kind in expected.items():
+        assert name in rows, "%s must be listed as assignable on the input field: %s" % (
+            name, r.text[:600])
+        assert rows[name][1] == kind, "%s must have kind %s: %r" % (name, kind, rows[name])
+    assert rows["titleTextColor"][3].startswith("{color:{red,green,blue}}"), \
+        "a COLOR row must show the color value shape: %r" % (rows["titleTextColor"],)
+    assert rows["titleFont"][3].startswith("{font:{faceName?"), \
+        "a FONT row must show the font value shape: %r" % (rows["titleFont"],)
+    assert_no_diff("reading a form field's assignable schema must not touch Form.form")
+
+
+@e2e_test(tool="get_metadata_details", kind="read")
 def test_assignable_on_common_form_keeps_mdclass_and_adds_content_root():
     fqn = "CommonForm.Form"
     r = call("get_metadata_details", {
