@@ -203,6 +203,8 @@ def test_show_element_switches_the_page_and_puts_the_editor_back():
       * Native render with -DnativeFormBufferedLayoutRender reported OFF at startup: no
         form image exists on this install, so the test is skipped before any capture.
         A status that cannot be read fails the test instead.
+      * Native render with the flag on, but the plain opening capture (no showElement)
+        reports a documented render-unavailable sentinel (CI's xvfb): skipped.
       * Native render with the buffered image: every capture below MUST succeed. The form
         is opened, then everything runs on the ACTIVE editor (no formPath), so no capture
         reopens it and only the restore can bring it back:
@@ -234,8 +236,13 @@ def test_show_element_switches_the_page_and_puts_the_editor_back():
         raise E2ESkip("EDT started without -DnativeFormBufferedLayoutRender=true, so this "
                       "install produces no form image")
 
-    _png(call("get_form_screenshot", {"projectName": PROJECT, "formPath": "CommonForm.Form"}),
-         "opening capture")
+    opening = call("get_form_screenshot", {"projectName": PROJECT, "formPath": "CommonForm.Form"})
+    if opening.is_error and any(s in opening.error_text() for s in _RENDER_UNAVAILABLE_SENTINELS):
+        # A plain capture is the base contract, not showElement: a virtual display (CI xvfb)
+        # renders no image even with the flag on. Every capture after this one must succeed.
+        raise E2ESkip("this install renders no form image even without showElement: %s"
+                      % opening.error_text()[:160])
+    _png(opening, "opening capture")
     baseline = _png(call("get_form_screenshot", {}), "baseline capture of the active editor")
     outside = _png(call("get_form_screenshot", {"showElement": "OK"}), "showElement=OK")
     page = _png(call("get_form_screenshot", {"showElement": "PageExtra"}), "showElement=PageExtra")
