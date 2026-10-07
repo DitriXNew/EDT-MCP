@@ -20,6 +20,7 @@ HTTPService.ProbeService (the only place a 64-bit property exists), ...
 """
 
 import os
+import re
 import time
 import uuid
 import xml.etree.ElementTree as ET
@@ -431,6 +432,210 @@ def test_malformed_form_field_picture_is_actionable_and_changes_nothing():
                                    "list_common_pictures"],
                          ctx="a malformed picture names all accepted forms and discovery tool")
     assert_no_diff("a rejected picture value must not change the project")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Form item Color / Font (#660) — the EDT designer's grammar, exact on-disk shape
+# ──────────────────────────────────────────────────────────────────────────────
+
+_FIELD_FQN = "Catalog.Catalog.Form.ItemForm.Field.Description"
+_XSI_TYPE = "{http://www.w3.org/2001/XMLSchema-instance}type"
+
+
+def _local(element):
+    return element.tag.rsplit("}", 1)[-1]
+
+
+def _description_item():
+    """The Description field's <items> element in the fixture Form.form."""
+    root = ET.fromstring(read_disk(_ITEM_FORM))
+    for item in root:
+        if _local(item) == "items" and item.findtext("name") == "Description":
+            return item
+    _fail("Form.form must still hold the Description field")
+
+
+def _appearance_shape(holder, tag):
+    """(xsi:type, [(child, text), ...]) of the ONE <tag> directly under holder, or None."""
+    found = [child for child in holder if _local(child) == tag]
+    if not found:
+        return None
+    assert len(found) == 1, "exactly one <%s> expected, got %d" % (tag, len(found))
+    element = found[0]
+    return element.get(_XSI_TYPE), [(_local(c), (c.text or "").strip()) for c in element]
+
+
+def _extinfo_of(item):
+    ext = [child for child in item if _local(child) == "extInfo"]
+    assert len(ext) == 1, "the Description field must keep exactly one <extInfo>"
+    return ext[0]
+
+
+def _assert_assignable_current(fqn, prop, kind, expected):
+    row = _assignable_row(fqn, prop)
+    assert row is not None, "%s must be listed by assignable:true" % prop
+    cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
+    assert cells[1] == kind, "%s must expose the %s kind: %r" % (prop, kind, row)
+    assert cells[2] == expected, "%s current value must be exactly %r, got: %r" % (prop, expected, row)
+
+
+def _set_field_props(props, ctx):
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": _FIELD_FQN, "properties": props})
+    assert_ok(r, ctx)
+    applied = r.structured.get("applied") or []
+    for p in props:
+        assert p["name"] in applied, "%s must be reported as applied: %r" % (p["name"], r.structured)
+    return r
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_field_title_color_takes_a_platform_web_color():
+    _set_field_props([{"name": "titleTextColor", "value": {"color": "Web.AliceBlue"}}],
+                     "set a platform web color as the field's title color")
+    poll_disk_contains(_ITEM_FORM, "<titleTextColor",
+                       ctx="the title color must reach Form.form")
+    assert _appearance_shape(_description_item(), "titleTextColor") == \
+        ("core:ColorRef", [("color", "Web.AliceBlue")]), \
+        "the title color must be stored as the designer stores it: %r" % (
+            _appearance_shape(_description_item(), "titleTextColor"),)
+    _assert_assignable_current(_FIELD_FQN, "titleTextColor", "COLOR", "Web.AliceBlue")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_field_color_and_font_on_ext_info_take_rgb_and_absolute_font():
+    _set_field_props([
+        {"name": "textColor", "value": {"color": {"red": 255, "green": 128, "blue": 64}}},
+        {"name": "font", "value": {"font": {"faceName": "Arial", "height": 12, "bold": True}}},
+    ], "set an RGB text color and an absolute font on the input field's extInfo")
+    poll_disk_contains(_ITEM_FORM, "<textColor", ctx="the text color must reach Form.form")
+    ext = _extinfo_of(_description_item())
+    assert _appearance_shape(ext, "textColor") == \
+        ("core:ColorDef", [("red", "255"), ("green", "128"), ("blue", "64")]), \
+        "the RGB color must land on the extInfo: %r" % (_appearance_shape(ext, "textColor"),)
+    assert _appearance_shape(ext, "font") == \
+        ("core:FontDef", [("faceName", "Arial"), ("height", "12.0"), ("bold", "true")]), \
+        "the absolute font must land on the extInfo: %r" % (_appearance_shape(ext, "font"),)
+    _assert_assignable_current(_FIELD_FQN, "textColor", "COLOR", "RGB(255, 128, 64)")
+    _assert_assignable_current(_FIELD_FQN, "font", "FONT", "face='Arial', height=12, bold")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_field_title_font_references_a_platform_style_font_with_one_override():
+    _set_field_props([{"name": "titleFont",
+                       "value": {"font": {"style": "NormalTextFont", "bold": True}}}],
+                     "set a style-font reference with a bold override")
+    poll_disk_contains(_ITEM_FORM, "<titleFont", ctx="the title font must reach Form.form")
+    # Only the given override is stored; italic/underline/strikeout stay inherited (absent).
+    assert _appearance_shape(_description_item(), "titleFont") == \
+        ("core:FontRef", [("font", "Style.NormalTextFont"), ("bold", "true")]), \
+        "the font reference must be stored as the designer stores it: %r" % (
+            _appearance_shape(_description_item(), "titleFont"),)
+    _assert_assignable_current(_FIELD_FQN, "titleFont", "FONT", "Style.NormalTextFont (bold)")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_field_title_color_references_a_configuration_style_item():
+    style = "E2EBrandColor"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "StyleItem." + style}),
+              "seed a style item")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "StyleItem." + style,
+        "properties": [{"name": "value", "value": {"color": {"red": 12, "green": 34, "blue": 56}}}],
+    }), "make the style item a color")
+    wait_for_project_ready()
+
+    _set_field_props([{"name": "titleTextColor", "value": {"color": {"style": style}}}],
+                     "reference the configuration style item from the field's title color")
+    poll_disk_contains(_ITEM_FORM, "Style." + style,
+                       ctx="the style-item reference must reach Form.form")
+    assert _appearance_shape(_description_item(), "titleTextColor") == \
+        ("core:ColorRef", [("color", "Style." + style)]), \
+        "the style-item reference must be stored as Style.<Name>: %r" % (
+            _appearance_shape(_description_item(), "titleTextColor"),)
+    _assert_assignable_current(_FIELD_FQN, "titleTextColor", "COLOR", "Style." + style)
+
+    # Same-session reads see the resolved item; a reload reads the persisted reference instead.
+    wait_for_project_ready()
+    assert_ok(call("clean_project", {"projectName": PROJECT}),
+              "reload the persisted style-item reference from disk")
+    wait_for_project_ready()
+    _assert_assignable_current(_FIELD_FQN, "titleTextColor", "COLOR", "Style." + style)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_field_title_font_references_a_configuration_style_font_with_an_override():
+    style = "E2EHeaderFont"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "StyleItem." + style}),
+              "seed a style item")
+    wait_for_project_ready()
+    assert_ok(call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "StyleItem." + style,
+        "properties": [{"name": "value",
+                        "value": {"font": {"faceName": "Arial", "height": 14, "bold": True}}}],
+    }), "make the style item a font")
+    wait_for_project_ready()
+
+    _set_field_props([{"name": "titleFont", "value": {"font": {"style": style, "italic": True}}}],
+                     "reference the configuration style font with an italic override")
+    poll_disk_contains(_ITEM_FORM, "Style." + style,
+                       ctx="the style-font reference must reach Form.form")
+    expected = ("core:FontRef", [("font", "Style." + style), ("italic", "true")])
+    assert _appearance_shape(_description_item(), "titleFont") == expected, \
+        "the style-font reference must be stored as Style.<Name> plus the one override: %r" % (
+            _appearance_shape(_description_item(), "titleFont"),)
+    _assert_assignable_current(_FIELD_FQN, "titleFont", "FONT", "Style." + style + " (italic)")
+
+    # The reference was bound to the item re-fetched in the write transaction: a reload reads it back.
+    wait_for_project_ready()
+    assert_ok(call("clean_project", {"projectName": PROJECT}),
+              "reload the persisted style-font reference from disk")
+    wait_for_project_ready()
+    assert _appearance_shape(_description_item(), "titleFont") == expected, \
+        "the reloaded Form.form must keep the style-font reference: %r" % (
+            _appearance_shape(_description_item(), "titleFont"),)
+    _assert_assignable_current(_FIELD_FQN, "titleFont", "FONT", "Style." + style + " (italic)")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_field_auto_color_clears_the_stored_value():
+    _set_field_props([{"name": "titleTextColor", "value": {"color": "Web.AliceBlue"}}],
+                     "seed a title color")
+    poll_disk_contains(_ITEM_FORM, "<titleTextColor", ctx="the seeded title color must reach disk")
+    _set_field_props([{"name": "titleTextColor", "value": {"color": "auto"}}],
+                     "reset the title color to automatic")
+    deadline = time.time() + 10
+    while time.time() < deadline and _appearance_shape(_description_item(), "titleTextColor"):
+        time.sleep(0.5)
+    assert _appearance_shape(_description_item(), "titleTextColor") is None, \
+        "'auto' must remove the stored title color from Form.form"
+    _assert_assignable_current(_FIELD_FQN, "titleTextColor", "COLOR", "")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_field_unknown_platform_color_is_refused_with_valid_names_and_changes_nothing():
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": _FIELD_FQN,
+        "properties": [{"name": "titleTextColor", "value": {"color": "Web.NoSuchColorE2E"}}],
+    })
+    e = assert_error(r, "an unknown platform web color")
+    assert_error_quality(e, names=["titleTextColor", "NoSuchColorE2E"],
+                         suggests=["Valid names", "Web.AliceBlue"],
+                         ctx="an unknown color names the value and lists the platform's names")
+    assert_no_diff("a refused color must not change the project")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_form_field_unknown_font_member_is_refused_and_changes_nothing():
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": _FIELD_FQN,
+        "properties": [{"name": "titleFont", "value": {"font": {"style": "NormalTextFont",
+                                                                 "weight": 700}}}],
+    })
+    e = assert_error(r, "an unknown font member")
+    assert_error_quality(e, names=["titleFont", "weight"], suggests=["faceName", "{font:"],
+                         ctx="an unknown font member is named with the accepted shapes")
+    assert_no_diff("a refused font must not change the project")
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
@@ -3782,3 +3987,215 @@ def test_modify_error_carries_no_marker_fields():
     assert_error_quality(e, names=["E2EMarkersNoSuchAttr"], ctx="missing modify target")
     assert_no_marker_fields(r.structured, "an error reports no markers")
     assert_no_diff("a refused modify must not touch disk")
+
+
+# ---- per-role values of an adjustable flag (#719) and a form attribute's useAlways (#661) ----
+
+_XSI_TYPE = "{http://www.w3.org/2001/XMLSchema-instance}type"
+
+
+def _use_always_paths(attr):
+    """The stored notDefaultUseAlwaysAttributes of a form attribute: [(xsi:type, segments)]."""
+    block = _form_attribute_block(read_disk(_ITEM_FORM), attr)
+    if block is None:
+        raise AssertionError("attribute %s is not in %s" % (attr, _ITEM_FORM))
+    return [(entry.get(_XSI_TYPE), (entry.findtext("segments") or "").strip())
+            for entry in block.findall("notDefaultUseAlwaysAttributes")]
+
+
+def _poll_use_always_paths(attr, want, timeout=20, ctx=""):
+    """Poll until the attribute's stored use-always paths equal `want` exactly (order included)."""
+    deadline = time.time() + timeout
+    last = "<never read>"
+    while time.time() < deadline:
+        try:
+            last = _use_always_paths(attr)
+            if last == want:
+                return
+        except (AssertionError, ET.ParseError) as e:
+            last = str(e)
+        time.sleep(0.5)
+    raise AssertionError("expected %s to store use-always paths %r [%s]; it stores %r"
+                         % (attr, want, ctx, last))
+
+
+def _attribute_xml(attr):
+    """The raw <attributes> fragment of `attr` in the item form, for exact-serialization checks."""
+    text = read_disk(_ITEM_FORM)
+    anchor = "<name>%s</name>" % attr
+    start = text.rfind("<attributes>", 0, text.index(anchor))
+    return text[start:text.index("</attributes>", start)]
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_use_always_on_an_object_lists_only_the_unchecked_field():
+    """#661: on an ordinary object the designer default is CHECKED, so EDT lists the paths NOT
+    used always. useAlways takes the checkbox state; the stored list is computed by EDT's rule."""
+    fqn = "Catalog.Catalog.Form.ItemForm.Attribute.Object"
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "useAlways",
+                        "value": {"Object.Code": False, "Object.Description": True}}]})
+    assert_ok(r, "uncheck Use always for Object.Code")
+    assert "useAlways" in (r.structured.get("applied") or []), \
+        "useAlways must be reported applied: %r" % (r.structured,)
+    _poll_use_always_paths("Object", [("form:DataPath", "Object.Code")],
+                           ctx="only the unchecked field is listed; the checked one is the default")
+    fragment = _attribute_xml("Object")
+    assert re.search(r'</edit>\s*<notDefaultUseAlwaysAttributes xsi:type="form:DataPath">\s*'
+                     r'<segments>Object\.Code</segments>\s*</notDefaultUseAlwaysAttributes>\s*<main>',
+                     fragment), "exact serialized form between <edit> and <main>:\n%s" % fragment
+    assert "Object.Description" not in fragment, \
+        "a field set to its default (checked) must not be listed:\n%s" % fragment
+
+    row = _assignable_row(fqn, "useAlways")
+    assert row is not None and '{"Object.Code":false}' in row, \
+        "get_metadata_details must show the effective state of the listed path: %r" % (row,)
+
+    back = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "useAlways", "value": {"Object.Code": True}}]})
+    assert_ok(back, "check Use always for Object.Code again")
+    _poll_use_always_paths("Object", [], ctx="checking it again restores the default: nothing listed")
+    assert "notDefaultUseAlwaysAttributes" not in _attribute_xml("Object")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_use_always_on_a_constants_set_lists_the_checked_constant():
+    """#661: a ConstantsSet defaults to UNCHECKED, so the list flips: a listed constant IS used
+    always. An unknown constant is refused before anything is written."""
+    constant = "E2EUseAlwaysConst"
+    attr = "E2EConstantsSet"
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "Constant." + constant})
+    assert_ok(r, "seed the constant")
+    _seed_form_attribute(attr)
+    fqn = "Catalog.Catalog.Form.ItemForm.Attribute." + attr
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ConstantsSet"}]}}]})
+    assert_ok(r, "make the attribute a constants set")
+    poll_disk_contains(_ITEM_FORM, "<types>ConstantsSet</types>",
+                       ctx="the constants-set type must be on disk before the checkbox is set")
+    wait_for_project_ready()
+
+    path = "%s.%s" % (attr, constant)
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "useAlways", "value": {path: True}}]})
+    assert_ok(r, "check Use always for the constant")
+    _poll_use_always_paths(attr, [("form:DataPath", path)],
+                           ctx="a checked constant of a constants set is the listed one")
+    row = _assignable_row(fqn, "useAlways")
+    assert row is not None and ('{"%s":true}' % path) in row, \
+        "the listed constant reads back as used always: %r" % (row,)
+
+    snap = tree_snapshot()
+    bad = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "useAlways", "value": {attr + ".E2ENoSuchConstant": True}}]})
+    e = assert_error(bad, "an unknown constant must be refused")
+    # EDT's data tree names the missing segment and lists the constants it does have.
+    assert_error_quality(e, names=["E2ENoSuchConstant", attr], suggests=[constant])
+    assert_tree_unchanged(snap, ctx="a refused useAlways must not touch the disk")
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "useAlways", "value": {path: False}}]})
+    assert_ok(r, "uncheck it again")
+    _poll_use_always_paths(attr, [], ctx="an unchecked constant is the constants-set default")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_use_always_refuses_a_path_of_another_attribute():
+    snap = tree_snapshot()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.Object",
+        "properties": [{"name": "useAlways", "value": {"List.Code": False}}]})
+    e = assert_error(r, "a path not rooted at the addressed attribute must be refused")
+    assert_error_quality(e, names=["List.Code", "Object"], suggests=["Object.Code"])
+    assert_tree_unchanged(snap, ctx="a refused useAlways must not touch the disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_use_always_refuses_a_field_the_data_tree_does_not_have():
+    """#661: every path is resolved in EDT's form data tree before the write; one it does not have
+    is refused naming the missing segment and the fields there, never written for markers to find."""
+    snap = tree_snapshot()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.Object",
+        "properties": [{"name": "useAlways", "value": {"Object.E2ENoSuchField": False}}]})
+    e = assert_error(r, "a field the data tree does not resolve must be refused")
+    assert_error_quality(e, names=["E2ENoSuchField", "'Object'"], suggests=["Fields there", "Code"])
+    assert_tree_unchanged(snap, ctx="a refused useAlways must not touch the disk")
+
+
+def _view_fragment(attr):
+    """The raw <view> element of `attr`, e.g. '<view>...</view>' or '<view/>'."""
+    fragment = _attribute_xml(attr)
+    m = re.search(r"<view/>|<view>.*?</view>", fragment, re.S)
+    if m is None:
+        raise AssertionError("attribute %s carries no <view>:\n%s" % (attr, fragment))
+    return m.group(0)
+
+
+def _poll_view_fragment(attr, pattern, timeout=20, ctx=""):
+    deadline = time.time() + timeout
+    last = "<never read>"
+    while time.time() < deadline:
+        try:
+            last = _view_fragment(attr)
+            if re.fullmatch(pattern, last, re.S):
+                return last
+        except (AssertionError, ValueError) as e:
+            last = str(e)
+        time.sleep(0.5)
+    raise AssertionError("expected %s.<view> to match %r [%s]; it is %r" % (attr, pattern, ctx, last))
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_view_role_values_are_set_and_dropped():
+    """#719: view takes {common?, roles?}; a role is Role.<Name> (any type-token language) or a
+    bare Name, 'default' drops its value, and an unnamed role keeps its own."""
+    role = "E2EViewRoleA"
+    other = "E2EViewRoleB"
+    attr = "MFViewRolesAttr"
+    for name in (role, other):
+        r = call("create_metadata", {"projectName": PROJECT, "fqn": "Role." + name})
+        assert_ok(r, "seed role " + name)
+    _seed_form_attribute(attr)
+    fqn = "Catalog.Catalog.Form.ItemForm.Attribute." + attr
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "view", "value": {
+            "common": False,
+            # Russian type token "Роль", and a bare Name.
+            "roles": {"Роль." + role: True, other: False}}}]})
+    assert_ok(r, "set common and two role values")
+    view = _poll_view_fragment(
+        attr, r"<view>\s*<for>\s*<value>true</value>\s*<role>Role\.%s</role>\s*</for>\s*"
+              r"<for>\s*<role>Role\.%s</role>\s*</for>\s*</view>" % (role, other),
+        ctx="common=false and a false role value are EMF defaults, so they are omitted")
+    assert "<common>" not in view, "common=false must not be serialized: %s" % view
+
+    row = _assignable_row(fqn, "view")
+    want = '{"common":false,"roles":{"Role.%s":true,"Role.%s":false}}' % (role, other)
+    assert row is not None and want in row, \
+        "get_metadata_details must show the role values next to common: %r" % (row,)
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "view", "value": {"common": True,
+                                                   "roles": {"Role." + role: "default"}}}]})
+    assert_ok(r, "drop one role value and turn common on")
+    _poll_view_fragment(
+        attr, r"<view>\s*<common>true</common>\s*<for>\s*<role>Role\.%s</role>\s*</for>\s*</view>"
+              % other, ctx="the dropped role is gone, the unnamed one is kept")
+
+    snap = tree_snapshot()
+    bad = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "view", "value": {"roles": {"Role.E2ENoSuchRole": True}}}]})
+    e = assert_error(bad, "an unknown role must be refused")
+    assert_error_quality(e, names=["Role.E2ENoSuchRole"], suggests=["Role"])
+    assert_tree_unchanged(snap, ctx="a refused role value must not touch the disk")

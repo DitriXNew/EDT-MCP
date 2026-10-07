@@ -7,6 +7,7 @@ Capture a PNG screenshot of a form's WYSIWYG editor; pass formPath to open the f
 | --- | --- | --- | --- |
 | projectName | — | string | EDT project name. Required when formPath is specified. |
 | formPath | — | string | Form FQN (e.g. 'Catalog.Products.Forms.ItemForm' or 'CommonForm.MyForm'); if omitted, captures the active form editor. |
+| showElement | — | string | Name of a form element (e.g. a page) to bring into view before capture: every enclosing Pages group switches to the page holding it. |
 | refresh | — | boolean | Force a real WYSIWYG re-render before capture; fails with an explicit error instead of returning a stale image when the re-render cannot be completed (default: false) |
 
 ## Guide
@@ -23,6 +24,7 @@ EDT must be launched with `-DnativeFormBufferedLayoutRender=true` in the `1cedt.
 ## Parameter details
 - `projectName` - EDT project name. **Required when `formPath` is specified**; omitting it then returns the error "projectName is required when formPath is specified". Ignored when targeting the active editor.
 - `formPath` - metadata FQN of the form. If given, the tool opens and activates that form automatically, waits for the WYSIWYG page, then captures it. If omitted, the currently active form editor is captured.
+- `showElement` - programmatic name of a form element to bring into view before capturing, typically a page of a Pages group (case-insensitive; the name, not the title). Every Pages group enclosing the element switches to the page holding it, nested groups included - the same as selecting the element in the form designer. An element outside every Pages group is visible on the current pages, so nothing is re-rendered for it and the capture shows the editor's current pages. Without `showElement` the capture shows the designer's current page, which is the first one after the form opens or after `refresh: true`. The switch is done after the refresh render, so the two can be combined, and it applies to this capture only. Afterwards the editor is put back as far as EDT allows: one render selects again the element the editor had selected, which re-opens the pages enclosing it (a clicked tab included); with nothing selected the default pages come back. EDT keeps no other record of which page a Pages group shows, so other Pages groups return to their default pages, and the earlier selection frame is not guaranteed. If that render fails the call fails, because the editor and a later capture without `showElement` would keep the switched page; `refresh: true` then re-renders it. An unknown name fails fast, before any render and in every render mode, with an error that names the form and lists its pages (at most 20); `get_metadata_details` with the form FQN lists every element. Requires the native form render: with `-DnativeFormLayoutRender=false` a known name is refused rather than returning the default page.
 - `refresh` - force a **real re-render** before capturing; default `false`. Set `true` if the form was just edited and the rendered image may be stale. With `refresh: true` the previously rendered buffer is never returned: if the re-render cannot be completed in time the tool fails with an explicit error ("refresh=true was requested but the form could not be re-rendered in time...") instead of silently returning the pre-edit image; retry, or call with `refresh: false` to accept the last rendered image.
 
 ### formPath format
@@ -34,6 +36,7 @@ EDT must be launched with `-DnativeFormBufferedLayoutRender=true` in the `1cedt.
 ## Examples
 - Active editor, default: `{}`.
 - Specific form: `{projectName: "MyProj", formPath: "Catalog.Products.Forms.ItemForm"}`.
+- A specific page: `{projectName: "MyProj", formPath: "Document.SalesOrder.Forms.DocumentForm", showElement: "DeliveryPage"}`.
 - Force refresh first: `{projectName: "MyProj", formPath: "CommonForm.MyForm", refresh: true}`.
 
 ## Notes & gotchas

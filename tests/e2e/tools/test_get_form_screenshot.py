@@ -54,10 +54,16 @@ REAL error paths exercised by the negative matrix (source-exact messages):
 FIXTURE TRUTH (TestConfiguration, English Names)
   CommonForm "Form" exists on disk at src/CommonForms/Form/Form.form, so the FQN
   "CommonForm.Form" resolves to a real, existing form file (confirmed by glob).
+  It has a Pages group "Pages" with the pages PageMain (label "Main page") and
+  PageExtra (label ExtraPageLabel, a longer line), so the two pages render
+  differently and a showElement switch that does nothing is visible.
   Catalog "Catalog" exists but is the WRONG KIND for a 2-part form FQN.
 """
 
 from harness import (
+    buffered_form_render_at_startup,
+    native_form_layout_render_mode,
+    E2ESkip,
     call,
     assert_ok,
     assert_error,
@@ -150,6 +156,107 @@ def test_capture_commonform_real_image_or_clean_render_sentinel():
             "signature %r); got prefix %r" % (_PNG_B64_PREFIX, blob[:16])
         )
 
+    assert_no_diff("a screenshot read must not touch the project on disk")
+
+
+@e2e_test(tool="get_form_screenshot", kind="read")
+def test_show_element_unknown_name_names_the_form_and_lists_its_pages():
+    """An unknown showElement fails fast, before the render gate: opening the editor and
+    resolving the name need no image and no particular render mode, so nothing excuses
+    a missing not-found here. The error names the value and the searched form and lists
+    the form's pages, so the caller needs no second call."""
+    r = call("get_form_screenshot", {
+        "projectName": PROJECT,
+        "formPath": "CommonForm.Form",
+        "showElement": "NoSuchElementXyz",
+    })
+    err = assert_error(r, "unknown showElement")
+    assert "'NoSuchElementXyz' was not found in form 'CommonForm.Form'" in err, (
+        "the not-found error must name the value and the searched form; got: %r" % (err[:400]))
+    assert "Its pages: PageMain, PageExtra." in err, (
+        "the not-found error must list the form's pages; got: %r" % (err[:400]))
+    assert_error_quality(
+        err,
+        names=["NoSuchElementXyz"],
+        suggests=["get_metadata_details"],
+        ctx="unknown showElement names the value and the tool listing every element",
+    )
+    assert_no_diff("a screenshot read must not touch the project on disk")
+
+
+def _png(result, ctx):
+    """The PNG blob of a successful capture; fails the test on an error or a non-PNG blob."""
+    assert not result.is_error, "[%s] must capture; got: %r" % (ctx, result.error_text()[:300])
+    blob = _blob(result)
+    assert blob and blob.startswith(_PNG_B64_PREFIX), (
+        "[%s] must return a real PNG; got prefix %r" % (ctx, (blob or "")[:16]))
+    return blob
+
+
+@e2e_test(tool="get_form_screenshot", kind="read")
+def test_show_element_switches_the_page_and_puts_the_editor_back():
+    """showElement must really switch the page, and the editor must not stay on it.
+
+    The prerequisites come from get_server_status, never from the tool's own failure:
+      * Java render (-DnativeFormLayoutRender=false): a KNOWN name is refused with the
+        restart advice - never a not-found, never the default page as success.
+      * Native render with -DnativeFormBufferedLayoutRender reported OFF at startup: no
+        form image exists on this install, so the test is skipped before any capture.
+        A status that cannot be read fails the test instead.
+      * Native render with the flag on, but the plain opening capture (no showElement)
+        reports a documented render-unavailable sentinel (CI's xvfb): skipped.
+      * Native render with the buffered image: every capture below MUST succeed. The form
+        is opened, then everything runs on the ACTIVE editor (no formPath), so no capture
+        reopens it and only the restore can bring it back:
+          - showElement=OK (outside every Pages group) renders nothing: same image;
+          - showElement=PageExtra differs from the baseline (a no-op switch fails here);
+          - showElement=extrapagelabel (an element ON that page, case-insensitive)
+            gives the same image as the page itself: same page, frame cleared both times;
+          - the capture afterwards no longer shows PageExtra (a missing restore fails).
+
+    Limit: no MCP tool can put a live editor on a user-clicked tab, so the editor here
+    starts on its default page, and this test cannot tell a restore of the user's tab
+    from a plain default-page render. The restore is best effort by EDT's design (it
+    re-selects the editor's last selection; other Pages groups return to their default
+    pages); FormPageSwitchTest pins its render sequence, not native pixels."""
+    mode = native_form_layout_render_mode()
+    if mode == "off":
+        r = call("get_form_screenshot", {
+            "projectName": PROJECT,
+            "formPath": "CommonForm.Form",
+            "showElement": "ExtraPageLabel",
+        })
+        err = assert_error(r, "showElement in Java render mode")
+        assert "showElement needs the native form render" in err and "'ExtraPageLabel'" in err, (
+            "Java render mode must refuse a known showElement explicitly; got: %r" % err[:400])
+        assert_no_diff("a screenshot read must not touch the project on disk")
+        return
+
+    if buffered_form_render_at_startup() == "off":
+        raise E2ESkip("EDT started without -DnativeFormBufferedLayoutRender=true, so this "
+                      "install produces no form image")
+
+    opening = call("get_form_screenshot", {"projectName": PROJECT, "formPath": "CommonForm.Form"})
+    if opening.is_error and any(s in opening.error_text() for s in _RENDER_UNAVAILABLE_SENTINELS):
+        # A plain capture is the base contract, not showElement: a virtual display (CI xvfb)
+        # renders no image even with the flag on. Every capture after this one must succeed.
+        raise E2ESkip("this install renders no form image even without showElement: %s"
+                      % opening.error_text()[:160])
+    _png(opening, "opening capture")
+    baseline = _png(call("get_form_screenshot", {}), "baseline capture of the active editor")
+    outside = _png(call("get_form_screenshot", {"showElement": "OK"}), "showElement=OK")
+    page = _png(call("get_form_screenshot", {"showElement": "PageExtra"}), "showElement=PageExtra")
+    element = _png(call("get_form_screenshot", {"showElement": "extrapagelabel"}),
+                   "showElement=extrapagelabel")
+    after = _png(call("get_form_screenshot", {}), "active-editor capture after showElement")
+
+    assert outside == baseline, (
+        "an element outside every Pages group is already visible: nothing may be re-rendered")
+    assert page != baseline, "showElement=PageExtra returned the page the editor showed: nothing was switched"
+    assert element == page, (
+        "an element on PageExtra must give the same image as the page itself (same page, "
+        "no selection frame); they differ")
+    assert after != page, "after showElement the editor still shows PageExtra: it was not put back"
     assert_no_diff("a screenshot read must not touch the project on disk")
 
 

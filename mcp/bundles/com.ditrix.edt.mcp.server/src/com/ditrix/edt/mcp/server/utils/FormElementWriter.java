@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EList;
@@ -1169,7 +1170,24 @@ public final class FormElementWriter
      */
     public static boolean writeEditableForm(FormEditContext ctx, String taskName, FormWork work)
     {
-        String contentFormFqn = BmTransactions.<String>write(ctx.bmModel, taskName, (tx, pm) ->
+        return writeEditableForm(ctx, taskName, work, false);
+    }
+
+    /**
+     * {@link #writeEditableForm(FormEditContext, String, FormWork)}, optionally committed through the
+     * model's global editing context ({@link BmTransactions#writeInGlobalContext}) so EDT's own save
+     * also deletes the files of the top objects the work detached.
+     *
+     * @param ctx the resolved context (see {@link #resolveForEdit})
+     * @param taskName a short BM task name for diagnostics
+     * @param work the mutation to run on the content form
+     * @param globalContext {@code true} to commit through the global editing context
+     * @return whether the export persisted the change to disk
+     */
+    public static boolean writeEditableForm(FormEditContext ctx, String taskName, FormWork work,
+        boolean globalContext)
+    {
+        BmTransactions.BmOperation<String> operation = (tx, pm) ->
         {
             EObject formModel = editableFormInTx(ctx, tx);
             work.run(formModel, tx);
@@ -1178,7 +1196,10 @@ public final class FormElementWriter
             normalizeFormCommandIds(formModel);
             // The content Form is a separate top object serialized to Form.form - export ITS fqn.
             return (formModel instanceof IBmObject) ? ((IBmObject)formModel).bmGetFqn() : null;
-        });
+        };
+        String contentFormFqn = globalContext
+            ? BmTransactions.writeInGlobalContext(ctx.bmModel, taskName, operation)
+            : BmTransactions.write(ctx.bmModel, taskName, operation);
         // The write is committed at this point whether or not an export can be submitted below, and
         // the export IS skipped when the content form has no FQN to name. Stating the project here
         // is what keeps that branch a write with a known scope instead of a call that says nothing
@@ -4524,23 +4545,88 @@ public final class FormElementWriter
     /** Whether any remaining authored form item references the path. */
     private static boolean formReferencesDataPath(EObject formModel, List<String> path)
     {
+        return itemBoundTo(formModel, path) != null;
+    }
+
+    /**
+     * The first authored form item bound to {@code path} in any language of its binding (see
+     * {@link #bindsAnySpelling}).
+     *
+     * @param formModel the form content model
+     * @param path the data path segments
+     * @return the item, or {@code null} when no item is bound to the path
+     */
+    public static EObject itemBoundTo(EObject formModel, List<String> path)
+    {
+        List<List<String>> spellings = Collections.singletonList(path);
+        return itemBoundTo(formModel, dataPath -> bindsAnySpelling(dataPath, spellings));
+    }
+
+    /**
+     * Whether an ITEM's binding names one of {@code spellings}: a legacy multi-language path in every
+     * language it stores, not only the active one; segments compare case-insensitively. A stored
+     * use-always registration is read by its active language instead, as EDT reads it.
+     *
+     * @param dataPath the item's data path object, may be {@code null}
+     * @param spellings the path's spellings
+     * @return whether the binding names the path
+     */
+    @SuppressWarnings("unchecked")
+    public static boolean bindsAnySpelling(EObject dataPath, List<List<String>> spellings)
+    {
+        if (dataPath == null)
+        {
+            return false;
+        }
+        EStructuralFeature languages = dataPath.eClass().getEStructuralFeature("paths"); //$NON-NLS-1$
+        if (languages instanceof EReference && languages.isMany() && dataPath.eGet(languages) instanceof List<?>)
+        {
+            for (Object language : (List<Object>)dataPath.eGet(languages))
+            {
+                if (language instanceof EObject && bindsAnySpelling((EObject)language, spellings))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+        for (List<String> spelling : spellings)
+        {
+            if (sameDataPath(dataPath, spelling))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The first authored form item whose {@code dataPath} satisfies {@code boundTo}.
+     *
+     * @param formModel the form content model
+     * @param boundTo tests an item's data path object (never {@code null})
+     * @return the item, or {@code null} when no item's path qualifies
+     */
+    public static EObject itemBoundTo(EObject formModel, Predicate<EObject> boundTo)
+    {
         EClassifier formItem = formModel.eClass().getEPackage().getEClassifier(ECLASS_FORM_ITEM);
         if (!(formItem instanceof EClass))
         {
-            return false;
+            return null;
         }
         Deque<EObject> pending = new ArrayDeque<>();
         pushFormItems(formModel, (EClass)formItem, pending);
         while (!pending.isEmpty())
         {
             EObject item = pending.pop();
-            if (sameDataPath(singleReference(item, "dataPath"), path)) //$NON-NLS-1$
+            EObject dataPath = singleReference(item, "dataPath"); //$NON-NLS-1$
+            if (dataPath != null && boundTo.test(dataPath))
             {
-                return true;
+                return item;
             }
             pushFormItems(item, (EClass)formItem, pending);
         }
-        return false;
+        return null;
     }
 
     /**

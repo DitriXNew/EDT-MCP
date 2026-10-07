@@ -43,6 +43,7 @@ import com.ditrix.edt.mcp.server.bridge.EdtMcpBridge;
 import com.ditrix.edt.mcp.server.bridge.IEdtMcpBridge;
 import com.ditrix.edt.mcp.server.history.McpCallHistoryFileLog;
 import com.ditrix.edt.mcp.server.utils.BackgroundJobs;
+import com.ditrix.edt.mcp.server.utils.FormAttributeDeletion;
 import com.ditrix.edt.mcp.server.utils.Log;
 import com.ditrix.edt.mcp.server.utils.NativeRenderModeProbe;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -417,6 +418,16 @@ public class Activator extends AbstractUIPlugin
     public IFormRefactoringService getFormRefactoringService()
     {
         return services.getFormRefactoringService();
+    }
+
+    /**
+     * Returns EDT's own form-attribute delete (the form designer's) with its read-only prediction.
+     *
+     * @return the deletion or null if not available
+     */
+    public FormAttributeDeletion getFormAttributeDeletion()
+    {
+        return services.getFormAttributeDeletion();
     }
 
     /**

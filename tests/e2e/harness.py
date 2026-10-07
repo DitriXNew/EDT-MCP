@@ -2516,6 +2516,49 @@ def restore_extension_fixture(ctx):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Form render mode (an independent oracle for render-dependent form tests)
+# ──────────────────────────────────────────────────────────────────────────────
+def _form_render_flag(flag):
+    """formRenderFlags[flag] from get_server_status; fails the test when it cannot be read.
+
+    A prerequisite that cannot be established is a failure, not a skip: only a
+    positively reported missing prerequisite may skip a test."""
+    r = call("get_server_status", {})
+    if r.is_error or not isinstance(r.structured, dict):
+        _fail("form render prerequisites: get_server_status failed: %s" % (r.error_text() or "")[:300])
+    flags = r.structured.get("formRenderFlags")
+    state = flags.get(flag) if isinstance(flags, dict) else None
+    if not isinstance(state, dict) or state.get("atStartup") not in ("on", "off"):
+        _fail("form render prerequisites: get_server_status reports no readable formRenderFlags.%s "
+              "(got %r)" % (flag, state))
+    return state
+
+
+def native_form_layout_render_mode():
+    """EDT's native form layout render mode, 'on' or 'off'; fails the test when unreadable.
+
+    formRenderFlags.nativeFormLayoutRender.atStartup is EDT's own
+    NativeRenderService.isNativeRender() at plugin activation, so EDT's default (native
+    when the property is absent) is reported correctly, and forcedAtRuntime marks a
+    later change of the live mode. Tests branch on this instead of accepting whichever
+    outcome a form tool happens to return. Opening an editor and resolving a name need
+    no particular mode."""
+    state = _form_render_flag("nativeFormLayoutRender")
+    mode = state["atStartup"]
+    if state.get("forcedAtRuntime") is True:
+        mode = "off" if mode == "on" else "on"
+    return mode
+
+
+def buffered_form_render_at_startup():
+    """-DnativeFormBufferedLayoutRender at plugin activation, 'on' or 'off'; fails the
+    test when unreadable. Only the startup value counts: EDT builds its offscreen buffer
+    once, so a later runtime force does not give a native render an image. It governs
+    the IMAGE only - an editor opens and resolves names without it."""
+    return _form_render_flag("nativeFormBufferedLayoutRender")["atStartup"]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Assertions
 # ──────────────────────────────────────────────────────────────────────────────
 def assert_ok(result, ctx=""):

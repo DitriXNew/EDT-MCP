@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -14,12 +15,15 @@ import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Supplier;
 
 import javax.xml.parsers.DocumentBuilderFactory;
 
 import org.eclipse.core.resources.IFile;
-import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
+import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.EList;
@@ -39,6 +43,12 @@ import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.form.model.AbstractDataPath;
+import com._1c.g5.v8.dt.form.model.AbstractFormAttribute;
+import com._1c.g5.v8.dt.form.model.Form;
+import com._1c.g5.v8.dt.form.model.FormAttributeAdditionalColumns;
+import com._1c.g5.v8.dt.form.model.FormChoiceParameterLink;
+import com._1c.g5.v8.dt.form.model.FormField;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
@@ -71,7 +81,9 @@ import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.utils.FormAttributeDeletion;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.FormModelValidator;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
@@ -81,10 +93,13 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PersistedContents;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.Refusals;
 import com.ditrix.edt.mcp.server.utils.SecureXml;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -191,11 +206,44 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             String registeringContainer, String targetFqn);
     }
 
+    /**
+     * Predicts and runs the delete of a form attribute or attribute column the way the form designer
+     * does. A package-private SEAM: production is {@link FormAttributeDeletion} (EDT's own service and
+     * collector); a unit test substitutes a fake.
+     */
+    interface FormAttributeDeleter
+    {
+        /**
+         * @param formModel the tx-bound content form
+         * @param attribute the tx-bound attribute or column
+         * @return what the delete will remove and clear, read without mutating
+         */
+        FormAttributeDeletion.Plan plan(EObject formModel, EObject attribute);
+
+        /**
+         * @param tx the open BM write transaction
+         * @param attribute the tx-bound attribute or column to delete (an {@code AbstractFormAttribute})
+         */
+        void delete(IBmTransaction tx, EObject attribute);
+
+        /**
+         * @param topObject an attached extInfo object EDT is about to detach
+         * @return the workspace file it is stored in, or {@code null} when that cannot be resolved
+         */
+        default IFile fileOf(EObject topObject)
+        {
+            return FormAttributeDeletion.fileOf(topObject);
+        }
+    }
+
     private final ConsentRequester consentRequester;
     private final CascadeSettler cascadeSettler;
     private final ExportSubmitter exportSubmitter;
     private final CascadeParticipants cascadeParticipants;
     private final RegistrationVerifier registrationVerifier;
+
+    /** Resolves the attribute deleter; answers {@code null} when the platform service is unavailable. */
+    private Supplier<FormAttributeDeleter> formAttributeDeleters = DeleteMetadataTool::platformFormAttributeDeleter;
 
     /** Production instance: consent goes to the real gate. */
     public DeleteMetadataTool()
@@ -254,6 +302,43 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         this.exportSubmitter = exportSubmitter;
         this.cascadeParticipants = cascadeParticipants;
         this.registrationVerifier = registrationVerifier;
+    }
+
+    /**
+     * Test seam: replaces the platform form-attribute delete.
+     *
+     * @param deleters answers the deleter, or {@code null} to simulate an unavailable service
+     * @return this tool
+     */
+    DeleteMetadataTool withFormAttributeDeleters(Supplier<FormAttributeDeleter> deleters)
+    {
+        this.formAttributeDeleters = deleters;
+        return this;
+    }
+
+    /** The production deleter: EDT's designer delete, items bound to the attribute included. */
+    private static FormAttributeDeleter platformFormAttributeDeleter()
+    {
+        Activator activator = Activator.getDefault();
+        FormAttributeDeletion deletion = activator == null ? null : activator.getFormAttributeDeletion();
+        if (deletion == null)
+        {
+            return null;
+        }
+        return new FormAttributeDeleter()
+        {
+            @Override
+            public FormAttributeDeletion.Plan plan(EObject formModel, EObject attribute)
+            {
+                return deletion.plan(formModel, attribute);
+            }
+
+            @Override
+            public void delete(IBmTransaction tx, EObject attribute)
+            {
+                deletion.delete(tx, attribute);
+            }
+        };
     }
 
     /**
@@ -391,7 +476,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             + "refused. EXCEPTION - an owned FORM object, a FORM " //$NON-NLS-1$
             + "member or an XDTO package member is removed straight from its container: nothing else " //$NON-NLS-1$
             + "blocks it (force is ignored) and no cross-object cascade runs, so references from elsewhere (a " //$NON-NLS-1$
-            + "field's dataPath, a command, an XDTO type) are left broken - re-check with " //$NON-NLS-1$
+            + "button's command, an XDTO type) are left broken - re-check with " //$NON-NLS-1$
             + "get_metadata_details (find_references takes TOP-level FQNs only, not these members). " //$NON-NLS-1$
             + "Parameters and examples: get_tool_guide('delete_metadata')."; //$NON-NLS-1$
     }
@@ -585,9 +670,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + "with supportLock=true is a vendor-support lock, which force does not override") //$NON-NLS-1$
             .integerProperty(KEY_PLATFORM_PROHIBITIONS_COUNT, "Count of platform prohibitions") //$NON-NLS-1$
             .booleanProperty("forced", "Whether the delete was forced past a reference or platform block") //$NON-NLS-1$ //$NON-NLS-2$
-            .booleanProperty(KEY_PERSISTED, "Present and false only for a partial forced-delete result: " //$NON-NLS-1$
-                + "the model deletion completed, but its registering .mdo is still stale or could not " //$NON-NLS-1$
-                + "be verified after the export wait") //$NON-NLS-1$
+            .booleanProperty(KEY_PERSISTED, "Present and false only for a partial result: the model deletion " //$NON-NLS-1$
+                + "completed, but a forced delete's registering .mdo is still stale or unverified after the " //$NON-NLS-1$
+                + "export wait, a form member's export could not be queued, or a detached form-attribute " //$NON-NLS-1$
+                + "file is still on disk or unverified after it") //$NON-NLS-1$
             .stringProperty(KEY_REGISTERING_FILE, "Project-relative .mdo path that still registers the " //$NON-NLS-1$
                 + "deleted node or could not be verified (partial forced-delete result only)") //$NON-NLS-1$
             .stringProperty(KEY_REGISTERING_CONTAINER, "FQN of the object serialized in registeringFile " //$NON-NLS-1$
@@ -1060,6 +1146,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * result is returned byte-for-byte unchanged: the temporary registering-file fields are removed.
      * A stale or unreadable registration remains a successful executed MODEL change, but gains
      * {@code persisted=false} and retains the exact file/container so clients can treat it as partial.
+     * A form-attribute delete's detached files are observed here instead ({@link #observeDetachedFiles}).
      */
     @Override
     protected String refreshAfterExportAwait(Map<String, String> params, String result,
@@ -1075,6 +1162,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             Activator.logError("delete_metadata: could not read the forced-delete result for " //$NON-NLS-1$
                 + "on-disk verification", e); //$NON-NLS-1$
             return result;
+        }
+        // Internal: always stripped here, so it never reaches the caller.
+        JsonElement formCheck = object.remove(KEY_FORM_CHECK);
+        if (VAL_EXECUTED.equals(resultString(object, McpKeys.ACTION))
+            && observeDetachedFiles(JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME), object,
+                formCheck != null && formCheck.isJsonObject() ? formCheck.getAsJsonObject() : null,
+                drainEstablished))
+        {
+            return GsonProvider.toJson(object);
         }
         if (!VAL_EXECUTED.equals(resultString(object, McpKeys.ACTION))
             || !object.has("forced") || !object.get("forced").getAsBoolean() //$NON-NLS-1$ //$NON-NLS-2$
@@ -1098,8 +1194,6 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
         // The model change completed. Do not turn that fact into a failure; state only that its
         // registering file is not confirmed current.
-        object.addProperty(KEY_PERSISTED, false);
-        String message = resultString(object, McpKeys.MESSAGE);
         String subject = registeringContainer == null || registeringContainer.isEmpty()
             ? "the object that registers it" : "'" + registeringContainer + "'"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         String verificationLag;
@@ -1121,8 +1215,23 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             // unnameable file; persisted=false supplies the structured partial-result signal.
             verificationLag = ""; //$NON-NLS-1$
         }
-        object.addProperty(McpKeys.MESSAGE, (message == null ? "" : message) + verificationLag); //$NON-NLS-1$
+        markNotPersisted(object, verificationLag);
         return GsonProvider.toJson(object);
+    }
+
+    /** The success clause a confirmed form-member delete ends its first sentence with. */
+    private static final String PERSISTED_CLAUSE = " and persisted to disk."; //$NON-NLS-1$
+
+    /**
+     * Marks a completed model change whose on-disk half is not confirmed: {@code persisted=false}, the
+     * success clause withdrawn, and {@code lag} appended to the message.
+     */
+    private static void markNotPersisted(JsonObject object, String lag)
+    {
+        object.addProperty(KEY_PERSISTED, false);
+        String message = resultString(object, McpKeys.MESSAGE);
+        object.addProperty(McpKeys.MESSAGE, (message == null ? "" //$NON-NLS-1$
+            : message.replace(PERSISTED_CLAUSE, " in the model; its export to disk is not confirmed.")) + lag); //$NON-NLS-1$
     }
 
     /** Resolves the registering container's project-relative {@code .mdo} path. */
@@ -1196,6 +1305,207 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + registeringFile + "'", e); //$NON-NLS-1$
             return RegistrationState.UNVERIFIABLE;
         }
+    }
+
+    /**
+     * Observes, after the export barrier, each detached object's file a confirmed form-attribute delete
+     * named: EDT's own save deletes it. Gone is {@link DetachedFileState#REMOVED}; still there or
+     * unobservable makes the result partial ({@code persisted=false}). Nothing is deleted here.
+     *
+     * @return whether the result carried a detached object at all
+     */
+    private boolean observeDetachedFiles(String projectName, JsonObject result, JsonObject formCheck,
+        boolean drainEstablished)
+    {
+        JsonElement items = result.get(KEY_ITEMS);
+        boolean seen = false;
+        boolean confirmed = true;
+        StringBuilder notes = new StringBuilder();
+        for (JsonElement element : items != null && items.isJsonArray() ? items.getAsJsonArray() : new JsonArray())
+        {
+            JsonObject item = element.isJsonObject() ? element.getAsJsonObject() : null;
+            if (item == null || !item.has(KEY_DETACHED))
+            {
+                continue;
+            }
+            seen = true;
+            String path = resultString(item, KEY_FILE);
+            if (path == null)
+            {
+                // Unresolved before the delete: already UNVERIFIED and noted in the message.
+                confirmed = false;
+                continue;
+            }
+            Boolean present = fileOnDisk(projectName, path);
+            DetachedFileState state = present == null ? DetachedFileState.UNVERIFIED
+                : present ? DetachedFileState.STILL_PRESENT : DetachedFileState.REMOVED;
+            item.addProperty(KEY_FILE_REMOVAL, state.name());
+            notes.append(' ').append(detachedFileMessage(state, path, drainEstablished));
+            // An absent file proves EDT deleted it, not that the form write finished too.
+            confirmed &= state == DetachedFileState.REMOVED && drainEstablished;
+        }
+        if (!seen)
+        {
+            return false;
+        }
+        if (drainEstablished)
+        {
+            // EDT writes each form file and deletes the detached file as separate exports; a failed form
+            // write drains too and would leave the old form naming a missing file.
+            List<String> formFiles = new ArrayList<>();
+            JsonElement listed = formCheck == null ? null : formCheck.get(FORM_CHECK_FILES);
+            if (listed != null && listed.isJsonArray())
+            {
+                listed.getAsJsonArray().forEach(file -> formFiles.add(file.getAsString()));
+            }
+            if (formFiles.isEmpty())
+            {
+                confirmed = false;
+                notes.append(" The form's Form.form could not be resolved, so it is not confirmed free of the " //$NON-NLS-1$
+                    + "deleted attribute; re-check it before relying on it."); //$NON-NLS-1$
+            }
+            for (String formFile : formFiles)
+            {
+                if (formFile.isEmpty())
+                {
+                    confirmed = false;
+                    notes.append(" The base form's Form.form could not be resolved, so it is not confirmed free " //$NON-NLS-1$
+                        + "of the deleted attribute; re-check it before relying on it."); //$NON-NLS-1$
+                    continue;
+                }
+                RegistrationState formState = formAttributeState(formBytes(projectName, formFile),
+                    resultString(formCheck, FORM_CHECK_ATTRIBUTE), resultString(formCheck, FORM_CHECK_COLUMN));
+                if (formState != RegistrationState.ABSENT)
+                {
+                    confirmed = false;
+                    notes.append(" Form.form ").append(formFile).append(formState == RegistrationState.PRESENT //$NON-NLS-1$
+                        ? " still declares the deleted attribute after EDT's export; EDT may have failed " //$NON-NLS-1$
+                            + "to write it - check the EDT log and re-check before relying on it." //$NON-NLS-1$
+                        : " could not be read after EDT's export, so it is not confirmed free of the " //$NON-NLS-1$
+                            + "deleted attribute; re-check it before relying on it."); //$NON-NLS-1$
+                }
+            }
+        }
+        String message = resultString(result, McpKeys.MESSAGE);
+        result.addProperty(McpKeys.MESSAGE, (message == null ? "" : message) + notes); //$NON-NLS-1$
+        if (!confirmed)
+        {
+            markNotPersisted(result, ""); //$NON-NLS-1$
+        }
+        return true;
+    }
+
+    /** What the observation saw for one detached file, as one sentence. */
+    private static String detachedFileMessage(DetachedFileState state, String path, boolean drainEstablished)
+    {
+        switch (state)
+        {
+        case REMOVED:
+            return "Its file " + path + (drainEstablished ? " is not on disk after EDT's export." //$NON-NLS-1$
+                : " is not on disk, but EDT's export was not observed to finish; re-check the form before relying on it."); //$NON-NLS-1$
+        case STILL_PRESENT:
+            return "Its file " + path + (drainEstablished //$NON-NLS-1$
+                ? " is still on disk after EDT's export finished; remove it or re-check before relying on it." //$NON-NLS-1$
+                : " is still on disk and EDT's export was not observed to finish; re-check it before relying on it."); //$NON-NLS-1$
+        case UNVERIFIED:
+        default:
+            return "Its file " + path + " could not be checked on disk; re-check it before relying on it."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /**
+     * Whether a project-relative file exists on the file system - read directly, so no workspace rule
+     * is waited for; {@code null} when it cannot be observed. Package-visible so a test serves its own.
+     */
+    Boolean fileOnDisk(String projectName, String path)
+    {
+        if (projectName == null || path == null)
+        {
+            return null;
+        }
+        try
+        {
+            // Fully qualified: the inherited AbstractMetadataWriteTool.ProjectContext shadows the utils one.
+            com.ditrix.edt.mcp.server.utils.ProjectContext context =
+                com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
+            IPath location = context.exists() ? context.project().getFile(new Path(path)).getLocation() : null;
+            return location == null ? null : Boolean.valueOf(location.toFile().exists());
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("delete_metadata: could not check '" + path + "' in '" + projectName + "'", e); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return null;
+        }
+    }
+
+    /**
+     * A project-relative file's bytes read directly from the file system (no workspace rule), or
+     * {@code null} when it cannot be read. Package-visible so a test serves its own.
+     */
+    byte[] formBytes(String projectName, String path)
+    {
+        if (projectName == null || path == null)
+        {
+            return null;
+        }
+        try
+        {
+            // Fully qualified: the inherited AbstractMetadataWriteTool.ProjectContext shadows the utils one.
+            com.ditrix.edt.mcp.server.utils.ProjectContext context =
+                com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
+            IPath location = context.exists() ? context.project().getFile(new Path(path)).getLocation() : null;
+            return location == null ? null : java.nio.file.Files.readAllBytes(location.toFile().toPath());
+        }
+        catch (java.io.IOException | RuntimeException e)
+        {
+            Activator.logError("delete_metadata: could not read '" + path + "' in '" + projectName + "'", e); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return null;
+        }
+    }
+
+    /** ABSENT when the Form.form bytes no longer declare the attribute (or column), PRESENT when they do. */
+    static RegistrationState formAttributeState(byte[] form, String attribute, String column)
+    {
+        if (form == null || attribute == null)
+        {
+            return RegistrationState.UNVERIFIABLE;
+        }
+        try
+        {
+            Element root = SecureXml.documentBuilderFactory().newDocumentBuilder()
+                .parse(new ByteArrayInputStream(form)).getDocumentElement();
+            return declaresFormAttribute(root, attribute, column) ? RegistrationState.PRESENT
+                : RegistrationState.ABSENT;
+        }
+        catch (Exception e)
+        {
+            Activator.logError("delete_metadata: could not parse Form.form to confirm the attribute delete", e); //$NON-NLS-1$
+            return RegistrationState.UNVERIFIABLE;
+        }
+    }
+
+    /** Whether a Form.form root declares the attribute ({@code <attributes><name>}), or its column. */
+    static boolean declaresFormAttribute(Element root, String attribute, String column)
+    {
+        for (Element candidate : directChildren(root, "attributes")) //$NON-NLS-1$
+        {
+            if (!attribute.equalsIgnoreCase(directChildText(candidate, "name"))) //$NON-NLS-1$
+            {
+                continue;
+            }
+            if (column == null)
+            {
+                return true;
+            }
+            for (Element columnElement : directChildren(candidate, "columns")) //$NON-NLS-1$
+            {
+                if (column.equalsIgnoreCase(directChildText(columnElement, "name"))) //$NON-NLS-1$
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** Package-visible pure XML check for the registering-file tests. */
@@ -1649,11 +1959,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Deletes a FORM member (item / attribute / command / handler) addressed by a form FQN. The member
-     * lives on the editable Form content model, so it is removed directly with {@link EcoreUtil#remove}
-     * (a Group / Table cascades its contained subtree because {@code items} is containment) - the
-     * md-refactoring service that cascades mdclass references does NOT apply here, so a cross-reference
-     * to the removed member (a field's dataPath, a button's command) is NOT rewritten; the caller
+     * Deletes a FORM member (item / attribute / command / handler) addressed by a form FQN. A form
+     * ATTRIBUTE or column goes through EDT's form-attribute service, the designer's delete, which also
+     * removes the items bound to it. Any other member is removed directly with {@link EcoreUtil#remove}
+     * (a Group / Table cascades its contained subtree because {@code items} is containment), so a
+     * cross-reference to it (a button's command) is NOT rewritten; the caller
      * should re-read the form afterwards. Two-phase like the mdclass path: {@code confirm=false}
      * previews what would be removed (no write transaction), {@code confirm=true} removes it and
      * force-exports the content form to {@code Form.form}.
@@ -1687,8 +1997,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             {
                 return formMemberNotFound(ref, handler, data.kindAdvice);
             }
+            // Resolved BEFORE the gate: an unavailable platform service must refuse, not ask the user
+            // to authorize a delete that cannot run.
+            final FormAttributeDeleter attributeDeleter = attributeDeleterFor(data, normFqn);
+            final List<String> authorizedScope = data.scope;
             return gateFormMemberDelete(normFqn, ref, handler, data,
-                () -> performFormDelete(fctx, normFqn, ref, handler, version));
+                () -> performFormDelete(fctx, normFqn, ref, handler, version, attributeDeleter,
+                    authorizedScope));
         }
         catch (Exception e)
         {
@@ -1795,12 +2110,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // event handler and a command's action went along unmentioned (issue #295 review).
         ConsentPreview preview = new ConsentPreview(
             handler ? "Delete form event handler" : "Delete form member", //$NON-NLS-1$ //$NON-NLS-2$
-            data.descendants.isEmpty()
+            (data.descendants.isEmpty()
                 ? "Removes it from " + ref.formPath + '.' //$NON-NLS-1$
                 : "Removes it and its " + data.descendants.size() //$NON-NLS-1$
                     + " contained member(s) (" + data.describeDescendants() + ")" //$NON-NLS-1$ //$NON-NLS-2$
-                    + data.truncationNote() + " from " + ref.formPath + '.', //$NON-NLS-1$
-            1 + data.descendants.size(), Collections.singletonList(normFqn));
+                    + data.truncationNote() + " from " + ref.formPath + '.') //$NON-NLS-1$
+                + data.boundItemsSentence(),
+            1 + data.descendants.size() + data.removedAlongCount(), Collections.singletonList(normFqn));
         return deleteWithConsent(preview, write);
     }
 
@@ -1926,6 +2242,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 {
                     d.truncated = collectRemovedMembers(target, d.descendants);
                 }
+                if (!handler && target instanceof AbstractFormAttribute)
+                {
+                    readAttributeDeletePreview(formModel, target, requireAttributeDeleter(normFqn), d);
+                }
                 return d;
             });
     }
@@ -1946,8 +2266,18 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         head.put("type", data.type); //$NON-NLS-1$
         removed.add(head);
         removed.addAll(data.descendants);
+        removed.addAll(data.boundItems);
+        removed.addAll(data.additionalColumns);
+        removed.addAll(data.detachedObjects);
 
         String memberWord = handler ? KEY_HANDLER : KEY_MEMBER;
+        String consequences = data.attribute
+            ? data.boundItemsSentence() + data.mainAttributeNote(false)
+                + " It is deleted through EDT's form-attribute service, as the form designer deletes it - " //$NON-NLS-1$
+                + "the confirmed response lists what was actually removed. Call confirm=true to apply." //$NON-NLS-1$
+            : " Cross-references to it (a button's command) are NOT rewritten - " //$NON-NLS-1$
+                + "re-check with get_metadata_details afterwards. Call confirm=true " //$NON-NLS-1$
+                + "to apply."; //$NON-NLS-1$
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_PREVIEW)
             .put("fqn", normFqn) //$NON-NLS-1$
@@ -1961,17 +2291,26 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                     ? "the " + memberWord + " itself." //$NON-NLS-1$ //$NON-NLS-2$
                     : "it and its " + data.descendants.size() + " contained member(s) (" //$NON-NLS-1$ //$NON-NLS-2$
                         + data.describeDescendants() + ")" + data.truncationNote() + ".") //$NON-NLS-1$ //$NON-NLS-2$
-                + " Cross-references to it (a field's dataPath, a button's command) are NOT rewritten - " //$NON-NLS-1$
-                + "re-check with get_metadata_details afterwards. Call confirm=true " //$NON-NLS-1$
-                + "to apply.") //$NON-NLS-1$
+                + consequences)
             .toJson();
     }
 
-    /** Delete inside a WRITE transaction, including symmetric form-binding cleanup, then export. */
-    private String performFormDelete(FormElementWriter.FormEditContext fctx, String normFqn,
-        FormElementWriter.FormMemberRef ref, boolean handler, Version version)
+    /**
+     * Delete inside a WRITE transaction, then export. A form attribute or column goes through EDT's
+     * form-attribute service ({@code attributeDeleter}), which also removes the items bound to it and
+     * unbinds the ones whose path no longer resolves - the designer's delete; any other member is
+     * removed directly, with the symmetric form-binding cleanup. {@code authorizedScope} is what the
+     * consent covered ({@link FormDeletePreview#scope}); an attribute delete whose scope differs now
+     * is refused before anything changes.
+     */
+    String performFormDelete(FormElementWriter.FormEditContext fctx, String normFqn,
+        FormElementWriter.FormMemberRef ref, boolean handler, Version version,
+        FormAttributeDeleter attributeDeleter, List<String> authorizedScope)
     {
         final String[] capturedType = new String[1];
+        final AttributeDeleteOutcome[] outcome = new AttributeDeleteOutcome[1];
+        // An attribute delete commits through the global editing context, as the designer's does, so
+        // EDT's own save also deletes the file of an extInfo object it detaches.
         boolean persisted = FormElementWriter.writeEditableForm(fctx, "DeleteFormMember", //$NON-NLS-1$
             (formModel, tx) ->
             {
@@ -1983,20 +2322,826 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                         formTargetAdvice(formModel, ref, handler, normFqn, version)));
                 }
                 capturedType[0] = target.eClass().getName();
+                if (!handler && target instanceof AbstractFormAttribute)
+                {
+                    // The deleter was resolved before the gate for an attribute PREVIEW; a target that
+                    // only turned into an attribute since then is refused rather than half-handled.
+                    if (attributeDeleter == null)
+                    {
+                        throw new FormValidationException(attributeServiceUnavailable(normFqn));
+                    }
+                    outcome[0] = deleteAttributeInTx(formModel, target, tx, attributeDeleter, normFqn,
+                        authorizedScope);
+                    return;
+                }
                 // Items are containments, so removing a Group/Table cascades its contained subtree.
                 // The writer also prunes dynamic-list UseAlways paths no remaining item references.
                 FormElementWriter.removeFormMember(formModel, target);
-            });
+            }, attributeDeleter != null);
 
-        return ToolResult.success()
+        return formDeleteResult(normFqn, ref, handler, capturedType[0], outcome[0], persisted);
+    }
+
+    /**
+     * The confirmed form-member delete's response. A detached object's file carries no
+     * {@code fileRemoval} yet: {@link #refreshAfterExportAwait} observes it after the export barrier.
+     */
+    static String formDeleteResult(String normFqn, FormElementWriter.FormMemberRef ref,
+        boolean handler, String type, AttributeDeleteOutcome outcome, boolean persisted)
+    {
+        String head = "Deleted form " + (handler ? KEY_HANDLER : KEY_MEMBER) + " '" + ref.name //$NON-NLS-1$ //$NON-NLS-2$
+            + "' (" + type + ") from " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
+            + (persisted ? PERSISTED_CLAUSE
+                : " (in-memory only; on-disk write did not complete - re-check before relying on " //$NON-NLS-1$
+                    + "it)."); //$NON-NLS-1$
+        ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_EXECUTED)
-            .put("fqn", normFqn) //$NON-NLS-1$
-            .put(McpKeys.MESSAGE, "Deleted form " + (handler ? KEY_HANDLER : KEY_MEMBER) + " '" + ref.name //$NON-NLS-1$ //$NON-NLS-2$
-                + "' (" + capturedType[0] + ") from " + ref.formPath //$NON-NLS-1$ //$NON-NLS-2$
-                + (persisted ? " and persisted to disk." //$NON-NLS-1$
-                    : " (in-memory only; on-disk write did not complete - re-check before relying on " //$NON-NLS-1$
-                        + "it).")) //$NON-NLS-1$
-            .toJson();
+            .put("fqn", normFqn); //$NON-NLS-1$
+        if (!persisted)
+        {
+            // The structured partial-result signal, not only the prose above.
+            result.put(KEY_PERSISTED, false);
+        }
+        if (outcome != null)
+        {
+            outcome.recordDetachedFiles();
+            List<Map<String, Object>> removed = new ArrayList<>();
+            removed.add(formItem(ref.name, type));
+            removed.addAll(outcome.entries());
+            result.put(KEY_ITEMS, removed);
+            head += outcome.describe();
+            if (!outcome.detached.isEmpty())
+            {
+                result.put(KEY_FORM_CHECK, outcome.formCheck(ref));
+            }
+        }
+        return result.put(McpKeys.MESSAGE, head).toJson();
+    }
+
+    // ==================== FORM attribute (EDT's designer delete) ====================
+
+    /** How many removed members a form-attribute delete lists per kind; the counts are always exact. */
+    static final int MAX_LISTED_BOUND_ITEMS = 50;
+
+    /** How many members the "form changed since the preview" refusal names per direction. */
+    private static final int MAX_NAMED_SCOPE_CHANGES = 10;
+
+    /** Item key: the data path an item is (or was) bound to. */
+    private static final String KEY_DATA_PATH = "dataPath"; //$NON-NLS-1$
+
+    /** Item key: present and true on an item that stays but loses its data path. */
+    private static final String KEY_UNBOUND = "unbound"; //$NON-NLS-1$
+
+    /** Item key: present and true on a member removed only because a removed item contains it. */
+    private static final String KEY_CONTAINED = "contained"; //$NON-NLS-1$
+
+    /** Item key: the table path of the additional-column entry a removed column belonged to. */
+    private static final String KEY_TABLE_PATH = "tablePath"; //$NON-NLS-1$
+
+    /** Item key: present and true on a separate BM object detached with the attribute's extInfo. */
+    private static final String KEY_DETACHED = "detached"; //$NON-NLS-1$
+
+    /** Item key: the extInfo kind a detached object hung from. */
+    private static final String KEY_EXT_INFO = "extInfo"; //$NON-NLS-1$
+
+    /** Item key: the project-relative file a detached object was stored in. */
+    private static final String KEY_FILE = "file"; //$NON-NLS-1$
+
+    /** Item key: that file's state observed after the export - {@link DetachedFileState}. */
+    private static final String KEY_FILE_REMOVAL = "fileRemoval"; //$NON-NLS-1$
+
+    /** Internal result member: the Form.form and attribute (column) the hook re-reads; always stripped there. */
+    private static final String KEY_FORM_CHECK = "formCheck"; //$NON-NLS-1$
+    private static final String FORM_CHECK_FILES = "files"; //$NON-NLS-1$
+    private static final String FORM_CHECK_ATTRIBUTE = "attribute"; //$NON-NLS-1$
+    private static final String FORM_CHECK_COLUMN = "column"; //$NON-NLS-1$
+
+    /** Preview item key: true when EDT's export of the confirmed delete removes the detached object's {@code file}. */
+    private static final String KEY_DELETED_FROM_DISK = "deletedFromDisk"; //$NON-NLS-1$
+
+    /** Item key: the kept field a dropped choice-parameter link belonged to. */
+    private static final String KEY_FIELD = "field"; //$NON-NLS-1$
+
+    /**
+     * The deleter for an attribute target, resolved inside the preview read; refuses when EDT's
+     * delete is unavailable - there is no own predictor or remover to fall back to. The refusal is
+     * logged through {@link Refusals}: the reflection or injection failure behind it was already
+     * logged at ERROR where {@code EdtServices} caught it.
+     *
+     * @param normFqn the normalized FQN being deleted
+     * @return the deleter
+     * @throws FormValidationException carrying the refusal when it is unavailable
+     */
+    FormAttributeDeleter requireAttributeDeleter(String normFqn)
+    {
+        FormAttributeDeleter deleter = formAttributeDeleters.get();
+        if (deleter == null)
+        {
+            FormValidationException refusal = new FormValidationException(attributeServiceUnavailable(normFqn));
+            Refusals.log("delete_metadata: EDT's form-attribute delete is unavailable", refusal); //$NON-NLS-1$
+            throw refusal;
+        }
+        return deleter;
+    }
+
+    /**
+     * The deleter for a confirmed attribute delete, resolved before the consent gate; {@code null}
+     * for a member that is not an attribute (it never needs the service).
+     *
+     * @param data what the preview read found
+     * @param normFqn the normalized FQN being deleted
+     * @return the deleter, or {@code null} for a non-attribute member
+     * @throws FormValidationException carrying the refusal when the platform service is unavailable
+     */
+    FormAttributeDeleter attributeDeleterFor(FormDeletePreview data, String normFqn)
+    {
+        if (!data.attribute)
+        {
+            return null;
+        }
+        return data.deleter != null ? data.deleter : requireAttributeDeleter(normFqn);
+    }
+
+    /** The refusal when EDT's form-attribute service cannot be reached. */
+    static String attributeServiceUnavailable(String normFqn)
+    {
+        return ToolResult.error("Cannot delete form attribute '" + normFqn + "': EDT's form-attribute " //$NON-NLS-1$ //$NON-NLS-2$
+            + "service (the designer's delete, which also removes the items bound to the attribute) " //$NON-NLS-1$
+            + "is unavailable, so nothing was changed. Wait for the form bundle to start (get_server_status) " //$NON-NLS-1$
+            + "and retry, or delete the attribute in the EDT form editor.").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * Fills the attribute half of a form-member preview from EDT's own prediction ({@code plan}): the
+     * items its collector removes plus every named member inside them, the additional columns a
+     * column's delete drops, and the extInfo object it detaches with the file the confirmed delete
+     * removes - each list capped at
+     * {@link #MAX_LISTED_BOUND_ITEMS}, the counts exact - and the {@link FormDeletePreview#scope} a
+     * confirmed delete is checked against.
+     *
+     * @param formModel the tx-bound content form
+     * @param attribute the attribute or column being deleted
+     * @param deleter EDT's delete (or a test fake)
+     * @param data receives the findings
+     */
+    static void readAttributeDeletePreview(EObject formModel, EObject attribute, FormAttributeDeleter deleter,
+        FormDeletePreview data)
+    {
+        data.attribute = true;
+        data.deleter = deleter;
+        data.main = FormElementWriter.isMainAttribute(attribute);
+        data.rootExtInfo = rootExtInfoKind(formModel);
+        FormAttributeDeletion.Plan plan = deleter.plan(formModel, attribute);
+        data.itemsKept = plan.itemsKept;
+        data.unresolved = plan.unresolved;
+        Set<EObject> roots = Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        roots.addAll(plan.bound);
+        for (EObject root : plan.bound)
+        {
+            if (hasAncestorIn(root, roots))
+            {
+                continue; // listed in the walk of the removed item that contains it
+            }
+            data.addRemoved(root, false);
+            List<EObject> inside = new ArrayList<>();
+            data.removalTruncated |= collectRemovedObjects(root, inside);
+            for (EObject member : inside)
+            {
+                data.addRemoved(member, !roots.contains(member));
+            }
+        }
+        for (EObject entry : plan.additionalColumns)
+        {
+            String tablePath = tablePathOf(entry);
+            List<EObject> inside = new ArrayList<>();
+            data.removalTruncated |= collectRemovedObjects(entry, inside);
+            for (EObject column : inside)
+            {
+                data.addAdditionalColumn(column, tablePath);
+            }
+        }
+        Map<FormAttributeDeletion.Detached, IFile> files = filesOf(plan, deleter);
+        for (FormAttributeDeletion.Detached detached : plan.detached)
+        {
+            Map<String, Object> entry = detachedEntry(detached);
+            IFile file = files.get(detached);
+            if (file != null)
+            {
+                entry.put(KEY_FILE, fileLabelOf(file));
+                entry.put(KEY_DELETED_FROM_DISK, Boolean.TRUE);
+            }
+            data.detachedObjects.add(entry);
+        }
+        // Which kept-field choice links EDT's cleaner drops hangs on its element-path resolution: disclosed, not predicted.
+        for (EObject member : PersistedContents.descendants(formModel))
+        {
+            if (member instanceof FormChoiceParameterLink && !hasAncestorIn(member, roots))
+            {
+                data.keptChoiceLinks = true;
+                break;
+            }
+        }
+        data.scope = scopeOf(formModel, attribute, plan, files);
+    }
+
+    /** The file of each detached object, resolved once per transaction; {@code null} when unresolved. */
+    private static Map<FormAttributeDeletion.Detached, IFile> filesOf(FormAttributeDeletion.Plan plan,
+        FormAttributeDeleter deleter)
+    {
+        Map<FormAttributeDeletion.Detached, IFile> files = new java.util.IdentityHashMap<>();
+        for (FormAttributeDeletion.Detached detached : plan.detached)
+        {
+            files.put(detached, deleter.fileOf(detached.object));
+        }
+        return files;
+    }
+
+    /**
+     * The form files the delete writes: the content form's own and, for an adopted attribute, its base-form
+     * copy - a separate top object EDT's delete also edits. Empty when the content form's is unresolved; a
+     * {@code null} entry is a required base copy that did not resolve.
+     */
+    private static List<IFile> formFilesOf(EObject formModel, FormAttributeDeleter deleter, boolean adopted)
+    {
+        List<IFile> files = new ArrayList<>();
+        IFile own = deleter.fileOf(formModel);
+        if (own == null)
+        {
+            return files;
+        }
+        files.add(own);
+        if (adopted)
+        {
+            Form baseForm = formModel instanceof Form ? ((Form)formModel).getBaseForm() : null;
+            files.add(baseForm == null || baseForm.eIsProxy() ? null : deleter.fileOf(baseForm));
+        }
+        return files;
+    }
+
+    /** The project-relative path the preview, the scope and the removal report all name a file by. */
+    private static String fileLabelOf(IFile file)
+    {
+        return file.getProjectRelativePath().toString();
+    }
+
+    /** A detached object's scope key: {@code "<file> id=<n>"}, either part alone, or {@code ""}. */
+    private static String detachedKeyOf(EObject object, IFile file)
+    {
+        String id = object instanceof IBmObject && ((IBmObject)object).bmGetEngine() != null
+            ? DETACHED_ID_PREFIX + ((IBmObject)object).bmGetId() : ""; //$NON-NLS-1$
+        if (file == null)
+        {
+            return id;
+        }
+        return id.isEmpty() ? fileLabelOf(file) : fileLabelOf(file) + ' ' + id;
+    }
+
+    /** Marks the BM id part of a detached object's scope key. */
+    private static final String DETACHED_ID_PREFIX = "id="; //$NON-NLS-1$
+
+    /** Whether a proper ancestor of {@code object} is in {@code roots}. */
+    private static boolean hasAncestorIn(EObject object, Set<EObject> roots)
+    {
+        for (EObject up = object.eContainer(); up != null; up = up.eContainer())
+        {
+            if (roots.contains(up))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Everything EDT's delete of {@code attribute} takes, as stable identities (containment path by
+     * name, then EClass) that survive into another transaction: the attribute and its own members,
+     * each removed item with its subtree, each dropped additional-column entry with its columns, and
+     * each detached extInfo object keyed by its file (or BM id). The consent covers exactly this
+     * multiset: one identity per object, so same-named siblings count separately.
+     *
+     * @param formModel the tx-bound content form
+     * @param attribute the attribute or column being deleted
+     * @param plan EDT's prediction for it
+     * @param files the file of each detached object ({@link #filesOf})
+     * @return the sorted identities
+     * @throws FormValidationException when a walk hit its node bound - a cut scope authorizes nothing
+     */
+    static List<String> scopeOf(EObject formModel, EObject attribute, FormAttributeDeletion.Plan plan,
+        Map<FormAttributeDeletion.Detached, IFile> files)
+    {
+        List<EObject> walked = new ArrayList<>();
+        walked.add(attribute);
+        boolean truncated = collectRemovedObjects(attribute, walked);
+        for (EObject root : plan.bound)
+        {
+            walked.add(root);
+            truncated |= collectRemovedObjects(root, walked);
+        }
+        for (EObject entry : plan.additionalColumns)
+        {
+            walked.add(entry);
+            truncated |= collectRemovedObjects(entry, walked);
+        }
+        if (truncated)
+        {
+            throw new FormValidationException(ToolResult.error("Cannot delete this form attribute: its removal " //$NON-NLS-1$
+                + "scope is larger than " + FormStructureReader.MAX_NODES + " members, so nothing was changed. " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Delete its contents first, or delete it in the EDT form designer.").toJson()); //$NON-NLS-1$
+        }
+        // A bound item inside another bound item is walked twice; each object counts once.
+        Set<EObject> members = Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        List<String> scope = new ArrayList<>();
+        for (EObject member : walked)
+        {
+            if (members.add(member))
+            {
+                scope.add(identityOf(formModel, member));
+            }
+        }
+        String owner = identityOf(formModel, attribute);
+        for (FormAttributeDeletion.Detached detached : plan.detached)
+        {
+            scope.add(owner + '/' + detached.extInfo + '.' + detached.feature + '['
+                + detachedKeyOf(detached.object, files.get(detached)) + "]:" //$NON-NLS-1$
+                + detached.object.eClass().getName());
+        }
+        if (plan.itemsKept)
+        {
+            scope.add("(bound items kept)"); //$NON-NLS-1$
+        }
+        Collections.sort(scope);
+        return scope;
+    }
+
+    /**
+     * {@code feature[name]/...:EClass} from the form down. An additional-column entry is keyed by its
+     * table path (plus {@code #n} for the n-th repeat), any other unnamed list member by its index.
+     */
+    private static String identityOf(EObject formModel, EObject member)
+    {
+        Deque<String> segments = new ArrayDeque<>();
+        for (EObject object = member; object != null && object != formModel; object = object.eContainer())
+        {
+            EStructuralFeature feature = object.eContainingFeature();
+            String name = ownNameOf(object);
+            String key = name != null ? name
+                : object instanceof FormAttributeAdditionalColumns ? tablePathKeyOf(object)
+                : feature != null && feature.isMany()
+                    ? "#" + ((List<?>)object.eContainer().eGet(feature)).indexOf(object) : ""; //$NON-NLS-1$ //$NON-NLS-2$
+            segments.push((feature == null ? "?" : feature.getName()) + '[' + key + ']'); //$NON-NLS-1$
+        }
+        return String.join("/", segments) + ':' + member.eClass().getName(); //$NON-NLS-1$
+    }
+
+    /** An additional-column entry's table path, with {@code #n} when n earlier siblings share it. */
+    private static String tablePathKeyOf(EObject entry)
+    {
+        String path = tablePathOf(entry);
+        int repeat = 0;
+        for (Object sibling : (List<?>)entry.eContainer().eGet(entry.eContainingFeature()))
+        {
+            if (sibling == entry)
+            {
+                break;
+            }
+            if (sibling instanceof EObject && path.equals(tablePathOf((EObject)sibling)))
+            {
+                repeat++;
+            }
+        }
+        return repeat == 0 ? path : path + '#' + repeat;
+    }
+
+    /** A readable name for a scope identity: the last segment's name, else its feature. */
+    private static String labelOf(String identity)
+    {
+        // A detached object's key is a file path: the last segment starts before its own '['.
+        int bracket = identity.lastIndexOf('[');
+        String last = identity.substring(identity.lastIndexOf('/', bracket < 0 ? identity.length() : bracket) + 1);
+        int colon = last.lastIndexOf(':');
+        if (colon > 0)
+        {
+            last = last.substring(0, colon);
+        }
+        int open = last.indexOf('[');
+        if (open < 0 || !last.endsWith("]")) //$NON-NLS-1$
+        {
+            return last;
+        }
+        String key = last.substring(open + 1, last.length() - 1);
+        int id = key.lastIndexOf(' ' + DETACHED_ID_PREFIX);
+        if (id > 0)
+        {
+            return key.substring(0, id); // the file, without the BM id
+        }
+        return key.isEmpty() || key.startsWith("#") || key.startsWith(DETACHED_ID_PREFIX) ? last.substring(0, open) : key; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal when the confirmed delete's scope is not the one the consent covered: the form
+     * changed in between (another editor bound a table, added a member inside a removed one).
+     *
+     * @param normFqn the FQN being deleted
+     * @param authorized what the consent covered, or {@code null} when it covered no attribute delete
+     * @param now what EDT's delete would take now
+     * @return the ready error JSON
+     */
+    static String scopeChangedError(String normFqn, List<String> authorized, List<String> now)
+    {
+        List<String> covered = authorized == null ? Collections.emptyList() : authorized;
+        List<String> added = labelsMissingFrom(now, covered);
+        List<String> gone = labelsMissingFrom(covered, now);
+        StringBuilder sb = new StringBuilder("The form changed since the preview: EDT's delete of '") //$NON-NLS-1$
+            .append(normFqn).append("' would now"); //$NON-NLS-1$
+        if (!added.isEmpty())
+        {
+            sb.append(" also remove ").append(added.size()).append(" member(s) the confirmation did not cover") //$NON-NLS-1$ //$NON-NLS-2$
+                .append(labelsOf(added));
+        }
+        if (!gone.isEmpty())
+        {
+            sb.append(added.isEmpty() ? "" : " and").append(" no longer remove ").append(gone.size()) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                .append(" member(s) it did cover").append(labelsOf(gone)); //$NON-NLS-1$
+        }
+        return ToolResult.error(sb.append(". Nothing was changed - call delete_metadata with confirm=false " //$NON-NLS-1$
+            + "to see what it removes now, then confirm that.").toString()).toJson(); //$NON-NLS-1$
+    }
+
+    /** The labels of {@code from}'s identities left after removing {@code other}'s, counting repeats. */
+    private static List<String> labelsMissingFrom(List<String> from, List<String> other)
+    {
+        List<String> rest = new ArrayList<>(other);
+        List<String> labels = new ArrayList<>();
+        for (String identity : from)
+        {
+            if (!rest.remove(identity))
+            {
+                labels.add(labelOf(identity));
+            }
+        }
+        return labels;
+    }
+
+    private static String labelsOf(List<String> labels)
+    {
+        return " (" + String.join(", ", labels.subList(0, Math.min(labels.size(), MAX_NAMED_SCOPE_CHANGES))) //$NON-NLS-1$ //$NON-NLS-2$
+            + (labels.size() > MAX_NAMED_SCOPE_CHANGES ? ", ..." : "") + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * Runs EDT's attribute delete on the tx-bound model and OBSERVES what it did. First the plan is
+     * recomputed here and compared with {@code authorizedScope} - a delete that would now take more
+     * (or less) than the consent covered is refused before anything changes. Then every persisted
+     * named member of the form (and every choice-parameter link) is snapshotted with its nearest
+     * named container and its data path, and afterwards reported as removed ({@code contained} when
+     * that container went too), unbound (kept, path cleared) or, for a link of a kept field, dropped
+     * from it; each planned extInfo object is reported as detached or left attached. A
+     * delete that left the attribute in place throws, rolling the transaction back.
+     *
+     * @param formModel the tx-bound content form
+     * @param target the tx-bound attribute or column
+     * @param tx the open write transaction
+     * @param deleter the platform delete (or a test fake)
+     * @param normFqn the FQN, for the refusals
+     * @param authorizedScope what the consent covered ({@link FormDeletePreview#scope})
+     * @return what was removed, unbound, dropped and detached
+     */
+    static AttributeDeleteOutcome deleteAttributeInTx(EObject formModel, EObject target, IBmTransaction tx,
+        FormAttributeDeleter deleter, String normFqn, List<String> authorizedScope)
+    {
+        FormAttributeDeletion.Plan plan = deleter.plan(formModel, target);
+        // The files are resolved before the check, so the one removed is the one the scope disclosed.
+        Map<FormAttributeDeletion.Detached, IFile> files = filesOf(plan, deleter);
+        List<String> scope = scopeOf(formModel, target, plan, files);
+        if (!scope.equals(authorizedScope))
+        {
+            throw new FormValidationException(scopeChangedError(normFqn, authorizedScope, scope));
+        }
+        AttributeDeleteOutcome outcome = new AttributeDeleteOutcome();
+        if (!plan.detached.isEmpty())
+        {
+            // Only an adopted attribute's delete also edits the base-form copy (the plan's itemsKept).
+            outcome.formFiles.addAll(formFilesOf(formModel, deleter, plan.itemsKept));
+        }
+        outcome.main = FormElementWriter.isMainAttribute(target);
+        outcome.rootExtInfo = rootExtInfoKind(formModel);
+        collectRemovedMembers(target, outcome.columns);
+        List<EObject> members = new ArrayList<>();
+        Map<EObject, EObject> owners = new java.util.IdentityHashMap<>();
+        Map<EObject, String> paths = new java.util.IdentityHashMap<>();
+        Map<EObject, String> tablePaths = new java.util.IdentityHashMap<>();
+        for (EObject member : PersistedContents.descendants(formModel))
+        {
+            boolean link = member instanceof FormChoiceParameterLink;
+            if ((link || ownNameOf(member) != null) && member != target && !EcoreUtil.isAncestor(target, member))
+            {
+                members.add(member);
+                // A link belongs to the field holding it, named or not.
+                owners.put(member, link ? fieldOf(member) : namedOwnerOf(formModel, member));
+                paths.put(member, link ? dottedOf(((FormChoiceParameterLink)member).getDatapath())
+                    : FormAttributeDeletion.pathOf(member));
+                if (member.eContainer() instanceof FormAttributeAdditionalColumns)
+                {
+                    tablePaths.put(member, tablePathOf(member.eContainer()));
+                }
+            }
+        }
+
+        deleter.delete(tx, target);
+
+        if (EcoreUtil.isAncestor(formModel, target))
+        {
+            throw new FormValidationException(ToolResult.error("EDT's form-attribute delete left '" //$NON-NLS-1$
+                + normFqn + "' in the form, so nothing was changed. Delete it in the EDT form editor " //$NON-NLS-1$
+                + "and report the case.").toJson()); //$NON-NLS-1$
+        }
+        for (EObject member : members)
+        {
+            String path = paths.get(member);
+            if (!EcoreUtil.isAncestor(formModel, member))
+            {
+                EObject owner = owners.get(member);
+                boolean contained = owner != null && !EcoreUtil.isAncestor(formModel, owner);
+                if (member instanceof FormChoiceParameterLink && owner != null && !contained)
+                {
+                    // EDT's cleaner dropped it from a field the delete kept.
+                    Map<String, Object> entry = itemEntry(member, path, false, false);
+                    if (ownNameOf(owner) != null)
+                    {
+                        entry.put(KEY_FIELD, ownNameOf(owner));
+                    }
+                    outcome.droppedLinks.add(entry);
+                    continue;
+                }
+                Map<String, Object> entry = itemEntry(member, path, contained, false);
+                if (tablePaths.containsKey(member))
+                {
+                    entry.put(KEY_TABLE_PATH, tablePaths.get(member));
+                }
+                outcome.removed.add(entry);
+            }
+            else if (!(member instanceof FormChoiceParameterLink) && !path.isEmpty()
+                && FormAttributeDeletion.pathOf(member).isEmpty())
+            {
+                outcome.unbound.add(itemEntry(member, path, false, true));
+            }
+        }
+        for (FormAttributeDeletion.Detached detached : plan.detached)
+        {
+            if (FormAttributeDeletion.isDetached(detached.object))
+            {
+                outcome.detached.add(detachedEntry(detached));
+                outcome.detachedFiles.add(files.get(detached));
+            }
+            else
+            {
+                outcome.leftAttached.add(detachedEntry(detached));
+            }
+        }
+        return outcome;
+    }
+
+    /** The nearest named container of {@code member} below the form root, or {@code null}. */
+    private static EObject namedOwnerOf(EObject formModel, EObject member)
+    {
+        for (EObject up = member.eContainer(); up != null && up != formModel; up = up.eContainer())
+        {
+            if (ownNameOf(up) != null)
+            {
+                return up;
+            }
+        }
+        return null;
+    }
+
+    /** The form field holding a choice-parameter link, or {@code null}. */
+    private static EObject fieldOf(EObject link)
+    {
+        EObject up = link.eContainer();
+        while (up != null && !(up instanceof FormField))
+        {
+            up = up.eContainer();
+        }
+        return up;
+    }
+
+    /** The dotted table path of an additional-column entry, or {@code ""}. */
+    private static String tablePathOf(EObject entry)
+    {
+        return dottedOf(entry instanceof FormAttributeAdditionalColumns
+            ? ((FormAttributeAdditionalColumns)entry).getTablePath() : null);
+    }
+
+    /** A data path's segments joined by dots, or {@code ""} for none. */
+    private static String dottedOf(AbstractDataPath path)
+    {
+        return path == null ? "" : String.join(".", path.getSegments()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** One {name, type[, dataPath][, contained][, unbound]} entry for a form member. */
+    private static Map<String, Object> itemEntry(EObject item, String dataPath, boolean contained,
+        boolean unbound)
+    {
+        Map<String, Object> entry = formItem(ownNameOf(item), item.eClass().getName());
+        if (dataPath != null && !dataPath.isEmpty())
+        {
+            entry.put(KEY_DATA_PATH, dataPath);
+        }
+        if (contained)
+        {
+            entry.put(KEY_CONTAINED, Boolean.TRUE);
+        }
+        if (unbound)
+        {
+            entry.put(KEY_UNBOUND, Boolean.TRUE);
+        }
+        return entry;
+    }
+
+    /** One {name: feature, type, extInfo, detached} entry for an extInfo object EDT detaches. */
+    private static Map<String, Object> detachedEntry(FormAttributeDeletion.Detached detached)
+    {
+        Map<String, Object> entry = formItem(detached.feature, detached.object.eClass().getName());
+        entry.put(KEY_EXT_INFO, detached.extInfo);
+        entry.put(KEY_DETACHED, Boolean.TRUE);
+        return entry;
+    }
+
+    /** " the attribute's DynamicListExtInfo.listSettings (DataCompositionSettings)" per entry, joined. */
+    private static String detachedNamesOf(List<Map<String, Object>> entries)
+    {
+        List<String> names = new ArrayList<>();
+        for (Map<String, Object> entry : entries)
+        {
+            names.add(entry.get(KEY_EXT_INFO) + "." + entry.get("name") + " (" + entry.get("type") + ")"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        }
+        return String.join(", ", names); //$NON-NLS-1$
+    }
+
+    /** The EClass name of the form root's extInfo, or {@code null} when it has none. */
+    private static String rootExtInfoKind(EObject formModel)
+    {
+        EStructuralFeature feature = formModel.eClass().getEStructuralFeature("extInfo"); //$NON-NLS-1$
+        Object value = feature instanceof EReference && !feature.isMany() ? formModel.eGet(feature) : null;
+        return value instanceof EObject ? ((EObject)value).eClass().getName() : null;
+    }
+
+    /** Splits removal entries into the directly removed ones and those only contained in them. */
+    private static List<Map<String, Object>> entriesWhere(List<Map<String, Object>> entries, boolean contained)
+    {
+        List<Map<String, Object>> picked = new ArrayList<>();
+        for (Map<String, Object> entry : entries)
+        {
+            if (Boolean.TRUE.equals(entry.get(KEY_CONTAINED)) == contained)
+            {
+                picked.add(entry);
+            }
+        }
+        return picked;
+    }
+
+    /** What a confirmed form-attribute delete did, observed on the model (no tx-bound EObject). */
+    static final class AttributeDeleteOutcome
+    {
+        boolean main;
+        String rootExtInfo;
+        final List<Map<String, Object>> columns = new ArrayList<>();
+        final List<Map<String, Object>> removed = new ArrayList<>();
+        final List<Map<String, Object>> unbound = new ArrayList<>();
+        /** The choice-parameter links EDT's cleaner dropped from kept fields ({@code field} names each). */
+        final List<Map<String, Object>> droppedLinks = new ArrayList<>();
+        final List<Map<String, Object>> detached = new ArrayList<>();
+        /** The file of each {@link #detached} object, read before the detach; {@code null} when unresolved. */
+        final List<IFile> detachedFiles = new ArrayList<>();
+        /** The form files the delete writes, resolved only when something is detached; empty when unresolved. */
+        final List<IFile> formFiles = new ArrayList<>();
+
+        /** What the hook re-reads: the form files and the deleted attribute (and column). */
+        Map<String, Object> formCheck(FormElementWriter.FormMemberRef ref)
+        {
+            Map<String, Object> check = new java.util.LinkedHashMap<>();
+            List<String> files = new ArrayList<>();
+            formFiles.forEach(file -> files.add(file == null ? "" : fileLabelOf(file))); //$NON-NLS-1$
+            check.put(FORM_CHECK_FILES, files);
+            boolean column = ref.ownerAttributeName != null;
+            check.put(FORM_CHECK_ATTRIBUTE, column ? ref.ownerAttributeName : ref.name);
+            if (column)
+            {
+                check.put(FORM_CHECK_COLUMN, ref.name);
+            }
+            return check;
+        }
+        final List<Map<String, Object>> leftAttached = new ArrayList<>();
+        /** The message tail for the detached objects whose file could not be resolved. */
+        private final StringBuilder fileNotes = new StringBuilder();
+
+        /**
+         * Names each detached object's {@code file} on its entry for the post-barrier observation; an
+         * unresolved one is {@link DetachedFileState#UNVERIFIED} at once and noted in the message.
+         */
+        void recordDetachedFiles()
+        {
+            for (int i = 0; i < detached.size(); i++)
+            {
+                Map<String, Object> entry = detached.get(i);
+                IFile file = detachedFiles.get(i);
+                if (file == null)
+                {
+                    entry.put(KEY_FILE_REMOVAL, DetachedFileState.UNVERIFIED.name());
+                    fileNotes.append(" The file of ").append(entry.get(KEY_EXT_INFO)).append('.') //$NON-NLS-1$
+                        .append(entry.get("name")) //$NON-NLS-1$
+                        .append(" could not be resolved, so its removal is not confirmed - check the form folder."); //$NON-NLS-1$
+                    continue;
+                }
+                entry.put(KEY_FILE, fileLabelOf(file));
+            }
+        }
+
+        /** The response's extra items: columns, the first removed / unbound members and dropped links, detached objects. */
+        List<Map<String, Object>> entries()
+        {
+            List<Map<String, Object>> all = new ArrayList<>(columns);
+            all.addAll(removed.subList(0, Math.min(removed.size(), MAX_LISTED_BOUND_ITEMS)));
+            all.addAll(unbound.subList(0, Math.min(unbound.size(), MAX_LISTED_BOUND_ITEMS)));
+            all.addAll(droppedLinks.subList(0, Math.min(droppedLinks.size(), MAX_LISTED_BOUND_ITEMS)));
+            all.addAll(detached);
+            return all;
+        }
+
+        /** The message tail: what went with the attribute, and the main-attribute note. */
+        String describe()
+        {
+            List<Map<String, Object>> direct = entriesWhere(removed, false);
+            List<Map<String, Object>> inside = entriesWhere(removed, true);
+            StringBuilder sb = new StringBuilder(" Deleted through EDT's form-attribute service"); //$NON-NLS-1$
+            if (!columns.isEmpty())
+            {
+                sb.append(", with ").append(columns.size()).append(" contained member(s)"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            sb.append(": ").append(direct.size()).append(" member(s) removed").append(namesOf(direct)); //$NON-NLS-1$ //$NON-NLS-2$
+            if (!inside.isEmpty())
+            {
+                sb.append(" with the ").append(inside.size()).append(" member(s) inside them") //$NON-NLS-1$ //$NON-NLS-2$
+                    .append(namesOf(inside));
+            }
+            if (!unbound.isEmpty())
+            {
+                sb.append(", ").append(unbound.size()) //$NON-NLS-1$
+                    .append(" item(s) kept with their data path cleared").append(namesOf(unbound)); //$NON-NLS-1$
+            }
+            if (!droppedLinks.isEmpty())
+            {
+                sb.append(", ").append(droppedLinks.size()) //$NON-NLS-1$
+                    .append(" choice-parameter link(s) dropped from kept fields").append(namesOf(droppedLinks)); //$NON-NLS-1$
+            }
+            if (!detached.isEmpty())
+            {
+                sb.append(", detached ").append(detachedNamesOf(detached)); //$NON-NLS-1$
+            }
+            sb.append('.');
+            sb.append(fileNotes);
+            if (!leftAttached.isEmpty())
+            {
+                sb.append(" EDT left ").append(detachedNamesOf(leftAttached)) //$NON-NLS-1$
+                    .append(" in the model - re-check it with get_metadata_details."); //$NON-NLS-1$
+            }
+            sb.append(mainNote(main, rootExtInfo, true));
+            return sb.toString();
+        }
+    }
+
+    /** " (A, B, C)" for the first listed entries, "" when there are none. */
+    private static String namesOf(List<Map<String, Object>> entries)
+    {
+        if (entries.isEmpty())
+        {
+            return ""; //$NON-NLS-1$
+        }
+        List<String> names = new ArrayList<>();
+        for (Map<String, Object> entry : entries.subList(0, Math.min(entries.size(), MAX_LISTED_BOUND_ITEMS)))
+        {
+            names.add(String.valueOf(entry.get("name"))); //$NON-NLS-1$
+        }
+        return " (" + String.join(", ", names) //$NON-NLS-1$ //$NON-NLS-2$
+            + (entries.size() > MAX_LISTED_BOUND_ITEMS ? ", ..." : "") + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * The note for deleting the form's MAIN attribute: the root extInfo and its handlers stay, as in
+     * the designer, and validate_form_model reports the leftover.
+     */
+    private static String mainNote(boolean main, String rootExtInfo, boolean done)
+    {
+        if (!main)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        String verb = done ? " was" : " is"; //$NON-NLS-1$ //$NON-NLS-2$
+        return " It" + verb + " the form's MAIN attribute" //$NON-NLS-1$ //$NON-NLS-2$
+            + (rootExtInfo == null ? "." //$NON-NLS-1$
+                : "; the form root's " + rootExtInfo + " and the event handlers inside it are kept, as " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "the designer keeps them - validate_form_model reports it as '" //$NON-NLS-1$
+                    + FormModelValidator.CODE_ORPHAN_FORM_EXT_INFO + "'."); //$NON-NLS-1$
     }
 
     // ==================== FORM object (owned BasicForm, symmetric with create) ====================
@@ -2132,7 +3277,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // Remove it physically through the workspace API (best-effort: never fail the delete the model
         // already committed). Only this EXACT form folder is removed, never the parent Forms/ (siblings)
         // or the owner folder. The path is built from the RESOLVED names captured above.
-        FolderCleanup folderCleanup =
+        ResourceCleanup folderCleanup =
             deleteFormResourceFolder(project, ref.ownerType, ownerNameOnDisk, formNameOnDisk);
 
         return ToolResult.success()
@@ -2770,29 +3915,74 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         return map;
     }
 
-    /** Outcome of the orphan form-folder cleanup - never conflate "not found" with "removed". */
-    private enum FolderCleanup
+    /** Outcome of an orphan-resource cleanup - never conflate "not found" with "removed". */
+    enum ResourceCleanup
     {
-        /** The folder existed and was deleted. */
+        /** The resource existed and was deleted. */
         REMOVED,
-        /** No folder at the resolved path (nothing was removed). */
+        /** No resource at the resolved path (nothing was removed). */
         NOT_FOUND,
         /** The path could not be resolved or the delete attempt failed. */
         FAILED
     }
 
-    /** The message fragment describing the folder-cleanup outcome (leading space included). */
-    private static String folderCleanupMessage(FolderCleanup cleanup)
+    /** A detached extInfo object's file as observed after the export barrier; EDT's save deletes it. */
+    enum DetachedFileState
+    {
+        /** Not on disk after the export. */
+        REMOVED,
+        /** Still on disk after the export: the result is partial. */
+        STILL_PRESENT,
+        /** The file could not be resolved or checked: the result is partial. */
+        UNVERIFIED
+    }
+
+    /** The message fragment describing the form-folder cleanup outcome (leading space included). */
+    private static String folderCleanupMessage(ResourceCleanup cleanup)
+    {
+        return ' ' + resourceCleanupMessage(cleanup, "The form resource folder"); //$NON-NLS-1$
+    }
+
+    /** "{@code subject} was removed from disk." and its NOT_FOUND / FAILED counterparts. */
+    private static String resourceCleanupMessage(ResourceCleanup cleanup, String subject)
     {
         switch (cleanup)
         {
         case REMOVED:
-            return " The form resource folder was removed from disk."; //$NON-NLS-1$
+            return subject + " was removed from disk."; //$NON-NLS-1$
         case NOT_FOUND:
-            return " The form resource folder was not found on disk (nothing was removed)."; //$NON-NLS-1$
+            return subject + " was not found on disk (nothing was removed)."; //$NON-NLS-1$
         case FAILED:
         default:
-            return " (the form resource folder could not be removed - check it manually)."; //$NON-NLS-1$
+            return subject + " could not be removed - check it manually."; //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Deletes one workspace resource through the workspace API, best effort: the model delete already
+     * committed, so a failure is logged and reported, never thrown. A missing resource is
+     * {@link ResourceCleanup#NOT_FOUND}, never claimed as removed.
+     *
+     * @param resource the file or folder to delete
+     * @return the outcome
+     */
+    static ResourceCleanup removeResource(IResource resource)
+    {
+        try
+        {
+            if (!resource.exists())
+            {
+                return ResourceCleanup.NOT_FOUND;
+            }
+            // force: also when out of sync with disk; a folder goes with its contents.
+            resource.delete(true, new NullProgressMonitor());
+            return ResourceCleanup.REMOVED;
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Failed to remove " + resource.getFullPath() //$NON-NLS-1$
+                + " (the model delete already succeeded; remove it manually if it persists).", e); //$NON-NLS-1$
+            return ResourceCleanup.FAILED;
         }
     }
 
@@ -2805,7 +3995,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * case-variant FQN would otherwise miss the real folder and leave the orphan behind. Best-effort: a
      * delete failure is logged but never propagated - the BM-model delete already committed, so the
      * orphan-folder cleanup must not turn a successful delete into an error. A folder that does not
-     * exist is reported as {@link FolderCleanup#NOT_FOUND}, never claimed as removed. Only the EXACT
+     * exist is reported as {@link ResourceCleanup#NOT_FOUND}, never claimed as removed. Only the EXACT
      * {@code Forms/<FormName>} folder is targeted, never the parent {@code Forms/} directory (which may
      * hold sibling forms) or the owner folder.
      *
@@ -2815,7 +4005,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * @param resolvedFormName the form Name AS RESOLVED on the model
      * @return the cleanup outcome (removed / not found on disk / failed)
      */
-    private static FolderCleanup deleteFormResourceFolder(IProject project, String ownerType,
+    private static ResourceCleanup deleteFormResourceFolder(IProject project, String ownerType,
         String resolvedOwnerName, String resolvedFormName)
     {
         String folderRel = formResourceFolderPath(ownerType, resolvedOwnerName, resolvedFormName);
@@ -2824,28 +4014,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             Activator.logError("Could not resolve the form resource folder for " + ownerType + "." //$NON-NLS-1$ //$NON-NLS-2$
                 + resolvedOwnerName + ".Form." + resolvedFormName + "; leaving any on-disk Forms/" //$NON-NLS-1$ //$NON-NLS-2$
                 + resolvedFormName + " folder in place.", null); //$NON-NLS-1$
-            return FolderCleanup.FAILED;
+            return ResourceCleanup.FAILED;
         }
-        try
-        {
-            IFolder folder = project.getFolder(new Path(folderRel));
-            if (!folder.exists())
-            {
-                // Nothing on disk at the resolved path (e.g. the form had no rendered content yet).
-                // Reported as NOT_FOUND - never claimed as a removal.
-                return FolderCleanup.NOT_FOUND;
-            }
-            // delete(true, monitor): force-delete the folder and its contents, keeping the workspace
-            // resource tree in sync with disk. DEPTH is implicitly infinite for a container.
-            folder.delete(true, new NullProgressMonitor());
-            return FolderCleanup.REMOVED;
-        }
-        catch (Exception e)
-        {
-            Activator.logError("Failed to remove the form resource folder " + folderRel //$NON-NLS-1$
-                + " (the model delete already succeeded; remove it manually if it persists).", e); //$NON-NLS-1$
-            return FolderCleanup.FAILED;
-        }
+        return removeResource(project.getFolder(new Path(folderRel)));
     }
 
     /**
@@ -3381,6 +4552,25 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     private static boolean collectRemovedMembers(EObject root, List<Map<String, Object>> out)
     {
+        List<EObject> members = new ArrayList<>();
+        boolean truncated = collectRemovedObjects(root, members);
+        for (EObject member : members)
+        {
+            out.add(formItem(ownNameOf(member), member.eClass().getName()));
+        }
+        return truncated;
+    }
+
+    /**
+     * {@link #collectRemovedMembers} answering the members themselves, for a caller that has to tell
+     * them apart (the form-attribute delete dedupes the subtrees of the items it removes).
+     *
+     * @param root the element to descend from; it is NOT itself added
+     * @param out receives every named persisted descendant, depth-first in metamodel order
+     * @return {@code true} when the walk hit its bound and stopped
+     */
+    private static boolean collectRemovedObjects(EObject root, List<EObject> out)
+    {
         int visits = FormStructureReader.MAX_NODES;
         Deque<EObject> pending = new ArrayDeque<>();
         pushPersistedChildren(root, pending);
@@ -3388,10 +4578,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             visits--;
             EObject child = pending.pop();
-            String name = ownNameOf(child);
-            if (name != null)
+            if (ownNameOf(child) != null)
             {
-                out.add(formItem(name, child.eClass().getName()));
+                out.add(child);
             }
             pushPersistedChildren(child, pending);
         }
@@ -3451,6 +4640,173 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
          * delete removes, and the message says so rather than presenting a cut list as complete.
          */
         boolean truncated;
+
+        /** Whether the target is a form attribute or column - deleted through EDT's service. */
+        boolean attribute;
+
+        /** EDT's delete, resolved in the preview read for an attribute; {@code null} otherwise. */
+        FormAttributeDeleter deleter;
+
+        /** Whether the target is the form's main attribute. */
+        boolean main;
+
+        /** The EClass name of the form root's extInfo, or {@code null} when it has none. */
+        String rootExtInfo;
+
+        /** Whether EDT's delete keeps the bound items (an attribute adopted by an extension form). */
+        boolean itemsKept;
+
+        /** Whether the attribute's data path does not resolve, so EDT's delete takes no item. */
+        boolean unresolved;
+
+        /**
+         * What EDT's delete removes besides the attribute: the items its collector picks
+         * ({name, type, dataPath}) and the named members inside them ({@code contained: true}), the
+         * first {@link #MAX_LISTED_BOUND_ITEMS}.
+         */
+        final List<Map<String, Object>> boundItems = new ArrayList<>();
+
+        /** How many items EDT's collector removes, listed or not. */
+        int boundItemCount;
+
+        /** How many named members go only because a removed item contains them, listed or not. */
+        int containedCount;
+
+        /** Whether a walk below a removed item hit its node bound. */
+        boolean removalTruncated;
+
+        /**
+         * The named columns of the additional-column entries a column's delete drops
+         * ({name, type, tablePath}), the first {@link #MAX_LISTED_BOUND_ITEMS}.
+         */
+        final List<Map<String, Object>> additionalColumns = new ArrayList<>();
+
+        /** How many additional columns the delete drops, listed or not. */
+        int additionalColumnCount;
+
+        /** The separate BM objects detached with the attribute's extInfo ({@code detached: true}). */
+        final List<Map<String, Object>> detachedObjects = new ArrayList<>();
+
+        /** Whether a field the delete keeps has choice-parameter links EDT's cleaner may drop. */
+        boolean keptChoiceLinks;
+
+        /**
+         * What the consent covers for an attribute delete, as {@link #scopeOf} identities;
+         * {@code null} for any other member. The confirmed delete recomputes it and refuses a change.
+         */
+        List<String> scope;
+
+        /** Counts a removed member and lists it while the list has room. */
+        void addRemoved(EObject member, boolean contained)
+        {
+            if (contained)
+            {
+                containedCount++;
+            }
+            else
+            {
+                boundItemCount++;
+            }
+            if (boundItems.size() < MAX_LISTED_BOUND_ITEMS)
+            {
+                boundItems.add(itemEntry(member, FormAttributeDeletion.pathOf(member), contained, false));
+            }
+        }
+
+        /** Counts a dropped additional column and lists it while the list has room. */
+        void addAdditionalColumn(EObject column, String tablePath)
+        {
+            additionalColumnCount++;
+            if (additionalColumns.size() < MAX_LISTED_BOUND_ITEMS)
+            {
+                Map<String, Object> entry = itemEntry(column, null, false, false);
+                entry.put(KEY_TABLE_PATH, tablePath);
+                additionalColumns.add(entry);
+            }
+        }
+
+        /** The sentences naming what the delete takes along, or {@code ""} for a non-attribute. */
+        String boundItemsSentence()
+        {
+            if (!attribute)
+            {
+                return ""; //$NON-NLS-1$
+            }
+            StringBuilder sb = new StringBuilder();
+            if (itemsKept)
+            {
+                sb.append(" The attribute is adopted from the base form: EDT's delete keeps the items " //$NON-NLS-1$
+                    + "bound to it and also drops it from the form's base-form copy."); //$NON-NLS-1$
+            }
+            else if (unresolved)
+            {
+                sb.append(" EDT cannot resolve the attribute's data path, so its delete takes no form item " //$NON-NLS-1$
+                    + "with it."); //$NON-NLS-1$
+            }
+            else if (boundItemCount == 0)
+            {
+                sb.append(" No form item is bound to it."); //$NON-NLS-1$
+            }
+            else
+            {
+                sb.append(" It also removes the ").append(boundItemCount).append(" item(s) bound to it") //$NON-NLS-1$ //$NON-NLS-2$
+                    .append(namesOf(entriesWhere(boundItems, false)));
+                if (containedCount > 0)
+                {
+                    sb.append(" and the ").append(containedCount).append(" member(s) inside them") //$NON-NLS-1$ //$NON-NLS-2$
+                        .append(namesOf(entriesWhere(boundItems, true)));
+                }
+                if (boundItems.size() < boundItemCount + containedCount)
+                {
+                    sb.append(" - the first ").append(boundItems.size()).append(" listed"); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                sb.append('.');
+            }
+            if (additionalColumnCount > 0)
+            {
+                sb.append(" It also drops the ").append(additionalColumnCount) //$NON-NLS-1$
+                    .append(" additional column(s) under its path").append(namesOf(additionalColumns)).append('.'); //$NON-NLS-1$
+            }
+            if (!detachedObjects.isEmpty())
+            {
+                sb.append(" It also detaches ").append(detachedNamesOf(detachedObjects)) //$NON-NLS-1$
+                    .append(", stored as a separate object, with everything in it."); //$NON-NLS-1$
+                for (Map<String, Object> entry : detachedObjects)
+                {
+                    sb.append(entry.containsKey(KEY_FILE)
+                        ? " Its file " + entry.get(KEY_FILE) + " is deleted from disk by EDT's export." //$NON-NLS-1$ //$NON-NLS-2$
+                        : " The file of " + entry.get(KEY_EXT_INFO) + "." + entry.get("name") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                            + " could not be resolved, so its removal cannot be confirmed - check the form folder afterwards."); //$NON-NLS-1$
+                }
+            }
+            if (removalTruncated)
+            {
+                sb.append(" The walk below the removed members stopped").append(truncationNoteFor(true)).append('.'); //$NON-NLS-1$
+            }
+            if (!itemsKept && !unresolved)
+            {
+                sb.append(" EDT may also clear the data path of items whose path stops resolving") //$NON-NLS-1$
+                    .append(keptChoiceLinks ? ", and drop the choice-parameter links of kept fields whose " //$NON-NLS-1$
+                        + "path points into the attribute or stops resolving" : "") //$NON-NLS-1$
+                    .append(" - the confirmed response lists them."); //$NON-NLS-1$
+            }
+            // The global editing context's commit saves another context that last modified the form.
+            sb.append(" An open editor of this form with unsaved changes has them all saved with the " //$NON-NLS-1$
+                + "delete, not only its changes to this form, and loses its undo history."); //$NON-NLS-1$
+            return sb.toString();
+        }
+
+        /** What the delete REMOVES besides the attribute and its own columns - the consent count. */
+        int removedAlongCount()
+        {
+            return boundItemCount + containedCount + additionalColumnCount + detachedObjects.size();
+        }
+
+        /** The main-attribute note for the preview, or {@code ""}. */
+        String mainAttributeNote(boolean done)
+        {
+            return mainNote(main, rootExtInfo, done);
+        }
 
         /**
          * The descendants grouped by their model type, e.g. {@code "2 FormField, 1 EventHandler"} -

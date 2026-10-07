@@ -6322,6 +6322,46 @@ public class FormElementWriterTest
     }
 
     @Test
+    public void testASurvivorBoundInAnInactiveLanguageKeepsTheRegistration()
+    {
+        // Real form model: the survivor's legacy binding stores English and Russian (Описание), the
+        // Russian one active. It still shows List.Description, so deleting the other item must not
+        // drop that field's registration.
+        com._1c.g5.v8.dt.form.model.FormFactory factory = com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE;
+        com._1c.g5.v8.dt.form.model.Form form = factory.createForm();
+        com._1c.g5.v8.dt.form.model.FormAttribute list = factory.createFormAttribute();
+        list.setName("List"); //$NON-NLS-1$
+        list.setExtInfo(factory.createDynamicListExtInfo());
+        form.getAttributes().add(list);
+        list.getNotDefaultUseAlwaysAttributes().add(typedDataPath(factory, "List", "Description")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        com._1c.g5.v8.dt.form.model.FormField deleted = factory.createFormField();
+        deleted.setName("Description1"); //$NON-NLS-1$
+        deleted.setDataPath(typedDataPath(factory, "List", "Description")); //$NON-NLS-1$ //$NON-NLS-2$
+        form.getItems().add(deleted);
+        com._1c.g5.v8.dt.form.model.FormField survivor = factory.createFormField();
+        survivor.setName("Description2"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.form.model.MultiLanguageDataPath legacy = factory.createMultiLanguageDataPath();
+        legacy.getPaths().add(typedDataPath(factory, "List", "Description")); //$NON-NLS-1$ //$NON-NLS-2$
+        legacy.getPaths().add(typedDataPath(factory, "List", "Описание")); //$NON-NLS-1$ //$NON-NLS-2$
+        legacy.setActiveLanguage(1);
+        survivor.setDataPath(legacy);
+        form.getItems().add(survivor);
+
+        FormElementWriter.removeFormMember(form, deleted);
+        assertEquals("the survivor still shows the field", 1, list.getNotDefaultUseAlwaysAttributes().size()); //$NON-NLS-1$
+        assertSame(survivor, FormElementWriter.itemBoundTo(form, Arrays.asList("List", "Description"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static com._1c.g5.v8.dt.form.model.DataPath typedDataPath(
+        com._1c.g5.v8.dt.form.model.FormFactory factory, String... segments)
+    {
+        com._1c.g5.v8.dt.form.model.DataPath path = factory.createDataPath();
+        path.getSegments().addAll(Arrays.asList(segments));
+        return path;
+    }
+
+    @Test
     public void testTabularSectionTableKeepsItsLineNumberColumn()
     {
         // The other side of the same branch: a tabular-section table is unchanged.
