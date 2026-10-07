@@ -10,7 +10,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.util.ArrayList;
@@ -51,7 +50,6 @@ import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataScopeTestFixtures;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
-import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.google.gson.JsonPrimitive;
 
@@ -1046,11 +1044,6 @@ public class GetMetadataDetailsToolTest
         return config;
     }
 
-    private static Subsystem sales(Configuration config)
-    {
-        return config.getSubsystems().get(0);
-    }
-
     /** Runs the default view for one FQN; vendor support is not asked (no editing service). */
     private static String renderDefaultView(MetadataScope scope, String fqn, List<String[]> failures)
     {
@@ -1070,29 +1063,13 @@ public class GetMetadataDetailsToolTest
     }
 
     @Test
-    public void testANestedSubsystemChainResolvesTheNestedSubsystemNotItsParent()
-    {
-        Configuration config = salesWithOrders();
-        Subsystem orders = sales(config).getSubsystems().get(0);
-        MetadataScope scope = MetadataScope.ofConfiguration(config);
-
-        assertSame(orders, GetMetadataDetailsTool.resolveNestedSubsystem(scope,
-            SubsystemUtils.nestedChain("Subsystem.Sales.Subsystem.Orders"))); //$NON-NLS-1$
-        assertSame(orders, GetMetadataDetailsTool.resolveNestedSubsystem(scope, SubsystemUtils.nestedChain(
-            MetadataTypeUtils.normalizeFqn(RU_SUBSYSTEM + ".sales." + RU_SUBSYSTEM + ".orders")))); //$NON-NLS-1$ //$NON-NLS-2$
-        assertNull("a missing leaf must not answer with its parent", //$NON-NLS-1$
-            GetMetadataDetailsTool.resolveNestedSubsystem(scope,
-                SubsystemUtils.nestedChain("Subsystem.Sales.Subsystem.Missing"))); //$NON-NLS-1$
-    }
-
-    @Test
     public void testAnExternalObjectsProjectNeverResolvesANestedChainInItsLinkedBase()
     {
-        // The linked base configuration is not this project's root (issue #309).
+        // The linked base configuration is not this project's root (issue #309): the chain resolves by
+        // the shared rule (SubsystemUtils.resolveInScope, pinned in SubsystemUtilsTest), and this
+        // project's own reason is what the row says.
         MetadataScope external = MetadataScopeTestFixtures.externalObjectsWithBase(salesWithOrders());
 
-        assertNull(GetMetadataDetailsTool.resolveNestedSubsystem(external,
-            SubsystemUtils.nestedChain("Subsystem.Sales.Subsystem.Orders"))); //$NON-NLS-1$
         List<String[]> failures = new ArrayList<>();
         assertEquals("", renderDefaultView(external, "Subsystem.Sales.Subsystem.Orders", failures)); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(1, failures.size());
@@ -1127,10 +1104,9 @@ public class GetMetadataDetailsToolTest
         assertEquals("nothing may be rendered for an address that resolves to nothing", "", md); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(1, failures.size());
         assertEquals("Subsystem.Sales.Subsystem.Missing", failures.get(0)[0]); //$NON-NLS-1$
-        String reason = failures.get(0)[1];
-        assertTrue(reason, reason.startsWith("Subsystem not found")); //$NON-NLS-1$
-        assertTrue(reason, reason.contains("'Subsystem.<Parent>.Subsystem.<Child>'")); //$NON-NLS-1$
-        assertTrue(reason, reason.contains("list_subsystems")); //$NON-NLS-1$
+        // How subsystems are addressed, in the sentence the subsystem refusals share.
+        assertEquals("Subsystem not found - no subsystem exists at this chain. " //$NON-NLS-1$
+            + SubsystemUtilsTest.ADDRESSING_HINT_TEXT, failures.get(0)[1]);
     }
 
     @Test
@@ -1160,10 +1136,8 @@ public class GetMetadataDetailsToolTest
             assertEquals("nothing may be rendered for " + fqn, "", md); //$NON-NLS-1$ //$NON-NLS-2$
             assertEquals(fqn, 1, failures.size());
             assertEquals(fqn, failures.get(0)[0]);
-            String reason = failures.get(0)[1];
-            assertTrue(reason, reason.startsWith("Not a subsystem address")); //$NON-NLS-1$
-            assertTrue(reason, reason.contains("'Subsystem.<Parent>.Subsystem.<Child>'")); //$NON-NLS-1$
-            assertTrue(reason, reason.contains("list_subsystems")); //$NON-NLS-1$
+            assertEquals("Not a subsystem address. " + SubsystemUtilsTest.ADDRESSING_HINT_TEXT, //$NON-NLS-1$
+                failures.get(0)[1]);
         }
     }
 

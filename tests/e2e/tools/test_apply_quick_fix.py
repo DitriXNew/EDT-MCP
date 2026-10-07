@@ -32,7 +32,7 @@ import re
 
 from harness import (
     call, assert_ok, assert_error, assert_error_quality, e2e_test,
-    PROJECT, TESTS_PROJECT, E2ESkip, reset_all_fixtures, wait_for_project_ready,
+    PROJECT, TESTS_PROJECT, E2ESkip, restore_extension_fixture, wait_for_project_ready,
     split_markdown_row,
 )
 
@@ -206,27 +206,6 @@ def _count_markers(project, check_id, module_path):
                if row["checkId"] == check_id and row["modulePath"] == module_path)
 
 
-def _restore_extension_fixture():
-    """Reverts the EXTENSION fixture (model + disk) after a fix mutated it.
-
-    Mirrors test_create_metadata.py's _restore_extension_fixture(): reset -> clean_project ->
-    wait_for_project_ready() -> a SECOND reset, not just a single reset + clean_project. Without
-    the wait and the second reset, the applied fix's own async disk export can race clean_project
-    (or clean_project can be issued while the project is still BUILDING and refuse), leaving the
-    extension fixture dirty for whichever test runs next.
-    """
-    reset_all_fixtures()
-    r_clean = call("clean_project", {"projectName": TESTS_PROJECT})
-    assert_ok(r_clean, "clean_project after apply_quick_fix must succeed, "
-              "or the extension model/tree stays polluted for later tests")
-    wait_for_project_ready()
-    reset_all_fixtures()
-    # The second revert is a git checkout EDT has not seen yet. Anything that reads the model
-    # straight after (the next candidate's `before` count) would otherwise race the re-import and
-    # read a half-synced marker set - which reads exactly like "the fix changed nothing".
-    wait_for_project_ready()
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # THE CORE INVARIANT (mandatory - never skips while any fixable marker exists)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -318,9 +297,9 @@ def test_never_reports_success_without_actually_changing_anything():
             # `finally` below restores anyway, and this teardown is expensive (clean_project plus
             # two ready-waits), so running it twice back to back is pure cost.
             if position < len(candidates) - 1:
-                _restore_extension_fixture()
+                restore_extension_fixture("applying a quick fix")
     finally:
-        _restore_extension_fixture()
+        restore_extension_fixture("applying a quick fix")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -393,7 +372,7 @@ def test_apply_a_discovered_fixable_marker():
     finally:
         # The fix mutated the extension (model + disk); the per-test reset only covers the
         # BASE, so revert + re-sync the extension here to keep the whole tree clean.
-        _restore_extension_fixture()
+        restore_extension_fixture("applying a quick fix")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

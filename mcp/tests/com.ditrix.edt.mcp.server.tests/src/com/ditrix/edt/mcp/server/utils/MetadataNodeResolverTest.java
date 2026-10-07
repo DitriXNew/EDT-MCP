@@ -10,6 +10,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import static org.mockito.Mockito.mock;
@@ -41,6 +42,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.IntegrationServiceChannel;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Method;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.TabularSectionAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.Task;
 import com._1c.g5.v8.dt.metadata.mdclass.URLTemplate;
@@ -531,6 +533,90 @@ public class MetadataNodeResolverTest
         }
         assertEquals("HTTPService.Api.UrlTemplate.Items.Method.Get", //$NON-NLS-1$
             MetadataNodeResolver.resolvableAddressOf(get));
+    }
+
+    // ==================== resolveAddress: the one dispatch (#708) ====================
+    //
+    // The vendor-support guard (yoFallback=true) and adopt_metadata_object (false) both say through
+    // this method which object an FQN names. The model: Catalog Goods with Form ItemForm, a Catalog
+    // whose Name create_metadata stored with ye, and Sales -> Orders linked like the platform model
+    // (the parent only lists the child, the child points back).
+
+    /** A Name stored with ye (U+0415), as create_metadata normalizes it by default. */
+    private static final String YE_NAME = fromCp(0x0415, 0x043b, 0x043a, 0x0430);
+    /** The same Name spelled with yo (U+0401). */
+    private static final String YO_NAME = fromCp(0x0401, 0x043b, 0x043a, 0x0430);
+    /** The Russian form kind token (Form). */
+    private static final String RU_FORM = fromCp(0x0424, 0x043e, 0x0440, 0x043c, 0x0430);
+
+    private static Configuration addressModel()
+    {
+        MdClassFactory f = MdClassFactory.eINSTANCE;
+        Configuration config = named(f.createConfiguration(), "Cfg"); //$NON-NLS-1$
+        Catalog goods = named(f.createCatalog(), "Goods"); //$NON-NLS-1$
+        goods.getForms().add(named(f.createCatalogForm(), "ItemForm")); //$NON-NLS-1$
+        config.getCatalogs().add(goods);
+        config.getCatalogs().add(named(f.createCatalog(), YE_NAME));
+        Subsystem sales = named(f.createSubsystem(), "Sales"); //$NON-NLS-1$
+        Subsystem orders = named(f.createSubsystem(), "Orders"); //$NON-NLS-1$
+        sales.getSubsystems().add(orders);
+        orders.setParentSubsystem(sales);
+        config.getSubsystems().add(sales);
+        return config;
+    }
+
+    @Test
+    public void testResolveAddressRetriesAYoSpellingOnlyWhenAsked()
+    {
+        Configuration config = addressModel();
+        MetadataScope scope = MetadataScope.ofConfiguration(config);
+        Catalog stored = config.getCatalogs().get(1);
+
+        assertSame(stored, MetadataNodeResolver.resolveAddress(scope, "Catalog." + YE_NAME, false)); //$NON-NLS-1$
+        assertSame(stored, MetadataNodeResolver.resolveAddress(scope, "Catalog." + YE_NAME, true)); //$NON-NLS-1$
+        assertSame("the yo spelling finds the ye-stored Name with the fallback", stored, //$NON-NLS-1$
+            MetadataNodeResolver.resolveAddress(scope, "Catalog." + YO_NAME, true)); //$NON-NLS-1$
+        assertNull("...and only with it", //$NON-NLS-1$
+            MetadataNodeResolver.resolveAddress(scope, "Catalog." + YO_NAME, false)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveAddressNamesASubsystemByItsChainNeverByAParent()
+    {
+        Configuration config = addressModel();
+        MetadataScope scope = MetadataScope.ofConfiguration(config);
+        Subsystem sales = config.getSubsystems().get(0);
+        Subsystem orders = sales.getSubsystems().get(0);
+
+        for (boolean yoFallback : new boolean[] { false, true })
+        {
+            assertSame(sales, MetadataNodeResolver.resolveAddress(scope, "Subsystem.Sales", yoFallback)); //$NON-NLS-1$
+            assertSame(orders, MetadataNodeResolver.resolveAddress(scope, "Subsystem.Sales.Subsystem.Orders", //$NON-NLS-1$
+                yoFallback));
+            assertNull("a missing leaf must not answer with its parent", //$NON-NLS-1$
+                MetadataNodeResolver.resolveAddress(scope, "Subsystem.Sales.Subsystem.Missing", yoFallback)); //$NON-NLS-1$
+            assertNull("a bare child names a top-level subsystem only", //$NON-NLS-1$
+                MetadataNodeResolver.resolveAddress(scope, "Subsystem.Orders", yoFallback)); //$NON-NLS-1$
+        }
+        assertNull("the linked base is no root of an external-objects project", //$NON-NLS-1$
+            MetadataNodeResolver.resolveAddress(MetadataScopeTestFixtures.externalObjectsWithBase(config),
+                "Subsystem.Sales.Subsystem.Orders", true)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveAddressTakesAFormInEitherLanguageBeforeTheNodeGrammar()
+    {
+        Configuration config = addressModel();
+        MetadataScope scope = MetadataScope.ofConfiguration(config);
+        MdObject itemForm = config.getCatalogs().get(0).getForms().get(0);
+
+        assertSame(itemForm, MetadataNodeResolver.resolveAddress(scope, "Catalog.Goods.Form.ItemForm", false)); //$NON-NLS-1$
+        assertSame(itemForm, MetadataNodeResolver.resolveAddress(scope, "Catalog.Goods." + RU_FORM + ".ItemForm", //$NON-NLS-1$ //$NON-NLS-2$
+            true));
+        assertNull(MetadataNodeResolver.resolveAddress(scope, "Catalog.Goods.Form.Missing", true)); //$NON-NLS-1$
+        assertSame("anything else goes to the node grammar", config.getCatalogs().get(0), //$NON-NLS-1$
+            MetadataNodeResolver.resolveAddress(scope, "Catalog.Goods", false)); //$NON-NLS-1$
+        assertNull(MetadataNodeResolver.resolveAddress(scope, null, true));
     }
 
     private static <T extends MdObject> T named(T object, String name)

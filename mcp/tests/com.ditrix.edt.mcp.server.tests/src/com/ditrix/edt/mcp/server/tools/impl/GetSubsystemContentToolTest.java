@@ -17,7 +17,12 @@ import java.util.Map;
 
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
+import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Tests for {@link GetSubsystemContentTool}.
@@ -25,8 +30,10 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  * Covers tool metadata, the input/output schema, the on-demand guide, the pure
  * {@code getResultFileName} file-name derivation, and the projectName/subsystemFqn
  * required-argument validation that returns before the first
- * {@code PlatformUI.getWorkbench()} call (the EDT boundary). Resolving the subsystem
- * and formatting its content need a live configuration and are covered by the E2E suite.
+ * {@code PlatformUI.getWorkbench()} call (the EDT boundary). Resolving the project needs a
+ * live workspace and is covered by the E2E suite; what follows it ({@code renderContent}) is
+ * pinned here on an in-memory configuration for the refusal of an address that names no
+ * subsystem (issue #708).
  */
 public class GetSubsystemContentToolTest
 {
@@ -239,5 +246,42 @@ public class GetSubsystemContentToolTest
         String result = new GetSubsystemContentTool().execute(params);
         assertTrue("validation error must be a JSON object", //$NON-NLS-1$
             result.trim().startsWith("{") && result.contains("\"error\"")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // ==================== an address that names no subsystem (issue #708) ====================
+
+    /** Sales -> Orders, linked both ways as the platform links a nested subsystem. */
+    private static Configuration salesWithOrders()
+    {
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        Subsystem sales = MdClassFactory.eINSTANCE.createSubsystem();
+        sales.setName("Sales"); //$NON-NLS-1$
+        Subsystem orders = MdClassFactory.eINSTANCE.createSubsystem();
+        orders.setName("Orders"); //$NON-NLS-1$
+        sales.getSubsystems().add(orders);
+        orders.setParentSubsystem(sales);
+        config.getSubsystems().add(sales);
+        return config;
+    }
+
+    @Test
+    public void testAnAddressThatNamesNoSubsystemIsRefusedWithTheSharedSentence()
+    {
+        // The "subsystem not found" modify_metadata gives for the same address: the address as
+        // written, then how subsystems are addressed - a nested chain at any depth, either token
+        // language - where this tool's own text used to claim the type token must be 'Subsystem'.
+        Configuration config = salesWithOrders();
+        for (String fqn : new String[] { "Subsystem.Sales.Subsystem.Missing", "Catalog.Catalog" }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            JsonObject error = JsonParser.parseString(
+                new GetSubsystemContentTool().renderContent(config, fqn, false, null)).getAsJsonObject();
+            assertFalse(fqn, error.get("success").getAsBoolean()); //$NON-NLS-1$
+            assertEquals("Subsystem not found: " + fqn + ". " + SubsystemUtilsTest.ADDRESSING_HINT_TEXT + ".", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                error.get("error").getAsString()); //$NON-NLS-1$
+        }
+        // The control: an address that names a subsystem renders it - a nested one included.
+        String nested = new GetSubsystemContentTool().renderContent(config, "Subsystem.Sales.Subsystem.Orders", //$NON-NLS-1$
+            false, null);
+        assertTrue(nested, nested.startsWith("# Subsystem: Orders")); //$NON-NLS-1$
     }
 }

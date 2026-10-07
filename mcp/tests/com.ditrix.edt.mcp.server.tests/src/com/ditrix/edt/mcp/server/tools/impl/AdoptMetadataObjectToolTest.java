@@ -30,6 +30,8 @@ import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.utils.MetadataScopeTestFixtures;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 
 /**
@@ -38,7 +40,11 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
  * BM model + an extension project, so the actual adopt behaviour (objectBelonging=ADOPTED,
  * extendedConfigurationObject link, multi-extension selection) is covered by the E2E suite; the
  * pure steps around it - which source an FQN resolves to, the address the result echoes, the
- * not-found refusal and the files an adoption exports - are pinned here headlessly (issue #708).
+ * project-kind and not-found refusals and the files an adoption exports - are pinned here headlessly
+ * (issue #708).
+ * The shared pieces they are built from have pins of their own: the address dispatch in
+ * {@code MetadataNodeResolverTest}, the subsystem walk and the addressing sentence in
+ * {@code SubsystemUtilsTest}.
  */
 import java.util.Collections;
 
@@ -185,10 +191,29 @@ public class AdoptMetadataObjectToolTest
         return subsystem;
     }
 
-    /** Resolves {@code fqn} the way the tool does: normalized first, then the source resolution. */
+    /** Resolves {@code fqn} the way the tool does: normalized first, then the adoption source. */
+    private AdoptMetadataObjectTool.AdoptionSource source(String fqn)
+    {
+        return AdoptMetadataObjectTool.AdoptionSource.resolve(MetadataScope.ofConfiguration(config),
+            MetadataTypeUtils.normalizeFqn(fqn));
+    }
+
+    /** The object {@code fqn} resolves to as an adoption source, or {@code null}. */
     private EObject resolve(String fqn)
     {
-        return AdoptMetadataObjectTool.resolveAdoptionSource(config, MetadataTypeUtils.normalizeFqn(fqn));
+        AdoptMetadataObjectTool.AdoptionSource source = source(fqn);
+        return source == null ? null : source.object;
+    }
+
+    /** The address every result names the source {@code fqn} resolves to by. */
+    private String name(String fqn)
+    {
+        return source(fqn).fqn;
+    }
+
+    private static String fromCp(int... cps)
+    {
+        return new String(cps, 0, cps.length);
     }
 
     @Test
@@ -271,28 +296,68 @@ public class AdoptMetadataObjectToolTest
         assertSame(itemForm, resolve("Catalog.Goods." + RU_FORMS + ".ItemForm")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    @Test
+    public void testTheSourceIsResolvedExactlyWithoutTheYoRetry()
+    {
+        // The shared dispatch can retry a yo spelling against a Name stored with ye; the guard asks
+        // for that retry, adopt does not - it resolves exactly, as it always did.
+        Catalog fir = MdClassFactory.eINSTANCE.createCatalog();
+        fir.setName(fromCp(0x0415, 0x043b, 0x043a, 0x0430));
+        config.getCatalogs().add(fir);
+
+        assertSame(fir, resolve("Catalog." + fromCp(0x0415, 0x043b, 0x043a, 0x0430))); //$NON-NLS-1$
+        assertNull("a yo spelling of a ye-stored Name is not this object to adopt", //$NON-NLS-1$
+            resolve("Catalog." + fromCp(0x0401, 0x043b, 0x043a, 0x0430))); //$NON-NLS-1$
+    }
+
     // ==================== the echoed address ====================
 
     @Test
     public void testASubsystemIsNamedByItsCanonicalChainOfStoredNames()
     {
         // The caller's mixed spelling and letter case come back as list_subsystems prints the chain.
-        assertEquals("Subsystem.Sales.Subsystem.Orders", AdoptMetadataObjectTool.canonicalFqn(config, //$NON-NLS-1$
-            MetadataTypeUtils.normalizeFqn(RU_SUBSYSTEM + ".sales." + RU_SUBSYSTEMS + ".orders"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Subsystem.Sales.Subsystem.Orders", //$NON-NLS-1$
+            name(RU_SUBSYSTEM + ".sales." + RU_SUBSYSTEMS + ".orders")); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("Subsystem." + RU_PLANNING + ".Subsystem." + RU_STOCK_PLANNING, //$NON-NLS-1$ //$NON-NLS-2$
-            AdoptMetadataObjectTool.canonicalFqn(config, MetadataTypeUtils.normalizeFqn(
-                RU_SUBSYSTEM + "." + RU_PLANNING + "." + RU_SUBSYSTEM + "." + RU_STOCK_PLANNING))); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            name(RU_SUBSYSTEM + "." + RU_PLANNING + "." + RU_SUBSYSTEM + "." + RU_STOCK_PLANNING)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals("Subsystem.Sales.Subsystem.Orders.Subsystem.Backlog", //$NON-NLS-1$
-            AdoptMetadataObjectTool.canonicalFqn(config, "Subsystem.sales.Subsystem.orders.Subsystem.backlog")); //$NON-NLS-1$
-        assertEquals("Subsystem.Sales", AdoptMetadataObjectTool.canonicalFqn(config, "Subsystem.sales")); //$NON-NLS-1$ //$NON-NLS-2$
+            name("Subsystem.sales.Subsystem.orders.Subsystem.backlog")); //$NON-NLS-1$
+        assertEquals("Subsystem.Sales", name("Subsystem.sales")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
     public void testAnyOtherSourceKeepsItsNormalizedFqn()
     {
-        assertEquals("Catalog.Goods.Attribute.Weight", //$NON-NLS-1$
-            AdoptMetadataObjectTool.canonicalFqn(config, "Catalog.Goods.Attribute.Weight")); //$NON-NLS-1$
-        assertEquals("Catalog.goods", AdoptMetadataObjectTool.canonicalFqn(config, "Catalog.goods")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Catalog.Goods.Attribute.Weight", name("Catalog.Goods.Attribute.Weight")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Catalog.goods", name("Catalog.goods")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testASubsystemWhoseChainCannotBeReadUpKeepsTheCallersAddress()
+    {
+        // A broken model: Lost is listed under Sales, but its own parent link loops back to itself, so
+        // the walk up never reaches a top-level subsystem - and must not invent a shorter address.
+        Subsystem lost = subsystem("Lost", sales); //$NON-NLS-1$
+        lost.setParentSubsystem(lost);
+
+        assertSame(lost, resolve("Subsystem.sales.Subsystem.lost")); //$NON-NLS-1$
+        assertEquals("Subsystem.sales.Subsystem.lost", name("Subsystem.sales.Subsystem.lost")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testASubsystemWhoseParentLinkIsMissingKeepsTheCallersAddress()
+    {
+        // Listed by its parent, but its own parentSubsystem is not set: the walk up ends at once and
+        // reads it as TOP-LEVEL. The address resolved DOWN through two levels, so that one-level
+        // reading ('Subsystem.Orphan', which names no subsystem here) is not its address.
+        Subsystem orphan = MdClassFactory.eINSTANCE.createSubsystem();
+        orphan.setName("Orphan"); //$NON-NLS-1$
+        sales.getSubsystems().add(orphan);
+
+        assertSame(orphan, resolve("Subsystem.sales.Subsystem.orphan")); //$NON-NLS-1$
+        assertEquals("Subsystem.sales.Subsystem.orphan", name("Subsystem.sales.Subsystem.orphan")); //$NON-NLS-1$ //$NON-NLS-2$
+        // ...while a linked child of the same parent is still named by its canonical chain.
+        assertEquals("Subsystem.Sales.Subsystem.Orders", name("Subsystem.sales.Subsystem.orders")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ==================== every result names the source by it (the wiring) ====================
@@ -305,9 +370,9 @@ public class AdoptMetadataObjectToolTest
     @Test
     public void testEveryResultNamesASubsystemByItsCanonicalChain()
     {
-        // Not the naming helper but its wiring: the address each result carries comes with the source.
-        AdoptMetadataObjectTool.AdoptionSource source = AdoptMetadataObjectTool.AdoptionSource.resolve(config,
-            MetadataTypeUtils.normalizeFqn(RU_SUBSYSTEM + ".sales." + RU_SUBSYSTEMS + ".orders")); //$NON-NLS-1$ //$NON-NLS-2$
+        // Not the naming but its wiring: the address each result carries comes with the source.
+        AdoptMetadataObjectTool.AdoptionSource source =
+            source(RU_SUBSYSTEM + ".sales." + RU_SUBSYSTEMS + ".orders"); //$NON-NLS-1$ //$NON-NLS-2$
         assertNotNull(source);
         assertSame(orders, source.object);
         String chain = "Subsystem.Sales.Subsystem.Orders"; //$NON-NLS-1$
@@ -341,14 +406,32 @@ public class AdoptMetadataObjectToolTest
     @Test
     public void testAnyOtherSourceIsNamedByItsNormalizedFqnAndAMissIsNoSource()
     {
-        AdoptMetadataObjectTool.AdoptionSource attribute = AdoptMetadataObjectTool.AdoptionSource.resolve(config,
-            MetadataTypeUtils.normalizeFqn(RU_CATALOG + ".Goods.Attribute.Weight")); //$NON-NLS-1$
+        AdoptMetadataObjectTool.AdoptionSource attribute = source(RU_CATALOG + ".Goods.Attribute.Weight"); //$NON-NLS-1$
         assertNotNull(attribute);
         assertSame(weight, attribute.object);
         assertEquals("Catalog.Goods.Attribute.Weight", attribute.fqn); //$NON-NLS-1$
         // A miss is no source at all - not a source without an object, which the caller would adopt.
-        assertNull(AdoptMetadataObjectTool.AdoptionSource.resolve(config, "Subsystem.Sales.Subsystem.Missing")); //$NON-NLS-1$
-        assertNull(AdoptMetadataObjectTool.AdoptionSource.resolve(config, "Catalog.Missing")); //$NON-NLS-1$
+        assertNull(source("Subsystem.Sales.Subsystem.Missing")); //$NON-NLS-1$
+        assertNull(source("Catalog.Missing")); //$NON-NLS-1$
+    }
+
+    // ==================== the project kind ====================
+
+    @Test
+    public void testAnExternalObjectsProjectIsRefusedByItsKind()
+    {
+        // Only a configuration has extensions. An external-objects project is refused by its KIND
+        // before any address is resolved: its scope holds its own external objects only, so the base
+        // catalog's valid FQN would come back "not found" there and blame the address.
+        MetadataScope external = MetadataScopeTestFixtures.externalObjectsWithBase(config);
+        assertEquals("Project 'Ext' is an EXTERNAL-OBJECTS project, and an extension extends only a " //$NON-NLS-1$
+            + "configuration: pass the BASE configuration as projectName (adopt_metadata_object adopts " //$NON-NLS-1$
+            + "an object of that configuration into one of its extensions).", //$NON-NLS-1$
+            AdoptMetadataObjectTool.projectKindRefusal(external, "Ext")); //$NON-NLS-1$
+        assertNull("a configuration project is adopted from", //$NON-NLS-1$
+            AdoptMetadataObjectTool.projectKindRefusal(MetadataScope.ofConfiguration(config), "Cfg")); //$NON-NLS-1$
+        // What the refusal comes BEFORE: the base catalog resolves to nothing in that scope.
+        assertNull(AdoptMetadataObjectTool.AdoptionSource.resolve(external, "Catalog.Goods")); //$NON-NLS-1$
     }
 
     // ==================== the not-found refusal ====================
@@ -356,15 +439,15 @@ public class AdoptMetadataObjectToolTest
     @Test
     public void testANotFoundSubsystemAddressSaysHowANestedOneIsAddressed()
     {
-        // The issue's fourth spelling: a bare child. The refusal must teach the chain, not only 'Type.Name'.
+        // The issue's fourth spelling: a bare child. The refusal must teach the chain, not only
+        // 'Type.Name' - in the sentence the subsystem refusals share.
         String fqn = "Subsystem." + RU_STOCK_PLANNING; //$NON-NLS-1$
-        String message = AdoptMetadataObjectTool.sourceNotFound(fqn);
-        assertTrue(message, message.startsWith("Object not found: " + fqn + OLD_NOT_FOUND_TAIL)); //$NON-NLS-1$
-        assertTrue(message, message.contains("A nested subsystem is addressed by its whole chain")); //$NON-NLS-1$
-        assertTrue(message, message.contains("'Subsystem.<Parent>.Subsystem.<Child>'")); //$NON-NLS-1$
-        assertTrue(message, message.contains("exactly as list_subsystems prints it")); //$NON-NLS-1$
-        assertTrue("a missing nested chain gets it too", AdoptMetadataObjectTool //$NON-NLS-1$
-            .sourceNotFound("Subsystem.Sales.Subsystem.Missing").contains("list_subsystems")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Object not found: " + fqn + OLD_NOT_FOUND_TAIL + " " //$NON-NLS-1$ //$NON-NLS-2$
+            + SubsystemUtilsTest.ADDRESSING_HINT_TEXT + ".", AdoptMetadataObjectTool.sourceNotFound(fqn)); //$NON-NLS-1$
+        assertEquals("a missing nested chain gets it too", //$NON-NLS-1$
+            "Object not found: Subsystem.Sales.Subsystem.Missing" + OLD_NOT_FOUND_TAIL + " " //$NON-NLS-1$ //$NON-NLS-2$
+                + SubsystemUtilsTest.ADDRESSING_HINT_TEXT + ".", //$NON-NLS-1$
+            AdoptMetadataObjectTool.sourceNotFound("Subsystem.Sales.Subsystem.Missing")); //$NON-NLS-1$
     }
 
     @Test
@@ -377,25 +460,10 @@ public class AdoptMetadataObjectToolTest
     }
 
     // ==================== the exported files ====================
-
-    @Test
-    public void testTheAncestorWalkFollowsParentSubsystemNearestFirst()
-    {
-        assertEquals(Arrays.asList(orders, sales), AdoptMetadataObjectTool.subsystemAncestors(backlog));
-        assertEquals(Collections.singletonList(sales), AdoptMetadataObjectTool.subsystemAncestors(orders));
-        assertTrue(AdoptMetadataObjectTool.subsystemAncestors(sales).isEmpty());
-        assertTrue("not a subsystem", AdoptMetadataObjectTool.subsystemAncestors(goods).isEmpty()); //$NON-NLS-1$
-        assertTrue(AdoptMetadataObjectTool.subsystemAncestors(null).isEmpty());
-    }
-
-    @Test(timeout = 10000)
-    public void testTheAncestorWalkStopsOnACycle()
-    {
-        Subsystem first = subsystem("First", null); //$NON-NLS-1$
-        Subsystem second = subsystem("Second", first); //$NON-NLS-1$
-        first.setParentSubsystem(second);
-        assertEquals(Collections.singletonList(first), AdoptMetadataObjectTool.subsystemAncestors(second));
-    }
+    //
+    // The parents come from SubsystemUtils.lineage - the walk that also names a subsystem source - and
+    // its order, cycle and proxy stops are pinned in SubsystemUtilsTest; these pin what the export
+    // list makes of it.
 
     @Test
     public void testAnAdoptedNestedSubsystemExportsEveryParentAboveIt()
@@ -439,7 +507,6 @@ public class AdoptMetadataObjectToolTest
         when(((IBmObject)proxy).bmGetFqn()).thenThrow(new IllegalStateException("not attached")); //$NON-NLS-1$
         Subsystem child = bmSubsystem("Subsystem.Gone.Subsystem.Child", proxy); //$NON-NLS-1$
 
-        assertTrue(AdoptMetadataObjectTool.subsystemAncestors(child).isEmpty());
         assertEquals(Arrays.asList("Subsystem.Gone.Subsystem.Child", "Configuration"), //$NON-NLS-1$ //$NON-NLS-2$
             AdoptMetadataObjectTool.dirtyFqns(child, bmConfiguration()));
     }

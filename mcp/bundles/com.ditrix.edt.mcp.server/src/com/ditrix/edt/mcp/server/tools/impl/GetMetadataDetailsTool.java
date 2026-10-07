@@ -84,13 +84,11 @@ public class GetMetadataDetailsTool implements IMcpTool
 
     /** The failure reason of a nested-subsystem chain that addresses no existing subsystem. */
     static final String NESTED_SUBSYSTEM_NOT_FOUND = "Subsystem not found - no subsystem exists at this " //$NON-NLS-1$
-        + "chain. A nested subsystem is addressed by its whole chain from a top-level subsystem " //$NON-NLS-1$
-        + "('Subsystem.<Parent>.Subsystem.<Child>'); use list_subsystems to list the existing ones"; //$NON-NLS-1$
+        + "chain. " + SubsystemUtils.addressingHint(); //$NON-NLS-1$
 
     /** The failure reason of a subsystem address that goes on past its name without being a chain. */
-    static final String MALFORMED_SUBSYSTEM_CHAIN = "Not a subsystem address - a top-level subsystem is " //$NON-NLS-1$
-        + "'Subsystem.<Name>', a nested one its whole chain with a type token before every name " //$NON-NLS-1$
-        + "('Subsystem.<Parent>.Subsystem.<Child>'); use list_subsystems to list the existing ones"; //$NON-NLS-1$
+    static final String MALFORMED_SUBSYSTEM_CHAIN = "Not a subsystem address. " //$NON-NLS-1$
+        + SubsystemUtils.addressingHint();
 
     @Override
     public String getName()
@@ -386,8 +384,9 @@ public class GetMetadataDetailsTool implements IMcpTool
         // A NESTED subsystem chain must not fall through to resolveObject either: a nested subsystem is
         // its own top object that its parent only REFERS to, and resolveObject reads only the first two
         // segments - so it rendered the PARENT for the child's address (issue #708). The chain resolves
-        // through the shared subsystem walk instead, and a chain that addresses nothing is a failure
-        // row, never one of its parents.
+        // by the shared rule (SubsystemUtils.resolveInScope, the one MetadataNodeResolver.resolveAddress
+        // resolves a chain with), and a chain that addresses nothing is a failure row, never one of its
+        // parents.
         String[] nestedChain = SubsystemUtils.nestedChain(MetadataTypeUtils.normalizeFqn(fqn));
         // Nor may a subsystem address that goes on past 'Subsystem.<Name>' without being a whole chain
         // (one cut short, or with a foreign segment): resolveObject would render its FIRST level.
@@ -396,7 +395,7 @@ public class GetMetadataDetailsTool implements IMcpTool
             failures.add(new String[] { fqn, MALFORMED_SUBSYSTEM_CHAIN });
             return;
         }
-        MdObject mdObject = nestedChain != null ? resolveNestedSubsystem(ctx.scope, nestedChain)
+        MdObject mdObject = nestedChain != null ? SubsystemUtils.resolveInScope(ctx.scope, nestedChain)
             : resolveObject(ctx.scope, fqn);
         if (mdObject == null)
         {
@@ -1481,26 +1480,6 @@ public class GetMetadataDetailsTool implements IMcpTool
         }
 
         return scope.findObject(mdType, mdName);
-    }
-
-    /**
-     * Resolves the NESTED subsystem a parsed chain addresses (see {@link SubsystemUtils#nestedChain}),
-     * through the same walk {@code create_metadata} and {@code modify_metadata} use: the subsystem at
-     * the chain's LAST level, or {@code null} when any level is missing - never one of its parents. An
-     * external-objects project holds no subsystems, and the configuration its scope carries is the
-     * linked BASE one, which is never a resolution root there. Package-visible for tests.
-     *
-     * @param scope the project's resolution root (may be {@code null})
-     * @param chain the parsed chain of subsystem names
-     * @return the nested subsystem, or {@code null} when the chain does not resolve here
-     */
-    static MdObject resolveNestedSubsystem(MetadataScope scope, String[] chain)
-    {
-        if (scope == null || scope.isExternalObjects() || chain == null)
-        {
-            return null;
-        }
-        return SubsystemUtils.resolveByPath(scope.configuration(), chain, chain.length);
     }
 
     /**

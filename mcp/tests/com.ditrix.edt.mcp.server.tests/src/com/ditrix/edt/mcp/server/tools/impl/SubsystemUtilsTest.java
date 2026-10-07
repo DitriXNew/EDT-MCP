@@ -11,7 +11,14 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import java.util.Arrays;
+import java.util.Collections;
 
 import org.eclipse.emf.common.util.BasicEMap;
 import org.eclipse.emf.common.util.EMap;
@@ -20,22 +27,44 @@ import org.junit.Test;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.utils.MetadataScopeTestFixtures;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 
 /**
  * Tests for {@link SubsystemUtils}.
  *
  * <p>Direct unit coverage for: type-token recognition ({@code isSubsystemTypeToken}),
- * FQN parsing ({@code parseSubsystemPath}), synonym lookup with language fallback
- * ({@code getSynonymForLanguage}, exercised via {@link BasicEMap}), and language
- * resolution ({@code resolveLanguage}) without a {@code Configuration}.</p>
+ * FQN parsing ({@code parseSubsystemPath}, {@code nestedChain}, {@code malformedSegmentError}),
+ * synonym lookup with language fallback ({@code getSynonymForLanguage}, exercised via
+ * {@link BasicEMap}), language resolution ({@code resolveLanguage}) without a
+ * {@code Configuration}, and - on an EMF {@code Configuration} built with {@link MdClassFactory} -
+ * the chain walks ({@code resolveByPath}, {@code resolveByFqn}, {@code chainFqn}).</p>
  *
- * <p>The full {@code resolveByFqn} method needs an EMF {@code Configuration}
- * with live {@code Subsystem} children, so it is covered through e2e tests
- * against {@code TestConfiguration} rather than here.</p>
+ * <p>Issue #708 adds the helpers several tools read: the addressing sentence and the
+ * "subsystem not found" built on it, the rule a chain resolves by in a project's root
+ * ({@code resolveInScope}), and the walk up a subsystem's own parents ({@code lineage}).</p>
  */
 public class SubsystemUtilsTest
 {
+    /**
+     * The addressing sentence written out as the wire text it is. Every tool test that pins a refusal
+     * carrying it compares against THIS literal, not against {@link SubsystemUtils#addressingHint()}:
+     * changing the sentence then turns every consumer's pin red, and a consumer that kept a copy of
+     * its own is the one that stays green.
+     */
+    public static final String ADDRESSING_HINT_TEXT = "A top-level subsystem is addressed as 'Subsystem.<Name>' " //$NON-NLS-1$
+        + "and a nested one by its whole chain from a top-level subsystem, with a type token before every " //$NON-NLS-1$
+        + "name ('Subsystem.<Parent>.Subsystem.<Child>', any depth; the tokens may be English or Russian) - " //$NON-NLS-1$
+        + "list_subsystems lists the existing ones in exactly that form"; //$NON-NLS-1$
+
+    /** "Планирование" - the parent subsystem of issue #708. */
+    private static final String RU_PLANNING = fromCp(0x041f, 0x043b, 0x0430, 0x043d, 0x0438, 0x0440, 0x043e,
+        0x0432, 0x0430, 0x043d, 0x0438, 0x0435);
+    /** "ПланированиеЗапасов" - the nested subsystem of issue #708. */
+    private static final String RU_STOCK_PLANNING = RU_PLANNING + fromCp(0x0417, 0x0430, 0x043f, 0x0430, 0x0441,
+        0x043e, 0x0432);
+
     // ========== isSubsystemTypeToken ==========
 
     @Test
@@ -549,5 +578,165 @@ public class SubsystemUtilsTest
         assertNull(SubsystemUtils.chainFqn(chain, 0));
         assertNull(SubsystemUtils.chainFqn(chain, 3));
         assertNull(SubsystemUtils.chainFqn(null, 1));
+    }
+
+    // ========== the helpers several tools read (issue #708) ==========
+    //
+    // Like the platform model, a nested subsystem is NOT contained by its parent here: the parent
+    // only lists it (Subsystem.subsystems is a reference) and the child points back
+    // (parentSubsystem). Russian names are built from code points so a non-UTF-8 build cannot
+    // corrupt them.
+
+    private static String fromCp(int... cps)
+    {
+        return new String(cps, 0, cps.length);
+    }
+
+    /** A subsystem linked under {@code parent} both ways, as the platform links a nested one. */
+    private static Subsystem linked(String name, Subsystem parent)
+    {
+        Subsystem subsystem = MdClassFactory.eINSTANCE.createSubsystem();
+        subsystem.setName(name);
+        if (parent != null)
+        {
+            parent.getSubsystems().add(subsystem);
+            subsystem.setParentSubsystem(parent);
+        }
+        return subsystem;
+    }
+
+    /** Sales -> Orders -> Backlog and the issue's Russian pair, every nested level linked both ways. */
+    private static final class LinkedTree
+    {
+        final Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        final Subsystem sales = linked("Sales", null); //$NON-NLS-1$
+        final Subsystem orders = linked("Orders", sales); //$NON-NLS-1$
+        final Subsystem backlog = linked("Backlog", orders); //$NON-NLS-1$
+        final Subsystem planning = linked(RU_PLANNING, null);
+        final Subsystem stockPlanning = linked(RU_STOCK_PLANNING, planning);
+
+        LinkedTree()
+        {
+            config.setName("Cfg"); //$NON-NLS-1$
+            config.getSubsystems().add(sales);
+            config.getSubsystems().add(planning);
+        }
+    }
+
+    // ---------- the addressing sentence and the "subsystem not found" built on it ----------
+
+    @Test
+    public void testTheAddressingHintIsTheSentenceTheSubsystemRefusalsShare()
+    {
+        assertEquals(ADDRESSING_HINT_TEXT, SubsystemUtils.addressingHint());
+    }
+
+    @Test
+    public void testASubsystemNotFoundNamesTheAddressThenHowSubsystemsAreAddressed()
+    {
+        // The one "subsystem not found" of modify_metadata and get_subsystem_content: the address as
+        // the caller wrote it - not normalized - then the shared sentence.
+        assertEquals("Subsystem not found: subsystem.Sales.Subsystem.Missing. " + ADDRESSING_HINT_TEXT + ".", //$NON-NLS-1$ //$NON-NLS-2$
+            SubsystemUtils.notFoundMessage("subsystem.Sales.Subsystem.Missing")); //$NON-NLS-1$
+    }
+
+    // ---------- a chain in a project's root ----------
+
+    @Test
+    public void testAChainInAScopeIsTheSubsystemAtItsLastLevelNeverAParent()
+    {
+        LinkedTree tree = new LinkedTree();
+        MetadataScope scope = MetadataScope.ofConfiguration(tree.config);
+
+        assertSame(tree.sales, SubsystemUtils.resolveInScope(scope, new String[] { "Sales" })); //$NON-NLS-1$
+        assertSame(tree.orders, SubsystemUtils.resolveInScope(scope, new String[] { "Sales", "Orders" })); //$NON-NLS-1$ //$NON-NLS-2$
+        assertSame(tree.backlog,
+            SubsystemUtils.resolveInScope(scope, new String[] { "sales", "orders", "backlog" })); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNull("a missing leaf must not answer with its parent", //$NON-NLS-1$
+            SubsystemUtils.resolveInScope(scope, new String[] { "Sales", "Missing" })); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("a missing parent", //$NON-NLS-1$
+            SubsystemUtils.resolveInScope(scope, new String[] { "Missing", "Orders" })); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("a bare child names a top-level subsystem only", //$NON-NLS-1$
+            SubsystemUtils.resolveInScope(scope, new String[] { "Orders" })); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnExternalObjectsProjectResolvesNoChainInItsLinkedBase()
+    {
+        // The linked base configuration is not this project's root (issue #309).
+        LinkedTree tree = new LinkedTree();
+        MetadataScope external = MetadataScopeTestFixtures.externalObjectsWithBase(tree.config);
+
+        assertNull(SubsystemUtils.resolveInScope(external, new String[] { "Sales", "Orders" })); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(SubsystemUtils.resolveInScope(external, new String[] { "Sales" })); //$NON-NLS-1$
+        assertNull(SubsystemUtils.resolveInScope(null, new String[] { "Sales" })); //$NON-NLS-1$
+        assertNull(SubsystemUtils.resolveInScope(MetadataScope.ofConfiguration(tree.config), null));
+    }
+
+    // ---------- the lineage: one walk, both answers ----------
+
+    @Test
+    public void testTheLineageReadsTheChainOffTheLeafsOwnParents()
+    {
+        LinkedTree tree = new LinkedTree();
+        SubsystemUtils.Lineage deep = SubsystemUtils.lineage(tree.backlog);
+        assertEquals("nearest first", Arrays.asList(tree.orders, tree.sales), deep.ancestors()); //$NON-NLS-1$
+        assertEquals("Subsystem.Sales.Subsystem.Orders.Subsystem.Backlog", deep.chainFqn()); //$NON-NLS-1$
+
+        assertEquals(Collections.singletonList(tree.sales), SubsystemUtils.lineage(tree.orders).ancestors());
+        assertEquals("Subsystem.Sales.Subsystem.Orders", SubsystemUtils.lineage(tree.orders).chainFqn()); //$NON-NLS-1$
+
+        SubsystemUtils.Lineage top = SubsystemUtils.lineage(tree.sales);
+        assertTrue(top.ancestors().isEmpty());
+        assertEquals("Subsystem.Sales", top.chainFqn()); //$NON-NLS-1$
+
+        // The STORED names and the canonical English token, whatever language the names are in.
+        assertEquals("Subsystem." + RU_PLANNING + ".Subsystem." + RU_STOCK_PLANNING, //$NON-NLS-1$ //$NON-NLS-2$
+            SubsystemUtils.lineage(tree.stockPlanning).chainFqn());
+    }
+
+    @Test(timeout = 10000)
+    public void testTheLineageStopsOnACycleAndNamesNothing()
+    {
+        Subsystem first = linked("First", null); //$NON-NLS-1$
+        Subsystem second = linked("Second", first); //$NON-NLS-1$
+        first.setParentSubsystem(second);
+
+        SubsystemUtils.Lineage cyclic = SubsystemUtils.lineage(second);
+        assertEquals(Collections.singletonList(first), cyclic.ancestors());
+        assertNull("a walk cut short never spells an address", cyclic.chainFqn()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheLineageStopsAtAnUnresolvedParentAndNamesNothing()
+    {
+        // A proxy is not an attached object: neither an export entry nor a level of the address.
+        Subsystem proxy = mock(Subsystem.class);
+        when(proxy.eIsProxy()).thenReturn(true);
+        when(proxy.getName()).thenReturn("Gone"); //$NON-NLS-1$
+        Subsystem child = mock(Subsystem.class);
+        when(child.getParentSubsystem()).thenReturn(proxy);
+        when(child.getName()).thenReturn("Child"); //$NON-NLS-1$
+
+        SubsystemUtils.Lineage cut = SubsystemUtils.lineage(child);
+        assertTrue(cut.ancestors().isEmpty());
+        assertNull("a walk cut short never spells an address", cut.chainFqn()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheLineageOfNothingIsEmptyAndUnmodifiable()
+    {
+        SubsystemUtils.Lineage nothing = SubsystemUtils.lineage(null);
+        assertTrue(nothing.ancestors().isEmpty());
+        assertNull(nothing.chainFqn());
+        try
+        {
+            nothing.ancestors().add(MdClassFactory.eINSTANCE.createSubsystem());
+            fail("ancestors() is documented unmodifiable - on the null leaf's path too"); //$NON-NLS-1$
+        }
+        catch (UnsupportedOperationException expected)
+        {
+            // The contract Lineage.ancestors() documents, held on every path.
+        }
     }
 }
