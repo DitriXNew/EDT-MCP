@@ -1214,7 +1214,7 @@ public final class FormStructureReader
      *         data path or it has no segments
      */
     @SuppressWarnings("unchecked")
-    private static String dataPathOf(EObject item)
+    public static String dataPathOf(EObject item)
     {
         EObject dataPath = getSingleReference(item, FEATURE_DATA_PATH);
         if (dataPath == null)

@@ -784,6 +784,38 @@ public final class FormElementWriter
     }
 
     /**
+     * The persisted data items bound AT or BELOW {@code attribute}'s own data path ({@code Object},
+     * {@code Object.Code}, {@code Rows.Price} for {@code Rows}) - what EDT's form-attribute delete
+     * takes with the attribute. A prediction for a preview: the platform resolves each item's path
+     * first, so an item whose path no longer resolves is unbound rather than removed.
+     *
+     * @param attribute a form attribute or one of its columns, on the tx-bound model
+     * @return the bound items in depth-first order, empty when nothing binds to it
+     */
+    public static List<EObject> findItemsBoundAtOrBelowAttribute(EObject attribute)
+    {
+        List<EObject> bound = new ArrayList<>();
+        List<String> prefix = ownDataPath(attribute);
+        EObject formModel = attribute == null ? null : contentFormOf(attribute);
+        if (prefix.isEmpty() || formModel == null)
+        {
+            return bound;
+        }
+        EClass dataItem = formEClass(formModel, "DataItem"); //$NON-NLS-1$
+        for (EObject item : PersistedContents.descendants(formModel))
+        {
+            String[] segments = dataPathSegments(item);
+            // contentFormOf: an extension form's contained baseForm copy is not this form's items.
+            if (segments.length >= prefix.size() && startsWithIgnoreCase(segments, prefix)
+                && (dataItem == null || dataItem.isInstance(item)) && contentFormOf(item) == formModel)
+            {
+                bound.add(item);
+            }
+        }
+        return bound;
+    }
+
+    /**
      * The CONTENT form {@code member} lives in: the nearest ancestor that owns both the {@code items}
      * tree and the {@code attributes} list. A group owns {@code items} but no attributes, and the
      * form's own container (its {@code BasicForm}, the owner object, the configuration) owns neither -

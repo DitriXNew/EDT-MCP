@@ -368,6 +368,97 @@ def test_delete_form_attribute_confirm():
     poll_disk_lacks(_FORM, "DAAttr", ctx="the deleted form attribute must be gone from the .form")
 
 
+# The designer's delete of a FORM ATTRIBUTE (issue #600): EDT's form-attribute service removes the
+# items bound to the attribute with it, and keeps the form root's extInfo. Fixture: ItemForm's main
+# attribute 'Object' backs the fields Code / Description / Attribute (dataPath Object.*).
+_OBJECT_FIELDS = ("Code", "Description", "Attribute")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_main_form_attribute_takes_its_bound_fields_and_keeps_root_ext_info():
+    # A handler INSIDE the root extInfo, as the owner bound it in the designer before deleting Object.
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Handler.BeforeWriteAtServer",
+        "properties": [{"name": "procedure", "value": "MainDelBeforeWriteAtServer_zz"}]})
+    assert_ok(r, "seed the root BeforeWriteAtServer handler")
+    wait_for_project_ready()
+    poll_disk_contains(_FORM, "MainDelBeforeWriteAtServer_zz", ctx="the seeded handler must be on disk")
+    fqn = "Catalog.Catalog.Form.ItemForm.Attribute.Object"
+
+    before = tree_snapshot()
+    pv = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(pv, "preview the main attribute delete")
+    assert pv.structured.get("action") == "preview", "must be a preview: %r" % (pv.structured,)
+    bound = {it.get("name"): it.get("dataPath") for it in (pv.structured.get("items") or [])
+             if it.get("dataPath") is not None}
+    assert bound == {"Code": "Object.Code", "Description": "Object.Description",
+                     "Attribute": "Object.Attribute"}, \
+        "the preview must list exactly the three fields bound to Object, with their paths: %r" % (
+            pv.structured,)
+    msg = pv.structured.get("message", "")
+    assert_contains(msg, "3 item(s) bound to it", "the preview must count the bound items")
+    assert_contains(msg, "MAIN attribute", "the preview must say it is the main attribute")
+    assert_contains(msg, "orphan-form-ext-info", "the preview must name the validator finding it leaves")
+    assert_not_contains(msg, "NOT rewritten", "an attribute delete no longer leaves dangling bindings")
+    assert_tree_unchanged(before, "a preview must not touch the form")
+
+    r = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn, "confirm": True})
+    assert_ok(r, "delete the main attribute (confirm)")
+    assert r.structured.get("action") == "executed", "confirm must execute: %r" % (r.structured,)
+    removed = [it.get("name") for it in (r.structured.get("items") or []) if it.get("dataPath")]
+    assert sorted(removed) == sorted(_OBJECT_FIELDS), \
+        "the response must name the fields it removed: %r" % (r.structured,)
+    assert_contains(r.structured.get("message", ""), "3 bound item(s) removed",
+                    "the response must report the removal it observed")
+
+    poll_disk_lacks(_FORM, "<segments>Object.", ctx="no item may keep a path through the deleted attribute")
+    xml = read_disk(_FORM)
+    for name in _OBJECT_FIELDS:
+        assert_not_contains(xml, "<name>%s</name>" % name, "the bound field %s must be gone" % name)
+    assert_not_contains(xml, "<name>Object</name>", "the attribute itself must be gone")
+    assert_contains(xml, "<name>Decoration1</name>", "an unbound item must survive the delete")
+    ext_at = xml.find('<extInfo xsi:type="form:CatalogFormExtInfo"')
+    assert ext_at != -1, "the root CatalogFormExtInfo must be KEPT, as the designer keeps it: %s" % (xml,)
+    assert xml.find("MainDelBeforeWriteAtServer_zz") > ext_at, \
+        "the handler inside the root extInfo must be kept: %s" % (xml,)
+
+    d = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_ok(d, "model read-back of the form")
+    assert_not_contains(d.text, "Object.Code", "MODEL read-back: no item bound through Object remains")
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_non_main_form_attribute_takes_only_its_own_bound_field():
+    _seed_form_attribute("DNAttr")
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Field.DNField",
+        "properties": [{"name": "dataPath", "value": "DNAttr"}]})
+    assert_ok(r, "seed a field bound to the attribute")
+    wait_for_project_ready()
+    poll_disk_contains(_FORM, "<name>DNField</name>", ctx="the seeded field must be on disk")
+    fqn = "Catalog.Catalog.Form.ItemForm.Attribute.DNAttr"
+
+    pv = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(pv, "preview the non-main attribute delete")
+    bound = {it.get("name"): it.get("dataPath") for it in (pv.structured.get("items") or [])
+             if it.get("dataPath") is not None}
+    assert bound == {"DNField": "DNAttr"}, \
+        "the preview must list only the field bound to DNAttr: %r" % (pv.structured,)
+    assert_not_contains(pv.structured.get("message", ""), "MAIN attribute",
+                        "a non-main attribute carries no main-attribute note")
+
+    r = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn, "confirm": True})
+    assert_ok(r, "delete the non-main attribute (confirm)")
+    assert r.structured.get("action") == "executed", "confirm must execute: %r" % (r.structured,)
+    poll_disk_lacks(_FORM, "<name>DNField</name>", ctx="the field bound to DNAttr must be gone")
+    xml = read_disk(_FORM)
+    assert_not_contains(xml, "<name>DNAttr</name>", "the attribute itself must be gone")
+    for name in _OBJECT_FIELDS:
+        assert_contains(xml, "<name>%s</name>" % name, "a field bound elsewhere (%s) must survive" % name)
+    assert_contains(xml, "<name>Object</name>", "the main attribute must survive")
+
+
 @e2e_test(tool="delete_metadata", kind="write-metadata")
 def test_delete_form_command_confirm():
     r = call("create_metadata", {

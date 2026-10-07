@@ -30,6 +30,7 @@ import com._1c.g5.v8.dt.core.platform.IExtensionProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.core.platform.IWorkspaceOrchestrator;
 import com._1c.g5.v8.dt.form.refactoring.IFormRefactoringService;
+import com._1c.g5.v8.dt.form.service.attribute.FormAttributeManagementService;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.md.MdPlugin;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
@@ -695,6 +696,49 @@ public class EdtServices
             service = formRefactoringServiceTracker.getService();
         }
         return service;
+    }
+
+    /** The form bundle's activator, internal (not exported) - reached reflectively for its injector. */
+    private static final String FORM_PLUGIN_CLASS = "com._1c.g5.v8.dt.internal.form.FormPlugin"; //$NON-NLS-1$
+
+    /**
+     * Returns EDT's {@link FormAttributeManagementService} - the service the form designer's
+     * "delete attribute" runs ({@code DeleteFormAttributeTask}): it removes the attribute together
+     * with its columns, the items bound to it and its ext-info object.
+     * <p>
+     * It is a Guice singleton of the form bundle that is NOT registered as an OSGi service, and the
+     * bundle's activator ({@code FormPlugin}) sits in a non-exported package, so the injector is
+     * reached reflectively; the service class itself is exported and typed. Answers the instance the
+     * platform itself uses ({@code FormUtil.getFormAttributeService} reads the same injector).
+     *
+     * @return the service, or {@code null} when the form bundle or its injector is unavailable
+     */
+    public FormAttributeManagementService getFormAttributeManagementService()
+    {
+        Bundle formBundle = Platform.getBundle(FORM_BUNDLE_ID);
+        if (formBundle == null)
+        {
+            Activator.logError("form bundle '" + FORM_BUNDLE_ID //$NON-NLS-1$
+                + "' not found in the running platform", null); //$NON-NLS-1$
+            return null;
+        }
+        try
+        {
+            ensureFormBundleActive(formBundle);
+            Class<?> pluginClass = formBundle.loadClass(FORM_PLUGIN_CLASS);
+            Object plugin = pluginClass.getMethod("getDefault").invoke(null); //$NON-NLS-1$
+            Object injector = plugin == null ? null : pluginClass.getMethod("getInjector").invoke(plugin); //$NON-NLS-1$
+            if (injector instanceof Injector)
+            {
+                return ((Injector)injector).getInstance(FormAttributeManagementService.class);
+            }
+            Activator.logError("form bundle injector is not available", null); //$NON-NLS-1$
+        }
+        catch (Exception | LinkageError e) // NOSONAR an EDT that moved this internal API must answer null, not throw
+        {
+            Activator.logError("Failed to obtain FormAttributeManagementService from the form injector", e); //$NON-NLS-1$
+        }
+        return null;
     }
 
     /**

@@ -31,6 +31,7 @@ import com._1c.g5.v8.dt.core.platform.IExtensionProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.core.platform.IWorkspaceOrchestrator;
 import com._1c.g5.v8.dt.form.refactoring.IFormRefactoringService;
+import com._1c.g5.v8.dt.form.service.attribute.FormAttributeManagementService;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.navigator.providers.INavigatorContentProviderStateProvider;
@@ -417,6 +418,16 @@ public class Activator extends AbstractUIPlugin
     public IFormRefactoringService getFormRefactoringService()
     {
         return services.getFormRefactoringService();
+    }
+
+    /**
+     * Returns EDT's FormAttributeManagementService - the form designer's attribute delete.
+     *
+     * @return the service or null if not available
+     */
+    public FormAttributeManagementService getFormAttributeManagementService()
+    {
+        return services.getFormAttributeManagementService();
     }
 
     /**
