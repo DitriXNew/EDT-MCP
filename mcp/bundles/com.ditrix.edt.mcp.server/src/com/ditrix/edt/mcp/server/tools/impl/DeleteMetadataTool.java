@@ -1366,6 +1366,13 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             }
             for (String formFile : formFiles)
             {
+                if (formFile.isEmpty())
+                {
+                    confirmed = false;
+                    notes.append(" The base form's Form.form could not be resolved, so it is not confirmed free " //$NON-NLS-1$
+                        + "of the deleted attribute; re-check it before relying on it."); //$NON-NLS-1$
+                    continue;
+                }
                 RegistrationState formState = formAttributeState(formBytes(projectName, formFile),
                     resultString(formCheck, FORM_CHECK_ATTRIBUTE), resultString(formCheck, FORM_CHECK_COLUMN));
                 if (formState != RegistrationState.ABSENT)
@@ -2550,10 +2557,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * The form files the delete writes: the content form's own and, in an adopted form, its base-form
-     * copy - a separate top object EDT's delete also edits. Empty when the content form's is unresolved.
+     * The form files the delete writes: the content form's own and, for an adopted attribute, its base-form
+     * copy - a separate top object EDT's delete also edits. Empty when the content form's is unresolved; a
+     * {@code null} entry is a required base copy that did not resolve.
      */
-    private static List<IFile> formFilesOf(EObject formModel, FormAttributeDeleter deleter)
+    private static List<IFile> formFilesOf(EObject formModel, FormAttributeDeleter deleter, boolean adopted)
     {
         List<IFile> files = new ArrayList<>();
         IFile own = deleter.fileOf(formModel);
@@ -2562,11 +2570,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return files;
         }
         files.add(own);
-        Form baseForm = formModel instanceof Form ? ((Form)formModel).getBaseForm() : null;
-        IFile base = baseForm == null || baseForm.eIsProxy() ? null : deleter.fileOf(baseForm);
-        if (base != null)
+        if (adopted)
         {
-            files.add(base);
+            Form baseForm = formModel instanceof Form ? ((Form)formModel).getBaseForm() : null;
+            files.add(baseForm == null || baseForm.eIsProxy() ? null : deleter.fileOf(baseForm));
         }
         return files;
     }
@@ -2813,7 +2820,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         AttributeDeleteOutcome outcome = new AttributeDeleteOutcome();
         if (!plan.detached.isEmpty())
         {
-            outcome.formFiles.addAll(formFilesOf(formModel, deleter));
+            // Only an adopted attribute's delete also edits the base-form copy (the plan's itemsKept).
+            outcome.formFiles.addAll(formFilesOf(formModel, deleter, plan.itemsKept));
         }
         outcome.main = FormElementWriter.isMainAttribute(target);
         outcome.rootExtInfo = rootExtInfoKind(formModel);
@@ -3013,7 +3021,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             Map<String, Object> check = new java.util.LinkedHashMap<>();
             List<String> files = new ArrayList<>();
-            formFiles.forEach(file -> files.add(fileLabelOf(file)));
+            formFiles.forEach(file -> files.add(file == null ? "" : fileLabelOf(file))); //$NON-NLS-1$
             check.put(FORM_CHECK_FILES, files);
             boolean column = ref.ownerAttributeName != null;
             check.put(FORM_CHECK_ATTRIBUTE, column ? ref.ownerAttributeName : ref.name);

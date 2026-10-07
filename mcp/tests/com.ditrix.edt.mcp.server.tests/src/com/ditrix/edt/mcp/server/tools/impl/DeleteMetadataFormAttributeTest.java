@@ -856,15 +856,24 @@ public class DeleteMetadataFormAttributeTest
     /** ... optionally in an adopted form whose base-form copy is stored in {@link #BASE_FORM_FILE}. */
     private static String listDeleteResult(IFile settingsFile, boolean persisted, boolean adopted)
     {
+        return listDeleteResult(settingsFile, persisted, adopted, true, fileAt(BASE_FORM_FILE));
+    }
+
+    /** {@code withBase}: the form has a base copy; {@code adopted}: EDT reports 'List' adopted from it. */
+    private static String listDeleteResult(IFile settingsFile, boolean persisted, boolean adopted, boolean withBase,
+        IFile baseFile)
+    {
         DataCompositionSettings settings = DcsFactory.eINSTANCE.createDataCompositionSettings();
         Form form = listForm(settings);
-        Form base = adopted ? F.createForm() : null;
+        Form base = adopted || withBase ? F.createForm() : null;
         form.setBaseForm(base);
         FormAttribute list = named(form, "List"); //$NON-NLS-1$
         IFile formFile = fileAt(FORM_FILE);
-        IFile baseFile = fileAt(BASE_FORM_FILE);
+        IFormExtensionService extensions = mock(IFormExtensionService.class);
+        when(extensions.isExtensionAdopted(any())).thenReturn(adopted);
         DeleteMetadataTool.FormAttributeDeleter platform = filedDeleter(object -> object == settings ? settingsFile
-            : object == form ? formFile : object == base ? baseFile : null, new ArrayList<>());
+            : object == form ? formFile : object == base ? baseFile : null, new ArrayList<>(),
+            edt(Set.of(), extensions));
         DeleteMetadataTool.AttributeDeleteOutcome outcome = DeleteMetadataTool.deleteAttributeInTx(form, list,
             null, platform, LIST_FQN, preview(form, list, platform).scope);
         return DeleteMetadataTool.formDeleteResult(LIST_FQN, FormElementWriter.parse(LIST_FQN), false,
@@ -1007,6 +1016,22 @@ public class DeleteMetadataFormAttributeTest
             Map.of(FORM_FILE, bytes(FORM_WITHOUT_LIST), BASE_FORM_FILE, bytes(FORM_WITHOUT_LIST))).drive(raw))
                 .getAsJsonObject();
         assertFalse("both files rewritten: the success stays intact", clean.has("persisted")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTheBaseFormCopyIsCheckedOnlyForAnAdoptedAttribute()
+    {
+        // An extension's OWN attribute: EDT's delete leaves the base copy alone, so it is not read.
+        String own = listDeleteResult(settingsFile(), true, false, true, fileAt(BASE_FORM_FILE));
+        assertEquals("[\"" + FORM_FILE + "\"]", //$NON-NLS-1$ //$NON-NLS-2$
+            JsonParser.parseString(own).getAsJsonObject().getAsJsonObject("formCheck").get("files").toString()); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // An adopted attribute whose base copy does not resolve: unverifiable, never silently skipped.
+        String unresolved = listDeleteResult(settingsFile(), true, true, true, null);
+        JsonObject answered = JsonParser.parseString(new DiskTool(new ArrayList<>(), DiskExportState.DRAINED,
+            Map.of(SETTINGS_FILE, Boolean.FALSE), Map.of(FORM_FILE, bytes(FORM_WITHOUT_LIST))).drive(unresolved))
+                .getAsJsonObject();
+        assertPartial(answered, "The base form's Form.form could not be resolved"); //$NON-NLS-1$
     }
 
     @Test
@@ -1327,7 +1352,12 @@ public class DeleteMetadataFormAttributeTest
     private static DeleteMetadataTool.FormAttributeDeleter filedDeleter(java.util.function.Function<EObject, IFile> files,
         List<EObject> calls)
     {
-        FormAttributeDeletion edt = edt();
+        return filedDeleter(files, calls, edt());
+    }
+
+    private static DeleteMetadataTool.FormAttributeDeleter filedDeleter(java.util.function.Function<EObject, IFile> files,
+        List<EObject> calls, FormAttributeDeletion edt)
+    {
         return new DeleteMetadataTool.FormAttributeDeleter()
         {
             @Override
