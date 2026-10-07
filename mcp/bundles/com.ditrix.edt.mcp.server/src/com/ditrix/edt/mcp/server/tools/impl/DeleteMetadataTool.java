@@ -20,8 +20,8 @@ import java.util.function.Supplier;
 import javax.xml.parsers.DocumentBuilderFactory;
 
 import org.eclipse.core.resources.IFile;
-import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.EList;
@@ -218,6 +218,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
          * @param attribute the tx-bound attribute or column to delete (an {@code AbstractFormAttribute})
          */
         void delete(IBmTransaction tx, EObject attribute);
+
+        /**
+         * @param topObject an attached extInfo object EDT is about to detach
+         * @return the workspace file it is stored in, or {@code null} when that cannot be resolved
+         */
+        default IFile fileOf(EObject topObject)
+        {
+            return FormAttributeDeletion.fileOf(topObject);
+        }
     }
 
     private final ConsentRequester consentRequester;
@@ -2106,6 +2115,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             .put("fqn", normFqn); //$NON-NLS-1$
         if (outcome[0] != null)
         {
+            // The form export skips the detached object's FQN, so its file is removed here, after commit.
+            outcome[0].removeDetachedFiles(DeleteMetadataTool::removeResource);
             List<Map<String, Object>> removed = new ArrayList<>();
             removed.add(formItem(ref.name, capturedType[0]));
             removed.addAll(outcome[0].entries());
@@ -2140,6 +2151,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /** Item key: the extInfo kind a detached object hung from. */
     private static final String KEY_EXT_INFO = "extInfo"; //$NON-NLS-1$
+
+    /** Item key: the project-relative file a detached object was stored in. */
+    private static final String KEY_FILE = "file"; //$NON-NLS-1$
+
+    /** Item key: what happened to that file - {@link ResourceCleanup} REMOVED / NOT_FOUND / FAILED. */
+    private static final String KEY_FILE_REMOVAL = "fileRemoval"; //$NON-NLS-1$
 
     /**
      * The deleter for an attribute target, resolved inside the preview read; refuses when EDT's
@@ -2472,6 +2489,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             }
         }
 
+        Map<FormAttributeDeletion.Detached, IFile> files = new java.util.IdentityHashMap<>();
+        for (FormAttributeDeletion.Detached detached : plan.detached)
+        {
+            files.put(detached, deleter.fileOf(detached.object));
+        }
+
         deleter.delete(tx, target);
 
         if (EcoreUtil.isAncestor(formModel, target))
@@ -2501,8 +2524,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
         for (FormAttributeDeletion.Detached detached : plan.detached)
         {
-            (FormAttributeDeletion.isDetached(detached.object) ? outcome.detached : outcome.leftAttached)
-                .add(detachedEntry(detached));
+            if (FormAttributeDeletion.isDetached(detached.object))
+            {
+                outcome.detached.add(detachedEntry(detached));
+                outcome.detachedFiles.add(files.get(detached));
+            }
+            else
+            {
+                outcome.leftAttached.add(detachedEntry(detached));
+            }
         }
         return outcome;
     }
@@ -2599,7 +2629,39 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         final List<Map<String, Object>> removed = new ArrayList<>();
         final List<Map<String, Object>> unbound = new ArrayList<>();
         final List<Map<String, Object>> detached = new ArrayList<>();
+        /** The file of each {@link #detached} object, read before the detach; {@code null} when unresolved. */
+        final List<IFile> detachedFiles = new ArrayList<>();
         final List<Map<String, Object>> leftAttached = new ArrayList<>();
+        /** The message tail for the removal of the detached objects' files. */
+        private final StringBuilder fileNotes = new StringBuilder();
+
+        /**
+         * Removes each detached object's file and records what happened on its entry
+         * ({@code file}, {@code fileRemoval}) and in the message - only what was seen.
+         *
+         * @param remover deletes one file and answers the outcome
+         */
+        void removeDetachedFiles(java.util.function.Function<IFile, ResourceCleanup> remover)
+        {
+            for (int i = 0; i < detached.size(); i++)
+            {
+                Map<String, Object> entry = detached.get(i);
+                IFile file = detachedFiles.get(i);
+                String what = entry.get(KEY_EXT_INFO) + "." + entry.get("name"); //$NON-NLS-1$ //$NON-NLS-2$
+                if (file == null)
+                {
+                    entry.put(KEY_FILE_REMOVAL, ResourceCleanup.FAILED.name());
+                    fileNotes.append(" The file of ").append(what) //$NON-NLS-1$
+                        .append(" could not be resolved - check the form folder for a leftover."); //$NON-NLS-1$
+                    continue;
+                }
+                String path = file.getProjectRelativePath().toString();
+                ResourceCleanup cleanup = remover.apply(file);
+                entry.put(KEY_FILE, path);
+                entry.put(KEY_FILE_REMOVAL, cleanup.name());
+                fileNotes.append(' ').append(resourceCleanupMessage(cleanup, "Its file " + path)); //$NON-NLS-1$
+            }
+        }
 
         /** The response's extra items: columns, the first removed / unbound members, detached objects. */
         List<Map<String, Object>> entries()
@@ -2637,6 +2699,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 sb.append(", detached ").append(detachedNamesOf(detached)); //$NON-NLS-1$
             }
             sb.append('.');
+            sb.append(fileNotes);
             if (!leftAttached.isEmpty())
             {
                 sb.append(" EDT left ").append(detachedNamesOf(leftAttached)) //$NON-NLS-1$
@@ -2814,7 +2877,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // Remove it physically through the workspace API (best-effort: never fail the delete the model
         // already committed). Only this EXACT form folder is removed, never the parent Forms/ (siblings)
         // or the owner folder. The path is built from the RESOLVED names captured above.
-        FolderCleanup folderCleanup =
+        ResourceCleanup folderCleanup =
             deleteFormResourceFolder(project, ref.ownerType, ownerNameOnDisk, formNameOnDisk);
 
         return ToolResult.success()
@@ -3452,29 +3515,63 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         return map;
     }
 
-    /** Outcome of the orphan form-folder cleanup - never conflate "not found" with "removed". */
-    private enum FolderCleanup
+    /** Outcome of an orphan-resource cleanup - never conflate "not found" with "removed". */
+    enum ResourceCleanup
     {
-        /** The folder existed and was deleted. */
+        /** The resource existed and was deleted. */
         REMOVED,
-        /** No folder at the resolved path (nothing was removed). */
+        /** No resource at the resolved path (nothing was removed). */
         NOT_FOUND,
         /** The path could not be resolved or the delete attempt failed. */
         FAILED
     }
 
-    /** The message fragment describing the folder-cleanup outcome (leading space included). */
-    private static String folderCleanupMessage(FolderCleanup cleanup)
+    /** The message fragment describing the form-folder cleanup outcome (leading space included). */
+    private static String folderCleanupMessage(ResourceCleanup cleanup)
+    {
+        return ' ' + resourceCleanupMessage(cleanup, "The form resource folder"); //$NON-NLS-1$
+    }
+
+    /** "{@code subject} was removed from disk." and its NOT_FOUND / FAILED counterparts. */
+    private static String resourceCleanupMessage(ResourceCleanup cleanup, String subject)
     {
         switch (cleanup)
         {
         case REMOVED:
-            return " The form resource folder was removed from disk."; //$NON-NLS-1$
+            return subject + " was removed from disk."; //$NON-NLS-1$
         case NOT_FOUND:
-            return " The form resource folder was not found on disk (nothing was removed)."; //$NON-NLS-1$
+            return subject + " was not found on disk (nothing was removed)."; //$NON-NLS-1$
         case FAILED:
         default:
-            return " (the form resource folder could not be removed - check it manually)."; //$NON-NLS-1$
+            return subject + " could not be removed - check it manually."; //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Deletes one workspace resource through the workspace API, best effort: the model delete already
+     * committed, so a failure is logged and reported, never thrown. A missing resource is
+     * {@link ResourceCleanup#NOT_FOUND}, never claimed as removed.
+     *
+     * @param resource the file or folder to delete
+     * @return the outcome
+     */
+    static ResourceCleanup removeResource(IResource resource)
+    {
+        try
+        {
+            if (!resource.exists())
+            {
+                return ResourceCleanup.NOT_FOUND;
+            }
+            // force: also when out of sync with disk; a folder goes with its contents.
+            resource.delete(true, new NullProgressMonitor());
+            return ResourceCleanup.REMOVED;
+        }
+        catch (Exception e)
+        {
+            Activator.logError("Failed to remove " + resource.getFullPath() //$NON-NLS-1$
+                + " (the model delete already succeeded; remove it manually if it persists).", e); //$NON-NLS-1$
+            return ResourceCleanup.FAILED;
         }
     }
 
@@ -3487,7 +3584,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * case-variant FQN would otherwise miss the real folder and leave the orphan behind. Best-effort: a
      * delete failure is logged but never propagated - the BM-model delete already committed, so the
      * orphan-folder cleanup must not turn a successful delete into an error. A folder that does not
-     * exist is reported as {@link FolderCleanup#NOT_FOUND}, never claimed as removed. Only the EXACT
+     * exist is reported as {@link ResourceCleanup#NOT_FOUND}, never claimed as removed. Only the EXACT
      * {@code Forms/<FormName>} folder is targeted, never the parent {@code Forms/} directory (which may
      * hold sibling forms) or the owner folder.
      *
@@ -3497,7 +3594,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * @param resolvedFormName the form Name AS RESOLVED on the model
      * @return the cleanup outcome (removed / not found on disk / failed)
      */
-    private static FolderCleanup deleteFormResourceFolder(IProject project, String ownerType,
+    private static ResourceCleanup deleteFormResourceFolder(IProject project, String ownerType,
         String resolvedOwnerName, String resolvedFormName)
     {
         String folderRel = formResourceFolderPath(ownerType, resolvedOwnerName, resolvedFormName);
@@ -3506,28 +3603,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             Activator.logError("Could not resolve the form resource folder for " + ownerType + "." //$NON-NLS-1$ //$NON-NLS-2$
                 + resolvedOwnerName + ".Form." + resolvedFormName + "; leaving any on-disk Forms/" //$NON-NLS-1$ //$NON-NLS-2$
                 + resolvedFormName + " folder in place.", null); //$NON-NLS-1$
-            return FolderCleanup.FAILED;
+            return ResourceCleanup.FAILED;
         }
-        try
-        {
-            IFolder folder = project.getFolder(new Path(folderRel));
-            if (!folder.exists())
-            {
-                // Nothing on disk at the resolved path (e.g. the form had no rendered content yet).
-                // Reported as NOT_FOUND - never claimed as a removal.
-                return FolderCleanup.NOT_FOUND;
-            }
-            // delete(true, monitor): force-delete the folder and its contents, keeping the workspace
-            // resource tree in sync with disk. DEPTH is implicitly infinite for a container.
-            folder.delete(true, new NullProgressMonitor());
-            return FolderCleanup.REMOVED;
-        }
-        catch (Exception e)
-        {
-            Activator.logError("Failed to remove the form resource folder " + folderRel //$NON-NLS-1$
-                + " (the model delete already succeeded; remove it manually if it persists).", e); //$NON-NLS-1$
-            return FolderCleanup.FAILED;
-        }
+        return removeResource(project.getFolder(new Path(folderRel)));
     }
 
     /**
