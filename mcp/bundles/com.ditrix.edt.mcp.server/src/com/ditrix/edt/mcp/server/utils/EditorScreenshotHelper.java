@@ -6,9 +6,11 @@ package com.ditrix.edt.mcp.server.utils;
 import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Base64;
-import java.util.Iterator;
+import java.util.List;
 import java.util.function.BooleanSupplier;
+import java.util.function.Predicate;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
@@ -32,11 +34,12 @@ import org.eclipse.ui.ide.IDE;
 import org.eclipse.ui.part.FileEditorInput;
 
 import com._1c.g5.v8.dt.form.model.Form;
+import com._1c.g5.v8.dt.form.model.FormGroup;
 import com._1c.g5.v8.dt.form.model.FormItem;
+import com._1c.g5.v8.dt.form.model.ManagedFormGroupType;
 import com._1c.g5.v8.dt.ui.util.ContentUtil;
 
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.protocol.ToolResult;
 
 /**
  * Reusable helper for capturing screenshots from EDT visual editors (forms, print forms, etc.).
@@ -63,6 +66,7 @@ public final class EditorScreenshotHelper
     private static final String GET_CONTROL_METHOD = "getControl"; //$NON-NLS-1$
     private static final String REFRESH_METHOD = "refresh"; //$NON-NLS-1$
     private static final String REBUILD_METHOD = "rebuild"; //$NON-NLS-1$
+    private static final String HIPPO_SESSION_FIELD = "hippoSession"; //$NON-NLS-1$
     private static final int WYSIWYG_WAIT_RETRIES = 15;
     private static final int WYSIWYG_WAIT_INTERVAL_MS = 500;
     private static final int RENDER_WAIT_TIMEOUT_MS = 8000;
@@ -70,6 +74,8 @@ public final class EditorScreenshotHelper
     private static final int FRESH_RENDER_WAIT_TIMEOUT_MS = 10000;
     private static final int EDITOR_INPUT_RESOLVE_RETRIES = 20;
     private static final int EDITOR_INPUT_RESOLVE_INTERVAL_MS = 250;
+    /** Most page names a not-found error lists; the rest is counted. */
+    private static final int MAX_LISTED_PAGES = 20;
 
     private EditorScreenshotHelper()
     {
@@ -134,7 +140,7 @@ public final class EditorScreenshotHelper
 
     /**
      * Result of opening a form editor: either the opened {@code FormEditor} part plus the
-     * resolved form {@code IFile}, or an error JSON string.
+     * resolved form {@code IFile}, or an error message.
      */
     public static final class OpenFormResult
     {
@@ -154,9 +160,9 @@ public final class EditorScreenshotHelper
             return new OpenFormResult(editorPart, formFile, null);
         }
 
-        static OpenFormResult error(String errorJson)
+        static OpenFormResult error(String message)
         {
-            return new OpenFormResult(null, null, errorJson);
+            return new OpenFormResult(null, null, message);
         }
 
         public boolean isSuccess()
@@ -199,29 +205,29 @@ public final class EditorScreenshotHelper
         String relativePath = MetadataPathResolver.resolveFormFilePath(formPath);
         if (relativePath == null)
         {
-            return OpenFormResult.error(ToolResult.error(
+            return OpenFormResult.error(
                 "Cannot resolve form path: " + formPath + ". " + //$NON-NLS-1$ //$NON-NLS-2$
                 "Expected format: 'MetadataType.ObjectName.Forms.FormName' " + //$NON-NLS-1$
-                "or 'CommonForm.FormName'.").toJson()); //$NON-NLS-1$
+                "or 'CommonForm.FormName'."); //$NON-NLS-1$
         }
 
         IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
         if (project == null || !project.exists())
         {
-            return OpenFormResult.error(ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson());
+            return OpenFormResult.error(ProjectContext.notFoundMessage(projectName));
         }
 
         IFile formFile = project.getFile(new Path(relativePath));
         if (!formFile.exists())
         {
-            return OpenFormResult.error(ToolResult.error(
-                "Form file not found: " + relativePath + " in project " + projectName).toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+            return OpenFormResult.error(
+                "Form file not found: " + relativePath + " in project " + projectName); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         IWorkbenchPage page = getWorkbenchPage();
         if (page == null)
         {
-            return OpenFormResult.error(ToolResult.error("No active workbench page").toJson()); //$NON-NLS-1$
+            return OpenFormResult.error("No active workbench page"); //$NON-NLS-1$
         }
 
         // Resolve the typed DT editor input (model + feature) BEFORE opening. Opening the form
@@ -234,10 +240,10 @@ public final class EditorScreenshotHelper
         IEditorInput editorInput = resolveGranularEditorInput(formFile);
         if (editorInput == null)
         {
-            return OpenFormResult.error(ToolResult.error(
+            return OpenFormResult.error(
                 "Could not resolve the form model for: " + formPath + ". " + //$NON-NLS-1$ //$NON-NLS-2$
                 "The project may still be loading or building its model; " + //$NON-NLS-1$
-                "wait for the project to finish loading and try again.").toJson()); //$NON-NLS-1$
+                "wait for the project to finish loading and try again."); //$NON-NLS-1$
         }
 
         try
@@ -253,8 +259,7 @@ public final class EditorScreenshotHelper
             IEditorPart editorPart = IDE.openEditor(page, editorInput, FORM_EDITOR_ID, true);
             if (editorPart == null)
             {
-                return OpenFormResult.error(
-                    ToolResult.error("Could not open form editor for: " + formPath).toJson()); //$NON-NLS-1$
+                return OpenFormResult.error("Could not open form editor for: " + formPath); //$NON-NLS-1$
             }
 
             // Bring the editor to the top and give it focus so its WYSIWYG page builds and the
@@ -267,8 +272,7 @@ public final class EditorScreenshotHelper
         catch (Exception e)
         {
             Activator.logError("Failed to open form editor for: " + formPath, e); //$NON-NLS-1$
-            return OpenFormResult.error(
-                ToolResult.error("Failed to open form editor: " + e.getMessage()).toJson()); //$NON-NLS-1$
+            return OpenFormResult.error("Failed to open form editor: " + e.getMessage()); //$NON-NLS-1$
         }
     }
 
@@ -667,26 +671,6 @@ public final class EditorScreenshotHelper
     // ==================== Image capture ====================
 
     /**
-     * Extracts the form image data from the WYSIWYG representation.
-     * This is the primary (preferred) capture method using {@code getFormImageData()}.
-     *
-     * @param wysiwygViewer the WYSIWYG viewer instance
-     * @return image data, or {@code null} if not available
-     */
-    public static ImageData extractFormImageData(Object wysiwygViewer) throws Exception
-    {
-        Object representation = ReflectionUtils.getFieldValue(wysiwygViewer, WYSIWYG_REPRESENTATION_FIELD);
-        if (representation == null)
-        {
-            return null;
-        }
-
-        // Trigger rebuild so the native render produces an up-to-date image, then read it.
-        rebuildRepresentation(representation);
-        return readFormImageData(representation);
-    }
-
-    /**
      * Returns the {@code com._1c.g5.v8.dt.form.model.Form} model that the WYSIWYG representation is
      * actually rendering, read from its {@code form} field. This is the authoritative subject of the
      * representation's render: in the representation's rebuild task ({@code FormWysiwygRepresentation$2})
@@ -732,19 +716,177 @@ public final class EditorScreenshotHelper
         return fqn != null && fqnMatchesFormPath(fqn, formPath);
     }
 
+    /** The WYSIWYG editor a form tool reads, or why it cannot be read. */
+    public static final class FormEditorTarget
+    {
+        private final Object viewer;
+        private final Object representation;
+        private final String error;
+
+        private FormEditorTarget(Object viewer, Object representation, String error)
+        {
+            this.viewer = viewer;
+            this.representation = representation;
+            this.error = error;
+        }
+
+        static FormEditorTarget failed(String error)
+        {
+            return new FormEditorTarget(null, null, error);
+        }
+
+        /** @return the WYSIWYG viewer, set when {@link #getError()} is {@code null} */
+        public Object getViewer()
+        {
+            return viewer;
+        }
+
+        /** @return the {@code FormWysiwygRepresentation}, set when {@link #getError()} is {@code null} */
+        public Object getRepresentation()
+        {
+            return representation;
+        }
+
+        /** @return {@code null} when the editor was resolved, otherwise the error message */
+        public String getError()
+        {
+            return error;
+        }
+    }
+
+    /**
+     * Resolves the WYSIWYG editor a form tool reads: opens {@code formPath} (closing an editor already
+     * open on it) and lets the UI settle, or takes the active form editor when no form is requested. For a
+     * requested form both identity guards run: the opened editor and the representation's own form model
+     * must be that form, so no tool reads another form. Runs on the UI thread.
+     *
+     * @param projectName EDT project name (required with {@code formPath})
+     * @param formPath form FQN, or {@code null}/empty for the active form editor
+     * @param product what the caller returns, named in the wrong-form errors (e.g. "screenshot")
+     * @return the viewer and representation, or the error
+     * @throws Exception when the active form editor cannot be looked up, or the settle wait is interrupted
+     */
+    public static FormEditorTarget resolveFormEditor(String projectName, String formPath, String product)
+        throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
+    {
+        boolean formRequested = formPath != null && !formPath.isEmpty();
+        Object editorPage;
+        if (formRequested)
+        {
+            OpenFormResult openResult = openForm(projectName, formPath);
+            if (!openResult.isSuccess())
+            {
+                return FormEditorTarget.failed(openResult.getError());
+            }
+            IEditorPart editorPart = openResult.getEditorPart();
+            Display display = Display.getCurrent();
+            for (int i = 0; i < 5; i++)
+            {
+                processEvents(display);
+                Thread.sleep(100);
+            }
+            // The page of THIS editor part, not the globally active one.
+            editorPage = waitForFormEditorPageOf(editorPart);
+            if (editorPage == null)
+            {
+                return FormEditorTarget.failed("Form editor opened but WYSIWYG page is not available. " //$NON-NLS-1$
+                    + "The form may still be loading; try again."); //$NON-NLS-1$
+            }
+            String actualFqn = getFormEditorFqn(editorPart);
+            if (actualFqn != null && !fqnMatchesFormPath(actualFqn, formPath))
+            {
+                return FormEditorTarget.failed("The opened form editor does not match the requested form: " //$NON-NLS-1$
+                    + "requested '" + formPath + "' but the editor is '" + actualFqn + "'. No " + product //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + " was taken, so none of another form is returned; try again once the requested form's " //$NON-NLS-1$
+                    + "editor is fully open."); //$NON-NLS-1$
+            }
+        }
+        else
+        {
+            editorPage = getActiveFormEditorPage();
+            if (editorPage == null)
+            {
+                return FormEditorTarget.failed("No active form editor page found. " //$NON-NLS-1$
+                    + "Specify formPath to open a form automatically."); //$NON-NLS-1$
+            }
+        }
+        Object viewer = ReflectionUtils.getFieldValue(editorPage, WYSIWYG_VIEWER_FIELD);
+        if (viewer == null)
+        {
+            return FormEditorTarget.failed("WYSIWYG viewer is not available"); //$NON-NLS-1$
+        }
+        Object representation = getRepresentation(viewer);
+        if (representation == null)
+        {
+            return FormEditorTarget.failed("WYSIWYG representation is not available"); //$NON-NLS-1$
+        }
+        String guardError = representationGuardError(representation, formPath, product);
+        if (guardError != null)
+        {
+            return FormEditorTarget.failed(guardError);
+        }
+        return new FormEditorTarget(viewer, representation, null);
+    }
+
+    /**
+     * Identity guard on the representation's own form model, which the image and the layout are rendered
+     * from; cheap, so it is re-run right before a capture.
+     *
+     * @param representation the {@code FormWysiwygRepresentation} instance
+     * @param formPath the requested form FQN, or {@code null}/empty when none was requested
+     * @param product what the caller returns, named in the error (e.g. "screenshot")
+     * @return {@code null} when no form was requested or the model is that form, otherwise the error
+     */
+    public static String representationGuardError(Object representation, String formPath, String product)
+    {
+        if (formPath == null || formPath.isEmpty() || representationFormMatches(representation, formPath))
+        {
+            return null;
+        }
+        return "The WYSIWYG editor for '" + formPath + "' does not render the requested form model. No " //$NON-NLS-1$ //$NON-NLS-2$
+            + product + " was taken, so none of another form is returned; try again once the requested " //$NON-NLS-1$
+            + "form's editor is fully open."; //$NON-NLS-1$
+    }
+
     /**
      * The form element a capture should bring into view, resolved before any render so an unknown name
      * fails fast. {@link #getItemId()} is meaningful only when {@link #getError()} is {@code null}.
      */
     public static final class ShowElementTarget
     {
+        private final String name;
         private final int itemId;
+        private final boolean onPage;
         private final String error;
 
-        private ShowElementTarget(int itemId, String error)
+        private ShowElementTarget(String name, int itemId, boolean onPage, String error)
         {
+            this.name = name;
             this.itemId = itemId;
+            this.onPage = onPage;
             this.error = error;
+        }
+
+        static ShowElementTarget resolved(String name, int itemId, boolean onPage)
+        {
+            return new ShowElementTarget(name, itemId, onPage, null);
+        }
+
+        static ShowElementTarget failed(String name, String error)
+        {
+            return new ShowElementTarget(name, 0, false, error);
+        }
+
+        /** @return whether a Pages group encloses the element, i.e. showing it may switch a page */
+        public boolean isOnPage()
+        {
+            return onPage;
+        }
+
+        /** @return the element name the caller asked for */
+        public String getName()
+        {
+            return name;
         }
 
         /** @return the form item id to select, valid when {@link #getError()} is {@code null} */
@@ -761,11 +903,10 @@ public final class EditorScreenshotHelper
     }
 
     /**
-     * Resolves the element to show by name in the representation's form model. Needs no render, so it
-     * runs before the render gate: an unknown name fails with an explicit error instead of paying the
-     * render wait or falling into the render-unavailable error. Refused in Java (non-native) render
-     * mode, where the page switch is not driven: a silent capture of the default page would be a wrong
-     * answer.
+     * Resolves the element to show by programmatic name in the representation's form model, with the
+     * same finder every form write uses ({@link FormElementWriter#findUniqueFormItem}). Needs no render,
+     * so it runs before the render gate. Render-mode independent: an unknown name always gets the
+     * not-found error, which names the form and lists its pages.
      *
      * @param representation the {@code FormWysiwygRepresentation} instance
      * @param elementName the element's programmatic name (case-insensitive, as in 1C)
@@ -773,132 +914,132 @@ public final class EditorScreenshotHelper
      */
     public static ShowElementTarget resolveShowElement(Object representation, String elementName)
     {
-        return resolveShowElement(representation, elementName, NativeRenderModeProbe.getNativeRenderMode());
-    }
-
-    static ShowElementTarget resolveShowElement(Object representation, String elementName,
-        NativeRenderModeProbe.NativeRenderMode renderMode)
-    {
-        if (renderMode == NativeRenderModeProbe.NativeRenderMode.OFF)
-        {
-            return new ShowElementTarget(0, "showElement needs the native form render, but EDT runs with " //$NON-NLS-1$
-                + "-DnativeFormLayoutRender=false. Restart EDT with the native render to capture element '" //$NON-NLS-1$
-                + elementName + "'."); //$NON-NLS-1$
-        }
         if (!(getRepresentationForm(representation) instanceof Form form))
         {
-            return new ShowElementTarget(0, "The form model of the WYSIWYG editor is not available"); //$NON-NLS-1$
+            return ShowElementTarget.failed(elementName, "The form model of the WYSIWYG editor is not available"); //$NON-NLS-1$
         }
-        FormItem item = findFormItem(form, elementName);
-        if (item == null)
+        EObject item;
+        try
         {
-            return new ShowElementTarget(0, "Form element '" + elementName + "' was not found in the form. " //$NON-NLS-1$ //$NON-NLS-2$
-                + "Pass the element's programmatic name (e.g. a page name); " //$NON-NLS-1$
-                + "get_metadata_details with the form FQN lists the elements."); //$NON-NLS-1$
+            // The editor's own form model, read on the UI thread the way the WYSIWYG itself reads it.
+            item = FormElementWriter.findUniqueFormItem(form, elementName);
         }
-        return new ShowElementTarget(item.getId(), null);
+        catch (IllegalArgumentException e)
+        {
+            return ShowElementTarget.failed(elementName, e.getMessage()
+                + " get_metadata_details with the form FQN lists every element."); //$NON-NLS-1$
+        }
+        if (!(item instanceof FormItem formItem))
+        {
+            return ShowElementTarget.failed(elementName, elementNotFoundMessage(form, elementName));
+        }
+        return ShowElementTarget.resolved(elementName, formItem.getId(), isInPagesGroup(formItem));
     }
 
-    /**
-     * Brings a resolved form element into view: every Pages group that encloses the element switches to
-     * the page holding it (nested groups included), the same way selecting the element in the form
-     * editor does. The selection is then cleared so no selection frame is painted into the captured
-     * image. Call {@link #restoreDefaultPages(Object)} after reading the image. Must be called on the UI
-     * thread.
-     *
-     * @param representation the {@code FormWysiwygRepresentation} instance
-     * @param target the element resolved by {@link #resolveShowElement(Object, String)}
-     * @param elementName the element name, for error messages
-     * @return {@code null} on success, otherwise a message describing why the element was not shown
-     */
-    public static String showFormElement(Object representation, ShowElementTarget target, String elementName)
+    /** Whether a Pages group encloses the item (a page itself included). */
+    static boolean isInPagesGroup(EObject item)
     {
-        return showFormElement(representation, target, elementName, FRESH_RENDER_WAIT_TIMEOUT_MS);
-    }
-
-    static String showFormElement(Object representation, ShowElementTarget target, String elementName,
-        int timeoutMs)
-    {
-        long deadline = System.currentTimeMillis() + timeoutMs;
-        // Only the synchronous native render is driven here. The editor's own setSelection would also
-        // switch the pages, but in native mode it schedules an asynchronous select-by-id rebuild that can
-        // land after the frame-clearing render below and paint the selection frame back.
-        if (renderUntilReady(representation, new int[] { target.getItemId() }, false,
-            deadline) != RenderOutcome.RENDERED)
+        for (EObject container = item.eContainer(); container != null; container = container.eContainer())
         {
-            return "The form could not be re-rendered to show element '" + elementName //$NON-NLS-1$
-                + "'. Ensure EDT runs with buffered native render " //$NON-NLS-1$
-                + "(VM option -DnativeFormBufferedLayoutRender=true) and try again."; //$NON-NLS-1$
+            if (container instanceof FormGroup group && group.getType() == ManagedFormGroupType.PAGES)
+            {
+                return true;
+            }
         }
-        // An update-only render with an empty selection keeps the switched pages but drops the
-        // selection frame; a full render would bring back the default pages.
-        if (renderUntilReady(representation, new int[0], true, deadline) != RenderOutcome.RENDERED)
-        {
-            return "Element '" + elementName + "' was shown, but the selection frame could not be " //$NON-NLS-1$ //$NON-NLS-2$
-                + "cleared from the image. Try again."; //$NON-NLS-1$
-        }
-        return null;
-    }
-
-    /**
-     * Restores the designer's default pages after a {@code showElement} capture with a plain full
-     * render, so neither the user's editor nor a later capture without {@code showElement} keeps the
-     * switched page. Best effort: a failure is logged, the capture already holds its image.
-     *
-     * @param representation the {@code FormWysiwygRepresentation} instance
-     * @return {@code true} if the full render ran
-     */
-    public static boolean restoreDefaultPages(Object representation)
-    {
-        return restoreDefaultPages(representation, FRESH_RENDER_WAIT_TIMEOUT_MS);
-    }
-
-    static boolean restoreDefaultPages(Object representation, int timeoutMs)
-    {
-        long deadline = System.currentTimeMillis() + timeoutMs;
-        if (renderUntilReady(representation, null, false, deadline) == RenderOutcome.RENDERED)
-        {
-            return true;
-        }
-        Activator.logWarning("Could not restore the default form pages after a showElement capture"); //$NON-NLS-1$
         return false;
     }
 
     /**
-     * Drives a synchronous render, retrying while the hooks report {@code NOT_READY} (the mapping root is
-     * transiently unavailable) until the deadline, as {@link #ensureRenderedFormImage(Object, int, boolean)}
-     * does.
+     * {@link #resolveShowElement(Object, String)} for {@code get_form_screenshot}: the name is resolved
+     * first, so a typo gets not-found in every render mode, and only then is the Java render refused,
+     * where the native select-by-id switch has nothing to drive and the default page would come back.
+     *
+     * @param representation the {@code FormWysiwygRepresentation} instance
+     * @param elementName the element's programmatic name
+     * @return the resolved target, or one carrying the error
      */
-    private static RenderOutcome renderUntilReady(Object representation, int[] selectedIds, boolean updateOnly,
-        long deadline)
+    public static ShowElementTarget resolveShowElementForScreenshot(Object representation, String elementName)
     {
-        RenderOutcome outcome = renderRequestedFormSynchronously(representation, selectedIds, updateOnly);
-        while (outcome == RenderOutcome.NOT_READY && System.currentTimeMillis() < deadline)
+        return resolveShowElementForScreenshot(representation, elementName,
+            NativeRenderModeProbe.getNativeRenderMode());
+    }
+
+    static ShowElementTarget resolveShowElementForScreenshot(Object representation, String elementName,
+        NativeRenderModeProbe.NativeRenderMode renderMode)
+    {
+        ShowElementTarget target = resolveShowElement(representation, elementName);
+        if (target.getError() == null && renderMode == NativeRenderModeProbe.NativeRenderMode.OFF)
         {
-            processEvents(Display.getCurrent());
-            sleep(RENDER_WAIT_POLL_INTERVAL_MS);
-            outcome = renderRequestedFormSynchronously(representation, selectedIds, updateOnly);
+            return ShowElementTarget.failed(elementName, "showElement needs the native form render, but EDT runs " //$NON-NLS-1$
+                + "with -DnativeFormLayoutRender=false. Restart EDT with the native render to capture element '" //$NON-NLS-1$
+                + elementName + "'."); //$NON-NLS-1$
         }
-        return outcome;
+        return target;
     }
 
     /**
-     * Finds a form item by programmatic name anywhere in the form's element tree.
-     *
-     * @param form the form model
-     * @param name the item name, compared case-insensitively
-     * @return the item, or {@code null} if the form has no item with that name
+     * The not-found error for {@code showElement}: names the searched form and lists its pages (the
+     * children of every Pages group, at most {@value #MAX_LISTED_PAGES}), so a typo costs no second call.
      */
-    static FormItem findFormItem(Form form, String name)
+    static String elementNotFoundMessage(Form form, String elementName)
     {
-        for (Iterator<EObject> iter = form.eAllContents(); iter.hasNext();)
+        String formFqn = mdFormFqn(form);
+        StringBuilder message = new StringBuilder("Form element '").append(elementName) //$NON-NLS-1$
+            .append("' was not found in ") //$NON-NLS-1$
+            .append(formFqn != null ? "form '" + formFqn + "'" : "the form").append(". "); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        List<String> pages = pageNames(form);
+        if (pages.isEmpty())
         {
-            if (iter.next() instanceof FormItem item && name.equalsIgnoreCase(item.getName()))
+            message.append("The form has no Pages group, so it has no page to switch to. "); //$NON-NLS-1$
+        }
+        else
+        {
+            message.append("Its pages: ") //$NON-NLS-1$
+                .append(String.join(", ", pages.subList(0, Math.min(pages.size(), MAX_LISTED_PAGES)))); //$NON-NLS-1$
+            if (pages.size() > MAX_LISTED_PAGES)
             {
-                return item;
+                message.append(" and ").append(pages.size() - MAX_LISTED_PAGES).append(" more"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            message.append(". "); //$NON-NLS-1$
+        }
+        return message.append("Pass the element's programmatic name, not its title; get_metadata_details " //$NON-NLS-1$
+            + "with the form FQN lists every element.").toString(); //$NON-NLS-1$
+    }
+
+    /** Names of the pages of every Pages group, in form order, over the persisted item tree. */
+    static List<String> pageNames(Form form)
+    {
+        List<String> names = new ArrayList<>();
+        for (EObject object : PersistedContents.descendants(form))
+        {
+            if (object instanceof FormGroup group && group.getType() == ManagedFormGroupType.PAGES)
+            {
+                for (EObject child : PersistedContents.of(group))
+                {
+                    if (child instanceof FormItem page && page.getName() != null)
+                    {
+                        names.add(page.getName());
+                    }
+                }
             }
         }
-        return null;
+        return names;
+    }
+
+    /** The MD-form FQN of a content form ({@code CommonForm.X}, {@code Catalog.Y.Form.Z}), or {@code null}. */
+    private static String mdFormFqn(Form form)
+    {
+        String fqn = bmGetFqn(form);
+        if (fqn == null)
+        {
+            return null;
+        }
+        String[] parts = fqn.split("\\."); //$NON-NLS-1$
+        if ((parts.length == 3 || parts.length == 5) && isContentFormSeparator(parts[parts.length - 1]))
+        {
+            return fqn.substring(0, fqn.lastIndexOf('.'));
+        }
+        return fqn;
     }
 
     /**
@@ -951,7 +1092,7 @@ public final class EditorScreenshotHelper
      * {@code formImageData} is populated for the requested form. So a non-empty image on the
      * identity-verified representation is the correct, sufficient condition.
      * <p>
-     * The render is still driven <b>synchronously</b> via {@link #renderRequestedFormSynchronously(Object)}
+     * The render is still driven <b>synchronously</b> via {@link #renderRequestedFormSynchronously(Object, int[], boolean)}
      * as a best-effort to populate/refresh the buffer first (it runs the same
      * {@code createHippoSession(tx, this.form, ...)} render the representation's rebuild task runs, on the
      * UI thread without the dropped async scheduling). If that path is unavailable, an asynchronous
@@ -983,7 +1124,7 @@ public final class EditorScreenshotHelper
      * may reuse the same {@link ImageData} instance (which is why instance identity alone was abandoned as
      * a freshness signal, see {@link #ensureRenderedFormImage(Object)});</li>
      * <li>a completed synchronous render pass ({@code RenderOutcome.RENDERED} from
-     * {@link #renderRequestedFormSynchronously(Object)}) is accepted as direct evidence, since it
+     * {@link #renderRequestedFormSynchronously(Object, int[], boolean)}) is accepted as direct evidence, since it
      * reassigns {@code formImageData} inline;</li>
      * <li>if the buffer could not be cleared, a fresh image must at least be a <i>different</i> instance
      * than the pre-existing one (weaker; a false negative here surfaces as an explicit error, never as a
@@ -1037,11 +1178,7 @@ public final class EditorScreenshotHelper
         // render reuses the same ImageData instance. If the field cannot be cleared, fall back to
         // requiring a different instance than the baseline — that can false-negative on instance reuse,
         // which then surfaces as an explicit "could not re-render" error rather than a stale image.
-        boolean requireNewInstance = false;
-        if (forceRefresh && hadPreexistingImage)
-        {
-            requireNewInstance = !clearFormImageData(representation);
-        }
+        boolean requireNewInstance = forceRefresh && hadPreexistingImage && !clearFormImageData(representation);
 
         Display display = Display.getCurrent();
         long deadline = System.currentTimeMillis() + timeoutMs;
@@ -1053,30 +1190,17 @@ public final class EditorScreenshotHelper
         // the editor opens; pump the event loop between attempts so the model finishes loading. Outside
         // force mode this is NOT a gate: as soon as the image is non-empty we return, regardless of why
         // it became non-empty. In force mode the image must additionally be fresh (see above).
-        boolean syncPathReachable = false;
-        while (System.currentTimeMillis() < deadline)
+        // A RENDERED pass reassigned formImageData during this call, so a non-empty image is fresh by
+        // construction in both modes.
+        SyncRender sync = renderSyncUntil(representation, null, false, deadline,
+            outcome -> (outcome == RenderOutcome.RENDERED && hasNonEmptyImage(representation))
+                || hasFreshImage(representation, baseline, requireNewInstance),
+            EditorScreenshotHelper::processCurrentEvents);
+        if (sync.accepted)
         {
-            RenderOutcome outcome = renderRequestedFormSynchronously(representation);
-            if (outcome == RenderOutcome.RENDERED && hasNonEmptyImage(representation))
-            {
-                // A full synchronous render ran during this call and reassigned formImageData, so the
-                // (non-empty) image is fresh by construction — sufficient in both modes.
-                return true;
-            }
-            if (hasFreshImage(representation, baseline, requireNewInstance))
-            {
-                return true;
-            }
-            if (outcome == RenderOutcome.UNREACHABLE)
-            {
-                // The synchronous hooks do not exist on this EDT; stop retrying and use the fallback.
-                break;
-            }
-            syncPathReachable = true;
-            processEvents(display);
-            sleep(RENDER_WAIT_POLL_INTERVAL_MS);
+            return true;
         }
-        if (syncPathReachable)
+        if (sync.reachable)
         {
             // The synchronous hooks are present but did not produce a (fresh) image within the budget; // NOSONAR explanatory comment, not commented-out code
             // one last check (the render task may have settled while pumping events).
@@ -1200,36 +1324,21 @@ public final class EditorScreenshotHelper
      * depended on this path to repopulate it, and timed out instead). The parameter types come from the
      * form bundle's own classloader and are correct by construction.
      *
-     * @param representation the {@code FormWysiwygRepresentation} instance
-     * @return {@link RenderOutcome#RENDERED} if the synchronous render ran to completion,
-     *         {@link RenderOutcome#NOT_READY} if its hooks exist but the mapping root is not yet
-     *         available (retry), or {@link RenderOutcome#UNREACHABLE} if the hooks do not exist on this
-     *         EDT (use the async fallback)
-     */
-    private static RenderOutcome renderRequestedFormSynchronously(Object representation)
-    {
-        return renderRequestedFormSynchronously(representation, null);
-    }
-
-    /**
-     * Same as {@link #renderRequestedFormSynchronously(Object)}, but when {@code selectedIds} is given
-     * the render is driven by a select-by-id event instead of an update event. The native renderer
-     * switches every Pages group that encloses a selected element to the page holding it, exactly as
-     * selecting the element in the form editor does.
+     * <p>
+     * When {@code selectedIds} is given the render is driven by a select-by-id event instead of an
+     * update event: the native renderer switches every Pages group enclosing a selected element to the
+     * page holding it, exactly as selecting the element in the form editor does.
      *
      * @param representation the {@code FormWysiwygRepresentation} instance
      * @param selectedIds form item ids to select ({@code 0} is the form itself), or {@code null} for a
      *            plain update render
-     * @return the render outcome, see {@link #renderRequestedFormSynchronously(Object)}
+     * @param updateOnly {@code false} for a full layout/render pass
+     * @return the outcome
      */
-    private static RenderOutcome renderRequestedFormSynchronously(Object representation, int[] selectedIds)
-    {
-        return renderRequestedFormSynchronously(representation, selectedIds, false);
-    }
-
-    private static RenderOutcome renderRequestedFormSynchronously(Object representation, int[] selectedIds,
+    static SyncRender renderRequestedFormSynchronously(Object representation, int[] selectedIds,
         boolean updateOnly)
     {
+        boolean invoked = false;
         try
         {
             // The form model the representation renders (the same field rebuildInternal would read).
@@ -1242,7 +1351,7 @@ public final class EditorScreenshotHelper
             if (controller == null || rebuildInternal == null || getMappingRoot == null)
             {
                 // This EDT does not expose the synchronous render hooks; signal the async fallback.
-                return RenderOutcome.UNREACHABLE;
+                return SyncRender.of(RenderOutcome.UNREACHABLE);
             }
             // The platform classes come from rebuildInternal's OWN parameter types — resolved by the
             // form bundle's classloader. rebuildInternal(Form, CommandInterfaceMapping,
@@ -1254,14 +1363,14 @@ public final class EditorScreenshotHelper
             {
                 // Not the rebuildInternal(Form, CommandInterfaceMapping, NativeRenderEvent, boolean)
                 // shape this path drives; treat the hooks as absent rather than mis-invoke.
-                return RenderOutcome.UNREACHABLE;
+                return SyncRender.of(RenderOutcome.UNREACHABLE);
             }
             Class<?> cmiMappingClass = paramTypes[1];
             Class<?> nativeRenderEventClass = paramTypes[2];
             if (form == null)
             {
                 // Hooks exist but the form is not set yet; let the caller retry once it loads.
-                return RenderOutcome.NOT_READY;
+                return SyncRender.of(RenderOutcome.NOT_READY);
             }
 
             // Synchronous sibling of getMappingRootAsync: compute the CommandInterfaceMapping root on
@@ -1271,7 +1380,7 @@ public final class EditorScreenshotHelper
             if (cmiMapping == null)
             {
                 // Mapping not ready yet; retry rather than render half-built.
-                return RenderOutcome.NOT_READY;
+                return SyncRender.of(RenderOutcome.NOT_READY);
             }
 
             // NativeRenderEvent.buildUpdateEvent() — the same event rebuild(boolean) constructs — or the
@@ -1284,34 +1393,150 @@ public final class EditorScreenshotHelper
             // Invoke the private rebuildInternal(Form, CommandInterfaceMapping, NativeRenderEvent,
             // boolean) directly: this is the synchronous body the async handler would have run.
             rebuildInternal.setAccessible(true); // NOSONAR reflective access is required (EDT internals, no Require-Bundle)
-            // updateOnly=false → force a full layout/render pass for this form.
+            Object sessionBefore = getHippoSession(representation);
+            invoked = true;
             rebuildInternal.invoke(representation, form, cmiMapping, event, Boolean.valueOf(updateOnly));
-
-            // Drain the redraw the render task scheduled so the offscreen buffer is settled.
-            processEvents(Display.getCurrent());
-            return RenderOutcome.RENDERED;
+            if (sessionBefore != null && getHippoSession(representation) == sessionBefore)
+            {
+                // Every render assigns a new session: an unchanged one means rebuildInternal returned
+                // early (its form had no actual object yet), so nothing was rendered.
+                return SyncRender.of(RenderOutcome.NOT_READY);
+            }
+            return SyncRender.of(RenderOutcome.RENDERED);
         }
         catch (Exception e)
         {
-            // The caller decides on a fallback: ensureRenderedFormImage has the async rebuild, showElement none.
             Activator.logWarning("Synchronous form render failed: " //$NON-NLS-1$
                 + e.getMessage());
-            return RenderOutcome.UNREACHABLE;
+            // A throw from inside rebuildInternal may have left a partial render behind.
+            return SyncRender.of(invoked ? RenderOutcome.FAILED : RenderOutcome.UNREACHABLE);
+        }
+    }
+
+    /** The representation's {@code hippoSession}, replaced by every render; {@code null} if unreadable. */
+    private static Object getHippoSession(Object representation)
+    {
+        try
+        {
+            return ReflectionUtils.getFieldValue(representation, HIPPO_SESSION_FIELD);
+        }
+        catch (Exception e)
+        {
+            return null;
+        }
+    }
+
+    /**
+     * The one synchronous-render retry loop: renders and stops as soon as {@code accept} holds for the
+     * outcome, the hooks turn out to be unreachable or failed, or the deadline passes. The event loop is
+     * pumped only while waiting for the next attempt, never after an accepted render, so a caller can
+     * follow it with another render or a capture before any other editor renders. At least one attempt
+     * always runs, so a caller with an exhausted budget still gets its render.
+     *
+     * @param representation the {@code FormWysiwygRepresentation} instance
+     * @param selectedIds ids for a select-by-id render, or {@code null} for an update render
+     * @param updateOnly {@code false} for a full layout/render pass
+     * @param deadline absolute time in milliseconds after which no new attempt starts
+     * @param accept when the caller is done, given the outcome of the last attempt
+     * @param pump drains the event loop between attempts (the UI event loop in production)
+     * @return the last attempt, whether it was accepted, and whether the hooks were ever reachable
+     */
+    static SyncRender renderSyncUntil(Object representation, int[] selectedIds, boolean updateOnly,
+        long deadline, Predicate<RenderOutcome> accept, Runnable pump)
+    {
+        boolean reachable = false;
+        while (true)
+        {
+            SyncRender attempt = renderRequestedFormSynchronously(representation, selectedIds, updateOnly);
+            if (accept.test(attempt.outcome))
+            {
+                return attempt.finish(true, true);
+            }
+            if (attempt.outcome == RenderOutcome.UNREACHABLE || attempt.outcome == RenderOutcome.FAILED)
+            {
+                return attempt.finish(false, reachable);
+            }
+            reachable = true;
+            if (System.currentTimeMillis() >= deadline)
+            {
+                return attempt.finish(false, true);
+            }
+            // Let the model finish loading before the next attempt.
+            pump.run();
+            sleep(RENDER_WAIT_POLL_INTERVAL_MS);
+        }
+    }
+
+    /** {@link #renderSyncUntil} that is done once a render actually ran. */
+    static SyncRender renderSyncUntilRendered(Object representation, int[] selectedIds, boolean updateOnly,
+        long deadline, Runnable pump)
+    {
+        return renderSyncUntil(representation, selectedIds, updateOnly, deadline,
+            outcome -> outcome == RenderOutcome.RENDERED, pump);
+    }
+
+    /**
+     * Drives a synchronous full render on the UI thread (retried while the model loads), so the layout
+     * read right after it is a whole generation produced during this call.
+     *
+     * @param representation the {@code FormWysiwygRepresentation} instance
+     * @return {@code true} when a render ran
+     */
+    public static boolean renderFormNow(Object representation)
+    {
+        boolean rendered = renderSyncUntilRendered(representation, null, false,
+            System.currentTimeMillis() + FRESH_RENDER_WAIT_TIMEOUT_MS,
+            EditorScreenshotHelper::processCurrentEvents).outcome == RenderOutcome.RENDERED;
+        // Lay the controls out; a rebuild that runs here is a whole layout of this call too.
+        processCurrentEvents();
+        return rendered;
+    }
+
+    /** Drains the pending events of the calling UI thread; a no-op off the UI thread. */
+    static void processCurrentEvents()
+    {
+        processEvents(Display.getCurrent());
+    }
+
+    /** Result of a synchronous render attempt, and of the retry loop around it. */
+    static final class SyncRender
+    {
+        final RenderOutcome outcome;
+        final boolean accepted;
+        final boolean reachable;
+
+        private SyncRender(RenderOutcome outcome, boolean accepted, boolean reachable)
+        {
+            this.outcome = outcome;
+            this.accepted = accepted;
+            this.reachable = reachable;
+        }
+
+        static SyncRender of(RenderOutcome outcome)
+        {
+            return new SyncRender(outcome, false, false);
+        }
+
+        SyncRender finish(boolean isAccepted, boolean wasReachable)
+        {
+            return new SyncRender(outcome, isAccepted, wasReachable);
         }
     }
 
     /**
      * Outcome of an attempt to drive the representation's synchronous render
-     * ({@link #renderRequestedFormSynchronously(Object)}).
+     * ({@link #renderRequestedFormSynchronously(Object, int[], boolean)}).
      */
-    private enum RenderOutcome
+    enum RenderOutcome
     {
-        /** A full synchronous render ran and reassigned {@code formImageData} for the requested form. */
+        /** A synchronous render ran and reassigned {@code formImageData} for the requested form. */
         RENDERED,
         /** The synchronous hooks exist but inputs (form/mapping root) are not ready yet; retry. */
         NOT_READY,
-        /** The synchronous hooks are not present on this EDT; use the async fallback instead. */
-        UNREACHABLE
+        /** The synchronous hooks are not present on this EDT, nothing was rendered. */
+        UNREACHABLE,
+        /** The render was invoked and threw: the editor may hold a partial render. */
+        FAILED
     }
 
     /**

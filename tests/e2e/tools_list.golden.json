@@ -2175,6 +2175,9 @@
         },
         "refresh": {
           "type": "boolean"
+        },
+        "showElement": {
+          "type": "string"
         }
       },
       "required": [],

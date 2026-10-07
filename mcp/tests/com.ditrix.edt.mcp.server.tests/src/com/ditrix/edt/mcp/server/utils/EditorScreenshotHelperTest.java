@@ -23,6 +23,7 @@ import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.form.model.FormFactory;
 import com._1c.g5.v8.dt.form.model.FormField;
 import com._1c.g5.v8.dt.form.model.FormGroup;
+import com._1c.g5.v8.dt.form.model.ManagedFormGroupType;
 
 /**
  * Unit tests for the render-readiness polling and the screenshot identity guard in
@@ -572,32 +573,22 @@ public class EditorScreenshotHelperTest
             rep.asyncRebuilds.get() >= 1);
     }
 
-    // ==================== showElement: form item lookup ====================
-
     @Test
-    public void testFindFormItemInNestedPages()
+    public void testRenderFormNowRunsASynchronousFullRender()
     {
-        Form form = FormFactory.eINSTANCE.createForm();
-        FormGroup pages = FormFactory.eINSTANCE.createFormGroup();
-        pages.setName("Pages"); //$NON-NLS-1$
-        FormGroup page = FormFactory.eINSTANCE.createFormGroup();
-        page.setName("СтраницаДоставка"); //$NON-NLS-1$
-        FormField field = FormFactory.eINSTANCE.createFormField();
-        field.setName("DeliveryAddress"); //$NON-NLS-1$
-        page.getItems().add(field);
-        pages.getItems().add(page);
-        form.getItems().add(pages);
+        // get_form_layout_snapshot's refresh: the layout it then reads comes from this render.
+        FakeSyncRepresentation rep = new FakeSyncRepresentation();
 
-        // 1C names are case-insensitive, Russian names included.
-        assertSame(page, EditorScreenshotHelper.findFormItem(form,
-            "страницадоставка")); //$NON-NLS-1$
-        assertSame(field, EditorScreenshotHelper.findFormItem(form, "deliveryaddress")); //$NON-NLS-1$
-        assertNull(EditorScreenshotHelper.findFormItem(form, "Missing")); //$NON-NLS-1$
+        assertTrue(EditorScreenshotHelper.renderFormNow(rep));
+        assertEquals("a full layout/render pass", Boolean.FALSE, rep.lastUpdateOnly); //$NON-NLS-1$
+        assertEquals("no async rebuild is scheduled", 0, rep.asyncRebuilds.get()); //$NON-NLS-1$
+        assertFalse("without the synchronous hooks nothing is rendered", //$NON-NLS-1$
+            EditorScreenshotHelper.renderFormNow(new Object()));
     }
 
-    // ==================== showElement: resolve, switch, restore ====================
+    // ==================== showElement: resolution ====================
 
-    /** A representation whose {@code form} field holds a real form model with one nested page. */
+    /** A representation whose {@code form} field holds a real form model. */
     private static final class FakeFormRepresentation
     {
         @SuppressWarnings("unused") // read reflectively (getRepresentationForm)
@@ -609,89 +600,179 @@ public class EditorScreenshotHelperTest
         }
     }
 
-    private static Form formWithPage(String pageName, int pageId)
+    private static FormGroup group(String name, int id, ManagedFormGroupType type)
+    {
+        FormGroup group = FormFactory.eINSTANCE.createFormGroup();
+        group.setName(name);
+        group.setId(id);
+        group.setType(type);
+        return group;
+    }
+
+    /** A form with one Pages group holding the given pages, ids 10, 11, ... */
+    private static Form formWithPages(String... pageNames)
     {
         Form form = FormFactory.eINSTANCE.createForm();
-        FormGroup pages = FormFactory.eINSTANCE.createFormGroup();
-        pages.setName("Pages"); //$NON-NLS-1$
-        FormGroup page = FormFactory.eINSTANCE.createFormGroup();
-        page.setName(pageName);
-        page.setId(pageId);
-        pages.getItems().add(page);
+        FormGroup pages = group("Pages", 1, ManagedFormGroupType.PAGES); //$NON-NLS-1$
+        for (int i = 0; i < pageNames.length; i++)
+        {
+            pages.getItems().add(group(pageNames[i], 10 + i, ManagedFormGroupType.PAGE));
+        }
         form.getItems().add(pages);
         return form;
     }
 
-    private static EditorScreenshotHelper.ShowElementTarget resolvedPage(int pageId)
+    @Test
+    public void testResolveShowElementFindsNestedRussianNameCaseInsensitively()
     {
-        EditorScreenshotHelper.ShowElementTarget target = EditorScreenshotHelper.resolveShowElement(
-            new FakeFormRepresentation(formWithPage("Delivery", pageId)), "Delivery", //$NON-NLS-1$ //$NON-NLS-2$
-            NativeRenderModeProbe.NativeRenderMode.ON);
-        assertNull(target.getError());
-        return target;
+        Form form = formWithPages("Основное", "СтраницаДоставка"); //$NON-NLS-1$ //$NON-NLS-2$
+        FormField field = FormFactory.eINSTANCE.createFormField();
+        field.setName("АдресДоставки"); //$NON-NLS-1$
+        field.setId(42);
+        ((FormGroup)((FormGroup)form.getItems().get(0)).getItems().get(1)).getItems().add(field);
+
+        EditorScreenshotHelper.ShowElementTarget page = EditorScreenshotHelper.resolveShowElement(
+            new FakeFormRepresentation(form), "страницадоставка"); //$NON-NLS-1$
+        assertNull(page.getError());
+        assertEquals(11, page.getItemId());
+        assertEquals("страницадоставка", page.getName()); //$NON-NLS-1$
+
+        EditorScreenshotHelper.ShowElementTarget nested = EditorScreenshotHelper.resolveShowElement(
+            new FakeFormRepresentation(form), "адресдоставки"); //$NON-NLS-1$
+        assertNull(nested.getError());
+        assertEquals(42, nested.getItemId());
+
+        EditorScreenshotHelper.ShowElementTarget english = EditorScreenshotHelper.resolveShowElement(
+            new FakeFormRepresentation(formWithPages("Main", "Delivery")), "DELIVERY"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull(english.getError());
+        assertEquals(11, english.getItemId());
     }
 
     @Test
-    public void testResolveShowElementFindsItemId()
+    public void testResolveShowElementTellsWhetherAPagesGroupEnclosesIt()
     {
-        assertEquals(7, resolvedPage(7).getItemId());
+        Form form = formWithPages("Main", "Extra"); //$NON-NLS-1$ //$NON-NLS-2$
+        FormField onPage = FormFactory.eINSTANCE.createFormField();
+        onPage.setName("OnPage"); //$NON-NLS-1$
+        onPage.setId(40);
+        ((FormGroup)((FormGroup)form.getItems().get(0)).getItems().get(1)).getItems().add(onPage);
+        FormField header = FormFactory.eINSTANCE.createFormField();
+        header.setName("Header"); //$NON-NLS-1$
+        header.setId(41);
+        FormGroup plainGroup = group("Top", 2, ManagedFormGroupType.USUAL_GROUP); //$NON-NLS-1$
+        plainGroup.getItems().add(header);
+        form.getItems().add(plainGroup);
+        FakeFormRepresentation rep = new FakeFormRepresentation(form);
+
+        assertTrue(EditorScreenshotHelper.resolveShowElement(rep, "OnPage").isOnPage()); //$NON-NLS-1$
+        assertTrue("a page itself lies in its Pages group", //$NON-NLS-1$
+            EditorScreenshotHelper.resolveShowElement(rep, "Extra").isOnPage()); //$NON-NLS-1$
+        assertFalse("outside every Pages group nothing has to switch", //$NON-NLS-1$
+            EditorScreenshotHelper.resolveShowElement(rep, "Header").isOnPage()); //$NON-NLS-1$
+        assertFalse(EditorScreenshotHelper.resolveShowElement(rep, "Pages").isOnPage()); //$NON-NLS-1$
     }
 
     @Test
-    public void testResolveShowElementUnknownNameNamesTheValue()
+    public void testResolveShowElementRefusesAnAmbiguousName()
     {
+        // The shared strict finder refuses a name two items share; a first-match finder picked one.
+        Form form = formWithPages("Main", "Extra"); //$NON-NLS-1$ //$NON-NLS-2$
+        FormGroup pages = (FormGroup)form.getItems().get(0);
+        for (int i = 0; i < 2; i++)
+        {
+            FormField field = FormFactory.eINSTANCE.createFormField();
+            field.setName("Twin"); //$NON-NLS-1$
+            field.setId(50 + i);
+            ((FormGroup)pages.getItems().get(i)).getItems().add(field);
+        }
+
         EditorScreenshotHelper.ShowElementTarget target = EditorScreenshotHelper.resolveShowElement(
-            new FakeFormRepresentation(formWithPage("Delivery", 7)), "NoSuchPage", //$NON-NLS-1$ //$NON-NLS-2$
-            NativeRenderModeProbe.NativeRenderMode.ON);
+            new FakeFormRepresentation(form), "Twin"); //$NON-NLS-1$
         assertNotNull(target.getError());
-        assertTrue(target.getError().contains("'NoSuchPage' was not found")); //$NON-NLS-1$
+        assertTrue(target.getError(), target.getError().contains("'Twin' is ambiguous")); //$NON-NLS-1$
+        assertTrue(target.getError(), target.getError().contains("get_metadata_details")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testResolveShowElementUnknownNameListsThePages()
+    {
+        EditorScreenshotHelper.ShowElementTarget target = EditorScreenshotHelper.resolveShowElement(
+            new FakeFormRepresentation(formWithPages("PageMain", "PageExtra")), "NoSuchPage"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        String error = target.getError();
+        assertNotNull(error);
+        assertTrue(error, error.contains("Form element 'NoSuchPage' was not found in ")); //$NON-NLS-1$
+        assertTrue(error, error.contains("Its pages: PageMain, PageExtra.")); //$NON-NLS-1$
+        assertTrue(error, error.contains("not its title")); //$NON-NLS-1$
+        assertTrue(error, error.contains("get_metadata_details with the form FQN")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNotFoundListsAtMostTwentyPages()
+    {
+        String[] names = new String[25];
+        for (int i = 0; i < names.length; i++)
+        {
+            names[i] = "P" + i; //$NON-NLS-1$
+        }
+        String error = EditorScreenshotHelper.resolveShowElement(new FakeFormRepresentation(formWithPages(names)),
+            "Missing").getError(); //$NON-NLS-1$
+        assertTrue(error, error.contains("P0, P1,")); //$NON-NLS-1$
+        assertTrue(error, error.contains(", P19 and 5 more.")); //$NON-NLS-1$
+        assertFalse(error, error.contains("P20")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNotFoundOnAFormWithoutPagesSaysSo()
+    {
+        Form form = FormFactory.eINSTANCE.createForm();
+        form.getItems().add(group("Header", 1, ManagedFormGroupType.USUAL_GROUP)); //$NON-NLS-1$
+        String error = EditorScreenshotHelper.resolveShowElement(new FakeFormRepresentation(form), "Missing") //$NON-NLS-1$
+            .getError();
+        assertTrue(error, error.contains("The form has no Pages group")); //$NON-NLS-1$
+        assertFalse(error, error.contains("Its pages")); //$NON-NLS-1$
     }
 
     @Test
     public void testResolveShowElementWithoutFormModel()
     {
         EditorScreenshotHelper.ShowElementTarget target = EditorScreenshotHelper.resolveShowElement(
-            new FakeRepresentation(), "Delivery", NativeRenderModeProbe.NativeRenderMode.ON); //$NON-NLS-1$
+            new FakeRepresentation(), "Delivery"); //$NON-NLS-1$
         assertEquals("The form model of the WYSIWYG editor is not available", target.getError()); //$NON-NLS-1$
     }
 
     @Test
-    public void testResolveShowElementRefusedInJavaRenderMode()
+    public void testScreenshotRefusesJavaRenderOnlyForAResolvedName()
     {
-        // The Java render does not switch pages on a select-by-id render; a success here would return
-        // the default page for the requested one.
-        EditorScreenshotHelper.ShowElementTarget target = EditorScreenshotHelper.resolveShowElement(
-            new FakeFormRepresentation(formWithPage("Delivery", 7)), "Delivery", //$NON-NLS-1$ //$NON-NLS-2$
-            NativeRenderModeProbe.NativeRenderMode.OFF);
-        assertNotNull(target.getError());
-        assertTrue(target.getError().contains("-DnativeFormLayoutRender=false")); //$NON-NLS-1$
+        FakeFormRepresentation rep = new FakeFormRepresentation(formWithPages("Main", "Delivery")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // A typo gets not-found in Java render mode too, never the restart-EDT refusal.
+        String typo = EditorScreenshotHelper.resolveShowElementForScreenshot(rep, "Delivry", //$NON-NLS-1$
+            NativeRenderModeProbe.NativeRenderMode.OFF).getError();
+        assertTrue(typo, typo.contains("'Delivry' was not found")); //$NON-NLS-1$
+        assertFalse(typo, typo.contains("nativeFormLayoutRender")); //$NON-NLS-1$
+
+        String refused = EditorScreenshotHelper.resolveShowElementForScreenshot(rep, "Delivery", //$NON-NLS-1$
+            NativeRenderModeProbe.NativeRenderMode.OFF).getError();
+        assertTrue(refused, refused.contains("-DnativeFormLayoutRender=false")); //$NON-NLS-1$
+
+        for (NativeRenderModeProbe.NativeRenderMode mode : new NativeRenderModeProbe.NativeRenderMode[] {
+            NativeRenderModeProbe.NativeRenderMode.ON, NativeRenderModeProbe.NativeRenderMode.UNKNOWN })
+        {
+            EditorScreenshotHelper.ShowElementTarget target =
+                EditorScreenshotHelper.resolveShowElementForScreenshot(rep, "Delivery", mode); //$NON-NLS-1$
+            assertNull(mode.toString(), target.getError());
+            assertEquals(11, target.getItemId());
+        }
     }
 
     @Test
-    public void testShowFormElementFailsWhenRenderIsUnreachable()
+    public void testPageNamesWalkEveryPagesGroup()
     {
-        // FakeRepresentation has no synchronous render hooks; showElement has no async fallback.
-        String error = EditorScreenshotHelper.showFormElement(new FakeRepresentation(), resolvedPage(7),
-            "Delivery", SHORT_TIMEOUT_MS); //$NON-NLS-1$
-        assertNotNull(error);
-        assertTrue(error.contains("could not be re-rendered to show element 'Delivery'")); //$NON-NLS-1$
-    }
+        Form form = formWithPages("A", "B"); //$NON-NLS-1$ //$NON-NLS-2$
+        FormGroup nested = group("Inner", 30, ManagedFormGroupType.PAGES); //$NON-NLS-1$
+        nested.getItems().add(group("C", 31, ManagedFormGroupType.PAGE)); //$NON-NLS-1$
+        ((FormGroup)((FormGroup)form.getItems().get(0)).getItems().get(0)).getItems().add(nested);
 
-    @Test
-    public void testShowFormElementSelectsThenClearsThenRestores()
-    {
-        FakeSyncRepresentation rep = new FakeSyncRepresentation();
-
-        assertNull(EditorScreenshotHelper.showFormElement(rep, resolvedPage(7), "Delivery", //$NON-NLS-1$
-            SHORT_TIMEOUT_MS));
-        // The last render is the update-only one with an empty selection: pages stay, frame goes.
-        assertEquals(Boolean.TRUE, rep.lastUpdateOnly);
-        assertEquals(0, ((FakeNativeRenderEvent)rep.lastEvent).selectedIds.length);
-
-        assertTrue(EditorScreenshotHelper.restoreDefaultPages(rep, SHORT_TIMEOUT_MS));
-        // Restoring is a plain full render (update event), which brings back the default pages.
-        assertEquals(Boolean.FALSE, rep.lastUpdateOnly);
-        assertNull(((FakeNativeRenderEvent)rep.lastEvent).selectedIds);
-        assertEquals(0, rep.asyncRebuilds.get());
+        assertEquals(java.util.List.of("A", "B", "C"), EditorScreenshotHelper.pageNames(form)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 }
