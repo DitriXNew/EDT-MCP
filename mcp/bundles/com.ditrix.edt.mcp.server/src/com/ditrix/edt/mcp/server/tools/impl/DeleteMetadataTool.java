@@ -1759,7 +1759,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             // Resolved BEFORE the gate: an unavailable platform service must refuse, not ask the user
             // to authorize a delete that cannot run.
             final FormAttributeDeleter attributeDeleter = attributeDeleterFor(data, normFqn);
-            final Set<String> authorizedScope = data.scope;
+            final List<String> authorizedScope = data.scope;
             return gateFormMemberDelete(normFqn, ref, handler, data,
                 () -> performFormDelete(fctx, normFqn, ref, handler, version, attributeDeleter,
                     authorizedScope));
@@ -2064,7 +2064,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      */
     String performFormDelete(FormElementWriter.FormEditContext fctx, String normFqn,
         FormElementWriter.FormMemberRef ref, boolean handler, Version version,
-        FormAttributeDeleter attributeDeleter, Set<String> authorizedScope)
+        FormAttributeDeleter attributeDeleter, List<String> authorizedScope)
     {
         final String[] capturedType = new String[1];
         final AttributeDeleteOutcome[] outcome = new AttributeDeleteOutcome[1];
@@ -2262,32 +2262,45 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * Everything EDT's delete of {@code attribute} takes, as stable identities (containment path by
      * name, then EClass) that survive into another transaction: the attribute and its own members,
      * each removed item with its subtree, each dropped additional-column entry with its columns, and
-     * each detached extInfo object. The consent covers exactly this set.
+     * each detached extInfo object. The consent covers exactly this multiset: one identity per
+     * object, so same-named siblings count separately.
      *
      * @param formModel the tx-bound content form
      * @param attribute the attribute or column being deleted
      * @param plan EDT's prediction for it
      * @return the sorted identities
+     * @throws FormValidationException when a walk hit its node bound - a cut scope authorizes nothing
      */
-    static Set<String> scopeOf(EObject formModel, EObject attribute, FormAttributeDeletion.Plan plan)
+    static List<String> scopeOf(EObject formModel, EObject attribute, FormAttributeDeletion.Plan plan)
     {
-        List<EObject> members = new ArrayList<>();
-        members.add(attribute);
-        collectRemovedObjects(attribute, members);
+        List<EObject> walked = new ArrayList<>();
+        walked.add(attribute);
+        boolean truncated = collectRemovedObjects(attribute, walked);
         for (EObject root : plan.bound)
         {
-            members.add(root);
-            collectRemovedObjects(root, members);
+            walked.add(root);
+            truncated |= collectRemovedObjects(root, walked);
         }
         for (EObject entry : plan.additionalColumns)
         {
-            members.add(entry);
-            collectRemovedObjects(entry, members);
+            walked.add(entry);
+            truncated |= collectRemovedObjects(entry, walked);
         }
-        Set<String> scope = new java.util.TreeSet<>();
-        for (EObject member : members)
+        if (truncated)
         {
-            scope.add(identityOf(formModel, member));
+            throw new FormValidationException(ToolResult.error("Cannot delete this form attribute: its removal " //$NON-NLS-1$
+                + "scope is larger than " + FormStructureReader.MAX_NODES + " members, so nothing was changed. " //$NON-NLS-1$ //$NON-NLS-2$
+                + "Delete its contents first, or delete it in the EDT form designer.").toJson()); //$NON-NLS-1$
+        }
+        // A bound item inside another bound item is walked twice; each object counts once.
+        Set<EObject> members = Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        List<String> scope = new ArrayList<>();
+        for (EObject member : walked)
+        {
+            if (members.add(member))
+            {
+                scope.add(identityOf(formModel, member));
+            }
         }
         String owner = identityOf(formModel, attribute);
         for (FormAttributeDeletion.Detached detached : plan.detached)
@@ -2299,10 +2312,14 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         {
             scope.add("(bound items kept)"); //$NON-NLS-1$
         }
+        Collections.sort(scope);
         return scope;
     }
 
-    /** {@code feature[name]/...:EClass} from the form down; an unnamed list member is keyed by index. */
+    /**
+     * {@code feature[name]/...:EClass} from the form down. An additional-column entry is keyed by its
+     * table path (plus {@code #n} for the n-th repeat), any other unnamed list member by its index.
+     */
     private static String identityOf(EObject formModel, EObject member)
     {
         Deque<String> segments = new ArrayDeque<>();
@@ -2311,11 +2328,31 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             EStructuralFeature feature = object.eContainingFeature();
             String name = ownNameOf(object);
             String key = name != null ? name
+                : object instanceof FormAttributeAdditionalColumns ? tablePathKeyOf(object)
                 : feature != null && feature.isMany()
                     ? "#" + ((List<?>)object.eContainer().eGet(feature)).indexOf(object) : ""; //$NON-NLS-1$ //$NON-NLS-2$
             segments.push((feature == null ? "?" : feature.getName()) + '[' + key + ']'); //$NON-NLS-1$
         }
         return String.join("/", segments) + ':' + member.eClass().getName(); //$NON-NLS-1$
+    }
+
+    /** An additional-column entry's table path, with {@code #n} when n earlier siblings share it. */
+    private static String tablePathKeyOf(EObject entry)
+    {
+        String path = tablePathOf(entry);
+        int repeat = 0;
+        for (Object sibling : (List<?>)entry.eContainer().eGet(entry.eContainingFeature()))
+        {
+            if (sibling == entry)
+            {
+                break;
+            }
+            if (sibling instanceof EObject && path.equals(tablePathOf((EObject)sibling)))
+            {
+                repeat++;
+            }
+        }
+        return repeat == 0 ? path : path + '#' + repeat;
     }
 
     /** A readable name for a scope identity: the last segment's name, else its feature. */
@@ -2345,25 +2382,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * @param now what EDT's delete would take now
      * @return the ready error JSON
      */
-    static String scopeChangedError(String normFqn, Set<String> authorized, Set<String> now)
+    static String scopeChangedError(String normFqn, List<String> authorized, List<String> now)
     {
-        Set<String> covered = authorized == null ? Collections.emptySet() : authorized;
-        List<String> added = new ArrayList<>();
-        List<String> gone = new ArrayList<>();
-        for (String identity : now)
-        {
-            if (!covered.contains(identity))
-            {
-                added.add(labelOf(identity));
-            }
-        }
-        for (String identity : covered)
-        {
-            if (!now.contains(identity))
-            {
-                gone.add(labelOf(identity));
-            }
-        }
+        List<String> covered = authorized == null ? Collections.emptyList() : authorized;
+        List<String> added = labelsMissingFrom(now, covered);
+        List<String> gone = labelsMissingFrom(covered, now);
         StringBuilder sb = new StringBuilder("The form changed since the preview: EDT's delete of '") //$NON-NLS-1$
             .append(normFqn).append("' would now"); //$NON-NLS-1$
         if (!added.isEmpty())
@@ -2378,6 +2401,21 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         }
         return ToolResult.error(sb.append(". Nothing was changed - call delete_metadata with confirm=false " //$NON-NLS-1$
             + "to see what it removes now, then confirm that.").toString()).toJson(); //$NON-NLS-1$
+    }
+
+    /** The labels of {@code from}'s identities left after removing {@code other}'s, counting repeats. */
+    private static List<String> labelsMissingFrom(List<String> from, List<String> other)
+    {
+        List<String> rest = new ArrayList<>(other);
+        List<String> labels = new ArrayList<>();
+        for (String identity : from)
+        {
+            if (!rest.remove(identity))
+            {
+                labels.add(labelOf(identity));
+            }
+        }
+        return labels;
     }
 
     private static String labelsOf(List<String> labels)
@@ -2404,10 +2442,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      * @return what was removed, unbound and detached
      */
     static AttributeDeleteOutcome deleteAttributeInTx(EObject formModel, EObject target, IBmTransaction tx,
-        FormAttributeDeleter deleter, String normFqn, Set<String> authorizedScope)
+        FormAttributeDeleter deleter, String normFqn, List<String> authorizedScope)
     {
         FormAttributeDeletion.Plan plan = deleter.plan(formModel, target);
-        Set<String> scope = scopeOf(formModel, target, plan);
+        List<String> scope = scopeOf(formModel, target, plan);
         if (!scope.equals(authorizedScope))
         {
             throw new FormValidationException(scopeChangedError(normFqn, authorizedScope, scope));
@@ -4164,7 +4202,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
          * What the consent covers for an attribute delete, as {@link #scopeOf} identities;
          * {@code null} for any other member. The confirmed delete recomputes it and refuses a change.
          */
-        Set<String> scope;
+        List<String> scope;
 
         /** Counts a removed member and lists it while the list has room. */
         void addRemoved(EObject member, boolean contained)

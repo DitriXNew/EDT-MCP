@@ -69,6 +69,7 @@ import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.FormAttributeDeletion;
 import com.ditrix.edt.mcp.server.utils.FormEditContextTestAccess;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
+import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
 import com.ditrix.edt.mcp.server.utils.RefusalsTestAccess;
 
@@ -465,7 +466,7 @@ public class DeleteMetadataFormAttributeTest
     public void testConfirmedMainAttributeDeleteKeepsTheRootExtInfo()
     {
         Form form = itemForm("Object"); //$NON-NLS-1$
-        Set<String> scope = preview(form, named(form, "Object")).scope; //$NON-NLS-1$
+        List<String> scope = preview(form, named(form, "Object")).scope; //$NON-NLS-1$
         DeleteMetadataTool.AttributeDeleteOutcome outcome = DeleteMetadataTool.deleteAttributeInTx(form,
             named(form, "Object"), null, deleter(edt(), (tx, a) -> //$NON-NLS-1$
             {
@@ -502,7 +503,7 @@ public class DeleteMetadataFormAttributeTest
     }
 
     /** Runs the confirmed delete through the emulated write boundary; it must fail. */
-    private static void assertConfirmFails(Set<String> authorizedScope,
+    private static void assertConfirmFails(List<String> authorizedScope,
         BiConsumer<IBmTransaction, EObject> delete, AtomicReference<Form> committed,
         AtomicReference<Form> working, IProject project)
     {
@@ -724,7 +725,7 @@ public class DeleteMetadataFormAttributeTest
 
     // ---- consent vs write scope: the form changed between preview and confirm (review P1) --------
 
-    private static String refusalOf(Form form, EObject attribute, Set<String> authorized, List<EObject> calls)
+    private static String refusalOf(Form form, EObject attribute, List<String> authorized, List<EObject> calls)
     {
         try
         {
@@ -744,7 +745,7 @@ public class DeleteMetadataFormAttributeTest
     {
         Form form = itemForm("Object"); //$NON-NLS-1$
         FormAttribute object = named(form, "Object"); //$NON-NLS-1$
-        Set<String> authorized = preview(form, object).scope;
+        List<String> authorized = preview(form, object).scope;
         form.getItems().add(field("Late", "Object", "Late")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         List<EObject> calls = new ArrayList<>();
         String json = refusalOf(form, object, authorized, calls);
@@ -763,7 +764,7 @@ public class DeleteMetadataFormAttributeTest
     {
         Form form = tableForm();
         FormAttribute rows = named(form, "Rows"); //$NON-NLS-1$
-        Set<String> authorized = preview(form, rows).scope;
+        List<String> authorized = preview(form, rows).scope;
         Decoration late = F.createDecoration();
         late.setName("LateHint"); //$NON-NLS-1$
         ((Table)item(form, "RowsTable")).getItems().add(late); //$NON-NLS-1$
@@ -778,10 +779,73 @@ public class DeleteMetadataFormAttributeTest
     {
         Form form = itemForm("Object"); //$NON-NLS-1$
         FormAttribute object = named(form, "Object"); //$NON-NLS-1$
-        Set<String> authorized = preview(form, object).scope;
+        List<String> authorized = preview(form, object).scope;
         EcoreUtil.remove(item(form, "Description")); //$NON-NLS-1$
         String json = refusalOf(form, object, authorized, new ArrayList<>());
         assertTrue(json, json.contains("no longer remove 1 member(s) it did cover (Description)")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testADuplicateSiblingAddedAfterThePreviewIsRefused()
+    {
+        // Same name, same type, same place: only the COUNT tells the two scopes apart.
+        Form form = tableForm();
+        FormAttribute rows = named(form, "Rows"); //$NON-NLS-1$
+        List<String> authorized = preview(form, rows).scope;
+        Decoration twin = F.createDecoration();
+        twin.setName("RowsHint"); //$NON-NLS-1$
+        ((Table)item(form, "RowsTable")).getItems().add(twin); //$NON-NLS-1$
+        List<EObject> calls = new ArrayList<>();
+        String json = refusalOf(form, rows, authorized, calls);
+        assertTrue(json, json.contains("also remove 1 member(s) the confirmation did not cover (RowsHint)")); //$NON-NLS-1$
+        assertTrue(calls.isEmpty());
+    }
+
+    @Test
+    public void testReorderedAdditionalColumnsKeepTheirScope()
+    {
+        // An additional-column entry is identified by its table path, not by its list position.
+        Form form = nestedColumnForm();
+        FormAttributeColumn sub = column(form, "Sub"); //$NON-NLS-1$
+        List<String> authorized = preview(form, sub).scope;
+        assertTrue(authorized.toString(),
+            authorized.stream().anyMatch(identity -> identity.contains("additionalColumns[Rows.Sub]/"))); //$NON-NLS-1$
+        named(form, "Rows").getAdditionalColumns().move(0, 2); // 'Rows.Subway' (kept) moves to the front //$NON-NLS-1$
+        List<EObject> calls = new ArrayList<>();
+        DeleteMetadataTool.deleteAttributeInTx(form, sub, null, deleter(edt(), (tx, column) ->
+        {
+            calls.add(column);
+            EcoreUtil.remove(column);
+        }), FQN, authorized);
+        assertEquals("the reorder does not change what the delete takes", List.of(sub), calls); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAScopeLargerThanTheWalkBoundIsRefused()
+    {
+        // A cut walk cannot authorize anything: preview and confirm both refuse.
+        Form form = tableForm();
+        FormAttribute rows = named(form, "Rows"); //$NON-NLS-1$
+        for (int i = 0; i <= FormStructureReader.MAX_NODES; i++)
+        {
+            FormAttributeColumn column = F.createFormAttributeColumn();
+            column.setName("C" + i); //$NON-NLS-1$
+            rows.getColumns().add(column);
+        }
+        String expected = "its removal scope is larger than " + FormStructureReader.MAX_NODES + " members"; //$NON-NLS-1$ //$NON-NLS-2$
+        try
+        {
+            preview(form, rows);
+            fail("the preview must refuse a scope it could not walk to the end"); //$NON-NLS-1$
+        }
+        catch (FormValidationException e)
+        {
+            assertTrue(e.json(), e.json().contains(expected));
+        }
+        List<EObject> calls = new ArrayList<>();
+        String json = refusalOf(form, rows, List.of(), calls);
+        assertTrue(json, json.contains(expected));
+        assertTrue("EDT's delete never ran", calls.isEmpty()); //$NON-NLS-1$
     }
 
     @Test
@@ -791,7 +855,7 @@ public class DeleteMetadataFormAttributeTest
         // transaction (here: on an equal copy) authorizes the same delete.
         Form form = itemForm("Object"); //$NON-NLS-1$
         Form previewed = itemForm("Object"); //$NON-NLS-1$
-        Set<String> authorized = preview(previewed, named(previewed, "Object")).scope; //$NON-NLS-1$
+        List<String> authorized = preview(previewed, named(previewed, "Object")).scope; //$NON-NLS-1$
         List<EObject> calls = new ArrayList<>();
         DeleteMetadataTool.deleteAttributeInTx(form, named(form, "Object"), null, deleter(edt(), (tx, a) -> //$NON-NLS-1$
         {
@@ -806,7 +870,7 @@ public class DeleteMetadataFormAttributeTest
     {
         Form live = itemForm("Object"); //$NON-NLS-1$
         Form previewed = itemForm("Object"); //$NON-NLS-1$
-        Set<String> authorized = preview(previewed, named(previewed, "Object")).scope; //$NON-NLS-1$
+        List<String> authorized = preview(previewed, named(previewed, "Object")).scope; //$NON-NLS-1$
         live.getItems().add(field("Late", "Object", "Late")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         AtomicReference<Form> committed = new AtomicReference<>(live);
         AtomicReference<Form> working = new AtomicReference<>();
