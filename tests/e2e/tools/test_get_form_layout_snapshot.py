@@ -405,3 +405,65 @@ def test_wrong_type_token_in_formpath_errors_clearly():
     assert_error_quality(msg, names=[bad_form], suggests=["CommonForm.FormName"],
                          ctx="wrong-type-token formPath names value and shows the expected format")
     assert_no_diff("a rejected call must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# showElement (the fixture CommonForm.Form has a Pages group "Pages" with the
+# pages PageMain and PageExtra; ExtraPageLabel sits on PageExtra)
+# ──────────────────────────────────────────────────────────────────────────────
+def _normalized_body(r):
+    """The YAML body with SnakeYAML's line folding undone and '' unescaped, so a long
+    error message can be matched as one string."""
+    return " ".join((r.text or "").split()).replace("''", "'")
+
+
+@e2e_test(tool="get_form_layout_snapshot", kind="read")
+def test_show_element_unknown_name_names_the_form_and_lists_its_pages():
+    """An unknown showElement fails with the same not-found error get_form_screenshot
+    gives: it names the value and the searched form and lists the form's pages. It is
+    resolved by name before any render-mode check, so it holds in every render mode."""
+    r = call("get_form_layout_snapshot", {
+        "projectName": PROJECT,
+        "formPath": "CommonForm.Form",
+        "showElement": "NoSuchElementXyz",
+    })
+    _assert_is_failure(r, "unknown showElement")
+    body = _normalized_body(r)
+    if not any(s in body for s in _RENDER_UNAVAILABLE_SENTINELS):
+        assert "'NoSuchElementXyz' was not found in form 'CommonForm.Form'" in body, (
+            "the not-found error must name the value and the searched form:\n%s" % body[:600])
+        assert "Its pages: PageMain, PageExtra." in body, (
+            "the not-found error must list the form's pages:\n%s" % body[:600])
+        assert_error_quality(body, names=["NoSuchElementXyz"], suggests=["get_metadata_details"],
+                             ctx="unknown showElement names the value and the element-listing tool")
+    assert_no_diff("snapshotting a form is read-only; nothing may change on disk")
+
+
+@e2e_test(tool="get_form_layout_snapshot", kind="read")
+def test_show_element_on_a_non_default_page_has_bounds_or_an_explicit_refusal():
+    """ExtraPageLabel sits on the non-default page PageExtra. The Java render lays out
+    every page, so its bounds must come back as shownElement. In native render mode no
+    element has bounds, and the tool must refuse explicitly rather than return a
+    snapshot that silently lacks the element. Never a not-found: the element exists."""
+    r = call("get_form_layout_snapshot", {
+        "projectName": PROJECT,
+        "formPath": "CommonForm.Form",
+        "showElement": "extrapagelabel",
+    })
+    assert_ok(r, "snapshot with showElement")
+    body = _normalized_body(r)
+    assert "was not found" not in body, "an existing element must not be reported missing:\n%s" % body[:600]
+    if "success: true" in body:
+        assert_contains(body, "shownElement: name: ExtraPageLabel bounds:",
+                        "a successful showElement snapshot must return the element and its bounds")
+        assert_contains(body, "formPath: CommonForm.Form", "the snapshot must echo the requested formPath")
+    else:
+        _assert_is_failure(r, "showElement without bounds")
+        native = ("cannot change get_form_layout_snapshot in native render mode" in body
+                  and "get_form_screenshot with showElement" in body)
+        no_bounds = "'extrapagelabel' exists in the form but has no calculated bounds" in body
+        render = any(s in body for s in _RENDER_UNAVAILABLE_SENTINELS)
+        assert native or no_bounds or render, (
+            "a showElement snapshot that cannot return the element's bounds must say why "
+            "(native-render refusal, no-bounds diagnosis, or a render sentinel):\n%s" % body[:600])
+    assert_no_diff("snapshotting a form is read-only; nothing may change on disk")

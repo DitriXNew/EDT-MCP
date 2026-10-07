@@ -7,6 +7,7 @@ Return a YAML snapshot of a form's calculated WYSIWYG layout (bounds, element ty
 | --- | --- | --- | --- |
 | projectName | — | string | EDT project name. Required when formPath is specified. |
 | formPath | — | string | Form FQN (e.g. 'Catalog.Products.Forms.ItemForm' or 'CommonForm.MyForm'); if omitted, uses the active form editor. |
+| showElement | — | string | Name of a form element (e.g. an element on a non-default page) whose calculated bounds the snapshot must contain; returned as shownElement, or an error when it has none. |
 | refresh | — | boolean | Force WYSIWYG refresh before snapshot (default: true) |
 | mode | — | string (one of: compact, full) | Output mode: 'compact' (default, visible elements only) or 'full' (all nodes/properties) |
 
@@ -30,6 +31,7 @@ No buffered-render JVM flag is required for this tool's element tree or form-lev
 - `formPath` - metadata FQN of the form. If given, the tool opens and activates that form automatically. If omitted, the currently active form editor is used.
 - `refresh` - force a WYSIWYG refresh before capturing; default `true`. Set `false` to read the last-rendered state without re-laying-out.
 - `mode` - `compact` (default) or `full`; an unknown value returns an error.
+- `showElement` - programmatic name of a form element (case-insensitive; the name, not the title), typically one on a non-default page. Nothing is switched in the editor: with `-DnativeFormLayoutRender=false` EDT lays out every page of a Pages group, so the elements of every page already have bounds in the snapshot (pages share their Pages group's area, so their bounds overlap). `showElement` confirms the element has calculated bounds and returns them as `shownElement`; if it has none, the call fails and says why. In native render mode no element has bounds on any page, so a known name is refused and points at `get_form_screenshot` with `showElement` (to see the page) or at relaunching EDT with `-DnativeFormLayoutRender=false`. An unknown name fails in every render mode with an error that names the form and lists its pages (at most 20).
 
 ### formPath format
 `MetadataType.ObjectName.Forms.FormName`, or `CommonForm.FormName` for a common form. Examples:
@@ -45,6 +47,7 @@ No buffered-render JVM flag is required for this tool's element tree or form-lev
 - Active editor, default compact: `{}`.
 - Specific form: `{projectName: "MyProj", formPath: "Catalog.Products.Forms.ItemForm"}`.
 - Full tree, no refresh: `{formPath: "CommonForm.MyForm", projectName: "MyProj", mode: "full", refresh: false}`.
+- Bounds of an element on another page: `{projectName: "MyProj", formPath: "Document.SalesOrder.Forms.DocumentForm", showElement: "DeliveryAddress"}`.
 
 ## Notes & gotchas
 - `formPath` without `projectName` is rejected: "projectName is required when formPath is specified".

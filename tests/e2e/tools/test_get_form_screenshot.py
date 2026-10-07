@@ -54,6 +54,9 @@ REAL error paths exercised by the negative matrix (source-exact messages):
 FIXTURE TRUTH (TestConfiguration, English Names)
   CommonForm "Form" exists on disk at src/CommonForms/Form/Form.form, so the FQN
   "CommonForm.Form" resolves to a real, existing form file (confirmed by glob).
+  It has a Pages group "Pages" with the pages PageMain (label "Main page") and
+  PageExtra (label ExtraPageLabel, a longer line), so the two pages render
+  differently and a showElement switch that does nothing is visible.
   Catalog "Catalog" exists but is the WRONG KIND for a 2-part form FQN.
 """
 
@@ -165,57 +168,98 @@ _NO_EDITOR_SENTINELS = (
 
 
 @e2e_test(tool="get_form_screenshot", kind="read")
-def test_show_element_unknown_name_errors_and_names_value():
-    """An unknown showElement must fail fast with an error naming the value. It is
-    resolved from the form model before the render gate, so it does not depend on
-    the render JVM flag: the only other acceptable outcome is that the editor
-    itself could not be opened (no form model to search)."""
+def test_show_element_unknown_name_names_the_form_and_lists_its_pages():
+    """An unknown showElement fails fast, before the render gate, so it does not
+    depend on the render JVM flag. The error names the value and the searched form
+    and lists the form's pages, so the caller needs no second call. The only other
+    acceptable outcome is that the editor itself could not be opened."""
     r = call("get_form_screenshot", {
         "projectName": PROJECT,
         "formPath": "CommonForm.Form",
         "showElement": "NoSuchElementXyz",
     })
-    assert_error(r)
-    err = r.error_text()
+    err = assert_error(r, "unknown showElement")
     if not any(s in err for s in _NO_EDITOR_SENTINELS):
-        assert "'NoSuchElementXyz' was not found" in err, (
-            "an unknown showElement must name the value in a not-found error, not a "
-            "render failure; got: %r" % (err[:300])
+        assert "'NoSuchElementXyz' was not found in form 'CommonForm.Form'" in err, (
+            "the not-found error must name the value and the searched form; got: %r"
+            % (err[:400])
         )
-        assert "get_metadata_details" in err, (
-            "the not-found error must point at the tool that lists element names; "
-            "got: %r" % (err[:300])
+        assert "Its pages: PageMain, PageExtra." in err, (
+            "the not-found error must list the form's pages; got: %r" % (err[:400])
+        )
+        assert_error_quality(
+            err,
+            names=["NoSuchElementXyz"],
+            suggests=["get_metadata_details"],
+            ctx="unknown showElement names the value and the tool listing every element",
         )
     assert_no_diff("a screenshot read must not touch the project on disk")
 
 
 @e2e_test(tool="get_form_screenshot", kind="read")
-def test_show_element_known_name_real_image_or_clean_render_sentinel():
-    """showElement with an element that exists (the decoration "OK" of the fixture
-    CommonForm.Form, matched case-insensitively) gives a real PNG, or a clean
-    render sentinel / render error when the native render is unavailable. It must
-    never report the element as missing."""
-    r = call("get_form_screenshot", {
+def test_show_element_switches_the_page_and_the_editor_comes_back():
+    """showElement must really switch the page, and the editor must not stay on it.
+
+    Render-dependent (module docstring): without a rendered image the default capture
+    already returns a documented render sentinel, and the rest cannot be observed.
+    With an image:
+      * showElement=PageExtra (and an element ON that page, case-insensitively)
+        returns a PNG that differs from the default capture - a switch that does
+        nothing returns the default page and fails here;
+      * a capture of the still-open editor right after (no formPath, no showElement,
+        no refresh) reads the buffer the restore re-rendered. Without the restore the
+        buffer still holds the PageExtra image, which this test rejects."""
+    default = call("get_form_screenshot", {
         "projectName": PROJECT,
         "formPath": "CommonForm.Form",
-        "showElement": "ok",
     })
-    if r.is_error:
-        err = r.error_text()
-        assert "was not found" not in err, (
-            "an existing element must not be reported as missing; got: %r" % (err[:300])
+    if default.is_error:
+        err = default.error_text()
+        assert any(s in err for s in _RENDER_UNAVAILABLE_SENTINELS), (
+            "a default capture of an existing form may only fail with a render "
+            "sentinel; got: %r" % (err[:300])
         )
-        assert (any(s in err for s in _RENDER_UNAVAILABLE_SENTINELS + _NO_EDITOR_SENTINELS)
-                or "could not be re-rendered" in err
-                or "needs the native form render" in err), (
-            "a failed showElement capture must be a documented render outcome; got: %r"
-            % (err[:300])
+        assert_no_diff("a screenshot read must not touch the project on disk")
+        return
+    default_blob = _blob(default)
+    assert default_blob and default_blob.startswith(_PNG_B64_PREFIX), (
+        "the default capture must be a real PNG; got prefix %r" % ((default_blob or "")[:16])
+    )
+
+    shown_blobs = {}
+    for name in ("PageExtra", "extrapagelabel"):
+        r = call("get_form_screenshot", {
+            "projectName": PROJECT,
+            "formPath": "CommonForm.Form",
+            "showElement": name,
+        })
+        # The default capture rendered, so the native render is up: the switch must work.
+        assert not r.is_error, (
+            "showElement=%r must capture once the default capture works; got: %r"
+            % (name, r.error_text()[:300])
         )
-    else:
         blob = _blob(r)
         assert blob and blob.startswith(_PNG_B64_PREFIX), (
-            "success must carry a real PNG blob; got prefix %r" % ((blob or "")[:16])
+            "showElement=%r must return a real PNG; got prefix %r" % (name, (blob or "")[:16])
         )
+        assert blob != default_blob, (
+            "showElement=%r returned the default page's image: the page was not switched" % name
+        )
+        shown_blobs[name] = blob
+
+    after = call("get_form_screenshot", {})
+    assert not after.is_error, (
+        "the CommonForm.Form editor is still open, so an active-editor capture must "
+        "succeed; got: %r" % (after.error_text()[:300])
+    )
+    after_blob = _blob(after)
+    assert after_blob and after_blob.startswith(_PNG_B64_PREFIX), (
+        "the active-editor capture must be a real PNG; got prefix %r" % ((after_blob or "")[:16])
+    )
+    assert after_blob != shown_blobs["extrapagelabel"], (
+        "after a showElement capture the editor still shows the switched page: the "
+        "restore did not run"
+    )
     assert_no_diff("a screenshot read must not touch the project on disk")
 
 

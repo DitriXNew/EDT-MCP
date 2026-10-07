@@ -17,6 +17,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.EditorScreenshotHelper;
 import com.ditrix.edt.mcp.server.utils.EditorScreenshotHelper.CaptureResult;
+import com.ditrix.edt.mcp.server.utils.FormPageSwitch;
 import com.ditrix.edt.mcp.server.utils.ReflectionUtils;
 
 /**
@@ -171,7 +172,7 @@ public class GetFormScreenshotTool implements IMcpTool
             EditorScreenshotHelper.ShowElementTarget showTarget = null;
             if (showElement != null && !showElement.isEmpty())
             {
-                showTarget = EditorScreenshotHelper.resolveShowElement(representation, showElement);
+                showTarget = EditorScreenshotHelper.resolveShowElementForScreenshot(representation, showElement);
                 if (showTarget.getError() != null)
                 {
                     return CaptureResult.error(ToolResult.error(showTarget.getError()).toJson());
@@ -210,37 +211,11 @@ public class GetFormScreenshotTool implements IMcpTool
                 return renderGate;
             }
 
-            // After the (possibly forced) render: a full re-render shows the designer's default pages
-            // again, so the requested page is switched last and read straight from that render.
-            if (showTarget != null)
+            if (showTarget == null)
             {
-                String showError = EditorScreenshotHelper.showFormElement(representation, showTarget, showElement);
-                if (showError != null)
-                {
-                    EditorScreenshotHelper.restoreDefaultPages(representation);
-                    return CaptureResult.error(ToolResult.error(showError).toJson());
-                }
+                return captureImage(representation, wysiwygViewer, rendered, formRequested);
             }
-
-            ImageDataResult imageResult = readValidImageData(representation, wysiwygViewer, rendered, formRequested);
-            if (imageResult.error != null)
-            {
-                if (showTarget != null)
-                {
-                    EditorScreenshotHelper.restoreDefaultPages(representation);
-                }
-                return imageResult.error;
-            }
-
-            // Encode before restoring: the native render reuses the ImageData instance.
-            String base64 = EditorScreenshotHelper.encodePng(imageResult.imageData);
-            if (showTarget != null)
-            {
-                // The switch applies to this capture only: bring the default pages back in the editor
-                // and in the buffer a later capture without showElement would read.
-                EditorScreenshotHelper.restoreDefaultPages(representation);
-            }
-            return CaptureResult.success(base64);
+            return captureShowingElement(representation, wysiwygViewer, rendered, formRequested, showTarget);
         }
         catch (Exception e)
         {
@@ -252,6 +227,51 @@ public class GetFormScreenshotTool implements IMcpTool
             return CaptureResult.error(
                 ToolResult.error("Failed to capture form screenshot: " + e.getMessage()).toJson()); //$NON-NLS-1$
         }
+    }
+
+    /** Reads, validates and encodes the representation's current image. */
+    private static CaptureResult captureImage(Object representation, Object wysiwygViewer, boolean rendered,
+        boolean formRequested)
+        throws Exception
+    {
+        ImageDataResult imageResult = readValidImageData(representation, wysiwygViewer, rendered, formRequested);
+        if (imageResult.error != null)
+        {
+            return imageResult.error;
+        }
+        return CaptureResult.success(EditorScreenshotHelper.encodePng(imageResult.imageData));
+    }
+
+    /**
+     * Captures with the page holding {@code target} shown. Runs after the (possibly forced) render,
+     * since a full render brings back the default pages. The editor is restored in {@code finally},
+     * after the image is encoded (the native render reuses the ImageData instance); a failed restore
+     * fails the call, because the editor and later captures would keep the switched page.
+     */
+    private static CaptureResult captureShowingElement(Object representation, Object wysiwygViewer,
+        boolean rendered, boolean formRequested, EditorScreenshotHelper.ShowElementTarget target)
+        throws Exception
+    {
+        FormPageSwitch pageSwitch = FormPageSwitch.show(representation, target);
+        CaptureResult capture;
+        String restoreError;
+        try
+        {
+            capture = pageSwitch.getError() != null
+                ? CaptureResult.error(ToolResult.error(pageSwitch.getError()).toJson())
+                : captureImage(representation, wysiwygViewer, rendered, formRequested);
+        }
+        finally
+        {
+            restoreError = pageSwitch.restore();
+        }
+        // An image-read failure stays the reported error; the restore failure is logged.
+        if (restoreError == null || (!capture.isSuccess() && pageSwitch.getError() == null))
+        {
+            return capture;
+        }
+        String message = pageSwitch.getError() != null ? pageSwitch.getError() + " " + restoreError : restoreError; //$NON-NLS-1$
+        return CaptureResult.error(ToolResult.error(message).toJson());
     }
 
     /**

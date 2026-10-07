@@ -83,8 +83,15 @@ public class FormLayoutSnapshotService
         "GroupTitle", "TopCommandBar", "SearchControl", "BottomCommandBar", "CreateButton", "FABCommandBar", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
         "CollapsibleGroupCollapseButton", "EditInCommandBar", "Last"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
-    public String captureLayoutSnapshot(String projectName, String formPath, boolean refresh, String mode)
+    /**
+     * Takes the snapshot. With {@code showElement} it also confirms that element has calculated bounds
+     * in the snapshot. No page is switched: the Java layout lays out every page of a Pages group, so a
+     * non-default page is already in the snapshot.
+     */
+    public String captureLayoutSnapshot(String projectName, String formPath, boolean refresh, String mode,
+        String showElement)
     {
+        boolean showRequested = showElement != null && !showElement.isEmpty();
         List<String> warnings = new ArrayList<>();
         boolean fullMode = MODE_FULL.equals(mode);
 
@@ -105,11 +112,6 @@ public class FormLayoutSnapshotService
             if (wysiwygViewer == null)
             {
                 return errorYaml("WYSIWYG viewer is not available"); //$NON-NLS-1$
-            }
-
-            if (refresh)
-            {
-                EditorScreenshotHelper.refreshViewer(wysiwygViewer);
             }
 
             Object representation = ReflectionUtils.getFieldValue(wysiwygViewer, WYSIWYG_REPRESENTATION_FIELD);
@@ -133,6 +135,22 @@ public class FormLayoutSnapshotService
                     + "editor is fully open."); //$NON-NLS-1$
             }
 
+            // Before the refresh: an unknown name or a mode where the element can have no bounds fails fast.
+            if (showRequested)
+            {
+                String showError = checkShowElement(representation, showElement,
+                    NativeRenderModeProbe.getNativeRenderMode());
+                if (showError != null)
+                {
+                    return errorYaml(showError);
+                }
+            }
+
+            if (refresh)
+            {
+                EditorScreenshotHelper.refreshViewer(wysiwygViewer);
+            }
+
             Object hippoLayForm = ReflectionUtils.getFieldValue(representation, HIPPO_LAY_FORM_FIELD);
             if (!(hippoLayForm instanceof EObject))
             {
@@ -146,6 +164,16 @@ public class FormLayoutSnapshotService
 
             List<Map<String, Object>> elements = collectElements((EObject)hippoLayForm, hippoSession,
                 modelProjection, layoutProjection, viewProjection, fullMode, warnings);
+
+            Map<String, Object> shownElement = null;
+            if (showRequested)
+            {
+                shownElement = findElementWithBounds(elements, showElement);
+                if (shownElement == null)
+                {
+                    return errorYaml(noBoundsForShownElement(showElement, NativeRenderModeProbe.getNativeRenderMode()));
+                }
+            }
 
             int elementCount = countElements(elements);
             int elementsWithBounds = countElementsWithBounds(elements);
@@ -166,6 +194,13 @@ public class FormLayoutSnapshotService
             result.put("elementCount", elementCount); //$NON-NLS-1$
             result.put("elementsWithBounds", elementsWithBounds); //$NON-NLS-1$
             result.put("boundsCoordinateSpace", "form WYSIWYG pixels"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (shownElement != null)
+            {
+                Map<String, Object> shown = new LinkedHashMap<>();
+                shown.put("name", shownElement.get("name")); //$NON-NLS-1$ //$NON-NLS-2$
+                shown.put("bounds", shownElement.get("bounds")); //$NON-NLS-1$ //$NON-NLS-2$
+                result.put("shownElement", shown); //$NON-NLS-1$
+            }
             result.put("warnings", warnings); //$NON-NLS-1$
             result.put("elements", elements); //$NON-NLS-1$
             return dumpYaml(result);
@@ -218,6 +253,96 @@ public class FormLayoutSnapshotService
                 + "EDT uses native render by default when -DnativeFormLayoutRender is not set explicitly, so an " //$NON-NLS-1$
                 + "installation with no such setting is most likely in the structural case."; //$NON-NLS-1$
         }
+    }
+
+    /**
+     * Resolves {@code showElement} with the resolver {@code get_form_screenshot} uses, then refuses the
+     * native render, where no element has calculated bounds on any page. Name first, so a typo gets
+     * not-found in every render mode.
+     *
+     * @param representation the {@code FormWysiwygRepresentation} instance
+     * @param showElement the element's programmatic name
+     * @param renderMode effective native render mode from {@link NativeRenderModeProbe}
+     * @return {@code null} when the snapshot may proceed, otherwise the error
+     */
+    public static String checkShowElement(Object representation, String showElement, NativeRenderMode renderMode)
+    {
+        String error = EditorScreenshotHelper.resolveShowElement(representation, showElement).getError();
+        if (error != null)
+        {
+            return error;
+        }
+        if (renderMode == NativeRenderMode.ON)
+        {
+            return "showElement cannot change get_form_layout_snapshot in native render mode: EDT returns no " //$NON-NLS-1$
+                + "per-element bounds there, on any page. To see the page holding '" + showElement //$NON-NLS-1$
+                + "', call get_form_screenshot with showElement; for its elements' bounds, relaunch EDT with " //$NON-NLS-1$
+                + "-DnativeFormLayoutRender=false, where every page is laid out and in the snapshot."; //$NON-NLS-1$
+        }
+        return null;
+    }
+
+    /**
+     * Finds the snapshot element named {@code name} (case-insensitive) that has positive bounds.
+     *
+     * @param elements the snapshot element tree
+     * @param name the element's programmatic name
+     * @return the element, or {@code null} when it is absent or has no positive bounds
+     */
+    public static Map<String, Object> findElementWithBounds(List<Map<String, Object>> elements, String name)
+    {
+        for (Map<String, Object> element : elements)
+        {
+            Object elementName = element.get("name"); //$NON-NLS-1$
+            if (elementName instanceof String text && text.equalsIgnoreCase(name)
+                && hasPositiveBoundsMap(element.get("bounds"))) //$NON-NLS-1$
+            {
+                return element;
+            }
+            Object children = element.get("children"); //$NON-NLS-1$
+            if (children instanceof List<?>)
+            {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> found = findElementWithBounds((List<Map<String, Object>>)children, name);
+                if (found != null)
+                {
+                    return found;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The error when {@code showElement} exists in the form but has no calculated bounds in the snapshot.
+     *
+     * @param showElement the element's programmatic name
+     * @param renderMode effective native render mode from {@link NativeRenderModeProbe}
+     * @return the error message
+     */
+    public static String noBoundsForShownElement(String showElement, NativeRenderMode renderMode)
+    {
+        String prefix = "Element '" + showElement + "' exists in the form but has no calculated bounds in " //$NON-NLS-1$ //$NON-NLS-2$
+            + "the snapshot"; //$NON-NLS-1$
+        if (renderMode == NativeRenderMode.OFF)
+        {
+            return prefix + ": the form may not have finished rendering, or the element is not visible. " //$NON-NLS-1$
+                + "Retry with refresh: true."; //$NON-NLS-1$
+        }
+        return prefix + ". EDT's render mode could not be read: in native render mode no element has bounds " //$NON-NLS-1$
+            + "(relaunch EDT with -DnativeFormLayoutRender=false, or call get_form_screenshot with " //$NON-NLS-1$
+            + "showElement to see the page); otherwise the form may not have finished rendering, so retry " //$NON-NLS-1$
+            + "with refresh: true."; //$NON-NLS-1$
+    }
+
+    private static boolean hasPositiveBoundsMap(Object bounds)
+    {
+        if (!(bounds instanceof Map<?, ?> map))
+        {
+            return false;
+        }
+        return map.get(KEY_WIDTH) instanceof Number width && map.get(KEY_HEIGHT) instanceof Number height
+            && width.intValue() > 0 && height.intValue() > 0;
     }
 
     /**
