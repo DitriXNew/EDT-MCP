@@ -20,6 +20,7 @@ HTTPService.ProbeService (the only place a 64-bit property exists), ...
 """
 
 import os
+import re
 import time
 import uuid
 import xml.etree.ElementTree as ET
@@ -3986,3 +3987,215 @@ def test_modify_error_carries_no_marker_fields():
     assert_error_quality(e, names=["E2EMarkersNoSuchAttr"], ctx="missing modify target")
     assert_no_marker_fields(r.structured, "an error reports no markers")
     assert_no_diff("a refused modify must not touch disk")
+
+
+# ---- per-role values of an adjustable flag (#719) and a form attribute's useAlways (#661) ----
+
+_XSI_TYPE = "{http://www.w3.org/2001/XMLSchema-instance}type"
+
+
+def _use_always_paths(attr):
+    """The stored notDefaultUseAlwaysAttributes of a form attribute: [(xsi:type, segments)]."""
+    block = _form_attribute_block(read_disk(_ITEM_FORM), attr)
+    if block is None:
+        raise AssertionError("attribute %s is not in %s" % (attr, _ITEM_FORM))
+    return [(entry.get(_XSI_TYPE), (entry.findtext("segments") or "").strip())
+            for entry in block.findall("notDefaultUseAlwaysAttributes")]
+
+
+def _poll_use_always_paths(attr, want, timeout=20, ctx=""):
+    """Poll until the attribute's stored use-always paths equal `want` exactly (order included)."""
+    deadline = time.time() + timeout
+    last = "<never read>"
+    while time.time() < deadline:
+        try:
+            last = _use_always_paths(attr)
+            if last == want:
+                return
+        except (AssertionError, ET.ParseError) as e:
+            last = str(e)
+        time.sleep(0.5)
+    raise AssertionError("expected %s to store use-always paths %r [%s]; it stores %r"
+                         % (attr, want, ctx, last))
+
+
+def _attribute_xml(attr):
+    """The raw <attributes> fragment of `attr` in the item form, for exact-serialization checks."""
+    text = read_disk(_ITEM_FORM)
+    anchor = "<name>%s</name>" % attr
+    start = text.rfind("<attributes>", 0, text.index(anchor))
+    return text[start:text.index("</attributes>", start)]
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_use_always_on_an_object_lists_only_the_unchecked_field():
+    """#661: on an ordinary object the designer default is CHECKED, so EDT lists the paths NOT
+    used always. useAlways takes the checkbox state; the stored list is computed by EDT's rule."""
+    fqn = "Catalog.Catalog.Form.ItemForm.Attribute.Object"
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "useAlways",
+                        "value": {"Object.Code": False, "Object.Description": True}}]})
+    assert_ok(r, "uncheck Use always for Object.Code")
+    assert "useAlways" in (r.structured.get("applied") or []), \
+        "useAlways must be reported applied: %r" % (r.structured,)
+    _poll_use_always_paths("Object", [("form:DataPath", "Object.Code")],
+                           ctx="only the unchecked field is listed; the checked one is the default")
+    fragment = _attribute_xml("Object")
+    assert re.search(r'</edit>\s*<notDefaultUseAlwaysAttributes xsi:type="form:DataPath">\s*'
+                     r'<segments>Object\.Code</segments>\s*</notDefaultUseAlwaysAttributes>\s*<main>',
+                     fragment), "exact serialized form between <edit> and <main>:\n%s" % fragment
+    assert "Object.Description" not in fragment, \
+        "a field set to its default (checked) must not be listed:\n%s" % fragment
+
+    row = _assignable_row(fqn, "useAlways")
+    assert row is not None and '{"Object.Code":false}' in row, \
+        "get_metadata_details must show the effective state of the listed path: %r" % (row,)
+
+    back = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "useAlways", "value": {"Object.Code": True}}]})
+    assert_ok(back, "check Use always for Object.Code again")
+    _poll_use_always_paths("Object", [], ctx="checking it again restores the default: nothing listed")
+    assert "notDefaultUseAlwaysAttributes" not in _attribute_xml("Object")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_use_always_on_a_constants_set_lists_the_checked_constant():
+    """#661: a ConstantsSet defaults to UNCHECKED, so the list flips: a listed constant IS used
+    always. An unknown constant is refused before anything is written."""
+    constant = "E2EUseAlwaysConst"
+    attr = "E2EConstantsSet"
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "Constant." + constant})
+    assert_ok(r, "seed the constant")
+    _seed_form_attribute(attr)
+    fqn = "Catalog.Catalog.Form.ItemForm.Attribute." + attr
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "type", "value": {"types": [{"kind": "ConstantsSet"}]}}]})
+    assert_ok(r, "make the attribute a constants set")
+    poll_disk_contains(_ITEM_FORM, "<types>ConstantsSet</types>",
+                       ctx="the constants-set type must be on disk before the checkbox is set")
+    wait_for_project_ready()
+
+    path = "%s.%s" % (attr, constant)
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "useAlways", "value": {path: True}}]})
+    assert_ok(r, "check Use always for the constant")
+    _poll_use_always_paths(attr, [("form:DataPath", path)],
+                           ctx="a checked constant of a constants set is the listed one")
+    row = _assignable_row(fqn, "useAlways")
+    assert row is not None and ('{"%s":true}' % path) in row, \
+        "the listed constant reads back as used always: %r" % (row,)
+
+    snap = tree_snapshot()
+    bad = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "useAlways", "value": {attr + ".E2ENoSuchConstant": True}}]})
+    e = assert_error(bad, "an unknown constant must be refused")
+    # EDT's data tree names the missing segment and lists the constants it does have.
+    assert_error_quality(e, names=["E2ENoSuchConstant", attr], suggests=[constant])
+    assert_tree_unchanged(snap, ctx="a refused useAlways must not touch the disk")
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "useAlways", "value": {path: False}}]})
+    assert_ok(r, "uncheck it again")
+    _poll_use_always_paths(attr, [], ctx="an unchecked constant is the constants-set default")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_use_always_refuses_a_path_of_another_attribute():
+    snap = tree_snapshot()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.Object",
+        "properties": [{"name": "useAlways", "value": {"List.Code": False}}]})
+    e = assert_error(r, "a path not rooted at the addressed attribute must be refused")
+    assert_error_quality(e, names=["List.Code", "Object"], suggests=["Object.Code"])
+    assert_tree_unchanged(snap, ctx="a refused useAlways must not touch the disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_use_always_refuses_a_field_the_data_tree_does_not_have():
+    """#661: every path is resolved in EDT's form data tree before the write; one it does not have
+    is refused naming the missing segment and the fields there, never written for markers to find."""
+    snap = tree_snapshot()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.Object",
+        "properties": [{"name": "useAlways", "value": {"Object.E2ENoSuchField": False}}]})
+    e = assert_error(r, "a field the data tree does not resolve must be refused")
+    assert_error_quality(e, names=["E2ENoSuchField", "'Object'"], suggests=["Fields there", "Code"])
+    assert_tree_unchanged(snap, ctx="a refused useAlways must not touch the disk")
+
+
+def _view_fragment(attr):
+    """The raw <view> element of `attr`, e.g. '<view>...</view>' or '<view/>'."""
+    fragment = _attribute_xml(attr)
+    m = re.search(r"<view/>|<view>.*?</view>", fragment, re.S)
+    if m is None:
+        raise AssertionError("attribute %s carries no <view>:\n%s" % (attr, fragment))
+    return m.group(0)
+
+
+def _poll_view_fragment(attr, pattern, timeout=20, ctx=""):
+    deadline = time.time() + timeout
+    last = "<never read>"
+    while time.time() < deadline:
+        try:
+            last = _view_fragment(attr)
+            if re.fullmatch(pattern, last, re.S):
+                return last
+        except (AssertionError, ValueError) as e:
+            last = str(e)
+        time.sleep(0.5)
+    raise AssertionError("expected %s.<view> to match %r [%s]; it is %r" % (attr, pattern, ctx, last))
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_view_role_values_are_set_and_dropped():
+    """#719: view takes {common?, roles?}; a role is Role.<Name> (any type-token language) or a
+    bare Name, 'default' drops its value, and an unnamed role keeps its own."""
+    role = "E2EViewRoleA"
+    other = "E2EViewRoleB"
+    attr = "MFViewRolesAttr"
+    for name in (role, other):
+        r = call("create_metadata", {"projectName": PROJECT, "fqn": "Role." + name})
+        assert_ok(r, "seed role " + name)
+    _seed_form_attribute(attr)
+    fqn = "Catalog.Catalog.Form.ItemForm.Attribute." + attr
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "view", "value": {
+            "common": False,
+            # Russian type token "Роль", and a bare Name.
+            "roles": {"Роль." + role: True, other: False}}}]})
+    assert_ok(r, "set common and two role values")
+    view = _poll_view_fragment(
+        attr, r"<view>\s*<for>\s*<value>true</value>\s*<role>Role\.%s</role>\s*</for>\s*"
+              r"<for>\s*<role>Role\.%s</role>\s*</for>\s*</view>" % (role, other),
+        ctx="common=false and a false role value are EMF defaults, so they are omitted")
+    assert "<common>" not in view, "common=false must not be serialized: %s" % view
+
+    row = _assignable_row(fqn, "view")
+    want = '{"common":false,"roles":{"Role.%s":true,"Role.%s":false}}' % (role, other)
+    assert row is not None and want in row, \
+        "get_metadata_details must show the role values next to common: %r" % (row,)
+
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "view", "value": {"common": True,
+                                                   "roles": {"Role." + role: "default"}}}]})
+    assert_ok(r, "drop one role value and turn common on")
+    _poll_view_fragment(
+        attr, r"<view>\s*<common>true</common>\s*<for>\s*<role>Role\.%s</role>\s*</for>\s*</view>"
+              % other, ctx="the dropped role is gone, the unnamed one is kept")
+
+    snap = tree_snapshot()
+    bad = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "properties": [{"name": "view", "value": {"roles": {"Role.E2ENoSuchRole": True}}}]})
+    e = assert_error(bad, "an unknown role must be refused")
+    assert_error_quality(e, names=["Role.E2ENoSuchRole"], suggests=["Role"])
+    assert_tree_unchanged(snap, ctx="a refused role value must not touch the disk")

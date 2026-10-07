@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EList;
@@ -1791,6 +1792,20 @@ public final class FormElementWriter
             names.add(RU_CATALOG_CODE);
             names.add(RU_CATALOG_DESCRIPTION);
         }
+        return names;
+    }
+
+    /**
+     * The first-level field names of a metadata object's data: its bindable attributes (custom and
+     * standard, see {@link #collectBindableSubAttributeNames}) plus its tabular sections.
+     *
+     * @param owner the metadata object
+     * @return the names (empty when none can be read)
+     */
+    public static Set<String> fieldNamesOf(EObject owner)
+    {
+        Set<String> names = collectBindableSubAttributeNames(owner);
+        addNamedElementNames(owner, "tabularSections", names); //$NON-NLS-1$
         return names;
     }
 
@@ -4524,23 +4539,48 @@ public final class FormElementWriter
     /** Whether any remaining authored form item references the path. */
     private static boolean formReferencesDataPath(EObject formModel, List<String> path)
     {
+        return itemBoundTo(formModel, path) != null;
+    }
+
+    /**
+     * The first authored form item bound to {@code path} (segments compared case-insensitively).
+     *
+     * @param formModel the form content model
+     * @param path the data path segments
+     * @return the item, or {@code null} when no item is bound to the path
+     */
+    public static EObject itemBoundTo(EObject formModel, List<String> path)
+    {
+        return itemBoundTo(formModel, dataPath -> sameDataPath(dataPath, path));
+    }
+
+    /**
+     * The first authored form item whose {@code dataPath} satisfies {@code boundTo}.
+     *
+     * @param formModel the form content model
+     * @param boundTo tests an item's data path object (never {@code null})
+     * @return the item, or {@code null} when no item's path qualifies
+     */
+    public static EObject itemBoundTo(EObject formModel, Predicate<EObject> boundTo)
+    {
         EClassifier formItem = formModel.eClass().getEPackage().getEClassifier(ECLASS_FORM_ITEM);
         if (!(formItem instanceof EClass))
         {
-            return false;
+            return null;
         }
         Deque<EObject> pending = new ArrayDeque<>();
         pushFormItems(formModel, (EClass)formItem, pending);
         while (!pending.isEmpty())
         {
             EObject item = pending.pop();
-            if (sameDataPath(singleReference(item, "dataPath"), path)) //$NON-NLS-1$
+            EObject dataPath = singleReference(item, "dataPath"); //$NON-NLS-1$
+            if (dataPath != null && boundTo.test(dataPath))
             {
-                return true;
+                return item;
             }
             pushFormItems(item, (EClass)formItem, pending);
         }
-        return false;
+        return null;
     }
 
     /**

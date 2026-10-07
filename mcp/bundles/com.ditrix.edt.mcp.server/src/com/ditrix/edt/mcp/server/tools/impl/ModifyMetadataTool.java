@@ -38,12 +38,15 @@ import com._1c.g5.v8.dt.core.platform.IDtProject;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.form.model.Form;
+import com._1c.g5.v8.dt.form.model.FormAttribute;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.QName;
 import com._1c.g5.v8.dt.mcore.ReferenceValue;
 import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.Value;
+import com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
@@ -76,6 +79,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
+import com.ditrix.edt.mcp.server.utils.AdjustableBooleanSupport;
 import com.ditrix.edt.mcp.server.utils.AppearanceValueBuilder;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceAddress;
@@ -109,6 +113,7 @@ import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
+import com.ditrix.edt.mcp.server.utils.UseAlwaysSupport;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
@@ -243,6 +248,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /** Property/JSON key: the value of a property entry. */
     private static final String KEY_VALUE = "value"; //$NON-NLS-1$
+    private static final String KEY_COMMON = "common"; //$NON-NLS-1$
+    private static final String KEY_ROLES = "roles"; //$NON-NLS-1$
 
     /** Error message prefix for an unresolved form FQN. */
     private static final String ERR_FORM_NOT_FOUND_PREFIX = "Form not found for '"; //$NON-NLS-1$
@@ -4251,6 +4258,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // change: the extInfo props are validated against the pre-change type's extInfo EClass, so
         // applying both in one tx is order-dependent and unsafe (see formTypeExtInfoComboError).
         String comboErr = formTypeExtInfoComboError(member, properties);
+        if (comboErr == null)
+        {
+            comboErr = useAlwaysWithRetypeError(properties);
+        }
         if (comboErr != null)
         {
             throw new FormValidationException(comboErr);
@@ -4372,6 +4383,29 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private static boolean decidesFormExtInfo(HolderChange hc)
     {
         return !hc.onExtInfo && PROP_MAIN.equalsIgnoreCase(hc.change.featureName());
+    }
+
+    /**
+     * Refuses {@code useAlways} batched with an attribute retype: the checkboxes are validated against
+     * the type the attribute has BEFORE the batch, so the retype must come first, in its own call.
+     * Package-visible for the headless test.
+     */
+    static String useAlwaysWithRetypeError(List<JsonObject> properties)
+    {
+        boolean useAlways = false;
+        boolean retype = false;
+        for (JsonObject prop : properties)
+        {
+            String name = prop == null ? null : asString(prop.get("name")); //$NON-NLS-1$
+            useAlways = useAlways || UseAlwaysSupport.PROPERTY.equalsIgnoreCase(name);
+            retype = retype || PROP_VALUE_TYPE.equalsIgnoreCase(name) || "type".equalsIgnoreCase(name); //$NON-NLS-1$
+        }
+        return useAlways && retype
+            ? ToolResult.error("'" + UseAlwaysSupport.PROPERTY + "' cannot be combined with a 'type' / " //$NON-NLS-1$ //$NON-NLS-2$
+                + "'valueType' change in one call: the checkboxes are checked against the attribute's " //$NON-NLS-1$
+                + "current type. Change the type first, then set '" + UseAlwaysSupport.PROPERTY //$NON-NLS-1$
+                + "' in a separate call.").toJson() //$NON-NLS-1$
+            : null;
     }
 
     /**
@@ -5661,10 +5695,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case QNAME:
                 return prepareQName(name, prop, info, out);
             case ADJUSTABLE_BOOLEAN:
-                return prepareAdjustableBoolean(name, value, info, out);
+                return prepareAdjustableBoolean(ctx.config, name, value, prop, info, out);
             case COLOR:
             case FONT:
                 return prepareAppearance(ctx, target, name, prop, info, out);
+            case USE_ALWAYS:
+                return prepareUseAlways(target, prop, info, out);
             case STRING:
             default:
                 return prepareString(name, value, info, out, normReport);
@@ -5840,26 +5876,146 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Validates an {@code ADJUSTABLE_BOOLEAN} property value and, on success, appends the prepared
-     * change to {@code out}. The wire value is a plain boolean and addresses the nested {@code common}
-     * flag; the sibling {@code for} overrides are preserved by the applier (issue #382).
+     * change to {@code out}. A plain boolean addresses the nested {@code common} flag and keeps the
+     * role values (issue #382); {@code {common?, roles?}} also edits the role values (issue #719).
      *
+     * @param config the configuration the role names resolve in, may be {@code null}
      * @param name the property name (for the error text)
-     * @param value the raw wire value
+     * @param value the raw wire value as a string ({@code null} for an object)
+     * @param prop the property entry
      * @param info the introspected property
      * @param out the prepared-change sink
-     * @return a JSON error on a non-boolean value, or {@code null} on success
+     * @return a JSON error, or {@code null} on success
      */
-    private static String prepareAdjustableBoolean(String name, String value, PropertyInfo info,
-        List<PreparedChange> out)
+    private static String prepareAdjustableBoolean(Configuration config, String name, String value,
+        JsonObject prop, PropertyInfo info, List<PreparedChange> out)
     {
+        JsonElement raw = prop.get(KEY_VALUE);
+        if (raw != null && raw.isJsonObject())
+        {
+            return prepareAdjustableBooleanObject(config, name, raw.getAsJsonObject(), info, out);
+        }
         Boolean b = parseBoolean(value);
         if (b == null)
         {
-            return ToolResult.error("'" + value + "' is not a valid boolean for '" + name //$NON-NLS-1$ //$NON-NLS-2$
-                + "'. Use true or false.").toJson(); //$NON-NLS-1$
+            return ToolResult.error("'" + (value != null ? value : String.valueOf(raw)) //$NON-NLS-1$
+                + "' is not a valid boolean for '" + name //$NON-NLS-1$
+                + "'. Use true or false, or {common?: bool, roles?: {'Role.<Name>': true|false|'default'}} " //$NON-NLS-1$
+                + "to set per-role values.").toJson(); //$NON-NLS-1$
         }
         out.add(PreparedChange.adjustableBoolean(info.feature, b.booleanValue()));
         return null;
+    }
+
+    /**
+     * The object form of an {@code ADJUSTABLE_BOOLEAN}: {@code common} optional, {@code roles} a map of
+     * role (by {@code Role.<Name>} or bare Name) to {@code true} / {@code false} / {@code 'default'}
+     * (drops the role's value). Every role is resolved here, before anything is written.
+     */
+    private static String prepareAdjustableBooleanObject(Configuration config, String name, JsonObject value,
+        PropertyInfo info, List<PreparedChange> out)
+    {
+        String shape = "{common?: true|false, roles?: {'Role.<Name>': true|false|'default'}}"; //$NON-NLS-1$
+        for (String key : value.keySet())
+        {
+            if (!KEY_COMMON.equals(key) && !KEY_ROLES.equals(key))
+            {
+                return ToolResult.error("'" + name + "' has no member '" + key + "'. Use " + shape + ".") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                    .toJson();
+            }
+        }
+        Boolean common = null;
+        if (value.has(KEY_COMMON))
+        {
+            common = AdjustableBooleanSupport.booleanValue(value.get(KEY_COMMON));
+            if (common == null)
+            {
+                return ToolResult.error("'" + name + "'.common must be true or false, got " //$NON-NLS-1$ //$NON-NLS-2$
+                    + value.get(KEY_COMMON) + ".").toJson(); //$NON-NLS-1$
+            }
+        }
+        Map<Role, Boolean> roles = new LinkedHashMap<>();
+        if (value.has(KEY_ROLES))
+        {
+            JsonElement rolesEl = value.get(KEY_ROLES);
+            if (!rolesEl.isJsonObject())
+            {
+                return ToolResult.error("'" + name + "'.roles must be an object keyed by role, e.g. " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "{'Role.Manager': false}; got " + rolesEl + ".").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            for (Map.Entry<String, JsonElement> entry : rolesEl.getAsJsonObject().entrySet())
+            {
+                Role role = AdjustableBooleanSupport.resolveRole(config, entry.getKey(), true);
+                if (role == null)
+                {
+                    return ToolResult.error("'" + name + "'.roles: '" + entry.getKey() //$NON-NLS-1$ //$NON-NLS-2$
+                        + "' is not a role of the configuration. Name it as 'Role.<Name>' or '<Name>' by its " //$NON-NLS-1$
+                        + "programmatic Name; get_metadata_objects with metadataType 'Role' lists them.") //$NON-NLS-1$
+                        .toJson();
+                }
+                if (roles.containsKey(role))
+                {
+                    return ToolResult.error("'" + name + "'.roles names the role '" + role.getName() //$NON-NLS-1$ //$NON-NLS-2$
+                        + "' twice (as '" + entry.getKey() + "' too). Give each role once.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                JsonElement roleValue = entry.getValue();
+                Boolean state = AdjustableBooleanSupport.isDefaultToken(roleValue) ? null
+                    : AdjustableBooleanSupport.booleanValue(roleValue);
+                if (state == null && !AdjustableBooleanSupport.isDefaultToken(roleValue))
+                {
+                    return ToolResult.error("'" + name + "'.roles['" + entry.getKey() //$NON-NLS-1$ //$NON-NLS-2$
+                        + "'] must be true, false or 'default' (drops the role's value), got " + roleValue //$NON-NLS-1$
+                        + ".").toJson(); //$NON-NLS-1$
+                }
+                roles.put(role, state);
+            }
+        }
+        if (common == null && roles.isEmpty())
+        {
+            return ToolResult.error("'" + name + "' changes nothing: give 'common' and/or 'roles' - " + shape //$NON-NLS-1$ //$NON-NLS-2$
+                + ". A null role value is dropped in transit; use 'default' to drop a role's value.").toJson(); //$NON-NLS-1$
+        }
+        out.add(PreparedChange.adjustableBoolean(info.feature, new AdjustableBooleanEdit(common, roles)));
+        return null;
+    }
+
+    /**
+     * Validates a form attribute's {@code useAlways} checkboxes (issue #661) against the platform's data
+     * tree and EDT's checkbox rule, before anything is written, and appends the prepared change.
+     */
+    private static String prepareUseAlways(EObject target, JsonObject prop,
+        PropertyInfo info, List<PreparedChange> out)
+    {
+        if (!(target instanceof FormAttribute))
+        {
+            return ToolResult.error("'" + UseAlwaysSupport.PROPERTY + "' is set on a form attribute " //$NON-NLS-1$ //$NON-NLS-2$
+                + "('...Form.<Form>.Attribute.<Name>').").toJson(); //$NON-NLS-1$
+        }
+        FormAttribute attribute = (FormAttribute)target;
+        List<UseAlwaysSupport.Request> requests = new ArrayList<>();
+        String err = UseAlwaysSupport.parse(attribute.getName(), prop.get(KEY_VALUE), requests);
+        List<UseAlwaysSupport.Plan> plans = new ArrayList<>();
+        if (err == null)
+        {
+            err = UseAlwaysSupport.plan(formOf(attribute), attribute, requests, plans);
+        }
+        if (err != null)
+        {
+            return ToolResult.error(err).toJson();
+        }
+        out.add(PreparedChange.useAlways(info.feature, plans));
+        return null;
+    }
+
+    /** The form content model holding {@code member}, or {@code null} when it is detached. */
+    private static EObject formOf(EObject member)
+    {
+        EObject current = member;
+        while (current != null && !(current instanceof Form))
+        {
+            current = current.eContainer();
+        }
+        return current;
     }
 
     /**
@@ -6620,6 +6776,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             this.onExtInfo = onExtInfo;
             this.change = change;
         }
+
+        /** @return the prepared change (package-visible for tests) */
+        PreparedChange change()
+        {
+            return change;
+        }
     }
 
     /**
@@ -6775,13 +6937,56 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
     }
 
+    /**
+     * The object form of an {@code AdjustableBoolean} change (issue #719): an optional {@code common}
+     * and role values, {@code null} dropping a role's value. Roles are kept by BM id so the write
+     * re-fetches them in its own transaction.
+     */
+    static final class AdjustableBooleanEdit
+    {
+        /** The new {@code common}, or {@code null} to keep the stored one. */
+        final Boolean common;
+        /** Role -&gt; value as resolved by the preparation, in request order. */
+        final Map<Role, Boolean> roles;
+
+        AdjustableBooleanEdit(Boolean common, Map<Role, Boolean> roles)
+        {
+            this.common = common;
+            this.roles = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(roles));
+        }
+
+        /** The role edits with every role re-fetched in {@code tx} (as resolved when {@code tx} is null). */
+        Map<Role, Boolean> rolesIn(IBmTransaction tx)
+        {
+            Map<Role, Boolean> result = new LinkedHashMap<>();
+            for (Map.Entry<Role, Boolean> e : roles.entrySet())
+            {
+                Role role = e.getKey();
+                if (tx != null && role instanceof IBmObject)
+                {
+                    Object inTx = tx.getObjectById(((IBmObject)role).bmGetId());
+                    if (!(inTx instanceof Role))
+                    {
+                        throw new IllegalStateException("Role." + role.getName() //$NON-NLS-1$
+                            + " is no longer in the transaction"); //$NON-NLS-1$
+                    }
+                    role = (Role)inTx;
+                }
+                result.put(role, e.getValue());
+            }
+            return result;
+        }
+    }
+
     /** A validated, coerced change ready to apply to the re-fetched target inside the write tx. */
     static final class PreparedChange
     {
         private enum Kind
         {
             SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE, MANY_ENUM, MCORE_VALUE_LIST, STYLE_VALUE,
-            CONTAINED, ADJUSTABLE_BOOLEAN
+            CONTAINED, ADJUSTABLE_BOOLEAN,
+            /** A form attribute's {@code useAlways} checkboxes; the value is the list of plans. */
+            USE_ALWAYS
         }
 
         /**
@@ -6841,6 +7046,19 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return new PreparedChange(feature, Kind.ADJUSTABLE_BOOLEAN, Boolean.valueOf(common),
                 null, null, null, null, false);
+        }
+
+        /** The object form of an {@code ADJUSTABLE_BOOLEAN} change: {@code common} and role values (#719). */
+        static PreparedChange adjustableBoolean(EStructuralFeature feature, AdjustableBooleanEdit edit)
+        {
+            return new PreparedChange(feature, Kind.ADJUSTABLE_BOOLEAN, edit, null, null, null, null, false);
+        }
+
+        /** A form attribute's {@code useAlways} change: the validated per-path plans (#661). */
+        static PreparedChange useAlways(EStructuralFeature feature, List<UseAlwaysSupport.Plan> plans)
+        {
+            return new PreparedChange(feature, Kind.USE_ALWAYS, java.util.Collections.unmodifiableList(
+                new ArrayList<>(plans)), null, null, null, null, false);
         }
 
         /**
@@ -6946,7 +7164,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         String featureName()
         {
-            return feature.getName();
+            return kind == Kind.USE_ALWAYS ? UseAlwaysSupport.PROPERTY : feature.getName();
         }
 
         /** Whether this change retypes data (a {@code TYPE_DESCRIPTION} / form {@code valueType} set). */
@@ -7074,16 +7292,44 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     return;
                 }
                 case ADJUSTABLE_BOOLEAN:
+                {
                     // Reuse the contained object and rewrite only `common`, so the sibling `for`
                     // overrides survive; create one only when the slot is genuinely empty. A plain
                     // eSet here would replace the object and lose them (issue #382).
-                    if (!FormElementWriter.setAdjustableBooleanFeature(target, feature.getName(),
-                        Boolean.TRUE.equals(scalarValue)))
+                    AdjustableBooleanEdit edit = scalarValue instanceof AdjustableBooleanEdit
+                        ? (AdjustableBooleanEdit)scalarValue : null;
+                    Object current = target.eGet(feature);
+                    boolean common = edit == null ? Boolean.TRUE.equals(scalarValue)
+                        : edit.common != null ? edit.common.booleanValue()
+                        // No 'common' asked: keep the stored one; an empty slot gets the designer's true.
+                        : !(current instanceof AdjustableBoolean) || ((AdjustableBoolean)current).isCommon();
+                    if (!FormElementWriter.setAdjustableBooleanFeature(target, feature.getName(), common))
                     {
                         throw new IllegalStateException("Cannot set '" + feature.getName() //$NON-NLS-1$
                             + "': its AdjustableBoolean type cannot be instantiated"); //$NON-NLS-1$
                     }
+                    if (edit != null && !edit.roles.isEmpty())
+                    {
+                        Object flag = target.eGet(feature);
+                        if (!(flag instanceof AdjustableBoolean))
+                        {
+                            throw new IllegalStateException("Cannot set the role values of '" //$NON-NLS-1$
+                                + feature.getName() + "': it is not an AdjustableBoolean"); //$NON-NLS-1$
+                        }
+                        AdjustableBooleanSupport.applyRoleEdits((AdjustableBoolean)flag, edit.rolesIn(tx));
+                    }
                     return;
+                }
+                case USE_ALWAYS:
+                {
+                    if (!(target instanceof FormAttribute))
+                    {
+                        throw new IllegalStateException("'useAlways' is set on a form attribute only"); //$NON-NLS-1$
+                    }
+                    UseAlwaysSupport.apply(formOf(target), (FormAttribute)target,
+                        (List<UseAlwaysSupport.Plan>)scalarValue);
+                    return;
+                }
                 case SCALAR:
                 default:
                     target.eSet(feature, scalarValue);
