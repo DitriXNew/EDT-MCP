@@ -26,6 +26,7 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -804,14 +805,36 @@ public class DeleteMetadataFormAttributeTest
             String expected = cleanup == DeleteMetadataTool.ResourceCleanup.REMOVED ? "was removed from disk."
                 : cleanup == DeleteMetadataTool.ResourceCleanup.NOT_FOUND
                     ? "was not found on disk (nothing was removed)." //$NON-NLS-1$
-                    : "could not be removed - check it manually."; //$NON-NLS-1$
+                    : cleanup == DeleteMetadataTool.ResourceCleanup.KEPT
+                        ? "was kept: the form on disk was not rewritten and still references it." //$NON-NLS-1$
+                        : "could not be removed - check it manually."; //$NON-NLS-1$
             assertTrue(message, message.contains("Its file " + SETTINGS_FILE + " " + expected)); //$NON-NLS-1$ //$NON-NLS-2$
             if (cleanup != DeleteMetadataTool.ResourceCleanup.REMOVED)
             {
                 assertFalse("never claims a removal it did not see", message.contains("removed from disk")); //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
-        assertEquals("the file read before the detach is the one removed", List.of(file, file, file), asked); //$NON-NLS-1$
+        assertEquals("the file read before the detach is the one removed", //$NON-NLS-1$
+            Collections.nCopies(DeleteMetadataTool.ResourceCleanup.values().length, file), asked);
+    }
+
+    @Test
+    public void testAFormThatDidNotReachDiskKeepsTheDetachedFile() throws CoreException
+    {
+        IFile file = settingsFile();
+        when(file.exists()).thenReturn(true);
+        DeleteMetadataTool.AttributeDeleteOutcome outcome = listDelete(file);
+        outcome.removeDetachedFiles(DeleteMetadataTool.detachedFileRemover(false));
+        verify(file, never()).delete(anyBoolean(), any());
+        assertEquals("KEPT", outcome.detached.get(0).get("fileRemoval")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(outcome.describe(), outcome.describe().contains("removed from disk")); //$NON-NLS-1$
+
+        IFile persistedFile = settingsFile();
+        when(persistedFile.exists()).thenReturn(true);
+        DeleteMetadataTool.AttributeDeleteOutcome persisted = listDelete(persistedFile);
+        persisted.removeDetachedFiles(DeleteMetadataTool.detachedFileRemover(true));
+        verify(persistedFile).delete(anyBoolean(), any());
+        assertEquals("REMOVED", persisted.detached.get(0).get("fileRemoval")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test

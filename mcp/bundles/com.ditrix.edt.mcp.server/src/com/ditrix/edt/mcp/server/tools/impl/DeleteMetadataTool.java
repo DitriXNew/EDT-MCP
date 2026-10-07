@@ -2118,7 +2118,7 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         if (outcome[0] != null)
         {
             // The form export skips the detached object's FQN, so its file is removed here, after commit.
-            outcome[0].removeDetachedFiles(DeleteMetadataTool::removeResource);
+            outcome[0].removeDetachedFiles(detachedFileRemover(persisted));
             List<Map<String, Object>> removed = new ArrayList<>();
             removed.add(formItem(ref.name, capturedType[0]));
             removed.addAll(outcome[0].entries());
@@ -3628,7 +3628,15 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         /** No resource at the resolved path (nothing was removed). */
         NOT_FOUND,
         /** The path could not be resolved or the delete attempt failed. */
-        FAILED
+        FAILED,
+        /** Not deleted on purpose: the on-disk form was not rewritten and still references it. */
+        KEPT
+    }
+
+    /** Removes a detached object's file only once the form reached disk; otherwise the old Form.form still references it. */
+    static java.util.function.Function<IFile, ResourceCleanup> detachedFileRemover(boolean formPersisted)
+    {
+        return formPersisted ? DeleteMetadataTool::removeResource : file -> ResourceCleanup.KEPT;
     }
 
     /** The message fragment describing the form-folder cleanup outcome (leading space included). */
@@ -3646,6 +3654,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             return subject + " was removed from disk."; //$NON-NLS-1$
         case NOT_FOUND:
             return subject + " was not found on disk (nothing was removed)."; //$NON-NLS-1$
+        case KEPT:
+            return subject + " was kept: the form on disk was not rewritten and still references it."; //$NON-NLS-1$
         case FAILED:
         default:
             return subject + " could not be removed - check it manually."; //$NON-NLS-1$
