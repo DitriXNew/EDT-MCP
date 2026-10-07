@@ -1795,20 +1795,6 @@ public final class FormElementWriter
         return names;
     }
 
-    /**
-     * The first-level field names of a metadata object's data: its bindable attributes (custom and
-     * standard, see {@link #collectBindableSubAttributeNames}) plus its tabular sections.
-     *
-     * @param owner the metadata object
-     * @return the names (empty when none can be read)
-     */
-    public static Set<String> fieldNamesOf(EObject owner)
-    {
-        Set<String> names = collectBindableSubAttributeNames(owner);
-        addNamedElementNames(owner, "tabularSections", names); //$NON-NLS-1$
-        return names;
-    }
-
     /** Adds the {@code name} of each element of the owner's {@code featureName} list (best-effort). */
     private static void addNamedElementNames(EObject owner, String featureName, Set<String> out)
     {
@@ -4543,7 +4529,8 @@ public final class FormElementWriter
     }
 
     /**
-     * The first authored form item bound to {@code path} (segments compared case-insensitively).
+     * The first authored form item bound to {@code path} in any language of its binding (see
+     * {@link #bindsAnySpelling}).
      *
      * @param formModel the form content model
      * @param path the data path segments
@@ -4551,7 +4538,46 @@ public final class FormElementWriter
      */
     public static EObject itemBoundTo(EObject formModel, List<String> path)
     {
-        return itemBoundTo(formModel, dataPath -> sameDataPath(dataPath, path));
+        List<List<String>> spellings = Collections.singletonList(path);
+        return itemBoundTo(formModel, dataPath -> bindsAnySpelling(dataPath, spellings));
+    }
+
+    /**
+     * Whether an ITEM's binding names one of {@code spellings}: a legacy multi-language path in every
+     * language it stores, not only the active one; segments compare case-insensitively. A stored
+     * use-always registration is read by its active language instead, as EDT reads it.
+     *
+     * @param dataPath the item's data path object, may be {@code null}
+     * @param spellings the path's spellings
+     * @return whether the binding names the path
+     */
+    @SuppressWarnings("unchecked")
+    public static boolean bindsAnySpelling(EObject dataPath, List<List<String>> spellings)
+    {
+        if (dataPath == null)
+        {
+            return false;
+        }
+        EStructuralFeature languages = dataPath.eClass().getEStructuralFeature("paths"); //$NON-NLS-1$
+        if (languages instanceof EReference && languages.isMany() && dataPath.eGet(languages) instanceof List<?>)
+        {
+            for (Object language : (List<Object>)dataPath.eGet(languages))
+            {
+                if (language instanceof EObject && bindsAnySpelling((EObject)language, spellings))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+        for (List<String> spelling : spellings)
+        {
+            if (sameDataPath(dataPath, spelling))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

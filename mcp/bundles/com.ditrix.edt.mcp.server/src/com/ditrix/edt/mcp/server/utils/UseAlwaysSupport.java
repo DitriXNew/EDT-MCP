@@ -249,7 +249,7 @@ public final class UseAlwaysSupport
                 // platform's spellings of the resolved field, every language of a legacy item path.
                 List<List<String>> spellings = spellings(info);
                 EObject item = FormElementWriter.itemBoundTo(form,
-                    bound -> bound instanceof AbstractDataPath && matchesAnySpelling((AbstractDataPath)bound, spellings));
+                    bound -> FormElementWriter.bindsAnySpelling(bound, spellings));
                 if (item != null)
                 {
                     return "'" + PROPERTY + "' cannot turn 'Use always' off for '" + request.key //$NON-NLS-1$ //$NON-NLS-2$
@@ -445,34 +445,6 @@ public final class UseAlwaysSupport
             }
         }
         return spellings;
-    }
-
-    private static boolean matchesAnySpelling(AbstractDataPath entry, List<List<String>> spellings)
-    {
-        if (entry instanceof MultiLanguageDataPath)
-        {
-            for (AbstractDataPath language : ((MultiLanguageDataPath)entry).getPaths())
-            {
-                if (matchesAnySpelling(language, spellings))
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-        List<String> segments = entry == null ? null : entry.getSegments();
-        if (segments == null)
-        {
-            return false;
-        }
-        for (List<String> spelling : spellings)
-        {
-            if (sameSegments(segments, spelling))
-            {
-                return true;
-            }
-        }
-        return false;
     }
 
     private static boolean isDynamicList(FormAttribute attribute)

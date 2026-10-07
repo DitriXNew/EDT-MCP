@@ -105,30 +105,7 @@ public final class AdjustableBooleanSupport
         {
             return null;
         }
-        return roleByName(config, name);
-    }
-
-    /**
-     * The configuration role with programmatic Name {@code name} (case-insensitive), or {@code null}.
-     *
-     * @param config the configuration
-     * @param name the role Name
-     * @return the role, or {@code null}
-     */
-    public static Role roleByName(Configuration config, String name)
-    {
-        if (config == null || name == null)
-        {
-            return null;
-        }
-        for (Role role : config.getRoles())
-        {
-            if (role != null && name.equalsIgnoreCase(role.getName()))
-            {
-                return role;
-            }
-        }
-        return null;
+        return config == null ? null : MetadataTypeUtils.findByName(config.getRoles(), name);
     }
 
     /**
@@ -196,7 +173,8 @@ public final class AdjustableBooleanSupport
         value.setCommon(common);
         for (Map.Entry<String, Boolean> e : roles.entrySet())
         {
-            Role role = roleByName(config, e.getKey().substring(ROLE_PREFIX.length()));
+            Role role = config == null ? null
+                : MetadataTypeUtils.findByName(config.getRoles(), e.getKey().substring(ROLE_PREFIX.length()));
             if (role == null)
             {
                 throw new IllegalStateException(e.getKey() + " disappeared before the write"); //$NON-NLS-1$
