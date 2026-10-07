@@ -24,15 +24,13 @@ ENVIRONMENT / SCOPE:
   (harness._record_outcome) and the orchestrator resets the model of every fixture project a
   test wrote (inside run_all._reset_after_write), so an adoption into the extension is reset
   like a write into the base. Each such test still restores the extension itself in a finally
-  block, the way test_create_metadata's extension test does, so a later extension-reading test
-  never depends on that order.
+  block, through harness.restore_extension_fixture - the restore every test that writes into
+  the extension shares - so a later extension-reading test never depends on that order.
 
 DIFF: the non-mutating cases assert assert_no_diff() on the base fixture; the nested-subsystem
 cases mutate the base (their seed) and the extension (the adoption), so they assert the files
 the adoption must write instead, and that a refused adoption leaves the extension untouched.
 """
-
-import time
 
 from harness import (
     E2ECallTimeout,
@@ -43,14 +41,13 @@ from harness import (
     assert_contains,
     assert_no_diff,
     assert_no_diff_rel,
-    read_fixture_file,
-    reset_all_fixtures,
+    poll_disk_contains_all,
+    restore_extension_fixture,
     wait_for_project_ready,
     e2e_test,
     PROJECT,
     TESTS_PROJECT,
     TESTS_PROJECT_REL,
-    _fail,
 )
 
 
@@ -150,9 +147,9 @@ def test_unknown_extension_name_lists_candidates():
 # adoption submits the export of every file it changed (the child, each parent subsystem, the
 # extension's Configuration.mdo) and waits for the extension's export queue before it answers, so
 # the files are normally settled when the call returns. Each check still POLLS for one read that
-# holds every needle: that wait is skipped where the export state cannot be observed, and a late
-# export pass (the platform also exports a changed top object on its own) may still be rewriting
-# the file.
+# holds every needle (poll_disk_contains_all on the extension's fixture path): that wait is skipped
+# where the export state cannot be observed, and a late export pass (the platform also exports a
+# changed top object on its own) may still be rewriting the file.
 
 _FIXTURE_SUBSYSTEM = "Subsystem"
 _PARENT_FQN = "Subsystem." + _FIXTURE_SUBSYSTEM
@@ -172,30 +169,6 @@ def _nested_fqn(child):
 def _ext_child_mdo(child):
     """The extension-relative .mdo of a nested subsystem under the fixture subsystem."""
     return "src/Subsystems/%s/Subsystems/%s/%s.mdo" % (_FIXTURE_SUBSYSTEM, child, child)
-
-
-def _poll_extension_file(relpath, needles, ctx, timeout=10):
-    """Poll until ONE read of an EXTENSION fixture file holds every needle, and return that read.
-
-    poll_disk_contains_all, its base-fixture twin, cannot be used: it reads the base project only.
-    Polling each needle separately would prove each was present at SOME moment, not that one
-    snapshot of the file holds them all. A missing file - or a read that lands mid-rewrite - just
-    keeps polling: the export may not have finished yet."""
-    deadline = time.time() + timeout
-    text = None
-    while True:
-        try:
-            text = read_fixture_file(TESTS_PROJECT_REL, relpath)
-        except (OSError, ValueError):
-            text = None
-        if text is not None and all(needle in text for needle in needles):
-            return text
-        if time.time() >= deadline:
-            missing = [needle for needle in needles if text is None or needle not in text]
-            _fail("expected %s/%s to contain %r [%s]; it holds:\n%s"
-                  % (TESTS_PROJECT_REL, relpath, missing, ctx,
-                     "(the file does not exist)" if text is None else text[:700]))
-        time.sleep(0.5)
 
 
 def _seed_nested_child(child):
@@ -223,32 +196,20 @@ def _assert_adopted(r, fqn, ctx):
 
 def _assert_nested_adoption_on_disk(child, ctx):
     """The three files a nested adoption changes in the extension, each by its structural element."""
-    _poll_extension_file(
+    poll_disk_contains_all(
         _ext_child_mdo(child),
         ["<name>%s</name>" % child, _ADOPTED, "<parentSubsystem>%s</parentSubsystem>" % _PARENT_FQN],
-        ctx + ": the adopted child has its own .mdo, linked to its parent")
-    _poll_extension_file(
+        ctx=ctx + ": the adopted child has its own .mdo, linked to its parent",
+        fixture_rel=TESTS_PROJECT_REL)
+    poll_disk_contains_all(
         _EXT_PARENT_MDO,
         ["<name>%s</name>" % _FIXTURE_SUBSYSTEM, _ADOPTED, "<subsystems>%s</subsystems>" % child],
-        ctx + ": the adopted parent lists the child in <subsystems>")
-    _poll_extension_file(
+        ctx=ctx + ": the adopted parent lists the child in <subsystems>",
+        fixture_rel=TESTS_PROJECT_REL)
+    poll_disk_contains_all(
         _EXT_CONFIGURATION_MDO, ["<subsystems>%s</subsystems>" % _PARENT_FQN],
-        ctx + ": the extension's configuration lists the top-level parent")
-
-
-def _restore_extension_fixture():
-    """Revert the EXTENSION fixture (disk + model) after an adoption mutated it.
-
-    The sequence test_create_metadata and test_apply_quick_fix use: reset -> clean_project ->
-    ready -> a SECOND reset (a late export pass can still race the first) -> ready again, so the
-    next extension-reading test starts from the committed fixture."""
-    reset_all_fixtures()
-    r_clean = call("clean_project", {"projectName": TESTS_PROJECT})
-    assert_ok(r_clean, "clean_project after a nested-subsystem adoption must succeed, or the "
-              "extension model stays polluted for later tests")
-    wait_for_project_ready()
-    reset_all_fixtures()
-    wait_for_project_ready()
+        ctx=ctx + ": the extension's configuration lists the top-level parent",
+        fixture_rel=TESTS_PROJECT_REL)
 
 
 @e2e_test(tool="adopt_metadata_object", kind="write-metadata")
@@ -310,10 +271,10 @@ def test_nested_subsystem_is_adopted_by_the_chain_list_subsystems_prints():
         # reset would race it. The orchestrator aborts the run on this.
         raise
     except BaseException:
-        _restore_extension_fixture()
+        restore_extension_fixture("a nested-subsystem adoption")
         raise
     else:
-        _restore_extension_fixture()
+        restore_extension_fixture("a nested-subsystem adoption")
 
 
 @e2e_test(tool="adopt_metadata_object", kind="write-metadata")
@@ -368,7 +329,7 @@ def test_nested_subsystem_adoption_adopts_its_parent_too():
         # NO cleanup here: the timed-out call may still be writing these very files.
         raise
     except BaseException:
-        _restore_extension_fixture()
+        restore_extension_fixture("a nested-subsystem adoption")
         raise
     else:
-        _restore_extension_fixture()
+        restore_extension_fixture("a nested-subsystem adoption")

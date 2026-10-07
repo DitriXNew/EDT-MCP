@@ -1047,10 +1047,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         Subsystem subsystem = SubsystemUtils.resolveByFqn(ctx.config, normFqn);
         if (subsystem == null)
         {
-            return ToolResult.error("Subsystem not found: " + args.fqn + ". Use 'Subsystem.Name' for a " //$NON-NLS-1$ //$NON-NLS-2$
-                + "top subsystem or 'Subsystem.Parent.Subsystem.Child' for a nested one (the type " //$NON-NLS-1$
-                + "token may be English or Russian). Use get_metadata_objects or list_subsystems to " //$NON-NLS-1$
-                + "find an FQN.").toJson(); //$NON-NLS-1$
+            return ToolResult.error(SubsystemUtils.notFoundMessage(args.fqn)).toJson();
         }
         // A 'template' payload addressed to a Subsystem FQN is refused here (a subsystem is not a
         // spreadsheet template), so a template payload combined with a subsystem content[] payload is

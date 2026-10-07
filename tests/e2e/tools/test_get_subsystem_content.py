@@ -15,11 +15,15 @@ Real error paths in GetSubsystemContentTool.execute / getSubsystemContentInterna
   - missing projectName     -> "projectName is required"
   - missing subsystemFqn    -> "subsystemFqn is required (e.g. 'Subsystem.Sales')"
   - project not found        -> "Project not found: <name>"
-  - subsystem not resolvable -> "Subsystem not found: <fqn>. Check the FQN is
-    'Subsystem.<Name>' (type token must be 'Subsystem'); use list_subsystems to
-    see available subsystems."  (covers both a non-existent subsystem AND a
-    malformed FQN — wrong type token / missing name, because
-    SubsystemUtils.resolveByFqn returns null for all of them).
+  - subsystem not resolvable -> "Subsystem not found: <fqn>. A top-level subsystem
+    is addressed as 'Subsystem.<Name>' and a nested one by its whole chain from a
+    top-level subsystem, with a type token before every name
+    ('Subsystem.<Parent>.Subsystem.<Child>', any depth; the tokens may be English or
+    Russian) - list_subsystems lists the existing ones in exactly that form."
+    (covers both a non-existent subsystem AND a malformed FQN — wrong type token /
+    missing name, because SubsystemUtils.resolveByFqn returns null for all of them).
+    It is the text modify_metadata gives for the same address (#708): one shared
+    "subsystem not found", SubsystemUtils.notFoundMessage.
 """
 
 from harness import (
@@ -28,6 +32,7 @@ from harness import (
     assert_error,
     assert_error_quality,
     assert_contains,
+    assert_not_contains,
     assert_no_diff,
     e2e_test,
     PROJECT,
@@ -140,6 +145,27 @@ def test_nonexistent_subsystem_errors_clearly():
     # Message must name the bad FQN and point at the discovery tool.
     assert_error_quality(e, names=[bad], suggests=["list_subsystems"])
     assert_no_diff()
+
+
+@e2e_test(tool="get_subsystem_content", kind="read")
+def test_a_missing_nested_chain_teaches_how_subsystems_are_addressed():
+    """A nested chain under the fixture subsystem that names no subsystem is refused BY NAME with
+    the "subsystem not found" modify_metadata gives for the same address (#708): the chain form at
+    any depth and list_subsystems, which lists the existing ones in that form. The old text claimed
+    the type token MUST be 'Subsystem' - false, the Russian token resolves too - and named no chain."""
+    bad = "Subsystem.Subsystem.Subsystem.E2ENoSuchNestedSub"
+    r = call("get_subsystem_content", {
+        "projectName": PROJECT,
+        "subsystemFqn": bad,
+    })
+    e = assert_error(r, "a nested chain that names no subsystem")
+    assert_error_quality(e, names=[bad],
+                         suggests=["Subsystem not found", "'Subsystem.<Parent>.Subsystem.<Child>'",
+                                   "any depth", "list_subsystems lists the existing ones"],
+                         ctx="the refusal names the address and teaches the chain")
+    assert_not_contains(e, "type token must be",
+                        "the refusal must not claim the type token has to be English")
+    assert_no_diff("a read tool must not touch the project")
 
 
 @e2e_test(tool="get_subsystem_content", kind="read")

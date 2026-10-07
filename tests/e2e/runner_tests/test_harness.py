@@ -2534,5 +2534,142 @@ class EvidenceLogTailTest(unittest.TestCase):
             HARNESS._read_log_tail(os.path.join("no", "such", "directory", ".log"))
 
 
+class FixtureFilePollTest(unittest.TestCase):
+    """poll_disk_contains_all polls a file of ANY fixture, the base project by default: one poll,
+    not a copy per fixture root (#708 review)."""
+
+    def _fixture_tree(self, tmp):
+        """A repo root holding a base-project file and an extension file that differ."""
+        base = os.path.join(tmp, "base")
+        extension = os.path.join(tmp, "tests", "tests", "src")
+        os.makedirs(os.path.join(base, "src"))
+        os.makedirs(extension)
+        with open(os.path.join(base, "src", "X.mdo"), "w", encoding="utf-8") as handle:
+            handle.write("<name>Base</name>")
+        with open(os.path.join(extension, "X.mdo"), "w", encoding="utf-8") as handle:
+            handle.write("<name>Ext</name><objectBelonging>Adopted</objectBelonging>")
+        return base
+
+    def test_a_named_fixture_root_is_where_the_file_is_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._fixture_tree(tmp)
+            with mock.patch.object(HARNESS, "REPO_ROOT", tmp), \
+                    mock.patch.object(HARNESS, "PROJECT_DIR", base):
+                text = HARNESS.poll_disk_contains_all(
+                    "src/X.mdo", ["<name>Ext</name>", "Adopted"], timeout=1,
+                    fixture_rel="tests/tests")
+
+        self.assertIn("<name>Ext</name>", text)
+
+    def test_the_base_project_stays_the_default_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._fixture_tree(tmp)
+            with mock.patch.object(HARNESS, "REPO_ROOT", tmp), \
+                    mock.patch.object(HARNESS, "PROJECT_DIR", base):
+                text = HARNESS.poll_disk_contains_all("src/X.mdo", ["<name>Base</name>"], timeout=1)
+                # The same relative path under the extension does not hold the base's text.
+                with self.assertRaises(HARNESS.E2EAssertion) as raised:
+                    HARNESS.poll_disk_contains_all("src/X.mdo", ["<name>Base</name>"], timeout=0.2,
+                                                   fixture_rel="tests/tests")
+
+        self.assertIn("<name>Base</name>", text)
+        self.assertIn("tests/tests/src/X.mdo", str(raised.exception),
+                      "a miss names the file with its fixture path")
+
+    def test_a_read_that_fails_while_the_file_is_replaced_keeps_polling(self):
+        # Every per-fixture copy this poll replaced tolerated ANY OSError, not only a missing file:
+        # a read that lands while the export replaces the file is no verdict.
+        reads = []
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._fixture_tree(tmp)
+
+            def flaky_open(path, *args, **kwargs):
+                reads.append(path)
+                if len(reads) == 1:
+                    raise PermissionError(13, "The process cannot access the file", path)
+                return open(path, *args, **kwargs)
+
+            with mock.patch.object(HARNESS, "REPO_ROOT", tmp), \
+                    mock.patch.object(HARNESS, "PROJECT_DIR", base), \
+                    mock.patch.object(HARNESS, "open", side_effect=flaky_open, create=True):
+                text = HARNESS.poll_disk_contains_all("src/X.mdo", ["<name>Base</name>"], timeout=5)
+
+        self.assertIn("<name>Base</name>", text)
+        self.assertEqual(2, len(reads), "the failed read is retried, not raised")
+
+    def test_a_file_that_never_reads_fails_at_the_deadline_naming_why(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._fixture_tree(tmp)
+
+            def denied(path, *args, **kwargs):
+                raise PermissionError(13, "Access is denied", path)
+
+            with mock.patch.object(HARNESS, "REPO_ROOT", tmp), \
+                    mock.patch.object(HARNESS, "PROJECT_DIR", base), \
+                    mock.patch.object(HARNESS, "open", side_effect=denied, create=True), \
+                    self.assertRaises(HARNESS.E2EAssertion) as raised:
+                HARNESS.poll_disk_contains_all("src/X.mdo", ["<name>Base</name>"], timeout=0.2)
+
+        self.assertIn("could not be read yet", str(raised.exception))
+        self.assertIn("Access is denied", str(raised.exception))
+
+
+class ExtensionFixtureRestoreTest(unittest.TestCase):
+    """restore_extension_fixture is the ONE restore every test that writes into the extension calls
+    (#708 review): revert, clean_project the extension, settle, revert again, settle again - and
+    every step checked, so a restore that did not happen fails the test that needed it."""
+
+    OK = HARNESS.Result({"result": {"isError": False}})
+    REFUSED = HARNESS.Result({"result": {"isError": True,
+                                         "content": [{"type": "text", "text": "clean refused"}]}})
+
+    def _run(self, clean_result, ready_answers):
+        """Run the restore with the server stubbed; return the ordered steps it took."""
+        steps = []
+        answers = list(ready_answers)
+
+        def ready(timeout=None, failure_details=None, progress=None, ignore_projects=()):
+            steps.append("ready")
+            answer = answers.pop(0)
+            if not answer and failure_details is not None:
+                failure_details[:] = ["projects did not become ready within 1s"]
+            return answer
+
+        def call(tool, arguments):
+            steps.append((tool, arguments.get("projectName")))
+            return clean_result
+
+        with mock.patch.object(HARNESS, "reset_all_fixtures", side_effect=lambda: steps.append("revert")), \
+                mock.patch.object(HARNESS, "call", side_effect=call), \
+                mock.patch.object(HARNESS, "wait_for_project_ready", side_effect=ready):
+            try:
+                HARNESS.restore_extension_fixture("an adoption")
+            finally:
+                self.steps = steps
+
+    def test_reverts_cleans_the_extension_and_settles_after_each_revert(self):
+        self._run(self.OK, [True, True])
+
+        self.assertEqual(["revert", ("clean_project", HARNESS.TESTS_PROJECT), "ready", "revert", "ready"],
+                         self.steps)
+
+    def test_a_refused_clean_project_fails_the_test_that_needed_the_restore(self):
+        with self.assertRaises(HARNESS.E2EAssertion) as raised:
+            self._run(self.REFUSED, [True, True])
+
+        self.assertIn("an adoption", str(raised.exception))
+        self.assertIn(HARNESS.TESTS_PROJECT, str(raised.exception))
+        self.assertNotIn("ready", self.steps, "nothing proceeds on a model that was not re-imported")
+
+    def test_an_extension_that_never_settles_fails_the_test_after_either_revert(self):
+        for answers in ([False, True], [True, False]):
+            with self.subTest(answers=answers):
+                with self.assertRaises(HARNESS.E2EAssertion) as raised:
+                    self._run(self.OK, answers)
+
+                self.assertIn("an adoption", str(raised.exception))
+                self.assertIn("did not become ready", str(raised.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

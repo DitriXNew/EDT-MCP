@@ -2482,6 +2482,39 @@ def final_cleanup():
     # flag would come to mean "we tried" instead of "we checked".
 
 
+def restore_extension_fixture(ctx):
+    """Put the EXTENSION fixture back - its files AND EDT's model of it - from inside a test that
+    wrote into it, and FAIL the test when that cannot be done.
+
+    The one such restore: every test that writes into the extension (create_metadata's
+    extension-owned form, apply_quick_fix, adopt_metadata_object's nested subsystems) calls this
+    instead of carrying a copy. The orchestrator resets after the test as well - a call that named
+    the extension makes that reset follow it there - so this exists for what that reset comes too
+    late for: a test that measures its NEXT step against the committed extension (apply_quick_fix
+    judges every candidate against it), and a test that fails half way and must not hand a polluted
+    extension to the extension-reading tests after it.
+
+    One pass, each step closing a race: revert every fixture path; clean_project the extension, so
+    EDT drops what the test wrote and re-imports the clean files; settle; revert again (an export of
+    the test's write still in flight, or clean_project's own revalidation, may have rewritten a
+    file); settle again, because that second revert is a change EDT has not seen yet and whatever
+    reads the extension next would race its re-import. Retrying belongs to the orchestrator's reset.
+
+    Every step is CHECKED (settle_or_fail, not a bare wait whose answer is dropped): a refused
+    clean_project or a project that never settles fails the test here, named by ctx, while it is
+    still attributable - carrying on would hand the next step a measurement against the last one's
+    leftovers.
+
+    @param ctx what is being undone, for the failure message (e.g. "a nested-subsystem adoption")"""
+    reset_all_fixtures()
+    assert_ok(call("clean_project", {"projectName": TESTS_PROJECT}),
+              "clean_project of the extension %s after %s - without it EDT's model keeps what the test "
+              "wrote" % (TESTS_PROJECT, ctx))
+    settle_or_fail("whatever reads the extension after %s" % ctx)
+    reset_all_fixtures()
+    settle_or_fail("whatever reads the extension after %s" % ctx)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Assertions
 # ──────────────────────────────────────────────────────────────────────────────
@@ -2745,11 +2778,20 @@ def poll_disk_contains(rel_path, substr, timeout=10, ctx=""):
     return poll_disk_contains_all(rel_path, [substr], timeout=timeout, ctx=ctx)
 
 
-def poll_disk_contains_all(rel_path, substrs, timeout=10, ctx=""):
+def poll_disk_contains_all(rel_path, substrs, timeout=10, ctx="", fixture_rel=None):
     """Poll until ONE read of a named fixture file contains every substring in substrs, and return
     that read. Polling each needle separately proves each was present at SOME moment, not that one
-    snapshot of the file holds them all."""
-    full = os.path.join(PROJECT_DIR, rel_path)
+    snapshot of the file holds them all.
+
+    rel_path is relative to the BASE project by default, or to the fixture path `fixture_rel` names
+    (TESTS_PROJECT_REL for the extension, say) - one poll for every fixture, not a copy per root.
+
+    A file that does not exist yet, or cannot be read at this moment (a read that lands while the
+    export replaces it), is no verdict either: the poll goes on until the timeout, and only then
+    fails, naming what the last read saw."""
+    root = PROJECT_DIR if fixture_rel is None else os.path.join(REPO_ROOT, *fixture_rel.split("/"))
+    shown = rel_path if fixture_rel is None else "%s/%s" % (fixture_rel, rel_path)
+    full = os.path.join(root, rel_path)
     deadline = time.time() + timeout
     last = ""
     while time.time() < deadline:
@@ -2760,10 +2802,12 @@ def poll_disk_contains_all(rel_path, substrs, timeout=10, ctx=""):
                 return last
         except FileNotFoundError:
             last = "(file does not exist yet)"
+        except OSError as e:
+            last = "(file could not be read yet: %s)" % e
         time.sleep(0.5)
     missing = [s for s in substrs if s not in last]
     _fail("expected %s to contain %r [%s]; it holds:\n%s"
-          % (rel_path, missing[0] if len(missing) == 1 else missing, ctx, last[:700]))
+          % (shown, missing[0] if len(missing) == 1 else missing, ctx, last[:700]))
 
 
 def assert_disk_path_gone(rel_path, ctx=""):

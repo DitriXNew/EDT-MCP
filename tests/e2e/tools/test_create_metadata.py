@@ -53,7 +53,7 @@ from harness import (
     poll_diff_contains,
     poll_disk_contains,
     read_disk,
-    reset_all_fixtures,
+    restore_extension_fixture,
     tree_snapshot,
     wait_for_project_ready,
     e2e_test,
@@ -672,20 +672,10 @@ def test_create_form_object_generate_content_extension_owned_owner_gets_value_ty
         # reset would race it. The orchestrator aborts the run on this.
         raise
     except BaseException:
-        _restore_extension_fixture()
+        restore_extension_fixture("creating an extension-owned form")
         raise
     else:
-        _restore_extension_fixture()
-
-
-def _restore_extension_fixture():
-    """Revert the EXTENSION fixture on disk, then re-sync ITS in-memory model from the clean disk -
-    the same two-step final_cleanup() uses for both fixtures, scoped here to just the extension
-    (the orchestrator's kind="write-metadata" post-test hook already handles the BASE fixture)."""
-    reset_all_fixtures()
-    call("clean_project", {"projectName": TESTS_PROJECT})
-    wait_for_project_ready()
-    reset_all_fixtures()
+        restore_extension_fixture("creating an extension-owned form")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
