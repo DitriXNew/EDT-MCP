@@ -40,6 +40,14 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
+      # The analyzed commit may predate the local actions, so they come from this workflow's revision.
+      - name: Checkout (the workflow's local actions)
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: .workflow-actions
+          sparse-checkout: .github/actions
+
       # The MCP plugin is BUILT on 25: Tycho 5 needs Maven on JDK 21+, and tycho-surefire runs
       # the EDT 2026.2 platform bundles, which are Java 25. The bundle itself still compiles to
       # release 17 (mcp/bom/pom.xml), so one artifact keeps loading on EDT 2026.1.
@@ -49,6 +57,10 @@ jobs:
           distribution: temurin
           java-version: 25
           cache: maven
+
+      # Maven is pinned, not the runner image's: see the action for why 3.10 breaks Tycho.
+      - name: Set up Maven
+        uses: ./.workflow-actions/.github/actions/setup-maven
 
       - name: Cache Tycho P2 repositories
         uses: actions/cache@v6

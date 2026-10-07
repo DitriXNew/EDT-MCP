@@ -72,6 +72,10 @@ jobs:
           java-version: 25
           cache: maven
 
+      # Maven is pinned, not the runner image's: see the action for why 3.10 breaks Tycho.
+      - name: Set up Maven
+        uses: ./.github/actions/setup-maven
+
       # Before Maven: an inconsistent or drifted EDT channel must fail with its real reason, not
       # with Tycho's opaque "bundleLocation can't be null". The served build also keys the cache,
       # so a new EDT build saves a fresh cache instead of re-downloading its jars on every run.
