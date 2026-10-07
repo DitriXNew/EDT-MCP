@@ -138,7 +138,17 @@ public final class MetadataPropertyIntrospector
          * {@code view} / {@code edit} (issue #382), a form item's {@code userVisible}, a form command's
          * {@code use}.</p>
          */
-        ADJUSTABLE_BOOLEAN
+        ADJUSTABLE_BOOLEAN,
+        /**
+         * A single contained mcore {@code Color} - a form item's {@code textColor},
+         * {@code titleBackColor}, ... - set via {@code {color:...}} (see {@link AppearanceValueBuilder}).
+         */
+        COLOR,
+        /**
+         * A single contained mcore {@code Font} - a form item's {@code font}, {@code titleFont}, ... -
+         * set via {@code {font:...}} (see {@link AppearanceValueBuilder}).
+         */
+        FONT
     }
 
     /** The introspected schema of one assignable property. */
@@ -642,6 +652,16 @@ public final class MetadataPropertyIntrospector
         {
             return ValueKind.QNAME;
         }
+        // A form item's colours and fonts are declared exactly against the abstract mcore Color /
+        // Font (issue #660); the concrete value is a ColorDef / ColorRef / FontDef / FontRef.
+        if (isContainedValue(ref, McorePackage.Literals.COLOR, false))
+        {
+            return ValueKind.COLOR;
+        }
+        if (isContainedValue(ref, McorePackage.Literals.FONT, false))
+        {
+            return ValueKind.FONT;
+        }
         // Census of the EDT sources: `contains Value[]` occurs exactly once in MdClass.xcore
         // (WebService.xdtoPackages) and zero times in Form.xcore. Admit that measured shape while
         // keeping every other many containment classified as a child collection and excluded.
@@ -799,6 +819,12 @@ public final class MetadataPropertyIntrospector
             String target = referenceTargetTypeName(feature);
             return target != null ? Collections.singletonList(target) : null;
         }
+        if (kind == ValueKind.COLOR || kind == ValueKind.FONT)
+        {
+            // The value shape, shown where the property is discovered (issue #660).
+            return Collections.singletonList(kind == ValueKind.COLOR ? AppearanceValueBuilder.COLOR_SHAPES
+                : AppearanceValueBuilder.FONT_SHAPES);
+        }
         return Collections.emptyList();
     }
 
@@ -927,6 +953,18 @@ public final class MetadataPropertyIntrospector
                     return Rendered.of(value instanceof QName ? renderQName((QName)value) : null);
                 case ADJUSTABLE_BOOLEAN:
                     return Rendered.of(renderAdjustableBoolean(value));
+                case COLOR:
+                {
+                    // The slot holds a value (null was answered above): a broken reference that
+                    // renders to nothing is a FAILED read, not an unset property.
+                    String color = AppearanceValueBuilder.renderColor(value);
+                    return Rendered.present(color, color);
+                }
+                case FONT:
+                {
+                    String font = AppearanceValueBuilder.renderFont(value);
+                    return Rendered.present(font, font);
+                }
                 default:
                     return Rendered.of(String.valueOf(value));
             }

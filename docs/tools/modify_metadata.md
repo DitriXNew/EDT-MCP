@@ -80,6 +80,15 @@ A StyleItem (created generically with create_metadata) has no value yet; set its
 - Font: `{name:'value', value:{font:{faceName:'Arial', height:12, bold:true, italic:false, underline:false, strikeout:false}}}` - at least one of faceName / height / bold / italic / underline / strikeout is required; height is a positive integer.
 get_metadata_details renders the assigned value under a `Value` section (Style Type + Color `RGB(r, g, b)` / `Auto`, or the Font face / height / flags).
 
+## Setting a form item's Color / Font
+
+A form item's colors and fonts (`textColor`, `backColor`, `borderColor`, `titleTextColor`, `titleBackColor`, `font`, `titleFont`, ... - listed by `get_metadata_details(assignable:true)` with kind `COLOR` / `FONT`) take the EDT designer's values:
+
+- Color: `{color:{red:255, green:0, blue:0}}`; `{color:'auto'}` clears the property (the automatic color); a named color `{color:'<Source>.<Name>'}` or `{color:{<source>:'<Name>'}}`. Sources: `Style` - a configuration style item, else a platform style color (`{color:{style:'BrandColor'}}`, `{color:'Style.FormBackColor'}`); `Palette` - a configuration palette color, else a platform one; `Web` (`{color:'Web.AliceBlue'}`); `Windows` (`{color:'Windows.ButtonFace'}`).
+- Font: absolute `{font:{faceName:'Arial', height:12, bold:true, italic?, underline?, strikeout?, scale?}}`; `{font:'auto'}` clears the property; a reference `{font:'Style.NormalTextFont'}` / `{font:'System.DefaultGUIFont'}`, or with overrides `{font:{style:'NormalTextFont', bold:true, height:10}}` - sources `Style` (a configuration style item, else a platform style font) and `System`. Only the overrides given are stored; the rest is inherited from the referenced font.
+
+Platform names are the platform's English names (it registers no Russian ones). An unknown name is refused before any write, with the valid names listed. The current value renders back in the same spelling (`Web.AliceBlue`, `RGB(255, 0, 0)`, `Style.NormalTextFont (bold)`).
+
 ## Setting a Picture value
 
 A single contained Picture property (for example a form field's `headerPicture` / `footerPicture`) takes one symbolic string:
@@ -261,6 +270,7 @@ The batch is validated as a whole against its END state before anything is writt
 - Set a style item to a red color: `{projectName:'P', fqn:'StyleItem.MyColor', properties:[{name:'value', value:{color:{red:255, green:0, blue:0}}}]}`
 - Set a style item to the automatic color: `{projectName:'P', fqn:'StyleItem.MyColor', properties:[{name:'value', value:{color:'auto'}}]}`
 - Set a style item to a font: `{projectName:'P', fqn:'StyleItem.MyFont', properties:[{name:'value', value:{font:{faceName:'Arial', height:12, bold:true}}}]}`
+- Color a form field's title with a style item and make it bold: `{projectName:'P', fqn:'Catalog.Products.Form.ItemForm.Field.Price', properties:[{name:'titleTextColor', value:{color:{style:'BrandColor'}}}, {name:'titleFont', value:{font:{style:'NormalTextFont', bold:true}}}]}`
 - Grant a role a right on an object: `{projectName:'P', fqn:'Role.FullAccess', rights:[{object:'Catalog.Products', right:'Read', value:'set'}]}`
 - Deny a right (bilingual right name): `{projectName:'P', fqn:'Role.FullAccess', rights:[{object:'Справочник.Товары', right:'Изменение', value:'unset'}]}`
 - Add a whole-object RLS restriction: `{projectName:'P', fqn:'Role.Sales', rights:[{object:'Catalog.Products', right:'Read', value:'set', rls:'WHERE Ref.Company = &Company'}]}`
