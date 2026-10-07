@@ -414,7 +414,7 @@ def test_delete_main_form_attribute_takes_its_bound_fields_and_keeps_root_ext_in
     removed = _picked(r.structured)
     assert sorted(removed) == sorted(_OBJECT_FIELDS), \
         "the response must name the fields it removed: %r" % (r.structured,)
-    assert_contains(r.structured.get("message", ""), "3 item(s) removed",
+    assert_contains(r.structured.get("message", ""), "3 member(s) removed",
                     "the response must report the removal it observed")
 
     poll_disk_lacks(_FORM, "<segments>Object.", ctx="no item may keep a path through the deleted attribute")
@@ -518,6 +518,65 @@ def test_delete_collection_form_attribute_discloses_and_takes_everything_inside_
         assert_not_contains(xml, "<name>%s</name>" % name, "%s must be gone with the attribute" % name)
     for name in _OBJECT_FIELDS:
         assert_contains(xml, "<name>%s</name>" % name, "a field bound elsewhere (%s) must survive" % name)
+
+
+@e2e_test(tool="delete_metadata", kind="write-metadata")
+def test_delete_dynamic_list_form_attribute_discloses_and_detaches_its_list_settings():
+    # EDT's delete detaches the attribute's extInfo object - for a dynamic list its settings, a
+    # separate BM object stored as ListSettings.dcss - so the preview must disclose it and the
+    # confirmed response must report it detached.
+    catalog_name = "E2EDelDynList"
+    catalog = "Catalog." + catalog_name
+    form = catalog + ".Form.ListForm"
+    fqn = form + ".Attribute.List"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": catalog}), "seed catalog")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": form}), "seed list form")
+    wait_for_project_ready()
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": fqn}), "seed form attribute")
+    wait_for_project_ready()
+    holder = {"items": [], "viewMode": "Normal"}
+    configured = call("dcs", {
+        "projectName": PROJECT, "fqn": fqn, "action": "upsert", "type": "dynamicList", "language": "en",
+        "body": {
+            "queryText": "SELECT Ref, Description AS Description FROM " + catalog,
+            "customQuery": True,
+            "mainTable": catalog,
+            "listSettings": {
+                "selection": dict(holder, userSettingID="selection"),
+                "filter": dict(holder, userSettingID="filter"),
+                "order": dict(holder, userSettingID="order"),
+                "conditionalAppearance": dict(holder, userSettingID="appearance"),
+            },
+        }})
+    assert_ok(configured, "configure the dynamic list with its shared settings")
+    wait_for_project_ready()
+    form_rel = "src/Catalogs/%s/Forms/ListForm/Form.form" % catalog_name
+    settings_rel = "src/Catalogs/%s/Forms/ListForm/Attributes/List/ExtInfo/ListSettings.dcss" % catalog_name
+    poll_disk_contains(settings_rel, "selection", ctx="the list settings must be on disk before the delete")
+
+    pv = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(pv, "preview the dynamic-list attribute delete")
+    detached = [it for it in (pv.structured.get("items") or []) if it.get("detached")]
+    assert [(it.get("name"), it.get("type"), it.get("extInfo")) for it in detached] == \
+        [("listSettings", "DataCompositionSettings", "DynamicListExtInfo")], \
+        "the preview must disclose the detached list settings: %r" % (pv.structured,)
+    assert_contains(pv.structured.get("message", ""),
+                    "It also detaches DynamicListExtInfo.listSettings (DataCompositionSettings)",
+                    "the preview message must name the detached object")
+
+    r = call("delete_metadata", {"projectName": PROJECT, "fqn": fqn, "confirm": True})
+    assert_ok(r, "delete the dynamic-list attribute (confirm)")
+    assert r.structured.get("action") == "executed", "confirm must execute: %r" % (r.structured,)
+    assert_contains(r.structured.get("message", ""), "detached DynamicListExtInfo.listSettings",
+                    "the response must report the settings it observed detached")
+    assert [it.get("name") for it in (r.structured.get("items") or []) if it.get("detached")] == \
+        ["listSettings"], "the response items must carry the detached settings: %r" % (r.structured,)
+    poll_disk_lacks(form_rel, "<name>List</name>", ctx="the attribute must be gone from Form.form")
+    poll_disk_path_gone(settings_rel, ctx="the detached list settings must leave the disk with it")
+    d = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [form]})
+    assert_ok(d, "model read-back of the list form")
+    assert_not_contains(d.text, "DynamicList", "MODEL read-back: the dynamic-list attribute is gone")
 
 
 @e2e_test(tool="delete_metadata", kind="write-metadata")

@@ -18,6 +18,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -28,20 +29,27 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.IStatus;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.Test;
 
+import com._1c.g5.v8.bm.core.IBmNamespace;
+import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.bm.integration.IBmTask;
+import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionSettings;
+import com._1c.g5.v8.dt.dcs.model.settings.DcsFactory;
 import com._1c.g5.v8.dt.form.model.AbstractDataPath;
 import com._1c.g5.v8.dt.form.model.AbstractFormAttribute;
 import com._1c.g5.v8.dt.form.model.DataItem;
 import com._1c.g5.v8.dt.form.model.DataPath;
 import com._1c.g5.v8.dt.form.model.Decoration;
+import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.form.model.FormAttribute;
+import com._1c.g5.v8.dt.form.model.FormAttributeAdditionalColumns;
 import com._1c.g5.v8.dt.form.model.FormAttributeColumn;
 import com._1c.g5.v8.dt.form.model.FormFactory;
 import com._1c.g5.v8.dt.form.model.FormField;
@@ -62,15 +70,17 @@ import com.ditrix.edt.mcp.server.utils.FormAttributeDeletion;
 import com.ditrix.edt.mcp.server.utils.FormEditContextTestAccess;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
+import com.ditrix.edt.mcp.server.utils.RefusalsTestAccess;
 
 /**
  * Deleting a FORM ATTRIBUTE goes through EDT's form-attribute service (the designer's delete), which
  * also removes the items bound to it. The prediction runs EDT's OWN item collector (the private
  * {@code DeleteDataItemByPathDathPrefixCommand}, reached the way production reaches it) over a real
- * form model, with the path resolution stubbed. These tests pin what the preview predicts, what the
- * confirmed delete reports from OBSERVATION, that a failed delete commits nothing through the write
- * boundary, the refusal when the service is unavailable, and that a non-attribute member never
- * consults the service.
+ * form model, with the path resolution stubbed. These tests pin what the preview predicts (items,
+ * additional columns, detached extInfo objects), what the confirmed delete reports from OBSERVATION,
+ * that a delete whose scope changed since the consent is refused, that a failed delete commits nothing
+ * through the write boundary, the refusal when the service is unavailable, and that a non-attribute
+ * member never consults the service.
  */
 public class DeleteMetadataFormAttributeTest
 {
@@ -288,10 +298,11 @@ public class DeleteMetadataFormAttributeTest
             List.of("Code", "Description", "Attribute"), names(data.boundItems)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals(3, data.boundItemCount);
         assertEquals(0, data.containedCount);
-        assertEquals(0, data.clearedCount);
         assertEquals("Object.Code", data.boundItems.get(0).get("dataPath")); //$NON-NLS-1$ //$NON-NLS-2$
         String sentence = data.boundItemsSentence();
-        assertTrue(sentence, sentence.contains("3 item(s) bound to it (Code, Description, Attribute)")); //$NON-NLS-1$
+        assertTrue(sentence, sentence.contains("3 item(s) bound to it (Code, Description, Attribute).")); //$NON-NLS-1$
+        assertTrue(sentence, sentence.contains("EDT may also clear the data path of items whose path stops resolving")); //$NON-NLS-1$
+        assertEquals(3, data.removedAlongCount());
         String note = data.mainAttributeNote(false);
         assertTrue(note, note.contains("MAIN attribute")); //$NON-NLS-1$
         assertTrue(note, note.contains("CatalogFormExtInfo")); //$NON-NLS-1$
@@ -358,21 +369,20 @@ public class DeleteMetadataFormAttributeTest
     }
 
     @Test
-    public void testAnUnresolvedPathIsReportedAsClearedNotRemoved()
+    public void testAnUnresolvedPathIsNeitherRemovedNorPredictedAsCleared()
     {
-        // EDT's collector resolves each path first; one that does not resolve is not removed but has its
-        // data path cleared - a different outcome the preview must not count as a removal (review P2).
+        // EDT's collector resolves each path first, so one that does not resolve is not removed. Whether
+        // EDT's cleaner then unbinds it is its own decision (element paths included) - the preview does
+        // not guess it, it says the confirmed response reports it (review P2).
         Form form = itemForm("Object"); //$NON-NLS-1$
         form.getItems().add(field("Stale", "Object", "Missing")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         DeleteMetadataTool.FormDeletePreview data = preview(form, named(form, "Object"), //$NON-NLS-1$
             edt(Set.of("Object.Missing"), mock(IFormExtensionService.class))); //$NON-NLS-1$
         assertEquals(List.of("Code", "Description", "Attribute"), names(data.boundItems)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         assertEquals(3, data.removedAlongCount());
-        assertEquals(List.of("Stale"), names(data.clearedItems)); //$NON-NLS-1$
-        assertEquals(Boolean.TRUE, data.clearedItems.get(0).get("unbound")); //$NON-NLS-1$
-        assertEquals("Object.Missing", data.clearedItems.get(0).get("dataPath")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue(data.boundItemsSentence(), data.boundItemsSentence().contains(
-            "1 item(s) whose path starts with it but does not resolve stay with the data path cleared (Stale)")); //$NON-NLS-1$
+        String sentence = data.boundItemsSentence();
+        assertFalse(sentence, sentence.contains("Stale")); //$NON-NLS-1$
+        assertTrue(sentence, sentence.contains("the confirmed response lists them")); //$NON-NLS-1$
     }
 
     @Test
@@ -403,7 +413,10 @@ public class DeleteMetadataFormAttributeTest
             edt(Set.of(), extensions));
         assertTrue(data.itemsKept);
         assertTrue("no bound item is promised for removal", data.boundItems.isEmpty()); //$NON-NLS-1$
-        assertTrue(data.boundItemsSentence(), data.boundItemsSentence().contains("adopted from the base form")); //$NON-NLS-1$
+        String sentence = data.boundItemsSentence();
+        assertTrue(sentence, sentence.contains("adopted from the base form")); //$NON-NLS-1$
+        assertFalse("EDT's cleaner does not run on an adopted attribute", sentence.contains("may also clear")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("an adopted delete is authorized as such", data.scope.contains("(bound items kept)")); //$NON-NLS-1$ //$NON-NLS-2$
 
         when(extensions.isPureExtensionObject(any(), any())).thenReturn(true);
         DeleteMetadataTool.FormDeletePreview own = preview(form, named(form, "Other"), edt(Set.of(), extensions)); //$NON-NLS-1$
@@ -432,7 +445,7 @@ public class DeleteMetadataFormAttributeTest
         });
 
         DeleteMetadataTool.AttributeDeleteOutcome outcome =
-            DeleteMetadataTool.deleteAttributeInTx(form, rows, null, platform, FQN);
+            DeleteMetadataTool.deleteAttributeInTx(form, rows, null, platform, FQN, preview(form, rows).scope);
 
         assertEquals("the service is called exactly once, with the attribute", List.of(rows), calls); //$NON-NLS-1$
         assertEquals(List.of("Price"), names(outcome.columns)); //$NON-NLS-1$
@@ -444,7 +457,7 @@ public class DeleteMetadataFormAttributeTest
         assertFalse("an item outside the table survives unreported", //$NON-NLS-1$
             names(outcome.entries()).contains("OtherField")); //$NON-NLS-1$
         String message = outcome.describe();
-        assertTrue(message, message.contains("1 item(s) removed (RowsTable) with the 3 member(s) inside them")); //$NON-NLS-1$
+        assertTrue(message, message.contains("1 member(s) removed (RowsTable) with the 3 member(s) inside them")); //$NON-NLS-1$
         assertTrue(message, message.contains("1 item(s) kept with their data path cleared (Stale)")); //$NON-NLS-1$
     }
 
@@ -452,12 +465,13 @@ public class DeleteMetadataFormAttributeTest
     public void testConfirmedMainAttributeDeleteKeepsTheRootExtInfo()
     {
         Form form = itemForm("Object"); //$NON-NLS-1$
+        Set<String> scope = preview(form, named(form, "Object")).scope; //$NON-NLS-1$
         DeleteMetadataTool.AttributeDeleteOutcome outcome = DeleteMetadataTool.deleteAttributeInTx(form,
             named(form, "Object"), null, deleter(edt(), (tx, a) -> //$NON-NLS-1$
             {
                 EcoreUtil.remove(item(form, "Code")); //$NON-NLS-1$
                 EcoreUtil.remove(a);
-            }), FQN);
+            }), FQN, scope);
         assertNotNull("the root extInfo is untouched, as in the designer", form.getExtInfo()); //$NON-NLS-1$
         String message = outcome.describe();
         assertTrue(message, message.contains("was the form's MAIN attribute")); //$NON-NLS-1$
@@ -487,24 +501,33 @@ public class DeleteMetadataFormAttributeTest
         return model;
     }
 
-    private static void assertNothingCommitted(BiConsumer<IBmTransaction, EObject> delete)
+    /** Runs the confirmed delete through the emulated write boundary; it must fail. */
+    private static void assertConfirmFails(Set<String> authorizedScope,
+        BiConsumer<IBmTransaction, EObject> delete, AtomicReference<Form> committed,
+        AtomicReference<Form> working, IProject project)
     {
-        Form live = itemForm("Object"); //$NON-NLS-1$
-        AtomicReference<Form> committed = new AtomicReference<>(live);
-        AtomicReference<Form> working = new AtomicReference<>();
-        IProject project = mock(IProject.class);
         FormElementWriter.FormEditContext fctx = FormEditContextTestAccess.of(project,
             transactional(committed, working, 7L), MdClassFactory.eINSTANCE.createCatalogForm(), 7L);
         try
         {
             new DeleteMetadataTool((name, preview) -> DestructiveConsentGate.ConsentDecision.ALLOW)
-                .performFormDelete(fctx, FQN, FormElementWriter.parse(FQN), false, null, deleter(edt(), delete));
+                .performFormDelete(fctx, FQN, FormElementWriter.parse(FQN), false, null, deleter(edt(), delete),
+                    authorizedScope);
             fail("a failed attribute delete must not report success"); //$NON-NLS-1$
         }
         catch (RuntimeException expected)
         {
             // the refusal / the service's own failure, escaping the write boundary
         }
+    }
+
+    private static void assertNothingCommitted(BiConsumer<IBmTransaction, EObject> delete)
+    {
+        Form live = itemForm("Object"); //$NON-NLS-1$
+        AtomicReference<Form> committed = new AtomicReference<>(live);
+        AtomicReference<Form> working = new AtomicReference<>();
+        IProject project = mock(IProject.class);
+        assertConfirmFails(preview(live, named(live, "Object")).scope, delete, committed, working, project); //$NON-NLS-1$
         assertNotSame("the delete ran on the transaction's working copy", live, working.get()); //$NON-NLS-1$
         assertNull("... and really removed the field there", item(working.get(), "Code")); //$NON-NLS-1$ //$NON-NLS-2$
         assertSame("the failed write must not have committed its working copy", live, committed.get()); //$NON-NLS-1$
@@ -549,6 +572,252 @@ public class DeleteMetadataFormAttributeTest
         assertNull(item(committed.get(), "Code")); //$NON-NLS-1$
     }
 
+    // ---- additional columns and extInfo objects EDT's delete also takes (review P1 / P2) ----------
+
+    /** 'Rows' with a collection column 'Sub' and additional columns authored under several table paths. */
+    private static Form nestedColumnForm()
+    {
+        Form form = tableForm();
+        FormAttribute rows = named(form, "Rows"); //$NON-NLS-1$
+        FormAttributeColumn sub = F.createFormAttributeColumn();
+        sub.setName("Sub"); //$NON-NLS-1$
+        rows.getColumns().add(sub);
+        rows.getAdditionalColumns().add(additional(path("Rows", "Sub"), "SubExtra1", "SubExtra2")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        rows.getAdditionalColumns().add(additional(path("Rows", "Sub", "Deep"), "DeepExtra")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        // Segment-wise, not textual: 'Rows.Subway' is not under 'Rows.Sub'.
+        rows.getAdditionalColumns().add(additional(path("Rows", "Subway"), "KeptExtra")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return form;
+    }
+
+    private static FormAttributeAdditionalColumns additional(DataPath tablePath, String... columns)
+    {
+        FormAttributeAdditionalColumns entry = F.createFormAttributeAdditionalColumns();
+        entry.setTablePath(tablePath);
+        for (String name : columns)
+        {
+            FormAttributeColumn column = F.createFormAttributeColumn();
+            column.setName(name);
+            entry.getColumns().add(column);
+        }
+        return entry;
+    }
+
+    private static FormAttributeColumn column(Form form, String name)
+    {
+        for (FormAttributeColumn column : named(form, "Rows").getColumns()) //$NON-NLS-1$
+        {
+            if (name.equals(column.getName()))
+            {
+                return column;
+            }
+        }
+        throw new AssertionError("no column " + name); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAColumnDeleteDisclosesTheAdditionalColumnsUnderItsPath()
+    {
+        // FormAttributeService.removeAllColumnsOfAttribute(column, true) drops the owner's additional
+        // columns whose table path starts with the column's - siblings of the target, so neither its
+        // own walk nor the item collector shows them.
+        Form form = nestedColumnForm();
+        FormAttributeColumn sub = column(form, "Sub"); //$NON-NLS-1$
+        DeleteMetadataTool.FormDeletePreview data = preview(form, sub);
+        assertEquals(List.of("SubExtra1", "SubExtra2", "DeepExtra"), names(data.additionalColumns)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("Rows.Sub", data.additionalColumns.get(0).get("tablePath")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Rows.Sub.Deep", data.additionalColumns.get(2).get("tablePath")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(3, data.additionalColumnCount);
+        assertEquals(3, data.removedAlongCount());
+        String sentence = data.boundItemsSentence();
+        assertTrue(sentence, sentence.contains(
+            "It also drops the 3 additional column(s) under its path (SubExtra1, SubExtra2, DeepExtra).")); //$NON-NLS-1$
+
+        List<ConsentPreview> asked = new ArrayList<>();
+        new DeleteMetadataTool((name, preview) ->
+        {
+            asked.add(preview);
+            return DestructiveConsentGate.ConsentDecision.REJECT;
+        }).gateFormMemberDelete("Catalog.Catalog.Form.ItemForm.Attribute.Rows", //$NON-NLS-1$
+            FormElementWriter.parse("Catalog.Catalog.Form.ItemForm.Attribute.Rows"), false, data, () -> "{}"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the column + the 3 additional columns", 1 + data.descendants.size() + 3, //$NON-NLS-1$
+            asked.get(0).getTotalCount());
+        assertTrue(asked.get(0).getSubtitle(), asked.get(0).getSubtitle().contains("3 additional column(s)")); //$NON-NLS-1$
+
+        // EDT's delete, emulated: the entries under Rows.Sub go, then the column.
+        FormAttribute rows = named(form, "Rows"); //$NON-NLS-1$
+        DeleteMetadataTool.AttributeDeleteOutcome outcome = DeleteMetadataTool.deleteAttributeInTx(form, sub, null,
+            deleter(edt(), (tx, column) ->
+            {
+                rows.getAdditionalColumns().removeIf(entry -> "Sub".equals(entry.getTablePath().getSegments().get(1))); //$NON-NLS-1$
+                EcoreUtil.remove(column);
+            }), FQN, data.scope);
+        assertEquals(List.of("SubExtra1", "SubExtra2", "DeepExtra"), names(outcome.removed)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals("their named owner (Rows) stays, so they are removed, not contained", //$NON-NLS-1$
+            List.of(), namesFlagged(outcome.removed, "contained")); //$NON-NLS-1$
+        assertEquals("Rows.Sub", outcome.removed.get(0).get("tablePath")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(outcome.describe(), outcome.describe().contains("3 member(s) removed (SubExtra1, SubExtra2, DeepExtra)")); //$NON-NLS-1$
+    }
+
+    /** The main item form plus a dynamic-list attribute 'List' whose settings are the given object. */
+    private static Form listForm(DataCompositionSettings settings)
+    {
+        Form form = itemForm("Object"); //$NON-NLS-1$
+        FormAttribute list = attribute("List", false); //$NON-NLS-1$
+        DynamicListExtInfo extInfo = F.createDynamicListExtInfo();
+        extInfo.setListSettings(settings);
+        list.setExtInfo(extInfo);
+        form.getAttributes().add(list);
+        form.getItems().add(field("ListField", "List")); //$NON-NLS-1$ //$NON-NLS-2$
+        return form;
+    }
+
+    @Test
+    public void testADynamicListDeleteDisclosesAndReportsItsDetachedSettings()
+    {
+        // ExtInfoManagementService.detachExtInfoObjectFromTransaction detaches the list settings: a
+        // separate BM top object, outside the form's containment walk.
+        Form form = listForm(DcsFactory.eINSTANCE.createDataCompositionSettings());
+        FormAttribute list = named(form, "List"); //$NON-NLS-1$
+        DeleteMetadataTool.FormDeletePreview data = preview(form, list);
+        assertEquals(List.of("ListField"), names(data.boundItems)); //$NON-NLS-1$
+        assertEquals(1, data.detachedObjects.size());
+        Map<String, Object> entry = data.detachedObjects.get(0);
+        assertEquals("listSettings", entry.get("name")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("DataCompositionSettings", entry.get("type")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("DynamicListExtInfo", entry.get("extInfo")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Boolean.TRUE, entry.get("detached")); //$NON-NLS-1$
+        assertEquals("the bound field + the detached settings", 2, data.removedAlongCount()); //$NON-NLS-1$
+        assertTrue(data.boundItemsSentence(), data.boundItemsSentence().contains(
+            "It also detaches DynamicListExtInfo.listSettings (DataCompositionSettings), stored as a separate object")); //$NON-NLS-1$
+        assertTrue(data.scope.toString(), data.scope.stream()
+            .anyMatch(identity -> identity.endsWith("DynamicListExtInfo.listSettings[]:DataCompositionSettings"))); //$NON-NLS-1$
+
+        DeleteMetadataTool.AttributeDeleteOutcome outcome = DeleteMetadataTool.deleteAttributeInTx(form, list, null,
+            deleter(edt(), (tx, attribute) ->
+            {
+                EcoreUtil.remove(item(form, "ListField")); //$NON-NLS-1$
+                EcoreUtil.remove(attribute);
+            }), FQN, data.scope);
+        // Never attached to a BM namespace here - the state detaching leaves an object in.
+        assertEquals(List.of("listSettings"), names(outcome.detached)); //$NON-NLS-1$
+        assertTrue(names(outcome.entries()).contains("listSettings")); //$NON-NLS-1$
+        assertTrue(outcome.describe(), outcome.describe()
+            .contains("detached DynamicListExtInfo.listSettings (DataCompositionSettings).")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnExtInfoObjectEdtLeftAttachedIsReported()
+    {
+        DataCompositionSettings settings = mock(DataCompositionSettings.class,
+            withSettings().extraInterfaces(IBmObject.class));
+        when(settings.eClass()).thenReturn(DcsFactory.eINSTANCE.createDataCompositionSettings().eClass());
+        when(((IBmObject)settings).bmGetNamespace()).thenReturn(mock(IBmNamespace.class));
+        Form form = listForm(settings);
+        FormAttribute list = named(form, "List"); //$NON-NLS-1$
+        DeleteMetadataTool.AttributeDeleteOutcome outcome = DeleteMetadataTool.deleteAttributeInTx(form, list, null,
+            deleter(edt(), (tx, attribute) -> EcoreUtil.remove(attribute)), FQN, preview(form, list).scope);
+        assertTrue(outcome.detached.isEmpty());
+        assertEquals(List.of("listSettings"), names(outcome.leftAttached)); //$NON-NLS-1$
+        assertTrue(outcome.describe(), outcome.describe()
+            .contains("EDT left DynamicListExtInfo.listSettings (DataCompositionSettings) in the model")); //$NON-NLS-1$
+    }
+
+    // ---- consent vs write scope: the form changed between preview and confirm (review P1) --------
+
+    private static String refusalOf(Form form, EObject attribute, Set<String> authorized, List<EObject> calls)
+    {
+        try
+        {
+            DeleteMetadataTool.deleteAttributeInTx(form, attribute, null, deleter(edt(), (tx, a) -> calls.add(a)),
+                FQN, authorized);
+            fail("a delete wider or narrower than the consent must be refused"); //$NON-NLS-1$
+            return null;
+        }
+        catch (FormValidationException e)
+        {
+            return e.json();
+        }
+    }
+
+    @Test
+    public void testAnItemBoundAfterThePreviewIsRefusedBeforeTheDelete()
+    {
+        Form form = itemForm("Object"); //$NON-NLS-1$
+        FormAttribute object = named(form, "Object"); //$NON-NLS-1$
+        Set<String> authorized = preview(form, object).scope;
+        form.getItems().add(field("Late", "Object", "Late")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        List<EObject> calls = new ArrayList<>();
+        String json = refusalOf(form, object, authorized, calls);
+        assertTrue(json, json.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue(json, json.contains("The form changed since the preview")); //$NON-NLS-1$
+        assertTrue(json, json.contains("would now also remove 1 member(s) the confirmation did not cover (Late)")); //$NON-NLS-1$
+        assertTrue(json, json.contains("Nothing was changed")); //$NON-NLS-1$
+        assertTrue(json, json.contains("confirm=false")); //$NON-NLS-1$
+        assertTrue("EDT's delete never ran", calls.isEmpty()); //$NON-NLS-1$
+        assertNotNull(item(form, "Late")); //$NON-NLS-1$
+        assertNotNull(item(form, "Code")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAMemberAddedInsideARemovedTableIsRefused()
+    {
+        Form form = tableForm();
+        FormAttribute rows = named(form, "Rows"); //$NON-NLS-1$
+        Set<String> authorized = preview(form, rows).scope;
+        Decoration late = F.createDecoration();
+        late.setName("LateHint"); //$NON-NLS-1$
+        ((Table)item(form, "RowsTable")).getItems().add(late); //$NON-NLS-1$
+        List<EObject> calls = new ArrayList<>();
+        String json = refusalOf(form, rows, authorized, calls);
+        assertTrue(json, json.contains("also remove 1 member(s) the confirmation did not cover (LateHint)")); //$NON-NLS-1$
+        assertTrue(calls.isEmpty());
+    }
+
+    @Test
+    public void testAMemberGoneSinceThePreviewIsRefusedToo()
+    {
+        Form form = itemForm("Object"); //$NON-NLS-1$
+        FormAttribute object = named(form, "Object"); //$NON-NLS-1$
+        Set<String> authorized = preview(form, object).scope;
+        EcoreUtil.remove(item(form, "Description")); //$NON-NLS-1$
+        String json = refusalOf(form, object, authorized, new ArrayList<>());
+        assertTrue(json, json.contains("no longer remove 1 member(s) it did cover (Description)")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnchangedFormPassesTheScopeCheck()
+    {
+        // The control: identities are names, not object references, so a preview taken in another
+        // transaction (here: on an equal copy) authorizes the same delete.
+        Form form = itemForm("Object"); //$NON-NLS-1$
+        Form previewed = itemForm("Object"); //$NON-NLS-1$
+        Set<String> authorized = preview(previewed, named(previewed, "Object")).scope; //$NON-NLS-1$
+        List<EObject> calls = new ArrayList<>();
+        DeleteMetadataTool.deleteAttributeInTx(form, named(form, "Object"), null, deleter(edt(), (tx, a) -> //$NON-NLS-1$
+        {
+            calls.add(a);
+            EcoreUtil.remove(a);
+        }), FQN, authorized);
+        assertEquals(1, calls.size());
+    }
+
+    @Test
+    public void testAScopeChangeCommitsNothingThroughTheWriteBoundary()
+    {
+        Form live = itemForm("Object"); //$NON-NLS-1$
+        Form previewed = itemForm("Object"); //$NON-NLS-1$
+        Set<String> authorized = preview(previewed, named(previewed, "Object")).scope; //$NON-NLS-1$
+        live.getItems().add(field("Late", "Object", "Late")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        AtomicReference<Form> committed = new AtomicReference<>(live);
+        AtomicReference<Form> working = new AtomicReference<>();
+        IProject project = mock(IProject.class);
+        AtomicInteger deletes = new AtomicInteger();
+        assertConfirmFails(authorized, (tx, a) -> deletes.incrementAndGet(), committed, working, project);
+        assertEquals("EDT's delete never ran", 0, deletes.get()); //$NON-NLS-1$
+        assertSame("nothing was committed", live, committed.get()); //$NON-NLS-1$
+        verifyNoMoreInteractions(project);
+    }
+
     // ---- the service seam ----------------------------------------------------------------------
 
     @Test
@@ -556,27 +825,44 @@ public class DeleteMetadataFormAttributeTest
     {
         DeleteMetadataTool tool = new DeleteMetadataTool((name, preview) -> DestructiveConsentGate.ConsentDecision.ALLOW)
             .withFormAttributeDeleters(() -> null);
+        List<IStatus> logged = new ArrayList<>();
+        RefusalsTestAccess.setSink(logged::add);
         try
         {
-            tool.requireAttributeDeleter(FQN);
-            fail("an unavailable service must refuse, never fall back to an own predictor or EcoreUtil.remove"); //$NON-NLS-1$
+            try
+            {
+                tool.requireAttributeDeleter(FQN);
+                fail("an unavailable service must refuse, never fall back to an own predictor or EcoreUtil.remove"); //$NON-NLS-1$
+            }
+            catch (FormValidationException e)
+            {
+                assertTrue(e.json(), e.json().contains("\"success\":false")); //$NON-NLS-1$
+                assertTrue(e.json(), e.json().contains("is unavailable, so nothing was changed")); //$NON-NLS-1$
+                assertTrue(e.json(), e.json().contains(FQN));
+            }
+            DeleteMetadataTool.FormDeletePreview attribute = new DeleteMetadataTool.FormDeletePreview();
+            attribute.attribute = true;
+            try
+            {
+                tool.attributeDeleterFor(attribute, FQN);
+                fail("the confirm path refuses the same way"); //$NON-NLS-1$
+            }
+            catch (FormValidationException e)
+            {
+                assertTrue(e.json(), e.json().contains("is unavailable")); //$NON-NLS-1$
+            }
         }
-        catch (FormValidationException e)
+        finally
         {
-            assertTrue(e.json(), e.json().contains("\"success\":false")); //$NON-NLS-1$
-            assertTrue(e.json(), e.json().contains("is unavailable, so nothing was changed")); //$NON-NLS-1$
-            assertTrue(e.json(), e.json().contains(FQN));
+            RefusalsTestAccess.setSink(null);
         }
-        DeleteMetadataTool.FormDeletePreview attribute = new DeleteMetadataTool.FormDeletePreview();
-        attribute.attribute = true;
-        try
+        // An expected refusal, not a failure: no ERROR (the injection failure behind it is logged where caught).
+        assertEquals(2, logged.size());
+        for (IStatus status : logged)
         {
-            tool.attributeDeleterFor(attribute, FQN);
-            fail("the confirm path refuses the same way"); //$NON-NLS-1$
-        }
-        catch (FormValidationException e)
-        {
-            assertTrue(e.json(), e.json().contains("is unavailable")); //$NON-NLS-1$
+            assertEquals(status.getMessage(), IStatus.INFO, status.getSeverity());
+            assertNull(status.getException());
+            assertTrue(status.getMessage(), status.getMessage().contains("form-attribute delete is unavailable")); //$NON-NLS-1$
         }
     }
 
