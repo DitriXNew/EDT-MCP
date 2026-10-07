@@ -299,14 +299,19 @@ public final class SubsystemUtils
 
     /**
      * Walks up from a subsystem along its own {@code parentSubsystem} references - the persisted
-     * back-reference EDT keeps on a nested subsystem (a top-level one has none) - and returns both
-     * things a caller reads off that one walk: the subsystems above it and the canonical chain that
-     * names it.
+     * back-reference EDT keeps on a nested subsystem (a top-level one has none) - and returns what a
+     * caller reads off that one walk: the subsystems above it, the canonical chain that names it, and
+     * whether an address is that chain ({@link Lineage#spells}).
      *
      * <p>The walk stops at an unresolved proxy (it is no attached object to ask anything) and at a
      * repeat, so a broken, cyclic model cannot keep it going. Only a walk that ran out of parents
      * reached a top-level subsystem: one cut short has seen part of the chain, and the levels it did
      * see would spell some other, shorter address - so it names nothing.</p>
+     *
+     * <p>Even a walk that reached the top reads the back-references, not the parents' own
+     * {@code subsystems} lists an address is resolved DOWN by, and in a broken model the two can
+     * disagree. A caller that names a subsystem it resolved by an address therefore uses the chain
+     * only when the lineage spells that address ({@link Lineage#spells}).</p>
      *
      * @param leaf the subsystem (may be {@code null})
      * @return the lineage, never {@code null}
@@ -315,7 +320,7 @@ public final class SubsystemUtils
     {
         if (leaf == null)
         {
-            return new Lineage(Collections.emptyList(), null);
+            return new Lineage(Collections.emptyList(), null, null);
         }
         List<Subsystem> ancestors = new ArrayList<>();
         Set<Subsystem> seen = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -326,10 +331,11 @@ public final class SubsystemUtils
             ancestors.add(parent);
             parent = parent.getParentSubsystem();
         }
+        String[] names = null;
         String chain = null;
         if (parent == null)
         {
-            String[] names = new String[ancestors.size() + 1];
+            names = new String[ancestors.size() + 1];
             for (int i = 0; i < ancestors.size(); i++)
             {
                 names[ancestors.size() - 1 - i] = ancestors.get(i).getName();
@@ -337,18 +343,24 @@ public final class SubsystemUtils
             names[ancestors.size()] = leaf.getName();
             chain = chainFqn(names, names.length);
         }
-        return new Lineage(Collections.unmodifiableList(ancestors), chain);
+        return new Lineage(Collections.unmodifiableList(ancestors), names, chain);
     }
 
-    /** What {@link #lineage} read off a subsystem. */
+    /**
+     * What {@link #lineage} read off a subsystem: the subsystems above it and, when the walk reached
+     * a top-level subsystem, the STORED name of every level, top first.
+     */
     public static final class Lineage
     {
         private final List<Subsystem> ancestors;
+        /** The stored names of the levels, top first; {@code null} when the walk was cut short. */
+        private final String[] storedNames;
         private final String chainFqn;
 
-        private Lineage(List<Subsystem> ancestors, String chainFqn)
+        private Lineage(List<Subsystem> ancestors, String[] storedNames, String chainFqn)
         {
             this.ancestors = ancestors;
+            this.storedNames = storedNames;
             this.chainFqn = chainFqn;
         }
 
@@ -366,13 +378,59 @@ public final class SubsystemUtils
         /**
          * The leaf's canonical address - {@code Subsystem.<Top>...Subsystem.<Leaf>}, every level by
          * its STORED name and the English token, exactly what {@code list_subsystems} prints - or
-         * {@code null} when the walk did not reach a top-level subsystem.
+         * {@code null} when the walk did not reach a top-level subsystem. It is the leaf's address
+         * only as far as the back-references are right: a caller that resolved the leaf by an
+         * address asks {@link #spells} before it names the leaf by this chain.
          *
          * @return the chain FQN, or {@code null}
          */
         public String chainFqn()
         {
             return chainFqn;
+        }
+
+        /**
+         * Whether the walk spells the address {@code names}: it reached a top-level subsystem, it has
+         * as many levels as {@code names}, and the STORED name of every level - the top one and the
+         * leaf included - matches the addressed name at the same depth by the one rule the descent
+         * ({@link SubsystemUtils#resolveByPath}) matches a level with: surrounding whitespace of the
+         * addressed name ignored, letter case ignored. A level that stores no name matches no
+         * addressed name.
+         *
+         * <p>An address resolves DOWN by name, along each parent's {@code subsystems} list; this walk
+         * read the levels back UP, along the {@code parentSubsystem} back-references. In a sound model
+         * the two are one path. In a broken one a back-reference can name another subsystem of the
+         * same depth - {@code Sales} lists {@code Stray}, whose parent link is {@code Planning} - and
+         * the chain then spells another address, which names a different subsystem or none. The
+         * level count cannot tell the two apart; the names it walked through can.</p>
+         *
+         * <p>It compares names, not subsystems: whether the walk met the very objects the descent did
+         * is not asked. Under matching names the walk can still have passed through another object -
+         * a sibling whose name differs in letter case alone (a clash 1C does not allow), or a
+         * same-named subsystem the parent's {@code subsystems} list does not hold - and the chain
+         * still resolves back to this subsystem: it is spelled by names, at every level the descent
+         * takes the first listed sibling that matches, and a stored name that matches the addressed
+         * one matches the same siblings it does.</p>
+         *
+         * @param names the addressed names, top first (see {@link SubsystemUtils#parseSubsystemPath});
+         *     may be {@code null}
+         * @return {@code true} when {@link #chainFqn()} is the canonical spelling of that very
+         *     address; {@code false} otherwise - always for a walk cut short and for {@code null}
+         */
+        public boolean spells(String[] names)
+        {
+            if (storedNames == null || names == null || names.length != storedNames.length)
+            {
+                return false;
+            }
+            for (int i = 0; i < storedNames.length; i++)
+            {
+                if (!nameMatches(names[i], storedNames[i]))
+                {
+                    return false;
+                }
+            }
+            return true;
         }
     }
 
@@ -593,14 +651,28 @@ public final class SubsystemUtils
         {
             return null;
         }
-        String trimmed = name.trim();
         for (Subsystem child : children)
         {
-            if (trimmed.equalsIgnoreCase(child.getName()))
+            if (nameMatches(name, child.getName()))
             {
                 return child;
             }
         }
         return null;
+    }
+
+    /**
+     * The ONE rule by which a subsystem's stored Name matches a level of an address: the addressed
+     * name without its surrounding whitespace, letter case ignored. The descent ({@link #findChild})
+     * and the check of the walk back up ({@link Lineage#spells}) both match a level by it, so they
+     * cannot drift apart: a level the descent walked through is a level the check accepts.
+     *
+     * @param addressed the name as the address carries it (may be {@code null})
+     * @param stored the Name the subsystem stores (may be {@code null})
+     * @return whether they name the same level; {@code false} when either is {@code null}
+     */
+    private static boolean nameMatches(String addressed, String stored)
+    {
+        return addressed != null && addressed.trim().equalsIgnoreCase(stored);
     }
 }

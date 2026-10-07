@@ -360,6 +360,65 @@ public class AdoptMetadataObjectToolTest
         assertEquals("Subsystem.Sales.Subsystem.Orders", name("Subsystem.sales.Subsystem.orders")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    @Test
+    public void testASubsystemWhoseParentLinkNamesAnotherTopLevelSubsystemKeepsTheCallersAddress()
+    {
+        // A broken model: Sales lists Stray, but Stray's own parent link names Planning. The walk up
+        // has as many levels as the address and still spells another one - Planning's chain, where a
+        // TWIN named Stray really lives. Named by it, every result would point at the twin.
+        Subsystem stray = MdClassFactory.eINSTANCE.createSubsystem();
+        stray.setName("Stray"); //$NON-NLS-1$
+        sales.getSubsystems().add(stray);
+        stray.setParentSubsystem(planning);
+        Subsystem twin = subsystem("Stray", planning); //$NON-NLS-1$
+
+        assertSame(stray, resolve("Subsystem.sales.Subsystem.stray")); //$NON-NLS-1$
+        assertEquals("Subsystem.sales.Subsystem.stray", name("Subsystem.sales.Subsystem.stray")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertSame("the echoed address must lead back to the source itself, not to its twin", stray, //$NON-NLS-1$
+            resolve(name("Subsystem.sales.Subsystem.stray"))); //$NON-NLS-1$
+        // The control: the twin, linked both ways, is a real subsystem and keeps its canonical chain.
+        assertSame(twin, resolve("Subsystem." + RU_PLANNING + ".Subsystem.Stray")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Subsystem." + RU_PLANNING + ".Subsystem.Stray", //$NON-NLS-1$ //$NON-NLS-2$
+            name("Subsystem." + RU_PLANNING + ".Subsystem.stray")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testASubsystemWhoseMiddleLevelLinksToAnotherParentKeepsTheCallersAddress()
+    {
+        // The top level agrees and a middle one does not: Orders lists Refunds, whose parent link names
+        // Returns, a sibling of Orders. The walk up reads Sales, Returns, Refunds - three levels, like
+        // the address - and spells a chain that names nothing here.
+        Subsystem returns = subsystem("Returns", sales); //$NON-NLS-1$
+        Subsystem refunds = MdClassFactory.eINSTANCE.createSubsystem();
+        refunds.setName("Refunds"); //$NON-NLS-1$
+        orders.getSubsystems().add(refunds);
+        refunds.setParentSubsystem(returns);
+        String address = "Subsystem.sales.Subsystem.orders.Subsystem.refunds"; //$NON-NLS-1$
+
+        assertSame(refunds, resolve(address));
+        assertEquals(address, name(address));
+        assertSame("the echoed address must lead back to the source itself", refunds, //$NON-NLS-1$
+            resolve(name(address)));
+        // The control: the chain the walk up reads is no address of it.
+        assertNull(resolve("Subsystem.Sales.Subsystem.Returns.Subsystem.Refunds")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testASubsystemWhoseWalkUpRunsPastTheAddressKeepsTheCallersAddress()
+    {
+        // A broken model: the configuration lists Sales at the top, but its own parent link names
+        // Planning. The walk up reads Planning, Sales - one level more than the address - and only its
+        // last level matches the address: named by that chain, every result would point at no subsystem.
+        sales.setParentSubsystem(planning);
+
+        assertSame(sales, resolve("Subsystem.sales")); //$NON-NLS-1$
+        assertEquals("Subsystem.sales", name("Subsystem.sales")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertSame("the echoed address must lead back to the source itself", sales, //$NON-NLS-1$
+            resolve(name("Subsystem.sales"))); //$NON-NLS-1$
+        // The control: the chain the walk up reads is no address of it.
+        assertNull(resolve("Subsystem." + RU_PLANNING + ".Subsystem.Sales")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
     // ==================== every result names the source by it (the wiring) ====================
 
     private static JsonObject json(String result)

@@ -457,9 +457,14 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
          *
          * <p>A subsystem is named by the canonical chain {@link SubsystemUtils#lineage} reads off the
          * source itself - the English token and the STORED name of every level, which is exactly what
-         * {@code list_subsystems} prints (see {@link #canonicalChain}). Anything else, and a subsystem
-         * whose chain cannot be read up to a top-level subsystem level for level, keeps the normalized
-         * FQN.</p>
+         * {@code list_subsystems} prints - but only when that walk up passes through the very names
+         * the address resolved down by, level for level (see {@link #canonicalChain}). Anything else
+         * keeps the normalized FQN: any other source, and a subsystem whose walk up does not spell its
+         * address - for example one cut short (a cycle, an unresolved parent), one with fewer levels
+         * than the address (a parent link that is not set, or one to a shallower subsystem) or with
+         * more (a parent link on a subsystem the configuration lists at the top, or one to a deeper
+         * subsystem), and one that names another subsystem at some level (a parent link to another
+         * subsystem of the same depth).</p>
          *
          * @param scope the project's resolution root
          * @param normFqn the normalized FQN
@@ -478,12 +483,20 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
 
         /**
          * The canonical chain of a subsystem source, read off its own parents by
-         * {@link SubsystemUtils#lineage} - or {@code null} when that walk does not account for every
-         * level of the address the source was resolved by. The address resolved DOWN from a top-level
-         * subsystem, one level per name, so the walk UP must count exactly as many: a back-reference
-         * that disagrees with the tree (a nested subsystem whose {@code parentSubsystem} is not set
-         * would look top-level) would otherwise spell some other address, and the walk's own stops (an
-         * unresolved parent, a cycle) name nothing.
+         * {@link SubsystemUtils#lineage} - or {@code null} when that walk does not spell the address
+         * the source was resolved by. The address resolved DOWN from a top-level subsystem, one name
+         * per level, along each parent's {@code subsystems} list; the walk reads the levels back UP,
+         * along the {@code parentSubsystem} back-references, and in a broken model the two can part.
+         * So the chain is used only when it passes through the very names the descent walked, level
+         * for level ({@link SubsystemUtils.Lineage#spells}). Counting the levels is not enough: a
+         * back-reference to another subsystem of the same depth ({@code Sales} lists {@code Stray},
+         * whose parent link is {@code Planning}) keeps the count and spells
+         * {@code Subsystem.Planning.Subsystem.Stray} - the address of a different {@code Stray}, or of
+         * none. The same check refuses a walk with fewer levels than the address (an unset parent
+         * link - the source's own makes it read as top-level - or a link to a shallower subsystem), a
+         * walk with more (a parent link on a subsystem the configuration lists at the top, or a link
+         * to a deeper subsystem), and a walk cut short by an unresolved parent or a cycle (it names
+         * nothing).
          *
          * @param source the resolved subsystem
          * @param normFqn the normalized chain FQN it was resolved by
@@ -493,7 +506,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         {
             String[] levels = SubsystemUtils.parseSubsystemPath(normFqn);
             SubsystemUtils.Lineage lineage = SubsystemUtils.lineage(source);
-            return levels != null && lineage.ancestors().size() + 1 == levels.length ? lineage.chainFqn() : null;
+            return levels != null && lineage.spells(levels) ? lineage.chainFqn() : null;
         }
     }
 }

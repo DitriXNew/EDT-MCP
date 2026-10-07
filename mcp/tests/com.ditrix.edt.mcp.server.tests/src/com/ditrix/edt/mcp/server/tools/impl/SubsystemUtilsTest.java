@@ -43,7 +43,8 @@ import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
  *
  * <p>Issue #708 adds the helpers several tools read: the addressing sentence and the
  * "subsystem not found" built on it, the rule a chain resolves by in a project's root
- * ({@code resolveInScope}), and the walk up a subsystem's own parents ({@code lineage}).</p>
+ * ({@code resolveInScope}), and the walk up a subsystem's own parents ({@code lineage}) - with
+ * whether that walk is an address ({@code Lineage.spells}).</p>
  */
 public class SubsystemUtilsTest
 {
@@ -738,5 +739,189 @@ public class SubsystemUtilsTest
         {
             // The contract Lineage.ancestors() documents, held on every path.
         }
+    }
+
+    // ---------- whether the walk up is an address: Lineage.spells ----------
+    //
+    // An address resolves DOWN by name; the walk reads the levels back UP. spells answers whether the
+    // walk passed through the very names of an address, level for level, by the rule the descent
+    // matches a level with. Each @Test pins one way of getting that wrong.
+
+    @Test
+    public void testTheWalkUpSpellsTheExactStoredNames()
+    {
+        LinkedTree tree = new LinkedTree();
+        assertTrue(SubsystemUtils.lineage(tree.backlog).spells(new String[] { "Sales", "Orders", "Backlog" })); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue(SubsystemUtils.lineage(tree.orders).spells(new String[] { "Sales", "Orders" })); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("a top-level subsystem is a walk of one level", //$NON-NLS-1$
+            SubsystemUtils.lineage(tree.sales).spells(new String[] { "Sales" })); //$NON-NLS-1$
+        assertTrue(SubsystemUtils.lineage(tree.stockPlanning).spells(new String[] { RU_PLANNING, RU_STOCK_PLANNING }));
+    }
+
+    @Test
+    public void testTheWalkUpSpellsAnAddressInAnyLetterCase()
+    {
+        LinkedTree tree = new LinkedTree();
+        assertTrue(SubsystemUtils.lineage(tree.backlog).spells(new String[] { "sales", "ORDERS", "bAcKlOg" })); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testTheWalkUpSpellsAnAddressedNameWithSurroundingWhitespace()
+    {
+        // The descent trims an addressed name before it matches a level, so a padded name is the
+        // same level on the way up too - not another address.
+        LinkedTree tree = new LinkedTree();
+        assertTrue(SubsystemUtils.lineage(tree.backlog).spells(new String[] { " Sales ", "\tOrders", "Backlog " })); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testTheWalkUpSpellsEveryAddressTheDescentResolves()
+    {
+        // ONE rule for a level, down and up: whatever spelling of a name the descent resolves a chain
+        // by, the walk up from what it found must accept as that very chain.
+        LinkedTree tree = new LinkedTree();
+        MetadataScope scope = MetadataScope.ofConfiguration(tree.config);
+        String[][] spellings = {
+            { "Sales", "Orders", "Backlog" }, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            { "sales", "orders", "backlog" }, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            { "SALES", "Orders", "bAcKlOg" }, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            { " Sales ", "\tOrders", "Backlog " } }; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        for (String[] names : spellings)
+        {
+            Subsystem found = SubsystemUtils.resolveInScope(scope, names);
+            assertSame("the descent: " + Arrays.toString(names), tree.backlog, found); //$NON-NLS-1$
+            assertTrue("the walk up: " + Arrays.toString(names), SubsystemUtils.lineage(found).spells(names)); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testADifferentTopLevelNameIsNotSpelled()
+    {
+        // The top level is a level too: a walk that reached another top-level subsystem is another
+        // address, however many levels it has.
+        LinkedTree tree = new LinkedTree();
+        assertFalse(SubsystemUtils.lineage(tree.backlog).spells(new String[] { "Planning", "Orders", "Backlog" })); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testADifferentMiddleNameIsNotSpelled()
+    {
+        LinkedTree tree = new LinkedTree();
+        assertFalse(SubsystemUtils.lineage(tree.backlog).spells(new String[] { "Sales", "Returns", "Backlog" })); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testADifferentLeafNameIsNotSpelled()
+    {
+        // The leaf is a level too. A source found by its address always matches it, but the predicate
+        // answers for any address, not only for the one the subsystem was found by.
+        LinkedTree tree = new LinkedTree();
+        assertFalse(SubsystemUtils.lineage(tree.backlog).spells(new String[] { "Sales", "Orders", "Archive" })); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testAShorterAddressIsNotSpelled()
+    {
+        LinkedTree tree = new LinkedTree();
+        assertFalse("the upper levels of the walk only", //$NON-NLS-1$
+            SubsystemUtils.lineage(tree.backlog).spells(new String[] { "Sales", "Orders" })); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("the lower levels of the walk only", //$NON-NLS-1$
+            SubsystemUtils.lineage(tree.backlog).spells(new String[] { "Orders", "Backlog" })); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testALongerAddressIsNotSpelled()
+    {
+        LinkedTree tree = new LinkedTree();
+        assertFalse(SubsystemUtils.lineage(tree.orders).spells(new String[] { "Sales", "Orders", "Backlog" })); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test(timeout = 10000)
+    public void testAWalkCutShortByACycleSpellsNothing()
+    {
+        Subsystem first = linked("First", null); //$NON-NLS-1$
+        Subsystem second = linked("Second", first); //$NON-NLS-1$
+        first.setParentSubsystem(second);
+
+        SubsystemUtils.Lineage cyclic = SubsystemUtils.lineage(second);
+        assertFalse(cyclic.spells(new String[] { "First", "Second" })); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(cyclic.spells(new String[] { "Second" })); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAWalkCutShortByAnUnresolvedParentSpellsNothing()
+    {
+        Subsystem proxy = mock(Subsystem.class);
+        when(proxy.eIsProxy()).thenReturn(true);
+        when(proxy.getName()).thenReturn("Gone"); //$NON-NLS-1$
+        Subsystem child = mock(Subsystem.class);
+        when(child.getParentSubsystem()).thenReturn(proxy);
+        when(child.getName()).thenReturn("Child"); //$NON-NLS-1$
+
+        SubsystemUtils.Lineage cut = SubsystemUtils.lineage(child);
+        assertFalse(cut.spells(new String[] { "Gone", "Child" })); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(cut.spells(new String[] { "Child" })); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testANullAddressIsNeverSpelled()
+    {
+        LinkedTree tree = new LinkedTree();
+        assertFalse(SubsystemUtils.lineage(tree.sales).spells(null));
+        assertFalse("a level without a name is not a name", //$NON-NLS-1$
+            SubsystemUtils.lineage(tree.orders).spells(new String[] { "Sales", null })); //$NON-NLS-1$
+        assertFalse("the lineage of no subsystem spells nothing", //$NON-NLS-1$
+            SubsystemUtils.lineage(null).spells(new String[] { "Sales" })); //$NON-NLS-1$
+    }
+
+    // ---------- a subsystem that stores no name: the STORED side of the one rule ----------
+    //
+    // The rule a level matches by answers false for a stored name that is null - on the way down and
+    // on the way up alike. testANullAddressIsNeverSpelled pins the ADDRESSED side; these two pin
+    // the stored one, so a rule that asks the stored name first cannot pass for the same rule.
+
+    /**
+     * A subsystem whose Name was never set, listed FIRST under {@code parent} - so a descent meets it
+     * before any named sibling - and linked back to it.
+     */
+    private static Subsystem unnamedFirstUnder(Subsystem parent)
+    {
+        Subsystem subsystem = MdClassFactory.eINSTANCE.createSubsystem();
+        parent.getSubsystems().add(0, subsystem);
+        subsystem.setParentSubsystem(parent);
+        return subsystem;
+    }
+
+    @Test
+    public void testTheDescentPassesOverASubsystemThatStoresNoName()
+    {
+        LinkedTree tree = new LinkedTree();
+        Subsystem unnamedTop = MdClassFactory.eINSTANCE.createSubsystem();
+        tree.config.getSubsystems().add(0, unnamedTop);
+        unnamedFirstUnder(tree.sales);
+        assertNull("the premise: a Name that was never set is null", unnamedTop.getName()); //$NON-NLS-1$
+        MetadataScope scope = MetadataScope.ofConfiguration(tree.config);
+
+        assertSame("past an unnamed top-level subsystem listed first", tree.sales, //$NON-NLS-1$
+            SubsystemUtils.resolveInScope(scope, new String[] { "Sales" })); //$NON-NLS-1$
+        assertSame("past an unnamed child listed first", tree.orders, //$NON-NLS-1$
+            SubsystemUtils.resolveInScope(scope, new String[] { "Sales", "Orders" })); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAWalkUpThroughASubsystemThatStoresNoNameSpellsNothing()
+    {
+        LinkedTree tree = new LinkedTree();
+        Subsystem underUnnamedTop = linked("Child", MdClassFactory.eINSTANCE.createSubsystem()); //$NON-NLS-1$
+        Subsystem underUnnamedMiddle = linked("Leaf", unnamedFirstUnder(tree.sales)); //$NON-NLS-1$
+        Subsystem unnamedLeaf = unnamedFirstUnder(tree.orders);
+        assertNull("the premise: a Name that was never set is null", unnamedLeaf.getName()); //$NON-NLS-1$
+
+        assertFalse("an unnamed top level", //$NON-NLS-1$
+            SubsystemUtils.lineage(underUnnamedTop).spells(new String[] { "Top", "Child" })); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("an unnamed middle level", SubsystemUtils.lineage(underUnnamedMiddle) //$NON-NLS-1$
+            .spells(new String[] { "Sales", "Middle", "Leaf" })); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertFalse("an unnamed leaf", //$NON-NLS-1$
+            SubsystemUtils.lineage(unnamedLeaf).spells(new String[] { "Sales", "Orders", "Leaf" })); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 }
