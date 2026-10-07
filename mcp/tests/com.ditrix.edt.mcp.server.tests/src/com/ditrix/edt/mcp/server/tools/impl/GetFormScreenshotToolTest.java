@@ -21,6 +21,8 @@ import org.junit.Test;
 import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.form.model.FormFactory;
 import com._1c.g5.v8.dt.form.model.FormField;
+import com._1c.g5.v8.dt.form.model.FormGroup;
+import com._1c.g5.v8.dt.form.model.ManagedFormGroupType;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.EditorScreenshotHelper;
@@ -111,6 +113,15 @@ public class GetFormScreenshotToolTest
         }
     }
 
+    /** A WYSIWYG viewer whose control is gone, so the print fallback has no image either. */
+    public static final class ViewerWithoutControl
+    {
+        public Object getControl()
+        {
+            return null;
+        }
+    }
+
     /** The reflectively driven editor surface: renders run until render {@code throwOnRender}, no image. */
     private static final class EditorWithoutImage
     {
@@ -150,16 +161,23 @@ public class GetFormScreenshotToolTest
     public void testImageReadFailureCarriesTheRestoreFailure()
     {
         Form form = FormFactory.eINSTANCE.createForm();
+        FormGroup pages = FormFactory.eINSTANCE.createFormGroup();
+        pages.setType(ManagedFormGroupType.PAGES);
+        FormGroup page = FormFactory.eINSTANCE.createFormGroup();
+        page.setType(ManagedFormGroupType.PAGE);
         FormField field = FormFactory.eINSTANCE.createFormField();
         field.setName("Target"); //$NON-NLS-1$
         field.setId(7);
-        form.getItems().add(field);
+        page.getItems().add(field);
+        pages.getItems().add(page);
+        form.getItems().add(pages);
         EditorWithoutImage editor = new EditorWithoutImage(form);
         editor.throwOnRender = 2; // the switch's select and frame-clear render, then the restore throws
         EditorScreenshotHelper.ShowElementTarget target = EditorScreenshotHelper.resolveShowElement(editor, "Target"); //$NON-NLS-1$
         assertNull(target.getError());
 
-        CaptureResult result = GetFormScreenshotTool.captureShowingElement(editor, null, true, true, target);
+        CaptureResult result = GetFormScreenshotTool.captureShowingElement(editor, new ViewerWithoutControl(), true,
+            null, target);
 
         assertFalse(result.isSuccess());
         assertTrue(result.getError(), result.getError().contains("Form image data is not available")); //$NON-NLS-1$

@@ -8,7 +8,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.IEditorPart;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -18,7 +17,6 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.EditorScreenshotHelper;
 import com.ditrix.edt.mcp.server.utils.EditorScreenshotHelper.CaptureResult;
 import com.ditrix.edt.mcp.server.utils.FormPageSwitch;
-import com.ditrix.edt.mcp.server.utils.ReflectionUtils;
 
 /**
  * Tool to capture a screenshot of a form WYSIWYG editor as PNG.
@@ -27,7 +25,9 @@ import com.ditrix.edt.mcp.server.utils.ReflectionUtils;
 public class GetFormScreenshotTool implements IMcpTool
 {
     public static final String NAME = "get_form_screenshot"; //$NON-NLS-1$
-    private static final String WYSIWYG_VIEWER_FIELD = "wysiwygViewer"; //$NON-NLS-1$
+
+    /** What this tool returns, named in the wrong-form errors. */
+    private static final String PRODUCT = "screenshot"; //$NON-NLS-1$
 
     /** Input param: form FQN to open and capture. */
     private static final String KEY_FORM_PATH = "formPath"; //$NON-NLS-1$
@@ -132,40 +132,21 @@ public class GetFormScreenshotTool implements IMcpTool
         {
             boolean formRequested = formPath != null && !formPath.isEmpty();
 
-            EditorPageResult pageResult = resolveEditorPage(projectName, formPath, formRequested);
-            if (pageResult.error != null)
+            if (formRequested)
             {
-                return pageResult.error;
+                EditorScreenshotHelper.ensureBufferedNativeRenderMode();
             }
-            Object editorPage = pageResult.editorPage;
-
-            Object wysiwygViewer = ReflectionUtils.getFieldValue(editorPage, WYSIWYG_VIEWER_FIELD);
-            if (wysiwygViewer == null)
+            // Opens the requested form (or takes the active editor) and runs both identity guards: the
+            // image is rendered from the representation's own form model into an offscreen buffer every
+            // form shares, so only that model proves whose pixels these are.
+            EditorScreenshotHelper.FormEditorTarget editor =
+                EditorScreenshotHelper.resolveFormEditor(projectName, formPath, PRODUCT);
+            if (editor.getError() != null)
             {
-                return CaptureResult.error(ToolResult.error("WYSIWYG viewer is not available").toJson()); //$NON-NLS-1$
+                return CaptureResult.error(ToolResult.error(editor.getError()).toJson());
             }
-
-            Object representation = EditorScreenshotHelper.getRepresentation(wysiwygViewer);
-            if (representation == null)
-            {
-                return CaptureResult.error(
-                    ToolResult.error("WYSIWYG representation is not available").toJson()); //$NON-NLS-1$
-            }
-
-            // Identity guard (b): image-level check (the stale-image defect). The form image
-            // is read from the representation's own form model: in the rebuild task the image and the
-            // layout are produced together from a single createHippoSession(tx, this.form, ...) call, so
-            // the pixels belong to whatever form THIS representation renders. Confirm that model is the
-            // requested form before trusting the image. The shared HippoLayoutService singleton paints
-            // every form into ONE memory-mapped offscreen buffer, so an editor-input FQN match alone
-            // does not prove the buffer (and thus the image) was repainted for the requested form.
-            if (formRequested && !EditorScreenshotHelper.representationFormMatches(representation, formPath))
-            {
-                return CaptureResult.error(ToolResult.error(
-                    "The WYSIWYG editor for '" + formPath + "' does not render the requested form model. " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "No screenshot was taken to avoid returning another form's image; " //$NON-NLS-1$
-                    + "try again once the requested form's editor is fully open.").toJson()); //$NON-NLS-1$
-            }
+            Object wysiwygViewer = editor.getViewer();
+            Object representation = editor.getRepresentation();
 
             // Resolve showElement before the render gate: an unknown name must fail fast with the
             // not-found error, not wait for the render or turn into the render-unavailable error.
@@ -215,7 +196,7 @@ public class GetFormScreenshotTool implements IMcpTool
             {
                 return captureImage(representation, wysiwygViewer, rendered, formRequested);
             }
-            return captureShowingElement(representation, wysiwygViewer, rendered, formRequested, showTarget);
+            return captureShowingElement(representation, wysiwygViewer, rendered, formPath, showTarget);
         }
         catch (Exception e)
         {
@@ -244,14 +225,15 @@ public class GetFormScreenshotTool implements IMcpTool
 
     /**
      * Captures with the page holding {@code target} shown. Runs after the (possibly forced) render,
-     * since a full render brings back the default pages. The switch is shown inside the {@code try}
-     * whose {@code finally} restores the editor, after the image is encoded (the native render reuses
-     * the ImageData instance). A failed restore fails the call and is appended to any other failure:
-     * the editor and later captures would keep the switched page.
+     * since a full render brings back the default pages. The switch, the identity guard and the image
+     * read follow each other with no event pumping, inside the {@code try} whose {@code finally}
+     * restores the editor. A failed restore fails the call and is appended to any other failure: the
+     * editor and later captures would keep the switched page.
      */
     static CaptureResult captureShowingElement(Object representation, Object wysiwygViewer,
-        boolean rendered, boolean formRequested, EditorScreenshotHelper.ShowElementTarget target)
+        boolean rendered, String formPath, EditorScreenshotHelper.ShowElementTarget target)
     {
+        boolean formRequested = formPath != null && !formPath.isEmpty();
         FormPageSwitch pageSwitch = FormPageSwitch.prepare(representation, target);
         String failure = null;
         String png = null;
@@ -259,6 +241,10 @@ public class GetFormScreenshotTool implements IMcpTool
         try
         {
             failure = pageSwitch.show();
+            if (failure == null)
+            {
+                failure = EditorScreenshotHelper.representationGuardError(representation, formPath, PRODUCT);
+            }
             if (failure == null)
             {
                 ImageDataResult image = readValidImageData(representation, wysiwygViewer, rendered, formRequested);
@@ -285,81 +271,6 @@ public class GetFormScreenshotTool implements IMcpTool
         }
         return failure == null ? CaptureResult.success(png)
             : CaptureResult.error(ToolResult.error(failure).toJson());
-    }
-
-    /**
-     * Resolves the WYSIWYG editor page to capture. When a form is requested it opens that form,
-     * lets the UI settle, resolves the page from the opened editor part and applies identity
-     * guard (a); otherwise it falls back to the globally active form editor page. On any failure
-     * the returned holder carries the same {@link CaptureResult} error as the inline code did.
-     * Runs on the UI thread.
-     *
-     * @throws InterruptedException if the UI-settle sleep is interrupted (propagated unchanged)
-     */
-    private EditorPageResult resolveEditorPage(String projectName, String formPath, boolean formRequested)
-        throws Exception
-    {
-        if (formRequested)
-        {
-            EditorScreenshotHelper.ensureBufferedNativeRenderMode();
-
-            // Open the requested form and keep a direct handle on the editor that was opened
-            // for it. The image MUST come from this editor's own WYSIWYG representation, not
-            // from the globally active form editor: previously this tool resolved the page via
-            // FormEditor.getActiveFormEditorPage(), which returns whatever form editor currently
-            // has workbench focus, so a previously rendered/active form (e.g. DataProcessor.X)
-            // was captured instead of the requested one.
-            EditorScreenshotHelper.OpenFormResult openResult =
-                EditorScreenshotHelper.openForm(projectName, formPath);
-            if (!openResult.isSuccess())
-            {
-                return EditorPageResult.failed(CaptureResult.error(openResult.getError()));
-            }
-
-            IEditorPart editorPart = openResult.getEditorPart();
-
-            // Let UI settle after activation
-            Display display = Display.getCurrent();
-            for (int i = 0; i < 5; i++)
-            {
-                EditorScreenshotHelper.processEvents(display);
-                Thread.sleep(100);
-            }
-
-            // Resolve the WYSIWYG page from THIS editor part (findPage), not the global active
-            // page, so the page is guaranteed to belong to the requested form.
-            Object editorPage = EditorScreenshotHelper.waitForFormEditorPageOf(editorPart);
-            if (editorPage == null)
-            {
-                return EditorPageResult.failed(CaptureResult.error(ToolResult.error(
-                    "Form editor opened but WYSIWYG page is not available. " + //$NON-NLS-1$
-                    "The form may still be loading.").toJson())); //$NON-NLS-1$
-            }
-
-            // Identity guard (a): confirm the opened editor actually corresponds to the requested
-            // form before reading its image. If it does not match, fail explicitly rather than
-            // return another form's PNG (the silent wrong-form defect).
-            String actualFqn = EditorScreenshotHelper.getFormEditorFqn(editorPart);
-            if (actualFqn != null && !EditorScreenshotHelper.fqnMatchesFormPath(actualFqn, formPath))
-            {
-                return EditorPageResult.failed(CaptureResult.error(ToolResult.error(
-                    "Captured form editor does not match the requested form. Requested '" //$NON-NLS-1$
-                    + formPath + "' but the active editor is '" + actualFqn //$NON-NLS-1$
-                    + "'. No screenshot was taken to avoid returning the wrong form's image; " //$NON-NLS-1$
-                    + "try again once the requested form's editor is fully open.").toJson())); //$NON-NLS-1$
-            }
-
-            return EditorPageResult.page(editorPage);
-        }
-
-        Object editorPage = EditorScreenshotHelper.getActiveFormEditorPage();
-        if (editorPage == null)
-        {
-            return EditorPageResult.failed(CaptureResult.error(ToolResult.error(
-                "No active form editor page found. " + //$NON-NLS-1$
-                "Specify formPath parameter to open a form automatically.").toJson())); //$NON-NLS-1$
-        }
-        return EditorPageResult.page(editorPage);
     }
 
     /**
@@ -433,32 +344,6 @@ public class GetFormScreenshotTool implements IMcpTool
         }
 
         return ImageDataResult.image(imageData);
-    }
-
-    /**
-     * Holder threading the resolved editor page or an early-return error out of
-     * {@link #resolveEditorPage}. Exactly one of {@code editorPage} / {@code error} is set.
-     */
-    private static final class EditorPageResult
-    {
-        final Object editorPage;
-        final CaptureResult error;
-
-        private EditorPageResult(Object editorPage, CaptureResult error)
-        {
-            this.editorPage = editorPage;
-            this.error = error;
-        }
-
-        static EditorPageResult page(Object editorPage)
-        {
-            return new EditorPageResult(editorPage, null);
-        }
-
-        static EditorPageResult failed(CaptureResult error)
-        {
-            return new EditorPageResult(null, error);
-        }
     }
 
     /**

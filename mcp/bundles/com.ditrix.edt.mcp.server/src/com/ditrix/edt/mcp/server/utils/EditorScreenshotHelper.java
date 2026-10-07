@@ -40,7 +40,6 @@ import com._1c.g5.v8.dt.form.model.ManagedFormGroupType;
 import com._1c.g5.v8.dt.ui.util.ContentUtil;
 
 import com.ditrix.edt.mcp.server.Activator;
-import com.ditrix.edt.mcp.server.protocol.ToolResult;
 
 /**
  * Reusable helper for capturing screenshots from EDT visual editors (forms, print forms, etc.).
@@ -141,7 +140,7 @@ public final class EditorScreenshotHelper
 
     /**
      * Result of opening a form editor: either the opened {@code FormEditor} part plus the
-     * resolved form {@code IFile}, or an error JSON string.
+     * resolved form {@code IFile}, or an error message.
      */
     public static final class OpenFormResult
     {
@@ -161,9 +160,9 @@ public final class EditorScreenshotHelper
             return new OpenFormResult(editorPart, formFile, null);
         }
 
-        static OpenFormResult error(String errorJson)
+        static OpenFormResult error(String message)
         {
-            return new OpenFormResult(null, null, errorJson);
+            return new OpenFormResult(null, null, message);
         }
 
         public boolean isSuccess()
@@ -206,29 +205,29 @@ public final class EditorScreenshotHelper
         String relativePath = MetadataPathResolver.resolveFormFilePath(formPath);
         if (relativePath == null)
         {
-            return OpenFormResult.error(ToolResult.error(
+            return OpenFormResult.error(
                 "Cannot resolve form path: " + formPath + ". " + //$NON-NLS-1$ //$NON-NLS-2$
                 "Expected format: 'MetadataType.ObjectName.Forms.FormName' " + //$NON-NLS-1$
-                "or 'CommonForm.FormName'.").toJson()); //$NON-NLS-1$
+                "or 'CommonForm.FormName'."); //$NON-NLS-1$
         }
 
         IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
         if (project == null || !project.exists())
         {
-            return OpenFormResult.error(ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson());
+            return OpenFormResult.error(ProjectContext.notFoundMessage(projectName));
         }
 
         IFile formFile = project.getFile(new Path(relativePath));
         if (!formFile.exists())
         {
-            return OpenFormResult.error(ToolResult.error(
-                "Form file not found: " + relativePath + " in project " + projectName).toJson()); //$NON-NLS-1$ //$NON-NLS-2$
+            return OpenFormResult.error(
+                "Form file not found: " + relativePath + " in project " + projectName); //$NON-NLS-1$ //$NON-NLS-2$
         }
 
         IWorkbenchPage page = getWorkbenchPage();
         if (page == null)
         {
-            return OpenFormResult.error(ToolResult.error("No active workbench page").toJson()); //$NON-NLS-1$
+            return OpenFormResult.error("No active workbench page"); //$NON-NLS-1$
         }
 
         // Resolve the typed DT editor input (model + feature) BEFORE opening. Opening the form
@@ -241,10 +240,10 @@ public final class EditorScreenshotHelper
         IEditorInput editorInput = resolveGranularEditorInput(formFile);
         if (editorInput == null)
         {
-            return OpenFormResult.error(ToolResult.error(
+            return OpenFormResult.error(
                 "Could not resolve the form model for: " + formPath + ". " + //$NON-NLS-1$ //$NON-NLS-2$
                 "The project may still be loading or building its model; " + //$NON-NLS-1$
-                "wait for the project to finish loading and try again.").toJson()); //$NON-NLS-1$
+                "wait for the project to finish loading and try again."); //$NON-NLS-1$
         }
 
         try
@@ -260,8 +259,7 @@ public final class EditorScreenshotHelper
             IEditorPart editorPart = IDE.openEditor(page, editorInput, FORM_EDITOR_ID, true);
             if (editorPart == null)
             {
-                return OpenFormResult.error(
-                    ToolResult.error("Could not open form editor for: " + formPath).toJson()); //$NON-NLS-1$
+                return OpenFormResult.error("Could not open form editor for: " + formPath); //$NON-NLS-1$
             }
 
             // Bring the editor to the top and give it focus so its WYSIWYG page builds and the
@@ -274,8 +272,7 @@ public final class EditorScreenshotHelper
         catch (Exception e)
         {
             Activator.logError("Failed to open form editor for: " + formPath, e); //$NON-NLS-1$
-            return OpenFormResult.error(
-                ToolResult.error("Failed to open form editor: " + e.getMessage()).toJson()); //$NON-NLS-1$
+            return OpenFormResult.error("Failed to open form editor: " + e.getMessage()); //$NON-NLS-1$
         }
     }
 
@@ -719,6 +716,138 @@ public final class EditorScreenshotHelper
         return fqn != null && fqnMatchesFormPath(fqn, formPath);
     }
 
+    /** The WYSIWYG editor a form tool reads, or why it cannot be read. */
+    public static final class FormEditorTarget
+    {
+        private final Object viewer;
+        private final Object representation;
+        private final String error;
+
+        private FormEditorTarget(Object viewer, Object representation, String error)
+        {
+            this.viewer = viewer;
+            this.representation = representation;
+            this.error = error;
+        }
+
+        static FormEditorTarget failed(String error)
+        {
+            return new FormEditorTarget(null, null, error);
+        }
+
+        /** @return the WYSIWYG viewer, set when {@link #getError()} is {@code null} */
+        public Object getViewer()
+        {
+            return viewer;
+        }
+
+        /** @return the {@code FormWysiwygRepresentation}, set when {@link #getError()} is {@code null} */
+        public Object getRepresentation()
+        {
+            return representation;
+        }
+
+        /** @return {@code null} when the editor was resolved, otherwise the error message */
+        public String getError()
+        {
+            return error;
+        }
+    }
+
+    /**
+     * Resolves the WYSIWYG editor a form tool reads: opens {@code formPath} (closing an editor already
+     * open on it) and lets the UI settle, or takes the active form editor when no form is requested. For a
+     * requested form both identity guards run: the opened editor and the representation's own form model
+     * must be that form, so no tool reads another form. Runs on the UI thread.
+     *
+     * @param projectName EDT project name (required with {@code formPath})
+     * @param formPath form FQN, or {@code null}/empty for the active form editor
+     * @param product what the caller returns, named in the wrong-form errors (e.g. "screenshot")
+     * @return the viewer and representation, or the error
+     * @throws Exception when the active form editor cannot be looked up, or the settle wait is interrupted
+     */
+    public static FormEditorTarget resolveFormEditor(String projectName, String formPath, String product)
+        throws Exception // NOSONAR propagates checked exceptions across the reflective boundary by design
+    {
+        boolean formRequested = formPath != null && !formPath.isEmpty();
+        Object editorPage;
+        if (formRequested)
+        {
+            OpenFormResult openResult = openForm(projectName, formPath);
+            if (!openResult.isSuccess())
+            {
+                return FormEditorTarget.failed(openResult.getError());
+            }
+            IEditorPart editorPart = openResult.getEditorPart();
+            Display display = Display.getCurrent();
+            for (int i = 0; i < 5; i++)
+            {
+                processEvents(display);
+                Thread.sleep(100);
+            }
+            // The page of THIS editor part, not the globally active one.
+            editorPage = waitForFormEditorPageOf(editorPart);
+            if (editorPage == null)
+            {
+                return FormEditorTarget.failed("Form editor opened but WYSIWYG page is not available. " //$NON-NLS-1$
+                    + "The form may still be loading; try again."); //$NON-NLS-1$
+            }
+            String actualFqn = getFormEditorFqn(editorPart);
+            if (actualFqn != null && !fqnMatchesFormPath(actualFqn, formPath))
+            {
+                return FormEditorTarget.failed("The opened form editor does not match the requested form: " //$NON-NLS-1$
+                    + "requested '" + formPath + "' but the editor is '" + actualFqn + "'. No " + product //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + " was taken, so none of another form is returned; try again once the requested form's " //$NON-NLS-1$
+                    + "editor is fully open."); //$NON-NLS-1$
+            }
+        }
+        else
+        {
+            editorPage = getActiveFormEditorPage();
+            if (editorPage == null)
+            {
+                return FormEditorTarget.failed("No active form editor page found. " //$NON-NLS-1$
+                    + "Specify formPath to open a form automatically."); //$NON-NLS-1$
+            }
+        }
+        Object viewer = ReflectionUtils.getFieldValue(editorPage, WYSIWYG_VIEWER_FIELD);
+        if (viewer == null)
+        {
+            return FormEditorTarget.failed("WYSIWYG viewer is not available"); //$NON-NLS-1$
+        }
+        Object representation = getRepresentation(viewer);
+        if (representation == null)
+        {
+            return FormEditorTarget.failed("WYSIWYG representation is not available"); //$NON-NLS-1$
+        }
+        String guardError = representationGuardError(representation, formPath, product);
+        if (guardError != null)
+        {
+            return FormEditorTarget.failed(guardError);
+        }
+        return new FormEditorTarget(viewer, representation, null);
+    }
+
+    /**
+     * Identity guard on the representation's own form model, which the image and the layout are rendered
+     * from; cheap, so it is re-run right before a capture.
+     *
+     * @param representation the {@code FormWysiwygRepresentation} instance
+     * @param formPath the requested form FQN, or {@code null}/empty when none was requested
+     * @param product what the caller returns, named in the error (e.g. "screenshot")
+     * @return {@code null} when no form was requested or the model is that form, otherwise the error
+     */
+    public static String representationGuardError(Object representation, String formPath, String product)
+    {
+        if (formPath == null || formPath.isEmpty() || representationFormMatches(representation, formPath))
+        {
+            return null;
+        }
+        return "The WYSIWYG editor for '" + formPath + "' does not render the requested form model. No " //$NON-NLS-1$ //$NON-NLS-2$
+            + product + " was taken, so none of another form is returned; try again once the requested " //$NON-NLS-1$
+            + "form's editor is fully open."; //$NON-NLS-1$
+    }
+
     /**
      * The form element a capture should bring into view, resolved before any render so an unknown name
      * fails fast. {@link #getItemId()} is meaningful only when {@link #getError()} is {@code null}.
@@ -727,23 +856,31 @@ public final class EditorScreenshotHelper
     {
         private final String name;
         private final int itemId;
+        private final boolean onPage;
         private final String error;
 
-        private ShowElementTarget(String name, int itemId, String error)
+        private ShowElementTarget(String name, int itemId, boolean onPage, String error)
         {
             this.name = name;
             this.itemId = itemId;
+            this.onPage = onPage;
             this.error = error;
         }
 
-        static ShowElementTarget resolved(String name, int itemId)
+        static ShowElementTarget resolved(String name, int itemId, boolean onPage)
         {
-            return new ShowElementTarget(name, itemId, null);
+            return new ShowElementTarget(name, itemId, onPage, null);
         }
 
         static ShowElementTarget failed(String name, String error)
         {
-            return new ShowElementTarget(name, 0, error);
+            return new ShowElementTarget(name, 0, false, error);
+        }
+
+        /** @return whether a Pages group encloses the element, i.e. showing it may switch a page */
+        public boolean isOnPage()
+        {
+            return onPage;
         }
 
         /** @return the element name the caller asked for */
@@ -796,7 +933,20 @@ public final class EditorScreenshotHelper
         {
             return ShowElementTarget.failed(elementName, elementNotFoundMessage(form, elementName));
         }
-        return ShowElementTarget.resolved(elementName, formItem.getId());
+        return ShowElementTarget.resolved(elementName, formItem.getId(), isInPagesGroup(formItem));
+    }
+
+    /** Whether a Pages group encloses the item (a page itself included). */
+    static boolean isInPagesGroup(EObject item)
+    {
+        for (EObject container = item.eContainer(); container != null; container = container.eContainer())
+        {
+            if (container instanceof FormGroup group && group.getType() == ManagedFormGroupType.PAGES)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -901,7 +1051,7 @@ public final class EditorScreenshotHelper
      * @param representation the {@code FormWysiwygRepresentation} instance
      * @return the current {@code formImageData} reference, or {@code null}
      */
-    static ImageData getFormImageDataField(Object representation)
+    private static ImageData getFormImageDataField(Object representation)
     {
         if (representation == null)
         {
@@ -1183,10 +1333,9 @@ public final class EditorScreenshotHelper
      * @param selectedIds form item ids to select ({@code 0} is the form itself), or {@code null} for a
      *            plain update render
      * @param updateOnly {@code false} for a full layout/render pass
-     * @return the outcome plus the {@code hippoSession} this render produced (read before the event
-     *         loop is pumped, so a later foreign rebuild is detectable)
+     * @return the outcome
      */
-    private static SyncRender renderRequestedFormSynchronously(Object representation, int[] selectedIds,
+    static SyncRender renderRequestedFormSynchronously(Object representation, int[] selectedIds,
         boolean updateOnly)
     {
         boolean invoked = false;
@@ -1247,14 +1396,13 @@ public final class EditorScreenshotHelper
             Object sessionBefore = getHippoSession(representation);
             invoked = true;
             rebuildInternal.invoke(representation, form, cmiMapping, event, Boolean.valueOf(updateOnly));
-            Object session = getHippoSession(representation);
-            if (sessionBefore != null && session == sessionBefore)
+            if (sessionBefore != null && getHippoSession(representation) == sessionBefore)
             {
                 // Every render assigns a new session: an unchanged one means rebuildInternal returned
                 // early (its form had no actual object yet), so nothing was rendered.
                 return SyncRender.of(RenderOutcome.NOT_READY);
             }
-            return new SyncRender(RenderOutcome.RENDERED, session);
+            return SyncRender.of(RenderOutcome.RENDERED);
         }
         catch (Exception e)
         {
@@ -1266,7 +1414,7 @@ public final class EditorScreenshotHelper
     }
 
     /** The representation's {@code hippoSession}, replaced by every render; {@code null} if unreadable. */
-    static Object getHippoSession(Object representation)
+    private static Object getHippoSession(Object representation)
     {
         try
         {
@@ -1279,17 +1427,18 @@ public final class EditorScreenshotHelper
     }
 
     /**
-     * The one synchronous-render retry loop: renders, pumps the event loop, and stops as soon as
-     * {@code accept} holds for the outcome, the hooks turn out to be unreachable or failed, or the
-     * deadline passes. At least one attempt always runs, so a caller with an exhausted budget (a
-     * restore after a slow switch) still gets its render.
+     * The one synchronous-render retry loop: renders and stops as soon as {@code accept} holds for the
+     * outcome, the hooks turn out to be unreachable or failed, or the deadline passes. The event loop is
+     * pumped only while waiting for the next attempt, never after an accepted render, so a caller can
+     * follow it with another render or a capture before any other editor renders. At least one attempt
+     * always runs, so a caller with an exhausted budget still gets its render.
      *
      * @param representation the {@code FormWysiwygRepresentation} instance
      * @param selectedIds ids for a select-by-id render, or {@code null} for an update render
      * @param updateOnly {@code false} for a full layout/render pass
      * @param deadline absolute time in milliseconds after which no new attempt starts
      * @param accept when the caller is done, given the outcome of the last attempt
-     * @param pump drains the event loop after each render (the UI event loop in production)
+     * @param pump drains the event loop between attempts (the UI event loop in production)
      * @return the last attempt, whether it was accepted, and whether the hooks were ever reachable
      */
     static SyncRender renderSyncUntil(Object representation, int[] selectedIds, boolean updateOnly,
@@ -1299,8 +1448,6 @@ public final class EditorScreenshotHelper
         while (true)
         {
             SyncRender attempt = renderRequestedFormSynchronously(representation, selectedIds, updateOnly);
-            // Drain the redraw the render task scheduled so the offscreen buffer is settled.
-            pump.run();
             if (accept.test(attempt.outcome))
             {
                 return attempt.finish(true, true);
@@ -1314,6 +1461,8 @@ public final class EditorScreenshotHelper
             {
                 return attempt.finish(false, true);
             }
+            // Let the model finish loading before the next attempt.
+            pump.run();
             sleep(RENDER_WAIT_POLL_INTERVAL_MS);
         }
     }
@@ -1335,9 +1484,12 @@ public final class EditorScreenshotHelper
      */
     public static boolean renderFormNow(Object representation)
     {
-        return renderSyncUntilRendered(representation, null, false,
+        boolean rendered = renderSyncUntilRendered(representation, null, false,
             System.currentTimeMillis() + FRESH_RENDER_WAIT_TIMEOUT_MS,
             EditorScreenshotHelper::processCurrentEvents).outcome == RenderOutcome.RENDERED;
+        // Lay the controls out; a rebuild that runs here is a whole layout of this call too.
+        processCurrentEvents();
+        return rendered;
     }
 
     /** Drains the pending events of the calling UI thread; a no-op off the UI thread. */
@@ -1350,32 +1502,24 @@ public final class EditorScreenshotHelper
     static final class SyncRender
     {
         final RenderOutcome outcome;
-        /** The session the render produced; {@code null} unless {@link #outcome} is RENDERED. */
-        final Object session;
         final boolean accepted;
         final boolean reachable;
 
-        SyncRender(RenderOutcome outcome, Object session)
-        {
-            this(outcome, session, false, false);
-        }
-
-        private SyncRender(RenderOutcome outcome, Object session, boolean accepted, boolean reachable)
+        private SyncRender(RenderOutcome outcome, boolean accepted, boolean reachable)
         {
             this.outcome = outcome;
-            this.session = session;
             this.accepted = accepted;
             this.reachable = reachable;
         }
 
         static SyncRender of(RenderOutcome outcome)
         {
-            return new SyncRender(outcome, null);
+            return new SyncRender(outcome, false, false);
         }
 
         SyncRender finish(boolean isAccepted, boolean wasReachable)
         {
-            return new SyncRender(outcome, session, isAccepted, wasReachable);
+            return new SyncRender(outcome, isAccepted, wasReachable);
         }
     }
 

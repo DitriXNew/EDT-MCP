@@ -649,6 +649,30 @@ public class EditorScreenshotHelperTest
     }
 
     @Test
+    public void testResolveShowElementTellsWhetherAPagesGroupEnclosesIt()
+    {
+        Form form = formWithPages("Main", "Extra"); //$NON-NLS-1$ //$NON-NLS-2$
+        FormField onPage = FormFactory.eINSTANCE.createFormField();
+        onPage.setName("OnPage"); //$NON-NLS-1$
+        onPage.setId(40);
+        ((FormGroup)((FormGroup)form.getItems().get(0)).getItems().get(1)).getItems().add(onPage);
+        FormField header = FormFactory.eINSTANCE.createFormField();
+        header.setName("Header"); //$NON-NLS-1$
+        header.setId(41);
+        FormGroup plainGroup = group("Top", 2, ManagedFormGroupType.USUAL_GROUP); //$NON-NLS-1$
+        plainGroup.getItems().add(header);
+        form.getItems().add(plainGroup);
+        FakeFormRepresentation rep = new FakeFormRepresentation(form);
+
+        assertTrue(EditorScreenshotHelper.resolveShowElement(rep, "OnPage").isOnPage()); //$NON-NLS-1$
+        assertTrue("a page itself lies in its Pages group", //$NON-NLS-1$
+            EditorScreenshotHelper.resolveShowElement(rep, "Extra").isOnPage()); //$NON-NLS-1$
+        assertFalse("outside every Pages group nothing has to switch", //$NON-NLS-1$
+            EditorScreenshotHelper.resolveShowElement(rep, "Header").isOnPage()); //$NON-NLS-1$
+        assertFalse(EditorScreenshotHelper.resolveShowElement(rep, "Pages").isOnPage()); //$NON-NLS-1$
+    }
+
+    @Test
     public void testResolveShowElementRefusesAnAmbiguousName()
     {
         // The shared strict finder refuses a name two items share; a first-match finder picked one.

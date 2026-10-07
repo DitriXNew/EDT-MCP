@@ -2485,6 +2485,16 @@ def final_cleanup():
 # ──────────────────────────────────────────────────────────────────────────────
 # Form render mode (an independent oracle for render-dependent form tests)
 # ──────────────────────────────────────────────────────────────────────────────
+def _form_render_flag(flag):
+    """formRenderFlags[flag] from get_server_status, or None when unreadable."""
+    r = call("get_server_status", {})
+    if r.is_error or not isinstance(r.structured, dict):
+        return None
+    flags = r.structured.get("formRenderFlags")
+    state = flags.get(flag) if isinstance(flags, dict) else None
+    return state if isinstance(state, dict) else None
+
+
 def native_form_layout_render_mode():
     """EDT's native form layout render mode as 'on' or 'off', or None when unreadable.
 
@@ -2493,19 +2503,32 @@ def native_form_layout_render_mode():
     default (native when the property is absent) is reported correctly, and
     forcedAtRuntime marks a later change of the live mode. Tests branch on this
     instead of accepting whichever outcome a form tool happens to return."""
-    r = call("get_server_status", {})
-    if r.is_error or not isinstance(r.structured, dict):
-        return None
-    flags = r.structured.get("formRenderFlags")
-    state = flags.get("nativeFormLayoutRender") if isinstance(flags, dict) else None
-    if not isinstance(state, dict):
-        return None
-    mode = state.get("atStartup")
+    state = _form_render_flag("nativeFormLayoutRender")
+    mode = state.get("atStartup") if state else None
     if mode not in ("on", "off"):
         return None
     if state.get("forcedAtRuntime") is True:
         mode = "off" if mode == "on" else "on"
     return mode
+
+
+def buffered_form_render_at_startup():
+    """-DnativeFormBufferedLayoutRender at plugin activation as 'on' or 'off', or None.
+
+    Only the startup value counts: EDT builds its offscreen buffer once, so a later
+    runtime force does not give a native render an image."""
+    state = _form_render_flag("nativeFormBufferedLayoutRender")
+    mode = state.get("atStartup") if state else None
+    return mode if mode in ("on", "off") else None
+
+
+def form_render_capable():
+    """Whether this EDT is configured to render forms, read without calling a form tool:
+    the Java layout render, or the native render with its buffered image (the flags a
+    test stand sets in 1cedt.ini). On such an install a form tool that cannot open or
+    render the form has failed; elsewhere that is an unmet precondition."""
+    layout = native_form_layout_render_mode()
+    return layout == "off" or (layout == "on" and buffered_form_render_at_startup() == "on")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
