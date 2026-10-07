@@ -1253,7 +1253,7 @@ public class DeleteMetadataFormAttributeTest
         String sentence = data.boundItemsSentence();
         assertTrue(sentence, sentence.contains("Its file " + SETTINGS_FILE + " is deleted from disk by EDT's export.")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue("the global-context commit's editor side effect is disclosed", sentence.contains( //$NON-NLS-1$
-            "An open editor of this form with unsaved changes has them saved with the delete and loses its undo history.")); //$NON-NLS-1$
+            "An open editor of this form with unsaved changes has them all saved with the delete, not only its changes to this form, and loses its undo history.")); //$NON-NLS-1$
         assertTrue(data.scope.toString(), data.scope.stream().anyMatch(identity -> identity.endsWith(
             "DynamicListExtInfo.listSettings[" + SETTINGS_FILE + "]:DataCompositionSettings"))); //$NON-NLS-1$ //$NON-NLS-2$
 
