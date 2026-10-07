@@ -1335,7 +1335,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 : present ? DetachedFileState.STILL_PRESENT : DetachedFileState.REMOVED;
             item.addProperty(KEY_FILE_REMOVAL, state.name());
             notes.append(' ').append(detachedFileMessage(state, path, drainEstablished));
-            confirmed &= state == DetachedFileState.REMOVED;
+            // An absent file proves EDT deleted it, not that the form write finished too.
+            confirmed &= state == DetachedFileState.REMOVED && drainEstablished;
         }
         if (!seen)
         {
@@ -1356,7 +1357,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         switch (state)
         {
         case REMOVED:
-            return "Its file " + path + " is not on disk after EDT's export."; //$NON-NLS-1$ //$NON-NLS-2$
+            return "Its file " + path + (drainEstablished ? " is not on disk after EDT's export." //$NON-NLS-1$
+                : " is not on disk, but EDT's export was not observed to finish; re-check the form before relying on it."); //$NON-NLS-1$
         case STILL_PRESENT:
             return "Its file " + path + (drainEstablished //$NON-NLS-1$
                 ? " is still on disk after EDT's export finished; remove it or re-check before relying on it." //$NON-NLS-1$

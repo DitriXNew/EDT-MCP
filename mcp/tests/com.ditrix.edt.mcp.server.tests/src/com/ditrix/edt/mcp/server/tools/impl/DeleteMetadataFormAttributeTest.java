@@ -946,7 +946,9 @@ public class DeleteMetadataFormAttributeTest
         JsonObject gone = JsonParser.parseString(new DiskTool(new ArrayList<>(), DiskExportState.UNOBSERVABLE,
             Map.of(SETTINGS_FILE, Boolean.FALSE)).drive(listDeleteResult(settingsFile(), true))).getAsJsonObject();
         assertEquals("REMOVED", detachedItem(gone).get("fileRemoval").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
-        assertFalse(gone.has("persisted")); //$NON-NLS-1$
+        // A gone file proves EDT deleted it, not that the form write finished: still partial.
+        assertPartial(gone, "Its file " + SETTINGS_FILE //$NON-NLS-1$
+            + " is not on disk, but EDT's export was not observed to finish"); //$NON-NLS-1$
     }
 
     @Test
