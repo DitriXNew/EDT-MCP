@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.TreeMap;
 
 import com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
@@ -254,14 +255,26 @@ public final class AdjustableBooleanSupport
      */
     public static String render(AdjustableBoolean value)
     {
-        if (value == null)
-        {
-            return null;
-        }
-        Map<String, Boolean> roles = roleValues(value);
+        return value == null ? null : toText(value.isCommon(), roleValues(value));
+    }
+
+    /**
+     * The order-independent identity of a flag: {@link #render} with the roles sorted, so two sides
+     * storing the same role values in another order compare equal.
+     *
+     * @param value the flag, may be {@code null}
+     * @return the identity, or {@code null} for no flag
+     */
+    public static String identity(AdjustableBoolean value)
+    {
+        return value == null ? null : toText(value.isCommon(), new TreeMap<>(roleValues(value)));
+    }
+
+    private static String toText(boolean common, Map<String, Boolean> roles)
+    {
         if (roles.isEmpty())
         {
-            return String.valueOf(value.isCommon());
+            return String.valueOf(common);
         }
         JsonObject rolesJson = new JsonObject();
         for (Map.Entry<String, Boolean> e : roles.entrySet())
@@ -269,7 +282,7 @@ public final class AdjustableBooleanSupport
             rolesJson.addProperty(e.getKey(), e.getValue());
         }
         JsonObject json = new JsonObject();
-        json.addProperty("common", value.isCommon()); //$NON-NLS-1$
+        json.addProperty("common", common); //$NON-NLS-1$
         json.add("roles", rolesJson); //$NON-NLS-1$
         return json.toString();
     }

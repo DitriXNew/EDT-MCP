@@ -5696,7 +5696,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case ADJUSTABLE_BOOLEAN:
                 return prepareAdjustableBoolean(ctx.config, name, value, prop, info, out);
             case USE_ALWAYS:
-                return prepareUseAlways(ctx.config, target, prop, info, out);
+                return prepareUseAlways(target, prop, info, out);
             case STRING:
             default:
                 return prepareString(name, value, info, out, normReport);
@@ -5977,9 +5977,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Validates a form attribute's {@code useAlways} checkboxes (issue #661) against the platform's data
-     * tree and the attribute's root type, before anything is written, and appends the prepared change.
+     * tree and EDT's checkbox rule, before anything is written, and appends the prepared change.
      */
-    private static String prepareUseAlways(Configuration config, EObject target, JsonObject prop,
+    private static String prepareUseAlways(EObject target, JsonObject prop,
         PropertyInfo info, List<PreparedChange> out)
     {
         if (!(target instanceof FormAttribute))
@@ -5993,7 +5993,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         List<UseAlwaysSupport.Plan> plans = new ArrayList<>();
         if (err == null)
         {
-            err = UseAlwaysSupport.plan(config, formOf(attribute), attribute, requests, plans);
+            err = UseAlwaysSupport.plan(formOf(attribute), attribute, requests, plans);
         }
         if (err != null)
         {

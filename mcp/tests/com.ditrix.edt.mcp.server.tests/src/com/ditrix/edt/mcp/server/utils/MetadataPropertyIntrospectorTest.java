@@ -1370,27 +1370,67 @@ public class MetadataPropertyIntrospectorTest
     }
 
     @Test
-    public void testUseAlwaysCurrentValueIsTheEffectiveStateOfTheListedPaths()
+    public void testAdjustableBooleanRoleOrderIsNotADifference()
     {
-        com._1c.g5.v8.dt.form.model.FormAttribute attribute =
-            com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE.createFormAttribute();
-        attribute.setName("Object"); //$NON-NLS-1$
-        TypeDescription type = McoreFactory.eINSTANCE.createTypeDescription();
-        Type catalogObject = McoreFactory.eINSTANCE.createType();
-        catalogObject.setName("CatalogObject.Products"); //$NON-NLS-1$
-        type.getTypes().add(catalogObject);
-        attribute.setValueType(type);
-        assertNull("nothing listed - every path at its default", //$NON-NLS-1$
-            MetadataPropertyIntrospector.find(attribute, "useAlways").currentValue); //$NON-NLS-1$
+        // The reader sees the stored order; a comparison must not call a reordering a change.
+        com._1c.g5.v8.dt.metadata.mdclass.Role manager = MdClassFactory.eINSTANCE.createRole();
+        manager.setName("Manager"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.metadata.mdclass.Role clerk = MdClassFactory.eINSTANCE.createRole();
+        clerk.setName("Clerk"); //$NON-NLS-1$
+        StandardCommand first = commandVisibleFor(manager, clerk);
+        StandardCommand second = commandVisibleFor(clerk, manager);
 
-        com._1c.g5.v8.dt.form.model.DataPath code =
-            com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE.createDataPath();
-        code.getSegments().add("Object"); //$NON-NLS-1$
-        code.getSegments().add("Code"); //$NON-NLS-1$
-        attribute.getNotDefaultUseAlwaysAttributes().add(code);
+        PropertyInfo a = MetadataPropertyIntrospector.find(first, "visible"); //$NON-NLS-1$
+        PropertyInfo b = MetadataPropertyIntrospector.find(second, "visible"); //$NON-NLS-1$
+        assertEquals("{\"common\":true,\"roles\":{\"Role.Manager\":true,\"Role.Clerk\":false}}", a.currentValue); //$NON-NLS-1$
+        assertEquals("{\"common\":true,\"roles\":{\"Role.Clerk\":false,\"Role.Manager\":true}}", b.currentValue); //$NON-NLS-1$
+        assertEquals(a.valueIdentity, b.valueIdentity);
+        assertEquals("{\"common\":true,\"roles\":{\"Role.Clerk\":false,\"Role.Manager\":true}}", a.valueIdentity); //$NON-NLS-1$
+    }
 
-        assertEquals("an object root lists the paths NOT used always", "{\"Object.Code\":false}", //$NON-NLS-1$ //$NON-NLS-2$
-            MetadataPropertyIntrospector.find(attribute, "useAlways").currentValue); //$NON-NLS-1$
+    @Test
+    public void testUseAlwaysCurrentValueIsWhatThePlatformReports()
+    {
+        UseAlwaysPlatformFake platform = new UseAlwaysPlatformFake();
+        platform.field("Object.Code", null, //$NON-NLS-1$
+            com._1c.g5.v8.dt.form.service.attribute.IUseAlwaysAttributeService.UseAlways.Checked);
+        platform.install();
+        try
+        {
+            com._1c.g5.v8.dt.form.model.FormAttribute attribute =
+                com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE.createFormAttribute();
+            attribute.setName("Object"); //$NON-NLS-1$
+            com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE.createForm().getAttributes().add(attribute);
+            assertNull("nothing listed - every path at its default", //$NON-NLS-1$
+                MetadataPropertyIntrospector.find(attribute, "useAlways").currentValue); //$NON-NLS-1$
+
+            attribute.getNotDefaultUseAlwaysAttributes().add(UseAlwaysPlatformFake.dataPath("Object.Code")); //$NON-NLS-1$
+            attribute.getNotDefaultUseAlwaysAttributes().add(UseAlwaysPlatformFake.dataPath("Object.Gone")); //$NON-NLS-1$
+
+            PropertyInfo useAlways = MetadataPropertyIntrospector.find(attribute, "useAlways"); //$NON-NLS-1$
+            assertEquals("{\"Object.Code\":false,\"Object.Gone\":\"unresolved\"}", useAlways.currentValue); //$NON-NLS-1$
+            assertEquals("Object.Code\nObject.Gone", useAlways.valueIdentity); //$NON-NLS-1$
+        }
+        finally
+        {
+            UseAlwaysPlatformFake.uninstall();
+        }
+    }
+
+    private static StandardCommand commandVisibleFor(com._1c.g5.v8.dt.metadata.mdclass.Role... roles)
+    {
+        StandardCommand command = MdClassFactory.eINSTANCE.createStandardCommand();
+        AdjustableBoolean flag = MdClassFactory.eINSTANCE.createAdjustableBoolean();
+        flag.setCommon(true);
+        for (com._1c.g5.v8.dt.metadata.mdclass.Role role : roles)
+        {
+            com._1c.g5.v8.dt.metadata.mdclass.ForRoleType forRole = MdClassFactory.eINSTANCE.createForRoleType();
+            forRole.setRole(role);
+            forRole.setValue("Manager".equals(role.getName())); //$NON-NLS-1$
+            flag.getFor().add(forRole);
+        }
+        command.setVisible(flag);
+        return command;
     }
 
     /**

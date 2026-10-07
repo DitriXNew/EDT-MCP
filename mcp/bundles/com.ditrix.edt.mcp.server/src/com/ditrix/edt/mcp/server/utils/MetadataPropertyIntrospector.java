@@ -950,7 +950,10 @@ public final class MetadataPropertyIntrospector
                 case QNAME:
                     return Rendered.of(value instanceof QName ? renderQName((QName)value) : null);
                 case ADJUSTABLE_BOOLEAN:
-                    return Rendered.of(renderAdjustableBoolean(value));
+                    // Role values in stored order for the reader, sorted for a comparison.
+                    return value instanceof AdjustableBoolean
+                        ? Rendered.of(renderAdjustableBoolean(value), AdjustableBooleanSupport.identity((AdjustableBoolean)value))
+                        : Rendered.of(renderAdjustableBoolean(value));
                 case USE_ALWAYS:
                 {
                     String[] useAlways = UseAlwaysSupport.render(obj);

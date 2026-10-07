@@ -11,8 +11,8 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.TreeMap;
+import java.util.TreeSet;
+import java.util.function.Supplier;
 
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
@@ -26,29 +26,26 @@ import com._1c.g5.v8.dt.form.model.FormFactory;
 import com._1c.g5.v8.dt.form.model.MultiLanguageDataPath;
 import com._1c.g5.v8.dt.form.model.PropertyInfo;
 import com._1c.g5.v8.dt.form.service.attribute.IUseAlwaysAttributeService;
+import com._1c.g5.v8.dt.form.service.attribute.IUseAlwaysAttributeService.UseAlways;
 import com._1c.g5.v8.dt.form.service.datasourceinfo.IDataSourceInfoAssociationService;
-import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.mcore.util.McoreUtil;
-import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
-import com._1c.g5.v8.dt.metadata.mdclass.Constant;
-import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.ScriptVariant;
 import com._1c.g5.wiring.ServiceAccess;
+import com.ditrix.edt.mcp.server.Activator;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 /**
- * A form attribute's "Use always" checkboxes (the attribute tree's column in the designer), exposed as
- * the {@code useAlways} property: {@code {"<Attr>.<path>": true|false}}, one designer checkbox per
- * path (issue #661).
+ * A form attribute's "Use always" checkboxes, exposed as the {@code useAlways} property:
+ * {@code {"<Attr>.<path>": true|false}}, one designer checkbox per path (issue #661).
  *
- * <p>The model keeps them in {@code FormAttribute.notDefaultUseAlwaysAttributes}, whose meaning flips
- * with the default of the attribute's root type - EDT's {@code UseAlwaysAttributeService}: a
- * ConstantsSet, a RegisterRecordsCollection and a dynamic list's columns default to UNCHECKED, so a
- * listed path is "use always"; any other root defaults to CHECKED, so a listed path is "not use always".
- * The caller sets the checkbox and this class computes the membership. A path the platform's data tree
- * resolves is written through that service itself; one it does not resolve falls back to the same
- * root-type rule, replicated in {@link #rootDefault}.</p>
+ * <p>The model keeps the paths whose checkbox differs from its default in
+ * {@code FormAttribute.notDefaultUseAlwaysAttributes}; the default depends on the path. EDT's
+ * {@link IUseAlwaysAttributeService} is the only authority on it: every path is resolved to the
+ * platform's {@link PropertyInfo}, read through {@code getUseAlwaysValue} and written through
+ * {@code setUseAlwaysValue}, the designer's own route. A path the platform cannot resolve, or one it
+ * gives no checkbox, is refused; without the platform nothing is written.</p>
  */
 public final class UseAlwaysSupport
 {
@@ -58,26 +55,55 @@ public final class UseAlwaysSupport
     /** The model feature holding the non-default paths. */
     public static final String FEATURE = "notDefaultUseAlwaysAttributes"; //$NON-NLS-1$
 
-    private static final String TYPE_GANTT_CHART = "GanttChart"; //$NON-NLS-1$
+    /** Read-back of a stored path the platform's data tree does not resolve. */
+    public static final String UNRESOLVED = "unresolved"; //$NON-NLS-1$
+
+    /** Read-back of a stored path the platform gives no checkbox. */
+    public static final String NO_CHECKBOX = "noCheckbox"; //$NON-NLS-1$
+
     private static final String TYPE_DYNAMIC_LIST = "DynamicList"; //$NON-NLS-1$
-    private static final String TYPE_CONSTANTS_SET = "ConstantsSet"; //$NON-NLS-1$
-    private static final String TYPE_RECORDS_COLLECTION = "RegisterRecordsCollection"; //$NON-NLS-1$
 
-    /** The designer's default checkbox state of a path; mirrors {@code IUseAlwaysAttributeService.UseAlways}. */
-    public enum UseAlwaysDefault
-    {
-        /** The designer shows no checkbox. */
-        NONE,
-        /** Checked unless listed. */
-        CHECKED,
-        /** Unchecked unless listed. */
-        UNCHECKED
-    }
+    /** Where the services come from; a test seam, the OSGi registry in production. */
+    static Supplier<Platform> platformSource = () -> new Platform(
+        ServiceAccess.get(IDataSourceInfoAssociationService.class), ServiceAccess.get(IUseAlwaysAttributeService.class));
 
-    /** What the attribute's value type makes of its paths, in the order the platform tests them. */
-    enum RootKind
+    /** The two EDT form services the checkbox lives in. */
+    public static final class Platform
     {
-        GANTT_CHART, DYNAMIC_LIST, CONSTANTS_SET, RECORDS_COLLECTION, OTHER
+        final IDataSourceInfoAssociationService dataSources;
+        final IUseAlwaysAttributeService useAlways;
+
+        /**
+         * @param dataSources resolves a data path to the form's data tree
+         * @param useAlways the checkbox rule
+         */
+        public Platform(IDataSourceInfoAssociationService dataSources, IUseAlwaysAttributeService useAlways)
+        {
+            this.dataSources = dataSources;
+            this.useAlways = useAlways;
+        }
+
+        /**
+         * The registered services. A missing one is a platform failure, not the caller's mistake, so it
+         * throws an unmarked exception that the tool logs at ERROR.
+         *
+         * @return the services
+         * @throws IllegalStateException when either is not available
+         */
+        static Platform current()
+        {
+            try
+            {
+                return platformSource.get();
+            }
+            catch (RuntimeException e)
+            {
+                throw new IllegalStateException("'" + PROPERTY + "' needs EDT's form data services " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "(IDataSourceInfoAssociationService, IUseAlwaysAttributeService), which this EDT session " //$NON-NLS-1$
+                    + "does not provide: " + e.getMessage() + ". Nothing was written; the EDT log names the " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "bundle that failed to start.", e); //$NON-NLS-1$
+            }
+        }
     }
 
     /** One requested checkbox: the path as given (first segment canonicalized) and its state. */
@@ -95,19 +121,14 @@ public final class UseAlwaysSupport
         }
     }
 
-    /** A validated request and how it is written: through the platform, or by the replicated rule. */
+    /** A request the platform resolved and gave a checkbox. */
     public static final class Plan
     {
         final Request request;
-        /** The platform's {@code PropertyInfo} for the path, or {@code null}. */
-        final PropertyInfo info;
-        final UseAlwaysDefault def;
 
-        Plan(Request request, PropertyInfo info, UseAlwaysDefault def)
+        Plan(Request request)
         {
             this.request = request;
-            this.info = info;
-            this.def = def;
         }
     }
 
@@ -185,44 +206,50 @@ public final class UseAlwaysSupport
     }
 
     /**
-     * Validates every request against the form and decides how it is written. Runs before anything
-     * is written, inside the transaction that will write.
+     * Resolves every request through the platform before anything is written: the path must be in the
+     * form's data tree and have a checkbox, and a dynamic-list field a form item shows cannot be
+     * unchecked.
      *
-     * @param config the configuration (constants are checked against it), may be {@code null}
      * @param formModel the form content model
      * @param attribute the addressed attribute
      * @param requests the parsed requests
      * @param out receives one plan per request
      * @return an actionable refusal, or {@code null}
+     * @throws IllegalStateException when the platform services are not available, or the attribute
+     *     is not in a form
      */
-    public static String plan(Configuration config, EObject formModel, FormAttribute attribute,
-        List<Request> requests, List<Plan> out)
+    public static String plan(EObject formModel, FormAttribute attribute, List<Request> requests, List<Plan> out)
     {
-        RootKind kind = rootKind(attribute);
+        if (!(formModel instanceof Form))
+        {
+            throw new IllegalStateException("'" + PROPERTY + "': the attribute '" + attribute.getName() //$NON-NLS-1$ //$NON-NLS-2$
+                + "' is not inside a form model, so its data tree cannot be read."); //$NON-NLS-1$
+        }
+        Form form = (Form)formModel;
+        Platform platform = Platform.current();
         for (Request request : requests)
         {
-            PropertyInfo info = formModel instanceof Form ? platformInfo((Form)formModel, request.segments) : null;
-            UseAlwaysDefault def = info != null ? platformDefault(info, (Form)formModel) : null;
-            if (def == null)
+            PropertyInfo info = platform.dataSources.findPropertyInfo(form, dataPath(request.segments));
+            if (info == null)
             {
-                String err = staticCheck(config, attribute, kind, request);
-                if (err != null)
-                {
-                    return err;
-                }
-                info = null;
-                def = rootDefault(kind);
+                return unresolvedRefusal(platform, form, request);
             }
-            if (def == UseAlwaysDefault.NONE)
+            UseAlways def = platform.useAlways.getDefaultValue(info, form);
+            if (def == null || def == UseAlways.None)
             {
-                return "'" + PROPERTY + "' path '" + request.key + "' has no 'Use always' checkbox in the " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "designer (a field reached through a reference, an aggregate, a field folder, a type " //$NON-NLS-1$
-                    + "whose fields are not read separately, or a Gantt chart), so there is nothing to set. " //$NON-NLS-1$
-                    + "Address the field itself, e.g. '" + attribute.getName() + ".<field>'."; //$NON-NLS-1$ //$NON-NLS-2$
+                return "'" + PROPERTY + "' path '" + request.key + "' has no 'Use always' checkbox in the " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "designer (EDT gives none to a field reached through a reference, an aggregate, a " //$NON-NLS-1$
+                    + "dynamic-list field folder, a type whose fields are not read separately, or a Gantt " //$NON-NLS-1$
+                    + "chart), so there is nothing to set. Address a field that has one, e.g. '" //$NON-NLS-1$
+                    + attribute.getName() + ".<field>'."; //$NON-NLS-1$
             }
-            if (kind == RootKind.DYNAMIC_LIST && !request.useAlways && formModel != null)
+            if (!request.useAlways && isDynamicList(attribute))
             {
-                EObject item = FormElementWriter.itemBoundTo(formModel, request.segments);
+                // The item may spell the field in either language: compare with both of the
+                // platform's spellings of the resolved field, every language of a legacy item path.
+                List<List<String>> spellings = spellings(info);
+                EObject item = FormElementWriter.itemBoundTo(form,
+                    bound -> bound instanceof AbstractDataPath && matchesAnySpelling((AbstractDataPath)bound, spellings));
                 if (item != null)
                 {
                     return "'" + PROPERTY + "' cannot turn 'Use always' off for '" + request.key //$NON-NLS-1$ //$NON-NLS-2$
@@ -230,14 +257,14 @@ public final class UseAlwaysSupport
                         + "list reads a shown field only through this flag. Remove or rebind the item first."; //$NON-NLS-1$
                 }
             }
-            out.add(new Plan(request, info, def));
+            out.add(new Plan(request));
         }
         return null;
     }
 
     /**
-     * Writes the plans onto the attribute, each through the platform's own service when the plan
-     * carries its {@code PropertyInfo}, otherwise by the replicated membership rule.
+     * Writes the plans through the platform's own setter. A legacy multi-language entry the platform
+     * does not recognize by its active spelling is removed too when the path must not be listed.
      *
      * @param formModel the form content model, in the write transaction
      * @param attribute the attribute, in the write transaction
@@ -245,90 +272,31 @@ public final class UseAlwaysSupport
      */
     public static void apply(EObject formModel, FormAttribute attribute, List<Plan> plans)
     {
-        IUseAlwaysAttributeService service = null;
+        Form form = (Form)formModel;
+        Platform platform = Platform.current();
         for (Plan plan : plans)
         {
-            if (plan.info != null && formModel instanceof Form)
+            PropertyInfo info = platform.dataSources.findPropertyInfo(form, dataPath(plan.request.segments));
+            if (info == null)
             {
-                service = service != null ? service : ServiceAccess.get(IUseAlwaysAttributeService.class);
-                if (service != null)
-                {
-                    service.setUseAlwaysValue(plan.info, plan.request.useAlways, (Form)formModel);
-                    continue;
-                }
+                throw new IllegalStateException("'" + PROPERTY + "' path '" + plan.request.key //$NON-NLS-1$ //$NON-NLS-2$
+                    + "' resolved when validated but not when written."); //$NON-NLS-1$
             }
-            writeMembership(attribute, plan.request.segments, listed(plan.def, plan.request.useAlways));
+            platform.useAlways.setUseAlwaysValue(info, plan.request.useAlways, form);
+            UseAlways def = platform.useAlways.getDefaultValue(info, form);
+            boolean listed = def == UseAlways.Checked ? !plan.request.useAlways : plan.request.useAlways;
+            if (!listed)
+            {
+                removeEverySpelling(attribute, spellings(info));
+            }
         }
     }
 
     /**
-     * Whether a path must be in the list for the wanted checkbox state.
+     * The stored paths with the state EDT reports for each, as {@code {path: true|false|"unresolved"|
+     * "noCheckbox"}} in stored order, and an identity of the stored paths alone, sorted.
      *
-     * @param def the path's default
-     * @param useAlways the wanted state
-     * @return whether the path is listed
-     */
-    static boolean listed(UseAlwaysDefault def, boolean useAlways)
-    {
-        return def == UseAlwaysDefault.CHECKED ? !useAlways : useAlways;
-    }
-
-    /**
-     * The default of a field directly under a root of {@code kind} - the platform's rule for a
-     * resolved, non-reference field (EDT {@code UseAlwaysAttributeService.getDefaultValue}).
-     *
-     * @param kind the root kind
-     * @return the default
-     */
-    static UseAlwaysDefault rootDefault(RootKind kind)
-    {
-        switch (kind)
-        {
-            case GANTT_CHART:
-                return UseAlwaysDefault.NONE;
-            case DYNAMIC_LIST:
-            case CONSTANTS_SET:
-            case RECORDS_COLLECTION:
-                return UseAlwaysDefault.UNCHECKED;
-            default:
-                return UseAlwaysDefault.CHECKED;
-        }
-    }
-
-    /**
-     * The root kind of an attribute, tested in the platform's order: any GanttChart, then any
-     * DynamicList (or a dynamic-list ext-info), then a single ConstantsSet / RegisterRecordsCollection.
-     *
-     * @param attribute the attribute
-     * @return the kind
-     */
-    static RootKind rootKind(FormAttribute attribute)
-    {
-        List<String> names = typeNames(attribute.getValueType());
-        if (names.contains(TYPE_GANTT_CHART))
-        {
-            return RootKind.GANTT_CHART;
-        }
-        if (names.contains(TYPE_DYNAMIC_LIST) || FormElementWriter.isDynamicListAttribute(attribute))
-        {
-            return RootKind.DYNAMIC_LIST;
-        }
-        if (names.size() == 1 && TYPE_CONSTANTS_SET.equals(names.get(0)))
-        {
-            return RootKind.CONSTANTS_SET;
-        }
-        if (names.size() == 1 && TYPE_RECORDS_COLLECTION.equals(names.get(0)))
-        {
-            return RootKind.RECORDS_COLLECTION;
-        }
-        return RootKind.OTHER;
-    }
-
-    /**
-     * The current checkboxes that differ from the default, as {@code {path: effective state}}: the
-     * text in stored order and an order-independent identity.
-     *
-     * @param attribute the form attribute
+     * @param attribute the form attribute, in a read transaction
      * @return {text, identity}, or {@code null} when every path is at its default
      */
     public static String[] render(EObject attribute)
@@ -342,200 +310,198 @@ public final class UseAlwaysSupport
         {
             return null; // NOSONAR null means "nothing to render"
         }
-        boolean listedMeans = rootDefault(rootKind(formAttribute)) == UseAlwaysDefault.UNCHECKED;
+        EObject formModel = formAttribute.eContainer();
+        if (!(formModel instanceof Form))
+        {
+            throw new IllegalStateException("'" + PROPERTY + "': the attribute '" + formAttribute.getName() //$NON-NLS-1$ //$NON-NLS-2$
+                + "' is not inside a form model."); //$NON-NLS-1$
+        }
+        Form form = (Form)formModel;
         JsonObject text = new JsonObject();
-        TreeMap<String, Boolean> sorted = new TreeMap<>();
-        for (AbstractDataPath path : formAttribute.getNotDefaultUseAlwaysAttributes())
+        TreeSet<String> identity = new TreeSet<>();
+        try
         {
-            String joined = String.join(".", segmentsOf(path)); //$NON-NLS-1$
-            text.addProperty(joined, listedMeans);
-            sorted.put(joined, listedMeans);
+            Platform platform = Platform.current();
+            for (AbstractDataPath path : formAttribute.getNotDefaultUseAlwaysAttributes())
+            {
+                List<String> segments = segmentsOf(path);
+                String joined = String.join(".", segments); //$NON-NLS-1$
+                identity.add(joined);
+                PropertyInfo info = segments.isEmpty() ? null
+                    : platform.dataSources.findPropertyInfo(form, dataPath(segments));
+                UseAlways state = info == null ? null : platform.useAlways.getUseAlwaysValue(info, form);
+                if (info == null)
+                {
+                    text.addProperty(joined, UNRESOLVED);
+                }
+                else if (state == UseAlways.Checked || state == UseAlways.Unchecked)
+                {
+                    text.addProperty(joined, state == UseAlways.Checked);
+                }
+                else
+                {
+                    text.addProperty(joined, NO_CHECKBOX);
+                }
+            }
         }
-        JsonObject identity = new JsonObject();
-        for (Map.Entry<String, Boolean> e : sorted.entrySet())
+        catch (RuntimeException e)
         {
-            identity.addProperty(e.getKey(), e.getValue());
+            Activator.logError("useAlways read-back of form attribute '" + formAttribute.getName() //$NON-NLS-1$
+                + "' failed in the platform", e); //$NON-NLS-1$
+            throw e;
         }
-        return new String[] { text.toString(), identity.toString() };
+        return new String[] { text.toString(), String.join("\n", identity) }; //$NON-NLS-1$
     }
 
-    /** The segments of a stored path; a legacy multi-language path answers with its first spelling. */
+    /**
+     * The segments of a stored path as the platform reads them: a legacy multi-language path answers
+     * with its active language's spelling ({@code MultiLanguageDataPath.getSegments}).
+     *
+     * @param path the stored path
+     * @return the segments, empty when the path has none
+     */
     static List<String> segmentsOf(AbstractDataPath path)
     {
         if (path instanceof MultiLanguageDataPath)
         {
-            List<AbstractDataPath> paths = ((MultiLanguageDataPath)path).getPaths();
-            return paths.isEmpty() ? Collections.emptyList() : segmentsOf(paths.get(0));
+            MultiLanguageDataPath multi = (MultiLanguageDataPath)path;
+            int active = multi.getActiveLanguage();
+            if (active < 0 || active >= multi.getPaths().size() || multi.getPaths().get(active) == null)
+            {
+                return Collections.emptyList();
+            }
         }
-        return path == null ? Collections.emptyList() : path.getSegments();
+        List<String> segments = path == null ? null : path.getSegments();
+        return segments == null ? Collections.emptyList() : segments;
     }
 
     // ---- internals ------------------------------------------------------------------------------
 
-    /** The checks we can make without the platform's data tree; {@code null} when the path may stand. */
-    private static String staticCheck(Configuration config, FormAttribute attribute, RootKind kind,
-        Request request)
+    /** Names the first segment the platform cannot resolve, and the fields it offers there. */
+    private static String unresolvedRefusal(Platform platform, Form form, Request request)
     {
-        String field = request.segments.get(1);
-        if (kind == RootKind.CONSTANTS_SET)
+        DataPath path = dataPath(request.segments);
+        PropertyInfo parent = null;
+        int failed = 1;
+        for (int i = request.segments.size() - 2; i >= 0; i--)
         {
-            if (request.segments.size() > 2)
+            parent = platform.dataSources.findPropertyInfo(form, path, i);
+            if (parent != null)
             {
-                return "'" + PROPERTY + "' path '" + request.key + "' goes below a constant; a constants " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    + "set has a 'Use always' checkbox per constant only: '" + attribute.getName() //$NON-NLS-1$
-                    + ".<Constant>'."; //$NON-NLS-1$
-            }
-            if (config != null && constantByName(config, field) == null)
-            {
-                return "'" + PROPERTY + "' path '" + request.key + "': '" + field + "' is not a constant of " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-                    + "the configuration. Address it by its programmatic Name; get_metadata_objects with " //$NON-NLS-1$
-                    + "metadataType 'Constant' lists them."; //$NON-NLS-1$
-            }
-            return null;
-        }
-        MdObject owner = kind == RootKind.OTHER ? metadataOwner(attribute.getValueType()) : null;
-        if (owner != null)
-        {
-            Set<String> fields = FormElementWriter.fieldNamesOf(owner);
-            if (!fields.isEmpty() && !containsIgnoreCase(fields, field))
-            {
-                List<String> listed = new ArrayList<>(fields);
-                Collections.sort(listed);
-                return "'" + PROPERTY + "' path '" + request.key + "': '" + field + "' is not a field of " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-                    + owner.eClass().getName() + "." + owner.getName() + ". Fields: " //$NON-NLS-1$ //$NON-NLS-2$
-                    + String.join(", ", listed) + "."; //$NON-NLS-1$ //$NON-NLS-2$
+                failed = i + 1;
+                break;
             }
         }
-        return null;
-    }
-
-    /** The platform's data-tree node for the path, or {@code null} when the platform cannot resolve it. */
-    private static PropertyInfo platformInfo(Form form, List<String> segments)
-    {
-        try
-        {
-            IDataSourceInfoAssociationService service =
-                ServiceAccess.get(IDataSourceInfoAssociationService.class);
-            if (service == null)
-            {
-                return null;
-            }
-            DataPath path = FormFactory.eINSTANCE.createDataPath();
-            path.getSegments().addAll(segments);
-            return service.findPropertyInfo(form, path);
-        }
-        catch (RuntimeException | LinkageError e)
-        {
-            return null;
-        }
-    }
-
-    /** The platform's default for a resolved path, or {@code null} when the service cannot answer. */
-    private static UseAlwaysDefault platformDefault(PropertyInfo info, Form form)
-    {
-        try
-        {
-            IUseAlwaysAttributeService service = ServiceAccess.get(IUseAlwaysAttributeService.class);
-            IUseAlwaysAttributeService.UseAlways value = service == null ? null : service.getDefaultValue(info, form);
-            if (value == null)
-            {
-                return null;
-            }
-            switch (value)
-            {
-                case Checked:
-                    return UseAlwaysDefault.CHECKED;
-                case Unchecked:
-                    return UseAlwaysDefault.UNCHECKED;
-                default:
-                    return UseAlwaysDefault.NONE;
-            }
-        }
-        catch (RuntimeException | LinkageError e)
-        {
-            return null;
-        }
-    }
-
-    /** Adds the path when {@code listed} and it is absent; removes every spelling of it otherwise. */
-    private static void writeMembership(FormAttribute attribute, List<String> segments, boolean listed)
-    {
-        List<AbstractDataPath> list = attribute.getNotDefaultUseAlwaysAttributes();
-        boolean present = false;
-        for (Iterator<AbstractDataPath> it = list.iterator(); it.hasNext();)
-        {
-            if (sameSegments(segmentsOf(it.next()), segments))
-            {
-                if (!listed)
-                {
-                    it.remove();
-                }
-                present = true;
-            }
-        }
-        if (listed && !present)
-        {
-            DataPath path = FormFactory.eINSTANCE.createDataPath();
-            path.getSegments().addAll(segments);
-            list.add(path);
-        }
-    }
-
-    private static List<String> typeNames(TypeDescription type)
-    {
+        String under = String.join(".", request.segments.subList(0, failed)); //$NON-NLS-1$
+        StringBuilder sb = new StringBuilder();
+        sb.append('\'').append(PROPERTY).append("' path '").append(request.key).append("': '") //$NON-NLS-1$ //$NON-NLS-2$
+            .append(request.segments.get(failed)).append("' is not a field of '").append(under) //$NON-NLS-1$
+            .append("' in the form's data, so EDT has no checkbox for it."); //$NON-NLS-1$
         List<String> names = new ArrayList<>();
-        if (type == null)
+        if (parent != null)
         {
-            return names;
-        }
-        for (TypeItem item : type.getTypes())
-        {
-            String name = item == null ? null : McoreUtil.getTypeName(item);
-            if (name != null)
+            for (PropertyInfo child : parent.getPropertyInfos())
             {
-                names.add(name);
+                if (child != null && child.getName() != null)
+                {
+                    names.add(child.getName());
+                }
             }
         }
-        return names;
+        if (!names.isEmpty())
+        {
+            Collections.sort(names, String.CASE_INSENSITIVE_ORDER);
+            int shown = Math.min(names.size(), 40);
+            sb.append(" Fields there: ").append(String.join(", ", names.subList(0, shown))) //$NON-NLS-1$ //$NON-NLS-2$
+                .append(shown < names.size() ? ", ..." : "").append('.'); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        else
+        {
+            sb.append(" get_metadata_details on the attribute's type lists its fields."); //$NON-NLS-1$
+        }
+        return sb.toString();
     }
 
-    /** The metadata object producing a single-typed attribute's type (e.g. a catalog for CatalogObject.X). */
-    private static MdObject metadataOwner(TypeDescription type)
+    /** Both spellings EDT stores a resolved path in - the ones its own setter matches on removal. */
+    private static List<List<String>> spellings(PropertyInfo info)
     {
-        if (type == null || type.getTypes().size() != 1)
+        List<List<String>> spellings = new ArrayList<>();
+        for (ScriptVariant variant : new ScriptVariant[] { ScriptVariant.ENGLISH, ScriptVariant.RUSSIAN })
         {
-            return null;
-        }
-        EObject current = type.getTypes().get(0);
-        while (current != null && !(current instanceof MdObject))
-        {
-            current = current.eContainer();
-        }
-        return (MdObject)current;
-    }
-
-    private static Constant constantByName(Configuration config, String name)
-    {
-        for (Constant constant : config.getConstants())
-        {
-            if (constant != null && name.equalsIgnoreCase(constant.getName()))
+            AbstractDataPath path = info.getDataPath(variant);
+            if (path != null && path.getSegments() != null && !path.getSegments().isEmpty())
             {
-                return constant;
+                spellings.add(new ArrayList<>(path.getSegments()));
             }
         }
-        return null;
+        return spellings;
     }
 
-    private static boolean containsIgnoreCase(Set<String> names, String name)
+    /** Removes every entry any spelling of which - every language of a legacy entry - is the path. */
+    private static void removeEverySpelling(FormAttribute attribute, List<List<String>> spellings)
     {
-        for (String candidate : names)
+        for (Iterator<AbstractDataPath> it = attribute.getNotDefaultUseAlwaysAttributes().iterator(); it.hasNext();)
         {
-            if (candidate.equalsIgnoreCase(name))
+            if (matchesAnySpelling(it.next(), spellings))
+            {
+                it.remove();
+            }
+        }
+    }
+
+    private static boolean matchesAnySpelling(AbstractDataPath entry, List<List<String>> spellings)
+    {
+        if (entry instanceof MultiLanguageDataPath)
+        {
+            for (AbstractDataPath language : ((MultiLanguageDataPath)entry).getPaths())
+            {
+                if (matchesAnySpelling(language, spellings))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+        List<String> segments = entry == null ? null : entry.getSegments();
+        if (segments == null)
+        {
+            return false;
+        }
+        for (List<String> spelling : spellings)
+        {
+            if (sameSegments(segments, spelling))
             {
                 return true;
             }
         }
         return false;
+    }
+
+    private static boolean isDynamicList(FormAttribute attribute)
+    {
+        if (FormElementWriter.isDynamicListAttribute(attribute))
+        {
+            return true;
+        }
+        if (attribute.getValueType() == null)
+        {
+            return false;
+        }
+        for (TypeItem item : attribute.getValueType().getTypes())
+        {
+            if (item != null && TYPE_DYNAMIC_LIST.equals(McoreUtil.getTypeName(item)))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static DataPath dataPath(List<String> segments)
+    {
+        DataPath path = FormFactory.eINSTANCE.createDataPath();
+        path.getSegments().addAll(segments);
+        return path;
     }
 
     private static boolean sameSegments(List<String> a, List<String> b)

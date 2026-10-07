@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EList;
@@ -4550,6 +4551,18 @@ public final class FormElementWriter
      */
     public static EObject itemBoundTo(EObject formModel, List<String> path)
     {
+        return itemBoundTo(formModel, dataPath -> sameDataPath(dataPath, path));
+    }
+
+    /**
+     * The first authored form item whose {@code dataPath} satisfies {@code boundTo}.
+     *
+     * @param formModel the form content model
+     * @param boundTo tests an item's data path object (never {@code null})
+     * @return the item, or {@code null} when no item's path qualifies
+     */
+    public static EObject itemBoundTo(EObject formModel, Predicate<EObject> boundTo)
+    {
         EClassifier formItem = formModel.eClass().getEPackage().getEClassifier(ECLASS_FORM_ITEM);
         if (!(formItem instanceof EClass))
         {
@@ -4560,7 +4573,8 @@ public final class FormElementWriter
         while (!pending.isEmpty())
         {
             EObject item = pending.pop();
-            if (sameDataPath(singleReference(item, "dataPath"), path)) //$NON-NLS-1$
+            EObject dataPath = singleReference(item, "dataPath"); //$NON-NLS-1$
+            if (dataPath != null && boundTo.test(dataPath))
             {
                 return item;
             }

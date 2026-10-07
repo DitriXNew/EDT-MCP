@@ -7,29 +7,34 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import org.junit.After;
 import org.junit.Test;
 
 import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.form.model.FormAttribute;
 import com._1c.g5.v8.dt.form.model.FormFactory;
+import com._1c.g5.v8.dt.form.service.attribute.IUseAlwaysAttributeService.UseAlways;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.Type;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
-import com._1c.g5.v8.dt.metadata.mdclass.Constant;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
+import com.ditrix.edt.mcp.server.utils.Refusals;
+import com.ditrix.edt.mcp.server.utils.UseAlwaysPlatformFake;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -119,31 +124,53 @@ public class ModifyMetadataToolAdjustableAndUseAlwaysTest
 
     // ---- useAlways (#661) ------------------------------------------------------------------------
 
-    @Test
-    public void testUseAlwaysPreparesOnAConstantsSetAttribute()
+    @After
+    public void restoreThePlatform()
     {
-        Configuration config = configWithConstants("UseReport"); //$NON-NLS-1$
+        UseAlwaysPlatformFake.uninstall();
+    }
+
+    @Test
+    public void testUseAlwaysPreparesWhatThePlatformResolves()
+    {
+        UseAlwaysPlatformFake platform = new UseAlwaysPlatformFake();
+        platform.field("ConstantsSet", null, UseAlways.None); //$NON-NLS-1$
+        platform.field("ConstantsSet.UseReport", null, UseAlways.Unchecked); //$NON-NLS-1$
+        platform.install();
         FormAttribute set = attributeInForm("ConstantsSet", "ConstantsSet"); //$NON-NLS-1$ //$NON-NLS-2$
         List<ModifyMetadataTool.HolderChange> prepared = new ArrayList<>();
 
-        String verdict = verdict(config, set, "useAlways", "{\"ConstantsSet.UseReport\": true}", prepared); //$NON-NLS-1$ //$NON-NLS-2$
+        String verdict = verdict(null, set, "useAlways", "{\"ConstantsSet.useReport\": true}", prepared); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertNull(verdict, verdict);
         assertEquals("useAlways", prepared.get(0).change().featureName()); //$NON-NLS-1$
         assertEquals(1, ((List<?>)prepared.get(0).change().value()).size());
+        assertTrue("nothing is written while preparing", platform.setCalls().isEmpty()); //$NON-NLS-1$
+
+        verdict = verdict(null, set, "useAlways", "{\"ConstantsSet.Ghost\": true}", new ArrayList<>()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull(verdict);
+        assertTrue(verdict, verdict.contains("'Ghost' is not a field of 'ConstantsSet'")); //$NON-NLS-1$
+        assertTrue(verdict, verdict.contains("Fields there: UseReport.")); //$NON-NLS-1$
+        verdict = verdict(null, set, "useAlways", "{\"Object.Code\": true}", new ArrayList<>()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(verdict, verdict.contains("not with the addressed attribute 'ConstantsSet'")); //$NON-NLS-1$
     }
 
     @Test
-    public void testUseAlwaysRefusesAnUnknownConstantAndAForeignPath()
+    public void testUseAlwaysWithoutThePlatformFailsInsteadOfGuessing()
     {
-        Configuration config = configWithConstants("UseReport"); //$NON-NLS-1$
+        UseAlwaysPlatformFake.installUnavailable("Service IDataSourceInfoAssociationService is unavailable"); //$NON-NLS-1$
         FormAttribute set = attributeInForm("ConstantsSet", "ConstantsSet"); //$NON-NLS-1$ //$NON-NLS-2$
-
-        String verdict = verdict(config, set, "useAlways", "{\"ConstantsSet.Ghost\": true}", new ArrayList<>()); //$NON-NLS-1$ //$NON-NLS-2$
-        assertNotNull(verdict);
-        assertTrue(verdict, verdict.contains("'Ghost' is not a constant of the configuration")); //$NON-NLS-1$
-        verdict = verdict(config, set, "useAlways", "{\"Object.Code\": true}", new ArrayList<>()); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue(verdict, verdict.contains("not with the addressed attribute 'ConstantsSet'")); //$NON-NLS-1$
+        try
+        {
+            verdict(null, set, "useAlways", "{\"ConstantsSet.UseReport\": true}", new ArrayList<>()); //$NON-NLS-1$ //$NON-NLS-2$
+            fail("a missing platform service must fail the call, not be decided by a rule of ours"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertFalse("a platform failure is logged at ERROR, not as a refusal", //$NON-NLS-1$
+                e instanceof Refusals.Marker);
+            assertTrue(e.getMessage(), e.getMessage().contains("IDataSourceInfoAssociationService is unavailable")); //$NON-NLS-1$
+        }
     }
 
     @Test
@@ -221,18 +248,6 @@ public class ModifyMetadataToolAdjustableAndUseAlwaysTest
             Role role = MdClassFactory.eINSTANCE.createRole();
             role.setName(name);
             config.getRoles().add(role);
-        }
-        return config;
-    }
-
-    private static Configuration configWithConstants(String... names)
-    {
-        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
-        for (String name : names)
-        {
-            Constant constant = MdClassFactory.eINSTANCE.createConstant();
-            constant.setName(name);
-            config.getConstants().add(constant);
         }
         return config;
     }

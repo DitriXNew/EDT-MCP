@@ -3890,7 +3890,8 @@ def test_use_always_on_a_constants_set_lists_the_checked_constant():
         "projectName": PROJECT, "fqn": fqn,
         "properties": [{"name": "useAlways", "value": {attr + ".E2ENoSuchConstant": True}}]})
     e = assert_error(bad, "an unknown constant must be refused")
-    assert_error_quality(e, names=["E2ENoSuchConstant"], suggests=["Constant"])
+    # EDT's data tree names the missing segment and lists the constants it does have.
+    assert_error_quality(e, names=["E2ENoSuchConstant", attr], suggests=[constant])
     assert_tree_unchanged(snap, ctx="a refused useAlways must not touch the disk")
 
     r = call("modify_metadata", {
@@ -3908,6 +3909,19 @@ def test_use_always_refuses_a_path_of_another_attribute():
         "properties": [{"name": "useAlways", "value": {"List.Code": False}}]})
     e = assert_error(r, "a path not rooted at the addressed attribute must be refused")
     assert_error_quality(e, names=["List.Code", "Object"], suggests=["Object.Code"])
+    assert_tree_unchanged(snap, ctx="a refused useAlways must not touch the disk")
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_use_always_refuses_a_field_the_data_tree_does_not_have():
+    """#661: every path is resolved in EDT's form data tree before the write; one it does not have
+    is refused naming the missing segment and the fields there, never written for markers to find."""
+    snap = tree_snapshot()
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute.Object",
+        "properties": [{"name": "useAlways", "value": {"Object.E2ENoSuchField": False}}]})
+    e = assert_error(r, "a field the data tree does not resolve must be refused")
+    assert_error_quality(e, names=["E2ENoSuchField", "'Object'"], suggests=["Fields there", "Code"])
     assert_tree_unchanged(snap, ctx="a refused useAlways must not touch the disk")
 
 
