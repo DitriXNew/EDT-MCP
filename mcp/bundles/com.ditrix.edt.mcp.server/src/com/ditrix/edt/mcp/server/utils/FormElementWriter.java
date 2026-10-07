@@ -6962,17 +6962,22 @@ public final class FormElementWriter
     }
 
     /**
-     * Runs the three id repairs, then drops EDT's cached id counters (BM properties of the form) so
-     * the designer's next allocation rescans it (issue #723). Package-visible for the unit test.
+     * Runs the three id repairs, then drops EDT's cached id counters (BM properties) on the form and
+     * its live base/extension peer, which share the attribute and command id space, so the designer's
+     * next allocation rescans them (issue #723). Package-visible for the unit test.
      */
     static void normalizeFormIds(EObject formModel)
     {
         normalizeFormAttributeIds(formModel);
         normalizeFormItemIds(formModel);
         normalizeFormCommandIds(formModel);
-        if (formModel instanceof IBmObject)
+        for (EObject form : new EObject[] { formModel, liveReference(formModel, FEATURE_EXTENSION_FORM),
+            liveReference(formModel, FEATURE_BASE_FORM) })
         {
-            FormIdentifierService.INSTANCE.clearCaches((IBmObject)formModel);
+            if (form instanceof IBmObject)
+            {
+                FormIdentifierService.INSTANCE.clearCaches((IBmObject)form);
+            }
         }
     }
 

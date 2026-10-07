@@ -148,6 +148,30 @@ public class FormIdCounterResetTest
     }
 
     @Test
+    public void testAWriteToEitherPeerDropsTheOtherPeersCounters()
+    {
+        Form base = formWithStaleCounters();
+        Form extension = formWithStaleCounters();
+        base.setExtensionForm(extension);
+        extension.setBaseForm(base);
+
+        FormElementWriter.normalizeFormIds(base);
+        assertCountersCleared(base);
+        assertCountersCleared(extension);
+
+        for (Form form : new Form[] { base, extension })
+        {
+            for (String counter : COUNTERS)
+            {
+                ((IBmObject)form).bmSetProperty(counter, "1"); //$NON-NLS-1$
+            }
+        }
+        FormElementWriter.normalizeFormIds(extension);
+        assertCountersCleared(extension);
+        assertCountersCleared(base);
+    }
+
+    @Test
     public void testTheWriteBoundaryDropsTheCountersOfTheFormItMutated()
     {
         Form form = formWithStaleCounters();
