@@ -45,6 +45,7 @@ import com._1c.g5.v8.dt.form.model.AbstractDataPath;
 import com._1c.g5.v8.dt.form.model.AbstractFormAttribute;
 import com._1c.g5.v8.dt.form.model.FormAttributeAdditionalColumns;
 import com._1c.g5.v8.dt.form.model.FormChoiceParameterLink;
+import com._1c.g5.v8.dt.form.model.FormField;
 import com._1c.g5.v8.dt.md.refactoring.core.IMdRefactoringService;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
@@ -2552,7 +2553,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             if ((link || ownNameOf(member) != null) && member != target && !EcoreUtil.isAncestor(target, member))
             {
                 members.add(member);
-                owners.put(member, namedOwnerOf(formModel, member));
+                // A link belongs to the field holding it, named or not.
+                owners.put(member, link ? fieldOf(member) : namedOwnerOf(formModel, member));
                 paths.put(member, link ? dottedOf(((FormChoiceParameterLink)member).getDatapath())
                     : FormAttributeDeletion.pathOf(member));
                 if (member.eContainer() instanceof FormAttributeAdditionalColumns)
@@ -2581,7 +2583,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 {
                     // EDT's cleaner dropped it from a field the delete kept.
                     Map<String, Object> entry = itemEntry(member, path, false, false);
-                    entry.put(KEY_FIELD, ownNameOf(owner));
+                    if (ownNameOf(owner) != null)
+                    {
+                        entry.put(KEY_FIELD, ownNameOf(owner));
+                    }
                     outcome.droppedLinks.add(entry);
                     continue;
                 }
@@ -2624,6 +2629,17 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             }
         }
         return null;
+    }
+
+    /** The form field holding a choice-parameter link, or {@code null}. */
+    private static EObject fieldOf(EObject link)
+    {
+        EObject up = link.eContainer();
+        while (up != null && !(up instanceof FormField))
+        {
+            up = up.eContainer();
+        }
+        return up;
     }
 
     /** The dotted table path of an additional-column entry, or {@code ""}. */

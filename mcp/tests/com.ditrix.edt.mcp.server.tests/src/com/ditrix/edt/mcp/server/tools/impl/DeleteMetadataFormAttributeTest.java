@@ -65,6 +65,7 @@ import com._1c.g5.v8.dt.form.model.FormAttributeColumn;
 import com._1c.g5.v8.dt.form.model.FormChoiceParameterLink;
 import com._1c.g5.v8.dt.form.model.FormFactory;
 import com._1c.g5.v8.dt.form.model.FormField;
+import com._1c.g5.v8.dt.form.model.FormGroup;
 import com._1c.g5.v8.dt.form.model.FormItem;
 import com._1c.g5.v8.dt.form.model.FormItemContainer;
 import com._1c.g5.v8.dt.form.model.InputFieldExtInfo;
@@ -1289,6 +1290,40 @@ public class DeleteMetadataFormAttributeTest
         String message = outcome.describe();
         assertTrue(message, message.contains(
             "2 choice-parameter link(s) dropped from kept fields (Filter.Owner, Filter.Late)")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testALinkBelongsToTheFieldHoldingItEvenAnUnnamedOne()
+    {
+        Form form = itemForm("Object"); //$NON-NLS-1$
+        FormAttribute other = named(form, "Other"); //$NON-NLS-1$
+        // The removed field sits unnamed in a named group the delete keeps.
+        FormItem removedField = item(form, "OtherField"); //$NON-NLS-1$
+        FormGroup group = F.createFormGroup();
+        group.setName("Group"); //$NON-NLS-1$
+        form.getItems().add(group);
+        group.getItems().add(removedField);
+        withLinks(removedField, link("Filter.Gone", "Object")); //$NON-NLS-1$ //$NON-NLS-2$
+        removedField.setName(null);
+        // The kept field is unnamed and loses its link to the cleaner.
+        FormItem keptField = item(form, "Description"); //$NON-NLS-1$
+        InputFieldExtInfo kept = withLinks(keptField, link("Filter.Late", "Other")); //$NON-NLS-1$ //$NON-NLS-2$
+        keptField.setName(null);
+        List<String> authorized = preview(form, other).scope;
+
+        DeleteMetadataTool.AttributeDeleteOutcome outcome = DeleteMetadataTool.deleteAttributeInTx(form, other, null,
+            deleter(edt(), (tx, attribute) ->
+            {
+                EcoreUtil.remove(removedField);
+                kept.getChoiceParameterLinks().clear();
+                EcoreUtil.remove(attribute);
+            }), FQN, authorized);
+
+        assertEquals(List.of("Filter.Late"), names(outcome.droppedLinks)); //$NON-NLS-1$
+        assertFalse("an unnamed field has no name to report", outcome.droppedLinks.get(0).containsKey("field")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the removed field's link went with it, not dropped from its group", //$NON-NLS-1$
+            namesFlagged(outcome.removed, "contained").contains("Filter.Gone")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse(names(outcome.removed).contains("Filter.Late")); //$NON-NLS-1$
     }
 
     // ---- the service seam ----------------------------------------------------------------------
