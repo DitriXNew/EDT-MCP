@@ -19,6 +19,7 @@ import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.PaletteData;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.form.model.ExtendedTooltip;
 import com._1c.g5.v8.dt.form.model.Form;
 import com._1c.g5.v8.dt.form.model.FormFactory;
 import com._1c.g5.v8.dt.form.model.FormField;
@@ -772,6 +773,10 @@ public class EditorScreenshotHelperTest
         FormGroup nested = group("Inner", 30, ManagedFormGroupType.PAGES); //$NON-NLS-1$
         nested.getItems().add(group("C", 31, ManagedFormGroupType.PAGE)); //$NON-NLS-1$
         ((FormGroup)((FormGroup)form.getItems().get(0)).getItems().get(0)).getItems().add(nested);
+        // A Pages group's extended tooltip is a contained item too, but not a page (seen live).
+        ExtendedTooltip tooltip = FormFactory.eINSTANCE.createExtendedTooltip();
+        tooltip.setName("PagesExtendedTooltip"); //$NON-NLS-1$
+        ((FormGroup)form.getItems().get(0)).setExtendedTooltip(tooltip);
 
         assertEquals(java.util.List.of("A", "B", "C"), EditorScreenshotHelper.pageNames(form)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
