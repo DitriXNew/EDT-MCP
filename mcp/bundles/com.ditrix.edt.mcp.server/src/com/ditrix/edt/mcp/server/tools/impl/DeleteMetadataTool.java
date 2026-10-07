@@ -6,6 +6,7 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -1161,8 +1162,11 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
                 + "on-disk verification", e); //$NON-NLS-1$
             return result;
         }
+        // Internal: always stripped here, so it never reaches the caller.
+        JsonElement formCheck = object.remove(KEY_FORM_CHECK);
         if (VAL_EXECUTED.equals(resultString(object, McpKeys.ACTION))
             && observeDetachedFiles(JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME), object,
+                formCheck != null && formCheck.isJsonObject() ? formCheck.getAsJsonObject() : null,
                 drainEstablished))
         {
             return GsonProvider.toJson(object);
@@ -1309,7 +1313,8 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
      *
      * @return whether the result carried a detached object at all
      */
-    private boolean observeDetachedFiles(String projectName, JsonObject result, boolean drainEstablished)
+    private boolean observeDetachedFiles(String projectName, JsonObject result, JsonObject formCheck,
+        boolean drainEstablished)
     {
         JsonElement items = result.get(KEY_ITEMS);
         boolean seen = false;
@@ -1341,6 +1346,25 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         if (!seen)
         {
             return false;
+        }
+        if (drainEstablished)
+        {
+            // EDT writes Form.form and deletes the detached file as separate exports; a failed form
+            // write drains too and would leave the old form naming a missing file.
+            String formFile = formCheck == null ? null : resultString(formCheck, FORM_CHECK_FILE);
+            RegistrationState formState = formFile == null ? RegistrationState.UNVERIFIABLE
+                : formAttributeState(formBytes(projectName, formFile), resultString(formCheck, FORM_CHECK_ATTRIBUTE),
+                    resultString(formCheck, FORM_CHECK_COLUMN));
+            if (formState != RegistrationState.ABSENT)
+            {
+                confirmed = false;
+                String form = formFile == null ? "The form's Form.form" : "Form.form " + formFile; //$NON-NLS-1$ //$NON-NLS-2$
+                notes.append(' ').append(formState == RegistrationState.PRESENT
+                    ? form + " still declares the deleted attribute after EDT's export; EDT may have failed " //$NON-NLS-1$
+                        + "to write it - check the EDT log and re-check before relying on it." //$NON-NLS-1$
+                    : form + " could not be read after EDT's export, so it is not confirmed free of the " //$NON-NLS-1$
+                        + "deleted attribute; re-check it before relying on it."); //$NON-NLS-1$
+            }
         }
         String message = resultString(result, McpKeys.MESSAGE);
         result.addProperty(McpKeys.MESSAGE, (message == null ? "" : message) + notes); //$NON-NLS-1$
@@ -1392,6 +1416,76 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             Activator.logError("delete_metadata: could not check '" + path + "' in '" + projectName + "'", e); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             return null;
         }
+    }
+
+    /**
+     * A project-relative file's bytes read directly from the file system (no workspace rule), or
+     * {@code null} when it cannot be read. Package-visible so a test serves its own.
+     */
+    byte[] formBytes(String projectName, String path)
+    {
+        if (projectName == null || path == null)
+        {
+            return null;
+        }
+        try
+        {
+            // Fully qualified: the inherited AbstractMetadataWriteTool.ProjectContext shadows the utils one.
+            com.ditrix.edt.mcp.server.utils.ProjectContext context =
+                com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
+            IPath location = context.exists() ? context.project().getFile(new Path(path)).getLocation() : null;
+            return location == null ? null : java.nio.file.Files.readAllBytes(location.toFile().toPath());
+        }
+        catch (java.io.IOException | RuntimeException e)
+        {
+            Activator.logError("delete_metadata: could not read '" + path + "' in '" + projectName + "'", e); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            return null;
+        }
+    }
+
+    /** ABSENT when the Form.form bytes no longer declare the attribute (or column), PRESENT when they do. */
+    static RegistrationState formAttributeState(byte[] form, String attribute, String column)
+    {
+        if (form == null || attribute == null)
+        {
+            return RegistrationState.UNVERIFIABLE;
+        }
+        try
+        {
+            Element root = SecureXml.documentBuilderFactory().newDocumentBuilder()
+                .parse(new ByteArrayInputStream(form)).getDocumentElement();
+            return declaresFormAttribute(root, attribute, column) ? RegistrationState.PRESENT
+                : RegistrationState.ABSENT;
+        }
+        catch (Exception e)
+        {
+            Activator.logError("delete_metadata: could not parse Form.form to confirm the attribute delete", e); //$NON-NLS-1$
+            return RegistrationState.UNVERIFIABLE;
+        }
+    }
+
+    /** Whether a Form.form root declares the attribute ({@code <attributes><name>}), or its column. */
+    static boolean declaresFormAttribute(Element root, String attribute, String column)
+    {
+        for (Element candidate : directChildren(root, "attributes")) //$NON-NLS-1$
+        {
+            if (!attribute.equalsIgnoreCase(directChildText(candidate, "name"))) //$NON-NLS-1$
+            {
+                continue;
+            }
+            if (column == null)
+            {
+                return true;
+            }
+            for (Element columnElement : directChildren(candidate, "columns")) //$NON-NLS-1$
+            {
+                if (column.equalsIgnoreCase(directChildText(columnElement, "name"))) //$NON-NLS-1$
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** Package-visible pure XML check for the registering-file tests. */
@@ -2256,6 +2350,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             removed.addAll(outcome.entries());
             result.put(KEY_ITEMS, removed);
             head += outcome.describe();
+            if (!outcome.detached.isEmpty())
+            {
+                result.put(KEY_FORM_CHECK, outcome.formCheck(ref));
+            }
         }
         return result.put(McpKeys.MESSAGE, head).toJson();
     }
@@ -2291,6 +2389,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
 
     /** Item key: that file's state observed after the export - {@link DetachedFileState}. */
     private static final String KEY_FILE_REMOVAL = "fileRemoval"; //$NON-NLS-1$
+
+    /** Internal result member: the Form.form and attribute (column) the hook re-reads; always stripped there. */
+    private static final String KEY_FORM_CHECK = "formCheck"; //$NON-NLS-1$
+    private static final String FORM_CHECK_FILE = "file"; //$NON-NLS-1$
+    private static final String FORM_CHECK_ATTRIBUTE = "attribute"; //$NON-NLS-1$
+    private static final String FORM_CHECK_COLUMN = "column"; //$NON-NLS-1$
 
     /** Preview item key: true when EDT's export of the confirmed delete removes the detached object's {@code file}. */
     private static final String KEY_DELETED_FROM_DISK = "deletedFromDisk"; //$NON-NLS-1$
@@ -2672,6 +2776,10 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             throw new FormValidationException(scopeChangedError(normFqn, authorizedScope, scope));
         }
         AttributeDeleteOutcome outcome = new AttributeDeleteOutcome();
+        if (!plan.detached.isEmpty())
+        {
+            outcome.formFile = deleter.fileOf(formModel);
+        }
         outcome.main = FormElementWriter.isMainAttribute(target);
         outcome.rootExtInfo = rootExtInfoKind(formModel);
         collectRemovedMembers(target, outcome.columns);
@@ -2862,6 +2970,25 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         final List<Map<String, Object>> detached = new ArrayList<>();
         /** The file of each {@link #detached} object, read before the detach; {@code null} when unresolved. */
         final List<IFile> detachedFiles = new ArrayList<>();
+        /** The form's own Form.form, resolved only when something is detached; {@code null} when unresolved. */
+        IFile formFile;
+
+        /** What the hook re-reads: the Form.form path and the deleted attribute (and column). */
+        Map<String, Object> formCheck(FormElementWriter.FormMemberRef ref)
+        {
+            Map<String, Object> check = new java.util.LinkedHashMap<>();
+            if (formFile != null)
+            {
+                check.put(FORM_CHECK_FILE, fileLabelOf(formFile));
+            }
+            boolean column = ref.ownerAttributeName != null;
+            check.put(FORM_CHECK_ATTRIBUTE, column ? ref.ownerAttributeName : ref.name);
+            if (column)
+            {
+                check.put(FORM_CHECK_COLUMN, ref.name);
+            }
+            return check;
+        }
         final List<Map<String, Object>> leftAttached = new ArrayList<>();
         /** The message tail for the detached objects whose file could not be resolved. */
         private final StringBuilder fileNotes = new StringBuilder();
