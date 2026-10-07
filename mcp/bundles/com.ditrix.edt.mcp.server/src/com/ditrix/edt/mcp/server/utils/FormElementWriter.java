@@ -45,6 +45,7 @@ import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.form.service.FormIdentifierService;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
@@ -1191,9 +1192,7 @@ public final class FormElementWriter
         {
             EObject formModel = editableFormInTx(ctx, tx);
             work.run(formModel, tx);
-            normalizeFormAttributeIds(formModel);
-            normalizeFormItemIds(formModel);
-            normalizeFormCommandIds(formModel);
+            normalizeFormIds(formModel);
             // The content Form is a separate top object serialized to Form.form - export ITS fqn.
             return (formModel instanceof IBmObject) ? ((IBmObject)formModel).bmGetFqn() : null;
         };
@@ -1662,9 +1661,7 @@ public final class FormElementWriter
             // attribute is actually present (it gates createField's dotted-path acceptance). Issue #208.
             seedObjectFields(content, russianAutoNames, objectFields);
         }
-        normalizeFormAttributeIds(content);
-        normalizeFormItemIds(content);
-        normalizeFormCommandIds(content);
+        normalizeFormIds(content);
         return content;
     }
 
@@ -6962,6 +6959,26 @@ public final class FormElementWriter
             }
         }
         return max + 1;
+    }
+
+    /**
+     * Runs the three id repairs, then drops EDT's cached id counters (BM properties) on the form and
+     * its live base/extension peer, which share the attribute and command id space, so the designer's
+     * next allocation rescans them (issue #723). Package-visible for the unit test.
+     */
+    static void normalizeFormIds(EObject formModel)
+    {
+        normalizeFormAttributeIds(formModel);
+        normalizeFormItemIds(formModel);
+        normalizeFormCommandIds(formModel);
+        for (EObject form : new EObject[] { formModel, liveReference(formModel, FEATURE_EXTENSION_FORM),
+            liveReference(formModel, FEATURE_BASE_FORM) })
+        {
+            if (form instanceof IBmObject)
+            {
+                FormIdentifierService.INSTANCE.clearCaches((IBmObject)form);
+            }
+        }
     }
 
     /**
