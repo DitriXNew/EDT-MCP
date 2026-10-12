@@ -1210,7 +1210,7 @@ public class CreateInfobaseToolTest
     @Test
     public void testUnreadableApplicationIdentityIsUnverifiedNotAbsence() throws Exception
     {
-        // An infobase application whose connection string cannot be read is NOT evidence that our
+        // An infobase application whose UUID cannot be read is NOT evidence that our
         // infobase is missing - it is evidence that we could not tell. Folding that into "no match"
         // would re-create exactly the reported defect, with the verdict flipped: a confident
         // boundToProject:false while the application may well be there.
@@ -1254,10 +1254,10 @@ public class CreateInfobaseToolTest
     }
 
     @Test
-    public void testUnreadableConnectionStringIsUnverifiedNotAbsence() throws Exception
+    public void testUnreadableUuidIsUnverifiedNotAbsence() throws Exception
     {
         // The other half of "identity could not be read": the application HAS an infobase reference,
-        // but reading its connection string throws. Same rule - we could not tell, so we do not say.
+        // but reading its UUID throws. Same rule - we could not tell, so we do not say.
         IProject project = mock(IProject.class);
         IApplicationManager mgr = mock(IApplicationManager.class);
         List<IApplication> opaque = Collections.singletonList(infobaseAppWithRef(throwingRef()));
@@ -1331,9 +1331,9 @@ public class CreateInfobaseToolTest
     }
 
     @Test
-    public void testMissingConnectionStringIsUnverifiedNotAbsence() throws Exception
+    public void testMissingUuidIsUnverifiedNotAbsence() throws Exception
     {
-        // The third undecidable shape: the reference exists but carries no connection string at all.
+        // The third undecidable shape: the reference exists but carries no UUID at all.
         IProject project = mock(IProject.class);
         IApplicationManager mgr = mock(IApplicationManager.class);
         InfobaseReference ref = mock(InfobaseReference.class);
@@ -1947,6 +1947,47 @@ public class CreateInfobaseToolTest
         assertFalse(json.has("infobaseFile")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testSameAddressWithAnOlderUuidIsNotTheNewApplication() throws Exception
+    {
+        IProject project = mock(IProject.class);
+        IApplicationManager manager = mock(IApplicationManager.class);
+        ServerInfobaseTarget target = new ServerInfobaseTarget("host", "base"); //$NON-NLS-1$ //$NON-NLS-2$
+        InfobaseReference fresh = target.reference("fresh"); //$NON-NLS-1$
+        InfobaseReference old = target.reference("old"); //$NON-NLS-1$
+        assertEquals(old.getConnectionString().asConnectionString(), fresh.getConnectionString().asConnectionString());
+        assertFalse(old.getUuid().equals(fresh.getUuid()));
+        IInfobaseApplication oldApp = infobaseAppWithRef(old);
+        when(manager.getApplications(project)).thenReturn(Collections.singletonList(oldApp));
+        CreateInfobaseTool.ResultContext context = new CreateInfobaseTool.ResultContext(
+            RB_PROJECT, null, "fresh", manager, project, target); //$NON-NLS-1$
+        JsonObject result = JsonParser.parseString(CreateInfobaseTool.buildSuccessResult(
+            context, fresh, true, true, (String)null)).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(result.get("boundToProject").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(result.has("applicationId")); //$NON-NLS-1$
+        verify(manager, never()).setDefaultApplication(any(), any());
+    }
+
+    @Test
+    public void testBlankServerFieldsStillFollowTheFileValidationPath()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "MissingProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseServer", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseRef", "  "); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseFile", "https://host/file"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateInfobaseTool().execute(params);
+        assertFalse(result, result.contains("not both")); //$NON-NLS-1$
+        assertTrue(result, result.contains("infobaseFile")); //$NON-NLS-1$
+        assertTrue(result, result.contains("https://host/file")); //$NON-NLS-1$
+        assertFalse(result, result.contains("required together")); //$NON-NLS-1$
+        params.remove("infobaseFile"); //$NON-NLS-1$
+        result = new CreateInfobaseTool().execute(params);
+        assertTrue(result, result.contains("infobaseFile is required")); //$NON-NLS-1$
+        assertTrue(result, result.contains("or infobaseServer + infobaseRef")); //$NON-NLS-1$
+    }
+
     // -------------------- #412 helpers --------------------
 
     /** The infobase directory the read-back tests report (absolute, so it is platform-independent). */
@@ -2033,16 +2074,19 @@ public class CreateInfobaseToolTest
         when(connection.asConnectionString()).thenReturn(connectionString);
         InfobaseReference ref = mock(InfobaseReference.class);
         when(ref.getConnectionString()).thenReturn(connection);
+        when(ref.getUuid()).thenReturn(java.util.UUID.nameUUIDFromBytes(
+            connectionString.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         return ref;
     }
 
-    /** A reference whose connection string cannot be read at all. */
+    /** A reference whose UUID cannot be read at all. */
     private static InfobaseReference throwingRef()
     {
         FileConnectionString connection = mock(FileConnectionString.class);
         when(connection.asConnectionString()).thenThrow(new IllegalStateException("detached")); //$NON-NLS-1$
         InfobaseReference ref = mock(InfobaseReference.class);
         when(ref.getConnectionString()).thenReturn(connection);
+        when(ref.getUuid()).thenThrow(new IllegalStateException("detached")); //$NON-NLS-1$
         return ref;
     }
 

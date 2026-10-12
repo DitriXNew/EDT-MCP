@@ -18,6 +18,56 @@ HARNESS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HARNESS)
 
 
+class ClusterProbeCleanupTest(unittest.TestCase):
+    probe = "McpRegistrationProbe_0123456789abcdef"
+    name = "McpServerRegistration_" + probe
+
+    def test_invisible_probe_is_removed_without_changing_unrelated_bytes(self):
+        for ending in (b"\n", b"\r\n"):
+            for probe_first in (True, False):
+                with self.subTest(ending=ending, probe_first=probe_first), tempfile.TemporaryDirectory() as directory:
+                    path = os.path.join(directory, "ibases.v8i")
+                    other = ending.join([b"[Personal base]", b'Connect=File="C:/personal";', b"ID=keep", b""])
+                    probe = ending.join([("[" + self.name + "]").encode(),
+                        ('Connect=Srvr="localhost:1541";Ref="%s";' % self.probe).encode(),
+                        b"ID=probe", b""])
+                    original = b"\xef\xbb\xbf" + (probe + other if probe_first else other + probe)
+                    with open(path, "wb") as stream:
+                        stream.write(original)
+                    def delete_probe(tool, params):
+                        self.assertEqual("delete_infobase", tool)
+                        self.assertEqual(self.name, params["infobaseName"])
+                        self.assertTrue(params["deleteRegistration"])
+                        self.assertFalse(params["deleteDatabaseFiles"])
+                        with open(path, "wb") as stream:
+                            stream.write(b"\xef\xbb\xbf" + other)
+                        return object()
+                    with mock.patch.dict(os.environ, {"EDT_MCP_INFOBASE_LIST": path}), \
+                            mock.patch.object(HARNESS, "call", side_effect=delete_probe) as called, \
+                            mock.patch.object(HARNESS, "assert_ok"):
+                        self.assertEqual(1, HARNESS.cleanup_cluster_registration_probe(
+                            self.name, "localhost:1541", self.probe))
+                        self.assertEqual(0, HARNESS.cleanup_cluster_registration_probe(
+                            self.name, "localhost:1541", self.probe))
+                        self.assertEqual(1, called.call_count)
+                    with open(path, "rb") as stream:
+                        self.assertEqual(b"\xef\xbb\xbf" + other, stream.read())
+
+    def test_cleanup_refuses_an_unrelated_name_or_a_mismatched_address(self):
+        with self.assertRaises(ValueError):
+            HARNESS.cleanup_cluster_registration_probe("Personal base", "localhost:1541", self.probe)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "ibases.v8i")
+            original = ('[%s]\nConnect=Srvr="other-host";Ref="%s";\n' % (self.name, self.probe)).encode()
+            with open(path, "wb") as stream:
+                stream.write(original)
+            with mock.patch.dict(os.environ, {"EDT_MCP_INFOBASE_LIST": path}):
+                with self.assertRaises(AssertionError):
+                    HARNESS.cleanup_cluster_registration_probe(self.name, "localhost:1541", self.probe)
+            with open(path, "rb") as stream:
+                self.assertEqual(original, stream.read())
+
+
 class MutationOutcomeTest(unittest.TestCase):
     def setUp(self):
         self.old_unresolved = HARNESS._MUTATIONS_UNRESOLVED

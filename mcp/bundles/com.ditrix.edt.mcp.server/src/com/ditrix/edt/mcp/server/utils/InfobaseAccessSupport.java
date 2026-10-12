@@ -760,6 +760,27 @@ public final class InfobaseAccessSupport
         return locks;
     }
 
+    /** Clears only this fresh reference's settings, after any in-flight bounded store write. */
+    public static void clearCredentials(InfobaseReference ref) throws Exception
+    {
+        BoundedJob.Result result = BoundedJob.run("Rollback infobase credentials", //$NON-NLS-1$
+            CREDENTIAL_STORE_TIMEOUT_MS, monitor -> {
+                IInfobaseAccessManager manager = resolveAccessManager();
+                if (manager == null)
+                {
+                    throw new IllegalStateException("IInfobaseAccessManager is unavailable."); //$NON-NLS-1$
+                }
+                synchronized (writeLockFor(ref))
+                {
+                    manager.updateSettings(ref, IInfobaseAccessSettings.NOT_DEFINED);
+                }
+            });
+        if (!result.isSuccess())
+        {
+            throw new IllegalStateException("Credential rollback did not complete: " + result.getOutcome()); //$NON-NLS-1$
+        }
+    }
+
     /**
      * Selects a stable write stripe from the infobase UUID, falling back to its non-secret name and
      * finally object identity for incomplete test/provisional references.

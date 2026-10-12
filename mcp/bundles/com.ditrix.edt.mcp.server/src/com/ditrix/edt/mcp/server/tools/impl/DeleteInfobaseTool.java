@@ -35,6 +35,7 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
+import com.ditrix.edt.mcp.server.utils.InfobaseRegistration;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
@@ -293,6 +294,37 @@ public class DeleteInfobaseTool implements IMcpTool
             resolveTargetApplication(appManager, project, projectName, applicationId, infobaseName);
         if (target.error != null)
         {
+            if (target.nameAbsent && (applicationId == null || applicationId.isEmpty()) && deleteRegistration
+                && !deleteDatabaseFiles && ibManager != null)
+            {
+                try
+                {
+                    Optional<InfobaseReference> registered = InfobaseRegistration.findUniqueServer(ibManager, infobaseName);
+                    if (registered.isPresent())
+                    {
+                        InfobaseReference reference = registered.get();
+                        IbIdentity identity = new IbIdentity(projectName, reference.getUuid().toString(), infobaseName);
+                        if (!confirm)
+                        {
+                            return buildPreviewResult(identity, true, false, null, SharedDatabase.NOT_SHARED);
+                        }
+                        String declined = checkDestructiveConsent(infobaseName,
+                            "This removes the server infobase association and launcher registration; the database is untouched."); //$NON-NLS-1$
+                        if (declined != null)
+                        {
+                            return declined;
+                        }
+                        return performFileInfobaseDeletion(projectName, project, assocManager, ibManager,
+                            false, FileDeletionPlan.of(reference, infobaseName, identity.resolvedId,
+                                null, SharedDatabase.NOT_SHARED, true));
+                    }
+                }
+                catch (Exception e)
+                {
+                    return ToolResult.error("Could not resolve the launcher entry for infobaseName '" //$NON-NLS-1$
+                        + infobaseName + "': " + e.getMessage() + ". Inspect the EDT launcher list.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
             return target.error;
         }
         IApplication targetApp = target.app;
@@ -397,7 +429,7 @@ public class DeleteInfobaseTool implements IMcpTool
         try
         {
             assocManager.dissociate(project, ibRef,
-                com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAssociationContext.empty());
+                InfobaseRegistration.currentContext(project));
         }
         catch (Exception e)
         {
@@ -458,7 +490,7 @@ public class DeleteInfobaseTool implements IMcpTool
             {
                 try
                 {
-                    ibManager.delete(ibRef);
+                    InfobaseRegistration.remove(ibManager, ibRef);
                 }
                 catch (Exception e)
                 {
@@ -600,6 +632,11 @@ public class DeleteInfobaseTool implements IMcpTool
         try
         {
             List<IApplication> apps = listRead.valueOrRethrow();
+            if (apps == null)
+            {
+                return TargetApplication.failed(ToolResult.error(
+                    "EDT returned no application list; retry get_applications before deleting. Nothing was deleted.").toJson()); //$NON-NLS-1$
+            }
             if (apps != null)
             {
                 for (IApplication app : apps)
@@ -622,7 +659,7 @@ public class DeleteInfobaseTool implements IMcpTool
         }
         if (targetApp == null)
         {
-            return TargetApplication.failed(ToolResult.error("Infobase with name '" + infobaseName //$NON-NLS-1$
+            return TargetApplication.absent(ToolResult.error("Infobase with name '" + infobaseName //$NON-NLS-1$
                 + "' not found in project '" + projectName //$NON-NLS-1$
                 + "'. Use get_applications to list available infobases.").toJson()); //$NON-NLS-1$
         }
@@ -922,21 +959,28 @@ public class DeleteInfobaseTool implements IMcpTool
     {
         final String error;
         final IApplication app;
+        final boolean nameAbsent;
 
-        private TargetApplication(String error, IApplication app)
+        private TargetApplication(String error, IApplication app, boolean nameAbsent)
         {
             this.error = error;
             this.app = app;
+            this.nameAbsent = nameAbsent;
         }
 
         static TargetApplication failed(String error)
         {
-            return new TargetApplication(error, null);
+            return new TargetApplication(error, null, false);
+        }
+
+        static TargetApplication absent(String error)
+        {
+            return new TargetApplication(error, null, true);
         }
 
         static TargetApplication of(IApplication app)
         {
-            return new TargetApplication(null, app);
+            return new TargetApplication(null, app, false);
         }
     }
 

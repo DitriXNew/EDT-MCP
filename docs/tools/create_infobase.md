@@ -1,6 +1,6 @@
 # create_infobase
 
-Prepare an infobase for an EDT project by creating a database or registering an existing one. Passing user/password/access STORES those credentials in EDT's infobase settings - the secret PERSISTS beyond this call and is reused by later connections. Parameters and examples: get_tool_guide('create_infobase').
+Create a file infobase or register an existing file/cluster infobase and bind it to an EDT project. EDT may open a Designer connection during binding when a runtime is installed. Passing user/password/access STORES those credentials in EDT's infobase settings - the secret PERSISTS beyond this call and is reused by later connections. Parameters and examples: get_tool_guide('create_infobase').
 
 ## Parameters
 | Parameter | Required | Type | Description |
@@ -19,20 +19,20 @@ Prepare an infobase for an EDT project by creating a database or registering an 
 | access | — | string (one of: INFOBASE, OS) | Authentication kind for the stored credentials: 'INFOBASE' (default, 1C user auth) or 'OS'. Credentials are stored when ANY of user/password/access is given; access='OS' on its own stores OS-authentication settings (no 1C user/password). Applies to applicationKind='infobase' (a file infobase), and to applicationKind='standaloneServer' with mode='register'; rejected for a newly created standalone server (mode='create'). |
 
 ## Guide
-Creates a new FILE infobase (1C:Enterprise database) OR registers an existing one, and binds it to a configuration project so it appears in `get_applications` as an application of type `com.e1c.g5.dt.applications.type.infobase`. This mirrors the two choices of the EDT "new infobase" dialog: make a new database, or use a database that already exists on disk.
+Creates a new file infobase (1C:Enterprise database) or registers an existing file/cluster infobase, and binds it to a configuration project so it appears in `get_applications` as an application of type `com.e1c.g5.dt.applications.type.infobase`. This mirrors the two choices of the EDT "new infobase" dialog: make a new database, or use a database that already exists on disk.
 
 ## Modes
 
 - **`mode='create'` (default)** — makes a brand-new file infobase at `infobaseFile`. This launches the 1C platform (`1cv8 CREATEINFOBASE`), so a **registered 1C:Enterprise platform runtime** must be installed in EDT (Window > Preferences > 1C:Enterprise > Installed Installations). The tool probes for a platform first and fails FAST with an actionable error if none is registered.
-- **`mode='register'`** — adds an EXISTING file infobase already present at `infobaseFile` (the directory must contain a `1Cv8.1CD`). No platform launch happens, so this works even without a configured runtime.
+- **`mode='register'`** — adds an EXISTING file infobase already present at `infobaseFile` (the directory must contain a `1Cv8.1CD`). No database creation command is launched. This works without a configured runtime, but EDT may open a Designer connection while binding when a runtime is installed.
 
-For an existing cluster/SQL infobase, use `mode='register'`, `infobaseServer` (for example `localhost:1541`) and `infobaseRef` (the cluster infobase name), without `infobaseFile`. This requires `applicationKind='infobase'`. Registration does not create a SQL database, test connectivity, change its configuration, run update handlers, or launch the platform. `boundToProject` verifies the EDT association, not database reachability. The returned `applicationId` can then be passed to `update_database` or `launch`; these separate operations need a configured runtime and appropriate credentials. Server creation, DBMS credentials and web-URL registration are out of scope.
+For an existing cluster/SQL infobase, use `mode='register'`, `infobaseServer` (for example `localhost:1541`) and `infobaseRef` (the cluster infobase name), without `infobaseFile`. This requires `applicationKind='infobase'`. The tool does not create a SQL database, change its configuration, or run update handlers. EDT may open a Designer session to the infobase during association when a platform runtime is installed. Requested credentials are stored before that association; a credential-store failure is reported in the result. Registration itself does not require a successful connection. `boundToProject` verifies the EDT association, not database reachability. The returned `applicationId` can then be passed to `update_database` or `launch`; these separate operations need a configured runtime and appropriate credentials. Server creation, DBMS credentials and web-URL registration are out of scope.
 
 ```text
 create_infobase projectName="MyProject" mode="register" infobaseServer="localhost:1541" infobaseRef="ExistingApp"
 ```
 
-Server results carry `infobaseServer` and `infobaseRef` instead of `infobaseFile`, including when binding read-back reports a refusal. Do not pass a connection string or credentials in either address field. Optional `user`/`password`/`access` use the same EDT credential storage and verification as file registration; passwords are not echoed. An already registered address may be refused by EDT: use its existing application from `get_applications` rather than creating a duplicate.
+Server results carry `infobaseServer` and `infobaseRef` instead of `infobaseFile`, including when binding read-back reports a refusal. Use a comma-separated list of `host[:port]` or `[IPv6][:port]` entries, with ports 1–65535 and no whitespace. `infobaseRef` must be a plain cluster name without slashes. Do not pass a URL, connection string or credentials in either address field. Optional `user`/`password`/`access` use the same EDT credential storage and verification as file registration; passwords are not echoed. The tool checks the entire EDT launcher list (including groups) and refuses an already registered address before adding a record or writing credentials. Use the existing application from `get_applications`, or bind the existing launcher entry in EDT. If association fails or read-back establishes NOT_BOUND, the tool rolls back its new association, launcher entry and requested credentials. The error reports each rollback outcome; it never deletes the database. An UNVERIFIED read-back retains the registration and asks for a later `get_applications` check.
 
 ## Application kind: infobase vs standalone server
 
