@@ -79,21 +79,7 @@ public final class StandardCommandGroupResolver
      */
     public static IEObjectProvider providerFor(Version version)
     {
-        if (version == null)
-        {
-            return null;
-        }
-        try
-        {
-            return IEObjectProvider.Registry.INSTANCE.get(McorePackage.Literals.COMMAND_GROUP,
-                version);
-        }
-        catch (RuntimeException e)
-        {
-            // A missing catalogue is reported through the caller's refusal, which carries both
-            // accepted forms; it is never an exception out of a property-preparation path.
-            return null;
-        }
+        return PlatformCatalogue.providerFor(McorePackage.Literals.COMMAND_GROUP, version);
     }
 
     /**
@@ -105,36 +91,18 @@ public final class StandardCommandGroupResolver
      */
     public static Result resolve(IEObjectProvider provider, String token)
     {
-        if (provider == null || token == null || token.isEmpty())
+        PlatformCatalogue.Lookup found =
+            PlatformCatalogue.find(provider, token, McorePackage.Literals.COMMAND_GROUP);
+        switch (found.status)
         {
-            return Result.error(unknown(token, provider));
+            case FOUND:
+                return Result.ok(found.proxy);
+            case UNAVAILABLE:
+                // Nothing is known about the name, so the refusal lists no catalogue names.
+                return Result.error(unknown(token, null));
+            default:
+                return Result.error(unknown(token, provider));
         }
-        try
-        {
-            // The catalogue index is an EXACT, case-sensitive map, so the exact spelling is the
-            // fast path and anything else is answered by a pass over the descriptions.
-            EObject exact = provider.getProxy(token);
-            if (isStandardGroupProxy(exact))
-            {
-                return Result.ok(exact);
-            }
-            for (IEObjectDescription description : descriptions(provider))
-            {
-                if (token.equalsIgnoreCase(nameOf(description)))
-                {
-                    EObject group = description.getEObjectOrProxy();
-                    if (isStandardGroupProxy(group))
-                    {
-                        return Result.ok(group);
-                    }
-                }
-            }
-        }
-        catch (RuntimeException e)
-        {
-            return Result.error(unknown(token, null));
-        }
-        return Result.error(unknown(token, provider));
     }
 
     /**
@@ -153,9 +121,9 @@ public final class StandardCommandGroupResolver
         Map<URI, List<String>> byGroup = new LinkedHashMap<>();
         try
         {
-            for (IEObjectDescription description : descriptions(provider))
+            for (IEObjectDescription description : PlatformCatalogue.descriptions(provider))
             {
-                String name = nameOf(description);
+                String name = PlatformCatalogue.nameOf(description);
                 URI target = description.getEObjectURI();
                 if (name == null || name.isEmpty() || target == null)
                 {
@@ -205,27 +173,5 @@ public final class StandardCommandGroupResolver
     {
         return "'" + (token == null ? "" : token) + "' is not a platform STANDARD command group. " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + addressingHint(provider);
-    }
-
-    private static Iterable<IEObjectDescription> descriptions(IEObjectProvider provider)
-    {
-        Iterable<IEObjectDescription> all = provider.getEObjectDescriptions(null);
-        return all == null ? Collections.emptyList() : all;
-    }
-
-    private static String nameOf(IEObjectDescription description)
-    {
-        return description == null || description.getName() == null ? null
-            : description.getName().toString();
-    }
-
-    /**
-     * Whether a catalogue answer is a value this server may queue: a command group, and an
-     * UNRESOLVED proxy. A non-proxy would only fail later, at commit, as an opaque BM assertion.
-     */
-    private static boolean isStandardGroupProxy(EObject value)
-    {
-        return value != null && value.eIsProxy() && value.eClass() != null
-            && McorePackage.Literals.COMMAND_GROUP.isSuperTypeOf(value.eClass());
     }
 }

@@ -52,7 +52,10 @@ Read tool -> every test ends with assert_no_diff(): opening/snapshotting a form 
 never mutate the project tree on disk.
 """
 
+import re
+
 from harness import (
+    native_form_layout_render_mode,
     call,
     assert_ok,
     assert_error_quality,
@@ -131,11 +134,9 @@ def _assert_zero_bounds_warning_is_a_real_diagnosis(body):
     that whichever one is emitted is internally coherent (a structural verdict must
     not also tell the caller to retry, and vice versa).
 
-    Deliberately NOT cross-checked against get_server_status.formRenderFlags. That
-    report is not a trustworthy oracle: `nativeFormLayoutRender` is EDT's default when
-    the property is ABSENT, while the tool reads Boolean.parseBoolean(None) -> False
-    and therefore publishes the OPPOSITE of the effective mode (issue #522). Judging
-    the new diagnosis by the broken reporter makes this test fail on a CORRECT server.
+    Not cross-checked against get_server_status here: this helper pins each diagnosis's
+    own coherence. Since #522 formRenderFlags.*.atStartup reads EDT's own mode, and the
+    showElement test below branches on it (harness.native_form_layout_render_mode).
 
     Anti-cheat: a pre-#506 server emits the unconditional "The form may not be fully
     rendered yet" wording in every mode, so it fails the first assertion whichever
@@ -405,3 +406,88 @@ def test_wrong_type_token_in_formpath_errors_clearly():
     assert_error_quality(msg, names=[bad_form], suggests=["CommonForm.FormName"],
                          ctx="wrong-type-token formPath names value and shows the expected format")
     assert_no_diff("a rejected call must not touch the project on disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# showElement (the fixture CommonForm.Form has a Pages group "Pages" with the
+# pages PageMain and PageExtra; ExtraPageLabel sits on PageExtra)
+# ──────────────────────────────────────────────────────────────────────────────
+def _normalized_body(r):
+    """The YAML body with SnakeYAML's line folding undone and '' unescaped, so a long
+    error message can be matched as one string."""
+    return " ".join((r.text or "").split()).replace("''", "'")
+
+
+@e2e_test(tool="get_form_layout_snapshot", kind="read")
+def test_show_element_unknown_name_names_the_form_and_lists_its_pages():
+    """An unknown showElement fails with the same not-found error get_form_screenshot
+    gives: it names the value and the searched form and lists the form's pages. It is
+    resolved by name before the layout is read and before any render-mode check, and
+    opening the editor needs no image, so nothing excuses a missing not-found here."""
+    r = call("get_form_layout_snapshot", {
+        "projectName": PROJECT,
+        "formPath": "CommonForm.Form",
+        "showElement": "NoSuchElementXyz",
+    })
+    _assert_is_failure(r, "unknown showElement")
+    body = _normalized_body(r)
+    assert "'NoSuchElementXyz' was not found in form 'CommonForm.Form'" in body, (
+        "the not-found error must name the value and the searched form:\n%s" % body[:600])
+    assert "Its pages: PageMain, PageExtra." in body, (
+        "the not-found error must list the form's pages:\n%s" % body[:600])
+    assert_error_quality(body, names=["NoSuchElementXyz"], suggests=["get_metadata_details"],
+                         ctx="unknown showElement names the value and the element-listing tool")
+    assert_no_diff("snapshotting a form is read-only; nothing may change on disk")
+
+
+_BOUNDS_RE = (r"bounds: left: (-?\d+) top: (-?\d+) width: (\d+) height: (\d+) "
+              r"right: (-?\d+) bottom: (-?\d+)")
+
+
+@e2e_test(tool="get_form_layout_snapshot", kind="read")
+def test_show_element_on_a_non_default_page_has_bounds_in_java_render_and_is_refused_in_native():
+    """ExtraPageLabel sits on the non-default page PageExtra. Branches on the render
+    mode read independently from get_server_status - never "either outcome":
+      * Java render (-DnativeFormLayoutRender=false): EDT lays out every page, so the
+        call MUST succeed and shownElement MUST carry positive numeric bounds that are
+        the same bounds the element tree gives ExtraPageLabel (a snapshot that always
+        answered "no calculated bounds" fails here);
+      * native render: no element has bounds on any page, so the call MUST be the
+        explicit refusal pointing at get_form_screenshot.
+    Neither branch needs a form image, so an editor that cannot be opened fails, and an
+    unreadable render mode fails the prerequisite check."""
+    mode = native_form_layout_render_mode()
+    r = call("get_form_layout_snapshot", {
+        "projectName": PROJECT,
+        "formPath": "CommonForm.Form",
+        "showElement": "extrapagelabel",
+    })
+    assert_ok(r, "snapshot with showElement")
+    body = _normalized_body(r)
+    assert "was not found" not in body, "an existing element must not be reported missing:\n%s" % body[:600]
+
+    if mode == "on":
+        _assert_is_failure(r, "showElement in native render mode")
+        assert "cannot change get_form_layout_snapshot in native render mode" in body, (
+            "native render mode must refuse showElement explicitly:\n%s" % body[:600])
+        assert "get_form_screenshot with showElement" in body, (
+            "the native-render refusal must name the tool that shows the page:\n%s" % body[:600])
+        assert_no_diff("snapshotting a form is read-only; nothing may change on disk")
+        return
+
+    assert "success: true" in body, (
+        "in Java render mode every page is laid out, so the element must have bounds:\n%s" % body[:800])
+    shown = re.search(r"shownElement: name: ExtraPageLabel " + _BOUNDS_RE, body)
+    assert shown, "shownElement must give the element's name and numeric bounds:\n%s" % body[:800]
+    assert int(shown.group(3)) > 0 and int(shown.group(4)) > 0, (
+        "shownElement bounds must be positive; got %r" % (shown.groups(),))
+
+    elements_at = body.find(" elements: ")
+    assert elements_at >= 0, "the snapshot must carry the element tree:\n%s" % body[:800]
+    in_tree = body.find("name: ExtraPageLabel ", elements_at)
+    assert in_tree >= 0, "the element tree must contain ExtraPageLabel:\n%s" % body[elements_at:elements_at + 800]
+    tree_bounds = re.compile(_BOUNDS_RE).search(body, in_tree)
+    assert tree_bounds and tree_bounds.groups() == shown.groups(), (
+        "shownElement must report the bounds the element tree gives ExtraPageLabel; "
+        "shownElement %r, tree %r" % (shown.groups(), tree_bounds.groups() if tree_bounds else None))
+    assert_no_diff("snapshotting a form is read-only; nothing may change on disk")

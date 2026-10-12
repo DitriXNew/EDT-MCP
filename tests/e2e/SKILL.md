@@ -142,6 +142,12 @@ from harness import (
 # write-metadata test). Do NOT call them in a test unless you genuinely need an
 # intermediate reset.
 #
+# A test that WRITES INTO THE EXTENSION fixture (TESTS_PROJECT) restores it itself, in a
+# finally block, with the one shared restore - never a local copy:
+#   restore_extension_fixture(ctx)   # revert, clean_project, settle, revert, settle; every step checked
+# and polls a file of a NON-BASE fixture with the same poll the base uses:
+#   poll_disk_contains_all(rel_path, needles, ctx=..., fixture_rel=TESTS_PROJECT_REL)
+#
 # Gated live-infobase helpers (used ONLY by tools/test_live_roundtrip.py, see §8.1):
 #   requires_live_infobase(reason)   # first line; raises E2ESkip unless EDT_MCP_LIVE_INFOBASE=1
 #   parse_yaxunit_counts(text)       # YAXUnit Markdown summary -> {total,passed,failed,errors,skipped,result}

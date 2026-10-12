@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EList;
@@ -44,6 +45,7 @@ import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.form.service.FormIdentifierService;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
@@ -1169,16 +1171,34 @@ public final class FormElementWriter
      */
     public static boolean writeEditableForm(FormEditContext ctx, String taskName, FormWork work)
     {
-        String contentFormFqn = BmTransactions.<String>write(ctx.bmModel, taskName, (tx, pm) ->
+        return writeEditableForm(ctx, taskName, work, false);
+    }
+
+    /**
+     * {@link #writeEditableForm(FormEditContext, String, FormWork)}, optionally committed through the
+     * model's global editing context ({@link BmTransactions#writeInGlobalContext}) so EDT's own save
+     * also deletes the files of the top objects the work detached.
+     *
+     * @param ctx the resolved context (see {@link #resolveForEdit})
+     * @param taskName a short BM task name for diagnostics
+     * @param work the mutation to run on the content form
+     * @param globalContext {@code true} to commit through the global editing context
+     * @return whether the export persisted the change to disk
+     */
+    public static boolean writeEditableForm(FormEditContext ctx, String taskName, FormWork work,
+        boolean globalContext)
+    {
+        BmTransactions.BmOperation<String> operation = (tx, pm) ->
         {
             EObject formModel = editableFormInTx(ctx, tx);
             work.run(formModel, tx);
-            normalizeFormAttributeIds(formModel);
-            normalizeFormItemIds(formModel);
-            normalizeFormCommandIds(formModel);
+            normalizeFormIds(formModel);
             // The content Form is a separate top object serialized to Form.form - export ITS fqn.
             return (formModel instanceof IBmObject) ? ((IBmObject)formModel).bmGetFqn() : null;
-        });
+        };
+        String contentFormFqn = globalContext
+            ? BmTransactions.writeInGlobalContext(ctx.bmModel, taskName, operation)
+            : BmTransactions.write(ctx.bmModel, taskName, operation);
         // The write is committed at this point whether or not an export can be submitted below, and
         // the export IS skipped when the content form has no FQN to name. Stating the project here
         // is what keeps that branch a write with a known scope instead of a call that says nothing
@@ -1641,9 +1661,7 @@ public final class FormElementWriter
             // attribute is actually present (it gates createField's dotted-path acceptance). Issue #208.
             seedObjectFields(content, russianAutoNames, objectFields);
         }
-        normalizeFormAttributeIds(content);
-        normalizeFormItemIds(content);
-        normalizeFormCommandIds(content);
+        normalizeFormIds(content);
         return content;
     }
 
@@ -4524,23 +4542,88 @@ public final class FormElementWriter
     /** Whether any remaining authored form item references the path. */
     private static boolean formReferencesDataPath(EObject formModel, List<String> path)
     {
+        return itemBoundTo(formModel, path) != null;
+    }
+
+    /**
+     * The first authored form item bound to {@code path} in any language of its binding (see
+     * {@link #bindsAnySpelling}).
+     *
+     * @param formModel the form content model
+     * @param path the data path segments
+     * @return the item, or {@code null} when no item is bound to the path
+     */
+    public static EObject itemBoundTo(EObject formModel, List<String> path)
+    {
+        List<List<String>> spellings = Collections.singletonList(path);
+        return itemBoundTo(formModel, dataPath -> bindsAnySpelling(dataPath, spellings));
+    }
+
+    /**
+     * Whether an ITEM's binding names one of {@code spellings}: a legacy multi-language path in every
+     * language it stores, not only the active one; segments compare case-insensitively. A stored
+     * use-always registration is read by its active language instead, as EDT reads it.
+     *
+     * @param dataPath the item's data path object, may be {@code null}
+     * @param spellings the path's spellings
+     * @return whether the binding names the path
+     */
+    @SuppressWarnings("unchecked")
+    public static boolean bindsAnySpelling(EObject dataPath, List<List<String>> spellings)
+    {
+        if (dataPath == null)
+        {
+            return false;
+        }
+        EStructuralFeature languages = dataPath.eClass().getEStructuralFeature("paths"); //$NON-NLS-1$
+        if (languages instanceof EReference && languages.isMany() && dataPath.eGet(languages) instanceof List<?>)
+        {
+            for (Object language : (List<Object>)dataPath.eGet(languages))
+            {
+                if (language instanceof EObject && bindsAnySpelling((EObject)language, spellings))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+        for (List<String> spelling : spellings)
+        {
+            if (sameDataPath(dataPath, spelling))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The first authored form item whose {@code dataPath} satisfies {@code boundTo}.
+     *
+     * @param formModel the form content model
+     * @param boundTo tests an item's data path object (never {@code null})
+     * @return the item, or {@code null} when no item's path qualifies
+     */
+    public static EObject itemBoundTo(EObject formModel, Predicate<EObject> boundTo)
+    {
         EClassifier formItem = formModel.eClass().getEPackage().getEClassifier(ECLASS_FORM_ITEM);
         if (!(formItem instanceof EClass))
         {
-            return false;
+            return null;
         }
         Deque<EObject> pending = new ArrayDeque<>();
         pushFormItems(formModel, (EClass)formItem, pending);
         while (!pending.isEmpty())
         {
             EObject item = pending.pop();
-            if (sameDataPath(singleReference(item, "dataPath"), path)) //$NON-NLS-1$
+            EObject dataPath = singleReference(item, "dataPath"); //$NON-NLS-1$
+            if (dataPath != null && boundTo.test(dataPath))
             {
-                return true;
+                return item;
             }
             pushFormItems(item, (EClass)formItem, pending);
         }
-        return false;
+        return null;
     }
 
     /**
@@ -5515,6 +5598,18 @@ public final class FormElementWriter
     }
 
     /**
+     * {@link #createHandler(EObject, String, String, Version, String, String, String[], String)} for a
+     * caller that does not know the handler's FQN: a refused duplicate then names "this same handler
+     * FQN" as the address of the route that changes the existing binding.
+     */
+    public static String createHandler(EObject container, String eventName, String procName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        Version version, String langCode, String callType, String[] createdKind)
+    {
+        return createHandler(container, eventName, procName, version, langCode, callType, createdKind,
+            null);
+    }
+
+    /**
      * Binds an event {@code Handler} to {@code container} (the form itself or a form item): resolves
      * the requested {@code eventName} against the element's AVAILABLE events; on no match returns an
      * error LISTING the available events localized to {@code langCode} (the user-required advisory).
@@ -5529,15 +5624,21 @@ public final class FormElementWriter
      * method-only call type and is rejected for a form event. A blank {@code callType} reproduces the
      * base-handler behavior exactly (one handler per event).
      *
+     * <p>A refused DUPLICATE (a command's existing action, an event already bound) names what is bound
+     * and the route that changes it on {@code handlerFqn} - the address the caller sent - so the caller
+     * does not have to discover the binding before it can change it (issue #628).</p>
+     *
      * <p>This writes only the {@code .form} model; the BSL handler procedure itself (like the base
      * path) is left to {@code write_module_source}.
      *
      * @param version the platform version (to resolve the element's platform Type and its events)
      * @param callType {@code null}/blank for a base handler; otherwise Before | After | Instead
+     * @param handlerFqn the handler FQN the caller addressed, or {@code null} when unknown (a duplicate
+     *     then names "this same handler FQN")
      * @return {@code null} on success, or a human-readable error message
      */
     public static String createHandler(EObject container, String eventName, String procName, // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
-        Version version, String langCode, String callType, String[] createdKind)
+        Version version, String langCode, String callType, String[] createdKind, String handlerFqn)
     {
         final boolean extension = callType != null && !callType.trim().isEmpty();
         if (ECLASS_FORM_COMMAND.equals(container.eClass().getName()))
@@ -5547,7 +5648,7 @@ public final class FormElementWriter
                 return "Call-type interception is not supported for a form command action; " //$NON-NLS-1$
                     + "callType applies to a form ITEM event."; //$NON-NLS-1$
             }
-            return createCommandAction(container, eventName, procName, createdKind);
+            return createCommandAction(container, eventName, procName, createdKind, handlerFqn);
         }
         // A form ROOT always holds handlers, so there the missing list is the model's shape.
         if ("Form".equals(container.eClass().getName()) && !holdsHandlerList(container)) //$NON-NLS-1$
@@ -5624,7 +5725,19 @@ public final class FormElementWriter
         EStructuralFeature ownerHandlersFeat =
             matched.owner.eClass().getEStructuralFeature(KEY_HANDLERS);
         return bindEventHandler(matched.owner, ownerHandlersFeat, matched.event, eventName, procName,
-            callType, createdKind);
+            callType, createdKind, handlerFqn);
+    }
+
+    /**
+     * {@link #bindEventHandler(EObject, EStructuralFeature, EObject, String, String, String, String[], String)}
+     * without the handler's FQN: a refused duplicate then names "this same handler FQN" as the
+     * address of its route. Package-visible for the headless unit test.
+     */
+    static String bindEventHandler(EObject container, EStructuralFeature handlersFeat, EObject matched, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        String eventName, String procName, String callType, String[] createdKind)
+    {
+        return bindEventHandler(container, handlersFeat, matched, eventName, procName, callType,
+            createdKind, null);
     }
 
     /**
@@ -5638,10 +5751,12 @@ public final class FormElementWriter
      * {@code com._1c.g5.v8.dt.form.model} import. Package-visible for the headless unit test (the
      * model-dependent event resolution above is exercised by the e2e suite / live verification).
      *
+     * @param handlerFqn the handler FQN the caller addressed, or {@code null}: a refused base
+     *     duplicate names it as the address of the route that changes the binding (issue #628)
      * @return {@code null} on success, or a human-readable error message
      */
     static String bindEventHandler(EObject container, EStructuralFeature handlersFeat, EObject matched, // NOSONAR reflective/form or transport god-method; further extraction deferred (reflective code)
-        String eventName, String procName, String callType, String[] createdKind)
+        String eventName, String procName, String callType, String[] createdKind, String handlerFqn)
     {
         final boolean extension = callType != null && !callType.trim().isEmpty();
         EClass baseEhType = ((EReference)handlersFeat).getEReferenceType();
@@ -5690,7 +5805,7 @@ public final class FormElementWriter
                 {
                     continue;
                 }
-                return "An event handler for '" + eventName + "' already exists on this element."; //$NON-NLS-1$ //$NON-NLS-2$
+                return eventHandlerExistsRefusal(container, existing, eventName, handlerFqn);
             }
             if (existingIsExtension && callTypeLiteral.getName().equals(callTypeNameOf(existing)))
             {
@@ -5717,6 +5832,64 @@ public final class FormElementWriter
         addToList(container, KEY_HANDLERS, handler);
         recordKind(handler, createdKind);
         return null;
+    }
+
+    /**
+     * The refusal for a second plain binding of an element / form event (issue #628): it names the
+     * procedure the event is already bound to and the route that changes it on {@code handlerFqn} -
+     * modify_metadata with a {@code procedure} property rebinds it, delete_metadata removes it.
+     *
+     * <p>Both routes resolve a handler FQN to the FIRST binding of its event around the element
+     * ({@link #findFormHandler}), interception handlers included. The route is therefore named only
+     * when that first binding IS this handler; when an extension's interception of the same event
+     * comes first, the route would change the wrong binding, so only the procedure is named.</p>
+     *
+     * @param container the handler-list owner the binding was attempted on (the element or its
+     *     ext-info)
+     * @param existing the base handler already bound to the event
+     * @param eventName the event leaf the caller addressed
+     * @param handlerFqn the handler FQN the caller sent, or {@code null}
+     * @return the refusal text
+     */
+    private static String eventHandlerExistsRefusal(EObject container, EObject existing, String eventName,
+        String handlerFqn)
+    {
+        String bound = "An event handler for '" + eventName + "' already exists on this element: it is " //$NON-NLS-1$ //$NON-NLS-2$
+            + "bound to " + boundProcedurePhrase(stringFeature(existing, FEATURE_NAME)); //$NON-NLS-1$
+        if (findFormHandler(handlerAddressOwner(container), eventName) != existing)
+        {
+            return bound + "."; //$NON-NLS-1$
+        }
+        return bound + ". create_metadata binds only an event the element does not handle yet - to " //$NON-NLS-1$
+            + "bind the event to another procedure, call modify_metadata on " //$NON-NLS-1$
+            + handlerRouteAddress(handlerFqn) + " with a 'procedure' property; to remove the binding, " //$NON-NLS-1$
+            + "call delete_metadata on it."; //$NON-NLS-1$
+    }
+
+    /**
+     * The element a handler FQN names when the binding list is {@code container}: the container
+     * itself, or - for a list held inside an ext-info (issues #592, #651) - the element that ext-info
+     * belongs to, which is what {@link #resolveHandlerContainer} hands the rebind and delete paths.
+     */
+    private static EObject handlerAddressOwner(EObject container)
+    {
+        EObject parent = container.eContainer();
+        return parent != null && singleReference(parent, FEATURE_EXT_INFO) == container ? parent
+            : container;
+    }
+
+    /** The route's address in a duplicate refusal: the FQN the caller sent, or a pointer back to it. */
+    private static String handlerRouteAddress(String handlerFqn)
+    {
+        return handlerFqn == null || handlerFqn.isBlank() ? "this same handler FQN" //$NON-NLS-1$
+            : "'" + handlerFqn + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** What a binding is bound to: "procedure 'P'", or the plain fact that it names no procedure. */
+    private static String boundProcedurePhrase(String procedure)
+    {
+        return procedure == null || procedure.isEmpty() ? "a handler with no procedure name" //$NON-NLS-1$
+            : "procedure '" + procedure + "'"; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
@@ -5780,10 +5953,11 @@ public final class FormElementWriter
      * {@code Action} (or its Russian equivalent). Builds the same
      * {@code FormCommandHandlerContainer}/{@code CommandHandler} pair the platform's
      * {@code ModelUtils.setCommandHandler} builds; the BSL procedure name defaults to the COMMAND name
-     * (the EDT UI's suggestion), not the event name.
+     * (the EDT UI's suggestion), not the event name. A command has ONE action: a second bind is
+     * refused by {@link #commandActionExistsRefusal}, which names what is bound and how to change it.
      */
     private static String createCommandAction(EObject command, String eventName, String procName,
-        String[] createdKind)
+        String[] createdKind, String handlerFqn)
     {
         if (!isActionToken(eventName))
         {
@@ -5797,8 +5971,7 @@ public final class FormElementWriter
         }
         if (command.eGet(actionFeat) != null)
         {
-            return "An event handler for '" + COMMAND_ACTION_EVENT //$NON-NLS-1$
-                + "' already exists on this command."; //$NON-NLS-1$
+            return commandActionExistsRefusal(command, handlerFqn);
         }
         EObject container = createFromClassifier(command, ECLASS_FORM_COMMAND_HANDLER_CONTAINER);
         EObject handler = createFromClassifier(command, ECLASS_COMMAND_HANDLER);
@@ -5817,8 +5990,99 @@ public final class FormElementWriter
         return null;
     }
 
-    /** Whether the handler FQN leaf addresses a command's Action (English or Russian). */
-    private static boolean isActionToken(String eventName)
+    /**
+     * The refusal for a second create of a form command's action (issue #628). The reporter met an
+     * action it did not know was there and could see neither what it was bound to nor how to change
+     * it, so the text names the command, what its action is bound to - read by
+     * {@link FormStructureReader#actionHandlerOf}, the very text the Commands table's "Action handler"
+     * column shows - and the route that changes it. The route follows the action's SHAPE, because
+     * only one shape can be rebound:
+     * <ul>
+     * <li>a single {@code handler} ({@code FormCommandHandlerContainer}) is rebound by modify_metadata
+     * on the same handler FQN with a {@code procedure} property ({@link #rebindHandler} renames it),
+     * or removed by delete_metadata;</li>
+     * <li>a {@code handlers} list ({@code FormExtensionCommandHandlerContainer} - an extension's
+     * interception) cannot be rebound, which {@link #rebindHandler} says too, so only the removal of
+     * the whole action is named;</li>
+     * <li>an action holding neither - a {@code FormCommandHandlerContainer} whose optional
+     * {@code handler} is unset - has no procedure to rebind. delete_metadata removes an action of ANY
+     * shape on this address ({@link #findFormHandler} hands it the action itself), after which the
+     * same create binds a fresh one, so that pair is the route named.</li>
+     * </ul>
+     * Package-visible for the headless unit test.
+     *
+     * @param command the form command whose action already exists
+     * @param handlerFqn the handler FQN the caller sent, or {@code null} - the route then points at
+     *     "this same handler FQN"
+     * @return the refusal text
+     */
+    static String commandActionExistsRefusal(EObject command, String handlerFqn)
+    {
+        String commandName = stringFeature(command, FEATURE_NAME);
+        String exists = "The action of form command '" + (commandName == null ? "" : commandName) //$NON-NLS-1$ //$NON-NLS-2$
+            + "' already exists"; //$NON-NLS-1$
+        EObject action = singleReference(command, FEATURE_ACTION);
+        if (action == null)
+        {
+            return exists + "."; //$NON-NLS-1$
+        }
+        String bound = FormStructureReader.actionHandlerOf(command);
+        if (singleReference(action, FEATURE_HANDLER) != null)
+        {
+            return exists + ": it is bound to " + boundProcedurePhrase(bound) //$NON-NLS-1$
+                + ". create_metadata binds only an action the command does not have yet - to bind the " //$NON-NLS-1$
+                + "command to another procedure, call modify_metadata on " + handlerRouteAddress(handlerFqn) //$NON-NLS-1$
+                + " with a 'procedure' property; to remove the binding, call delete_metadata on it."; //$NON-NLS-1$
+        }
+        if (holdsHandlerList(action))
+        {
+            return exists + ": it holds " + (bound.isEmpty() //$NON-NLS-1$
+                ? "an empty extension interception handler list" //$NON-NLS-1$
+                : "the extension interception handlers '" + bound + "'") //$NON-NLS-1$ //$NON-NLS-2$
+                + ". modify_metadata cannot rebind interception handlers; to remove the whole action, " //$NON-NLS-1$
+                + "call delete_metadata on " + handlerRouteAddress(handlerFqn) + "."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return exists + " but holds no single handler, so there is no procedure to rebind on it: " //$NON-NLS-1$
+            + "remove it with delete_metadata on " + handlerRouteAddress(handlerFqn) //$NON-NLS-1$
+            + ", then repeat this create_metadata call."; //$NON-NLS-1$
+    }
+
+    /**
+     * Why an EXISTING command action that carries no single handler cannot be rebound (issue #628).
+     * Its create is refused while the action exists, so the "bind it first with create_metadata"
+     * advice a missing action gets would loop here. delete_metadata on the same handler FQN removes
+     * an action of ANY shape ({@link #findFormHandler} hands it the action itself), so that is the
+     * route named: for an extension's interception list the removal of the whole action; for an
+     * action that holds no handler at all the removal followed by a fresh create_metadata bind.
+     *
+     * @param command the form command
+     * @param action its existing action, which holds no single {@code handler}
+     * @return the refusal text
+     */
+    private static String commandActionNotRebindable(EObject command, EObject action)
+    {
+        if (holdsHandlerList(action))
+        {
+            String bound = FormStructureReader.actionHandlerOf(command);
+            return "This command's action holds extension interception handlers" //$NON-NLS-1$
+                + (bound.isEmpty() ? "" : " ('" + bound + "')") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "; modify_metadata cannot rebind them - remove the action with delete_metadata on " //$NON-NLS-1$
+                + "this FQN."; //$NON-NLS-1$
+        }
+        return "This command's action exists but holds no single handler, so modify_metadata has no " //$NON-NLS-1$
+            + "procedure to rebind on it - remove the action with delete_metadata on this FQN, then " //$NON-NLS-1$
+            + "bind it with create_metadata on this FQN."; //$NON-NLS-1$
+    }
+
+    /**
+     * Whether the handler FQN leaf addresses a command's Action (English or Russian). Public because
+     * modify_metadata refuses the same spellings as PROPERTY names on a form command and routes them
+     * to this handler member instead (issue #628): one definition of the action's spellings.
+     *
+     * @param eventName the leaf (or property name) to test, may be {@code null}
+     * @return {@code true} for {@code Action} (any case) or its Russian spelling
+     */
+    public static boolean isActionToken(String eventName)
     {
         return COMMAND_ACTION_EVENT.equalsIgnoreCase(eventName)
             || (eventName != null && RU_ACTION.equalsIgnoreCase(eventName.trim()));
@@ -6695,6 +6959,26 @@ public final class FormElementWriter
             }
         }
         return max + 1;
+    }
+
+    /**
+     * Runs the three id repairs, then drops EDT's cached id counters (BM properties) on the form and
+     * its live base/extension peer, which share the attribute and command id space, so the designer's
+     * next allocation rescans them (issue #723). Package-visible for the unit test.
+     */
+    static void normalizeFormIds(EObject formModel)
+    {
+        normalizeFormAttributeIds(formModel);
+        normalizeFormItemIds(formModel);
+        normalizeFormCommandIds(formModel);
+        for (EObject form : new EObject[] { formModel, liveReference(formModel, FEATURE_EXTENSION_FORM),
+            liveReference(formModel, FEATURE_BASE_FORM) })
+        {
+            if (form instanceof IBmObject)
+            {
+                FormIdentifierService.INSTANCE.clearCaches((IBmObject)form);
+            }
+        }
     }
 
     /**
@@ -7840,8 +8124,10 @@ public final class FormElementWriter
      * {@code name}; for a form command ({@code ...Command.X.Handler.Action}) the single Action's
      * contained {@code CommandHandler} is renamed. Does NOT bind a new event (that is
      * {@code create_metadata} via {@link #createHandler}); a missing handler is reported so the caller
-     * can steer the user to create it. Reflective, so no compile-time form-model dependency. Call on
-     * the tx-bound form model.
+     * can steer the user to create it - except a command action that EXISTS without a single handler
+     * (an extension's interception list, or an action holding no handler at all), which create_metadata
+     * would refuse, so its refusal names the removal first (issue #628). Reflective, so no
+     * compile-time form-model dependency. Call on the tx-bound form model.
      *
      * @param container the form root, the owning form item or the form command (already resolved on
      *     the tx-bound model, see {@link #resolveHandlerContainer})
@@ -7870,8 +8156,12 @@ public final class FormElementWriter
             EObject handler = action != null ? singleReference(action, FEATURE_HANDLER) : null;
             if (handler == null)
             {
-                return "No event handler for '" + eventName + "' exists on this element to rebind. " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "Use create_metadata on the handler FQN to bind it first."; //$NON-NLS-1$
+                // Only a MISSING action is bound "first" by create_metadata; an existing one that
+                // holds no single handler would be refused there as existing - a loop (issue #628).
+                return action == null
+                    ? "No event handler for '" + eventName + "' exists on this element to rebind. " //$NON-NLS-1$ //$NON-NLS-2$
+                        + "Use create_metadata on the handler FQN to bind it first." //$NON-NLS-1$
+                    : commandActionNotRebindable(container, action);
             }
             setStringFeature(handler, FEATURE_NAME, procName);
             return null;

@@ -42,6 +42,7 @@ import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.mcore.util.McoreUtil;
+import com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonPicture;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -65,7 +66,7 @@ public final class MetadataPropertyIntrospector
 {
     /**
      * The {@code AdjustableBoolean} flag the wire boolean of an {@link ValueKind#ADJUSTABLE_BOOLEAN}
-     * property addresses. Its sibling {@code for} list (per-role overrides) is left untouched.
+     * property addresses. Its sibling {@code for} list (per-role values) is addressed by the object form.
      */
     public static final String COMMON_FEATURE = "common"; //$NON-NLS-1$
 
@@ -129,8 +130,9 @@ public final class MetadataPropertyIntrospector
         /**
          * A contained {@link com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean AdjustableBoolean}:
          * a flag the designer stores as a nested object ({@code common}) that MAY additionally carry
-         * per-role / per-functional-option overrides ({@code for}). On the wire it is a plain boolean
-         * addressing {@code common}; the {@code for} overrides are preserved untouched.
+         * per-role values ({@code for}). On the wire it is a plain boolean addressing {@code common}
+         * (role values preserved), or {@code {common?, roles?}} (issue #719, see
+         * {@link AdjustableBooleanSupport}).
          *
          * <p>Like {@link #STYLE_VALUE} this is a single-valued containment reference, so the generic
          * containment filter would drop it - it is classified explicitly. Classifying it by its TARGET
@@ -138,7 +140,22 @@ public final class MetadataPropertyIntrospector
          * {@code view} / {@code edit} (issue #382), a form item's {@code userVisible}, a form command's
          * {@code use}.</p>
          */
-        ADJUSTABLE_BOOLEAN
+        ADJUSTABLE_BOOLEAN,
+        /**
+         * A single contained mcore {@code Color} - a form item's {@code textColor},
+         * {@code titleBackColor}, ... - set via {@code {color:...}} (see {@link AppearanceValueBuilder}).
+         */
+        COLOR,
+        /**
+         * A single contained mcore {@code Font} - a form item's {@code font}, {@code titleFont}, ... -
+         * set via {@code {font:...}} (see {@link AppearanceValueBuilder}).
+         */
+        FONT,
+        /**
+         * A form attribute's "Use always" checkboxes, published as {@code useAlways} over the model's
+         * {@code notDefaultUseAlwaysAttributes} list (issue #661, see {@link UseAlwaysSupport}).
+         */
+        USE_ALWAYS
     }
 
     /** The introspected schema of one assignable property. */
@@ -285,10 +302,19 @@ public final class MetadataPropertyIntrospector
                 continue;
             }
             Rendered current = renderCurrent(obj, feature, kind);
-            result.add(new PropertyInfo(feature.getName(), kind, current.text, current.identity,
+            result.add(new PropertyInfo(propertyName(feature, kind), kind, current.text, current.identity,
                 allowedValuesFor(feature, kind), feature, false, current.failed));
         }
         return result;
+    }
+
+    /**
+     * The wire name of an assignable feature: its own name, except the use-always list, which is
+     * published as {@code useAlways} because its values are checkbox states, not list members.
+     */
+    private static String propertyName(EStructuralFeature feature, ValueKind kind)
+    {
+        return kind == ValueKind.USE_ALWAYS ? UseAlwaysSupport.PROPERTY : feature.getName();
     }
 
     /**
@@ -373,16 +399,16 @@ public final class MetadataPropertyIntrospector
         }
         for (EStructuralFeature feature : obj.eClass().getEAllStructuralFeatures()) // NOSONAR intentional multiple loop exits; restructuring with flags would reduce readability
         {
-            if (!feature.getName().equalsIgnoreCase(name) || !isAssignable(feature))
+            if (!isAssignable(feature))
             {
                 continue;
             }
             ValueKind kind = classify(feature);
-            if (kind == null)
+            if (kind == null || !propertyName(feature, kind).equalsIgnoreCase(name))
             {
                 continue;
             }
-            return new PropertyInfo(feature.getName(), kind, null, allowedValuesFor(feature, kind),
+            return new PropertyInfo(propertyName(feature, kind), kind, null, allowedValuesFor(feature, kind),
                 feature);
         }
         return null;
@@ -434,9 +460,10 @@ public final class MetadataPropertyIntrospector
         }
         for (EStructuralFeature feature : obj.eClass().getEAllStructuralFeatures())
         {
-            if (isAssignable(feature) && classify(feature) != null)
+            ValueKind kind = isAssignable(feature) ? classify(feature) : null;
+            if (kind != null)
             {
-                names.add(feature.getName());
+                names.add(propertyName(feature, kind));
             }
         }
         return names;
@@ -568,6 +595,10 @@ public final class MetadataPropertyIntrospector
         {
             return ValueKind.ADJUSTABLE_BOOLEAN;
         }
+        if (UseAlwaysSupport.isUseAlwaysFeature(feature))
+        {
+            return ValueKind.USE_ALWAYS;
+        }
         if (feature instanceof EAttribute)
         {
             return classifyAttribute((EAttribute)feature);
@@ -641,6 +672,16 @@ public final class MetadataPropertyIntrospector
         if (isContainedValue(ref, McorePackage.Literals.QNAME, false))
         {
             return ValueKind.QNAME;
+        }
+        // A form item's colours and fonts are declared exactly against the abstract mcore Color /
+        // Font (issue #660); the concrete value is a ColorDef / ColorRef / FontDef / FontRef.
+        if (isContainedValue(ref, McorePackage.Literals.COLOR, false))
+        {
+            return ValueKind.COLOR;
+        }
+        if (isContainedValue(ref, McorePackage.Literals.FONT, false))
+        {
+            return ValueKind.FONT;
         }
         // Census of the EDT sources: `contains Value[]` occurs exactly once in MdClass.xcore
         // (WebService.xdtoPackages) and zero times in Form.xcore. Admit that measured shape while
@@ -754,12 +795,15 @@ public final class MetadataPropertyIntrospector
     }
 
     /**
-     * Renders an {@code AdjustableBoolean}'s current value: the nested {@code common} flag, which is
-     * what the wire boolean addresses. The sibling {@code for} overrides are NOT rendered - they are
-     * neither readable nor writable through this property, and showing them would suggest otherwise.
+     * Renders an {@code AdjustableBoolean}'s current value in the shape {@code modify_metadata} takes:
+     * the bare {@code common} flag, or {@code {common, roles}} once a role has a value of its own.
      */
     private static String renderAdjustableBoolean(Object value)
     {
+        if (value instanceof AdjustableBoolean)
+        {
+            return AdjustableBooleanSupport.render((AdjustableBoolean)value);
+        }
         if (!(value instanceof EObject))
         {
             return null;
@@ -798,6 +842,12 @@ public final class MetadataPropertyIntrospector
         {
             String target = referenceTargetTypeName(feature);
             return target != null ? Collections.singletonList(target) : null;
+        }
+        if (kind == ValueKind.COLOR || kind == ValueKind.FONT)
+        {
+            // The value shape, shown where the property is discovered (issue #660).
+            return Collections.singletonList(kind == ValueKind.COLOR ? AppearanceValueBuilder.COLOR_SHAPES
+                : AppearanceValueBuilder.FONT_SHAPES);
         }
         return Collections.emptyList();
     }
@@ -926,7 +976,27 @@ public final class MetadataPropertyIntrospector
                 case QNAME:
                     return Rendered.of(value instanceof QName ? renderQName((QName)value) : null);
                 case ADJUSTABLE_BOOLEAN:
-                    return Rendered.of(renderAdjustableBoolean(value));
+                    // Role values in stored order for the reader, sorted for a comparison.
+                    return value instanceof AdjustableBoolean
+                        ? Rendered.of(renderAdjustableBoolean(value), AdjustableBooleanSupport.identity((AdjustableBoolean)value))
+                        : Rendered.of(renderAdjustableBoolean(value));
+                case USE_ALWAYS:
+                {
+                    String[] useAlways = UseAlwaysSupport.render(obj);
+                    return useAlways == null ? Rendered.ABSENT : Rendered.of(useAlways[0], useAlways[1]);
+                }
+                case COLOR:
+                {
+                    // The slot holds a value (null was answered above): a broken reference that
+                    // renders to nothing is a FAILED read, not an unset property.
+                    String color = AppearanceValueBuilder.renderColor(value);
+                    return Rendered.present(color, color);
+                }
+                case FONT:
+                {
+                    String font = AppearanceValueBuilder.renderFont(value);
+                    return Rendered.present(font, font);
+                }
                 default:
                     return Rendered.of(String.valueOf(value));
             }

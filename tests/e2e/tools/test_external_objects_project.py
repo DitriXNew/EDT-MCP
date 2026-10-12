@@ -24,13 +24,11 @@ the tools, and each ends by asserting the fixture path is byte-clean again. They
 touch the base project, so assert_no_diff() (which is scoped to it) holds throughout.
 """
 
-import time
-
 from harness import (
     call, assert_ok, assert_error, assert_error_quality, assert_contains,
     assert_not_contains, assert_no_diff, assert_no_diff_rel, poll_diff_contains_rel,
-    read_fixture_file, reset_fixture_rel, wait_for_project_ready, e2e_test, PROJECT,
-    EXT_OBJECTS_PROJECT, EXT_OBJECTS_REL, _fail, assert_marker_contract,
+    poll_disk_contains_all, read_fixture_file, reset_fixture_rel, wait_for_project_ready,
+    e2e_test, PROJECT, EXT_OBJECTS_PROJECT, EXT_OBJECTS_REL, _fail, assert_marker_contract,
 )
 
 # The Russian TYPE tokens for the two external-objects types. The bilingual token catalogue
@@ -284,24 +282,27 @@ def test_extobj_unsupported_member_kind_is_refused_by_name():
     assert_no_diff_rel(EXT_OBJECTS_REL, "a refused call must not touch the fixture")
 
 
-def _poll_fixture_file(relpath, substrs, timeout=10, ctx=""):
-    """Poll until one file of the external-objects fixture exists and holds every substring.
+@e2e_test(tool="adopt_metadata_object", kind="write")
+def test_extobj_project_is_no_adoption_source():
+    """An external-objects project is refused by its KIND: an extension extends only a configuration.
 
-    A NEW root is an untracked file, which a `git diff` based poll never sees. Returns the text
-    of the read that matched."""
-    deadline = time.time() + timeout
-    text = None
-    while True:
-        try:
-            text = read_fixture_file(EXT_OBJECTS_REL, relpath)
-        except OSError:
-            text = None
-        if text is not None and all(s in text for s in substrs):
-            return text
-        if time.time() >= deadline:
-            _fail("%s must contain %r [%s]; read: %r"
-                  % (relpath, substrs, ctx, (text or "<missing>")[:600]))
-        time.sleep(0.5)
+    The refusal comes before the address is resolved. This project's scope holds its own external
+    objects only, so the base catalog's valid FQN would otherwise come back "Object not found ...
+    Check the FQN" - blaming the address instead of the project. It names the project, its kind and
+    what to pass instead, and nothing is written. The refusal's text is unit-pinned; asking for it
+    sits inside executeOnUiThread, which no unit test reaches - this test is that call's pin."""
+    r = call("adopt_metadata_object", {"projectName": EXT_OBJECTS_PROJECT, "fqn": "Catalog.Catalog"})
+    e = assert_error(r, "adopting from an external-objects project")
+    assert_error_quality(e, names=[EXT_OBJECTS_PROJECT, "EXTERNAL-OBJECTS"],
+                         suggests=["pass the BASE configuration as projectName"],
+                         ctx="the refusal names the project and its kind, and what to pass instead")
+    assert_not_contains(e, "Object not found", "a valid base FQN must not be blamed")
+    assert_no_diff("a refused adopt must not touch the base project")
+    assert_no_diff_rel(EXT_OBJECTS_REL, "a refused adopt must not touch the external-objects project")
+
+
+# A NEW root is an untracked file, which a `git diff` based poll never sees: its checks poll the file
+# itself, through the poll every fixture shares (poll_disk_contains_all with fixture_rel).
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
@@ -333,20 +334,22 @@ def test_extobj_create_a_new_root_data_processor():
         assert_contains(listed.text, name, "MODEL read-back: the new root must be listed")
         assert_contains(listed.text, "ExtProc", "the existing roots must still be listed")
 
-        mdo = _poll_fixture_file(
+        mdo = poll_disk_contains_all(
             "src/ExternalDataProcessors/%s/%s.mdo" % (name, name),
             ["<name>%s</name>" % name, "<producedTypes>", "<objectType typeId=", "valueTypeId=",
              '<containedObjects classId="c3831ec8-d8d5-4f93-8a22-f9bfae07327f"',
              "<value>E2e loader</value>", "<comment>e2e root</comment>"],
-            ctx="the root must reach disk with the wizard's default content")
+            ctx="the root must reach disk with the wizard's default content",
+            fixture_rel=EXT_OBJECTS_REL)
         assert_contains(mdo, "uuid=", "the root must carry its own uuid")
 
         member = call("create_metadata",
                       {"projectName": EXT_OBJECTS_PROJECT, "fqn": fqn + ".Attribute.Note",
                        "expectedNotExists": True})
         assert_ok(member, "a member of the new root must be creatable")
-        _poll_fixture_file("src/ExternalDataProcessors/%s/%s.mdo" % (name, name),
-                           ["<name>Note</name>"], ctx="the member must reach the root's .mdo")
+        poll_disk_contains_all("src/ExternalDataProcessors/%s/%s.mdo" % (name, name),
+                               ["<name>Note</name>"], ctx="the member must reach the root's .mdo",
+                               fixture_rel=EXT_OBJECTS_REL)
     finally:
         reset_fixture_rel(EXT_OBJECTS_REL)
         call("clean_project", {"projectName": EXT_OBJECTS_PROJECT})
@@ -367,11 +370,12 @@ def test_extobj_create_a_new_root_report_by_its_russian_type_token():
         s = created.structured or {}
         if s.get("fqn") != "ExternalReport." + name or s.get("kind") != "ExternalReport":
             _fail("the Russian token must create the canonical ExternalReport root: %r" % (s,))
-        _poll_fixture_file(
+        poll_disk_contains_all(
             "src/ExternalReports/%s/%s.mdo" % (name, name),
             ["<mdclass:ExternalReport", "<name>%s</name>" % name, "<producedTypes>",
              '<containedObjects classId="e41aff26-25cf-4bb6-b6c1-3f478a75f374"'],
-            ctx="the report root must reach disk with the wizard's default content")
+            ctx="the report root must reach disk with the wizard's default content",
+            fixture_rel=EXT_OBJECTS_REL)
         details = call("get_metadata_details",
                        {"projectName": EXT_OBJECTS_PROJECT, "objectFqns": ["ExternalReport." + name]})
         assert_ok(details, "read the new report back")

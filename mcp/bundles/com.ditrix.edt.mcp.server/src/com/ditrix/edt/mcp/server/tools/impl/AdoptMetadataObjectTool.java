@@ -23,6 +23,7 @@ import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.md.extension.adopt.IModelObjectAdopter;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -32,9 +33,10 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
-import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
 import com.google.gson.JsonObject;
 
 /**
@@ -66,6 +68,12 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
 
     /** Output key: whether the change was exported to disk. */
     private static final String KEY_PERSISTED = "persisted"; //$NON-NLS-1$
+
+    /**
+     * The source is resolved ({@link MetadataNodeResolver#resolveAddress}) EXACTLY, as adopt always
+     * resolved it - without the yo retry the vendor-support guard and modify/delete resolve with.
+     */
+    private static final boolean YO_FALLBACK = false;
 
     @Override
     public String getName()
@@ -133,18 +141,21 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         {
             return ctx.error;
         }
+        String projectKindError = projectKindRefusal(ctx.scope, projectName);
+        if (projectKindError != null)
+        {
+            return ToolResult.error(projectKindError).toJson();
+        }
 
         String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
-        // Resolve the source: a top object or a member (attribute/tabular section/...) via the shared
-        // resolver; a FORM object via the form resolver (forms are a separate getForms() collection,
-        // not in the mdclass child-token tree, so resolveExisting does not see them).
-        EObject source = resolveAdoptionSource(ctx.config, normFqn);
+        // Resolve the source - a subsystem by its chain, a form, any other top object or member -
+        // through the one dispatch the vendor-support guard judges an address with, together with
+        // the address every result below names it by (for a subsystem, its chain as list_subsystems
+        // prints it).
+        AdoptionSource source = AdoptionSource.resolve(ctx.scope, normFqn);
         if (source == null)
         {
-            return ToolResult.error("Object not found: " + normFqn + ". " //$NON-NLS-1$ //$NON-NLS-2$
-                + "Check the FQN: 'Type.Name' for a top object (e.g. 'Catalog.Products'), " //$NON-NLS-1$
-                + "'Type.Name.Kind.Name' for a member (e.g. 'Catalog.Products.Attribute.Weight'), " //$NON-NLS-1$
-                + "'Type.Name.Form.FormName' for a form (e.g. 'Catalog.Products.Form.ItemForm').").toJson(); //$NON-NLS-1$
+            return ToolResult.error(sourceNotFound(normFqn)).toJson();
         }
 
         // Resolve the target extension: the configuration extensions whose parent is this config project.
@@ -193,31 +204,20 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 + "(the md.extension bundle may be inactive).").toJson(); //$NON-NLS-1$
         }
 
-        if (!adopter.isAdoptable(source))
+        if (!adopter.isAdoptable(source.object))
         {
-            return ToolResult.error("'" + normFqn + "' cannot be adopted into an extension " //$NON-NLS-1$ //$NON-NLS-2$
-                + "(the platform reports it is not adoptable).").toJson(); //$NON-NLS-1$
+            return notAdoptableError(source);
         }
 
         String extName = target.getProject().getName();
 
-        if (adopter.isAdopted(source, target))
+        if (adopter.isAdopted(source.object, target))
         {
             // A SUCCESS that changes nothing: adoptAndAttach is never called, so no export is
             // queued anywhere. Stated rather than left silent, because "queued nothing" and "did
             // not say" owe the barrier different answers.
             WriteScope.recordNothingQueued();
-            // The adopted FQN equals the source FQN (adoption is by-UUID, the Name is preserved).
-            // Do NOT call bmGetFqn() on the adopted object - for a MEMBER (form/attribute) it is not
-            // a top object and bmGetFqn() throws ("may be called on top objects only").
-            return ToolResult.success()
-                .put(McpKeys.ACTION, "alreadyAdopted") //$NON-NLS-1$
-                .put("fqn", normFqn) //$NON-NLS-1$
-                .put(KEY_EXTENSION_PROJECT, extName)
-                .put(KEY_OBJECT_BELONGING, "ADOPTED") //$NON-NLS-1$
-                .put(KEY_PERSISTED, true)
-                .put("message", "'" + normFqn + "' is already adopted in extension '" + extName + "'.") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                .toJson();
+            return alreadyAdoptedResult(source, extName);
         }
 
         // Vendor support (#642) does not apply: the base side is only read, and EDT reads support
@@ -228,7 +228,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         // declaration immediately after a normal return takes precedence.
         WriteScope.recordUndeterminable("model-object adopter may mutate before throwing", //$NON-NLS-1$
             java.util.Collections.singletonList(extName));
-        EObject adopted = adopter.adoptAndAttach(source, target, new NullProgressMonitor());
+        EObject adopted = adopter.adoptAndAttach(source.object, target, new NullProgressMonitor());
 
         // projectName is the BASE configuration by contract; the write lands in the EXTENSION.
         // Stated here rather than left to the export submission below, because that submission is
@@ -236,18 +236,66 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         // write in this project, not a call that wrote nowhere.
         WriteScope.recordWrite(target.getProject());
 
-        // The adopted FQN equals the source FQN (adoption is by-UUID; the Name is preserved). Do NOT
-        // call bmGetFqn() on the adopted object - for a MEMBER (form/attribute) it is not a top object
-        // and bmGetFqn() throws. Persist the adopted TOP object's .mdo AND the extension
-        // Configuration.mdo registration (the parent collection changed), mirroring create_metadata.
-        // bmGetTopObject()/its bmGetFqn() are safe identity reads on the object the platform returned.
-        String adoptedFqn = normFqn;
+        // Persist the adopted TOP object's .mdo, the .mdo of every parent subsystem of an adopted
+        // nested subsystem, AND the extension Configuration.mdo registration (the parent collection
+        // changed), mirroring create_metadata. bmGetTopObject()/bmGetFqn() are safe identity reads on
+        // the objects the platform returned.
         List<String> dirty = collectDirtyFqns(adopted, target);
         boolean persisted = !dirty.isEmpty() && BmTransactions.forceExportToDisk(target.getProject(), dirty);
 
+        return adoptedResult(source, extName, persisted);
+    }
+
+    /**
+     * The refusal for a source the platform reports as not adoptable, naming it the way every result
+     * of the call does. Package-visible for tests.
+     *
+     * @param source the resolved source
+     * @return the error JSON
+     */
+    static String notAdoptableError(AdoptionSource source)
+    {
+        return ToolResult.error("'" + source.fqn + "' cannot be adopted into an extension " //$NON-NLS-1$ //$NON-NLS-2$
+            + "(the platform reports it is not adoptable).").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * The success of an adoption that was not needed: the source is adopted in {@code extName}
+     * already. The copy is named by the source's address - it keeps the source's Name (the platform
+     * maps it by UUID); {@code bmGetFqn()} of an adopted object is never asked, because for a MEMBER (a
+     * form, an attribute) it is not a top object and throws ("may be called on top objects only").
+     * Package-visible for tests.
+     *
+     * @param source the resolved source
+     * @param extName the extension project's name
+     * @return the success JSON
+     */
+    static String alreadyAdoptedResult(AdoptionSource source, String extName)
+    {
+        return ToolResult.success()
+            .put(McpKeys.ACTION, "alreadyAdopted") //$NON-NLS-1$
+            .put("fqn", source.fqn) //$NON-NLS-1$
+            .put(KEY_EXTENSION_PROJECT, extName)
+            .put(KEY_OBJECT_BELONGING, "ADOPTED") //$NON-NLS-1$
+            .put(KEY_PERSISTED, true)
+            .put("message", "'" + source.fqn + "' is already adopted in extension '" + extName + "'.") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            .toJson();
+    }
+
+    /**
+     * The success of an adoption that ran, naming the adopted copy by the source's address for the
+     * reason given at {@link #alreadyAdoptedResult}. Package-visible for tests.
+     *
+     * @param source the resolved source
+     * @param extName the extension project's name
+     * @param persisted whether the platform accepted a save task for the change
+     * @return the success JSON
+     */
+    static String adoptedResult(AdoptionSource source, String extName, boolean persisted)
+    {
         return ToolResult.success()
             .put(McpKeys.ACTION, "adopted") //$NON-NLS-1$
-            .put("fqn", adoptedFqn) //$NON-NLS-1$
+            .put("fqn", source.fqn) //$NON-NLS-1$
             .put(KEY_EXTENSION_PROJECT, extName)
             .put(KEY_OBJECT_BELONGING, "ADOPTED") //$NON-NLS-1$
             .put(KEY_PERSISTED, persisted)
@@ -255,36 +303,81 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Resolves the source object to adopt: a top object or a member via the shared
-     * {@link MetadataNodeResolver}, falling back to a FORM object via {@link #resolveFormObject}. A
-     * read-only resolution; returns {@code null} when the FQN addresses nothing. Behaviour-identical to
-     * the former inline node/form resolution that set the {@code source} local.
+     * The refusal for a project nothing is adopted FROM: an external-objects project. An extension
+     * extends only a configuration, so no extension adopts from such a project - and its scope holds
+     * its own external objects only, so a base object's valid FQN would resolve to nothing there and
+     * the caller would be told to fix the address instead of the project. Hence refused by its KIND,
+     * before any address is resolved. Package-visible for tests.
      *
-     * @param config the configuration to resolve against
-     * @param normFqn the normalized FQN
-     * @return the resolved source object, or {@code null} when not found
+     * @param scope the project's resolution root
+     * @param projectName the project name as the caller passed it
+     * @return the refusal message, or {@code null} for a configuration project
      */
-    private static EObject resolveAdoptionSource(Configuration config, String normFqn)
+    static String projectKindRefusal(MetadataScope scope, String projectName)
     {
-        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(config, normFqn);
-        if (node != null && node.object != null)
+        if (scope == null || !scope.isExternalObjects())
         {
-            return node.object;
+            return null;
         }
-        return resolveFormObject(config, normFqn);
+        return "Project '" + projectName + "' is an EXTERNAL-OBJECTS project, and an extension extends " //$NON-NLS-1$ //$NON-NLS-2$
+            + "only a configuration: pass the BASE configuration as projectName (adopt_metadata_object " //$NON-NLS-1$
+            + "adopts an object of that configuration into one of its extensions)."; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal for an FQN that resolves to nothing. An address that starts with a subsystem token
+     * also learns how subsystems are addressed, in the sentence the subsystem refusals share
+     * ({@link SubsystemUtils#addressingHint()}): its bare {@code Subsystem.<Child>} names only a
+     * top-level subsystem, so that spelling misses a nested one. Package-visible for tests.
+     *
+     * @param normFqn the normalized FQN that resolved to nothing
+     * @return the error message
+     */
+    static String sourceNotFound(String normFqn)
+    {
+        String message = "Object not found: " + normFqn + ". " //$NON-NLS-1$ //$NON-NLS-2$
+            + "Check the FQN: 'Type.Name' for a top object (e.g. 'Catalog.Products'), " //$NON-NLS-1$
+            + "'Type.Name.Kind.Name' for a member (e.g. 'Catalog.Products.Attribute.Weight'), " //$NON-NLS-1$
+            + "'Type.Name.Form.FormName' for a form (e.g. 'Catalog.Products.Form.ItemForm')."; //$NON-NLS-1$
+        int dot = normFqn == null ? -1 : normFqn.indexOf('.');
+        if (dot > 0 && SubsystemUtils.isSubsystemTypeToken(normFqn.substring(0, dot)))
+        {
+            message += " " + SubsystemUtils.addressingHint() + "."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return message;
     }
 
     /**
      * Collects the FQNs of the objects whose {@code .mdo} must be re-exported after an adoption: the
-     * adopted object's TOP object (when it is a {@link IBmObject}) and the extension
-     * {@code Configuration} (whose child collection changed). A read-only computation — the actual
-     * disk export is done by the caller. Behaviour-identical to the former inline dirty-list building.
+     * {@link #dirtyFqns} of the adopted object and the target extension's own {@code Configuration}.
+     * A read-only computation — the actual disk export is done by the caller.
      *
      * @param adopted the object returned by the adopter
      * @param target the target extension project
-     * @return the (possibly empty) list of dirty FQNs, in the original order
+     * @return the (possibly empty) list of dirty FQNs
      */
     private static List<String> collectDirtyFqns(EObject adopted, IExtensionProject target)
+    {
+        IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
+        Configuration extConfig =
+            configProvider != null ? configProvider.getConfiguration(target.getProject()) : null;
+        return dirtyFqns(adopted, extConfig);
+    }
+
+    /**
+     * The FQNs of the top objects an adoption changed, in export order: the adopted object's TOP
+     * object (when it is a {@link IBmObject}); for an adopted NESTED subsystem, every parent subsystem
+     * above it - each parent's {@code .mdo} lists the child in {@code <subsystems>}, and after the
+     * platform's cascade the parent is itself new (the same rule {@code create_metadata} applies to a
+     * nested create); then the extension {@code Configuration} (whose child collection changed).
+     * The parents are read off the adopted copy by {@link SubsystemUtils#lineage}, the walk that also
+     * names a subsystem source. Package-visible for tests.
+     *
+     * @param adopted the object returned by the adopter
+     * @param extConfig the extension's configuration, or {@code null} when it is not available
+     * @return the (possibly empty) list of dirty FQNs
+     */
+    static List<String> dirtyFqns(EObject adopted, Configuration extConfig)
     {
         List<String> dirty = new ArrayList<>();
         if (adopted instanceof IBmObject)
@@ -295,9 +388,16 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                 dirty.add(topObject.bmGetFqn());
             }
         }
-        IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
-        Configuration extConfig =
-            configProvider != null ? configProvider.getConfiguration(target.getProject()) : null;
+        if (adopted instanceof Subsystem)
+        {
+            for (Subsystem ancestor : SubsystemUtils.lineage((Subsystem)adopted).ancestors())
+            {
+                if (ancestor instanceof IBmObject)
+                {
+                    dirty.add(((IBmObject)ancestor).bmGetFqn());
+                }
+            }
+        }
         if (extConfig instanceof IBmObject)
         {
             dirty.add(((IBmObject)extConfig).bmGetFqn());
@@ -317,29 +417,6 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         return value != null && !value.isEmpty();
     }
 
-    /**
-     * Resolves a FORM object by FQN. Forms live in a separate {@code getForms()} collection, so the
-     * mdclass child-token resolver ({@code resolveExisting}) does not see them. Accepts both the
-     * plural addressing the form reader defines ({@code Type.Name.Forms.FormName} and
-     * {@code CommonForm.Name}) and the singular {@code Type.Name.Form.FormName} used elsewhere for
-     * form members (normalized to the plural form here). Returns {@code null} when it is not a form.
-     */
-    private static MdObject resolveFormObject(Configuration config, String normFqn)
-    {
-        MdObject form = FormStructureReader.resolveMdForm(config, normFqn);
-        if (form != null)
-        {
-            return form;
-        }
-        String[] parts = normFqn.split("\\."); //$NON-NLS-1$
-        if (parts.length == 4 && "form".equalsIgnoreCase(parts[2])) //$NON-NLS-1$
-        {
-            return FormStructureReader.resolveMdForm(config,
-                parts[0] + "." + parts[1] + ".Forms." + parts[3]); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        return null;
-    }
-
     private static String candidateNames(List<IExtensionProject> candidates)
     {
         if (candidates.isEmpty())
@@ -347,5 +424,89 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             return "(none)"; //$NON-NLS-1$
         }
         return candidates.stream().map(c -> c.getProject().getName()).collect(Collectors.joining(", ")); //$NON-NLS-1$
+    }
+
+    /**
+     * What a call is asked to adopt: the base object or member the FQN resolved to, and the address
+     * every result of the call names it by. The two are resolved together, once, so the refusal, the
+     * "already adopted" answer and the adoption's own result all carry the same name - for a subsystem
+     * the canonical chain rather than the caller's spelling (issue #708). Package-visible for tests.
+     */
+    static final class AdoptionSource
+    {
+        /** The base object or member to adopt. */
+        final EObject object;
+
+        /** The address the results name it by - see {@link #resolve}. */
+        final String fqn;
+
+        private AdoptionSource(EObject object, String fqn)
+        {
+            this.object = object;
+            this.fqn = fqn;
+        }
+
+        /**
+         * Resolves the source a normalized FQN addresses and names it.
+         *
+         * <p>The source resolves through {@link MetadataNodeResolver#resolveAddress}, the dispatch
+         * the vendor-support guard judges an address with: a subsystem by its chain (any depth, any
+         * mix of English and Russian tokens, any letter case; a bare {@code Subsystem.<Child>} names a
+         * top-level subsystem only), a form (bilingual kind token), any other top object or member.
+         * The platform adopter itself adopts the missing parents of a nested subsystem first.</p>
+         *
+         * <p>A subsystem is named by the canonical chain {@link SubsystemUtils#lineage} reads off the
+         * source itself - the English token and the STORED name of every level, which is exactly what
+         * {@code list_subsystems} prints - but only when that walk up passes through the very names
+         * the address resolved down by, level for level (see {@link #canonicalChain}). Anything else
+         * keeps the normalized FQN: any other source, and a subsystem whose walk up does not spell its
+         * address - for example one cut short (a cycle, an unresolved parent), one with fewer levels
+         * than the address (a parent link that is not set, or one to a shallower subsystem) or with
+         * more (a parent link on a subsystem the configuration lists at the top, or one to a deeper
+         * subsystem), and one that names another subsystem at some level (a parent link to another
+         * subsystem of the same depth).</p>
+         *
+         * @param scope the project's resolution root
+         * @param normFqn the normalized FQN
+         * @return the source, or {@code null} when the FQN addresses nothing
+         */
+        static AdoptionSource resolve(MetadataScope scope, String normFqn)
+        {
+            MdObject object = MetadataNodeResolver.resolveAddress(scope, normFqn, YO_FALLBACK);
+            if (object == null)
+            {
+                return null;
+            }
+            String chain = object instanceof Subsystem ? canonicalChain((Subsystem)object, normFqn) : null;
+            return new AdoptionSource(object, chain != null ? chain : normFqn);
+        }
+
+        /**
+         * The canonical chain of a subsystem source, read off its own parents by
+         * {@link SubsystemUtils#lineage} - or {@code null} when that walk does not spell the address
+         * the source was resolved by. The address resolved DOWN from a top-level subsystem, one name
+         * per level, along each parent's {@code subsystems} list; the walk reads the levels back UP,
+         * along the {@code parentSubsystem} back-references, and in a broken model the two can part.
+         * So the chain is used only when it passes through the very names the descent walked, level
+         * for level ({@link SubsystemUtils.Lineage#spells}). Counting the levels is not enough: a
+         * back-reference to another subsystem of the same depth ({@code Sales} lists {@code Stray},
+         * whose parent link is {@code Planning}) keeps the count and spells
+         * {@code Subsystem.Planning.Subsystem.Stray} - the address of a different {@code Stray}, or of
+         * none. The same check refuses a walk with fewer levels than the address (an unset parent
+         * link - the source's own makes it read as top-level - or a link to a shallower subsystem), a
+         * walk with more (a parent link on a subsystem the configuration lists at the top, or a link
+         * to a deeper subsystem), and a walk cut short by an unresolved parent or a cycle (it names
+         * nothing).
+         *
+         * @param source the resolved subsystem
+         * @param normFqn the normalized chain FQN it was resolved by
+         * @return the canonical chain FQN, or {@code null} to keep {@code normFqn}
+         */
+        private static String canonicalChain(Subsystem source, String normFqn)
+        {
+            String[] levels = SubsystemUtils.parseSubsystemPath(normFqn);
+            SubsystemUtils.Lineage lineage = SubsystemUtils.lineage(source);
+            return levels != null && lineage.spells(levels) ? lineage.chainFqn() : null;
+        }
     }
 }

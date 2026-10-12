@@ -1123,12 +1123,16 @@ public final class FormStructureReader
     }
 
     /**
+     * The text of the Commands table's "Action handler" column. Package-visible so
+     * {@link FormElementWriter}'s refusal of a second command action names the bound procedure in
+     * exactly this text (issue #628).
+     *
      * @return the BSL procedure name(s) bound to a form command's Action - the single
      *         {@code CommandHandler} of a {@code FormCommandHandlerContainer} or the
      *         {@code CommandHandlerExtension}s of an extension container - or {@code ""} when the
      *         command has no action handler. Addressed as {@code ...Command.X.Handler.Action}.
      */
-    private static String actionHandlerOf(EObject command)
+    static String actionHandlerOf(EObject command)
     {
         EObject action = getSingleReference(command, FEATURE_ACTION);
         if (action == null)

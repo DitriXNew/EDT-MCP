@@ -585,6 +585,66 @@ public final class MetadataNodeResolver
     }
 
     /**
+     * Resolves ONE address to the metadata object it names - a subsystem by its chain, a form, or any
+     * node {@link #resolveExisting} knows. It is the one dispatch the vendor-support guard and
+     * {@code adopt_metadata_object} resolve an address with, so the two cannot disagree about WHICH
+     * object an FQN names: the guard judges the object a write would change, adopt adopts the object
+     * the caller named. The one respect in which they deliberately differ is this method's
+     * {@code yoFallback} parameter, not a second copy of the dispatch.
+     *
+     * <ul>
+     * <li>A SUBSYSTEM goes by its chain ({@link SubsystemUtils#parseSubsystemPath}, then
+     * {@link SubsystemUtils#resolveInScope}): a nested subsystem is a separate top object that its
+     * parent only REFERS to ({@code Subsystem.subsystems} is not a containment), so the containment
+     * grammar of this class has no step to it - and must not get one: it would make a top object look
+     * like a member to every tool at once (see {@code CreateMetadataTool}, issue #351). The answer is
+     * the subsystem at the chain's LAST level or {@code null}, never one of its parents.</li>
+     * <li>A FORM ({@link FormElementWriter#parseFormPath}, whose kind token is bilingual) resolves
+     * through {@link FormStructureReader#resolveMdForm(MetadataScope, String)}; a form path that
+     * names no form falls through to the node grammar below.</li>
+     * <li>Any other address must have a valid arity ({@link #isValidArity}) and resolves through
+     * {@link #resolveExisting(MetadataScope, String)} - or, with {@code yoFallback}, through
+     * {@link #resolveExistingWithYoFallback(MetadataScope, String)}, which also finds a name
+     * {@code create_metadata} stored with ye when the address spells it with yo. The subsystem and
+     * form branches have no such retry.</li>
+     * </ul>
+     *
+     * @param scope the resolution root (may be {@code null})
+     * @param fqn the normalized FQN (see {@link MetadataTypeUtils#normalizeFqn}; may be {@code null})
+     * @param yoFallback whether an address the exact node lookup misses is retried with yo
+     *     normalized to ye
+     * @return the object, or {@code null} when the address names nothing in this root
+     */
+    public static MdObject resolveAddress(MetadataScope scope, String fqn, boolean yoFallback)
+    {
+        if (fqn == null)
+        {
+            return null;
+        }
+        String[] chain = SubsystemUtils.parseSubsystemPath(fqn);
+        if (chain != null)
+        {
+            return SubsystemUtils.resolveInScope(scope, chain);
+        }
+        String formPath = FormElementWriter.parseFormPath(fqn);
+        if (formPath != null)
+        {
+            MdObject form = FormStructureReader.resolveMdForm(scope, formPath);
+            if (form != null)
+            {
+                return form;
+            }
+        }
+        if (!isValidArity(fqn.split("\\.").length)) //$NON-NLS-1$
+        {
+            return null;
+        }
+        MetadataNode node = yoFallback ? resolveExistingWithYoFallback(scope, fqn).node
+            : resolveExisting(scope, fqn);
+        return node == null ? null : node.object;
+    }
+
+    /**
      * Returns the yo-to-ye-normalized retry FQN for a failed exact resolve, or {@code null}
      * when the input contains no yo (no distinct retry form exists).
      *

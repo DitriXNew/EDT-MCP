@@ -21,7 +21,6 @@ import java.util.function.UnaryOperator;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonPrimitive;
 
 /**
  * A model-free snapshot of one section's command interface - its panel groups in display order,
@@ -796,34 +795,12 @@ public final class CommandInterfaceSection
 
     private static boolean isDefaultToken(JsonElement el)
     {
-        return el.isJsonPrimitive() && el.getAsJsonPrimitive().isString()
-            && "default".equalsIgnoreCase(el.getAsString().trim()); //$NON-NLS-1$
+        return AdjustableBooleanSupport.isDefaultToken(el);
     }
 
     private static Boolean booleanValue(JsonElement el)
     {
-        if (el == null || !el.isJsonPrimitive())
-        {
-            return null;
-        }
-        JsonPrimitive p = el.getAsJsonPrimitive();
-        if (p.isBoolean())
-        {
-            return p.getAsBoolean();
-        }
-        if (p.isString())
-        {
-            String s = p.getAsString().trim();
-            if ("true".equalsIgnoreCase(s)) //$NON-NLS-1$
-            {
-                return Boolean.TRUE;
-            }
-            if ("false".equalsIgnoreCase(s)) //$NON-NLS-1$
-            {
-                return Boolean.FALSE;
-            }
-        }
-        return null;
+        return AdjustableBooleanSupport.booleanValue(el);
     }
 
     // ===== rendering ================================================================================

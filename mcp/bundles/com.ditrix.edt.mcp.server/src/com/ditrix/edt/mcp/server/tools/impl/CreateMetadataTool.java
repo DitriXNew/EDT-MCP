@@ -2487,6 +2487,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      * ({@code ...Button.Price.Handler.OnChange} for a FIELD) no longer binds the handler to the
      * element that merely bears the name; the error then names the kind it actually has.</p>
      *
+     * <p>{@code normFqn} also reaches the writer: a refused duplicate (an action or event that is
+     * already bound) names the procedure it is bound to and the route that changes it on this very
+     * address (issue #628).</p>
+     *
      * @throws IllegalStateException if the container is missing or the writer rejects the event
      */
     private static void writeHandler(EObject formModel, HandlerWriteSpec spec, String normFqn)
@@ -2509,8 +2513,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     + (advice.isEmpty() ? ". Create the item first, then add the handler." //$NON-NLS-1$
                         : kindTail + advice));
         }
+        // The address the caller sent rides along: a refused DUPLICATE names it as the route that
+        // changes the existing binding (issue #628).
         String err = FormElementWriter.createHandler(container, spec.eventName, spec.procName,
-            spec.version, spec.langCode, spec.callType, spec.createdKind);
+            spec.version, spec.langCode, spec.callType, spec.createdKind, normFqn);
         if (err != null)
         {
             // A refusal: createHandler RAISES a model/platform failure (modelLacks) and only

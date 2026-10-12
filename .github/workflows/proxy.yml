@@ -15,7 +15,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Insurance against a wedged test run: fail visibly in minutes instead of a
     # runner-killing hang (a healthy build takes ~1.5 min).
     timeout-minutes: 15

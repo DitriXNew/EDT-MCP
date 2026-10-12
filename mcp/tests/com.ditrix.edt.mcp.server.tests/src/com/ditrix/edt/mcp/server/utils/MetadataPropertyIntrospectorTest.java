@@ -1328,6 +1328,122 @@ public class MetadataPropertyIntrospectorTest
             flag.valueKind == ValueKind.ADJUSTABLE_BOOLEAN);
     }
 
+    @Test
+    public void testAdjustableBooleanCurrentValueShowsTheRoleValuesInTheWriteShape()
+    {
+        // Issue #719: once a role has a value of its own, Current is the {common, roles} object
+        // modify_metadata takes, so a reader sees the per-role values next to common.
+        com._1c.g5.v8.dt.metadata.mdclass.Role manager = MdClassFactory.eINSTANCE.createRole();
+        manager.setName("Manager"); //$NON-NLS-1$
+        StandardCommand command = MdClassFactory.eINSTANCE.createStandardCommand();
+        AdjustableBoolean flag = MdClassFactory.eINSTANCE.createAdjustableBoolean();
+        flag.setCommon(true);
+        com._1c.g5.v8.dt.metadata.mdclass.ForRoleType forRole = MdClassFactory.eINSTANCE.createForRoleType();
+        forRole.setRole(manager);
+        forRole.setValue(false);
+        flag.getFor().add(forRole);
+        command.setVisible(flag);
+
+        assertEquals("{\"common\":true,\"roles\":{\"Role.Manager\":false}}", //$NON-NLS-1$
+            MetadataPropertyIntrospector.find(command, "visible").currentValue); //$NON-NLS-1$
+    }
+
+    // ---- a form attribute's "Use always" checkboxes (issue #661) ---------------------------------
+
+    @Test
+    public void testTheUseAlwaysListIsPublishedAsUseAlways()
+    {
+        com._1c.g5.v8.dt.form.model.FormAttribute attribute =
+            com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE.createFormAttribute();
+        attribute.setName("Object"); //$NON-NLS-1$
+
+        PropertyInfo useAlways = MetadataPropertyIntrospector.findFeature(attribute, "useAlways"); //$NON-NLS-1$
+        assertNotNull("the use-always list must be assignable as useAlways", useAlways); //$NON-NLS-1$
+        assertEquals(ValueKind.USE_ALWAYS, useAlways.valueKind);
+        assertEquals("useAlways", useAlways.name); //$NON-NLS-1$
+        assertNull("the model feature name is not the wire name", //$NON-NLS-1$
+            MetadataPropertyIntrospector.findFeature(attribute, "notDefaultUseAlwaysAttributes")); //$NON-NLS-1$
+        List<String> names = MetadataPropertyIntrospector.assignableNames(attribute);
+        assertTrue(names.toString(), names.contains("useAlways")); //$NON-NLS-1$
+        assertFalse(names.toString(), names.contains("notDefaultUseAlwaysAttributes")); //$NON-NLS-1$
+        assertFalse("the sibling saved-data list stays out", names.contains("settingsSavedData")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testAdjustableBooleanRoleOrderIsNotADifference()
+    {
+        // The reader sees the stored order; a comparison must not call a reordering a change.
+        com._1c.g5.v8.dt.metadata.mdclass.Role manager = MdClassFactory.eINSTANCE.createRole();
+        manager.setName("Manager"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.metadata.mdclass.Role clerk = MdClassFactory.eINSTANCE.createRole();
+        clerk.setName("Clerk"); //$NON-NLS-1$
+        StandardCommand first = commandVisibleFor(manager, clerk);
+        StandardCommand second = commandVisibleFor(clerk, manager);
+
+        PropertyInfo a = MetadataPropertyIntrospector.find(first, "visible"); //$NON-NLS-1$
+        PropertyInfo b = MetadataPropertyIntrospector.find(second, "visible"); //$NON-NLS-1$
+        assertEquals("{\"common\":true,\"roles\":{\"Role.Manager\":true,\"Role.Clerk\":false}}", a.currentValue); //$NON-NLS-1$
+        assertEquals("{\"common\":true,\"roles\":{\"Role.Clerk\":false,\"Role.Manager\":true}}", b.currentValue); //$NON-NLS-1$
+        assertEquals(a.valueIdentity, b.valueIdentity);
+        assertEquals("{\"common\":true,\"roles\":{\"Role.Clerk\":false,\"Role.Manager\":true}}", a.valueIdentity); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testARoleValueThatCannotBeIdentifiedIsAFailedReadNotAnEqualValue()
+    {
+        StandardCommand command = MdClassFactory.eINSTANCE.createStandardCommand();
+        AdjustableBoolean flag = MdClassFactory.eINSTANCE.createAdjustableBoolean();
+        flag.getFor().add(MdClassFactory.eINSTANCE.createForRoleType());
+        command.setVisible(flag);
+
+        assertTrue(MetadataPropertyIntrospector.find(command, "visible").readFailed); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testUseAlwaysCurrentValueIsWhatThePlatformReports()
+    {
+        UseAlwaysPlatformFake platform = new UseAlwaysPlatformFake();
+        platform.field("Object.Code", null, //$NON-NLS-1$
+            com._1c.g5.v8.dt.form.service.attribute.IUseAlwaysAttributeService.UseAlways.Checked);
+        platform.install();
+        try
+        {
+            com._1c.g5.v8.dt.form.model.FormAttribute attribute =
+                com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE.createFormAttribute();
+            attribute.setName("Object"); //$NON-NLS-1$
+            com._1c.g5.v8.dt.form.model.FormFactory.eINSTANCE.createForm().getAttributes().add(attribute);
+            assertNull("nothing listed - every path at its default", //$NON-NLS-1$
+                MetadataPropertyIntrospector.find(attribute, "useAlways").currentValue); //$NON-NLS-1$
+
+            attribute.getNotDefaultUseAlwaysAttributes().add(UseAlwaysPlatformFake.dataPath("Object.Code")); //$NON-NLS-1$
+            attribute.getNotDefaultUseAlwaysAttributes().add(UseAlwaysPlatformFake.dataPath("Object.Gone")); //$NON-NLS-1$
+
+            PropertyInfo useAlways = MetadataPropertyIntrospector.find(attribute, "useAlways"); //$NON-NLS-1$
+            assertEquals("{\"Object.Code\":false,\"Object.Gone\":\"unresolved\"}", useAlways.currentValue); //$NON-NLS-1$
+            assertEquals("[[\"Object.Code\",false],[\"Object.Gone\",\"unresolved\"]]", useAlways.valueIdentity); //$NON-NLS-1$
+        }
+        finally
+        {
+            UseAlwaysPlatformFake.uninstall();
+        }
+    }
+
+    private static StandardCommand commandVisibleFor(com._1c.g5.v8.dt.metadata.mdclass.Role... roles)
+    {
+        StandardCommand command = MdClassFactory.eINSTANCE.createStandardCommand();
+        AdjustableBoolean flag = MdClassFactory.eINSTANCE.createAdjustableBoolean();
+        flag.setCommon(true);
+        for (com._1c.g5.v8.dt.metadata.mdclass.Role role : roles)
+        {
+            com._1c.g5.v8.dt.metadata.mdclass.ForRoleType forRole = MdClassFactory.eINSTANCE.createForRoleType();
+            forRole.setRole(role);
+            forRole.setValue("Manager".equals(role.getName())); //$NON-NLS-1$
+            flag.getFor().add(forRole);
+        }
+        command.setVisible(flag);
+        return command;
+    }
+
     /**
      * A synthetic holder carrying ONE reference named {@code flag} of the given target type and shape,
      * so the classification rule can be probed on each axis it tests (target type, containment,

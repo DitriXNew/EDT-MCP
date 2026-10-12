@@ -18,13 +18,8 @@ import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.Rectangle;
-import org.eclipse.swt.widgets.Display;
-import org.eclipse.ui.IEditorPart;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
-
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
@@ -38,8 +33,6 @@ import com.ditrix.edt.mcp.server.utils.ReflectionUtils;
  */
 public class FormLayoutSnapshotService
 {
-    private static final String WYSIWYG_VIEWER_FIELD = "wysiwygViewer"; //$NON-NLS-1$
-    private static final String WYSIWYG_REPRESENTATION_FIELD = "wysiwygRepresentation"; //$NON-NLS-1$
     private static final String HIPPO_LAY_FORM_FIELD = "hippoLayForm"; //$NON-NLS-1$
     private static final String HIPPO_SESSION_FIELD = "hippoSession"; //$NON-NLS-1$
     private static final String MODEL_PROJECTION_FIELD = "modelProjection"; //$NON-NLS-1$
@@ -83,54 +76,52 @@ public class FormLayoutSnapshotService
         "GroupTitle", "TopCommandBar", "SearchControl", "BottomCommandBar", "CreateButton", "FABCommandBar", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
         "CollapsibleGroupCollapseButton", "EditInCommandBar", "Last"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 
-    public String captureLayoutSnapshot(String projectName, String formPath, boolean refresh, String mode)
+    /**
+     * Takes the snapshot. With {@code showElement} it also confirms that element has calculated bounds
+     * in the snapshot. No page is switched: the Java layout lays out every page of a Pages group, so a
+     * non-default page is already in the snapshot.
+     */
+    public String captureLayoutSnapshot(String projectName, String formPath, boolean refresh, String mode,
+        String showElement)
     {
+        boolean showRequested = showElement != null && !showElement.isEmpty();
         List<String> warnings = new ArrayList<>();
         boolean fullMode = MODE_FULL.equals(mode);
 
         try
         {
-            Object editorPage = resolveEditorPage(projectName, formPath);
-            if (editorPage == null)
+            // Opens the requested form (or takes the active editor) and runs both identity guards: the
+            // layout is produced from the representation's own form model.
+            EditorScreenshotHelper.FormEditorTarget editor =
+                EditorScreenshotHelper.resolveFormEditor(projectName, formPath, "layout snapshot"); //$NON-NLS-1$
+            if (editor.getError() != null)
             {
-                if (formPath != null && !formPath.isEmpty())
-                {
-                    return errorYaml("Form editor opened but WYSIWYG page is not available. " + //$NON-NLS-1$
-                        "The form may still be loading or rendering; try again."); //$NON-NLS-1$
-                }
-                return errorYaml("No active form editor page found. Specify formPath to open a form automatically."); //$NON-NLS-1$
+                return errorYaml(editor.getError());
             }
+            Object wysiwygViewer = editor.getViewer();
+            Object representation = editor.getRepresentation();
 
-            Object wysiwygViewer = ReflectionUtils.getFieldValue(editorPage, WYSIWYG_VIEWER_FIELD);
-            if (wysiwygViewer == null)
+            // Before the refresh: an unknown name or a mode where the element can have no bounds fails fast.
+            if (showRequested)
             {
-                return errorYaml("WYSIWYG viewer is not available"); //$NON-NLS-1$
+                String showError = checkShowElement(representation, showElement,
+                    NativeRenderModeProbe.getNativeRenderMode());
+                if (showError != null)
+                {
+                    return errorYaml(showError);
+                }
             }
 
             if (refresh)
             {
                 EditorScreenshotHelper.refreshViewer(wysiwygViewer);
-            }
-
-            Object representation = ReflectionUtils.getFieldValue(wysiwygViewer, WYSIWYG_REPRESENTATION_FIELD);
-            if (representation == null)
-            {
-                return errorYaml("WYSIWYG representation is not available"); //$NON-NLS-1$
-            }
-
-            // Identity guard (b), mirrored from get_form_screenshot: the layout (hippoLayForm) and the
-            // form image are produced together from a single createHippoSession(tx, this.form, ...)
-            // call on the representation's OWN form model, so the snapshot belongs to whatever form
-            // THIS representation renders. Confirm that model is the requested form before reading the
-            // layout; otherwise fail explicitly rather than return another form's layout (the same
-            // silent wrong-form defect get_form_screenshot had).
-            if (formPath != null && !formPath.isEmpty()
-                && !EditorScreenshotHelper.representationFormMatches(representation, formPath))
-            {
-                return errorYaml("The WYSIWYG editor for '" + formPath //$NON-NLS-1$
-                    + "' does not render the requested form model. No layout snapshot was taken to " //$NON-NLS-1$
-                    + "avoid returning another form's layout; try again once the requested form's " //$NON-NLS-1$
-                    + "editor is fully open."); //$NON-NLS-1$
+                // The refresh above only schedules a rebuild; this one runs now, so the fields read
+                // below are one whole layout produced during this call.
+                if (!EditorScreenshotHelper.renderFormNow(representation))
+                {
+                    warnings.add("The form could not be re-rendered during this call, so the layout below may " //$NON-NLS-1$
+                        + "predate it. Retry the call."); //$NON-NLS-1$
+                }
             }
 
             Object hippoLayForm = ReflectionUtils.getFieldValue(representation, HIPPO_LAY_FORM_FIELD);
@@ -147,6 +138,16 @@ public class FormLayoutSnapshotService
             List<Map<String, Object>> elements = collectElements((EObject)hippoLayForm, hippoSession,
                 modelProjection, layoutProjection, viewProjection, fullMode, warnings);
 
+            Map<String, Object> shownElement = null;
+            if (showRequested)
+            {
+                shownElement = findElementWithBounds(elements, showElement);
+                if (shownElement == null)
+                {
+                    return errorYaml(noBoundsForShownElement(showElement, NativeRenderModeProbe.getNativeRenderMode()));
+                }
+            }
+
             int elementCount = countElements(elements);
             int elementsWithBounds = countElementsWithBounds(elements);
             if (elementsWithBounds == 0)
@@ -155,7 +156,7 @@ public class FormLayoutSnapshotService
                     NativeRenderModeProbe.getNativeRenderMode()));
             }
 
-            Map<String, Object> formSize = getFormSize(wysiwygViewer, refresh);
+            Map<String, Object> formSize = getFormSize(wysiwygViewer, representation, refresh);
 
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("success", true); //$NON-NLS-1$
@@ -166,13 +167,13 @@ public class FormLayoutSnapshotService
             result.put("elementCount", elementCount); //$NON-NLS-1$
             result.put("elementsWithBounds", elementsWithBounds); //$NON-NLS-1$
             result.put("boundsCoordinateSpace", "form WYSIWYG pixels"); //$NON-NLS-1$ //$NON-NLS-2$
+            if (shownElement != null)
+            {
+                result.put("shownElement", shownElementEntry(shownElement)); //$NON-NLS-1$
+            }
             result.put("warnings", warnings); //$NON-NLS-1$
             result.put("elements", elements); //$NON-NLS-1$
             return dumpYaml(result);
-        }
-        catch (IllegalStateException e)
-        {
-            return errorYaml(e.getMessage());
         }
         catch (Exception e)
         {
@@ -221,58 +222,108 @@ public class FormLayoutSnapshotService
     }
 
     /**
-     * Resolves the WYSIWYG page the snapshot is read from. For a requested {@code formPath} the form
-     * is opened via {@link EditorScreenshotHelper#openForm} and the page is resolved from <i>that</i>
-     * editor part ({@link EditorScreenshotHelper#waitForFormEditorPageOf}), NOT from the global
-     * {@code FormEditor.getActiveFormEditorPage()} lookup that returns whatever form editor currently
-     * holds workbench focus — the same wrong-form defect {@code get_form_screenshot} had. The opened
-     * editor's model FQN is then verified against the requested form (identity guard (a)); a mismatch
-     * throws an {@link IllegalStateException} whose message the caller reports verbatim. Without a
-     * {@code formPath} the globally active page is used, as before.
+     * Resolves {@code showElement} with the resolver {@code get_form_screenshot} uses, then refuses the
+     * native render, where no element has calculated bounds on any page. Name first, so a typo gets
+     * not-found in every render mode.
+     *
+     * @param representation the {@code FormWysiwygRepresentation} instance
+     * @param showElement the element's programmatic name
+     * @param renderMode effective native render mode from {@link NativeRenderModeProbe}
+     * @return {@code null} when the snapshot may proceed, otherwise the error
      */
-    private Object resolveEditorPage(String projectName, String formPath) throws Exception
+    public static String checkShowElement(Object representation, String showElement, NativeRenderMode renderMode)
     {
-        if (formPath != null && !formPath.isEmpty())
+        String error = EditorScreenshotHelper.resolveShowElement(representation, showElement).getError();
+        if (error != null)
         {
-            // Open the requested form and keep a direct handle on the editor opened for it.
-            EditorScreenshotHelper.OpenFormResult openResult =
-                EditorScreenshotHelper.openForm(projectName, formPath);
-            if (!openResult.isSuccess())
-            {
-                throw new IllegalStateException(extractToolErrorMessage(openResult.getError()));
-            }
-            IEditorPart editorPart = openResult.getEditorPart();
-
-            // Let the UI settle after activation (same budget as get_form_screenshot).
-            Display display = Display.getCurrent();
-            for (int i = 0; i < 5; i++)
-            {
-                EditorScreenshotHelper.processEvents(display);
-                Thread.sleep(100);
-            }
-
-            // Resolve the WYSIWYG page from THIS editor part (findPage); the helper owns the shared
-            // wait/re-activate loop, replacing the global-active-page wait used here before.
-            Object editorPage = EditorScreenshotHelper.waitForFormEditorPageOf(editorPart);
-            if (editorPage == null)
-            {
-                return null;
-            }
-
-            // Identity guard (a): the opened editor must correspond to the requested form before its
-            // layout is read; otherwise fail explicitly instead of returning the wrong form's layout.
-            String actualFqn = EditorScreenshotHelper.getFormEditorFqn(editorPart);
-            if (actualFqn != null && !EditorScreenshotHelper.fqnMatchesFormPath(actualFqn, formPath))
-            {
-                throw new IllegalStateException("Form editor does not match the requested form. " //$NON-NLS-1$
-                    + "Requested '" + formPath + "' but the opened editor is '" + actualFqn //$NON-NLS-1$ //$NON-NLS-2$
-                    + "'. No layout snapshot was taken to avoid returning the wrong form's layout; " //$NON-NLS-1$
-                    + "try again once the requested form's editor is fully open."); //$NON-NLS-1$
-            }
-            return editorPage;
+            return error;
         }
+        if (renderMode == NativeRenderMode.ON)
+        {
+            return "showElement cannot change get_form_layout_snapshot in native render mode: EDT returns no " //$NON-NLS-1$
+                + "per-element bounds there, on any page. To see the page holding '" + showElement //$NON-NLS-1$
+                + "', call get_form_screenshot with showElement; for its elements' bounds, relaunch EDT with " //$NON-NLS-1$
+                + "-DnativeFormLayoutRender=false, where every page is laid out and in the snapshot."; //$NON-NLS-1$
+        }
+        return null;
+    }
 
-        return EditorScreenshotHelper.getActiveFormEditorPage();
+    /**
+     * The {@code shownElement} entry: the element's name and a copy of its bounds (the same map twice in
+     * the dump would come out as a YAML anchor and alias).
+     *
+     * @param element the element found by {@link #findElementWithBounds}
+     * @return the entry
+     */
+    public static Map<String, Object> shownElementEntry(Map<String, Object> element)
+    {
+        Map<String, Object> shown = new LinkedHashMap<>();
+        shown.put("name", element.get("name")); //$NON-NLS-1$ //$NON-NLS-2$
+        shown.put("bounds", new LinkedHashMap<>((Map<?, ?>)element.get("bounds"))); //$NON-NLS-1$ //$NON-NLS-2$
+        return shown;
+    }
+
+    /**
+     * Finds the snapshot element named {@code name} (case-insensitive) that has positive bounds.
+     *
+     * @param elements the snapshot element tree
+     * @param name the element's programmatic name
+     * @return the element, or {@code null} when it is absent or has no positive bounds
+     */
+    public static Map<String, Object> findElementWithBounds(List<Map<String, Object>> elements, String name)
+    {
+        for (Map<String, Object> element : elements)
+        {
+            Object elementName = element.get("name"); //$NON-NLS-1$
+            if (elementName instanceof String text && text.equalsIgnoreCase(name)
+                && hasPositiveBoundsMap(element.get("bounds"))) //$NON-NLS-1$
+            {
+                return element;
+            }
+            Object children = element.get("children"); //$NON-NLS-1$
+            if (children instanceof List<?>)
+            {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> found = findElementWithBounds((List<Map<String, Object>>)children, name);
+                if (found != null)
+                {
+                    return found;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The error when {@code showElement} exists in the form but has no calculated bounds in the snapshot.
+     *
+     * @param showElement the element's programmatic name
+     * @param renderMode effective native render mode from {@link NativeRenderModeProbe}
+     * @return the error message
+     */
+    public static String noBoundsForShownElement(String showElement, NativeRenderMode renderMode)
+    {
+        String prefix = "Element '" + showElement + "' exists in the form but has no calculated bounds in " //$NON-NLS-1$ //$NON-NLS-2$
+            + "the snapshot"; //$NON-NLS-1$
+        if (renderMode == NativeRenderMode.OFF)
+        {
+            return prefix + ": the form may not have finished rendering, or the element is not visible. " //$NON-NLS-1$
+                + "Retry with refresh: true."; //$NON-NLS-1$
+        }
+        return prefix + ". EDT's render mode could not be read: in native render mode no element has bounds " //$NON-NLS-1$
+            + "(relaunch EDT with -DnativeFormLayoutRender=false, or call get_form_screenshot with " //$NON-NLS-1$
+            + "showElement to see the page); otherwise the form may not have finished rendering, so retry " //$NON-NLS-1$
+            + "with refresh: true."; //$NON-NLS-1$
+    }
+
+    private static boolean hasPositiveBoundsMap(Object bounds)
+    {
+        if (!(bounds instanceof Map<?, ?> map))
+        {
+            return false;
+        }
+        return map.get(KEY_WIDTH) instanceof Number width && map.get(KEY_HEIGHT) instanceof Number height
+            && width.intValue() > 0 && height.intValue() > 0;
     }
 
     public String normalizeMode(String mode)
@@ -286,23 +337,6 @@ public class FormLayoutSnapshotService
             return MODE_FULL;
         }
         return null;
-    }
-
-    private String extractToolErrorMessage(String errorJson)
-    {
-        try
-        {
-            JsonObject object = JsonParser.parseString(errorJson).getAsJsonObject();
-            if (object.has("error")) //$NON-NLS-1$
-            {
-                return object.get("error").getAsString(); //$NON-NLS-1$
-            }
-        }
-        catch (Exception e)
-        {
-            return errorJson;
-        }
-        return errorJson;
     }
 
     private List<Map<String, Object>> collectElements(EObject hippoLayForm, Object hippoSession,
@@ -920,11 +954,13 @@ public class FormLayoutSnapshotService
         }
     }
 
-    private Map<String, Object> getFormSize(Object wysiwygViewer, boolean refresh) throws Exception
+    /** The rendered size; read without a new render, so it matches the layout the elements came from. */
+    private Map<String, Object> getFormSize(Object wysiwygViewer, Object representation, boolean refresh)
+        throws Exception
     {
         if (refresh)
         {
-            ImageData imageData = EditorScreenshotHelper.extractFormImageData(wysiwygViewer);
+            ImageData imageData = EditorScreenshotHelper.readFormImageData(representation);
             if (imageData != null)
             {
                 return boundsMap(0, 0, imageData.width, imageData.height);

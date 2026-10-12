@@ -8,7 +8,6 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -50,8 +49,6 @@ import com._1c.g5.v8.dt.mcore.CommandGroup;
 import com._1c.g5.v8.dt.mcore.StandardCommandGroup;
 import com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
-import com._1c.g5.v8.dt.metadata.mdclass.ForRoleType;
-import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
@@ -89,7 +86,7 @@ public final class CommandInterfaceSupport
 
     private static final String STANDARD_COMMAND_INFIX = ".StandardCommand."; //$NON-NLS-1$
 
-    private static final String ROLE_PREFIX = "Role."; //$NON-NLS-1$
+    private static final String ROLE_PREFIX = AdjustableBooleanSupport.ROLE_PREFIX;
 
     private static final String COMMAND_GROUP_PREFIX = "CommandGroup."; //$NON-NLS-1$
 
@@ -395,20 +392,7 @@ public final class CommandInterfaceSupport
 
     static Visibility visibilityOf(AdjustableBoolean value)
     {
-        Map<String, Boolean> roles = new LinkedHashMap<>();
-        if (value == null)
-        {
-            return new Visibility(false, roles);
-        }
-        for (ForRoleType forRole : value.getFor())
-        {
-            Role role = forRole.getRole();
-            if (role != null && !role.eIsProxy() && role.getName() != null)
-            {
-                roles.put(ROLE_PREFIX + role.getName(), forRole.isValue());
-            }
-        }
-        return new Visibility(value.isCommon(), roles);
+        return new Visibility(value != null && value.isCommon(), AdjustableBooleanSupport.roleValues(value));
     }
 
     /**
@@ -614,30 +598,8 @@ public final class CommandInterfaceSupport
     /** Maps a requested role FQN to {@code Role.<Name>}, or {@code null} when the configuration has none. */
     static String canonicalRole(Configuration config, String ref)
     {
-        if (config == null || ref == null)
-        {
-            return null;
-        }
-        String normalized = MetadataTypeUtils.normalizeFqn(ref.trim());
-        int dot = normalized.indexOf('.');
-        if (dot <= 0 || !"Role".equals(normalized.substring(0, dot))) //$NON-NLS-1$
-        {
-            return null;
-        }
-        Role role = roleByName(config, normalized.substring(dot + 1).trim());
+        Role role = AdjustableBooleanSupport.resolveRole(config, ref, false);
         return role == null ? null : ROLE_PREFIX + role.getName();
-    }
-
-    private static Role roleByName(Configuration config, String name)
-    {
-        for (Role role : config.getRoles())
-        {
-            if (role != null && name.equalsIgnoreCase(role.getName()))
-            {
-                return role;
-            }
-        }
-        return null;
     }
 
     private static String applyInTx(IBmTransaction tx, IProgressMonitor pm, CommandInterfaceAddress address,
@@ -1100,35 +1062,7 @@ public final class CommandInterfaceSupport
     static AdjustableBoolean toAdjustableBoolean(Configuration config, Visibility visibility,
         AdjustableBoolean stored)
     {
-        AdjustableBoolean value = MdClassFactory.eINSTANCE.createAdjustableBoolean();
-        value.setCommon(visibility.common());
-        for (Map.Entry<String, Boolean> e : visibility.roles().entrySet())
-        {
-            Role role = roleByName(config, e.getKey().substring(ROLE_PREFIX.length()));
-            if (role == null)
-            {
-                throw new IllegalStateException(e.getKey() + " disappeared before the write"); //$NON-NLS-1$
-            }
-            ForRoleType forRole = MdClassFactory.eINSTANCE.createForRoleType();
-            forRole.setRole(role);
-            forRole.setValue(Boolean.TRUE.equals(e.getValue()));
-            value.getFor().add(forRole);
-        }
-        if (stored != null)
-        {
-            for (ForRoleType original : stored.getFor())
-            {
-                Role role = original.getRole();
-                if (role == null || role.eIsProxy() || role.getName() == null)
-                {
-                    ForRoleType kept = MdClassFactory.eINSTANCE.createForRoleType();
-                    kept.setRole(role);
-                    kept.setValue(original.isValue());
-                    value.getFor().add(kept);
-                }
-            }
-        }
-        return value;
+        return AdjustableBooleanSupport.build(config, visibility.common(), visibility.roles(), stored);
     }
 
     /**

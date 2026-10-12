@@ -86,20 +86,9 @@ public final class PictureValueBuilder
         }
         if (isPlatformPictureName(value))
         {
-            IEObjectProvider provider = null;
-            if (version != null)
-            {
-                try
-                {
-                    provider = IEObjectProvider.Registry.INSTANCE.get(McorePackage.Literals.PICTURE, version);
-                }
-                catch (RuntimeException e)
-                {
-                    // The common error below carries the original value and the recovery path.
-                    provider = null;
-                }
-            }
-            return buildWithProvider(raw, scope, provider);
+            // A missing catalogue is answered by the common error, which carries the recovery path.
+            return buildWithProvider(raw, scope,
+                PlatformCatalogue.providerFor(McorePackage.Literals.PICTURE, version));
         }
         return buildWithProvider(raw, scope, (IEObjectProvider)null);
     }

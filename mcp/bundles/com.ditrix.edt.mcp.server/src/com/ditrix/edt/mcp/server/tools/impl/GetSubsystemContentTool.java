@@ -138,14 +138,27 @@ public class GetSubsystemContentTool implements IMcpTool
         {
             return resolved.errorJson();
         }
-        Configuration config = resolved.configuration();
+        return renderContent(resolved.configuration(), subsystemFqn, recursive, language);
+    }
 
+    /**
+     * Renders the subsystem {@code subsystemFqn} addresses in {@code config} - or, when it addresses
+     * none (a missing subsystem, a malformed or non-subsystem FQN), the "subsystem not found"
+     * {@code modify_metadata} gives for the same address ({@link SubsystemUtils#notFoundMessage}).
+     * Package-visible for tests.
+     *
+     * @param config the project's configuration
+     * @param subsystemFqn the requested address, as written
+     * @param recursive whether to collect the content of nested subsystems too
+     * @param language the requested synonym language, or {@code null}
+     * @return the Markdown, or the error JSON
+     */
+    String renderContent(Configuration config, String subsystemFqn, boolean recursive, String language)
+    {
         Subsystem subsystem = SubsystemUtils.resolveByFqn(config, subsystemFqn);
         if (subsystem == null)
         {
-            return ToolResult.error("Subsystem not found: " + subsystemFqn //$NON-NLS-1$
-                + ". Check the FQN is 'Subsystem.<Name>' (type token must be 'Subsystem'); " //$NON-NLS-1$
-                + "use list_subsystems to see available subsystems.").toJson(); //$NON-NLS-1$
+            return ToolResult.error(SubsystemUtils.notFoundMessage(subsystemFqn)).toJson();
         }
 
         String effectiveLanguage = SubsystemUtils.resolveLanguage(language, config);

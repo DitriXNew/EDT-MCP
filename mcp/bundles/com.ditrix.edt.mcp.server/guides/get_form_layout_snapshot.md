@@ -15,8 +15,9 @@ No buffered-render JVM flag is required for this tool's element tree or form-lev
 ## Parameter details
 - `projectName` - EDT project name. **Required when `formPath` is specified**; omitting it then returns an error. Ignored when targeting the active editor.
 - `formPath` - metadata FQN of the form. If given, the tool opens and activates that form automatically. If omitted, the currently active form editor is used.
-- `refresh` - force a WYSIWYG refresh before capturing; default `true`. Set `false` to read the last-rendered state without re-laying-out.
+- `refresh` - re-render the form before capturing; default `true`. The bounds and the form size then come from one layout produced during the call; if the form cannot be re-rendered, a warning says the layout may predate the call. Set `false` to read the last-rendered state without re-laying-out.
 - `mode` - `compact` (default) or `full`; an unknown value returns an error.
+- `showElement` - programmatic name of a form element (case-insensitive; the name, not the title), typically one on a non-default page. Nothing is switched in the editor: with `-DnativeFormLayoutRender=false` EDT lays out every page of a Pages group, so the elements of every page already have bounds in the snapshot (pages share their Pages group's area, so their bounds overlap). `showElement` confirms the element has calculated bounds and returns them as `shownElement`; if it has none, the call fails and says why. In native render mode no element has bounds on any page, so a known name is refused and points at `get_form_screenshot` with `showElement` (to see the page) or at relaunching EDT with `-DnativeFormLayoutRender=false`. An unknown name fails in every render mode with an error that names the form and lists its pages (at most 20).
 
 ### formPath format
 `MetadataType.ObjectName.Forms.FormName`, or `CommonForm.FormName` for a common form. Examples:
@@ -32,6 +33,7 @@ No buffered-render JVM flag is required for this tool's element tree or form-lev
 - Active editor, default compact: `{}`.
 - Specific form: `{projectName: "MyProj", formPath: "Catalog.Products.Forms.ItemForm"}`.
 - Full tree, no refresh: `{formPath: "CommonForm.MyForm", projectName: "MyProj", mode: "full", refresh: false}`.
+- Bounds of an element on another page: `{projectName: "MyProj", formPath: "Document.SalesOrder.Forms.DocumentForm", showElement: "DeliveryAddress"}`.
 
 ## Notes & gotchas
 - `formPath` without `projectName` is rejected: "projectName is required when formPath is specified".

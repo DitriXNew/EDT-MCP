@@ -107,19 +107,48 @@ public final class BmTransactions
      */
     public static <T> T write(IBmModel model, String taskName, BmOperation<T> operation)
     {
-        T result = model.execute(new AbstractBmTask<T>(taskName)
+        T result = model.execute(task(taskName, operation));
+        // execute() returned, so the writable BM boundary committed. Record that fact BEFORE any
+        // caller-side identity/render/export work can throw. Project identity is intentionally a
+        // separate signal, supplied by recordWrite/forceExport for the export barrier.
+        WriteScope.recordMutationCommitted();
+        return result;
+    }
+
+    /**
+     * Runs {@code operation} like {@link #write}, but committed through the model's GLOBAL editing
+     * context ({@link IBmModel#getGlobalContext}) - the path EDT's designer and refactorings commit
+     * through. Unlike {@link IBmModel#execute}, that commit schedules EDT's own save of every resource
+     * it touched, including the DELETION of the file of a top object the task detached.
+     * <p>
+     * Side effect, by the platform's design: an editing context (an open editor) that last modified
+     * one of those resources has its unsaved changes saved and its undo history cleared.
+     *
+     * @param model the BM model (must be non-null; resolved by the caller)
+     * @param taskName a short task name for diagnostics
+     * @param operation the write work
+     * @param <T> the result type
+     * @return the operation result
+     */
+    public static <T> T writeInGlobalContext(IBmModel model, String taskName, BmOperation<T> operation)
+    {
+        T result = model.getGlobalContext().execute(task(taskName, operation));
+        // Same contract as write: the boundary committed once execute() returned.
+        WriteScope.recordMutationCommitted();
+        return result;
+    }
+
+    /** The BM task wrapping {@code operation}, shared by both write paths. */
+    private static <T> AbstractBmTask<T> task(String taskName, BmOperation<T> operation)
+    {
+        return new AbstractBmTask<T>(taskName)
         {
             @Override
             public T execute(IBmTransaction tx, IProgressMonitor monitor)
             {
                 return operation.execute(tx, monitor);
             }
-        });
-        // execute() returned, so the writable BM boundary committed. Record that fact BEFORE any
-        // caller-side identity/render/export work can throw. Project identity is intentionally a
-        // separate signal, supplied by recordWrite/forceExport for the export barrier.
-        WriteScope.recordMutationCommitted();
-        return result;
+        };
     }
 
     /**

@@ -66,6 +66,12 @@ public final class VendorSupportGuard
     /** The configuration pseudo-address used by command-interface and module paths. */
     private static final String CONFIGURATION = "Configuration"; //$NON-NLS-1$
 
+    /**
+     * An address is resolved ({@link MetadataNodeResolver#resolveAddress}) WITH the yo fallback that
+     * modify/delete use, so a yo-spelled address of an existing object is judged, not skipped.
+     */
+    private static final boolean YO_FALLBACK = true;
+
     /** The shared remedy of every lock refusal. */
     private static final String REMEDY = " Nothing was changed. Make the change in a configuration " //$NON-NLS-1$
         + "extension instead (adopt the object with adopt_metadata_object and edit the adopted " //$NON-NLS-1$
@@ -219,7 +225,8 @@ public final class VendorSupportGuard
             Configuration configuration = scope.configuration();
             String ownerFqn = moduleOwnerFqn(projectRelativePath);
             EObject owner = ownerFqn == null ? null
-                : CONFIGURATION.equals(ownerFqn) ? configuration : resolveExact(scope, ownerFqn);
+                : CONFIGURATION.equals(ownerFqn) ? configuration
+                    : MetadataNodeResolver.resolveAddress(scope, ownerFqn, YO_FALLBACK);
             String label = ownerFqn;
             if (owner == null || owner == configuration)
             {
@@ -581,7 +588,8 @@ public final class VendorSupportGuard
         if (commandInterface != null)
         {
             String owner = commandInterface.ownerFqn();
-            EObject object = CONFIGURATION.equals(owner) ? scope.configuration() : resolveExact(scope, owner);
+            EObject object = CONFIGURATION.equals(owner) ? scope.configuration()
+                : MetadataNodeResolver.resolveAddress(scope, owner, YO_FALLBACK);
             return object == null ? null
                 : new Target(object, CONFIGURATION.equals(owner) ? configurationLabel(scope.configuration())
                     : owner, false);
@@ -591,7 +599,7 @@ public final class VendorSupportGuard
         for (int length = longest; length >= 2; length--)
         {
             String prefix = String.join(".", Arrays.copyOf(parts, length)); //$NON-NLS-1$
-            MdObject found = resolveExact(scope, prefix);
+            MdObject found = MetadataNodeResolver.resolveAddress(scope, prefix, YO_FALLBACK);
             if (found != null)
             {
                 return new Target(found, prefix, length == parts.length);
@@ -602,36 +610,6 @@ public final class VendorSupportGuard
             return new Target(scope.configuration(), configurationLabel(scope.configuration()), false);
         }
         return null;
-    }
-
-    /**
-     * Resolves one address - a subsystem chain, a form, or any node the shared resolver knows -
-     * through the shared bilingual resolvers. A node also resolves through the yo fallback that
-     * modify/delete use, so a yo-spelled address of an existing object is judged, not skipped.
-     */
-    private static MdObject resolveExact(MetadataScope scope, String fqn)
-    {
-        String[] chain = SubsystemUtils.parseSubsystemPath(fqn);
-        if (chain != null)
-        {
-            return SubsystemUtils.resolveByPath(scope.configuration(), chain, chain.length);
-        }
-        String formPath = FormElementWriter.parseFormPath(fqn);
-        if (formPath != null)
-        {
-            MdObject form = FormStructureReader.resolveMdForm(scope, formPath);
-            if (form != null)
-            {
-                return form;
-            }
-        }
-        if (!MetadataNodeResolver.isValidArity(fqn.split("\\.").length)) //$NON-NLS-1$
-        {
-            return null;
-        }
-        MetadataNodeResolver.MetadataNode node =
-            MetadataNodeResolver.resolveExistingWithYoFallback(scope, fqn).node;
-        return node == null ? null : node.object;
     }
 
     /** Asks EDT about one object and words the refusal. */

@@ -18,6 +18,7 @@ import static org.mockito.Mockito.when;
 import org.junit.Test;
 
 import com._1c.g5.v8.bm.core.IBmTransaction;
+import com._1c.g5.v8.bm.integration.IBmGlobalEditingContext;
 import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.bm.integration.IBmTask;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -82,6 +83,35 @@ public class BmTransactionsTest
         // A write must go through the writable path, never the read-only one.
         verify(model).execute(any());
         verify(model, never()).executeReadonlyTask(any());
+    }
+
+    @Test
+    public void testWriteInGlobalContextCommitsThroughTheGlobalContext()
+    {
+        IBmModel model = mock(IBmModel.class);
+        IBmGlobalEditingContext global = mock(IBmGlobalEditingContext.class);
+        when(model.getGlobalContext()).thenReturn(global);
+        IBmTransaction tx = mock(IBmTransaction.class);
+        when(global.execute(any())).thenAnswer(inv -> {
+            IBmTask<?> task = inv.getArgument(0);
+            return task.execute(tx, null);
+        });
+
+        WriteScope scope = new WriteScope();
+        String[] result = new String[1];
+        WriteScope.runWithScope(scope, () -> result[0] = BmTransactions.writeInGlobalContext(model, "g", //$NON-NLS-1$
+            (t, pm) -> {
+                assertSame("the op must receive the active transaction", tx, t); //$NON-NLS-1$
+                return "G"; //$NON-NLS-1$
+            }));
+
+        assertEquals("G", result[0]); //$NON-NLS-1$
+        // EDT schedules its own save only for a commit made through an editing context.
+        verify(global).execute(any());
+        verify(model, never()).execute(any());
+        assertTrue("a returned global-context write is a committed mutation too", //$NON-NLS-1$
+            scope.markErrorAfterRecordedWrite(ToolResult.error("later").toJson()) //$NON-NLS-1$
+                .contains("\"mutationCommitted\":true")); //$NON-NLS-1$
     }
 
     @Test

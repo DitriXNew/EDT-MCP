@@ -561,6 +561,40 @@ public class CreateMetadataToolTest
             guide.contains("tabular-section attribute")); //$NON-NLS-1$
     }
 
+    /**
+     * A second create of a command's action is refused, and the guide says what the refusal names -
+     * the bound procedure and the route that changes it - so an agent that met an action it did not
+     * know about learns the way out before it guesses (issue #628).
+     */
+    @Test
+    public void testTheGuideSaysACommandHasOneActionAndHowToChangeIt()
+    {
+        String guide = new CreateMetadataTool().getGuide();
+        assertTrue(guide.contains("A command has ONE action: a second create on the same FQN is " //$NON-NLS-1$
+            + "refused, naming the procedure it is bound to and the route that changes it")); //$NON-NLS-1$
+        // The rebind is for a single-handler action only; the route is not promised to every shape.
+        assertTrue(guide.contains("modify_metadata on that FQN with `procedure` rebinds a " //$NON-NLS-1$
+            + "single-handler action; delete_metadata removes an action of any shape - the only route " //$NON-NLS-1$
+            + "for an extension's interception list, which cannot be rebound")); //$NON-NLS-1$
+    }
+
+    /**
+     * Binding to a procedure that already exists changes only the form, and EDT does not re-check the
+     * form module, so its unused-method / event-region warnings stay until the owner is revalidated -
+     * measured on EDT 2026.2 for a command action and an item event handler alike. The guide gives the
+     * way out, so an agent does not read a working binding as a dead one (issue #628, item 3).
+     */
+    @Test
+    public void testTheGuideSaysHowToClearTheWarningsABindingToAnExistingProcedureLeaves()
+    {
+        String guide = new CreateMetadataTool().getGuide();
+        assertTrue(guide.contains("to a procedure that ALREADY exists changes only the form, and EDT does " //$NON-NLS-1$
+            + "not re-check the form module then")); //$NON-NLS-1$
+        assertTrue(guide.contains("until the owner object is revalidated (revalidate_objects with the " //$NON-NLS-1$
+            + "owner")); //$NON-NLS-1$
+        assertTrue(guide.contains("Binding first and writing the procedure afterwards avoids them.")); //$NON-NLS-1$
+    }
+
     // ===== XDTO package member creation (issue #183 stream 1) - schema/description contract ==========
     //
     // create_metadata's execute() needs a live workbench + BM model, so the ObjectType/Property write

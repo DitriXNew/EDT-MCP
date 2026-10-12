@@ -38,6 +38,8 @@ from harness import (
     assert_ok,
     assert_error,
     assert_error_quality,
+    assert_no_diff,
+    assert_not_contains,
     assert_tree_unchanged,
     tree_snapshot,
     poll_disk_contains,
@@ -229,6 +231,34 @@ def test_subsystem_content_reject_subsystem_member():
     assert_error_quality(e, names=[child_fqn], suggests=["subsystem"],
                          ctx="a Subsystem is rejected as a content member with the object named + a hint")
     assert_tree_unchanged(before, "a rejected non-member add must change nothing")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Negative — a content payload on a subsystem that does not exist teaches how one is addressed
+# ══════════════════════════════════════════════════════════════════════════════
+
+@e2e_test(tool="modify_metadata", kind="write")
+def test_subsystem_content_on_a_missing_chain_teaches_how_subsystems_are_addressed():
+    # A nested chain under the fixture's Subsystem.Subsystem that names no subsystem is refused BY
+    # NAME, with the "subsystem not found" get_subsystem_content gives for the same address (#708,
+    # SubsystemUtils.notFoundMessage): the chain form and list_subsystems, which lists the existing
+    # ones in that form. get_metadata_objects is not named any more - it lists top-level subsystems
+    # only, so it cannot find a nested chain. No unit test reaches this call site (it sits inside
+    # executeOnUiThread, which needs a live project): this test is its pin.
+    fqn = "Subsystem.Subsystem.Subsystem.E2ENoSuchNestedSub"
+    r = call("modify_metadata", {
+        "projectName": PROJECT, "fqn": fqn,
+        "content": [{"op": "add", "metadata": "Catalog.Catalog"}],
+    })
+    e = assert_error(r, "a content payload on a nested chain that names no subsystem")
+    assert_error_quality(e, names=[fqn],
+                         suggests=["Subsystem not found", "'Subsystem.<Parent>.Subsystem.<Child>'",
+                                   "list_subsystems lists the existing ones"],
+                         ctx="the refusal names the address and teaches the chain")
+    assert_not_contains(e, "get_metadata_objects",
+                        "the refusal must not send the caller to a tool that lists top-level "
+                        "subsystems only")
+    assert_no_diff("a refused content change must not touch the project")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
