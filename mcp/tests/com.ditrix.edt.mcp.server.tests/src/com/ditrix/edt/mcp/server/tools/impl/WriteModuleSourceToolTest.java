@@ -17,7 +17,12 @@ import java.util.Map;
 import org.junit.Test;
 
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.AdoptedModuleState;
+import com.ditrix.edt.mcp.server.utils.AdoptedModuleStateTestFixtures;
+import com.ditrix.edt.mcp.server.utils.BuildUtils;
 import com.ditrix.edt.mcp.server.utils.ContentHash;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Tests for {@link WriteModuleSourceTool}.
@@ -2343,5 +2348,276 @@ public class WriteModuleSourceToolTest
         assertMethodEditError("target span is incomplete", //$NON-NLS-1$
             WriteModuleSourceTool.applyMethodTargetedEdit(module, "replaceMethod", "Target", //$NON-NLS-1$ //$NON-NLS-2$
                 "Procedure Target()\nEndProcedure\n")); //$NON-NLS-1$
+    }
+
+    // ==================== Modules of adopted objects (#711) ====================
+    //
+    // After the text is written, the module of an object ADOPTED into an extension is switched from
+    // None to Extended (AdoptedModuleState, pinned on its own in AdoptedModuleStateTest). These pin
+    // what the TOOL does with the step's result: the response key and paragraph, and the error that
+    // replaces the success when the step fails - the text is written by then, so the error says so.
+
+    private static List<String> twoLines()
+    {
+        return Arrays.asList("A", "B"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Every write outside an adopted module answers exactly as it did before #711. */
+    @Test
+    public void testANotApplicableModuleStateLeavesTheResponseAsItWas()
+    {
+        assertEquals("---\ntool: write_module_source\nprojectName: P\nmodulePath: CommonModules/OK/Module.bsl\n" //$NON-NLS-1$
+            + "mode: append\nstatus: success\nlinesAfter: 2\nsyntaxCheck: passed\nlinesBefore: 1\n---\n" //$NON-NLS-1$
+            + "File written successfully", //$NON-NLS-1$
+            WriteModuleSourceTool.buildSuccessResponse("P", "CommonModules/OK/Module.bsl", "append", false, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                twoLines(), true, 1, null, AdoptedModuleState.Result.notApplicable()));
+        assertEquals("---\ntool: write_module_source\nprojectName: P\nmodulePath: CommonModules/OK/Module.bsl\n" //$NON-NLS-1$
+            + "mode: replace\nstatus: success\nlinesAfter: 2\nsyntaxCheck: skipped\nnewFile: true\n---\n" //$NON-NLS-1$
+            + "File written successfully", //$NON-NLS-1$
+            WriteModuleSourceTool.buildSuccessResponse("P", "CommonModules/OK/Module.bsl", "replace", true, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                twoLines(), false, 0, null, AdoptedModuleState.Result.notApplicable()));
+    }
+
+    @Test
+    public void testASwitchIsReportedInTheFrontmatterAndExplainedInTheBody()
+    {
+        AdoptedModuleState.Result switched = AdoptedModuleStateTestFixtures.switched();
+        String response = WriteModuleSourceTool.buildSuccessResponse("tests", //$NON-NLS-1$
+            "CommonModules/DrySignal/Module.bsl", "replace", false, twoLines(), false, 0, null, switched); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(response, response.contains("\nmoduleExtensionState: switchedToExtended\n")); //$NON-NLS-1$
+        assertTrue("the key belongs to the frontmatter", //$NON-NLS-1$
+            response.indexOf("moduleExtensionState") < response.indexOf("\n---\n", 4)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull(switched.bodySentence());
+        assertTrue(response, response.endsWith("File written successfully\n\n" + switched.bodySentence())); //$NON-NLS-1$
+        assertTrue(response, response.contains("'CommonModule.DrySignal'")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheModuleStateKeyFollowsNormalizedCharacters()
+    {
+        String response = WriteModuleSourceTool.buildSuccessResponse("tests", //$NON-NLS-1$
+            "CommonModules/DrySignal/Module.bsl", "append", false, twoLines(), true, 1, "EM DASH x1", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            AdoptedModuleStateTestFixtures.switched());
+        assertTrue(response, response.indexOf("normalizedCharacters") >= 0); //$NON-NLS-1$
+        assertTrue(response,
+            response.indexOf("normalizedCharacters") < response.indexOf("moduleExtensionState")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A paragraph on every write into an already-Extended module would be noise: the key says it. */
+    @Test
+    public void testAnAlreadyExtendedModuleCarriesOnlyTheKeyWhenItsExportDrained()
+    {
+        String response = WriteModuleSourceTool.buildSuccessResponse("tests", //$NON-NLS-1$
+            "CommonModules/DrySignal/Module.bsl", "append", false, twoLines(), true, 1, null, //$NON-NLS-1$ //$NON-NLS-2$
+            AdoptedModuleStateTestFixtures.alreadyExtended(BuildUtils.DiskExportState.DRAINED));
+        assertTrue(response, response.contains("\nmoduleExtensionState: alreadyExtended\n")); //$NON-NLS-1$
+        assertTrue(response, response.endsWith("\n---\nFile written successfully")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnAlreadyExtendedModuleWhoseExportIsUnconfirmedCarriesTheWarning()
+    {
+        AdoptedModuleState.Result pending =
+            AdoptedModuleStateTestFixtures.alreadyExtended(BuildUtils.DiskExportState.PENDING);
+        String response = WriteModuleSourceTool.buildSuccessResponse("tests", //$NON-NLS-1$
+            "CommonModules/DrySignal/Module.bsl", "append", false, twoLines(), true, 1, null, pending); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(response, response.contains("\nmoduleExtensionState: alreadyExtended\n")); //$NON-NLS-1$
+        assertNotNull(pending.bodySentence());
+        assertTrue(response, response.endsWith("File written successfully\n\n" + pending.bodySentence())); //$NON-NLS-1$
+        assertTrue(response, response.contains("not confirmed")); //$NON-NLS-1$
+    }
+
+    /**
+     * A failed step must turn the write into an error - and an error that says the text IS written
+     * (mutationCommitted:true), so neither the caller nor the e2e harness takes it for a refusal.
+     */
+    @Test
+    public void testAFailedStepTurnsTheWriteIntoAnErrorAfterMutation()
+    {
+        AdoptedModuleState.Result failed = AdoptedModuleStateTestFixtures.failedForWantOfAModel();
+        assertTrue(failed.failed());
+        boolean[] built = new boolean[1];
+        String json = WriteModuleSourceTool.finishWrite(() -> failed, state -> {
+            built[0] = true;
+            return "success"; //$NON-NLS-1$
+        });
+        assertFalse("no success response may be built for a failed step", built[0]); //$NON-NLS-1$
+        JsonObject error = JsonParser.parseString(json).getAsJsonObject();
+        assertFalse(error.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue("the text is written: the error must say the mutation committed", //$NON-NLS-1$
+            error.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(failed.failureMessage(), error.get("error").getAsString()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnconfirmedExportOfASwitchIsAnErrorAfterMutation()
+    {
+        AdoptedModuleState.Result unconfirmed = AdoptedModuleStateTestFixtures.exportNotConfirmed();
+        JsonObject error = JsonParser.parseString(
+            WriteModuleSourceTool.finishWrite(() -> unconfirmed, state -> "success")).getAsJsonObject(); //$NON-NLS-1$
+        assertTrue(error.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(error.get("error").getAsString(), //$NON-NLS-1$
+            error.get("error").getAsString().contains("not confirmed")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testASucceededStepReturnsTheSuccessResponse()
+    {
+        assertEquals("success", WriteModuleSourceTool.finishWrite( //$NON-NLS-1$
+            AdoptedModuleState.Result::notApplicable, state -> "success")); //$NON-NLS-1$
+        assertEquals("success", WriteModuleSourceTool.finishWrite( //$NON-NLS-1$
+            AdoptedModuleStateTestFixtures::switched, state -> "success")); //$NON-NLS-1$
+        // An unconfirmed export of a module that was ALREADY Extended is a warning, not an error.
+        assertEquals("success", WriteModuleSourceTool.finishWrite( //$NON-NLS-1$
+            () -> AdoptedModuleStateTestFixtures.alreadyExtended(BuildUtils.DiskExportState.PENDING),
+            state -> "success")); //$NON-NLS-1$
+        // A state left as it is and a missing extension block are successes too: the text is written.
+        assertEquals("success", WriteModuleSourceTool.finishWrite( //$NON-NLS-1$
+            AdoptedModuleStateTestFixtures::keptChecked, state -> "success")); //$NON-NLS-1$
+        assertEquals("success", WriteModuleSourceTool.finishWrite( //$NON-NLS-1$
+            AdoptedModuleStateTestFixtures::noExtensionBlock, state -> "success")); //$NON-NLS-1$
+    }
+
+    /**
+     * A Checked/Notify state the step leaves as it is, and an adopted object with no extension block, are
+     * successes: the frontmatter carries their own key value, and the body names what was found - never an
+     * error, which would invite the caller to re-send an edit that is already written.
+     */
+    @Test
+    public void testAKeptStateAndAMissingBlockAnswerASuccessWithTheKeyAndTheNote()
+    {
+        AdoptedModuleState.Result kept = AdoptedModuleStateTestFixtures.keptChecked();
+        String keptResponse = WriteModuleSourceTool.finishWrite(() -> kept,
+            state -> WriteModuleSourceTool.buildSuccessResponse("tests", "CommonModules/DrySignal/Module.bsl", //$NON-NLS-1$ //$NON-NLS-2$
+                "append", false, twoLines(), true, 1, null, state)); //$NON-NLS-1$
+        assertTrue(keptResponse, keptResponse.contains("\nstatus: success\n")); //$NON-NLS-1$
+        assertTrue(keptResponse, keptResponse.contains("\nmoduleExtensionState: keptChecked\n")); //$NON-NLS-1$
+        assertNotNull(kept.bodySentence());
+        assertTrue(keptResponse, keptResponse.endsWith("File written successfully\n\n" + kept.bodySentence())); //$NON-NLS-1$
+        assertTrue(keptResponse, keptResponse.contains("is Checked")); //$NON-NLS-1$
+
+        AdoptedModuleState.Result noBlock = AdoptedModuleStateTestFixtures.noExtensionBlock();
+        String noBlockResponse = WriteModuleSourceTool.finishWrite(() -> noBlock,
+            state -> WriteModuleSourceTool.buildSuccessResponse("tests", "CommonModules/DrySignal/Module.bsl", //$NON-NLS-1$ //$NON-NLS-2$
+                "replace", false, twoLines(), false, 0, null, state)); //$NON-NLS-1$
+        assertTrue(noBlockResponse, noBlockResponse.contains("\nstatus: success\n")); //$NON-NLS-1$
+        assertTrue(noBlockResponse, noBlockResponse.contains("\nmoduleExtensionState: noExtensionBlock\n")); //$NON-NLS-1$
+        assertNotNull(noBlock.bodySentence());
+        assertTrue(noBlockResponse, noBlockResponse.endsWith("File written successfully\n\n" + noBlock.bodySentence())); //$NON-NLS-1$
+        assertTrue(noBlockResponse, noBlockResponse.contains("no extension block")); //$NON-NLS-1$
+        assertFalse(noBlockResponse, noBlockResponse.contains("mutationCommitted")); //$NON-NLS-1$
+    }
+
+    /**
+     * The seam RUNS the step - once - and renders the response from that very result: a write cannot
+     * run the step and then answer past it, and leaving the seam out leaves the step out with it.
+     */
+    @Test
+    public void testTheSeamRunsTheStepOnceAndRendersItsOwnResult()
+    {
+        AdoptedModuleState.Result switched = AdoptedModuleStateTestFixtures.switched();
+        int[] runs = new int[1];
+        String response = WriteModuleSourceTool.finishWrite(() -> {
+            runs[0]++;
+            return switched;
+        }, state -> state == switched ? "rendered from the step's result" : "rendered from another result"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, runs[0]);
+        assertEquals("rendered from the step's result", response); //$NON-NLS-1$
+    }
+
+    /**
+     * The rerun every failure of the step names - an append of an empty source - is safe only because it
+     * appends NOTHING: the module's lines come back as they were, not with an extra blank line.
+     */
+    @Test
+    public void testAnEmptyAppendLeavesTheModulesLinesAsTheyWere()
+    {
+        assertTrue("an empty source is no line at all", WriteModuleSourceTool.splitSourceLines("").isEmpty()); //$NON-NLS-1$ //$NON-NLS-2$
+        List<String> module = Arrays.asList("Procedure A()", "EndProcedure", ""); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertEquals(module, WriteModuleSourceTool.appendLines(module, "")); //$NON-NLS-1$
+        assertEquals(Arrays.asList("Procedure A()", "EndProcedure", "", "// x"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            WriteModuleSourceTool.appendLines(module, "// x\n")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheGuideStatesTheAdoptedModuleRuleAndWhatItDoesNotCover()
+    {
+        String guide = new WriteModuleSourceTool().getGuide();
+        assertTrue(guide, guide.contains("moduleExtensionState")); //$NON-NLS-1$
+        // Every value the key can take is listed - the two successes round 2 added among them.
+        for (String value : Arrays.asList("`switchedToExtended`", "`alreadyExtended`", "`keptChecked`", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "`keptNotify`", "`noExtensionBlock`")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            assertTrue("the guide must list the key value " + value, guide.contains(value)); //$NON-NLS-1$
+        }
+        assertTrue(guide, guide.contains("mutationCommitted")); //$NON-NLS-1$
+        assertTrue(guide, guide.contains("`mode=append` and an empty `source`")); //$NON-NLS-1$
+        assertTrue(guide, guide.contains("line ends normalized")); //$NON-NLS-1$
+        assertTrue(guide, guide.contains("`skipSyntaxCheck=true` if the module was written with it")); //$NON-NLS-1$
+        assertTrue("the no-model failure reaches the extension's own modules too", //$NON-NLS-1$
+            guide.contains("its own objects included")); //$NON-NLS-1$
+        for (String uncovered : Arrays.asList("dimension tables", "Bot", "IntegrationService", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "WebSocketClient", "recalculation", "<form>Extended</form>")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            assertTrue("the guide must name what is not covered: " + uncovered, guide.contains(uncovered)); //$NON-NLS-1$
+        }
+        assertFalse("the old sentence says writing never touches the module's state", //$NON-NLS-1$
+            guide.contains("writes `.bsl` text only; it does not adopt the module object")); //$NON-NLS-1$
+    }
+
+    /**
+     * The guide states only what was verified: EDT's UI records the state in the .mdo, EDT's listener sets
+     * it only in the model, and this tool records it at once. The claim round 2 removed - that EDT leaves a
+     * module that is not Extended out of the extension it exports and loads into the infobase - is gone from
+     * the WHOLE guide, not only from the section and the gotcha that points to it: the stand showed the XML
+     * dump carrying such a module. So are the claims the round-2 gate found broader than EDT's bytecode: that
+     * EDT never switches a Checked or Notify state (its listener asks for None first, but its module adopter,
+     * which its UI runs to add a method to an extension, sets Extended without asking), and that EDT lists
+     * every module but the ordinary-application one as extensible (8.3.8's property-type delegate lists none).
+     */
+    @Test
+    public void testTheGuideStatesTheVerifiedFactsAndNoExportOrInfobaseConsequence()
+    {
+        String guide = new WriteModuleSourceTool().getGuide().replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        int start = guide.indexOf("## Modules of adopted objects\n"); //$NON-NLS-1$
+        assertTrue("the guide has its adopted-module section", start >= 0); //$NON-NLS-1$
+        int end = guide.indexOf("\n## ", start + 1); //$NON-NLS-1$
+        String section = end < 0 ? guide.substring(start) : guide.substring(start, end);
+        assertTrue(section, section.contains("When code is added to an adopted module in EDT's UI, EDT records " //$NON-NLS-1$
+            + "`Extended` there")); //$NON-NLS-1$
+        assertTrue(section, section.contains("but only in its model, a few seconds later, and it never saves the `.mdo`")); //$NON-NLS-1$
+        assertTrue(section, section.contains("This tool records the state at once")); //$NON-NLS-1$
+        assertTrue(section, section.contains("Each of these is a success: the module text is written")); //$NON-NLS-1$
+        assertTrue(section, section.contains("the state is `Checked` or `Notify`; like EDT's own listener, this tool " //$NON-NLS-1$
+            + "switches only `None`, so it is left exactly as it is")); //$NON-NLS-1$
+        assertTrue(section, section.contains("EDT does not list it among the properties an extension can extend, so " //$NON-NLS-1$
+            + "none of these fails a write into it")); //$NON-NLS-1$
+        assertTrue(guide, guide.contains("- In an extension, writing the module of an ADOPTED object")); //$NON-NLS-1$
+        // Swept over the WHOLE guide: the claim put back anywhere - a precondition line, an example - fails too.
+        for (String fragment : Arrays.asList("infobase", "left out", "exports and loads", "whatever its state", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "never runs", "only when that module's state is", "leaves the module", "Without Extended", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            "Nothing depends")) //$NON-NLS-1$
+        {
+            assertFalse("the guide must claim no export or infobase consequence ('" + fragment + "'): " //$NON-NLS-1$ //$NON-NLS-2$
+                + lineHolding(guide, fragment), guide.contains(fragment));
+        }
+        for (String fragment : Arrays.asList("like EDT,", "EDT never switches", "which EDT never", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "EDT only switches", "every other module")) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            assertFalse("the guide must claim nothing broader than EDT's bytecode ('" + fragment + "'): " //$NON-NLS-1$ //$NON-NLS-2$
+                + lineHolding(guide, fragment), guide.contains(fragment));
+        }
+    }
+
+    /** The guide's line that holds {@code fragment}, for the message of a failing sweep; empty when none does. */
+    private static String lineHolding(String guide, String fragment)
+    {
+        int at = guide.indexOf(fragment);
+        if (at < 0)
+        {
+            return ""; //$NON-NLS-1$
+        }
+        int to = guide.indexOf('\n', at);
+        return guide.substring(guide.lastIndexOf('\n', at) + 1, to < 0 ? guide.length() : to);
     }
 }

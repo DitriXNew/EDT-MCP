@@ -66,6 +66,15 @@ public final class VendorSupportGuard
     /** The configuration pseudo-address used by command-interface and module paths. */
     private static final String CONFIGURATION = "Configuration"; //$NON-NLS-1$
 
+    /** The folder of an object's commands, below the object's own folder. */
+    private static final String COMMANDS = "Commands"; //$NON-NLS-1$
+
+    /** The one module file a command holds. */
+    private static final String COMMAND_MODULE_FILE = "CommandModule.bsl"; //$NON-NLS-1$
+
+    /** The extension of a module file. */
+    private static final String BSL_EXTENSION = ".bsl"; //$NON-NLS-1$
+
     /**
      * An address is resolved ({@link MetadataNodeResolver#resolveAddress}) WITH the yo fallback that
      * modify/delete use, so a yo-spelled address of an existing object is judged, not skipped.
@@ -517,20 +526,53 @@ public final class VendorSupportGuard
     /**
      * The FQN of the metadata object that owns a module, read off its project-relative path:
      * {@code Configuration} for a configuration module, {@code Type.Name}, {@code Type.Name.Form.F}
-     * or {@code Type.Name.Command.C}. Pure.
+     * or {@code Type.Name.Command.C}. Pure. The guard's own, lenient reading of
+     * {@link #moduleOwnerFqn(String, boolean)}.
      *
      * @param projectRelativePath the module path, with or without the leading {@code src/}
      * @return the owner FQN, or {@code null} when the path names no known metadata directory
      */
     public static String moduleOwnerFqn(String projectRelativePath)
     {
+        return moduleOwnerFqn(projectRelativePath, false);
+    }
+
+    /**
+     * The FQN of the metadata object that owns a module, read off its project-relative path - ONE
+     * reading of a module path for every caller, with how far it reaches as the parameter. Pure.
+     * <p>
+     * Lenient ({@code strict = false}, the guard's): any path below {@code Configuration/} belongs to
+     * the configuration; any other path below a metadata directory belongs to the form or command
+     * whose folder it is in ({@code Type.Name.Form.F}, {@code Type.Name.Command.C}), or else to its
+     * top object {@code Type.Name} - the object whose editability a write there depends on.
+     * <p>
+     * Strict ({@code strict = true}): only a module file its owner holds ITSELF, in one of three
+     * shapes - {@code Configuration/<Stem>.bsl}, {@code <Dir>/<Name>/<Stem>.bsl} and
+     * {@code <Dir>/<Name>/Commands/<Command>/CommandModule.bsl}, with no empty segment. Any other path
+     * names a NESTED object - a form, a recalculation, an external data source's table - whose module
+     * the lenient reading hands to an object above it (a recalculation's {@code RecordSetModule.bsl}
+     * to its register), and answers {@code null}.
+     *
+     * @param projectRelativePath the module path, with or without the leading {@code src/}, with
+     *     {@code /} or {@code \} as separators
+     * @param strict whether to read only the three shapes of a module its owner holds itself
+     * @return the owner FQN, or {@code null} when the path names no known metadata directory or,
+     *     strictly read, is none of the three shapes
+     */
+    public static String moduleOwnerFqn(String projectRelativePath, boolean strict)
+    {
         if (projectRelativePath == null)
         {
             return null;
         }
-        String[] parts = projectRelativePath.replace('\\', '/').split("/"); //$NON-NLS-1$
+        // The strict reading keeps a trailing empty segment: a path ending in a separator names no file.
+        String[] parts = projectRelativePath.replace('\\', '/').split("/", strict ? -1 : 0); //$NON-NLS-1$
         int start = parts.length > 0 && BslModuleUtils.SOURCE_FOLDER.equals(parts[0]) ? 1 : 0;
         String[] rest = Arrays.copyOfRange(parts, start, parts.length);
+        if (strict && !isModuleItsOwnerHolds(rest))
+        {
+            return null;
+        }
         if (rest.length >= 2 && CONFIGURATION.equals(rest[0]))
         {
             return CONFIGURATION;
@@ -549,11 +591,45 @@ public final class VendorSupportGuard
         {
             return fqn + ".Form." + rest[3]; //$NON-NLS-1$
         }
-        if (rest.length >= 5 && "Commands".equals(rest[2])) //$NON-NLS-1$
+        if (rest.length >= 5 && COMMANDS.equals(rest[2]))
         {
             return fqn + ".Command." + rest[3]; //$NON-NLS-1$
         }
         return fqn;
+    }
+
+    /**
+     * Whether the segments below {@code src/} are one of the three shapes of a module file its owner
+     * holds itself - the strict reading of {@link #moduleOwnerFqn(String, boolean)}: no empty segment,
+     * a {@code <Stem>.bsl} file name, and {@code Configuration/<file>}, {@code <Dir>/<Name>/<file>} or
+     * {@code <Dir>/<Name>/Commands/<Command>/CommandModule.bsl}.
+     */
+    private static boolean isModuleItsOwnerHolds(String[] rest)
+    {
+        for (String part : rest)
+        {
+            if (part.isEmpty())
+            {
+                return false;
+            }
+        }
+        String file = rest.length == 0 ? "" : rest[rest.length - 1]; //$NON-NLS-1$
+        if (!file.endsWith(BSL_EXTENSION) || file.length() == BSL_EXTENSION.length())
+        {
+            return false;
+        }
+        boolean root = CONFIGURATION.equals(rest[0]);
+        switch (rest.length)
+        {
+        case 2:
+            return root;
+        case 3:
+            return !root;
+        case 5:
+            return !root && COMMANDS.equals(rest[2]) && COMMAND_MODULE_FILE.equals(file);
+        default:
+            return false;
+        }
     }
 
     /** The object a write is judged on and the address that named it. */
