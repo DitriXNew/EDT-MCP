@@ -2696,7 +2696,26 @@ public class WriteModuleSourceToolTest
         assertTrue(section, section.contains("This tool records the state at once")); //$NON-NLS-1$
         // The export is confirmed by the FILE: the queue drains also when EDT fails to write it (#743 review).
         assertTrue(section, section.contains("exports the owner's `.mdo`, and reads that `.mdo` back until it carries " //$NON-NLS-1$
-            + "the state line, for up to 60s in all")); //$NON-NLS-1$
+            + "the state line, for up to 60s counted from the export request")); //$NON-NLS-1$
+        // The export request is the shared export call, the one create_metadata, modify_metadata and delete_metadata
+        // make too - not one every metadata write makes (rename_metadata_object does not): counted in the 60s, not cut
+        // short - EDT can keep it waiting on the caller's thread (2026.1 and 2026.2 bytecode), so the guide promises no
+        // 60s for the whole call (#743 review, round 8).
+        assertTrue(section, section.contains("The export request itself is EDT's own call, the one `create_metadata`, " //$NON-NLS-1$
+            + "`modify_metadata` and `delete_metadata` make too: it counts toward the 60s but is not cut short, so " //$NON-NLS-1$
+            + "while EDT keeps it waiting the call waits too.")); //$NON-NLS-1$
+        assertFalse("not every metadata write makes the export request: " + section, //$NON-NLS-1$
+            section.contains("every metadata write")); //$NON-NLS-1$
+        assertFalse("no 60s is promised for the whole call: " + section, section.contains("60s in all")); //$NON-NLS-1$ //$NON-NLS-2$
+        // A read the deadline cut off keeps its job until the file system answers, so while it is out no other read of
+        // the project starts - until its claim lapses, three times the 60s, after which one more may: no limit on the
+        // reads is stated without that lapse (#743 review, round 8).
+        assertTrue(section, section.contains("While an earlier `.mdo` read of the project has not returned, no other " //$NON-NLS-1$
+            + "starts - for up to 3 minutes, after which one more may - and the `.mdo` counts as not read back.")); //$NON-NLS-1$
+        assertFalse("no read limit is stated without its lapse: " + section, //$NON-NLS-1$
+            section.contains("At most one `.mdo` read per project is outstanding")); //$NON-NLS-1$
+        assertFalse("no read limit is stated without its lapse: " + section, //$NON-NLS-1$
+            section.contains("none starts and the `.mdo` counts as not read back")); //$NON-NLS-1$
         assertTrue(section, section.contains("EDT's export queue drains even when EDT fails to write the file, so only " //$NON-NLS-1$
             + "the file confirms the export")); //$NON-NLS-1$
         // One evidence, one verdict (#743 review): an unconfirmed export fails the write whether the step switched the
@@ -2708,8 +2727,8 @@ public class WriteModuleSourceToolTest
             + "confirmed fails the write either way (below).")); //$NON-NLS-1$
         assertTrue(section, section.contains("or the state is `Extended` in EDT's model - switched or already - but its " //$NON-NLS-1$
             + "`.mdo` export was not confirmed: the `.mdo`, read back, did not carry its line within 60s or could not be " //$NON-NLS-1$
-            + "read back, or the export could not be scheduled and the `.mdo`, read once if time was left, was not seen " //$NON-NLS-1$
-            + "carrying it.")); //$NON-NLS-1$
+            + "read back, or the export could not be scheduled and the `.mdo`, read once if time was left and no " //$NON-NLS-1$
+            + "earlier read of the project's files was out, was not seen carrying it.")); //$NON-NLS-1$
         assertFalse("the one read of a refused export happens only while the budget lasts: " + section, //$NON-NLS-1$
             section.contains("read once, was not seen carrying it")); //$NON-NLS-1$
         assertFalse("a refused export whose .mdo already carries the line is no failure: " + section, //$NON-NLS-1$

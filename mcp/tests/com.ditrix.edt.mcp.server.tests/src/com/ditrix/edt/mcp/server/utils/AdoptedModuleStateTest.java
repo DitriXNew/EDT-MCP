@@ -35,14 +35,21 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IProjectDescription;
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.ILog;
+import org.eclipse.core.runtime.ILogListener;
+import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
+import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
@@ -50,6 +57,8 @@ import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.FrameworkUtil;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
@@ -153,6 +162,8 @@ public class AdoptedModuleStateTest
     @Before
     public void setUp()
     {
+        // The platform's reads claim a per-project slot that a hung read of an earlier test may still hold.
+        BuildUtils.forgetExportWaits();
         root = AdoptedModuleStateTestFixtures.extensionWithAdoptedModule();
         drySignal = root.getCommonModules().get(0);
         own = MdClassFactory.eINSTANCE.createCommonModule();
@@ -1130,6 +1141,103 @@ public class AdoptedModuleStateTest
         }
     }
 
+    /**
+     * The platform's read claims its PROJECT's slot before it starts a job (#743 review): while an earlier read of the
+     * project's files has not returned, the read starts no job - the file, which carries the line, is not even
+     * touched - and answers that it could not read it back. Another project's read is not held up, and once the
+     * earlier read returned, the project's read runs again and releases its own claim when it returns.
+     */
+    @Test
+    public void testThePlatformReadClaimsItsProjectsSlotBeforeItStartsAJob() throws Exception
+    {
+        AdoptedModuleState.StateLine line =
+            AdoptedModuleState.StateLine.of(drySignal, MdClassPackage.Literals.COMMON_MODULE__MODULE);
+        java.nio.file.Path dir = Files.createTempDirectory("adopted-module-state"); //$NON-NLS-1$
+        try
+        {
+            java.nio.file.Path file = dir.resolve("DrySignal.mdo"); //$NON-NLS-1$
+            Files.write(file, drySignalMdo("    <module>Extended</module>\n")); //$NON-NLS-1$
+            IProject onDisk = projectWithFileAt("SlotProject", DRY_SIGNAL_MDO, file); //$NON-NLS-1$
+            AtomicBoolean earlier = BuildUtils.beginStateLineRead("SlotProject", 60_000L); //$NON-NLS-1$
+            assertNotNull("an earlier read of the project is out", earlier); //$NON-NLS-1$
+
+            assertEquals("no read starts while an earlier read of the project is out", //$NON-NLS-1$
+                AdoptedModuleState.LineOnDisk.UNREADABLE,
+                AdoptedModuleState.PLATFORM.readStateLine(onDisk, DRY_SIGNAL_MDO, line, PLATFORM_READ_MS));
+            verify(onDisk, never()).getFile(any(org.eclipse.core.runtime.IPath.class));
+
+            assertEquals("another project's read is not held up", AdoptedModuleState.LineOnDisk.PRESENT, //$NON-NLS-1$
+                AdoptedModuleState.PLATFORM.readStateLine(projectWithFileAt("OtherSlotProject", DRY_SIGNAL_MDO, file), //$NON-NLS-1$
+                    DRY_SIGNAL_MDO, line, PLATFORM_READ_MS));
+
+            earlier.set(true); // the earlier read returned
+            assertEquals("once it returned, the project's read runs again", AdoptedModuleState.LineOnDisk.PRESENT, //$NON-NLS-1$
+                AdoptedModuleState.PLATFORM.readStateLine(onDisk, DRY_SIGNAL_MDO, line, PLATFORM_READ_MS));
+            assertNotNull("and releases its own claim when it returns", //$NON-NLS-1$
+                BuildUtils.beginStateLineRead("SlotProject", 60_000L)); //$NON-NLS-1$
+        }
+        finally
+        {
+            Files.deleteIfExists(dir.resolve("DrySignal.mdo")); //$NON-NLS-1$
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    /**
+     * The review's case end to end, on EDT's job manager (#743 review): a read the deadline cut off keeps its job until
+     * the file system answers, and a second read of the same project meanwhile starts NO second job - it answers at
+     * once that the file could not be read back - so repeated writes do not pile up one hung job each. Once the file
+     * system answers, the first job returns and reopens the slot, and a later read starts a job again. The hung reads
+     * wait on a latch with a finite ceiling, so a read that lost its bound fails an assertion instead of hanging the
+     * suite.
+     */
+    @Test
+    public void testAHungPlatformReadStartsNoSecondJobUntilItReturns() throws Exception
+    {
+        AdoptedModuleState.StateLine line =
+            AdoptedModuleState.StateLine.of(drySignal, MdClassPackage.Literals.COMMON_MODULE__MODULE);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger entered = new AtomicInteger();
+        IProject hanging = mock(IProject.class);
+        when(hanging.getName()).thenReturn("HungProject"); //$NON-NLS-1$
+        IFile mdoFile = mock(IFile.class);
+        when(hanging.getFile(new Path(DRY_SIGNAL_MDO))).thenReturn(mdoFile);
+        when(mdoFile.getLocation()).thenAnswer(inv -> {
+            entered.incrementAndGet();
+            release.await(HUNG_READ_CEILING_MS, TimeUnit.MILLISECONDS); // a file system that does not answer
+            return null;
+        });
+        try
+        {
+            assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE,
+                AdoptedModuleState.PLATFORM.readStateLine(hanging, DRY_SIGNAL_MDO, line, 2_000L));
+            assertEquals("the first read's job is still in the file system", 1, entered.get()); //$NON-NLS-1$
+
+            long start = System.nanoTime();
+            assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE,
+                AdoptedModuleState.PLATFORM.readStateLine(hanging, DRY_SIGNAL_MDO, line, 5_000L));
+            long waited = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+            assertTrue("a second read is refused at once, not after its own timeout (waited " + waited + "ms)", //$NON-NLS-1$ //$NON-NLS-2$
+                waited < 2_500L);
+            assertEquals("no second job reached the file system", 1, entered.get()); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+        }
+        // The file system answers: the first job returns and reopens the slot, so a later read starts a job again.
+        long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(HUNG_READ_CEILING_MS);
+        while (entered.get() < 2 && System.nanoTime() < until)
+        {
+            AdoptedModuleState.PLATFORM.readStateLine(hanging, DRY_SIGNAL_MDO, line, 2_000L);
+            if (entered.get() < 2)
+            {
+                Thread.sleep(20);
+            }
+        }
+        assertEquals("once the first read returned, a new read starts a job", 2, entered.get()); //$NON-NLS-1$
+    }
+
     /** A pause the call's own thread is interrupted in ends at once, and the interrupt is kept for the caller. */
     @Test
     public void testThePlatformPauseKeepsTheInterrupt()
@@ -1161,7 +1269,17 @@ public class AdoptedModuleStateTest
     /** A project whose file at {@code relativePath} lies at {@code location} on disk ({@code null}: no location). */
     private static IProject projectWithFileAt(String relativePath, java.nio.file.Path location)
     {
+        return projectWithFileAt(null, relativePath, location);
+    }
+
+    /**
+     * A project named {@code name} - its reads' slot - whose file at {@code relativePath} lies at {@code location} on
+     * disk ({@code null}: no location).
+     */
+    private static IProject projectWithFileAt(String name, String relativePath, java.nio.file.Path location)
+    {
         IProject owner = mock(IProject.class);
+        when(owner.getName()).thenReturn(name);
         IFile mdoFile = mock(IFile.class);
         when(owner.getFile(new Path(relativePath))).thenReturn(mdoFile);
         when(mdoFile.getLocation()).thenReturn(location == null ? null : Path.fromOSString(location.toString()));
@@ -1588,22 +1706,24 @@ public class AdoptedModuleStateTest
         for (AdoptedModuleState.LineOnDisk found : AdoptedModuleState.LineOnDisk.values())
         {
             FakeRunner runner = new FakeRunner(BoundedJob.Outcome.COMPLETED, true);
-            assertEquals(found, AdoptedModuleState.readBounded(runner, "read", 1_234L, () -> found)); //$NON-NLS-1$
+            assertEquals(found, AdoptedModuleState.readBounded(runner, "completed", "read", 1_234L, () -> found)); //$NON-NLS-1$ //$NON-NLS-2$
             assertEquals("the read's timeout is what it is handed", Collections.singletonList(1_234L), runner.timeouts); //$NON-NLS-1$
         }
+        // Each case below reads a project of its own and checks that the runner was handed the read: a case whose read
+        // was refused for an earlier case's claim would answer UNREADABLE for the wrong reason.
         assertEquals("a read that threw found nothing", AdoptedModuleState.LineOnDisk.UNREADABLE, //$NON-NLS-1$
-            AdoptedModuleState.readBounded(new FakeRunner(BoundedJob.Outcome.COMPLETED, true), "read", 1_000L, () -> { //$NON-NLS-1$
+            readThrough(new FakeRunner(BoundedJob.Outcome.COMPLETED, true), "threw", () -> { //$NON-NLS-1$
                 throw new IllegalStateException("disk"); //$NON-NLS-1$
             }));
         assertEquals("a run that published no answer found nothing", AdoptedModuleState.LineOnDisk.UNREADABLE, //$NON-NLS-1$
-            AdoptedModuleState.readBounded(new FakeRunner(BoundedJob.Outcome.COMPLETED, false), "read", 1_000L, //$NON-NLS-1$
+            readThrough(new FakeRunner(BoundedJob.Outcome.COMPLETED, false), "unpublished", //$NON-NLS-1$
                 () -> AdoptedModuleState.LineOnDisk.PRESENT));
         for (BoundedJob.Outcome late : new BoundedJob.Outcome[] { BoundedJob.Outcome.TIMED_OUT,
             BoundedJob.Outcome.TIMED_OUT_BEFORE_START, BoundedJob.Outcome.NOT_RUN })
         {
             // Even a read that went on to find the line is no answer once the caller stopped waiting for it.
-            assertEquals(late.name(), AdoptedModuleState.LineOnDisk.UNREADABLE, AdoptedModuleState.readBounded(
-                new FakeRunner(late, true), "read", 1_000L, () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$
+            assertEquals(late.name(), AdoptedModuleState.LineOnDisk.UNREADABLE, readThrough(
+                new FakeRunner(late, true), "late-" + late, () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$
         }
         // An interrupted caller, as BoundedJob reports it: the read may have run on and found the line, and the result
         // carries the InterruptedException. Then the same read with no failure on the result: only the outcome is left
@@ -1616,8 +1736,7 @@ public class AdoptedModuleStateTest
             try
             {
                 assertEquals(String.valueOf(carried), AdoptedModuleState.LineOnDisk.UNREADABLE,
-                    AdoptedModuleState.readBounded(interrupted, "read", 1_000L, //$NON-NLS-1$
-                        () -> AdoptedModuleState.LineOnDisk.PRESENT));
+                    readThrough(interrupted, "interrupted-" + carried, () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$
                 assertTrue("the interrupt is kept for the caller", Thread.currentThread().isInterrupted()); //$NON-NLS-1$
             }
             finally
@@ -1628,14 +1747,225 @@ public class AdoptedModuleStateTest
         FakeRunner unschedulable = new FakeRunner(BoundedJob.Outcome.COMPLETED, true);
         unschedulable.scheduleFailure = new IllegalStateException("job manager shut down"); //$NON-NLS-1$
         assertEquals("a read that could not be scheduled read nothing", AdoptedModuleState.LineOnDisk.UNREADABLE, //$NON-NLS-1$
-            AdoptedModuleState.readBounded(unschedulable, "read", 1_000L, () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$
+            readThrough(unschedulable, "unschedulable", () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$
         for (long none : new long[] { 0L, -1L })
         {
             FakeRunner idle = new FakeRunner(BoundedJob.Outcome.COMPLETED, true);
             assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE,
-                AdoptedModuleState.readBounded(idle, "read", none, () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$
+                AdoptedModuleState.readBounded(idle, "idle", "read", none, () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$ //$NON-NLS-2$
             assertTrue("nothing left: no read is started", idle.timeouts.isEmpty()); //$NON-NLS-1$
         }
+    }
+
+    /**
+     * One read per project is outstanding at a time while its claim holds (#743 review): a read the deadline cut off
+     * keeps its job - one of EDT's worker threads - until the file system answers, so while it has not returned, a
+     * second read of the same project starts NO job and answers that the file could not be read back, as a read the
+     * deadline cut does. Another project's read is not held up, and once the first read returns - the last thing its
+     * job does - the project's reads start again.
+     */
+    @Test
+    public void testOneReadPerProjectIsOutstandingAtATime() throws Exception
+    {
+        FakeRunner cut = new FakeRunner(BoundedJob.Outcome.TIMED_OUT, false); // the read is still in the file system
+        assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE,
+            readThrough(cut, "P", () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$
+
+        FakeRunner second = new FakeRunner(BoundedJob.Outcome.COMPLETED, true);
+        assertEquals("a second read while the first is out", AdoptedModuleState.LineOnDisk.UNREADABLE, //$NON-NLS-1$
+            AdoptedModuleState.readBounded(second, "P", "read", 1_000L, () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("no job is started for it", second.timeouts.isEmpty()); //$NON-NLS-1$
+
+        assertEquals("another project's read is not held up", AdoptedModuleState.LineOnDisk.PRESENT, //$NON-NLS-1$
+            readThrough(new FakeRunner(BoundedJob.Outcome.COMPLETED, true), "Q", //$NON-NLS-1$
+                () -> AdoptedModuleState.LineOnDisk.PRESENT));
+
+        cut.kept.run(new NullProgressMonitor()); // the file system answers, long after the caller stopped waiting
+        assertEquals("once the first read returned, the next one starts", AdoptedModuleState.LineOnDisk.PRESENT, //$NON-NLS-1$
+            readThrough(new FakeRunner(BoundedJob.Outcome.COMPLETED, true), "P", //$NON-NLS-1$
+                () -> AdoptedModuleState.LineOnDisk.PRESENT));
+    }
+
+    /**
+     * The claim is held exactly as long as the read is out (#743 review): taken before the job is scheduled, held while
+     * the read runs, and released by the job when the read returns - a read that threw included.
+     */
+    @Test
+    public void testTheClaimIsHeldWhileTheReadRunsAndReleasedWhenItReturns()
+    {
+        boolean[] heldDuringTheRead = new boolean[1];
+        assertEquals(AdoptedModuleState.LineOnDisk.PRESENT,
+            readThrough(new FakeRunner(BoundedJob.Outcome.COMPLETED, true), "P", () -> { //$NON-NLS-1$
+                heldDuringTheRead[0] = BuildUtils.beginStateLineRead("P", 1_000L) == null; //$NON-NLS-1$
+                return AdoptedModuleState.LineOnDisk.PRESENT;
+            }));
+        assertTrue("the project's slot is held while its read runs", heldDuringTheRead[0]); //$NON-NLS-1$
+        assertNotNull("and released once the read returned", BuildUtils.beginStateLineRead("P", 1_000L)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE,
+            readThrough(new FakeRunner(BoundedJob.Outcome.COMPLETED, true), "Threw", () -> { //$NON-NLS-1$
+                throw new IllegalStateException("disk"); //$NON-NLS-1$
+            }));
+        assertNotNull("a read that threw returned all the same", BuildUtils.beginStateLineRead("Threw", 1_000L)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Only a read that can no longer run releases its claim at once (#743 review): a job our own cancel kept from
+     * starting, and a job that could not be scheduled. A read the deadline cut while it ran, one that never ran (a
+     * suspended job manager runs it when it resumes) and one whose caller was interrupted may still be out: they keep
+     * the claim until the read returns or the claim lapses. Nothing left of the budget takes no claim at all.
+     */
+    @Test
+    public void testOnlyAReadThatCanNoLongerRunReleasesItsClaimAtOnce()
+    {
+        for (BoundedJob.Outcome stillOut : new BoundedJob.Outcome[] { BoundedJob.Outcome.TIMED_OUT,
+            BoundedJob.Outcome.NOT_RUN, BoundedJob.Outcome.INTERRUPTED })
+        {
+            String project = "out-" + stillOut; //$NON-NLS-1$
+            FakeRunner runner = new FakeRunner(stillOut, false);
+            runner.interruptsTheCaller = stillOut == BoundedJob.Outcome.INTERRUPTED;
+            try
+            {
+                assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE,
+                    readThrough(runner, project, () -> AdoptedModuleState.LineOnDisk.PRESENT));
+            }
+            finally
+            {
+                Thread.interrupted();
+            }
+            assertNull(stillOut + " keeps the claim: the read may still be out", //$NON-NLS-1$
+                BuildUtils.beginStateLineRead(project, 1_000L));
+        }
+        assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, readThrough(
+            new FakeRunner(BoundedJob.Outcome.TIMED_OUT_BEFORE_START, false), "before-start", //$NON-NLS-1$
+            () -> AdoptedModuleState.LineOnDisk.PRESENT));
+        assertNotNull("a read our cancel kept from starting will never run: its claim is released at once", //$NON-NLS-1$
+            BuildUtils.beginStateLineRead("before-start", 1_000L)); //$NON-NLS-1$
+
+        FakeRunner unschedulable = new FakeRunner(BoundedJob.Outcome.COMPLETED, true);
+        unschedulable.scheduleFailure = new IllegalStateException("job manager shut down"); //$NON-NLS-1$
+        assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE,
+            readThrough(unschedulable, "unschedulable", () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$
+        assertNotNull("a read that could not be scheduled started no job: its claim is released at once", //$NON-NLS-1$
+            BuildUtils.beginStateLineRead("unschedulable", 1_000L)); //$NON-NLS-1$
+
+        for (long none : new long[] { 0L, -1L })
+        {
+            assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, AdoptedModuleState.readBounded(
+                new FakeRunner(BoundedJob.Outcome.COMPLETED, true), "none", "read", none, //$NON-NLS-1$ //$NON-NLS-2$
+                () -> AdoptedModuleState.LineOnDisk.PRESENT));
+        }
+        assertNotNull("nothing left of the budget takes no claim", BuildUtils.beginStateLineRead("none", 1_000L)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * An unreturned claim holds for three times the step's whole budget, not three times the read's share of it (#743
+     * review): a read cut with a sliver of the budget left - 1ms here - would otherwise hold its project's slot for a
+     * sliver, and the next write would start another hung job at once. The hold's length is read off the slot, so a
+     * basis that is too short but outlasts the test's sleep - the poll's longest pause - fails as well.
+     */
+    @Test
+    public void testAnUnreturnedClaimHoldsForTheBudgetNotForTheReadsShare() throws Exception
+    {
+        FakeRunner sliver = new FakeRunner(BoundedJob.Outcome.TIMED_OUT, false);
+        assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, AdoptedModuleState.readBounded(sliver, "sliver", "read", //$NON-NLS-1$ //$NON-NLS-2$
+            1L, () -> AdoptedModuleState.LineOnDisk.PRESENT));
+        assertEquals(Collections.singletonList(1L), sliver.timeouts);
+        // The hold itself, read off the slot: three times the step's whole budget. A claim sized on any shorter basis -
+        // the read's share, the poll's longest pause - fails here, not only one shorter than the sleep below.
+        long hold = 3 * AdoptedModuleState.EXPORT_DEADLINE_MS;
+        long left = BuildUtils.stateLineReadHoldLeftMs("sliver"); //$NON-NLS-1$
+        assertTrue("the claim holds for three times the step's budget: " + left + "ms of " + hold + "ms left", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            left > hold - 10_000L && left <= hold);
+
+        Thread.sleep(25); // far past three times the read's own 1ms
+
+        FakeRunner next = new FakeRunner(BoundedJob.Outcome.COMPLETED, true);
+        assertEquals("the claim still holds", AdoptedModuleState.LineOnDisk.UNREADABLE, //$NON-NLS-1$
+            AdoptedModuleState.readBounded(next, "sliver", "read", 1_000L, () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("and no job was started", next.timeouts.isEmpty()); //$NON-NLS-1$
+    }
+
+    /**
+     * A refused read says why in EDT's log (#743 review): while an earlier read's claim holds, every read of the
+     * project is refused - the poll asks about once a second - so the refusal is logged at INFO once per claim, not
+     * once per refusal. A read that takes a claim of its own logs nothing, and a refusal behind that later claim is
+     * logged again.
+     */
+    @Test
+    public void testARefusedReadIsLoggedOncePerClaim()
+    {
+        String project = "RefusalLoggedProject"; //$NON-NLS-1$ (no other test reads this project)
+        Bundle bundle = FrameworkUtil.getBundle(AdoptedModuleState.class);
+        assertNotNull("the log can only be observed from inside OSGi; without the bundle a count of its entries " //$NON-NLS-1$
+            + "would see nothing at all", bundle); //$NON-NLS-1$
+        ILog log = Platform.getLog(bundle);
+        List<IStatus> recorded = Collections.synchronizedList(new ArrayList<>());
+        ILogListener listener = (status, plugin) -> recorded.add(status);
+        log.addLogListener(listener);
+        try
+        {
+            AtomicBoolean earlier = BuildUtils.beginStateLineRead(project, 60_000L);
+            assertNotNull("an earlier read of the project is out", earlier); //$NON-NLS-1$
+            for (int i = 0; i < 3; i++)
+            {
+                FakeRunner refused = new FakeRunner(BoundedJob.Outcome.COMPLETED, true);
+                assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, AdoptedModuleState.readBounded(refused, project,
+                    "read", 1_000L, () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$
+                assertTrue("a refused read starts no job", refused.timeouts.isEmpty()); //$NON-NLS-1$
+            }
+            List<IStatus> said = refusalsLoggedFor(recorded, project);
+            assertEquals("three refusals behind one claim are logged once: " + said, 1, said.size()); //$NON-NLS-1$
+            assertEquals("at INFO, as BuildUtils' refused waits are", IStatus.INFO, said.get(0).getSeverity()); //$NON-NLS-1$
+
+            earlier.set(true); // the earlier read returned
+            assertEquals(AdoptedModuleState.LineOnDisk.PRESENT, readThrough(new FakeRunner(BoundedJob.Outcome.COMPLETED,
+                true), project, () -> AdoptedModuleState.LineOnDisk.PRESENT));
+            assertEquals("a read that took a claim logs no refusal", 1, refusalsLoggedFor(recorded, project).size()); //$NON-NLS-1$
+
+            AtomicBoolean later = BuildUtils.beginStateLineRead(project, 60_000L);
+            assertNotNull("a later read of the project is out", later); //$NON-NLS-1$
+            assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, AdoptedModuleState.readBounded(
+                new FakeRunner(BoundedJob.Outcome.COMPLETED, true), project, "read", 1_000L, //$NON-NLS-1$
+                () -> AdoptedModuleState.LineOnDisk.PRESENT));
+            assertEquals("a refusal behind the later claim is logged again", 2, //$NON-NLS-1$
+                refusalsLoggedFor(recorded, project).size());
+        }
+        finally
+        {
+            log.removeLogListener(listener);
+        }
+    }
+
+    /** The recorded log entries that say a read of {@code project}'s files was not started. */
+    private static List<IStatus> refusalsLoggedFor(List<IStatus> recorded, String project)
+    {
+        List<IStatus> ours = new ArrayList<>();
+        synchronized (recorded)
+        {
+            for (IStatus status : recorded)
+            {
+                String message = status.getMessage();
+                if (message != null && message.contains(project) && message.contains("has not returned yet")) //$NON-NLS-1$
+                {
+                    ours.add(status);
+                }
+            }
+        }
+        return ours;
+    }
+
+    /**
+     * One bounded read through {@code runner}, for a project of its own, given 1000ms - and the runner was handed it: a
+     * read refused for a claim held elsewhere is not the case the caller meant to test.
+     */
+    private static AdoptedModuleState.LineOnDisk readThrough(FakeRunner runner, String projectName,
+        Supplier<AdoptedModuleState.LineOnDisk> read)
+    {
+        AdoptedModuleState.LineOnDisk seen = AdoptedModuleState.readBounded(runner, projectName, "read", 1_000L, read); //$NON-NLS-1$
+        assertEquals("the read of " + projectName + " was handed to the runner", Collections.singletonList(1_000L), //$NON-NLS-1$ //$NON-NLS-2$
+            runner.timeouts);
+        return seen;
     }
 
     /** Each read of the .mdo started with time left, and was given exactly what was left of the budget then. */
@@ -1669,6 +1999,11 @@ public class AdoptedModuleStateTest
          */
         Throwable failure;
         final List<Long> timeouts = new ArrayList<>();
+        /**
+         * The read it was handed: one it did not run is kept, as BoundedJob's job keeps a read the deadline cut off,
+         * and a test runs it later - the file system answering after the caller stopped waiting.
+         */
+        BoundedJob.IBoundedWork kept;
 
         FakeRunner(BoundedJob.Outcome outcome, boolean runsTheRead)
         {
@@ -1680,6 +2015,7 @@ public class AdoptedModuleStateTest
         public BoundedJob.Result run(String jobName, long timeoutMs, BoundedJob.IBoundedWork work)
         {
             timeouts.add(timeoutMs);
+            kept = work;
             if (scheduleFailure != null)
             {
                 throw scheduleFailure;

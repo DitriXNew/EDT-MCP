@@ -69,6 +69,12 @@ public final class BuildUtils
     private static final String MARKER_READ_SLOT_PREFIX = "markers:"; //$NON-NLS-1$
 
     /**
+     * Slot-key prefix of the bounded read of a module's state line back from a {@code .mdo}, apart from both
+     * waits and the marker read.
+     */
+    private static final String STATE_LINE_READ_SLOT_PREFIX = "mdo-state-line:"; //$NON-NLS-1$
+
+    /**
      * The derived-data segments EDT's validation runs under: the check framework's model checks
      * (critical-data-integrity, normal, complex) and the validator segments. Mirrored, not imported,
      * for the same reason as {@link #EXPORT_OBJECTS_SEGMENT}: the declaring classes are internal.
@@ -647,6 +653,41 @@ public final class BuildUtils
     static AtomicBoolean beginMarkerRead(String projectName, long timeoutMs)
     {
         return beginWait(MARKER_READ_SLOT_PREFIX + projectName, timeoutMs);
+    }
+
+    /**
+     * Claims the single slot for a bounded read of a module's state line back from a project's {@code .mdo}
+     * (AdoptedModuleState), so reads stuck in a file system that does not answer do not pile up one job per
+     * write: a read its deadline cut off keeps its job until the file system answers. A key of its own, so it
+     * never refuses - and is never refused by - the export wait, the validation wait or the marker read.
+     *
+     * @param projectName the project whose slot to claim
+     * @param timeoutMs sizes how long an unreturned claim holds: three times it
+     * @return the flag the read must set when it returns, or {@code null} when a previous read for this
+     *     project has not come back yet and its claim has not lapsed
+     */
+    static AtomicBoolean beginStateLineRead(String projectName, long timeoutMs)
+    {
+        return beginWait(STATE_LINE_READ_SLOT_PREFIX + projectName, timeoutMs);
+    }
+
+    /**
+     * How much longer a project's claim for a state-line read holds while its read has not returned - so a test
+     * can pin the size of the claim, which its caller chooses ({@link #beginStateLineRead}'s timeout), without
+     * waiting it out.
+     *
+     * @param projectName the project
+     * @return the milliseconds until the claim lapses, or 0 when the project holds no such claim - none taken,
+     *     its read returned, or the claim lapsed
+     */
+    static long stateLineReadHoldLeftMs(String projectName)
+    {
+        ExportWaitSlot slot = EXPORT_WAIT_RETURNED.get(STATE_LINE_READ_SLOT_PREFIX + projectName);
+        if (slot == null || slot.returned.get())
+        {
+            return 0L;
+        }
+        return Math.max(0L, slot.reopenAtMs - System.currentTimeMillis());
     }
 
     private static AtomicBoolean beginWait(String slotKey, long timeoutMs)
