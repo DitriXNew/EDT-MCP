@@ -85,10 +85,11 @@ import com.ditrix.edt.mcp.server.Activator;
  * runs in a {@link BoundedJob}, so a file system that does not answer (a network disk, a {@code .mdo} too large
  * for what is left) cannot hold the call past the budget - but for BoundedJob's short grace (0.5s) for a read
  * whose job had not started by the deadline - and a read not answered in time confirms nothing. Such a read
- * keeps its job until the file system answers, so while an earlier read of the project's files is out, no other
- * one starts - the file counts as not read back - until that read returns or its claim lapses, three times the
- * budget after it was taken: a file system that never answers costs a project at most one hung read per lapse,
- * not one per write (see {@link #readBounded}). The queue cannot confirm the export: EDT's export
+ * keeps its job until the file system answers, so while an earlier read of the project's files is out - its job
+ * is reading, or still waiting to run - no other one starts - the file counts as not read back - until that job
+ * ends, also without having run the read, or its claim lapses, three times the budget after it was taken: a file
+ * system that never answers costs a project at most one hung read per lapse, not one per write (see
+ * {@link #readBounded}). The queue cannot confirm the export: EDT's export
  * task processor catches a failed file write (a locked or read-only file, a full disk), so the queue DRAINS
  * all the same, and an UNOBSERVABLE queue says nothing either way (see {@link BuildUtils#waitForDiskExport}).
  * An export the platform does not accept is never waited for - nothing was queued - but the file still
@@ -327,8 +328,8 @@ public final class AdoptedModuleState
         ABSENT,
         /**
          * The file could not be read or parsed - EDT may be writing it - or not within the time the read was given,
-         * or it was not read at all because an earlier read of the project's files had not returned and its claim had
-         * not lapsed; so it says nothing either way.
+         * or it was not read at all because the job of an earlier read of the project's files had not ended and its
+         * claim had not lapsed; so it says nothing either way.
          */
         UNREADABLE
     }
@@ -391,8 +392,9 @@ public final class AdoptedModuleState
         /**
          * Reads a {@code .mdo} as it is on disk NOW and looks for the module's state line in it - within
          * {@code timeoutMs}: the caller stops waiting then, and a read that has not answered by then is
-         * UNREADABLE. While an earlier read of the project's files has not returned and its claim has not lapsed,
-         * the platform's read starts none and is UNREADABLE at once ({@link AdoptedModuleState#readBounded}).
+         * UNREADABLE. While the job of an earlier read of the project's files has not ended - it is reading, or still
+         * waiting to run - and its claim has not lapsed, the platform's read starts none and is UNREADABLE at once
+         * ({@link AdoptedModuleState#readBounded}).
          *
          * @param project the project
          * @param mdoPath the project-relative {@code .mdo}
@@ -525,8 +527,8 @@ public final class AdoptedModuleState
     }
 
     /**
-     * Runs work under a deadline: {@link BoundedJob#run(String, long, BoundedJob.IBoundedWork)} in production, a
-     * fake in a test. Package-visible for tests.
+     * Runs work under a deadline and reports when its job has ended: BoundedJob's run with a completion callback in
+     * production, a fake in a test. Package-visible for tests.
      */
     @FunctionalInterface
     interface BoundedRunner
@@ -535,9 +537,13 @@ public final class AdoptedModuleState
          * @param jobName the job's name in EDT's progress view
          * @param timeoutMs how long the caller waits for the work
          * @param work the work
+         * @param jobEnded run once when the work's job has ended - the work returned, or the job was cancelled or
+         *     removed without running it (EDT's {@code done} notification, BoundedJob's completion callback) - also
+         *     when that is after the run answered; a job that may still run has not ended. It runs on whatever thread
+         *     EDT delivers the notification on, so it must not block.
          * @return how the run ended
          */
-        BoundedJob.Result run(String jobName, long timeoutMs, BoundedJob.IBoundedWork work);
+        BoundedJob.Result run(String jobName, long timeoutMs, BoundedJob.IBoundedWork work, Runnable jobEnded);
     }
 
     /**
@@ -552,17 +558,26 @@ public final class AdoptedModuleState
      * A read the deadline caught keeps its job - one of EDT's worker threads - until the file system answers, and
      * the call does not wait for it. So that such reads do not pile up one per write, a read first claims its
      * project - the marker read's rule, on a key of its own ({@link BuildUtils#beginStateLineRead}): the claim is
-     * taken before a job is scheduled, and while an earlier read's claim holds - its read has not returned, and the
-     * claim has not lapsed - no job is started and the read is UNREADABLE at once, as one the deadline cut. The first
+     * taken before a job is scheduled, and while an earlier read's claim holds - its job has not ended, and the claim
+     * has not lapsed - no job is started and the read is UNREADABLE at once, as one the deadline cut. The first
      * refusal by a claim is logged at INFO and the ones after it are not: while the claim holds, the poll is refused
-     * about once a second. The job releases the claim when the read returns; when there is no job left to return -
-     * our own cancel kept it from starting, or it could not be scheduled - the claim is released at once, while a job
-     * that may still run (cut while running, never run, its caller interrupted) keeps it. An unreturned claim lapses
-     * after three times the step's whole budget, not three times this read's share of it - a read cut with a sliver
-     * of the budget left would otherwise hold its claim for a sliver - so a file system that never answers costs a
-     * project at most one hung read per lapse, not one per write. A read whose job had not started at the deadline
-     * may take up to BoundedJob's short grace (0.5s) more to establish that. Never throws an exception.
-     * Package-visible for tests.
+     * about once a second.
+     * <p>
+     * The claim is released when the read's job ends. The job releases it itself when the read returns, so a caller
+     * that has the answer finds it released; the job's terminal notification - EDT's {@code done}, through
+     * BoundedJob's completion callback - releases it as well, and that notification also comes for a job that ends
+     * WITHOUT running the read: one cancelled before it started, by our deadline or by anything else (the job manager
+     * of 2026.1 and 2026.2, org.eclipse.core.jobs 3.15, notifies done inside the cancel of a waiting job, and when
+     * the worker ends a job cancelled at the start line). The claim of a read that could not be scheduled, or whose
+     * job our own cancel kept from starting, is released at once too. A job that may still run keeps the claim until
+     * it ends - one the deadline cut while it ran, or one a suspended job manager still holds, for which BoundedJob
+     * answers NOT_RUN and which EDT runs when the manager resumes unless something cancels it first - or until the
+     * claim lapses: three times the step's whole budget after the claim was taken, elapsed on a monotonic clock, not
+     * three times this read's share of it - a read cut with a sliver of the budget left would otherwise hold its claim
+     * for a sliver - so a file system that never answers costs a project at most one hung read per lapse, not one per
+     * write. A release only sets the claim's own flag: it never blocks the thread that delivers the notification, and a
+     * late one cannot release a newer claim. A read whose job had not started at the deadline may take up to
+     * BoundedJob's short grace (0.5s) more to establish that. Never throws an exception. Package-visible for tests.
      *
      * @param runner what runs the read under its deadline: BoundedJob in production
      * @param projectName the project whose files are read: the key of the read's claim
@@ -582,7 +597,7 @@ public final class AdoptedModuleState
         String logKey = String.valueOf(projectName); // the set takes no null
         if (returned == null)
         {
-            // An earlier read of this project's files has not returned: starting another would only add a hung job.
+            // The job of an earlier read of this project's files has not ended: another would only add a hung job.
             // Said once per claim: while the claim holds, the poll is refused about once a second.
             if (REFUSAL_LOGGED.add(logKey))
             {
@@ -594,6 +609,9 @@ public final class AdoptedModuleState
         // This read holds the claim now: the first read it refuses is said again.
         REFUSAL_LOGGED.remove(logKey);
         AtomicReference<LineOnDisk> answer = new AtomicReference<>();
+        // The job's end - EDT's done notification, which comes also for a job that ends without running the read. It
+        // only sets this claim's flag: it never blocks the thread EDT delivers the notification on.
+        Runnable jobEnded = () -> returned.set(true);
         BoundedJob.Result result;
         try
         {
@@ -604,10 +622,11 @@ public final class AdoptedModuleState
                 }
                 finally
                 {
-                    // Set from the JOB thread when the read returns: after the caller has gone, if the deadline cut it.
+                    // Set from the JOB thread when the read returns: before the caller has the answer, or after the
+                    // caller has gone if the deadline cut it.
                     returned.set(true);
                 }
-            });
+            }, jobEnded);
         }
         catch (RuntimeException e) // NOSONAR a read that could not be scheduled read nothing: an answer, not a crash
         {
@@ -617,7 +636,8 @@ public final class AdoptedModuleState
         }
         if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
         {
-            // Our cancel kept the job from starting: the read never ran and never will (BuildUtils' rule).
+            // Our cancel kept the job from starting: the read never ran and never will (BuildUtils' rule). Released
+            // here, not only by the job's terminal notification, which may come a moment after the run answered.
             returned.set(true);
         }
         // A read is an answer only when it COMPLETED in time; one that published past the deadline is not.
@@ -1291,7 +1311,8 @@ public final class AdoptedModuleState
      * No read starts once the budget is spent - not even the first, so a queue's wait that used it all leaves the
      * file unread - and each read is given only what is left: one not answered by then confirms nothing. A read not
      * started because an earlier read of the project's files is still out confirms nothing either, and the poll goes
-     * on: once that read returns or its claim lapses, a later one can still find the line.
+     * on: once that read's job ends - also without having run the read - or its claim lapses, a later one can still
+     * find the line.
      *
      * @param project the project
      * @param mdoPath the owner's top-object {@code .mdo}, may be {@code null} (nothing to read: not confirmed)

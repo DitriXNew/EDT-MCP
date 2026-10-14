@@ -2707,11 +2707,15 @@ public class WriteModuleSourceToolTest
         assertFalse("not every metadata write makes the export request: " + section, //$NON-NLS-1$
             section.contains("every metadata write")); //$NON-NLS-1$
         assertFalse("no 60s is promised for the whole call: " + section, section.contains("60s in all")); //$NON-NLS-1$ //$NON-NLS-2$
-        // A read the deadline cut off keeps its job until the file system answers, so while it is out no other read of
-        // the project starts - until its claim lapses, three times the 60s, after which one more may: no limit on the
-        // reads is stated without that lapse (#743 review, round 8).
-        assertTrue(section, section.contains("While an earlier `.mdo` read of the project has not returned, no other " //$NON-NLS-1$
-            + "starts - for up to 3 minutes, after which one more may - and the `.mdo` counts as not read back.")); //$NON-NLS-1$
+        // A read the deadline cut off keeps its job until the file system answers, so while it is out - running, or still
+        // waiting to run - no other read of the project starts, until its claim lapses, three times the 60s, after which
+        // one more may: no limit on the reads is stated without that lapse (#743 review, round 8). A read whose job was
+        // cancelled before it ran never returned, yet holds nothing: the job's end releases its claim (round 9).
+        assertTrue(section, section.contains("While an earlier `.mdo` read of the project is still running or waiting " //$NON-NLS-1$
+            + "to run, no other starts - for up to 3 minutes, after which one more may - and the `.mdo` counts as not " //$NON-NLS-1$
+            + "read back.")); //$NON-NLS-1$
+        assertFalse("a read whose job was cancelled before it ran never returned, yet holds nothing: " + section, //$NON-NLS-1$
+            section.contains("read of the project has not returned, no other starts")); //$NON-NLS-1$
         assertFalse("no read limit is stated without its lapse: " + section, //$NON-NLS-1$
             section.contains("At most one `.mdo` read per project is outstanding")); //$NON-NLS-1$
         assertFalse("no read limit is stated without its lapse: " + section, //$NON-NLS-1$

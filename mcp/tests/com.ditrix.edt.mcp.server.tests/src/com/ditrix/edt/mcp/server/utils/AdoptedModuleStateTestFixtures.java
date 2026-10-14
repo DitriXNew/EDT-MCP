@@ -99,6 +99,12 @@ public final class AdoptedModuleStateTestFixtures
         public final List<Long> readStarts = new ArrayList<>();
         /** What {@link #readStateLine} throws - after recording the read - instead of answering, when set. */
         public RuntimeException readFailure;
+        /**
+         * When set, answers each read of the {@code .mdo} - after the read is recorded, and taking no time on the
+         * virtual clock - in place of {@link #disk} and {@link #readTimes}: a test runs the platform's bounded read
+         * through it.
+         */
+        public ReadThrough readThrough;
         /** Whether {@link #pause} is interrupted (and answers {@code false}). */
         public boolean interrupted;
         /** The virtual clock, in ms. */
@@ -196,6 +202,10 @@ public final class AdoptedModuleStateTestFixtures
             {
                 throw readFailure;
             }
+            if (readThrough != null)
+            {
+                return readThrough.read(project, mdoPath, line, timeoutMs);
+            }
             long takes = readTimes.isEmpty() ? 0L : readTimes.get(Math.min(read, readTimes.size() - 1));
             if (takes > timeoutMs)
             {
@@ -262,6 +272,21 @@ public final class AdoptedModuleStateTestFixtures
             }
             return out;
         }
+    }
+
+    /** A read of the {@code .mdo} a test answers: {@link FakeEnvironment#readThrough}. */
+    @FunctionalInterface
+    interface ReadThrough
+    {
+        /**
+         * @param project the project
+         * @param mdoPath the project-relative {@code .mdo}
+         * @param line the line to look for
+         * @param timeoutMs what is left of the budget
+         * @return what the read found
+         */
+        AdoptedModuleState.LineOnDisk read(IProject project, String mdoPath, AdoptedModuleState.StateLine line,
+            long timeoutMs);
     }
 
     /**

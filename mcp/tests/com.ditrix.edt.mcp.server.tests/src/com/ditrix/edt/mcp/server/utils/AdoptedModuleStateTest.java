@@ -51,6 +51,10 @@ import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.IJobChangeEvent;
+import org.eclipse.core.runtime.jobs.IJobChangeListener;
+import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.core.runtime.jobs.JobChangeAdapter;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
@@ -1761,8 +1765,8 @@ public class AdoptedModuleStateTest
      * One read per project is outstanding at a time while its claim holds (#743 review): a read the deadline cut off
      * keeps its job - one of EDT's worker threads - until the file system answers, so while it has not returned, a
      * second read of the same project starts NO job and answers that the file could not be read back, as a read the
-     * deadline cut does. Another project's read is not held up, and once the first read returns - the last thing its
-     * job does - the project's reads start again.
+     * deadline cut does. Another project's read is not held up, and once the first read's job ends - the file system
+     * answers, the read returns - the project's reads start again.
      */
     @Test
     public void testOneReadPerProjectIsOutstandingAtATime() throws Exception
@@ -1780,7 +1784,7 @@ public class AdoptedModuleStateTest
             readThrough(new FakeRunner(BoundedJob.Outcome.COMPLETED, true), "Q", //$NON-NLS-1$
                 () -> AdoptedModuleState.LineOnDisk.PRESENT));
 
-        cut.kept.run(new NullProgressMonitor()); // the file system answers, long after the caller stopped waiting
+        cut.finishKept(); // the file system answers, long after the caller stopped waiting, and the job ends
         assertEquals("once the first read returned, the next one starts", AdoptedModuleState.LineOnDisk.PRESENT, //$NON-NLS-1$
             readThrough(new FakeRunner(BoundedJob.Outcome.COMPLETED, true), "P", //$NON-NLS-1$
                 () -> AdoptedModuleState.LineOnDisk.PRESENT));
@@ -1788,32 +1792,39 @@ public class AdoptedModuleStateTest
 
     /**
      * The claim is held exactly as long as the read is out (#743 review): taken before the job is scheduled, held while
-     * the read runs, and released by the job when the read returns - a read that threw included.
+     * the read runs, and released by the job itself when the read returns - a read that threw included - so a caller
+     * that has the answer finds the claim released even while the job's terminal notification is still on its way:
+     * EDT marks the job done first and delivers the notification after, so a join that found the job done may return
+     * a moment before it comes.
      */
     @Test
     public void testTheClaimIsHeldWhileTheReadRunsAndReleasedWhenItReturns()
     {
         boolean[] heldDuringTheRead = new boolean[1];
-        assertEquals(AdoptedModuleState.LineOnDisk.PRESENT,
-            readThrough(new FakeRunner(BoundedJob.Outcome.COMPLETED, true), "P", () -> { //$NON-NLS-1$
-                heldDuringTheRead[0] = BuildUtils.beginStateLineRead("P", 1_000L) == null; //$NON-NLS-1$
-                return AdoptedModuleState.LineOnDisk.PRESENT;
-            }));
+        FakeRunner returned = new FakeRunner(BoundedJob.Outcome.COMPLETED, true);
+        returned.notificationLate = true;
+        assertEquals(AdoptedModuleState.LineOnDisk.PRESENT, readThrough(returned, "P", () -> { //$NON-NLS-1$
+            heldDuringTheRead[0] = BuildUtils.beginStateLineRead("P", 1_000L) == null; //$NON-NLS-1$
+            return AdoptedModuleState.LineOnDisk.PRESENT;
+        }));
         assertTrue("the project's slot is held while its read runs", heldDuringTheRead[0]); //$NON-NLS-1$
-        assertNotNull("and released once the read returned", BuildUtils.beginStateLineRead("P", 1_000L)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNotNull("and released once the read returned, before the job's terminal notification", //$NON-NLS-1$
+            BuildUtils.beginStateLineRead("P", 1_000L)); //$NON-NLS-1$
 
-        assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE,
-            readThrough(new FakeRunner(BoundedJob.Outcome.COMPLETED, true), "Threw", () -> { //$NON-NLS-1$
-                throw new IllegalStateException("disk"); //$NON-NLS-1$
-            }));
+        FakeRunner threw = new FakeRunner(BoundedJob.Outcome.COMPLETED, true);
+        threw.notificationLate = true;
+        assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, readThrough(threw, "Threw", () -> { //$NON-NLS-1$
+            throw new IllegalStateException("disk"); //$NON-NLS-1$
+        }));
         assertNotNull("a read that threw returned all the same", BuildUtils.beginStateLineRead("Threw", 1_000L)); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
-     * Only a read that can no longer run releases its claim at once (#743 review): a job our own cancel kept from
-     * starting, and a job that could not be scheduled. A read the deadline cut while it ran, one that never ran (a
-     * suspended job manager runs it when it resumes) and one whose caller was interrupted may still be out: they keep
-     * the claim until the read returns or the claim lapses. Nothing left of the budget takes no claim at all.
+     * Before any terminal notification of the job, only a read that can no longer run releases its claim at once (#743
+     * review): a job our own cancel kept from starting - its notification may come a moment after the run answered -
+     * and a job that could not be scheduled. A read the deadline cut while it ran, one that has not run yet (a
+     * suspended job manager still holds it) and one whose caller was interrupted while it ran may still be out: they
+     * keep the claim until their job ends or the claim lapses. Nothing left of the budget takes no claim at all.
      */
     @Test
     public void testOnlyAReadThatCanNoLongerRunReleasesItsClaimAtOnce()
@@ -1937,6 +1948,236 @@ public class AdoptedModuleStateTest
         }
     }
 
+    /**
+     * A read whose job ends WITHOUT running it holds nothing (#743 review, round 9): EDT sends the job's terminal
+     * notification also when the job is cancelled before it starts - by anything, not only by our deadline - and that
+     * notification releases the claim, whatever the run answered: NOT_RUN, INTERRUPTED (our cancel ended a job that
+     * was still waiting) or TIMED_OUT. Kept until it lapses, such a claim would refuse every read of the project for
+     * three minutes on account of a read that no longer exists. A job that has not ended - one a suspended job manager
+     * still holds - keeps the claim until its notification comes.
+     */
+    @Test
+    public void testTheTerminalNotificationOfAJobThatEndedWithoutRunningReleasesItsClaim()
+    {
+        for (BoundedJob.Outcome outcome : new BoundedJob.Outcome[] { BoundedJob.Outcome.NOT_RUN,
+            BoundedJob.Outcome.INTERRUPTED, BoundedJob.Outcome.TIMED_OUT })
+        {
+            String project = "ended-" + outcome; //$NON-NLS-1$
+            FakeRunner ended = new FakeRunner(outcome, false);
+            ended.endsWithoutRunning = true;
+            ended.interruptsTheCaller = outcome == BoundedJob.Outcome.INTERRUPTED;
+            try
+            {
+                assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE,
+                    readThrough(ended, project, () -> AdoptedModuleState.LineOnDisk.PRESENT));
+            }
+            finally
+            {
+                Thread.interrupted();
+            }
+            assertNotNull(outcome + ": a job that ended without running holds nothing", //$NON-NLS-1$
+                BuildUtils.beginStateLineRead(project, 1_000L));
+        }
+
+        FakeRunner held = new FakeRunner(BoundedJob.Outcome.NOT_RUN, false); // a suspended job manager still holds it
+        assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE,
+            readThrough(held, "still-held", () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$
+        assertNull("a job that may still run keeps the claim", //$NON-NLS-1$
+            BuildUtils.beginStateLineRead("still-held", 1_000L)); //$NON-NLS-1$
+        held.keptDone.run(); // cancelled later, never having run
+        assertNotNull("released when that job ends, also without having run", //$NON-NLS-1$
+            BuildUtils.beginStateLineRead("still-held", 1_000L)); //$NON-NLS-1$
+    }
+
+    /**
+     * The review's case on EDT's job manager (#743 review, round 9): a read whose job is cancelled before it enters the
+     * work releases its project's claim at once - EDT ends a waiting job it cancels and notifies done inside the
+     * cancel - so the next read of the project may start; BoundedJob reports NOT_RUN for it. The cancel comes from the
+     * scheduler, before the caller joins the job, so the order is fixed and nothing is left to timing.
+     */
+    @Test
+    public void testAReadWhoseJobIsCancelledBeforeItRunsReleasesItsClaimAtOnce()
+    {
+        AtomicBoolean ran = new AtomicBoolean();
+        AdoptedModuleState.BoundedRunner cancelledBeforeItRuns = (name, timeout, work, onDone) -> BoundedJob.run(name,
+            timeout, work, onDone, job -> {
+                job.schedule(HUNG_READ_CEILING_MS); // waiting to run...
+                job.cancel(); // ...and cancelled before it does
+            });
+        assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, AdoptedModuleState.readBounded(cancelledBeforeItRuns,
+            "CancelledProject", "read", PLATFORM_READ_MS, () -> { //$NON-NLS-1$ //$NON-NLS-2$
+                ran.set(true);
+                return AdoptedModuleState.LineOnDisk.PRESENT;
+            }));
+        assertFalse("the read never ran", ran.get()); //$NON-NLS-1$
+        assertEquals("its claim was released at once: a read that will never run holds nothing", 0L, //$NON-NLS-1$
+            BuildUtils.stateLineReadHoldLeftMs("CancelledProject")); //$NON-NLS-1$
+        assertNotNull("the next read of the project may start", //$NON-NLS-1$
+            BuildUtils.beginStateLineRead("CancelledProject", 60_000L)); //$NON-NLS-1$
+    }
+
+    /**
+     * A read whose job has not run yet keeps its project's claim until that job ends (#743 review, round 9): BoundedJob
+     * reports NOT_RUN also for a job a suspended job manager still holds - one that runs when the manager resumes,
+     * unless something cancels it first - so NOT_RUN alone releases nothing. Here the scheduler hands the job to EDT's
+     * job manager only after the caller gave up on it; once the job has run, its end releases the claim.
+     */
+    @Test
+    public void testAReadWhoseJobHasNotRunYetKeepsItsClaimUntilTheJobRunsAndEnds() throws Exception
+    {
+        AtomicReference<Job> notYetRun = new AtomicReference<>();
+        AdoptedModuleState.BoundedRunner heldBack = (name, timeout, work, onDone) -> BoundedJob.run(name, timeout, work,
+            onDone, notYetRun::set);
+        CountDownLatch read = new CountDownLatch(1);
+        assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, AdoptedModuleState.readBounded(heldBack, "HeldProject", //$NON-NLS-1$
+            "read", PLATFORM_READ_MS, () -> { //$NON-NLS-1$
+                read.countDown();
+                return AdoptedModuleState.LineOnDisk.PRESENT;
+            }));
+        assertNotNull("the job was handed over", notYetRun.get()); //$NON-NLS-1$
+        assertNull("a read whose job may still run keeps its project's claim", //$NON-NLS-1$
+            BuildUtils.beginStateLineRead("HeldProject", 60_000L)); //$NON-NLS-1$
+
+        McpJobs.schedule(notYetRun.get()); // the job manager runs it after all
+        assertTrue("the job that was held back ran the read", //$NON-NLS-1$
+            read.await(HUNG_READ_CEILING_MS, TimeUnit.MILLISECONDS));
+        assertTrue("once that job has run and ended, its claim is released", awaitReleased("HeldProject")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The release on the job's end never blocks the thread that delivers it (#743 review, round 9): EDT hands a job's
+     * done notification to its listeners on whichever thread it delivers the job's events on - e.g. the job's worker,
+     * or a thread that cancels the job - possibly while the caller is still waiting for the job, and a listener that
+     * blocks stalls EDT's job manager - so the release must finish on its own, at once. Here the notification comes on
+     * another thread while the caller is still inside the run.
+     */
+    @Test
+    public void testTheReleaseOnTheJobsEndNeverBlocksTheThreadThatDeliversIt()
+    {
+        AtomicBoolean deliveredInTime = new AtomicBoolean();
+        AdoptedModuleState.BoundedRunner endsWhileTheCallerWaits = (name, timeout, work, onDone) -> {
+            Thread delivery = new Thread(onDone, "done notification of " + name); //$NON-NLS-1$
+            delivery.setDaemon(true);
+            delivery.start();
+            try
+            {
+                delivery.join(1_000L);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            deliveredInTime.set(!delivery.isAlive());
+            return new BoundedJob.Result(BoundedJob.Outcome.NOT_RUN, 0L, null);
+        };
+        assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, AdoptedModuleState.readBounded(endsWhileTheCallerWaits,
+            "NotificationProject", "read", 1_000L, () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the release returned on the delivering thread within a second, while the caller still waited", //$NON-NLS-1$
+            deliveredInTime.get());
+        assertNotNull("and released the claim", BuildUtils.beginStateLineRead("NotificationProject", 60_000L)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The production read hands the job's end on (#743 review, round 9): a platform read whose job a third party
+     * cancels at the start line - EDT then ends it without running it and notifies done - never touches the file and
+     * releases its project's claim once EDT has ended the job, so the next read of the project starts a job and finds
+     * the line. The cancel comes from an aboutToRun listener, which EDT allows ("listeners may have canceled or put the
+     * job to sleep") and which does not block; it picks the read's job by its name alone.
+     */
+    @Test
+    public void testThePlatformReadReleasesTheClaimOfAJobCancelledBeforeItRan() throws Exception
+    {
+        AdoptedModuleState.StateLine line =
+            AdoptedModuleState.StateLine.of(drySignal, MdClassPackage.Literals.COMMON_MODULE__MODULE);
+        String mdoPath = "src/CommonModules/CancelledRead" + System.nanoTime() + "/CancelledRead.mdo"; //$NON-NLS-1$ //$NON-NLS-2$
+        String jobName = "Reading back " + mdoPath; //$NON-NLS-1$
+        AtomicBoolean cancelled = new AtomicBoolean();
+        IJobChangeListener canceller = new JobChangeAdapter()
+        {
+            @Override
+            public void aboutToRun(IJobChangeEvent event)
+            {
+                if (jobName.equals(event.getJob().getName()) && cancelled.compareAndSet(false, true))
+                {
+                    event.getJob().cancel();
+                }
+            }
+        };
+        java.nio.file.Path dir = Files.createTempDirectory("adopted-module-state"); //$NON-NLS-1$
+        try
+        {
+            java.nio.file.Path file = dir.resolve("CancelledRead.mdo"); //$NON-NLS-1$
+            Files.write(file, drySignalMdo("    <module>Extended</module>\n")); //$NON-NLS-1$
+            IProject onDisk = projectWithFileAt("CancelledReadProject", mdoPath, file); //$NON-NLS-1$
+            Job.getJobManager().addJobChangeListener(canceller);
+            try
+            {
+                assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE,
+                    AdoptedModuleState.PLATFORM.readStateLine(onDisk, mdoPath, line, PLATFORM_READ_MS));
+            }
+            finally
+            {
+                Job.getJobManager().removeJobChangeListener(canceller);
+            }
+            assertTrue("the read's job was cancelled at the start line", cancelled.get()); //$NON-NLS-1$
+            verify(onDisk, never()).getFile(any(org.eclipse.core.runtime.IPath.class));
+            assertTrue("a read whose job ended without running releases its project's claim", //$NON-NLS-1$
+                awaitReleased("CancelledReadProject")); //$NON-NLS-1$
+            assertEquals("so the next read of the project starts a job and finds the line", //$NON-NLS-1$
+                AdoptedModuleState.LineOnDisk.PRESENT,
+                AdoptedModuleState.PLATFORM.readStateLine(onDisk, mdoPath, line, PLATFORM_READ_MS));
+        }
+        finally
+        {
+            Files.deleteIfExists(dir.resolve("CancelledRead.mdo")); //$NON-NLS-1$
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    /**
+     * Within one step (#743 review, round 9): the poll's first read goes to a job that is cancelled before it runs, on
+     * EDT's job manager. That job's end releases the claim, so the poll's next read starts a job of its own and
+     * confirms the line. Were the claim kept until it lapses, every later read of the project would be refused, and
+     * the write would fail as "could not be read back" with a .mdo that carries the line.
+     */
+    @Test
+    public void testAReadWhoseJobEndedWithoutRunningLeavesThePollsNextReadFreeToConfirm()
+    {
+        reports(MdPropertyState.NONE);
+        AtomicInteger jobs = new AtomicInteger();
+        AtomicInteger readsRun = new AtomicInteger();
+        AdoptedModuleState.BoundedRunner firstJobCancelled = (name, timeout, work, onDone) -> BoundedJob.run(name,
+            timeout, work, onDone, jobs.getAndIncrement() > 0 ? McpJobs::schedule : job -> {
+                job.schedule(HUNG_READ_CEILING_MS);
+                job.cancel();
+            });
+        env.readThrough = (target, mdoPath, line, timeoutMs) -> AdoptedModuleState.readBounded(firstJobCancelled,
+            target.getName(), "Reading back " + mdoPath, timeoutMs, () -> { //$NON-NLS-1$
+                readsRun.incrementAndGet();
+                return AdoptedModuleState.LineOnDisk.PRESENT;
+            });
+        Result result = run(DRY_SIGNAL);
+        assertEquals(String.valueOf(result.failureMessage()), Outcome.SWITCHED, result.outcome());
+        assertEquals("two reads: the one whose job was cancelled, then the poll's next, which ran", 2, //$NON-NLS-1$
+            env.mdoReads().size());
+        assertEquals("only the second read ran", 1, readsRun.get()); //$NON-NLS-1$
+    }
+
+    /** Waits, within the hung read's ceiling, until {@code project} holds no state-line read claim. */
+    private static boolean awaitReleased(String project) throws InterruptedException
+    {
+        long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(HUNG_READ_CEILING_MS);
+        while (BuildUtils.stateLineReadHoldLeftMs(project) > 0)
+        {
+            if (System.nanoTime() - until >= 0)
+            {
+                return false;
+            }
+            Thread.sleep(10);
+        }
+        return true;
+    }
+
     /** The recorded log entries that say a read of {@code project}'s files was not started. */
     private static List<IStatus> refusalsLoggedFor(List<IStatus> recorded, String project)
     {
@@ -1983,7 +2224,10 @@ public class AdoptedModuleStateTest
 
     /**
      * A bounded runner that answers a scripted outcome - running the read first, or not, as BoundedJob does when the
-     * read finishes after the caller stopped waiting - and records the timeouts it is given.
+     * read finishes after the caller stopped waiting - and records the timeouts it is given. It hands the job's terminal
+     * notification on as EDT sends it: once a job that ran the read has ended; at once for a job that ended without
+     * running it ({@link #endsWithoutRunning}); and for a job that may still run, only when the test delivers it
+     * ({@link #finishKept}, {@link #keptDone}).
      */
     private static final class FakeRunner implements AdoptedModuleState.BoundedRunner
     {
@@ -1998,12 +2242,25 @@ public class AdoptedModuleStateTest
          * its InterruptedException; none when not set. A COMPLETED result carries what the read threw.
          */
         Throwable failure;
+        /**
+         * Whether a job that does not run the read has ended all the same - cancelled before it started, by anything,
+         * or removed - and so sends its terminal notification at once. When not set, such a job may still run - a
+         * suspended job manager still holds it - and sends none until the test delivers it.
+         */
+        boolean endsWithoutRunning;
+        /**
+         * Whether the terminal notification of a job that ran the read is still on its way when the caller has its
+         * answer, and is left for the test to deliver ({@link #keptDone}).
+         */
+        boolean notificationLate;
         final List<Long> timeouts = new ArrayList<>();
         /**
          * The read it was handed: one it did not run is kept, as BoundedJob's job keeps a read the deadline cut off,
          * and a test runs it later - the file system answering after the caller stopped waiting.
          */
         BoundedJob.IBoundedWork kept;
+        /** The job's terminal notification it was handed: one it did not deliver, a test delivers. */
+        Runnable keptDone;
 
         FakeRunner(BoundedJob.Outcome outcome, boolean runsTheRead)
         {
@@ -2012,10 +2269,11 @@ public class AdoptedModuleStateTest
         }
 
         @Override
-        public BoundedJob.Result run(String jobName, long timeoutMs, BoundedJob.IBoundedWork work)
+        public BoundedJob.Result run(String jobName, long timeoutMs, BoundedJob.IBoundedWork work, Runnable onDone)
         {
             timeouts.add(timeoutMs);
             kept = work;
+            keptDone = onDone;
             if (scheduleFailure != null)
             {
                 throw scheduleFailure;
@@ -2031,6 +2289,14 @@ public class AdoptedModuleStateTest
                 {
                     thrown = e;
                 }
+                if (!notificationLate)
+                {
+                    onDone.run(); // the job ended
+                }
+            }
+            else if (endsWithoutRunning)
+            {
+                onDone.run(); // the job ended without running the read
             }
             if (interruptsTheCaller)
             {
@@ -2038,6 +2304,13 @@ public class AdoptedModuleStateTest
             }
             return new BoundedJob.Result(outcome, timeoutMs,
                 outcome == BoundedJob.Outcome.COMPLETED ? thrown : failure);
+        }
+
+        /** The file system answers long after the caller stopped waiting: the kept read runs, and its job ends. */
+        void finishKept() throws Exception
+        {
+            kept.run(new NullProgressMonitor());
+            keptDone.run();
         }
     }
 
