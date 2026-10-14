@@ -17,6 +17,7 @@ import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.ecore.EObject;
 
 import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.core.platform.IExtensionProject;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
@@ -24,6 +25,7 @@ import com._1c.g5.v8.dt.md.extension.adopt.IModelObjectAdopter;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
+import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
@@ -32,7 +34,9 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.ExtensionRootBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
@@ -50,8 +54,10 @@ import com.google.gson.JsonObject;
  * The whole adopt+attach is performed by the platform service
  * {@link IModelObjectAdopter#adoptAndAttach(EObject, IExtensionProject, org.eclipse.core.runtime.IProgressMonitor)}:
  * it runs its OWN BM write task on the extension's model, creates the adopted copy with
- * {@code ObjectBelonging.ADOPTED}, attaches it by generated FQN, and wires the
- * {@code extendedConfigurationObject} UUID link to the base object (by-ID mapping). This
+ * {@code ObjectBelonging.ADOPTED}, attaches it by generated FQN, and - only when the extension root
+ * keeps mapping by IDs and the platform version is above 8.3.14 - wires the
+ * {@code extendedConfigurationObject} UUID link to the base object (by-ID mapping; otherwise the copy
+ * is mapped by name, and the result says so, see {@link #byNameMappingNote}). This
  * tool resolves the source object and the target extension, calls that service, and then
  * force-exports the new {@code .mdo} (+ the extension's {@code Configuration.mdo}
  * registration) so the change survives a refresh / clean_project / EDT restart.
@@ -121,6 +127,9 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     + "the bytes are correct (a platform-side write failure is logged inside EDT), and the " //$NON-NLS-1$
                     + "wait is skipped where the export state cannot be observed", false) //$NON-NLS-1$
             .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
+            .stringProperty(McpKeys.MESSAGE,
+                "Present when the object was already adopted, and when the extension maps adopted objects to " //$NON-NLS-1$
+                    + "the base by name rather than by ID (it says why and how to change it)") //$NON-NLS-1$
             .build();
     }
 
@@ -211,13 +220,16 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
 
         String extName = target.getProject().getName();
 
+        // Read before the adoption, as EDT's copier reads it during the adoption (#706).
+        String mappingNote = mappingNote(extName, platformVersion(target), extensionModel(target));
+
         if (adopter.isAdopted(source.object, target))
         {
             // A SUCCESS that changes nothing: adoptAndAttach is never called, so no export is
             // queued anywhere. Stated rather than left silent, because "queued nothing" and "did
             // not say" owe the barrier different answers.
             WriteScope.recordNothingQueued();
-            return alreadyAdoptedResult(source, extName);
+            return alreadyAdoptedResult(source, extName, mappingNote);
         }
 
         // Vendor support (#642) does not apply: the base side is only read, and EDT reads support
@@ -243,7 +255,7 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         List<String> dirty = collectDirtyFqns(adopted, target);
         boolean persisted = !dirty.isEmpty() && BmTransactions.forceExportToDisk(target.getProject(), dirty);
 
-        return adoptedResult(source, extName, persisted);
+        return adoptedResult(source, extName, persisted, mappingNote);
     }
 
     /**
@@ -261,24 +273,26 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
 
     /**
      * The success of an adoption that was not needed: the source is adopted in {@code extName}
-     * already. The copy is named by the source's address - it keeps the source's Name (the platform
-     * maps it by UUID); {@code bmGetFqn()} of an adopted object is never asked, because for a MEMBER (a
-     * form, an attribute) it is not a top object and throws ("may be called on top objects only").
-     * Package-visible for tests.
+     * already. The copy is named by the source's address - it keeps the source's Name; {@code bmGetFqn()}
+     * of an adopted object is never asked, because for a MEMBER (a form, an attribute) it is not a top
+     * object and throws ("may be called on top objects only"). A mapping note is appended to the message,
+     * never put in its place. Package-visible for tests.
      *
      * @param source the resolved source
      * @param extName the extension project's name
+     * @param mappingNote the {@link #byNameMappingNote}, or {@code null}
      * @return the success JSON
      */
-    static String alreadyAdoptedResult(AdoptionSource source, String extName)
+    static String alreadyAdoptedResult(AdoptionSource source, String extName, String mappingNote)
     {
+        String message = "'" + source.fqn + "' is already adopted in extension '" + extName + "'."; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         return ToolResult.success()
             .put(McpKeys.ACTION, "alreadyAdopted") //$NON-NLS-1$
             .put("fqn", source.fqn) //$NON-NLS-1$
             .put(KEY_EXTENSION_PROJECT, extName)
             .put(KEY_OBJECT_BELONGING, "ADOPTED") //$NON-NLS-1$
             .put(KEY_PERSISTED, true)
-            .put("message", "'" + source.fqn + "' is already adopted in extension '" + extName + "'.") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            .put(McpKeys.MESSAGE, mappingNote == null ? message : message + " " + mappingNote) //$NON-NLS-1$
             .toJson();
     }
 
@@ -289,17 +303,148 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
      * @param source the resolved source
      * @param extName the extension project's name
      * @param persisted whether the platform accepted a save task for the change
+     * @param mappingNote the {@link #byNameMappingNote}, or {@code null} for a copy mapped by ID
      * @return the success JSON
      */
-    static String adoptedResult(AdoptionSource source, String extName, boolean persisted)
+    static String adoptedResult(AdoptionSource source, String extName, boolean persisted, String mappingNote)
     {
-        return ToolResult.success()
+        ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, "adopted") //$NON-NLS-1$
             .put("fqn", source.fqn) //$NON-NLS-1$
             .put(KEY_EXTENSION_PROJECT, extName)
             .put(KEY_OBJECT_BELONGING, "ADOPTED") //$NON-NLS-1$
-            .put(KEY_PERSISTED, persisted)
-            .toJson();
+            .put(KEY_PERSISTED, persisted);
+        if (mappingNote != null)
+        {
+            result.put(McpKeys.MESSAGE, mappingNote);
+        }
+        return result.toJson();
+    }
+
+    /**
+     * Why objects adopted into the extension are mapped to the base by NAME, or {@code null} when they are
+     * mapped by ID - or when that cannot be told. The predicate is EDT's own: its adopter's copier writes an
+     * object's {@code extendedConfigurationObject} link (with the state Checked) only when the platform
+     * version is above 8.3.14 ({@link ExtensionRootBuilder#versionMapsByNameOnly}) AND the extension ROOT keeps
+     * mapping by IDs, and nothing in EDT adds the link later. Either fact alone decides when it is known to
+     * fail; an unknown fact is never blamed. Turning the flag on (or recreating the extension) is advised only
+     * when the version does not already decide, since a recreated extension keeps its base's version.
+     * Package-visible for tests.
+     *
+     * @param extName the extension project's name
+     * @param version the extension's platform version - the one EDT adopts with - or {@code null}
+     * @param keepsMappingByIds the root's {@code keepMappingToExtendedConfigurationObjectsByIDs}, or
+     *     {@code null} when it could not be read
+     * @return the note, or {@code null}
+     */
+    static String byNameMappingNote(String extName, Version version, Boolean keepsMappingByIds)
+    {
+        boolean flagOff = Boolean.FALSE.equals(keepsMappingByIds);
+        boolean versionTooOld = ExtensionRootBuilder.versionMapsByNameOnly(version);
+        if (!flagOff && !versionTooOld)
+        {
+            return null;
+        }
+        List<String> reasons = new ArrayList<>(2);
+        if (flagOff)
+        {
+            reasons.add("the root's keepMappingToExtendedConfigurationObjectsByIDs is false"); //$NON-NLS-1$
+        }
+        if (versionTooOld)
+        {
+            reasons.add("the extension's platform version is " + version); //$NON-NLS-1$
+        }
+        StringBuilder note = new StringBuilder("Extension '").append(extName) //$NON-NLS-1$
+            .append("' maps adopted objects to the base by NAME, not by ID: EDT writes an adopted object's ") //$NON-NLS-1$
+            .append("extendedConfigurationObject link only when, at adoption, the extension root keeps mapping ") //$NON-NLS-1$
+            .append("by IDs (keepMappingToExtendedConfigurationObjectsByIDs) and the platform version is above ") //$NON-NLS-1$
+            .append("8.3.14, and here ").append(String.join(" and ", reasons)) //$NON-NLS-1$ //$NON-NLS-2$
+            .append(". Renaming the base object or the copy breaks such a mapping."); //$NON-NLS-1$
+        if (versionTooOld)
+        {
+            note.append(" Mapping by ID needs a platform version above 8.3.14."); //$NON-NLS-1$
+        }
+        else if (flagOff)
+        {
+            // Only where the version does not already decide: an extension recreated over the same base keeps the
+            // base's version, and at 8.3.14 or lower EDT maps by name whatever the flag says.
+            note.append(" To map by ID, turn keepMappingToExtendedConfigurationObjectsByIDs on in EDT, or ") //$NON-NLS-1$
+                .append("recreate the extension with create_project, which sets it; objects adopted before ") //$NON-NLS-1$
+                .append("that stay mapped by name."); //$NON-NLS-1$
+        }
+        return note.toString();
+    }
+
+    /**
+     * The {@link #byNameMappingNote} for an adoption into the extension whose model is {@code extensionModel}: its
+     * root's mapping flag, read by {@link #keepsMappingByIds}, judged together with the platform version.
+     * Package-visible for tests.
+     *
+     * @param extName the extension project's name
+     * @param version the extension's platform version, or {@code null}
+     * @param extensionModel the extension project's model, or {@code null} when it is not available
+     * @return the note, or {@code null}
+     */
+    static String mappingNote(String extName, Version version, IBmModel extensionModel)
+    {
+        return byNameMappingNote(extName, version, extensionModel == null ? null : keepsMappingByIds(extensionModel));
+    }
+
+    /**
+     * The extension root's {@code keepMappingToExtendedConfigurationObjectsByIDs}, read in a READ transaction of
+     * the extension's model, or {@code null} when it cannot be read: the model holds no configuration root, or
+     * the read failed. Package-visible for tests.
+     *
+     * @param extensionModel the extension project's model
+     * @return the flag, or {@code null}
+     */
+    static Boolean keepsMappingByIds(IBmModel extensionModel)
+    {
+        try
+        {
+            return BmTransactions.read(extensionModel, "adopt_metadata_object: read the mapping mode", //$NON-NLS-1$
+                (tx, monitor) -> {
+                    IBmObject root = tx.getTopObjectByFqn("Configuration"); //$NON-NLS-1$
+                    return root instanceof Configuration
+                        ? Boolean.valueOf(((Configuration)root).isKeepMappingToExtendedConfigurationObjectsByIDs())
+                        : null;
+                });
+        }
+        catch (RuntimeException e)
+        {
+            // The note is informational: a failed read claims nothing either way.
+            Activator.logInfo("adopt_metadata_object: could not read the extension root's mapping mode: " + e); //$NON-NLS-1$
+            return null; // NOSONAR tri-state: null means "could not be read"
+        }
+    }
+
+    /** The extension project's model, or {@code null} when it is not available. */
+    private static IBmModel extensionModel(IExtensionProject target)
+    {
+        try
+        {
+            BmModelResolver.Resolution model = BmModelResolver.resolve(target.getProject());
+            return model.isAvailable() ? model.getModel() : null;
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logInfo("adopt_metadata_object: the model of " + target.getProject().getName() //$NON-NLS-1$
+                + " is not available: " + e); //$NON-NLS-1$
+            return null;
+        }
+    }
+
+    /** The extension's platform version - the one EDT's adopter adopts with - or {@code null}. */
+    private static Version platformVersion(IExtensionProject target)
+    {
+        try
+        {
+            return target.getVersion();
+        }
+        catch (RuntimeException e)
+        {
+            return null;
+        }
     }
 
     /**

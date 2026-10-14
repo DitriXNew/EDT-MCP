@@ -9,7 +9,8 @@ a base project, or an external data processors/reports project.
   immediately for metadata authoring via `create_metadata`.
 - **extension** — create a configuration extension project bound to a base configuration.
   Use this to override metadata objects (`adopt_metadata_object`) or add BSL interceptors
-  without modifying the base configuration.
+  without modifying the base configuration. Its root is built the way EDT's own
+  new-extension wizard builds it — see **Extension root** below.
 - **externalObjects** — create an external data processors/reports project. The project
   may be seeded with its root `ExternalDataProcessor` / `ExternalReport` in the same call,
   after which its members are ready for authoring via `create_metadata`. Omit the root when
@@ -52,7 +53,12 @@ The `name` must not already exist as a workspace project (the tool rejects dupli
 - **comment** (optional): free-text comment.
 - **purpose** (optional, default `Customization`): `Customization`, `AddOn`, or `Patch`.
 - **compatibilityMode** (optional): a `CompatibilityMode` enum literal
-  (e.g. `Version8_3_10`). Omit or pass empty for the factory default.
+  (e.g. `Version8_3_24`). Omit or pass empty for the base configuration's compatibility
+  mode — what EDT's new-extension wizard always uses. A mode of 8.3.13 or lower over a base
+  above 8.3.13 is refused before anything is created (EDT's adopter takes the root's
+  default-roles state from the base's mode). A mode above the base's is accepted with a
+  warning in `message`: the wizard never produces it, and whether the platform accepts such
+  an extension was not verified.
 - **version**: REJECTED — extension always inherits the version from the base configuration.
 - **scriptVariant**: REJECTED — extension always inherits scriptVariant from the base.
 
@@ -75,6 +81,34 @@ The `name` must not already exist as a workspace project (the tool rejects dupli
   `scriptVariantNote` in response).
 - **baseProjectName**, **prefix**, **purpose**, **compatibilityMode**, **synonym**,
   **comment**: all REJECTED for this kind.
+
+## Extension root
+
+The root of a new extension is the base configuration's root ADOPTED, the way EDT's own
+"New configuration extension" wizard builds it — not a fresh configuration:
+
+- it carries the extension block with EDT's property states (`Checked` / `Extended`), and
+  none of the properties only a configuration has;
+- it keeps mapping adopted objects to the base by IDs
+  (`keepMappingToExtendedConfigurationObjectsByIDs`), which is what makes
+  `adopt_metadata_object` link each adopted object to its base object by ID — on a
+  platform version above 8.3.14 only: at 8.3.14 or lower EDT maps adopted objects by name
+  whatever the flag;
+- it adopts the base's default language and inherits the base's script variant and
+  compatibility mode (unless `compatibilityMode` is given);
+- the two command interface files the wizard creates, `CommandInterface.cmi` and
+  `MainSectionCommandInterface.cmi`, are created too.
+
+Not replicated: EDT's wizard also creates a default role (named from the prefix in EDT's UI
+language, e.g. `Ext1_DefaultRole`; only over a base whose compatibility mode is above
+8.3.13 — the wizard's extension mode is always the base's) that gives users rights to the
+extension's new objects. This tool does not create it, and no MCP path
+can add a role to the extension root's `defaultRoles` yet — add it in EDT. The service
+modules the v8codestyle plugin's templates write are not created either;
+`write_module_source` creates a module when you write one.
+
+As with any extension, EDT connects the new extension to the infobases of its base project;
+`get_applications` lists them for the extension (`inheritedFromProject`).
 
 ## Examples
 
@@ -184,6 +218,8 @@ On success the response includes:
 - `name` — the Configuration name (configuration and extension only).
 - `baseProject` — the base configuration project (extension only).
 - `prefix` / `purpose` — extension-only attributes applied.
+- `compatibilityMode` — the extension's effective compatibility mode as its enum name, e.g.
+  `Version8_5_1` (extension only): the base configuration's unless one was requested.
 - `scriptVariant` — script variant applied or inherited.
 - `version` — platform version used for project creation.
 - `externalObject` — canonical FQN of the seeded root, including the stored (possibly
@@ -192,11 +228,17 @@ On success the response includes:
   observed through the same metadata scope used by `get_metadata_objects`.
 - `normalized` — fields rewritten by the default `ё`->`е` normalization; `name` here means
   the seeded root Name.
-- `state` — `ready` when the lifecycle STARTED event was received (project is fully
-  indexed); `created` when the timeout elapsed before STARTED and creation is otherwise
-  confirmed; `rootConfirmed` / `rootUnconfirmed` records whether a requested root was
-  observed during a slow create. Both slow seeded-root states use
-  `action=verificationRequired`, not `created`, because the create job has not finished.
+- `state` — `ready` when EDT reported the project's context started. For an extension,
+  `ready` also means its root file was seen on disk with the extension block; for a
+  configuration or externalObjects project nothing on disk is checked, and EDT may still
+  be saving the new project's files for a few seconds. `created` when that was not
+  confirmed (for an extension, `message` says what was not); `rootConfirmed` /
+  `rootUnconfirmed` records whether a requested root was observed during a slow create.
+  Both slow seeded-root states use `action=verificationRequired`, not `created`, because
+  the create job has not finished. `ready` does not mean EDT has finished computing the
+  project's derived data: `list_projects` may still report it `building` for a while.
+- `message` — for an extension: how its root was built, what was not confirmed, and the
+  wizard's default role this tool does not create.
 - `codestyle` — `{applied: bool, note: string, autoSortNote: string}` reporting the
   v8codestyle preference write result.
 - `synonymNote` — present only when the synonym (configuration/extension) could not be
@@ -210,10 +252,11 @@ On success the response includes:
   computed name already exists. Use a unique `name` or pass an explicit `projectName`.
 - **Extension: base must be a configuration, not an extension.** Pass the BASE
   configuration's project name. Passing an extension project name returns an error.
-- **After creation, wait for `state=ready`** before calling `adopt_metadata_object` or
-  other project-dependent tools; the new project must complete lifecycle indexing.
-  If `state=created` is returned, retry the dependent call after a few seconds or call
-  `revalidate_objects`.
+- **After creation, check `state=ready`** before calling `adopt_metadata_object` or
+  other project-dependent tools. If `state=created` is returned, retry the dependent call
+  after a few seconds (for an extension, `message` says what was not confirmed). Do not
+  restart EDT or run `clean_project` on a new project in its first seconds: EDT saves its
+  files asynchronously, and only an extension's `ready` confirms its root file is on disk.
 - **A slow seeded root is verified, not recreated.** If creation exceeds the wait window,
   the tool makes a best-effort read through the metadata scope. An unresolvable root may
   simply mean indexing is still running. The response always reports
@@ -224,8 +267,8 @@ On success the response includes:
   make the duplicate-project guard refuse the retry, whether or not EDT eventually attaches
   the root.
 - **autoSortTopObjects is not yet applied.** See `codestyle.autoSortNote` in the response.
-- **Client-side timeouts.** Creation can take a couple of minutes on a busy workspace (the
-  tool waits for the create operation and then for lifecycle STARTED). If your MCP client
+- **Client-side timeouts.** A create normally answers within seconds, but on a busy
+  workspace the create operation alone may take up to its 120 s limit. If your MCP client
   times out first, the creation usually still completes server-side — re-check with
   `list_projects` before retrying, or the retry will hit the duplicate-name guard.
 - **language is mandatory for configuration projects.** The tool always creates a default

@@ -177,6 +177,81 @@ public class CreateProjectToolTest
         assertTrue("outputSchema must declare externalObjectConfirmed", //$NON-NLS-1$
             schema.contains("\"externalObjectConfirmed\"")); //$NON-NLS-1$
         assertTrue("outputSchema must declare normalized", schema.contains("\"normalized\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        // #706: the effective extension compatibility mode is echoed - by default the BASE's, which is
+        // what EDT's wizard uses, no longer the project's runtime version.
+        assertTrue("outputSchema must declare compatibilityMode", //$NON-NLS-1$
+            schema.contains("\"compatibilityMode\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCompatibilityModeProseNamesTheBaseDefaultAndARealisticExample()
+    {
+        String schema = new CreateProjectTool().getInputSchema();
+        int at = schema.indexOf("\"compatibilityMode\""); //$NON-NLS-1$
+        assertTrue("schema must declare compatibilityMode", at >= 0); //$NON-NLS-1$
+        String prose = schema.substring(at, schema.indexOf('}', at));
+        assertTrue("the default is the base configuration's mode, as in EDT's wizard: " + prose, //$NON-NLS-1$
+            prose.contains("base configuration's compatibility mode")); //$NON-NLS-1$
+        assertFalse("'factory default' was the runtime version - the #706 defect: " + prose, //$NON-NLS-1$
+            prose.contains("factory default")); //$NON-NLS-1$
+        assertFalse("Version8_3_10 is refused over any base above 8.3.13 - not an example: " + prose, //$NON-NLS-1$
+            prose.contains("Version8_3_10")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideDescribesTheWizardShapedExtensionRoot()
+    {
+        String guide = new CreateProjectTool().getGuide();
+        assertTrue("guide must say the root keeps mapping by IDs", //$NON-NLS-1$
+            guide.contains("keepMappingToExtendedConfigurationObjectsByIDs")); //$NON-NLS-1$
+        assertTrue("guide must name the two command interface files", //$NON-NLS-1$
+            guide.contains("CommandInterface.cmi") && guide.contains("MainSectionCommandInterface.cmi")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("guide must say the wizard's default role is not created", //$NON-NLS-1$
+            guide.contains("default role")); //$NON-NLS-1$
+        // The guide wraps its lines, so a phrase is looked for in the text with its whitespace flattened: the
+        // old 'fully indexed' sentence broke across a line and a plain contains() never saw it.
+        String flat = flat(guide);
+        assertFalse("ready means the context started, not 'fully indexed'", //$NON-NLS-1$
+            flat.contains("fully indexed")); //$NON-NLS-1$
+        assertTrue("ready is said not to mean EDT has finished computing the project", //$NON-NLS-1$
+            flat.contains("`ready` does not mean EDT has finished computing")); //$NON-NLS-1$
+        assertFalse("the 'couple of minutes' was the 60 s wait that #706 removed", //$NON-NLS-1$
+            flat.contains("couple of minutes")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideBindsTheByIdMappingToThePlatformVersion()
+    {
+        // EDT's copier links an adopted object by ID only above platform 8.3.14, whatever the root's flag.
+        String flat = flat(new CreateProjectTool().getGuide());
+        assertTrue(flat, flat.contains("on a platform version above 8.3.14 only")); //$NON-NLS-1$
+        assertTrue(flat, flat.contains("at 8.3.14 or lower EDT maps adopted objects by name")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideSaysWhichKindsReadyConfirmsOnDisk()
+    {
+        // Only an extension's 'ready' waits for its root file; a configuration's or an externalObjects
+        // project's 'ready' means only that EDT reported the context started.
+        String flat = flat(new CreateProjectTool().getGuide());
+        assertTrue(flat, flat.contains("for a configuration or externalObjects project nothing on disk is checked")); //$NON-NLS-1$
+        assertTrue(flat, flat.contains("only an extension's `ready` confirms its root file is on disk")); //$NON-NLS-1$
+        assertFalse("'message says what was not' holds for an extension only", //$NON-NLS-1$
+            flat.contains("`message` says what was not;")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideTiesTheWizardsDefaultRoleToTheBaseMode()
+    {
+        // The wizard's extension mode is always its base's, so the base's mode decides whether it makes a role.
+        String flat = flat(new CreateProjectTool().getGuide());
+        assertTrue(flat, flat.contains("only over a base whose compatibility mode is above 8.3.13")); //$NON-NLS-1$
+        assertFalse(flat, flat.contains("only above extension compatibility 8.3.13")); //$NON-NLS-1$
+    }
+
+    private static String flat(String text)
+    {
+        return text.replaceAll("\\s+", " "); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     // ────────── Argument-validation sentinels (return before any EDT API call) ──────────
