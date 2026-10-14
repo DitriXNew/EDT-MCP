@@ -5570,7 +5570,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         /**
          * The FORM-member variant. A form attribute is the one place the platform holds an in-memory
-         * collection type (ValueTable / ValueTree), so only this context admits those kinds (#295).
+         * collection type (ValueTable / ValueTree), so this context admits those kinds (#295); on the
+         * mdclass path only a defined type's own type does, through
+         * {@link ModifyMetadataTool#typeTargetForFeature} (#727).
          * {@code project} is {@code null} here, as the class doc explains.
          *
          * @param scope the resolution root the member belongs to
@@ -5760,7 +5762,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case LONG:
                 return prepareLong(name, value, info, out);
             case TYPE_DESCRIPTION:
-                return prepareTypeDescription(ctx, name, prop, info, out, isExtensionProject);
+                return prepareTypeDescription(ctx, target, name, prop, info, out, isExtensionProject);
             case REFERENCE:
                 return prepareReference(ctx, target, name, value, info, out);
             case MANY_REFERENCE:
@@ -6189,9 +6191,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * MetadataTypeBuilder.TypeTarget)} so an unresolved reference target's error can append the
      * extension-adopt hint (issue #262); {@code ctx.typeTarget} rides along so the in-memory collection
      * kinds are admitted on a form attribute and refused on a stored metadata feature (issue #295),
-     * with the feature-level exceptions of {@link #typeTargetForFeature}.
+     * with the feature-level exceptions of {@link #typeTargetForFeature}. A refusal of a defined type's
+     * own type names that defined type ({@link #definedTypeOwner}).
      */
-    private String prepareTypeDescription(PrepareContext ctx, String name,
+    private String prepareTypeDescription(PrepareContext ctx, EObject target, String name,
         JsonObject prop, PropertyInfo info, List<PreparedChange> out, boolean isExtensionProject)
     {
         if (ctx.version == null)
@@ -6204,7 +6207,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             ctx.scope, ctx.version, isExtensionProject, typeTarget);
         if (tr.error != null)
         {
-            String message = "Invalid 'type' for '" + name + "': " + tr.error; //$NON-NLS-1$ //$NON-NLS-2$
+            String message = "Invalid 'type' for '" + name + "'" + definedTypeOwner(typeTarget, target) //$NON-NLS-1$ //$NON-NLS-2$
+                + ": " + tr.error; //$NON-NLS-1$
             if (tr.platformFailure)
             {
                 // Not the caller's spec: the platform failed, so it reaches the log as an ERROR with a stack.
@@ -6218,7 +6222,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Adds the feature-level exceptions on top of the call site's form-vs-mdclass target: an event
-     * subscription's source (#543) and a session parameter's type (#646).
+     * subscription's source (#543), a session parameter's type (#646) and a defined type's own type,
+     * which takes what EDT's DefinedType type editor offers (#727).
      */
     static MetadataTypeBuilder.TypeTarget typeTargetForFeature(
         MetadataTypeBuilder.TypeTarget contextTarget, EStructuralFeature feature)
@@ -6235,7 +6240,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return MetadataTypeBuilder.TypeTarget.SESSION_PARAMETER;
         }
+        if (feature == MdClassPackage.Literals.DEFINED_TYPE__TYPE)
+        {
+            return MetadataTypeBuilder.TypeTarget.DEFINED_TYPE;
+        }
         return contextTarget;
+    }
+
+    /**
+     * The clause naming the defined type a {@code type} refusal is about - {@code " of 'DefinedType.X'"} -
+     * for a {@link MetadataTypeBuilder.TypeTarget#DEFINED_TYPE} target (issue #727), else empty: the
+     * other targets' refusals keep their wording.
+     */
+    private static String definedTypeOwner(MetadataTypeBuilder.TypeTarget typeTarget, EObject target)
+    {
+        String address = typeTarget == MetadataTypeBuilder.TypeTarget.DEFINED_TYPE && target instanceof MdObject
+            ? MetadataNodeResolver.resolvableAddressOf((MdObject)target) : null;
+        return address == null ? "" : " of '" + address + "'"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     /**
