@@ -45,6 +45,7 @@ import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.QName;
 import com._1c.g5.v8.dt.mcore.ReferenceValue;
 import com._1c.g5.v8.dt.mcore.StringValue;
+import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
@@ -114,6 +115,7 @@ import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
+import com.ditrix.edt.mcp.server.utils.TypeChangeDefaults;
 import com.ditrix.edt.mcp.server.utils.UseAlwaysSupport;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
@@ -2477,6 +2479,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
         final List<String> cascadedPackageNames = new ArrayList<>();
         final List<String> cascadedExportFqns = new ArrayList<>();
+        // What a type write reset besides the type (issue #700), for the confirmation message.
+        final TypeChangeDefaults.Reset[] typeReset = { TypeChangeDefaults.Reset.NONE };
 
         try
         {
@@ -2488,10 +2492,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 final String oldNamespace = (xdtoNamespaceChange && applyTo instanceof XDTOPackage)
                     ? ((XDTOPackage)applyTo).getNamespace() : null;
                 localizedReport.rememberPreState(applyTo, changes);
-                for (PreparedChange change : changes)
-                {
-                    change.applyTo(applyTo, tx);
-                }
+                typeReset[0] = applyChanges(applyTo, changes, tx);
                 localizedReport.collect(applyTo, changes, declaredCodes, config);
                 if (fqnGenerator != null && applyTo instanceof XDTOPackage)
                 {
@@ -2565,7 +2566,54 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
 
         return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames,
-            localizedReport);
+            localizedReport, typeReset[0]);
+    }
+
+    /**
+     * Applies a validated batch to its target inside the write transaction: the type writes first, then
+     * every other change, in batch order. A type write is EDT's type change, which resets the properties
+     * that depend on the type the way the designer does (see {@link TypeChangeDefaults}); applying it
+     * first keeps a property the same call sets explicitly - quick choice, indexing, full-text search,
+     * ... - from being undone by those resets. A repeated property is decided by its LAST write, and so
+     * is a repeated type: only the last type write of each feature is applied, so the resets compare the
+     * stored type with the type the batch ends with, never with one it merely passes through. A batch
+     * therefore means its end state in whatever order it lists its properties (issue #700).
+     * Package-visible for tests.
+     *
+     * @param target the object the batch is written to, inside {@code tx}
+     * @param changes the prepared changes, in the caller's order
+     * @param tx the write transaction
+     * @return what the type writes reset besides the type; {@link TypeChangeDefaults.Reset#NONE} when
+     *         they reset nothing
+     */
+    static TypeChangeDefaults.Reset applyChanges(EObject target, List<PreparedChange> changes,
+        IBmTransaction tx)
+    {
+        Map<EStructuralFeature, PreparedChange> lastTypeWrites = new LinkedHashMap<>();
+        for (PreparedChange change : changes)
+        {
+            if (change.isTypeChange())
+            {
+                lastTypeWrites.put(change.feature(), change);
+            }
+        }
+        TypeChangeDefaults.Reset reset = TypeChangeDefaults.Reset.NONE;
+        for (PreparedChange change : lastTypeWrites.values())
+        {
+            TypeChangeDefaults.Reset applied = change.applyTo(target, tx);
+            if (applied != TypeChangeDefaults.Reset.NONE)
+            {
+                reset = applied;
+            }
+        }
+        for (PreparedChange change : changes)
+        {
+            if (!change.isTypeChange())
+            {
+                change.applyTo(target, tx);
+            }
+        }
+        return reset;
     }
 
     /**
@@ -3214,6 +3262,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         MdNameNormalizer.Report normReport, List<String> cascadedPackageNames,
         LocalizedWriteReport localizedReport)
     {
+        return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames,
+            localizedReport, TypeChangeDefaults.Reset.NONE);
+    }
+
+    /**
+     * The full variant: also names, in the confirmation MESSAGE only, what a type change reset besides
+     * the type (issue #700) - the output schema is untouched.
+     */
+    private static String buildModifiedResult(String normFqn, List<String> applied, boolean persisted, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        MdNameNormalizer.Report normReport, List<String> cascadedPackageNames,
+        LocalizedWriteReport localizedReport, TypeChangeDefaults.Reset typeReset)
+    {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
@@ -3224,13 +3284,35 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             localizedReport.addTo(result);
         }
         normReport.addTo(result);
+        return result.put(McpKeys.MESSAGE,
+            modifiedMessage(normFqn, applied, cascadedPackageNames, typeReset)).toJson();
+    }
+
+    /**
+     * The confirmation MESSAGE of a completed modify: the applied properties, the namespace cascade when
+     * there is one, and what a type change reset besides the type (issue #700). Package-visible for
+     * tests.
+     */
+    static String modifiedMessage(String normFqn, List<String> applied, List<String> cascadedPackageNames,
+        TypeChangeDefaults.Reset typeReset)
+    {
         String message = MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         if (!cascadedPackageNames.isEmpty())
         {
             message += "; namespace propagated to " + cascadedPackageNames.size() //$NON-NLS-1$
                 + " referencing package(s): " + String.join(", ", cascadedPackageNames); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        return result.put(McpKeys.MESSAGE, message).toJson();
+        if (typeReset == TypeChangeDefaults.Reset.OWNER)
+        {
+            message += "; the type change also reset the properties that depend on the type, as EDT's " //$NON-NLS-1$
+                + "designer does"; //$NON-NLS-1$
+        }
+        else if (typeReset == TypeChangeDefaults.Reset.REFERRERS)
+        {
+            message += "; the type change also reset the fill value of every editable object typed " //$NON-NLS-1$
+                + "with it, as EDT's designer does"; //$NON-NLS-1$
+        }
+        return message;
     }
 
     /**
@@ -7355,8 +7437,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return localizedLanguage;
         }
 
+        /**
+         * Writes this change to {@code target} inside {@code tx}. A type write is EDT's type change: on an
+         * owner EDT resets type-dependent properties for, and when the type really changes, those
+         * properties are reset as the designer resets them (issue #700, {@link TypeChangeDefaults}).
+         *
+         * @return what a type write reset besides the type; {@link TypeChangeDefaults.Reset#NONE} for
+         *         every other change
+         */
         @SuppressWarnings("unchecked")
-        void applyTo(EObject target, IBmTransaction tx)
+        TypeChangeDefaults.Reset applyTo(EObject target, IBmTransaction tx)
         {
             switch (kind)
             {
@@ -7369,13 +7459,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                             + "' is not a map"); //$NON-NLS-1$
                     }
                     ((EMap<String, String>)map).put(localizedLanguage, localizedValue);
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case REFERENCE:
                 {
                     // BM normalizes the target to its in-tx counterpart by bmId on set.
                     target.eSet(feature, requireInTx(tx, referenceBmIds.get(0)));
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case MANY_REFERENCE:
                 {
@@ -7387,7 +7477,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     {
                         list.add(requireInTx(tx, id));
                     }
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case MANY_ENUM:
                 {
@@ -7396,7 +7486,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     EList<Object> list = (EList<Object>)target.eGet(feature);
                     list.clear();
                     list.addAll((List<Object>)scalarValue);
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case MCORE_VALUE_LIST:
                 {
@@ -7420,7 +7510,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                             list.add(string);
                         }
                     }
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case STYLE_VALUE:
                 {
@@ -7432,7 +7522,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         target.eSet(styleBinding.typeFeature, styleBinding.type);
                     }
                     target.eSet(feature, scalarValue);
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case CONTAINED:
                 {
@@ -7449,7 +7539,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     {
                         target.eSet(feature, value);
                     }
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case ADJUSTABLE_BOOLEAN:
                 {
@@ -7478,7 +7568,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         }
                         AdjustableBooleanSupport.applyRoleEdits((AdjustableBoolean)flag, edit.rolesIn(tx));
                     }
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case USE_ALWAYS:
                 {
@@ -7488,12 +7578,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     }
                     UseAlwaysSupport.apply(formOf(target), (FormAttribute)target,
                         (List<UseAlwaysSupport.Plan>)scalarValue);
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case SCALAR:
                 default:
+                    if (typeChange && scalarValue instanceof TypeDescription)
+                    {
+                        return TypeChangeDefaults.setType(target, feature, (TypeDescription)scalarValue, tx);
+                    }
                     target.eSet(feature, scalarValue);
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
             }
         }
 

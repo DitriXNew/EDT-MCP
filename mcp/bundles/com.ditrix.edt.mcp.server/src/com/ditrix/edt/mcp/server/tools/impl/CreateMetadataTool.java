@@ -19,6 +19,7 @@ import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
@@ -30,6 +31,7 @@ import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
@@ -42,6 +44,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.ScriptVariant;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
+import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.v8.dt.xdto.model.ObjectType;
 import com._1c.g5.v8.dt.xdto.model.Package;
@@ -75,6 +78,7 @@ import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 import com.ditrix.edt.mcp.server.utils.WrittenObjectMarkers;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
@@ -1636,10 +1640,6 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final EStructuralFeature feature = target.feature;
         final EClass elementType = target.elementType;
         final String name = target.childName;
-        // Template / Recalculation / Form need the model-object factory (not a bare EcoreUtil.create)
-        // so the type's default content is wired (e.g. a Recalculation's produced types). They are
-        // still contained members, serialized inline in the owner's .mdo. See isFactoryInitializedChild.
-        final boolean factoryInitialized = isFactoryInitializedChild(elementType);
         // The top object that owns the member's .mdo file (members live inside the top object's file).
         final String topFqn = topFqn(normFqn);
         final IModelObjectFactory factory = bm.factory;
@@ -1654,7 +1654,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 MemberChildSpec spec =
                     new MemberChildSpec(factory, elementType, owner, version, name, props,
                         synonymLanguage, feature);
-                MdObject child = createMemberChild(spec, factoryInitialized);
+                MdObject child = createMemberChild(spec);
                 return child.eClass();
             });
         }
@@ -1701,7 +1701,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      * Immutable inputs for building one member child inside the write transaction, grouping the
      * arguments so the child-creation helpers stay within the parameter limit.
      */
-    private static final class MemberChildSpec
+    static final class MemberChildSpec
     {
         final IModelObjectFactory factory;
         final EClass elementType;
@@ -1711,10 +1711,26 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final Props props;
         final String synonymLanguage;
         final EStructuralFeature feature;
+        /** The platform type provider a member left without its mandatory type is defaulted with. */
+        final IEObjectProvider typeProvider;
 
+        /**
+         * The spec the write transaction builds: the type provider is the platform's one for the
+         * project's version, looked up only for a member with a value type
+         * ({@link CreateMetadataTool#typeProviderFor}).
+         */
         MemberChildSpec(IModelObjectFactory factory, EClass elementType, EObject owner, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             Version version, String name, Props props, String synonymLanguage,
             EStructuralFeature feature)
+        {
+            this(factory, elementType, owner, version, name, props, synonymLanguage, feature,
+                typeProviderFor(elementType, version));
+        }
+
+        /** A spec with an explicit type provider (the headless tests pass a mocked one). */
+        MemberChildSpec(IModelObjectFactory factory, EClass elementType, EObject owner, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+            Version version, String name, Props props, String synonymLanguage,
+            EStructuralFeature feature, IEObjectProvider typeProvider)
         {
             this.factory = factory;
             this.elementType = elementType;
@@ -1724,25 +1740,32 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             this.props = props;
             this.synonymLanguage = synonymLanguage;
             this.feature = feature;
+            this.typeProvider = typeProvider;
         }
     }
 
     /**
      * Creates and attaches one member child to its (tx-fetched) owner, dispatching to the
-     * factory-initialized or the plain construction path. Performs the irreversible BM mutation; runs
-     * inside the write transaction at the same point the inline code did.
+     * factory-initialized or the plain construction path ({@link #isFactoryInitializedChild}).
+     * Performs the irreversible BM mutation; runs inside the write transaction at the same point the
+     * inline code did.
      *
      * @return the created child
      */
-    private static MdObject createMemberChild(MemberChildSpec spec, boolean factoryInitialized)
+    static MdObject createMemberChild(MemberChildSpec spec)
     {
-        return factoryInitialized ? createFactoryInitializedChild(spec) : createPlainChild(spec);
+        return isFactoryInitializedChild(spec.elementType) ? createFactoryInitializedChild(spec)
+            : createPlainChild(spec);
     }
 
     /**
-     * Factory-initialized member path (Form / Template / Recalculation): the parent-aware factory
-     * wires the type's default content; a bare create is the fallback when the factory declines.
-     * Performs the BM mutation inside the write transaction.
+     * Factory-initialized member path (Form / Template / Recalculation, and every member with a value
+     * type): the parent-aware factory hands the member to its OWNER's type initializer, which wires
+     * the designer defaults - a Recalculation's produced types, an attribute's or a dimension's type
+     * and input flags. A bare create is the fallback when the factory declines, and a member left
+     * without its mandatory type gets the per-kind default ({@link #ensureMandatoryType}). Explicit
+     * synonym / comment are applied after the factory, so they win. Performs the BM mutation inside
+     * the write transaction.
      *
      * @return the created and attached child
      */
@@ -1763,6 +1786,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             ((BasicTemplate)child).setTemplateType(TemplateType.SPREADSHEET_DOCUMENT);
         }
+        ensureMandatoryType(child, spec.typeProvider);
         applyScalarProps(child, spec.props, spec.synonymLanguage);
         addToFeature(spec.owner, spec.feature, child);
         spec.factory.fillDefaultReferences(child);
@@ -1770,8 +1794,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Plain member path (Attribute, Command, ...): a bare {@code EcoreUtil.create}, named, given a
-     * UUID and attached. Performs the BM mutation inside the write transaction.
+     * Plain member path (EnumValue, Command, TabularSection, ...: the members with no value type): a
+     * bare {@code EcoreUtil.create}, named, given a UUID and attached. Performs the BM mutation inside
+     * the write transaction.
      *
      * @return the created and attached child
      */
@@ -2958,21 +2983,148 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * A child whose valid default content must be wired by the model-object factory (Form, Template,
-     * Recalculation) rather than by a bare {@code EcoreUtil.create}: a Recalculation needs its
-     * produced types, a Form its form type, a Template its template type. These are CONTAINED
-     * objects - the platform serializes them inline in the owner's {@code .mdo}, like other members
-     * (empirically: a Recalculation lands as {@code <recalculations><producedTypes/><name/></...>}
-     * inside the register file) - but creating them with {@code EcoreUtil.create} would leave them
-     * ill-formed. Plain members (Attribute, Command, ...) are everything else. The classification
-     * keys off the three platform base types, so it is robust to the concrete owner-specific
-     * element subtypes.
+     * A child whose valid default content must be wired by the model-object factory rather than by a
+     * bare {@code EcoreUtil.create}: a Recalculation needs its produced types, a Form its form type, a
+     * Template its template type, and every member with a value type ({@link #carriesMandatoryType})
+     * its type. These are CONTAINED objects - the platform serializes them inline in the owner's
+     * {@code .mdo}, like other members (empirically: a Recalculation lands as
+     * {@code <recalculations><producedTypes/><name/></...>} inside the register file) - but creating
+     * them with {@code EcoreUtil.create} would leave them ill-formed: a register dimension without a
+     * type breaks EDT's derived data for the whole register (issue #700). Plain members (EnumValue,
+     * Command, TabularSection, ...) are everything else. The classification keys off the platform
+     * base types and the metamodel, so it is robust to the concrete owner-specific element subtypes.
      */
     private static boolean isFactoryInitializedChild(EClass elementType)
     {
         return MdClassPackage.Literals.BASIC_FORM.isSuperTypeOf(elementType)
             || MdClassPackage.Literals.BASIC_TEMPLATE.isSuperTypeOf(elementType)
-            || MdClassPackage.Literals.RECALCULATION.isSuperTypeOf(elementType);
+            || MdClassPackage.Literals.RECALCULATION.isSuperTypeOf(elementType)
+            || carriesMandatoryType(elementType);
+    }
+
+    /** The name of a member's value-type feature in the metamodel ({@code contains TypeDescription[1] type}). */
+    private static final String TYPE_FEATURE = "type"; //$NON-NLS-1$
+
+    /**
+     * The member's MANDATORY value-type feature: a required, contained {@code TypeDescription} named
+     * {@code type}, or {@code null} when the class has none. Read from the metamodel rather than
+     * listed: every {@code BasicFeature} has it (attributes, dimensions, resources, tabular-section
+     * and addressing attributes, accounting flags), and so does {@code SequenceDimension}, which is
+     * NOT a {@code BasicFeature} ({@code MdClass.xcore}). A command's parameter type is a different,
+     * optional feature, so a command does not qualify.
+     *
+     * @param eClass the member's class
+     * @return the type feature, or {@code null}
+     */
+    static EReference mandatoryTypeFeature(EClass eClass)
+    {
+        EStructuralFeature feature = eClass.getEStructuralFeature(TYPE_FEATURE);
+        if (feature instanceof EReference reference && reference.isContainment() && reference.isRequired()
+            && McorePackage.Literals.TYPE_DESCRIPTION.isSuperTypeOf(reference.getEReferenceType()))
+        {
+            return reference;
+        }
+        return null;
+    }
+
+    /**
+     * Whether a member of {@code elementType} must carry a value type ({@link #mandatoryTypeFeature}).
+     *
+     * @param elementType the member's class
+     * @return {@code true} for a member with a mandatory value type
+     */
+    static boolean carriesMandatoryType(EClass elementType)
+    {
+        return mandatoryTypeFeature(elementType) != null;
+    }
+
+    /**
+     * The platform type provider {@link #ensureMandatoryType} defaults a member's type with: the
+     * registry's {@code TypeItem} provider for the project's version - the one the owner initializers
+     * and {@link MetadataTypeBuilder#build} use - or {@code null} for a member without a value type
+     * (it needs none) or an unknown version.
+     *
+     * @param elementType the member's class
+     * @param version the project's platform version (may be {@code null})
+     * @return the type provider, or {@code null}
+     */
+    static IEObjectProvider typeProviderFor(EClass elementType, Version version)
+    {
+        return carriesMandatoryType(elementType) && version != null
+            ? IEObjectProvider.Registry.INSTANCE.get(McorePackage.Literals.TYPE_ITEM, version) : null;
+    }
+
+    /**
+     * Gives a member that must carry a value type, but has none, the designer's default type for its
+     * kind ({@link #defaultTypeSpec}). This is the fallback for a factory that declined (an
+     * initializer's {@code IllegalArgumentException} reaches us as {@code null}) or returned its bare
+     * fallback object; a type the owner's initializer did set is kept. Runs inside the write
+     * transaction, before the member is attached.
+     *
+     * @param member the new member
+     * @param typeProvider the platform type provider for the project's version (may be {@code null})
+     * @throws IllegalStateException when the default type cannot be built - the create is then rolled
+     *     back rather than writing a member without its mandatory type
+     */
+    static void ensureMandatoryType(MdObject member, IEObjectProvider typeProvider)
+    {
+        EReference typeFeature = mandatoryTypeFeature(member.eClass());
+        if (typeFeature == null || member.eGet(typeFeature) != null)
+        {
+            return;
+        }
+        MetadataTypeBuilder.Result built = MetadataTypeBuilder.buildWithProvider(
+            defaultTypeSpec(member.eClass()), typeProvider, null, null, false,
+            MetadataTypeBuilder.TypeTarget.METADATA);
+        if (built.error != null)
+        {
+            throw built.asException("Cannot set the default type of the new " + member.eClass().getName() //$NON-NLS-1$
+                + " '" + member.getName() + "': " + built.error); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        member.eSet(typeFeature, built.typeDescription);
+    }
+
+    /** The default length of a string member and the default precision of a numeric resource. */
+    private static final int DEFAULT_TYPE_SIZE = 10;
+
+    /**
+     * The designer's default value type for a new member of {@code memberClass}, as the
+     * {@code create_metadata} type spec ({@code {types:[{kind, ...}]}}). It mirrors EDT's type
+     * initializers ({@code com._1c.g5.v8.dt.md.model.*Initializer}): {@code Number(10,0)} for an
+     * accumulation, accounting or calculation register resource; {@code Boolean} for a chart of
+     * accounts' accounting flag and ext-dimension accounting flag; {@code String(10)} for every other
+     * member - attributes, dimensions, an information register's resource, tabular-section and
+     * addressing attributes, a sequence's dimension.
+     *
+     * @param memberClass the member's class
+     * @return the type spec
+     */
+    static JsonObject defaultTypeSpec(EClass memberClass)
+    {
+        JsonObject item = new JsonObject();
+        if (MdClassPackage.Literals.ACCUMULATION_REGISTER_RESOURCE.isSuperTypeOf(memberClass)
+            || MdClassPackage.Literals.ACCOUNTING_REGISTER_RESOURCE.isSuperTypeOf(memberClass)
+            || MdClassPackage.Literals.CALCULATION_REGISTER_RESOURCE.isSuperTypeOf(memberClass))
+        {
+            item.addProperty("kind", "Number"); //$NON-NLS-1$ //$NON-NLS-2$
+            item.addProperty("precision", DEFAULT_TYPE_SIZE); //$NON-NLS-1$
+            item.addProperty("scale", 0); //$NON-NLS-1$
+        }
+        else if (MdClassPackage.Literals.ACCOUNTING_FLAG.isSuperTypeOf(memberClass)
+            || MdClassPackage.Literals.EXT_DIMENSION_ACCOUNTING_FLAG.isSuperTypeOf(memberClass))
+        {
+            item.addProperty("kind", "Boolean"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        else
+        {
+            item.addProperty("kind", "String"); //$NON-NLS-1$ //$NON-NLS-2$
+            item.addProperty("length", DEFAULT_TYPE_SIZE); //$NON-NLS-1$
+        }
+        JsonArray types = new JsonArray();
+        types.add(item);
+        JsonObject spec = new JsonObject();
+        spec.add("types", types); //$NON-NLS-1$
+        return spec;
     }
 
     // ---- helpers --------------------------------------------------------------------------------
@@ -3033,7 +3185,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     }
 
     /** The supported, parsed properties. */
-    private static final class Props
+    static final class Props
     {
         String synonym;
         String language;
