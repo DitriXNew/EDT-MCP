@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.TreeMap;
+import java.util.function.Predicate;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
@@ -285,6 +286,24 @@ public final class MetadataPropertyIntrospector
      */
     public static List<PropertyInfo> introspect(EObject obj)
     {
+        return introspectOnly(obj, name -> true);
+    }
+
+    /**
+     * Returns the assignable properties of {@code obj} whose wire name {@code admit} accepts, in the
+     * model's feature order - {@link #introspect(EObject)} restricted BEFORE any current value is read.
+     *
+     * <p>The restriction is not a filter over the finished list: a property the predicate rejects is
+     * never read or rendered at all. That is the point for a configuration root (issue #741), whose
+     * object collections hold every top object of the configuration - thousands on an ERP-size one - while
+     * the view asks for a handful of scalar properties.</p>
+     *
+     * @param obj the object to introspect
+     * @param admit accepts the wire names (as {@link PropertyInfo#name} reports them) to return
+     * @return the admitted assignable property schemas (never {@code null}; empty if {@code obj} is null)
+     */
+    public static List<PropertyInfo> introspectOnly(EObject obj, Predicate<String> admit)
+    {
         List<PropertyInfo> result = new ArrayList<>();
         if (obj == null)
         {
@@ -298,6 +317,10 @@ public final class MetadataPropertyIntrospector
             }
             ValueKind kind = classify(feature);
             if (kind == null)
+            {
+                continue;
+            }
+            if (!admit.test(propertyName(feature, kind)))
             {
                 continue;
             }
