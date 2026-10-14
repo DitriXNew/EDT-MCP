@@ -7,6 +7,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 
 import org.junit.Test;
@@ -280,5 +281,62 @@ public class MetadataPathResolverTest
     public void testResolveMetadataDirUnknownReturnsNull()
     {
         assertNull(MetadataPathResolver.resolveMetadataDir("NotAType")); //$NON-NLS-1$
+    }
+
+    // ==================== resolveFormModulePath (the form's BSL module) ====================
+
+    @Test
+    public void testFormModuleEnglishCatalog()
+    {
+        // The module EDT keeps beside a form's Form.form - read by create_metadata to tell whether a
+        // new command's procedure already exists (issue #628).
+        assertEquals("src/Catalogs/Products/Forms/ItemForm/Module.bsl", //$NON-NLS-1$
+            MetadataPathResolver.resolveFormModulePath("Catalog.Products.Forms.ItemForm")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormModuleRussianTypeAndFormTokens()
+    {
+        // Справочник.Товары.Форма.ФормаЭлемента -> src/Catalogs/Товары/Forms/ФормаЭлемента/Module.bsl:
+        // the tokens are translated, the names are carried verbatim.
+        assertEquals("src/Catalogs/\u0422\u043E\u0432\u0430\u0440\u044B/Forms/\u0424\u043E\u0440\u043C\u0430\u042D\u043B\u0435\u043C\u0435\u043D\u0442\u0430/Module.bsl",
+            MetadataPathResolver.resolveFormModulePath("\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.\u0422\u043E\u0432\u0430\u0440\u044B.\u0424\u043E\u0440\u043C\u0430.\u0424\u043E\u0440\u043C\u0430\u042D\u043B\u0435\u043C\u0435\u043D\u0442\u0430"));
+    }
+
+    @Test
+    public void testFormModuleCommonFormInBothLanguages()
+    {
+        assertEquals("src/CommonForms/MyForm/Module.bsl", //$NON-NLS-1$
+            MetadataPathResolver.resolveFormModulePath("CommonForm.MyForm")); //$NON-NLS-1$
+        // ОбщаяФорма.MyForm
+        assertEquals("src/CommonForms/MyForm/Module.bsl", //$NON-NLS-1$
+            MetadataPathResolver.resolveFormModulePath("\u041E\u0431\u0449\u0430\u044F\u0424\u043E\u0440\u043C\u0430.MyForm"));
+    }
+
+    @Test
+    public void testFormModuleExternalDataProcessor()
+    {
+        // A form of an external data processor lives in its own project, under the same layout.
+        assertEquals("src/ExternalDataProcessors/ExtProc/Forms/MainForm/Module.bsl", //$NON-NLS-1$
+            MetadataPathResolver.resolveFormModulePath("ExternalDataProcessor.ExtProc.forms.MainForm")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFormModuleSitsInTheFormFolder()
+    {
+        String formPath = "Document.SalesOrder.Forms.DocumentForm"; //$NON-NLS-1$
+        assertEquals(MetadataPathResolver.resolveFormFolderPath(formPath) + "/Module.bsl", //$NON-NLS-1$
+            MetadataPathResolver.resolveFormModulePath(formPath));
+    }
+
+    @Test
+    public void testFormModuleUnresolvableReturnsNull()
+    {
+        assertNull(MetadataPathResolver.resolveFormModulePath(null));
+        assertNull(MetadataPathResolver.resolveFormModulePath("")); //$NON-NLS-1$
+        assertNull(MetadataPathResolver.resolveFormModulePath("Bogus.X.Forms.Y")); //$NON-NLS-1$
+        assertNull(MetadataPathResolver.resolveFormModulePath("Catalog.Products")); //$NON-NLS-1$
+        // The control: a resolvable path in the same test does resolve.
+        assertNotNull(MetadataPathResolver.resolveFormModulePath("Catalog.Products.Forms.ItemForm")); //$NON-NLS-1$
     }
 }

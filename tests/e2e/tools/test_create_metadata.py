@@ -31,6 +31,8 @@ Fixture inventory (TestConfiguration, English Names):
   need one create it first.)
 """
 
+import re
+import time
 import xml.etree.ElementTree as ET
 
 from harness import (
@@ -54,6 +56,7 @@ from harness import (
     poll_disk_contains,
     read_disk,
     restore_extension_fixture,
+    split_markdown_row,
     tree_snapshot,
     wait_for_project_ready,
     e2e_test,
@@ -1983,6 +1986,299 @@ def test_create_form_command_action_missing_command_is_error():
     e = assert_error(r, "Action handler on a missing command")
     assert_error_quality(e, names=["NoSuchCmd_zz"], suggests=["Form command not found"],
                          ctx="an Action handler on a missing command is a clean error")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# A created form command's unbound action (issue #628)
+#
+# Creating '...Form.F.Command.C' never binds an action - only '...Command.C.Handler.Action' does -
+# so the create response says the command has no action yet and quotes the address that binds it.
+# It looks into the form's module first. A same-named procedure is named the way the module writes
+# it, together with the owner to revalidate: binding a procedure that already exists changes only
+# the form, and EDT does not re-check the module then. A same-named FUNCTION is answered with a
+# binding to a new name, since a module cannot hold two methods of one name. Every route binds
+# before a procedure is written, and every other member kind keeps the plain "Created <fqn>".
+# The fixture ItemForm has no Module.bsl; the tests that need one write it with
+# write_module_source, and the per-test fixture reset (git `clean -fd` on the fixture root - the
+# file is untracked and not ignored) removes it again.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# The module tools address a module RELATIVE TO src/, while read_disk / poll_disk_* address it
+# relative to the PROJECT - the two spellings are named apart, as in test_rename_metadata_object.
+_ITEM_FORM_MODULE_SRC_REL = "Catalogs/Catalog/Forms/ItemForm/Module.bsl"
+_ITEM_FORM_MODULE = "src/" + _ITEM_FORM_MODULE_SRC_REL
+
+# A procedure and a function named like the commands the tests below create - one in another case,
+# as 1C identifiers compare ignoring case. Russian keywords on purpose: BSL accepts both languages,
+# and the scan that finds them has to as well.
+_ITEM_FORM_MODULE_SOURCE = (
+    "&НаКлиенте\n"
+    "Процедура procact(Команда)\n"
+    "КонецПроцедуры\n"
+    "\n"
+    "&НаКлиенте\n"
+    "Функция FnAct()\n"
+    "\tВозврат 1;\n"
+    "КонецФункции\n"
+)
+
+_QUOTED_ACTION_ADDRESS = re.compile(r"'([^']+\.Handler\.Action)'")
+_QUOTED_REVALIDATION = re.compile(r"Then run revalidate_objects on '([^']+)'")
+
+
+def _quoted_action_address(structured, ctx):
+    """The one '...Handler.Action' address the create message quotes - which must be the created
+    command's own address plus '.Handler.Action', i.e. something the caller can pass straight back."""
+    message = structured.get("message") or ""
+    found = _QUOTED_ACTION_ADDRESS.findall(message)
+    if len(found) != 1:
+        _fail("%s: the message must quote exactly one '...Handler.Action' address, got %r in %r"
+              % (ctx, found, message))
+    if found[0] != "%s.Handler.Action" % structured.get("fqn"):
+        _fail("%s: the quoted address %r is not the created command's own address %r plus "
+              "'.Handler.Action'" % (ctx, found[0], structured.get("fqn")))
+    return found[0]
+
+
+def _item_form_row(section, name):
+    """The cells of `name`'s row in ItemForm's `## <section>` table (get_metadata_details), with the
+    text that was read: (None, text) when the table has no such row."""
+    r = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_ok(r, "read the form structure back")
+    in_section = False
+    for line in r.text.splitlines():
+        if line.startswith("## "):
+            in_section = line.strip() == "## " + section
+            continue
+        cells = split_markdown_row(line) if in_section else []
+        if cells and cells[0] == name:
+            return cells, r.text
+    return None, r.text
+
+
+def _item_form_command_action(command):
+    """The 'Action handler' cell of `command` in ItemForm's Commands table (get_metadata_details)."""
+    cells, text = _item_form_row("Commands", command)
+    if cells is None or len(cells) != 3:
+        _fail("command %s is not in ItemForm's Commands table:\n%s" % (command, text[:1500]))
+    return cells[2]
+
+
+def _command_action_on_disk(form_xml, command):
+    """What ItemForm's Form.form binds `command`'s action to: the handler's procedure name, '' when the
+    command's <formCommands> element has no <action>, or None when the command is not there (yet) -
+    or the read landed mid-rewrite and does not parse."""
+    try:
+        root = ET.fromstring(form_xml)
+    except ET.ParseError:
+        return None
+    for node in root.iter():
+        if _xml_local(node.tag) != "formCommands" or _direct_child_text(node, "name") != command:
+            continue
+        for action in node:
+            if _xml_local(action.tag) != "action":
+                continue
+            for handler in action:
+                if _xml_local(handler.tag) == "handler":
+                    return _direct_child_text(handler, "name") or "(a handler without a name)"
+            return "(an action without a handler)"
+        return ""
+    return None
+
+
+def _poll_command_action_on_disk(command, expected, ctx, timeout=60, stable_for=2.0):
+    """Poll ItemForm's Form.form until `command`'s action on disk is `expected` ('' = the command is
+    there with no <action>) and has HELD for `stable_for` seconds: an action bound by something else a
+    moment after the call resets the dwell and fails the poll, naming what it saw."""
+    deadline = time.time() + timeout
+    seen = None
+    since = None
+    while time.time() < deadline:
+        try:
+            seen = _command_action_on_disk(read_disk(_KIND_PROBE_FORM), command)
+        except (OSError, ValueError):
+            # Not there yet, or caught mid-rewrite: read_disk decodes strictly as UTF-8, so a read
+            # landing inside a multi-byte sequence raises UnicodeDecodeError (a ValueError). Either
+            # way it is no verdict - read again.
+            seen = None
+        if seen == expected:
+            if since is None:
+                since = time.time()
+            if time.time() - since >= stable_for:
+                return
+        else:
+            since = None
+        time.sleep(0.2)
+    _fail("%s: expected %s's action in %s to be %r for %.1fs, last saw %r"
+          % (ctx, command, _KIND_PROBE_FORM, expected, stable_for, seen))
+
+
+def _write_item_form_module():
+    # The fixture form has no module, and the per-test reset must take away the one an earlier test
+    # wrote: run in file order, the function test below proves the procedure test's module is gone.
+    try:
+        read_disk(_ITEM_FORM_MODULE)
+    except FileNotFoundError:
+        pass
+    else:
+        _fail("ItemForm already has a Module.bsl before this test wrote one - the fixture reset "
+              "did not remove a module an earlier test wrote")
+    w = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": _ITEM_FORM_MODULE_SRC_REL,
+        "mode": "replace", "overwrite": True, "source": _ITEM_FORM_MODULE_SOURCE,
+    })
+    assert_ok(w, "write ItemForm's module with a procedure and a function")
+    poll_disk_contains(_ITEM_FORM_MODULE, "FnAct", timeout=30,
+                       ctx="the written module must be on disk before a command is created")
+    wait_for_project_ready()
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_created_form_command_says_its_action_is_unbound_and_quotes_the_binding_address():
+    cmd = "NoActCmd"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command." + cmd})
+    assert_ok(r, "create a form command on a form that has no module")
+    # The claim is true - first on disk: the command's <formCommands> element is there with no
+    # <action>, and stays so.
+    _poll_command_action_on_disk(cmd, "", "the new command is on disk without an action")
+    message = r.structured.get("message") or ""
+    assert_contains(message, "The command has no action yet, so a button bound to it does nothing",
+                    "the create must say the new command is a dead button")
+    assert_contains(message, "(its 'procedure' defaults to the command name '%s')" % cmd,
+                    "the hint must say which procedure the binding will name")
+    assert_contains(message, "then add that procedure with write_module_source.",
+                    "the hint must close its sentence before any marker report")
+    assert_not_contains(message, "unless the form module already declares it",
+                        "a form with no module leaves the look-up nothing it could not read")
+    if "markersIncomplete" in r.structured:
+        assert_marker_contract(r.structured, "the marker sentence follows the hint")
+    address = _quoted_action_address(r.structured, "the generic hint")
+    # ... and in the model.
+    assert _item_form_command_action(cmd) == "", \
+        "a freshly created command must have no action handler"
+    wait_for_project_ready()
+    # And the route is not a dead end: the quoted address binds the action, its procedure
+    # defaulting to the command name.
+    r2 = call("create_metadata", {"projectName": PROJECT, "fqn": address})
+    assert_ok(r2, "the address the hint quotes must bind the action")
+    assert "CommandHandler" in (r2.structured.get("kind") or ""), \
+        "kind must be CommandHandler: %r" % (r2.structured,)
+    _poll_command_action_on_disk(cmd, cmd, "the bound action names the command's procedure on disk",
+                                 stable_for=0.5)
+    assert _item_form_command_action(cmd) == cmd, \
+        "the bound action must name the command's own procedure"
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_created_form_command_names_the_same_named_procedure_the_module_already_has():
+    _write_item_form_module()
+    # Russian FORM and KIND tokens: the address the message quotes back keeps them, while its leading
+    # TYPE token comes back canonical English, as in structured.fqn - and it has to work as an
+    # address all the same.
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Справочник.Catalog.Форма.ItemForm.Команда.ProcAct"})
+    assert_ok(r, "create a command named like an existing procedure, through Russian tokens")
+    # Nothing bound the action by itself, even next to a same-named procedure: on disk the command
+    # has no <action>, and keeps none.
+    _poll_command_action_on_disk("ProcAct", "",
+                                 "a command created next to a same-named procedure has no action on disk")
+    message = r.structured.get("message") or ""
+    assert_contains(message, "The command has no action yet, so a button bound to it does nothing",
+                    "a same-named procedure binds nothing by itself")
+    assert_contains(message, "The form module already has procedure 'procact'",
+                    "the procedure is named the way the module writes it")
+    assert_contains(message, "with procedure 'procact' binds it in one call.",
+                    "the hint must name the procedure to pass")
+    assert_contains(message, "EDT does not re-check the form module on that bind",
+                    "the hint must say why binding an existing procedure needs a revalidation")
+    assert_contains(message, "warnings on 'procact' still treat it as unbound.",
+                    "the hint must close its sentence before any marker report")
+    assert_not_contains(message, "write_module_source",
+                        "the procedure exists, so writing it again must not be advised")
+    address = _quoted_action_address(r.structured, "the procedure hint")
+    if address != "Catalog.Catalog.Форма.ItemForm.Команда.ProcAct.Handler.Action":
+        _fail("the quoted address must keep the caller's FORM / KIND tokens behind the canonical TYPE "
+              "token: %r" % address)
+    owners = _QUOTED_REVALIDATION.findall(message)
+    if owners != ["Catalog.Catalog"]:
+        _fail("the hint must name the form's owner to revalidate, as the object's own FQN: %r in %r"
+              % (owners, message))
+    # ... and in the model.
+    assert _item_form_command_action("ProcAct") == "", \
+        "a command created next to a same-named procedure must still have no action handler"
+    wait_for_project_ready()
+    # Following the hint binds the existing procedure in one call.
+    r2 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": address,
+        "properties": [{"name": "procedure", "value": "procact"}]})
+    assert_ok(r2, "the hinted call must bind the existing procedure")
+    _poll_command_action_on_disk("ProcAct", "procact",
+                                 "the bound procedure lands in the command's action on disk",
+                                 stable_for=0.5)
+    assert _item_form_command_action("ProcAct") == "procact", \
+        "the commands table must show the existing procedure as the action handler"
+    # And the owner it names is an address revalidate_objects takes.
+    wait_for_project_ready()
+    rv = call("revalidate_objects", {"projectName": PROJECT, "objects": owners})
+    assert_ok(rv, "revalidate the owner the hint names")
+    assert_contains(rv.text, "objectsFound: 1", "the owner the hint names must resolve")
+    assert_contains(rv.text, "## Validated (1)", "the owner the hint names must be revalidated")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_created_form_command_named_like_a_module_function_asks_for_a_procedure_elsewhere():
+    _write_item_form_module()
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command.FnAct"})
+    assert_ok(r, "create a command named like an existing function")
+    # The command is there - on disk, with no <action>: a function of its name binds nothing.
+    _poll_command_action_on_disk("FnAct", "",
+                                 "the command named like a function is on disk without an action")
+    message = r.structured.get("message") or ""
+    assert_contains(message, "The command has no action yet, so a button bound to it does nothing",
+                    "a same-named function binds nothing either")
+    assert_contains(message, "The form module's 'FnAct' is a function",
+                    "the hint must say what holds the command's name")
+    assert_contains(message, "bind the action with create_metadata on",
+                    "the hint must bind first, as on the generic route")
+    assert_contains(message, "with a new name as 'procedure', then add a procedure of that new name "
+                    "with write_module_source.",
+                    "the binding names a new procedure, which is written after the bind")
+    assert_not_contains(message, "add that procedure",
+                        "a second method named FnAct would break the module")
+    assert_not_contains(message, "defaults to the command name",
+                        "the default binding would name the function")
+    _quoted_action_address(r.structured, "the function hint")
+    # ... and in the model.
+    assert _item_form_command_action("FnAct") == "", \
+        "a command created next to a same-named function must have no action handler"
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_created_form_attribute_named_like_a_module_procedure_keeps_the_plain_message():
+    # Only a COMMAND has an action to report on. An attribute named like a procedure of the form
+    # module is answered with the plain "Created <fqn>": no action hint, no address to bind, no
+    # owner to revalidate.
+    _write_item_form_module()
+    attr = "procact"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r, "create a form attribute named like a procedure of the form module")
+    form_xml = poll_disk_contains(_KIND_PROBE_FORM, "<name>%s</name>" % attr, timeout=60,
+                                  ctx="the new attribute must land in the form's .form on disk")
+    if _form_attribute_block(form_xml, attr) is None:
+        _fail("the new member must be a form <attributes> element in Form.form")
+    message = r.structured.get("message") or ""
+    # The written object's marker report, when there is one, follows as a sentence of its own.
+    if message.split(". EDT ", 1)[0] != "Created %s" % r.structured.get("fqn"):
+        _fail("a created form attribute must be answered with the plain 'Created <fqn>': %r" % message)
+    for hint in ("has no action", "Handler.Action", "procedure 'procact'", "revalidate_objects"):
+        assert_not_contains(message, hint, "an attribute has no action to report on")
+    cells, details = _item_form_row("Attributes", attr)
+    if cells is None:
+        _fail("the new attribute must be in ItemForm's Attributes table:\n%s" % details[:1500])
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
