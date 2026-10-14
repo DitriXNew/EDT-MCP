@@ -2414,17 +2414,30 @@ public class WriteModuleSourceToolTest
         assertTrue(response, response.endsWith("\n---\nFile written successfully")); //$NON-NLS-1$
     }
 
+    /**
+     * A module that already was Extended - EDT's own listener may flip the model first - whose .mdo export is not
+     * confirmed is no success either: the write answers the error that says the text is written and that the state
+     * is Extended in EDT's model (#743 review: one evidence, one verdict).
+     */
     @Test
-    public void testAnAlreadyExtendedModuleWhoseExportIsUnconfirmedCarriesTheWarning()
+    public void testAnAlreadyExtendedModuleWhoseExportIsUnconfirmedIsAnErrorAfterMutation()
     {
         AdoptedModuleState.Result pending =
             AdoptedModuleStateTestFixtures.alreadyExtended(BuildUtils.DiskExportState.PENDING);
-        String response = WriteModuleSourceTool.buildSuccessResponse("tests", //$NON-NLS-1$
-            "CommonModules/DrySignal/Module.bsl", "append", false, twoLines(), true, 1, null, pending); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue(response, response.contains("\nmoduleExtensionState: alreadyExtended\n")); //$NON-NLS-1$
-        assertNotNull(pending.bodySentence());
-        assertTrue(response, response.endsWith("File written successfully\n\n" + pending.bodySentence())); //$NON-NLS-1$
-        assertTrue(response, response.contains("not confirmed")); //$NON-NLS-1$
+        assertTrue(pending.failed());
+        boolean[] built = new boolean[1];
+        JsonObject error = JsonParser.parseString(WriteModuleSourceTool.finishWrite(() -> pending, state -> {
+            built[0] = true;
+            return "success"; //$NON-NLS-1$
+        })).getAsJsonObject();
+        assertFalse("no success response may be built for an unconfirmed export", built[0]); //$NON-NLS-1$
+        assertFalse(error.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(error.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        String message = error.get("error").getAsString(); //$NON-NLS-1$
+        assertEquals(pending.failureMessage(), message);
+        assertTrue(message, message.contains("is already Extended in EDT's model")); //$NON-NLS-1$
+        assertTrue(message, message.contains("was not confirmed within 60s")); //$NON-NLS-1$
+        assertTrue(message, message.contains("do not re-send the original edit")); //$NON-NLS-1$
     }
 
     /**
@@ -2460,6 +2473,100 @@ public class WriteModuleSourceToolTest
             error.get("error").getAsString().contains("not confirmed")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    /**
+     * A switch whose .mdo, read back to the end of the budget, never carried the line is no success - even when
+     * EDT's export queue drained, which it does also when it fails to write the file: the write answers the error
+     * that says the text is written, and nothing says the .mdo was exported (#743 review).
+     */
+    @Test
+    public void testASwitchWhoseMdoNeverCarriesTheLineIsAnErrorAfterMutation()
+    {
+        AdoptedModuleState.Result notOnDisk = AdoptedModuleStateTestFixtures.switchedButNotOnDisk();
+        assertTrue(notOnDisk.failed());
+        boolean[] built = new boolean[1];
+        JsonObject error = JsonParser.parseString(WriteModuleSourceTool.finishWrite(() -> notOnDisk, state -> {
+            built[0] = true;
+            return "success"; //$NON-NLS-1$
+        })).getAsJsonObject();
+        assertFalse("no success response may be built for a line that never reached the .mdo", built[0]); //$NON-NLS-1$
+        assertTrue(error.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+        String message = error.get("error").getAsString(); //$NON-NLS-1$
+        assertTrue(message, message.contains("did not carry <module>Extended</module> within 60s")); //$NON-NLS-1$
+        assertFalse(message, message.contains("was exported")); //$NON-NLS-1$
+    }
+
+    /**
+     * The race shape (#743 review: one evidence, one verdict). EDT's own listener flips the model in reaction to the
+     * same .bsl write, so whether the step switched the state or found it Extended is not the caller's to know: the
+     * same .mdo evidence answers the same. Both are an error after mutation when the .mdo, read back, never carried
+     * the line, and both a success when it did - so a caller that checks only the error flag never takes a failed
+     * export for a done one.
+     */
+    @Test
+    public void testTheSameMdoEvidenceAnswersTheSameWhetherTheStepSwitchedOrFoundExtended()
+    {
+        for (AdoptedModuleState.Result notOnDisk : Arrays.asList(AdoptedModuleStateTestFixtures.switchedButNotOnDisk(),
+            AdoptedModuleStateTestFixtures.alreadyExtendedButNotOnDisk()))
+        {
+            String json = WriteModuleSourceTool.finishWrite(() -> notOnDisk, state -> "success"); //$NON-NLS-1$
+            assertNotEquals("a .mdo without the line is no success, whichever way the race went", "success", json); //$NON-NLS-1$ //$NON-NLS-2$
+            JsonObject error = JsonParser.parseString(json).getAsJsonObject();
+            assertFalse(error.get("success").getAsBoolean()); //$NON-NLS-1$
+            assertTrue(error.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+            String message = error.get("error").getAsString(); //$NON-NLS-1$
+            assertTrue(message, message.contains(" in EDT's model, but the export of its .mdo was requested")); //$NON-NLS-1$
+            assertTrue(message, message.contains("src/CommonModules/DrySignal/DrySignal.mdo, read back, did not carry " //$NON-NLS-1$
+                + "<module>Extended</module> within 60s")); //$NON-NLS-1$
+            assertFalse(message, message.contains("was exported")); //$NON-NLS-1$
+        }
+        for (AdoptedModuleState.Result onDisk : Arrays.asList(AdoptedModuleStateTestFixtures.switched(),
+            AdoptedModuleStateTestFixtures.alreadyExtended(BuildUtils.DiskExportState.DRAINED)))
+        {
+            assertEquals("success", WriteModuleSourceTool.finishWrite(() -> onDisk, state -> "success")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /**
+     * A refused export request is decided by the .mdo, read once (#743 review: the file is the evidence): one that
+     * already carries the line answers the very success response a confirmed export answers - after a switch and for a
+     * module found already Extended alike - and one that does not answers the error that says the text is written.
+     */
+    @Test
+    public void testARefusedExportIsDecidedByTheMdoReadOnce()
+    {
+        AdoptedModuleState.Result[][] shapes = {
+            { AdoptedModuleStateTestFixtures.switchedWithARefusedExport(true),
+                AdoptedModuleStateTestFixtures.switched(),
+                AdoptedModuleStateTestFixtures.switchedWithARefusedExport(false) },
+            { AdoptedModuleStateTestFixtures.alreadyExtendedWithARefusedExport(true),
+                AdoptedModuleStateTestFixtures.alreadyExtended(BuildUtils.DiskExportState.DRAINED),
+                AdoptedModuleStateTestFixtures.alreadyExtendedWithARefusedExport(false) } };
+        for (AdoptedModuleState.Result[] shape : shapes)
+        {
+            AdoptedModuleState.Result onDisk = shape[0];
+            AdoptedModuleState.Result confirmed = shape[1];
+            AdoptedModuleState.Result missing = shape[2];
+            assertFalse("a refused export whose .mdo already carries the line is a success: " //$NON-NLS-1$
+                + onDisk.failureMessage(), onDisk.failed());
+            String response = WriteModuleSourceTool.finishWrite(() -> onDisk,
+                state -> WriteModuleSourceTool.buildSuccessResponse("tests", "CommonModules/DrySignal/Module.bsl", //$NON-NLS-1$ //$NON-NLS-2$
+                    "append", false, twoLines(), true, 1, null, state)); //$NON-NLS-1$
+            assertEquals("the same success response as a confirmed export", //$NON-NLS-1$
+                WriteModuleSourceTool.buildSuccessResponse("tests", "CommonModules/DrySignal/Module.bsl", "append", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    false, twoLines(), true, 1, null, confirmed),
+                response);
+
+            JsonObject error = JsonParser.parseString(
+                WriteModuleSourceTool.finishWrite(() -> missing, state -> "success")).getAsJsonObject(); //$NON-NLS-1$
+            assertFalse(error.get("success").getAsBoolean()); //$NON-NLS-1$
+            assertTrue(error.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+            String message = error.get("error").getAsString(); //$NON-NLS-1$
+            assertEquals(missing.failureMessage(), message);
+            assertTrue(message, message.contains("could not be scheduled, so src/CommonModules/DrySignal/DrySignal.mdo " //$NON-NLS-1$
+                + "may still lack <module>Extended</module>")); //$NON-NLS-1$
+        }
+    }
+
     @Test
     public void testASucceededStepReturnsTheSuccessResponse()
     {
@@ -2467,9 +2574,9 @@ public class WriteModuleSourceToolTest
             AdoptedModuleState.Result::notApplicable, state -> "success")); //$NON-NLS-1$
         assertEquals("success", WriteModuleSourceTool.finishWrite( //$NON-NLS-1$
             AdoptedModuleStateTestFixtures::switched, state -> "success")); //$NON-NLS-1$
-        // An unconfirmed export of a module that was ALREADY Extended is a warning, not an error.
+        // A module that already was Extended, its line read back from the .mdo, is a success as well.
         assertEquals("success", WriteModuleSourceTool.finishWrite( //$NON-NLS-1$
-            () -> AdoptedModuleStateTestFixtures.alreadyExtended(BuildUtils.DiskExportState.PENDING),
+            () -> AdoptedModuleStateTestFixtures.alreadyExtended(BuildUtils.DiskExportState.DRAINED),
             state -> "success")); //$NON-NLS-1$
         // A state left as it is and a missing extension block are successes too: the text is written.
         assertEquals("success", WriteModuleSourceTool.finishWrite( //$NON-NLS-1$
@@ -2587,6 +2694,28 @@ public class WriteModuleSourceToolTest
             + "`Extended` there")); //$NON-NLS-1$
         assertTrue(section, section.contains("but only in its model, a few seconds later, and it never saves the `.mdo`")); //$NON-NLS-1$
         assertTrue(section, section.contains("This tool records the state at once")); //$NON-NLS-1$
+        // The export is confirmed by the FILE: the queue drains also when EDT fails to write it (#743 review).
+        assertTrue(section, section.contains("exports the owner's `.mdo`, and reads that `.mdo` back until it carries " //$NON-NLS-1$
+            + "the state line, for up to 60s in all")); //$NON-NLS-1$
+        assertTrue(section, section.contains("EDT's export queue drains even when EDT fails to write the file, so only " //$NON-NLS-1$
+            + "the file confirms the export")); //$NON-NLS-1$
+        // One evidence, one verdict (#743 review): an unconfirmed export fails the write whether the step switched the
+        // state or found it Extended - which of the two is a race with EDT's listener - and the failure names every way
+        // an export goes unconfirmed, a refused request included: the .mdo, read once, still decides that one.
+        assertTrue(section, section.contains("the `.mdo` is exported again to match the model and read back the same " //$NON-NLS-1$
+            + "way. Which of the two values a write reports is a race with that listener, so an export that is not " //$NON-NLS-1$
+            + "confirmed fails the write either way (below).")); //$NON-NLS-1$
+        assertTrue(section, section.contains("or the state is `Extended` in EDT's model - switched or already - but its " //$NON-NLS-1$
+            + "`.mdo` export was not confirmed: the `.mdo`, read back, did not carry its line within 60s or could not be " //$NON-NLS-1$
+            + "read back, or the export could not be scheduled and the `.mdo`, read once, was not seen carrying it.")); //$NON-NLS-1$
+        assertFalse("a refused export whose .mdo already carries the line is no failure: " + section, //$NON-NLS-1$
+            section.contains("or the export could not be scheduled.")); //$NON-NLS-1$
+        assertFalse("an unconfirmed export of an already-Extended module is no success with a note: " + section, //$NON-NLS-1$
+            section.contains("The body speaks only when")); //$NON-NLS-1$
+        assertFalse("an unconfirmed export fails the write after a switch and without one: " + section, //$NON-NLS-1$
+            section.contains("or the state was switched but")); //$NON-NLS-1$
+        assertFalse("the export is not confirmed by the queue: " + section, //$NON-NLS-1$
+            section.contains("waits up to 60s for that export")); //$NON-NLS-1$
         assertTrue(section, section.contains("Each of these is a success: the module text is written")); //$NON-NLS-1$
         assertTrue(section, section.contains("the state is `Checked` or `Notify`; like EDT's own listener, this tool " //$NON-NLS-1$
             + "switches only `None`, so it is left exactly as it is")); //$NON-NLS-1$

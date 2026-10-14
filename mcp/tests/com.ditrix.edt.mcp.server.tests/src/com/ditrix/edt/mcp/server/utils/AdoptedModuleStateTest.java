@@ -24,6 +24,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyZeroInteractions;
 import static org.mockito.Mockito.when;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -31,7 +33,12 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IProjectDescription;
+import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.Path;
+import org.eclipse.core.runtime.Status;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
@@ -374,6 +381,145 @@ public class AdoptedModuleStateTest
         assertNull(AdoptedModuleState.moduleFeature(null, "Module")); //$NON-NLS-1$
     }
 
+    // ==================== StateLine: the module's OWN state line in the owner's .mdo ====================
+
+    private static final String MDO_ROOT_ATTRIBUTES = " xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"" //$NON-NLS-1$
+        + " xmlns:mdclass=\"http://g5.1c.ru/v8/dt/metadata/mdclass\"" //$NON-NLS-1$
+        + " xmlns:mdclassExtension=\"http://g5.1c.ru/v8/dt/metadata/mdclass/extension\"" //$NON-NLS-1$
+        + " uuid=\"94bc1aac-b04d-4431-af5f-9f59eea92471\""; //$NON-NLS-1$
+
+    /** A .mdo the way EDT writes one: the declaration, then {@code body}. */
+    private static byte[] mdo(String body)
+    {
+        return ("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" + body).getBytes(StandardCharsets.UTF_8); //$NON-NLS-1$
+    }
+
+    /** The adopted DrySignal's .mdo, its extension block holding {@code stateLines}. */
+    private static byte[] drySignalMdo(String stateLines)
+    {
+        return mdo("<mdclass:CommonModule" + MDO_ROOT_ATTRIBUTES + ">\n  <name>DrySignal</name>\n" //$NON-NLS-1$ //$NON-NLS-2$
+            + "  <objectBelonging>Adopted</objectBelonging>\n" //$NON-NLS-1$
+            + "  <extension xsi:type=\"mdclassExtension:CommonModuleExtension\">\n" //$NON-NLS-1$
+            + "    <extendedConfigurationObject>Checked</extendedConfigurationObject>\n" + stateLines //$NON-NLS-1$
+            + "  </extension>\n  <server>true</server>\n</mdclass:CommonModule>\n"); //$NON-NLS-1$
+    }
+
+    /**
+     * The adopted Catalog.X's .mdo: its own block holds {@code ownLines}; an adopted form, and two adopted
+     * commands - {@code Other} already Extended, {@code Fill} holding {@code fillLines} - carry their own blocks.
+     */
+    private static byte[] catalogMdo(String ownLines, String fillLines)
+    {
+        return mdo("<mdclass:Catalog" + MDO_ROOT_ATTRIBUTES + ">\n  <name>X</name>\n" //$NON-NLS-1$ //$NON-NLS-2$
+            + "  <objectBelonging>Adopted</objectBelonging>\n" //$NON-NLS-1$
+            + "  <extension xsi:type=\"mdclassExtension:CatalogExtension\">\n" //$NON-NLS-1$
+            + "    <extendedConfigurationObject>Checked</extendedConfigurationObject>\n" + ownLines //$NON-NLS-1$
+            + "  </extension>\n" //$NON-NLS-1$
+            + "  <forms uuid=\"59f829ae-28c7-401d-a12c-0f10b89e65a7\">\n    <name>ItemForm</name>\n" //$NON-NLS-1$
+            + "    <objectBelonging>Adopted</objectBelonging>\n" //$NON-NLS-1$
+            + "    <extension xsi:type=\"mdclassExtension:BasicFormExtension\">\n      <form>Extended</form>\n" //$NON-NLS-1$
+            + "    </extension>\n  </forms>\n" //$NON-NLS-1$
+            + "  <commands uuid=\"1b5e2bd0-8f0e-4c55-9c41-0f8c6b0c2a11\">\n    <name>Other</name>\n" //$NON-NLS-1$
+            + "    <objectBelonging>Adopted</objectBelonging>\n" //$NON-NLS-1$
+            + "    <extension xsi:type=\"mdclassExtension:BasicCommandExtension\">\n" //$NON-NLS-1$
+            + "      <commandModule>Extended</commandModule>\n      <objectModule>Extended</objectModule>\n" //$NON-NLS-1$
+            + "    </extension>\n  </commands>\n" //$NON-NLS-1$
+            + "  <commands uuid=\"2c6f3ce1-9a1f-4d66-8d52-1a9d7c1d3b22\">\n    <name>Fill</name>\n" //$NON-NLS-1$
+            + "    <objectBelonging>Adopted</objectBelonging>\n" //$NON-NLS-1$
+            + "    <extension xsi:type=\"mdclassExtension:BasicCommandExtension\">\n" + fillLines //$NON-NLS-1$
+            + "    </extension>\n  </commands>\n</mdclass:Catalog>\n"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheStateLineOfATopObjectIsItsOwnBlocksModuleElement()
+    {
+        AdoptedModuleState.StateLine line =
+            AdoptedModuleState.StateLine.of(drySignal, MdClassPackage.Literals.COMMON_MODULE__MODULE);
+        assertNotNull(line);
+        assertEquals("extension/module", line.toString()); //$NON-NLS-1$
+        assertEquals(AdoptedModuleState.LineOnDisk.PRESENT, line.in(drySignalMdo("    <module>Extended</module>\n"))); //$NON-NLS-1$
+        assertEquals(AdoptedModuleState.LineOnDisk.ABSENT, line.in(drySignalMdo(""))); //$NON-NLS-1$
+        assertEquals("only Extended is the line the step records", AdoptedModuleState.LineOnDisk.ABSENT, //$NON-NLS-1$
+            line.in(drySignalMdo("    <module>Checked</module>\n"))); //$NON-NLS-1$
+        assertEquals("whitespace around the value is EDT's formatting, not another value", //$NON-NLS-1$
+            AdoptedModuleState.LineOnDisk.PRESENT, line.in(drySignalMdo("    <module>\n      Extended\n    </module>\n"))); //$NON-NLS-1$
+    }
+
+    /**
+     * A command's line is in ITS block, inside the top object's .mdo, among its siblings': a sibling command that
+     * already is Extended must not confirm this one.
+     */
+    @Test
+    public void testTheStateLineOfACommandIsReadInThatCommandsOwnBlock()
+    {
+        AdoptedModuleState.StateLine line =
+            AdoptedModuleState.StateLine.of(fill, MdClassPackage.Literals.BASIC_COMMAND__COMMAND_MODULE);
+        assertNotNull(line);
+        assertEquals("commands[Fill]/extension/commandModule", line.toString()); //$NON-NLS-1$
+        assertEquals("the sibling Other carries the line, Fill does not", AdoptedModuleState.LineOnDisk.ABSENT, //$NON-NLS-1$
+            line.in(catalogMdo("", ""))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(AdoptedModuleState.LineOnDisk.PRESENT,
+            line.in(catalogMdo("", "      <commandModule>Extended</commandModule>\n"))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** The top object's line is in its OWN block: the same element in a nested object's block is not it. */
+    @Test
+    public void testATopObjectsLineIsNotTakenFromANestedObjectsBlock()
+    {
+        AdoptedModuleState.StateLine line =
+            AdoptedModuleState.StateLine.of(catalog, MdClassPackage.Literals.BASIC_DB_OBJECT__OBJECT_MODULE);
+        assertEquals("extension/objectModule", line.toString()); //$NON-NLS-1$
+        assertEquals("only the command Other's block holds an objectModule line", AdoptedModuleState.LineOnDisk.ABSENT, //$NON-NLS-1$
+            line.in(catalogMdo("", ""))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(AdoptedModuleState.LineOnDisk.PRESENT,
+            line.in(catalogMdo("    <objectModule>Extended</objectModule>\n", ""))); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTheRootsLineIsInTheRootsOwnBlock()
+    {
+        AdoptedModuleState.StateLine line =
+            AdoptedModuleState.StateLine.of(root, MdClassPackage.Literals.CONFIGURATION__SESSION_MODULE);
+        assertEquals("extension/sessionModule", line.toString()); //$NON-NLS-1$
+        String configuration = "<mdclass:Configuration" + MDO_ROOT_ATTRIBUTES + ">\n  <name>tests</name>\n" //$NON-NLS-1$ //$NON-NLS-2$
+            + "  <objectBelonging>Adopted</objectBelonging>\n" //$NON-NLS-1$
+            + "  <extension xsi:type=\"mdclassExtension:ConfigurationExtension\">\n" //$NON-NLS-1$
+            + "    <defaultRunMode>Checked</defaultRunMode>\n%s" //$NON-NLS-1$
+            + "  </extension>\n  <languages uuid=\"b9813cc5-7b88-4b0f-8ecc-070ae4316918\">\n    <name>English</name>\n" //$NON-NLS-1$
+            + "    <extension xsi:type=\"mdclassExtension:LanguageExtension\">\n" //$NON-NLS-1$
+            + "      <sessionModule>Extended</sessionModule>\n    </extension>\n  </languages>\n" //$NON-NLS-1$
+            + "</mdclass:Configuration>\n"; //$NON-NLS-1$
+        assertEquals(AdoptedModuleState.LineOnDisk.ABSENT, line.in(mdo(String.format(configuration, "")))); //$NON-NLS-1$
+        assertEquals(AdoptedModuleState.LineOnDisk.PRESENT,
+            line.in(mdo(String.format(configuration, "    <sessionModule>Extended</sessionModule>\n")))); //$NON-NLS-1$
+    }
+
+    /**
+     * A file that cannot be read or parsed proves nothing either way - EDT may be writing it - and the parser is the
+     * hardened one: a DOCTYPE is refused, never resolved.
+     */
+    @Test
+    public void testAnMdoThatCannotBeParsedIsUnreadableNotAbsent()
+    {
+        AdoptedModuleState.StateLine line =
+            AdoptedModuleState.StateLine.of(drySignal, MdClassPackage.Literals.COMMON_MODULE__MODULE);
+        assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, line.in(null));
+        assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, line.in(new byte[0]));
+        byte[] whole = drySignalMdo("    <module>Extended</module>\n"); //$NON-NLS-1$
+        assertEquals("a file cut short mid-write", AdoptedModuleState.LineOnDisk.UNREADABLE, //$NON-NLS-1$
+            line.in(Arrays.copyOf(whole, whole.length / 2)));
+        assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, line.in(mdo("<!DOCTYPE x [<!ENTITY e \"Extended\">]>\n" //$NON-NLS-1$
+            + "<mdclass:CommonModule" + MDO_ROOT_ATTRIBUTES + "><extension><module>&e;</module></extension>" //$NON-NLS-1$ //$NON-NLS-2$
+            + "</mdclass:CommonModule>"))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNoOwnerOrNoFeatureHasNoStateLine()
+    {
+        assertNull(AdoptedModuleState.StateLine.of(null, MdClassPackage.Literals.COMMON_MODULE__MODULE));
+        assertNull(AdoptedModuleState.StateLine.of(drySignal, null));
+    }
+
     // ==================== decide: the state decision, never a write ====================
 
     @Test
@@ -513,19 +659,95 @@ public class AdoptedModuleStateTest
 
     // ==================== ensureExtended: orchestration ====================
 
+    /**
+     * A base configuration: EDT's registry does not name it an extension, and its persistent nature verifiably is
+     * not the extension's - the one combination that is no extension. Nothing is asked of its model.
+     */
     @Test
     public void testNotAnExtensionProjectChangesNothingAndOpensNoTransaction()
     {
         env.extension = false;
+        env.nature = Boolean.FALSE;
         reports(MdPropertyState.NONE);
         Result result = run(DRY_SIGNAL);
         assertEquals(Outcome.NOT_APPLICABLE, result.outcome());
         assertNull(result.frontMatterValue());
         assertNull(result.bodySentence());
         assertFalse(result.failed());
+        assertTrue("the registry's 'no' is checked against the persistent nature", env.calls.contains("nature")); //$NON-NLS-1$
         assertFalse("no model may be asked for a base project", env.calls.contains("model")); //$NON-NLS-1$
         assertTrue(env.exportCalls().isEmpty());
         verifyZeroInteractions(access);
+    }
+
+    /** The registry answers first: an extension it names needs no second look at the project's natures. */
+    @Test
+    public void testAnExtensionTheRegistryNamesIsNotAskedForItsNature()
+    {
+        reports(MdPropertyState.NONE);
+        assertEquals(Outcome.SWITCHED, run(DRY_SIGNAL).outcome());
+        assertFalse(env.calls.contains("nature")); //$NON-NLS-1$
+    }
+
+    /**
+     * EDT's registry also says "no extension" for a project it has not registered - which is what it does while it
+     * disposes and restarts a project's context, between the write and this step. The project's PERSISTENT nature
+     * tells such an extension from a base configuration, and the step goes on: without the model it is the
+     * transient failure that says the text is written and names the rerun - never a silent "not applicable".
+     */
+    @Test
+    public void testAnExtensionEdtHasNotRegisteredIsToldByItsNatureAndFailsTransiently()
+    {
+        env.extension = false;
+        env.nature = Boolean.TRUE;
+        env.model = null;
+        reports(MdPropertyState.NONE);
+
+        Result result = run(DRY_SIGNAL);
+
+        assertEquals(Outcome.FAILED, result.outcome());
+        assertTrue("the text is written, the state not checked: the write must fail", result.failed()); //$NON-NLS-1$
+        assertNull(result.frontMatterValue());
+        String message = result.failureMessage();
+        assertTrue(message, message.startsWith("The module text was written to src/CommonModules/DrySignal/Module.bsl")); //$NON-NLS-1$
+        assertTrue(message, message.contains("whether its owner 'CommonModule.DrySignal' is adopted from the base " //$NON-NLS-1$
+            + "configuration - and so whether its module state is to be recorded as Extended - could not be checked")); //$NON-NLS-1$
+        assertTrue(message, message.contains("BM model is not available for project 'tests'")); //$NON-NLS-1$
+        assertTrue(message, message.contains("do not re-send the original edit")); //$NON-NLS-1$
+        assertTrue(message, message.contains("mode=append and an empty source")); //$NON-NLS-1$
+        assertEquals("the registry, then the nature, then the model", //$NON-NLS-1$
+            Arrays.asList("isExtension", "nature", "model"), env.calls.subList(0, 3)); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        verifyZeroInteractions(access);
+    }
+
+    /** The nature is enough to go on: with the model there, the owner's own belonging decides as for any extension. */
+    @Test
+    public void testAnExtensionEdtHasNotRegisteredIsSwitchedWhenItsModelIsThere()
+    {
+        env.extension = false;
+        env.nature = Boolean.TRUE;
+        reports(MdPropertyState.NONE);
+        Result result = run(DRY_SIGNAL);
+        assertEquals(Outcome.SWITCHED, result.outcome());
+        verify(access).setPropertyState(same(drySignal), same(MdClassPackage.Literals.COMMON_MODULE__MODULE),
+            same(MdPropertyState.EXTENDED));
+    }
+
+    /**
+     * Natures that cannot be read are no proof of a base configuration: the step goes on, and the model and the
+     * owner's belonging decide - here, without a model, the transient failure. A base project never gets here: its
+     * nature is read, and it is not the extension's.
+     */
+    @Test
+    public void testAProjectWhoseNaturesCannotBeReadIsNotTakenForABaseConfiguration()
+    {
+        env.extension = false;
+        env.nature = null;
+        env.model = null;
+        Result result = run(DRY_SIGNAL);
+        assertEquals(Outcome.FAILED, result.outcome());
+        assertTrue(result.failed());
+        assertTrue(result.failureMessage(), result.failureMessage().contains("BM model is not available")); //$NON-NLS-1$
     }
 
     @Test
@@ -692,7 +914,10 @@ public class AdoptedModuleStateTest
         assertTrue(message, message.contains("add skipSyntaxCheck=true if the module was written with it")); //$NON-NLS-1$
     }
 
-    /** A refused submission queued nothing: waiting on the empty queue would "drain" and claim an export. */
+    /**
+     * A refused submission queued nothing: waiting on the empty queue would "drain" and claim an export. The .mdo is
+     * read ONCE instead - no wait, no pause, no time spent - and one without the line leaves the switch not confirmed.
+     */
     @Test
     public void testASwitchWhoseExportCannotBeScheduledIsNotConfirmedAndNotAwaited()
     {
@@ -701,6 +926,9 @@ public class AdoptedModuleStateTest
         Result result = run(DRY_SIGNAL);
         assertEquals(Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
         assertEquals(Collections.singletonList("forceExport:CommonModule.DrySignal"), env.exportCalls()); //$NON-NLS-1$
+        assertEquals("read once, never waited for", //$NON-NLS-1$
+            Arrays.asList("forceExport:CommonModule.DrySignal", DRY_SIGNAL_READ), env.exportAndDiskCalls()); //$NON-NLS-1$
+        assertEquals("no time spent", 0L, env.clock); //$NON-NLS-1$
         assertTrue(result.failureMessage(), result.failureMessage().contains("could not be scheduled")); //$NON-NLS-1$
     }
 
@@ -712,6 +940,7 @@ public class AdoptedModuleStateTest
         Result result = run(DRY_SIGNAL);
         assertEquals(Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
         assertTrue("no FQN, no export request", env.exportCalls().isEmpty()); //$NON-NLS-1$
+        assertTrue("no FQN, no file to read", env.mdoReads().isEmpty()); //$NON-NLS-1$
         // With no top object named by the model, the message names the file by its role, never "null".
         String message = result.failureMessage();
         assertTrue(message, message.contains("the .mdo of its top object may still lack <module>Extended</module>")); //$NON-NLS-1$
@@ -777,6 +1006,101 @@ public class AdoptedModuleStateTest
         assertNull(AdoptedModuleState.PLATFORM.topObjectFqn(mock(EObject.class)));
     }
 
+    /**
+     * The platform reads the PERSISTENT nature off the project's description - the nature id EDT 2026.1 and 2026.2
+     * both declare (ICoreConstants.V8_EXTENSION_NATURE, pinned as a literal) - and answers "cannot tell" when the
+     * description cannot be read, never "no".
+     */
+    @Test
+    public void testThePlatformReadsTheExtensionNatureOffTheProjectDescription() throws CoreException
+    {
+        assertEquals(Boolean.TRUE, AdoptedModuleState.PLATFORM.hasExtensionNature(
+            natureProject("org.eclipse.xtext.ui.shared.xtextNature", "com._1c.g5.v8.dt.core.V8ExtensionNature"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Boolean.FALSE, AdoptedModuleState.PLATFORM.hasExtensionNature(
+            natureProject("org.eclipse.xtext.ui.shared.xtextNature", "com._1c.g5.v8.dt.core.V8ConfigurationNature"))); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Boolean.FALSE, AdoptedModuleState.PLATFORM.hasExtensionNature(
+            natureProject("com._1c.g5.v8.dt.core.V8ExternalObjectsNature"))); //$NON-NLS-1$
+        IProject unreadable = mock(IProject.class);
+        when(unreadable.isOpen()).thenReturn(Boolean.TRUE);
+        when(unreadable.getDescription()).thenThrow(new CoreException(Status.CANCEL_STATUS));
+        assertNull(AdoptedModuleState.PLATFORM.hasExtensionNature(unreadable));
+    }
+
+    /**
+     * The platform reads the .mdo's BYTES off the file system - what EDT's export wrote, not the workspace's view
+     * of it - and an absent file, or a project with no location for it, is unreadable, never "absent".
+     */
+    @Test
+    public void testThePlatformReadsTheMdoBackFromTheFileSystem() throws Exception
+    {
+        AdoptedModuleState.StateLine line =
+            AdoptedModuleState.StateLine.of(drySignal, MdClassPackage.Literals.COMMON_MODULE__MODULE);
+        java.nio.file.Path dir = Files.createTempDirectory("adopted-module-state"); //$NON-NLS-1$
+        try
+        {
+            java.nio.file.Path file = dir.resolve("DrySignal.mdo"); //$NON-NLS-1$
+            Files.write(file, drySignalMdo("    <module>Extended</module>\n")); //$NON-NLS-1$
+            IProject onDisk = projectWithFileAt("src/CommonModules/DrySignal/DrySignal.mdo", file); //$NON-NLS-1$
+            assertEquals(AdoptedModuleState.LineOnDisk.PRESENT, AdoptedModuleState.PLATFORM.readStateLine(onDisk,
+                "src/CommonModules/DrySignal/DrySignal.mdo", line)); //$NON-NLS-1$
+
+            Files.write(file, drySignalMdo("")); //$NON-NLS-1$
+            assertEquals(AdoptedModuleState.LineOnDisk.ABSENT, AdoptedModuleState.PLATFORM.readStateLine(onDisk,
+                "src/CommonModules/DrySignal/DrySignal.mdo", line)); //$NON-NLS-1$
+
+            Files.delete(file);
+            assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, AdoptedModuleState.PLATFORM.readStateLine(onDisk,
+                "src/CommonModules/DrySignal/DrySignal.mdo", line)); //$NON-NLS-1$
+
+            assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, AdoptedModuleState.PLATFORM.readStateLine(
+                projectWithFileAt("src/CommonModules/DrySignal/DrySignal.mdo", null), //$NON-NLS-1$
+                "src/CommonModules/DrySignal/DrySignal.mdo", line)); //$NON-NLS-1$
+        }
+        finally
+        {
+            Files.deleteIfExists(dir.resolve("DrySignal.mdo")); //$NON-NLS-1$
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    /** A pause the call's own thread is interrupted in ends at once, and the interrupt is kept for the caller. */
+    @Test
+    public void testThePlatformPauseKeepsTheInterrupt()
+    {
+        assertTrue(AdoptedModuleState.PLATFORM.pause(1));
+        Thread.currentThread().interrupt();
+        try
+        {
+            assertFalse(AdoptedModuleState.PLATFORM.pause(10_000));
+            assertTrue("the interrupt must be restored", Thread.currentThread().isInterrupted()); //$NON-NLS-1$
+        }
+        finally
+        {
+            Thread.interrupted();
+        }
+    }
+
+    /** An OPEN project whose description carries exactly {@code natureIds}. */
+    private static IProject natureProject(String... natureIds) throws CoreException
+    {
+        IProject natured = mock(IProject.class);
+        when(natured.isOpen()).thenReturn(Boolean.TRUE);
+        IProjectDescription description = mock(IProjectDescription.class);
+        when(description.getNatureIds()).thenReturn(natureIds);
+        when(natured.getDescription()).thenReturn(description);
+        return natured;
+    }
+
+    /** A project whose file at {@code relativePath} lies at {@code location} on disk ({@code null}: no location). */
+    private static IProject projectWithFileAt(String relativePath, java.nio.file.Path location)
+    {
+        IProject owner = mock(IProject.class);
+        IFile mdoFile = mock(IFile.class);
+        when(owner.getFile(new Path(relativePath))).thenReturn(mdoFile);
+        when(mdoFile.getLocation()).thenReturn(location == null ? null : Path.fromOSString(location.toString()));
+        return owner;
+    }
+
     /** Bilingual: a Cyrillic Name resolves exactly, is exported under the model's FQN and named in its .mdo. */
     @Test
     public void testAnAdoptedModuleWithACyrillicNameIsSwitchedAndItsMdoNamed()
@@ -809,60 +1133,527 @@ public class AdoptedModuleStateTest
         verify(access).setPropertyState(any(), any(), any());
     }
 
-    /** UNOBSERVABLE is no evidence the export finished, so it must not be worded as if it did. */
+    // ==================== the export is confirmed by the FILE, never by the queue ====================
+
+    /** The owner's .mdo as the model names it, and the state line the step looks for in it. */
+    private static final String DRY_SIGNAL_READ = "readMdo:src/CommonModules/DrySignal/DrySignal.mdo#extension/module"; //$NON-NLS-1$
+
+    /**
+     * The queue's answer only says nothing is queued any more: the .mdo itself is read back, after the wait, for
+     * the module's own state line - and a line that is there at once ends it, with no pause.
+     */
     @Test
-    public void testAnUnobservableExportIsNotWordedAsADoneOne()
+    public void testTheMdoIsReadBackAfterTheWaitForTheModulesOwnStateLine()
     {
         reports(MdPropertyState.NONE);
-        env.exportState = BuildUtils.DiskExportState.UNOBSERVABLE;
         Result result = run(DRY_SIGNAL);
         assertEquals(Outcome.SWITCHED, result.outcome());
-        assertFalse(result.failed());
-        String body = result.bodySentence();
-        assertTrue(body, body.contains("could not be observed")); //$NON-NLS-1$
-        assertFalse(body, body.contains("was exported")); //$NON-NLS-1$
+        assertEquals(Arrays.asList("forceExport:CommonModule.DrySignal", "awaitExport:60000", DRY_SIGNAL_READ), //$NON-NLS-1$ //$NON-NLS-2$
+            env.exportAndDiskCalls());
+        assertTrue(result.bodySentence(), result.bodySentence().contains("the .mdo was exported")); //$NON-NLS-1$
     }
 
     /**
-     * Only an export this call CAUSED may refuse it. In the already-Extended case nothing changed in the
-     * model, and a busy or wedged export wait would otherwise turn every such write into an error.
+     * EDT's export task processor catches a failed file write (a locked or read-only .mdo, a full disk) and the
+     * queue DRAINS all the same - BuildUtils.waitForDiskExport's own contract. So a drained queue whose .mdo,
+     * read back to the end of the budget, never carries the line is no export: after a switch the write fails
+     * with the text written, and nothing says the .mdo was exported.
      */
     @Test
-    public void testAnAlreadyExtendedModuleWhoseExportStaysPendingIsStillASuccess()
+    public void testADrainedQueueWhoseMdoLacksTheLineIsNotConfirmed()
+    {
+        reports(MdPropertyState.NONE);
+        env.exportState = BuildUtils.DiskExportState.DRAINED;
+        env.disk.add(AdoptedModuleState.LineOnDisk.ABSENT);
+
+        Result result = run(DRY_SIGNAL);
+
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
+        assertTrue(result.failed());
+        assertNull(result.frontMatterValue());
+        String message = result.failureMessage();
+        assertTrue(message, message.startsWith("The module text was written to src/CommonModules/DrySignal/Module.bsl")); //$NON-NLS-1$
+        assertTrue(message, message.contains("was switched from None to Extended in EDT's model, but the export of its " //$NON-NLS-1$
+            + ".mdo was requested and src/CommonModules/DrySignal/DrySignal.mdo, read back, did not carry " //$NON-NLS-1$
+            + "<module>Extended</module> within 60s")); //$NON-NLS-1$
+        assertTrue(message, message.contains("Nothing was rolled back")); //$NON-NLS-1$
+        assertTrue(message, message.contains("do not re-send the original edit")); //$NON-NLS-1$
+        assertTrue(message, message.contains("mode=append and an empty source")); //$NON-NLS-1$
+        assertFalse(message, message.contains("was exported")); //$NON-NLS-1$
+        // The file was read until the budget ran out - ONE 60s budget from the request - and the last read ends it.
+        assertEquals(60_000L, env.clock);
+        List<String> disk = env.exportAndDiskCalls();
+        assertTrue(disk.toString(), disk.get(disk.size() - 1).equals(DRY_SIGNAL_READ));
+        for (String read : env.mdoReads())
+        {
+            assertEquals(DRY_SIGNAL_READ, read);
+        }
+        // The pause doubles from 100ms to 1s: a prompt first look, then no busier than once a second.
+        assertEquals(Arrays.asList("pause:100", "pause:200", "pause:400", "pause:800", "pause:1000", "pause:1000"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            pauses().subList(0, 6));
+    }
+
+    /**
+     * UNOBSERVABLE says nothing about the export, either way: the step keeps reading the .mdo, and a line that
+     * appears within the budget confirms the switch.
+     */
+    @Test
+    public void testAnUnobservableQueueIsConfirmedByTheLineAppearingWithinTheBudget()
+    {
+        reports(MdPropertyState.NONE);
+        env.exportState = BuildUtils.DiskExportState.UNOBSERVABLE;
+        env.disk.addAll(Arrays.asList(AdoptedModuleState.LineOnDisk.ABSENT, AdoptedModuleState.LineOnDisk.ABSENT,
+            AdoptedModuleState.LineOnDisk.PRESENT));
+
+        Result result = run(DRY_SIGNAL);
+
+        assertEquals(Outcome.SWITCHED, result.outcome());
+        assertFalse(result.failed());
+        assertEquals("switchedToExtended", result.frontMatterValue()); //$NON-NLS-1$
+        assertTrue(result.bodySentence(), result.bodySentence().contains("the .mdo was exported")); //$NON-NLS-1$
+        assertEquals(3, env.mdoReads().size());
+        assertEquals(300L, env.clock);
+    }
+
+    /** UNOBSERVABLE and a line that never appears: the switch is not confirmed - the write fails with its text written. */
+    @Test
+    public void testAnUnobservableQueueWhoseLineNeverAppearsIsNotConfirmed()
+    {
+        reports(MdPropertyState.NONE);
+        env.exportState = BuildUtils.DiskExportState.UNOBSERVABLE;
+        env.disk.add(AdoptedModuleState.LineOnDisk.ABSENT);
+
+        Result result = run(DRY_SIGNAL);
+
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
+        assertTrue(result.failed());
+        assertTrue(result.failureMessage(), result.failureMessage().contains(
+            "did not carry <module>Extended</module> within 60s")); //$NON-NLS-1$
+        assertEquals(60_000L, env.clock);
+    }
+
+    /**
+     * ONE budget for the queue and the file: a queue wait that spent the whole 60s leaves one read, and no pause.
+     * The file still outranks the queue: a PENDING answer whose .mdo carries the line is confirmed - a previous
+     * wait still outstanding makes the queue answer PENDING at once.
+     */
+    @Test
+    public void testTheQueueAndTheFileShareOneSixtySecondBudget()
+    {
+        reports(MdPropertyState.NONE);
+        env.exportState = BuildUtils.DiskExportState.PENDING;
+        env.exportWaitMs = 60_000L;
+        env.disk.addAll(Arrays.asList(AdoptedModuleState.LineOnDisk.ABSENT, AdoptedModuleState.LineOnDisk.PRESENT));
+        Result spent = run(DRY_SIGNAL);
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, spent.outcome());
+        assertTrue(spent.failureMessage(), spent.failureMessage().contains("was not confirmed within 60s")); //$NON-NLS-1$
+        assertEquals("the wait spent the budget: one read, no pause", 1, env.mdoReads().size()); //$NON-NLS-1$
+        assertTrue(pauses().isEmpty());
+
+        freshPlatform();
+        reports(MdPropertyState.NONE);
+        env.exportState = BuildUtils.DiskExportState.PENDING;
+        env.disk.addAll(Arrays.asList(AdoptedModuleState.LineOnDisk.ABSENT, AdoptedModuleState.LineOnDisk.PRESENT));
+        Result appeared = run(DRY_SIGNAL);
+        assertEquals(Outcome.SWITCHED, appeared.outcome());
+        assertTrue(appeared.bodySentence(), appeared.bodySentence().contains("the .mdo was exported")); //$NON-NLS-1$
+    }
+
+    /** An interrupted pause ends the reading at once - the call is being cancelled - and confirms nothing. */
+    @Test
+    public void testAnInterruptedPollStopsAtOnceAndConfirmsNothing()
+    {
+        reports(MdPropertyState.NONE);
+        env.exportState = BuildUtils.DiskExportState.UNOBSERVABLE;
+        env.disk.add(AdoptedModuleState.LineOnDisk.ABSENT);
+        env.interrupted = true;
+        Result result = run(DRY_SIGNAL);
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
+        assertEquals("no read after the interrupted pause", 1, env.mdoReads().size()); //$NON-NLS-1$
+        assertEquals(Collections.singletonList("pause:100"), pauses()); //$NON-NLS-1$
+        assertEquals(100L, env.clock);
+    }
+
+    /**
+     * A .mdo that cannot be read back (or parsed - EDT may be writing it) confirms nothing, and the message says
+     * it could not be READ, not that the line is missing. A later read that finds the line confirms the switch.
+     */
+    @Test
+    public void testAnMdoThatCannotBeReadBackIsNotConfirmedAndSaysSo()
+    {
+        reports(MdPropertyState.NONE);
+        env.disk.add(AdoptedModuleState.LineOnDisk.UNREADABLE);
+        Result result = run(DRY_SIGNAL);
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
+        String message = result.failureMessage();
+        assertTrue(message, message.contains("was switched from None to Extended in EDT's model, but the export of its " //$NON-NLS-1$
+            + ".mdo was requested and src/CommonModules/DrySignal/DrySignal.mdo could not be read back to confirm " //$NON-NLS-1$
+            + "<module>Extended</module> within 60s. Nothing was rolled back.")); //$NON-NLS-1$
+        assertFalse(message, message.contains("did not carry")); //$NON-NLS-1$
+        assertFalse("one 'but' per sentence: " + message, message.contains("was requested, but")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        freshPlatform();
+        reports(MdPropertyState.NONE);
+        env.disk.addAll(Arrays.asList(AdoptedModuleState.LineOnDisk.UNREADABLE, AdoptedModuleState.LineOnDisk.PRESENT));
+        assertEquals(Outcome.SWITCHED, run(DRY_SIGNAL).outcome());
+    }
+
+    /**
+     * ONE evidence, ONE verdict: a module that already was Extended - EDT's own listener flips the model in reaction
+     * to the same .bsl write, so this is a race the caller cannot see - fails the write like a switch when its .mdo,
+     * read back to the end of the budget, never carries the line, whether the queue drained or could not be
+     * observed. The error says the text is written, that the state is Extended in EDT's model, what the file showed
+     * and how to rerun the step; nothing says the .mdo was exported. Once the line is there, the key alone says it.
+     */
+    @Test
+    public void testAnAlreadyExtendedModuleWhoseLineNeverReachesTheMdoFailsTheWriteLikeASwitch()
+    {
+        for (BuildUtils.DiskExportState queue : new BuildUtils.DiskExportState[] { BuildUtils.DiskExportState.DRAINED,
+            BuildUtils.DiskExportState.UNOBSERVABLE })
+        {
+            freshPlatform();
+            reports(MdPropertyState.EXTENDED);
+            env.exportState = queue;
+            env.disk.add(AdoptedModuleState.LineOnDisk.ABSENT);
+            Result result = run(DRY_SIGNAL);
+            assertEquals(queue.name(), Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
+            assertTrue(queue.name(), result.failed());
+            assertNull("an error carries no key", result.frontMatterValue()); //$NON-NLS-1$
+            assertNull("an error carries no success paragraph", result.bodySentence()); //$NON-NLS-1$
+            verify(access, never()).setPropertyState(any(), any(), any());
+            String message = result.failureMessage();
+            assertTrue(message, message.startsWith("The module text was written to src/CommonModules/DrySignal/Module.bsl, " //$NON-NLS-1$
+                + "and the module state of 'CommonModule.DrySignal' is already Extended in EDT's model, but the export " //$NON-NLS-1$
+                + "of its .mdo was requested again to match the model and src/CommonModules/DrySignal/DrySignal.mdo, " //$NON-NLS-1$
+                + "read back, did not carry <module>Extended</module> within 60s; if EDT failed to write the file " //$NON-NLS-1$
+                + "(a locked or read-only .mdo, a full disk), its log says so. Nothing was rolled back. The write " //$NON-NLS-1$
+                + "stands: do not re-send the original edit. And do not commit the working tree in this state")); //$NON-NLS-1$
+            assertTrue(message, message.contains("mode=append and an empty source")); //$NON-NLS-1$
+            assertTrue(message, message.endsWith(" - that exports the .mdo again.")); //$NON-NLS-1$
+            assertFalse(message, message.contains("switched from None")); //$NON-NLS-1$
+            assertFalse(message, message.contains("was exported")); //$NON-NLS-1$
+            assertNoRemovedClaim("the unconfirmed export of an already-Extended module", message); //$NON-NLS-1$
+            // The same budget as after a switch: the file was read until it ran out.
+            assertEquals(60_000L, env.clock);
+        }
+
+        freshPlatform();
+        reports(MdPropertyState.EXTENDED);
+        env.exportState = BuildUtils.DiskExportState.UNOBSERVABLE;
+        env.disk.add(AdoptedModuleState.LineOnDisk.PRESENT);
+        Result confirmed = run(DRY_SIGNAL);
+        assertEquals(Outcome.ALREADY_EXTENDED, confirmed.outcome());
+        assertFalse(confirmed.failed());
+        assertNull("the line is on disk: the key alone says it", confirmed.bodySentence()); //$NON-NLS-1$
+    }
+
+    /**
+     * A .mdo that cannot be read back confirms nothing for a module that already was Extended either: the error says
+     * the file could not be READ - not that the line is missing, and never that it was exported.
+     */
+    @Test
+    public void testAnAlreadyExtendedModuleWhoseMdoCannotBeReadBackFailsAndSaysSo()
+    {
+        reports(MdPropertyState.EXTENDED);
+        env.disk.add(AdoptedModuleState.LineOnDisk.UNREADABLE);
+        Result result = run(DRY_SIGNAL);
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
+        assertTrue(result.failed());
+        assertNull(result.bodySentence());
+        String message = result.failureMessage();
+        assertTrue(message, message.contains("and the module state of 'CommonModule.DrySignal' is already Extended in " //$NON-NLS-1$
+            + "EDT's model, but the export of its .mdo was requested again to match the model and " //$NON-NLS-1$
+            + "src/CommonModules/DrySignal/DrySignal.mdo could not be read back to confirm <module>Extended</module> " //$NON-NLS-1$
+            + "within 60s. Nothing was rolled back. The write stands: do not re-send the original edit.")); //$NON-NLS-1$
+        assertFalse(message, message.contains("did not carry")); //$NON-NLS-1$
+        assertFalse(message, message.contains("was exported")); //$NON-NLS-1$
+    }
+
+    /**
+     * ONE evidence, ONE verdict - the race's three shapes. EDT's own listener flips the model in reaction to the same
+     * .bsl write, so the step may find None and switch it, find Extended at once, or find None in its read and
+     * Extended in its write (the listener won in between). The caller cannot tell them apart, so the same .mdo
+     * evidence gives the same answer in each: a success when the file, read back, carries the line - its export
+     * refused or not; a failure when it does not, cannot be read back, or its export stays pending or is refused with
+     * no line in the file - and, on the ordinary-application module, a success with a note every time the line is not
+     * seen. A caller that checks only the error flag never takes a failed export for a done one, whichever way the race
+     * went.
+     */
+    @Test
+    public void testTheSameMdoEvidenceGivesTheSameVerdictWhetherTheStateWasSwitchedOrFoundExtended()
+    {
+        for (String path : Arrays.asList(DRY_SIGNAL, "src/Configuration/SessionModule.bsl", ORDINARY)) //$NON-NLS-1$
+        {
+            for (String evidence : Arrays.asList("written", "missing", "unreadable", "pending", "notScheduled", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+                "notScheduledButOnDisk")) //$NON-NLS-1$
+            {
+                boolean unconfirmed = !"written".equals(evidence) && !"notScheduledButOnDisk".equals(evidence); //$NON-NLS-1$ //$NON-NLS-2$
+                boolean expectFailure = unconfirmed && !ORDINARY.equals(path);
+                for (String shape : Arrays.asList("switched", "foundExtended", "listenerWonBeforeTheWrite")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                {
+                    freshPlatform();
+                    if ("switched".equals(shape)) //$NON-NLS-1$
+                    {
+                        reports(MdPropertyState.NONE);
+                    }
+                    else if ("foundExtended".equals(shape)) //$NON-NLS-1$
+                    {
+                        reports(MdPropertyState.EXTENDED);
+                    }
+                    else
+                    {
+                        when(access.hasPropertyState(any(EObject.class), any(EStructuralFeature.class),
+                            eq(MdPropertyState.NONE))).thenReturn(Boolean.TRUE, Boolean.FALSE);
+                        reports(MdPropertyState.EXTENDED);
+                    }
+                    switch (evidence)
+                    {
+                    case "missing": //$NON-NLS-1$
+                        env.disk.add(AdoptedModuleState.LineOnDisk.ABSENT);
+                        break;
+                    case "unreadable": //$NON-NLS-1$
+                        env.disk.add(AdoptedModuleState.LineOnDisk.UNREADABLE);
+                        break;
+                    case "pending": //$NON-NLS-1$
+                        env.exportState = BuildUtils.DiskExportState.PENDING;
+                        break;
+                    case "notScheduled": //$NON-NLS-1$
+                        env.exportAccepted = false;
+                        break;
+                    case "notScheduledButOnDisk": //$NON-NLS-1$
+                        env.exportAccepted = false;
+                        env.disk.add(AdoptedModuleState.LineOnDisk.PRESENT);
+                        break;
+                    default:
+                        break;
+                    }
+                    String what = path + " / " + evidence + " / " + shape; //$NON-NLS-1$ //$NON-NLS-2$
+                    Result result = run(path);
+                    assertEquals(what, expectFailure, result.failed());
+                    Outcome reached = "switched".equals(shape) ? Outcome.SWITCHED : Outcome.ALREADY_EXTENDED; //$NON-NLS-1$
+                    assertEquals(what, expectFailure ? Outcome.EXPORT_NOT_CONFIRMED : reached, result.outcome());
+                    verify(access, times("switched".equals(shape) ? 1 : 0)).setPropertyState(any(), any(), any()); //$NON-NLS-1$
+                    if (expectFailure)
+                    {
+                        assertTrue(what, result.failureMessage().startsWith("The module text was written to " + path)); //$NON-NLS-1$
+                        assertTrue(what, result.failureMessage().contains(" in EDT's model, but ")); //$NON-NLS-1$
+                    }
+                    else if (unconfirmed)
+                    {
+                        assertTrue(what, result.bodySentence().contains(ORDINARY_FACT));
+                    }
+                    else
+                    {
+                        // Confirmed by the file - its export scheduled or not: no error, and no note to excuse one.
+                        assertNull(what, result.failureMessage());
+                        String body = result.bodySentence();
+                        assertTrue(what + ": " + body, body == null || !body.contains(ORDINARY_FACT)); //$NON-NLS-1$
+                    }
+                }
+            }
+        }
+    }
+
+    /** The pauses the step made while it read the .mdo back, in order. */
+    private List<String> pauses()
+    {
+        List<String> out = new ArrayList<>();
+        for (String call : env.calls)
+        {
+            if (call.startsWith("pause:")) //$NON-NLS-1$
+            {
+                out.add(call);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * A queue still busy at the end of the budget, with no line in the .mdo: not confirmed - the same failure for a
+     * module that already was Extended as after a switch. Round 1 kept it a success for fear that a busy queue would
+     * fail such writes; since the FILE decides, a line that lands while the queue is still busy confirms the export
+     * (testTheQueueAndTheFileShareOneSixtySecondBudget), so only a .mdo without the line fails.
+     */
+    @Test
+    public void testAnAlreadyExtendedModuleWhoseExportStaysPendingIsNotConfirmed()
     {
         reports(MdPropertyState.EXTENDED);
         env.exportState = BuildUtils.DiskExportState.PENDING;
         Result result = run(DRY_SIGNAL);
-        assertEquals(Outcome.ALREADY_EXTENDED, result.outcome());
-        assertFalse(result.failed());
-        assertEquals("alreadyExtended", result.frontMatterValue()); //$NON-NLS-1$
-        String body = result.bodySentence();
-        assertNotNull("a warning is stated", body); //$NON-NLS-1$
-        assertTrue(body, body.contains("already Extended")); //$NON-NLS-1$
-        assertTrue(body, body.contains("not confirmed within 60s")); //$NON-NLS-1$
-        assertTrue(body, body.contains("<module>Extended</module>")); //$NON-NLS-1$
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
+        assertTrue(result.failed());
+        assertNull(result.frontMatterValue());
+        assertNull(result.bodySentence());
+        String message = result.failureMessage();
+        assertTrue(message, message.contains("and the module state of 'CommonModule.DrySignal' is already Extended in " //$NON-NLS-1$
+            + "EDT's model, but the export of its .mdo, requested again to match the model, was not confirmed within " //$NON-NLS-1$
+            + "60s, so src/CommonModules/DrySignal/DrySignal.mdo may still lack <module>Extended</module>. Nothing was " //$NON-NLS-1$
+            + "rolled back.")); //$NON-NLS-1$
+        assertTrue(message, message.contains("do not re-send the original edit")); //$NON-NLS-1$
+        assertTrue(message, message.contains("mode=append and an empty source")); //$NON-NLS-1$
     }
 
+    /**
+     * A refused export request queued nothing, and the .mdo, read once, does not carry the line: the same failure as
+     * after a switch.
+     */
     @Test
-    public void testAnAlreadyExtendedModuleWhoseExportCannotBeScheduledIsStillASuccess()
+    public void testAnAlreadyExtendedModuleWhoseExportCannotBeScheduledIsNotConfirmed()
     {
         reports(MdPropertyState.EXTENDED);
         env.exportAccepted = false;
         Result result = run(DRY_SIGNAL);
-        assertEquals(Outcome.ALREADY_EXTENDED, result.outcome());
-        assertFalse(result.failed());
-        assertTrue(result.bodySentence(), result.bodySentence().contains("could not be scheduled")); //$NON-NLS-1$
-        assertEquals(Collections.singletonList("forceExport:CommonModule.DrySignal"), env.exportCalls()); //$NON-NLS-1$
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
+        assertTrue(result.failed());
+        assertNull(result.bodySentence());
+        assertEquals("not awaited, read once", //$NON-NLS-1$
+            Arrays.asList("forceExport:CommonModule.DrySignal", DRY_SIGNAL_READ), env.exportAndDiskCalls()); //$NON-NLS-1$
+        String message = result.failureMessage();
+        assertTrue(message, message.contains("and the module state of 'CommonModule.DrySignal' is already Extended in " //$NON-NLS-1$
+            + "EDT's model, but the export of its .mdo could not be scheduled, so " //$NON-NLS-1$
+            + "src/CommonModules/DrySignal/DrySignal.mdo may still lack <module>Extended</module>. Nothing was rolled " //$NON-NLS-1$
+            + "back.")); //$NON-NLS-1$
+        assertFalse(message, message.contains("read back,")); //$NON-NLS-1$
     }
 
+    /**
+     * The file is the evidence, a refused export request included (#743 review): nothing was queued that could still
+     * change the .mdo, so it is read ONCE, at once - never polled, never waited for - and a module that already was
+     * Extended, whose .mdo already carries the line (recorded in EDT's UI, or by an earlier write), is the same success
+     * as a confirmed export: the key alone, no paragraph, no error.
+     */
     @Test
-    public void testAnAlreadyExtendedModuleWhoseExportIsUnobservableSaysSo()
+    public void testARefusedExportOfAnAlreadyExtendedModuleWhoseMdoCarriesTheLineIsConfirmedByOneRead()
+    {
+        reports(MdPropertyState.EXTENDED);
+        env.exportAccepted = false;
+        env.disk.add(AdoptedModuleState.LineOnDisk.PRESENT);
+        Result result = run(DRY_SIGNAL);
+        assertEquals(Outcome.ALREADY_EXTENDED, result.outcome());
+        assertFalse(result.failed());
+        assertNull(result.failureMessage());
+        assertEquals("alreadyExtended", result.frontMatterValue()); //$NON-NLS-1$
+        assertNull("confirmed by the file: the key alone says it", result.bodySentence()); //$NON-NLS-1$
+        verify(access, never()).setPropertyState(any(), any(), any());
+        assertEquals("one read, no wait and no pause", //$NON-NLS-1$
+            Arrays.asList("forceExport:CommonModule.DrySignal", DRY_SIGNAL_READ), env.exportAndDiskCalls()); //$NON-NLS-1$
+        assertEquals("no time spent", 0L, env.clock); //$NON-NLS-1$
+    }
+
+    /**
+     * The same after a switch: a refused export whose .mdo, read once, carries the line answers exactly what a
+     * confirmed export answers - the same key and the same paragraph, word for word.
+     */
+    @Test
+    public void testARefusedExportAfterASwitchWhoseMdoCarriesTheLineAnswersLikeAConfirmedExport()
+    {
+        reports(MdPropertyState.NONE);
+        Result confirmed = run(DRY_SIGNAL); // the healthy export: accepted, drained, the line on disk
+        assertEquals(Outcome.SWITCHED, confirmed.outcome());
+
+        freshPlatform();
+        reports(MdPropertyState.NONE);
+        env.exportAccepted = false;
+        env.disk.add(AdoptedModuleState.LineOnDisk.PRESENT);
+        Result result = run(DRY_SIGNAL);
+        assertEquals(Outcome.SWITCHED, result.outcome());
+        assertFalse(result.failed());
+        assertNull(result.failureMessage());
+        assertEquals("switchedToExtended", result.frontMatterValue()); //$NON-NLS-1$
+        assertNotNull(result.bodySentence());
+        assertEquals("the success text is the confirmed export's", confirmed.bodySentence(), result.bodySentence()); //$NON-NLS-1$
+        verify(access, times(1)).setPropertyState(same(drySignal), same(MdClassPackage.Literals.COMMON_MODULE__MODULE),
+            same(MdPropertyState.EXTENDED));
+        assertEquals("one read, no wait and no pause", //$NON-NLS-1$
+            Arrays.asList("forceExport:CommonModule.DrySignal", DRY_SIGNAL_READ), env.exportAndDiskCalls()); //$NON-NLS-1$
+        assertEquals("no time spent", 0L, env.clock); //$NON-NLS-1$
+    }
+
+    /**
+     * A refused export whose .mdo, read once, is not seen carrying the line - absent, unreadable, or a read that
+     * throws - stays NOT confirmed, with the words a refused export has always had ("could not be scheduled"), after a
+     * switch and for a module found already Extended alike: one read, never polled, never waited for, and nothing
+     * escapes.
+     */
+    @Test
+    public void testARefusedExportWhoseMdoIsNotSeenCarryingTheLineStaysNotConfirmedAfterOneRead()
+    {
+        for (MdPropertyState before : new MdPropertyState[] { MdPropertyState.NONE, MdPropertyState.EXTENDED })
+        {
+            for (String disk : Arrays.asList("absent", "unreadable", "throws")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {
+                freshPlatform();
+                reports(before);
+                env.exportAccepted = false;
+                if ("throws".equals(disk)) //$NON-NLS-1$
+                {
+                    env.readFailure = new IllegalStateException("read refused"); //$NON-NLS-1$
+                }
+                else
+                {
+                    env.disk.add("absent".equals(disk) ? AdoptedModuleState.LineOnDisk.ABSENT //$NON-NLS-1$
+                        : AdoptedModuleState.LineOnDisk.UNREADABLE);
+                }
+                String what = before.getName() + " / " + disk; //$NON-NLS-1$
+                Result result = run(DRY_SIGNAL);
+                assertEquals(what, Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
+                assertTrue(what, result.failed());
+                assertNull(what, result.frontMatterValue());
+                assertNull(what, result.bodySentence());
+                String message = result.failureMessage();
+                assertTrue(what + ": " + message, message.contains(" in EDT's model, but the export of its .mdo could " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "not be scheduled, so src/CommonModules/DrySignal/DrySignal.mdo may still lack " //$NON-NLS-1$
+                    + "<module>Extended</module>. Nothing was rolled back.")); //$NON-NLS-1$
+                assertFalse(what + ": " + message, message.contains("read back")); //$NON-NLS-1$ //$NON-NLS-2$
+                assertEquals(what, Arrays.asList("forceExport:CommonModule.DrySignal", DRY_SIGNAL_READ), //$NON-NLS-1$
+                    env.exportAndDiskCalls());
+                assertEquals(what, 0L, env.clock);
+            }
+        }
+    }
+
+    /**
+     * An export that throws is no export, but the file still decides it: the .mdo is read once, and one that already
+     * carries the line confirms the switch as a written export does; one without it leaves it not confirmed.
+     */
+    @Test
+    public void testAnExportThatThrowsIsStillDecidedByOneReadOfTheMdo()
+    {
+        reports(MdPropertyState.NONE);
+        env.exportFailure = new IllegalStateException("save task refused"); //$NON-NLS-1$
+        env.disk.add(AdoptedModuleState.LineOnDisk.PRESENT);
+        Result result = run(DRY_SIGNAL);
+        assertEquals(Outcome.SWITCHED, result.outcome());
+        assertFalse(result.failed());
+        assertTrue(result.bodySentence(), result.bodySentence().contains("the .mdo was exported")); //$NON-NLS-1$
+        assertEquals(Arrays.asList("forceExport:CommonModule.DrySignal", DRY_SIGNAL_READ), env.exportAndDiskCalls()); //$NON-NLS-1$
+        assertEquals("no time spent", 0L, env.clock); //$NON-NLS-1$
+
+        freshPlatform();
+        reports(MdPropertyState.NONE);
+        env.exportFailure = new IllegalStateException("save task refused"); //$NON-NLS-1$
+        env.disk.add(AdoptedModuleState.LineOnDisk.ABSENT);
+        Result missing = run(DRY_SIGNAL);
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, missing.outcome());
+        assertTrue(missing.failureMessage(), missing.failureMessage().contains("could not be scheduled")); //$NON-NLS-1$
+        assertEquals(Arrays.asList("forceExport:CommonModule.DrySignal", DRY_SIGNAL_READ), env.exportAndDiskCalls()); //$NON-NLS-1$
+    }
+
+    /**
+     * An unobservable queue is no news either way: what the .mdo holds decides. A module that already was Extended,
+     * whose line never appears, is not confirmed - never the round-1 "completion could not be observed".
+     */
+    @Test
+    public void testAnAlreadyExtendedModuleWhoseQueueIsUnobservableIsDecidedByTheMdo()
     {
         reports(MdPropertyState.EXTENDED);
         env.exportState = BuildUtils.DiskExportState.UNOBSERVABLE;
         Result result = run(DRY_SIGNAL);
-        assertEquals(Outcome.ALREADY_EXTENDED, result.outcome());
-        assertTrue(result.bodySentence(), result.bodySentence().contains("could not be observed")); //$NON-NLS-1$
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
+        assertTrue(result.failed());
+        assertTrue(result.failureMessage(), result.failureMessage().contains(
+            "did not carry <module>Extended</module> within 60s")); //$NON-NLS-1$
+        assertFalse(result.failureMessage(), result.failureMessage().contains("could not be observed")); //$NON-NLS-1$
     }
 
     /**
@@ -1107,17 +1898,190 @@ public class AdoptedModuleStateTest
         assertTrue(body, body.contains(ORDINARY_FACT));
         assertNoRemovedClaim("the ordinary module's unconfirmed-export note", body); //$NON-NLS-1$
 
-        env.exportState = BuildUtils.DiskExportState.DRAINED;
+        // A refused export whose .mdo, read once, does not carry the line: a fresh platform, so no earlier export of
+        // this test has put the line there.
+        freshPlatform();
+        reports(MdPropertyState.NONE);
         env.exportAccepted = false;
         Result refused = run(ORDINARY);
         assertEquals(Outcome.SWITCHED, refused.outcome());
         assertFalse(refused.failed());
         assertTrue(refused.bodySentence(), refused.bodySentence().contains("could not be scheduled")); //$NON-NLS-1$
 
+        // A drained queue whose .mdo never carries the line: the same note - never "the .mdo was exported".
+        freshPlatform();
+        reports(MdPropertyState.NONE);
+        env.disk.add(AdoptedModuleState.LineOnDisk.ABSENT);
+        Result missing = run(ORDINARY);
+        assertEquals(Outcome.SWITCHED, missing.outcome());
+        assertFalse(missing.failed());
+        String missingBody = missing.bodySentence();
+        assertTrue(missingBody, missingBody.contains("(<ordinaryApplicationModule>Extended</ordinaryApplicationModule> in " //$NON-NLS-1$
+            + "src/Configuration/Configuration.mdo), but the export of the .mdo was requested and the .mdo, read back, " //$NON-NLS-1$
+            + "did not carry that line within 60s.")); //$NON-NLS-1$
+        assertFalse(missingBody, missingBody.contains("was exported")); //$NON-NLS-1$
+        assertTrue(missingBody, missingBody.contains(ORDINARY_FACT));
+        assertNoRemovedClaim("the ordinary module's not-on-disk note", missingBody); //$NON-NLS-1$
+
         // The contrast: the same unconfirmed export of the SESSION module refuses the write.
-        env.exportAccepted = true;
+        freshPlatform();
+        reports(MdPropertyState.NONE);
         env.exportState = BuildUtils.DiskExportState.PENDING;
         assertEquals(Outcome.EXPORT_NOT_CONFIRMED, run("src/Configuration/SessionModule.bsl").outcome()); //$NON-NLS-1$
+        freshPlatform();
+        reports(MdPropertyState.NONE);
+        env.disk.add(AdoptedModuleState.LineOnDisk.ABSENT);
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, run("src/Configuration/SessionModule.bsl").outcome()); //$NON-NLS-1$
+    }
+
+    /**
+     * An ordinary-application module that already was Extended, whose export is not confirmed, is a note on a success
+     * too - the paragraph says what the .mdo showed, teaches the rerun and says why the write does not fail - while
+     * the SESSION module of the same root fails the write on the same evidence.
+     */
+    @Test
+    public void testAnUnconfirmedExportOfAnAlreadyExtendedOrdinaryApplicationModuleIsANoteNotAFailure()
+    {
+        reports(MdPropertyState.EXTENDED);
+        env.disk.add(AdoptedModuleState.LineOnDisk.ABSENT);
+        Result missing = run(ORDINARY);
+        assertEquals(Outcome.ALREADY_EXTENDED, missing.outcome());
+        assertFalse(missing.failed());
+        assertNull(missing.failureMessage());
+        assertEquals("alreadyExtended", missing.frontMatterValue()); //$NON-NLS-1$
+        String note = missing.bodySentence();
+        assertNotNull(note);
+        assertTrue(note, note.startsWith("The module state of the extension's root object (Configuration) is already " //$NON-NLS-1$
+            + "Extended (<ordinaryApplicationModule>Extended</ordinaryApplicationModule> in " //$NON-NLS-1$
+            + "src/Configuration/Configuration.mdo), but the export of the .mdo was requested again to match the model " //$NON-NLS-1$
+            + "and the .mdo, read back, did not carry that line within 60s. Nothing was rolled back; check the line " //$NON-NLS-1$
+            + "before committing")); //$NON-NLS-1$
+        assertTrue(note, note.contains("mode=append and an empty source")); //$NON-NLS-1$
+        assertTrue(note, note.endsWith(ORDINARY_FACT + ".")); //$NON-NLS-1$
+        assertFalse(note, note.contains("was exported")); //$NON-NLS-1$
+        assertNoRemovedClaim("the already-Extended ordinary module's not-on-disk note", note); //$NON-NLS-1$
+
+        for (BuildUtils.DiskExportState queue : new BuildUtils.DiskExportState[] { BuildUtils.DiskExportState.PENDING,
+            BuildUtils.DiskExportState.UNOBSERVABLE })
+        {
+            freshPlatform();
+            reports(MdPropertyState.EXTENDED);
+            env.exportState = queue;
+            Result result = run(ORDINARY);
+            assertEquals(queue.name(), Outcome.ALREADY_EXTENDED, result.outcome());
+            assertFalse(queue.name(), result.failed());
+            assertTrue(result.bodySentence(), result.bodySentence().contains(ORDINARY_FACT));
+        }
+        freshPlatform();
+        reports(MdPropertyState.EXTENDED);
+        env.exportAccepted = false;
+        Result refused = run(ORDINARY);
+        assertEquals(Outcome.ALREADY_EXTENDED, refused.outcome());
+        assertFalse(refused.failed());
+        assertTrue(refused.bodySentence(), refused.bodySentence().contains("the export of the .mdo could not be " //$NON-NLS-1$
+            + "scheduled, so the .mdo on disk may still lack that line")); //$NON-NLS-1$
+        assertTrue(refused.bodySentence(), refused.bodySentence().contains(ORDINARY_FACT));
+
+        // The contrast: the same evidence on the SESSION module, already Extended, refuses the write.
+        freshPlatform();
+        reports(MdPropertyState.EXTENDED);
+        env.disk.add(AdoptedModuleState.LineOnDisk.ABSENT);
+        Result session = run("src/Configuration/SessionModule.bsl"); //$NON-NLS-1$
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, session.outcome());
+        assertTrue(session.failed());
+        assertTrue(session.failureMessage(), session.failureMessage().contains("the module state of the extension's " //$NON-NLS-1$
+            + "root object (Configuration) is already Extended in EDT's model, but")); //$NON-NLS-1$
+    }
+
+    /**
+     * An ordinary-application module whose .mdo cannot be read back: the note says the file could not be READ - never
+     * that the line is missing, never that the .mdo was exported - after a switch and when the state already was
+     * Extended alike, and why it does not fail the write.
+     */
+    @Test
+    public void testAnUnreadableMdoOfTheOrdinaryApplicationModuleIsANoteThatSaysSo()
+    {
+        reports(MdPropertyState.NONE);
+        env.disk.add(AdoptedModuleState.LineOnDisk.UNREADABLE);
+        Result switched = run(ORDINARY);
+        assertEquals(Outcome.SWITCHED, switched.outcome());
+        assertFalse(switched.failed());
+        assertNull(switched.failureMessage());
+        assertEquals("switchedToExtended", switched.frontMatterValue()); //$NON-NLS-1$
+        String body = switched.bodySentence();
+        assertTrue(body, body.contains("its module state was switched from None to Extended " //$NON-NLS-1$
+            + "(<ordinaryApplicationModule>Extended</ordinaryApplicationModule> in src/Configuration/Configuration.mdo), " //$NON-NLS-1$
+            + "but the export of the .mdo was requested and the .mdo could not be read back to confirm that line within " //$NON-NLS-1$
+            + "60s. ")); //$NON-NLS-1$
+        assertTrue(body, body.endsWith(ORDINARY_FACT + ".")); //$NON-NLS-1$
+        assertFalse(body, body.contains("did not carry")); //$NON-NLS-1$
+        assertFalse(body, body.contains("was exported")); //$NON-NLS-1$
+        assertNoRemovedClaim("the ordinary module's unreadable-mdo note", body); //$NON-NLS-1$
+
+        freshPlatform();
+        reports(MdPropertyState.EXTENDED);
+        env.disk.add(AdoptedModuleState.LineOnDisk.UNREADABLE);
+        Result already = run(ORDINARY);
+        assertEquals(Outcome.ALREADY_EXTENDED, already.outcome());
+        assertFalse(already.failed());
+        assertNull(already.failureMessage());
+        assertEquals("alreadyExtended", already.frontMatterValue()); //$NON-NLS-1$
+        String note = already.bodySentence();
+        assertNotNull(note);
+        assertTrue(note, note.startsWith("The module state of the extension's root object (Configuration) is already " //$NON-NLS-1$
+            + "Extended (<ordinaryApplicationModule>Extended</ordinaryApplicationModule> in " //$NON-NLS-1$
+            + "src/Configuration/Configuration.mdo), but the export of the .mdo was requested again to match the model " //$NON-NLS-1$
+            + "and the .mdo could not be read back to confirm that line within 60s. Nothing was rolled back;")); //$NON-NLS-1$
+        assertTrue(note, note.endsWith(ORDINARY_FACT + ".")); //$NON-NLS-1$
+        assertFalse(note, note.contains("did not carry")); //$NON-NLS-1$
+        assertFalse(note, note.contains("was exported")); //$NON-NLS-1$
+        assertNoRemovedClaim("the already-Extended ordinary module's unreadable-mdo note", note); //$NON-NLS-1$
+    }
+
+    /**
+     * A refused export of the ordinary-application module is decided by one read of the .mdo too, and never fails the
+     * write: a file that carries the line is the confirmed success - a switch says the .mdo was exported, a module
+     * already Extended says nothing beyond the key, and neither needs the note - while one that does not (absent or
+     * unreadable) is the note that the export could not be scheduled, never an error.
+     */
+    @Test
+    public void testARefusedExportOfTheOrdinaryApplicationModuleIsDecidedByOneReadAndNeverFails()
+    {
+        for (MdPropertyState before : new MdPropertyState[] { MdPropertyState.NONE, MdPropertyState.EXTENDED })
+        {
+            for (AdoptedModuleState.LineOnDisk disk : AdoptedModuleState.LineOnDisk.values())
+            {
+                freshPlatform();
+                reports(before);
+                env.exportAccepted = false;
+                env.disk.add(disk);
+                String what = before.getName() + " / " + disk; //$NON-NLS-1$
+                Result result = run(ORDINARY);
+                assertEquals(what, MdPropertyState.NONE.equals(before) ? Outcome.SWITCHED : Outcome.ALREADY_EXTENDED,
+                    result.outcome());
+                assertFalse(what, result.failed());
+                assertNull(what, result.failureMessage());
+                assertEquals(what, Arrays.asList("forceExport:Configuration", //$NON-NLS-1$
+                    "readMdo:src/Configuration/Configuration.mdo#extension/ordinaryApplicationModule"), //$NON-NLS-1$
+                    env.exportAndDiskCalls());
+                String body = result.bodySentence();
+                if (disk == AdoptedModuleState.LineOnDisk.PRESENT && MdPropertyState.NONE.equals(before))
+                {
+                    assertTrue(what + ": " + body, body.contains(", and the .mdo was exported.")); //$NON-NLS-1$ //$NON-NLS-2$
+                    assertFalse(what + ": " + body, body.contains(ORDINARY_FACT)); //$NON-NLS-1$
+                }
+                else if (disk == AdoptedModuleState.LineOnDisk.PRESENT)
+                {
+                    assertNull(what + ": the line is on disk, the key alone says it", body); //$NON-NLS-1$
+                }
+                else
+                {
+                    assertTrue(what + ": " + body, body.contains("could not be scheduled")); //$NON-NLS-1$ //$NON-NLS-2$
+                    assertTrue(what + ": " + body, body.contains(ORDINARY_FACT)); //$NON-NLS-1$
+                    assertFalse(what + ": " + body, body.contains("was exported")); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
+        }
     }
 
     /** A step that could not run on the ordinary-application module does not fail the write: a note. */
@@ -1157,11 +2121,12 @@ public class AdoptedModuleStateTest
     // ==================== Result: what each outcome says ====================
 
     /**
-     * Only a failure or an unconfirmed switch fails the write. A state left as it is and a missing
-     * extension block are successes now: the text is written, and the key says what was found.
+     * Only a failure or an unconfirmed export fails the write - after a switch and for a module that already was
+     * Extended alike. A state left as it is and a missing extension block are successes: the text is written, and
+     * the key says what was found.
      */
     @Test
-    public void testOnlyAFailureOrAnUnconfirmedSwitchFailsTheWrite()
+    public void testOnlyAFailureOrAnUnconfirmedExportFailsTheWrite()
     {
         assertFalse(Result.notApplicable().failed());
         assertNull(Result.notApplicable().frontMatterValue());
@@ -1171,7 +2136,17 @@ public class AdoptedModuleStateTest
         assertFalse(AdoptedModuleStateTestFixtures.keptChecked().failed());
         assertFalse(AdoptedModuleStateTestFixtures.noExtensionBlock().failed());
         assertTrue(AdoptedModuleStateTestFixtures.exportNotConfirmed().failed());
+        assertTrue(AdoptedModuleStateTestFixtures.switchedButNotOnDisk().failed());
+        assertTrue(AdoptedModuleStateTestFixtures.alreadyExtended(BuildUtils.DiskExportState.PENDING).failed());
+        assertTrue(AdoptedModuleStateTestFixtures.alreadyExtendedButNotOnDisk().failed());
         assertTrue(AdoptedModuleStateTestFixtures.failedForWantOfAModel().failed());
+        // A refused export is decided by the .mdo, read once: the line there is a success, none is a failure.
+        assertFalse("a refused export after a switch, the line on disk", //$NON-NLS-1$
+            AdoptedModuleStateTestFixtures.switchedWithARefusedExport(true).failed());
+        assertFalse("a refused export of a module already Extended, the line on disk", //$NON-NLS-1$
+            AdoptedModuleStateTestFixtures.alreadyExtendedWithARefusedExport(true).failed());
+        assertTrue(AdoptedModuleStateTestFixtures.switchedWithARefusedExport(false).failed());
+        assertTrue(AdoptedModuleStateTestFixtures.alreadyExtendedWithARefusedExport(false).failed());
     }
 
     /** Each outcome a write reports has its own key value; a failure has none. */
@@ -1184,6 +2159,7 @@ public class AdoptedModuleStateTest
         assertEquals("keptChecked", AdoptedModuleStateTestFixtures.keptChecked().frontMatterValue()); //$NON-NLS-1$
         assertEquals("noExtensionBlock", AdoptedModuleStateTestFixtures.noExtensionBlock().frontMatterValue()); //$NON-NLS-1$
         assertNull(AdoptedModuleStateTestFixtures.exportNotConfirmed().frontMatterValue());
+        assertNull(AdoptedModuleStateTestFixtures.alreadyExtendedButNotOnDisk().frontMatterValue());
         assertNull(AdoptedModuleStateTestFixtures.failedForWantOfAModel().frontMatterValue());
     }
 
@@ -1219,10 +2195,19 @@ public class AdoptedModuleStateTest
             {
                 for (String path : Arrays.asList(DRY_SIGNAL, "src/Configuration/SessionModule.bsl", ORDINARY)) //$NON-NLS-1$
                 {
-                    freshPlatform();
-                    reports(before);
-                    env.exportState = state;
-                    results.add(run(path));
+                    // What the .mdo read back holds: the healthy default, a missing line, an unreadable file.
+                    for (AdoptedModuleState.LineOnDisk disk : new AdoptedModuleState.LineOnDisk[] { null,
+                        AdoptedModuleState.LineOnDisk.ABSENT, AdoptedModuleState.LineOnDisk.UNREADABLE })
+                    {
+                        freshPlatform();
+                        reports(before);
+                        env.exportState = state;
+                        if (disk != null)
+                        {
+                            env.disk.add(disk);
+                        }
+                        results.add(run(path));
+                    }
                     freshPlatform();
                     reports(before);
                     env.exportAccepted = false;
@@ -1270,6 +2255,29 @@ public class AdoptedModuleStateTest
         List<Result> failures = new ArrayList<>();
         failures.add(AdoptedModuleStateTestFixtures.exportNotConfirmed());
         failures.add(AdoptedModuleStateTestFixtures.failedForWantOfAModel());
+        failures.add(AdoptedModuleStateTestFixtures.switchedButNotOnDisk());
+        failures.add(AdoptedModuleStateTestFixtures.alreadyExtendedButNotOnDisk());
+        failures.add(AdoptedModuleStateTestFixtures.alreadyExtended(BuildUtils.DiskExportState.PENDING));
+
+        freshPlatform(); // the queue drained, the .mdo cannot be read back
+        reports(MdPropertyState.NONE);
+        env.disk.add(AdoptedModuleState.LineOnDisk.UNREADABLE);
+        failures.add(run(DRY_SIGNAL));
+
+        freshPlatform(); // already Extended, the .mdo cannot be read back
+        reports(MdPropertyState.EXTENDED);
+        env.disk.add(AdoptedModuleState.LineOnDisk.UNREADABLE);
+        failures.add(run(DRY_SIGNAL));
+
+        freshPlatform(); // already Extended, the export cannot be scheduled
+        reports(MdPropertyState.EXTENDED);
+        env.exportAccepted = false;
+        failures.add(run(DRY_SIGNAL));
+
+        freshPlatform(); // an extension EDT has not registered, told by its nature, without its model
+        env.extension = false;
+        env.model = null;
+        failures.add(run(DRY_SIGNAL));
 
         freshPlatform();
         reports(MdPropertyState.NONE);

@@ -6,11 +6,29 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.ParserConfigurationException;
+
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.SAXException;
+import org.xml.sax.helpers.DefaultHandler;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
@@ -50,9 +68,26 @@ import com.ditrix.edt.mcp.server.Activator;
  * listener's own calls: the owner is found from the file's path, the feature from the file's stem, and
  * {@link IMdAdoptedPropertyAccess#hasPropertyState} with {@code NONE} gates
  * {@link IMdAdoptedPropertyAccess#setPropertyState} with {@code EXTENDED}, made on the transaction's copy
- * of the owner inside a write task. Then the owner's TOP object is force-exported and the export is
- * awaited within the metadata writes' budget - also when the state was already {@code Extended}, which
- * is how the listener leaves it, so the {@code .mdo} is brought in line with the model.
+ * of the owner inside a write task. Then the owner's TOP object is force-exported - also when the state
+ * was already {@code Extended}, which is how the listener leaves it, so the {@code .mdo} is brought in
+ * line with the model - and the export is confirmed by the FILE: after the export queue's wait, the
+ * {@code .mdo} is read back from disk for the module's own state line until it carries it, within the
+ * metadata writes' one budget. The queue cannot confirm it: EDT's export task processor catches a failed
+ * file write (a locked or read-only file, a full disk), so the queue DRAINS all the same, and an
+ * UNOBSERVABLE queue says nothing either way (see {@link BuildUtils#waitForDiskExport}). An export the
+ * platform does not accept is never waited for - nothing was queued - but the file still decides it: the
+ * {@code .mdo} is read once, at once, so one that already carries the line (recorded in EDT's UI, or by an
+ * earlier write) confirms it all the same.
+ * <p>
+ * An export the file does not confirm fails the write - the text written, nothing rolled back - whether the
+ * step switched the state or found it already {@code Extended}: the listener flips the model in reaction to
+ * the same write, so which of the two the step finds is a race, and the file, the one evidence, gets one
+ * verdict. The ordinary-application module is the exception (below).
+ * <p>
+ * The step runs in a configuration extension only. EDT's project registry is asked first, but it also
+ * says "no" for a project it has not registered - as while it disposes and restarts a project's context,
+ * which can fall between the write and this step - so its "no" is checked against the project's
+ * persistent nature: only a project that verifiably lacks the extension's nature is no extension.
  * <p>
  * It never switches a state back (EDT keeps {@code Extended} when a module is emptied), never touches
  * {@code Checked} or {@code Notify}, and never creates a missing extension block - the platform's set
@@ -80,7 +115,9 @@ import com.ditrix.edt.mcp.server.Activator;
  * ({@code <form>Extended</form>}) is set when the form is adopted.
  * <p>
  * Until EDT has registered the project's BM model, an adopted object cannot be told from one of the
- * extension's own: a write into any module of the strict reading then fails as a transient error.
+ * extension's own: a write into any module of the strict reading then fails as a transient error. An
+ * extension project EDT has not (re)registered yet is still told an extension by its persistent nature, so
+ * it gets the same answer, never a silent skip.
  * <p>
  * A dry-run mode of {@code write_module_source} (issue #465) must skip this step: it changes the model
  * and exports the owner's {@code .mdo}.
@@ -91,11 +128,35 @@ public final class AdoptedModuleState
     public static final String FRONT_MATTER_KEY = "moduleExtensionState"; //$NON-NLS-1$
 
     /**
-     * How long to wait for the owner's {@code .mdo} export: the budget the metadata write tools give
-     * their own export (AbstractMetadataWriteTool's EXPORT_DEADLINE_MS, whose javadoc carries the
-     * measurement - 0.02-0.15s on a healthy workspace).
+     * The one budget for the owner's {@code .mdo} export - the export queue's wait and the reads of the file
+     * back together, counted from the request: the budget the metadata write tools give their own export
+     * (AbstractMetadataWriteTool's EXPORT_DEADLINE_MS, whose javadoc carries the measurement - 0.02-0.15s on
+     * a healthy workspace).
      */
     static final long EXPORT_DEADLINE_MS = 60_000L;
+
+    /**
+     * The first pause between two reads of the owner's {@code .mdo} while its state line is not there; each
+     * pause doubles, up to {@link #MDO_POLL_MAX_MS}: a prompt second look, then no busier than once a second.
+     */
+    static final long MDO_POLL_FIRST_MS = 100L;
+
+    /** The longest pause between two reads of the owner's {@code .mdo}. */
+    static final long MDO_POLL_MAX_MS = 1_000L;
+
+    /**
+     * The persistent nature of a configuration-extension project - {@code ICoreConstants.V8_EXTENSION_NATURE}
+     * of EDT 2026.1 and 2026.2 alike. Named here, as ProjectStateChecker names it: the constant's package is
+     * not imported.
+     */
+    private static final List<String> EXTENSION_NATURE =
+        Collections.singletonList("com._1c.g5.v8.dt.core.V8ExtensionNature"); //$NON-NLS-1$
+
+    /** The {@code .mdo} element of an object's extension block. */
+    private static final String EXTENSION_ELEMENT = "extension"; //$NON-NLS-1$
+
+    /** The {@code .mdo} element holding a contained object's Name. */
+    private static final String NAME_ELEMENT = "name"; //$NON-NLS-1$
 
     private static final String CONFIGURATION = "Configuration"; //$NON-NLS-1$
     private static final String BSL = ".bsl"; //$NON-NLS-1$
@@ -143,9 +204,15 @@ public final class AdoptedModuleState
     {
         /** Not the module of an adopted object in an extension: nothing was done. */
         NOT_APPLICABLE,
-        /** The state was None and is now Extended; the owner's {@code .mdo} export was requested. */
+        /**
+         * The state was None and is now Extended, and the owner's {@code .mdo}, read back, carries the line - or,
+         * on the ordinary-application module, a note says it does not.
+         */
         SWITCHED,
-        /** The state already was Extended; the owner's {@code .mdo} export was requested again. */
+        /**
+         * The state already was Extended, and the owner's {@code .mdo}, its export requested again, carries the line
+         * when read back - or, on the ordinary-application module, a note says it does not.
+         */
         ALREADY_EXTENDED,
         /** The adopted owner has no extension block, so there is no state to record: a success, with a note. */
         NO_EXTENSION_BLOCK,
@@ -156,21 +223,57 @@ public final class AdoptedModuleState
         OTHER_STATE,
         /** The step could not be carried out. */
         FAILED,
-        /** The state was switched, but the owner's {@code .mdo} export was not confirmed. */
+        /**
+         * The state is Extended in EDT's model - switched by this call, or found so - but the export of the
+         * owner's {@code .mdo} is not confirmed: the file was not seen carrying the module's state line - read
+         * back within the budget after an accepted export request, read ONCE when the export could not be
+         * scheduled, and not read at all when there is no file or line to look for. One outcome for both: which
+         * of the two the step found is a race with EDT's own listener.
+         */
         EXPORT_NOT_CONFIRMED
     }
 
-    /** How the owner's {@code .mdo} export ended. */
+    /**
+     * How the export of the owner's {@code .mdo} ended - decided by the FILE, never by the queue alone (the queue
+     * drains also when EDT fails to write the file): read back after the queue's wait, or read once when the
+     * export could not be scheduled.
+     */
     enum Export
     {
-        /** The export queue drained within the budget. */
-        DRAINED,
-        /** The export was requested, but its completion cannot be observed. */
-        UNOBSERVABLE,
-        /** The export was requested and not confirmed within the budget. */
+        /**
+         * The {@code .mdo}, read back, carries the module's state line - also when the export could not be
+         * scheduled and the file, read once, already carried it. The only confirmed export.
+         */
+        WRITTEN,
+        /**
+         * The export was requested and the queue drained or could not be observed, but the {@code .mdo}, read
+         * back until the budget ran out, did not carry the line.
+         */
+        MISSING,
+        /**
+         * The export was requested and the queue drained or could not be observed, but the {@code .mdo} could
+         * not be read back - or parsed - until the budget ran out.
+         */
+        UNREADABLE,
+        /** The export was requested, the queue did not drain within the budget, and the line was not seen. */
         PENDING,
-        /** The platform accepted no export request. */
+        /**
+         * The export could not be scheduled - the platform accepted no request, or exporting threw - and the
+         * {@code .mdo}, read once, was not seen carrying the line: absent, unreadable, or no file or line to look
+         * for.
+         */
         NOT_SCHEDULED
+    }
+
+    /** What one read of the owner's {@code .mdo} found for the module's state line. */
+    enum LineOnDisk
+    {
+        /** The owner's own extension block carries the module's element with {@code Extended}. */
+        PRESENT,
+        /** The file was read and parsed, and the owner's block does not carry that line. */
+        ABSENT,
+        /** The file could not be read or parsed - EDT may be writing it - so it says nothing either way. */
+        UNREADABLE
     }
 
     /**
@@ -182,9 +285,17 @@ public final class AdoptedModuleState
     {
         /**
          * @param project the project the module was written in
-         * @return whether it is a configuration extension
+         * @return whether EDT's project registry names it a configuration extension - {@code false} also for
+         *     a project it has not registered (yet, or again)
          */
         boolean isExtensionProject(IProject project);
+
+        /**
+         * @param project the project the module was written in
+         * @return whether its persistent description carries the extension's nature, or {@code null} when its
+         *     natures cannot be read - which is never "no"
+         */
+        Boolean hasExtensionNature(IProject project);
 
         /**
          * @param project the project the module was written in
@@ -215,6 +326,25 @@ public final class AdoptedModuleState
          * @return how the export wait ended
          */
         BuildUtils.DiskExportState awaitExport(IProject project, long timeoutMs);
+
+        /**
+         * Reads a {@code .mdo} as it is on disk NOW and looks for the module's state line in it.
+         *
+         * @param project the project
+         * @param mdoPath the project-relative {@code .mdo}
+         * @param line the line to look for
+         * @return what the read found; never {@code null}
+         */
+        LineOnDisk readStateLine(IProject project, String mdoPath, StateLine line);
+
+        /** @return a monotonic clock, in milliseconds */
+        long currentTimeMillis();
+
+        /**
+         * @param ms how long to wait
+         * @return {@code false} when the wait was interrupted - the interrupt flag is kept for the caller
+         */
+        boolean pause(long ms);
     }
 
     /** The production platform. */
@@ -224,6 +354,12 @@ public final class AdoptedModuleState
         public boolean isExtensionProject(IProject project)
         {
             return ExtensionOriginUtils.isExtensionProject(project);
+        }
+
+        @Override
+        public Boolean hasExtensionNature(IProject project)
+        {
+            return ProjectContext.hasAnyNature(project, EXTENSION_NATURE);
         }
 
         @Override
@@ -270,7 +406,57 @@ public final class AdoptedModuleState
         {
             return BuildUtils.waitForDiskExport(project, timeoutMs);
         }
+
+        @Override
+        public LineOnDisk readStateLine(IProject project, String mdoPath, StateLine line)
+        {
+            return line.in(mdoBytes(project, mdoPath));
+        }
+
+        @Override
+        public long currentTimeMillis()
+        {
+            return TimeUnit.NANOSECONDS.toMillis(System.nanoTime());
+        }
+
+        @Override
+        public boolean pause(long ms)
+        {
+            try
+            {
+                Thread.sleep(ms);
+                return true;
+            }
+            catch (InterruptedException e)
+            {
+                // The call is being cancelled: stop reading, and keep the interrupt for the caller.
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
     };
+
+    /**
+     * The bytes of a project's file as they are on the FILE SYSTEM - what EDT's export wrote, not the
+     * workspace's view of it - read through NIO, which on Windows shares the file for writing and deleting,
+     * so a read never stands in the way of the export it waits for.
+     *
+     * @param project the project
+     * @param projectRelativePath the file
+     * @return the bytes, or {@code null} when the file has no location or cannot be read
+     */
+    private static byte[] mdoBytes(IProject project, String projectRelativePath)
+    {
+        try
+        {
+            IPath location = project.getFile(new Path(projectRelativePath)).getLocation();
+            return location == null ? null : Files.readAllBytes(location.toFile().toPath());
+        }
+        catch (IOException | RuntimeException e) // NOSONAR an unreadable file is an answer (not confirmed), not a crash
+        {
+            return null;
+        }
+    }
 
     private AdoptedModuleState()
     {
@@ -391,6 +577,158 @@ public final class AdoptedModuleState
         }
         return CONFIGURATION.equals(topObjectFqn) ? CONFIGURATION_MDO
             : MetadataPathResolver.resolveTopObjectMdoPath(topObjectFqn);
+    }
+
+    /**
+     * Where a module's state line sits in its owner's top-object {@code .mdo}: down the containment steps from
+     * the top object to the owner - each an element named as the containment feature, told by its
+     * {@code <name>} - then the owner's OWN {@code <extension>} block, in which the state is the element named
+     * as the module feature ({@code <module>Extended</module>}, {@code <commandModule>Extended</commandModule>}).
+     * Scoped on purpose: a top object's {@code .mdo} also holds the blocks of its forms, commands and
+     * attributes, and a sibling command's {@code Extended} line is not this command's. Package-visible for tests.
+     */
+    static final class StateLine
+    {
+        /** The containment features from the top object down to the owner. */
+        private final List<String> features;
+        /** The Names of the objects along those steps. */
+        private final List<String> names;
+        /** The module feature's name: the state's element. */
+        private final String element;
+
+        private StateLine(List<String> features, List<String> names, String element)
+        {
+            this.features = features;
+            this.names = names;
+            this.element = element;
+        }
+
+        /**
+         * @param owner the module's owner, as the model holds it (read inside a model read)
+         * @param moduleFeature its module feature
+         * @return the owner's state line, or {@code null} when the owner cannot be addressed by containment and
+         *     Name from its top object
+         */
+        static StateLine of(EObject owner, EStructuralFeature moduleFeature)
+        {
+            if (owner == null || moduleFeature == null)
+            {
+                return null;
+            }
+            List<String> features = new ArrayList<>();
+            List<String> names = new ArrayList<>();
+            // Up to the top object: a configuration's collections only REFER to its top objects, so the
+            // containment root is the top object whose .mdo the export writes; a command is CONTAINED by it.
+            for (EObject current = owner; current.eContainer() != null; current = current.eContainer())
+            {
+                EReference containment = current.eContainmentFeature();
+                String name = current instanceof MdObject ? ((MdObject)current).getName() : null;
+                if (containment == null || name == null || name.isEmpty())
+                {
+                    return null;
+                }
+                features.add(0, containment.getName());
+                names.add(0, name);
+            }
+            return new StateLine(features, names, moduleFeature.getName());
+        }
+
+        /**
+         * Looks for the line in a {@code .mdo}'s bytes with the hardened parser ({@link SecureXml}).
+         *
+         * @param mdo the file's bytes, may be {@code null}
+         * @return PRESENT, ABSENT, or UNREADABLE for no bytes or bytes that do not parse - a file being
+         *     written proves nothing either way
+         */
+        LineOnDisk in(byte[] mdo)
+        {
+            if (mdo == null || mdo.length == 0)
+            {
+                return LineOnDisk.UNREADABLE;
+            }
+            Element current;
+            try
+            {
+                DocumentBuilder builder = SecureXml.documentBuilderFactory().newDocumentBuilder();
+                // Silent: a malformed file is an answer here, not a message for the console.
+                builder.setErrorHandler(new DefaultHandler());
+                current = builder.parse(new ByteArrayInputStream(mdo)).getDocumentElement();
+            }
+            catch (ParserConfigurationException | SAXException | IOException | RuntimeException e) // NOSONAR an unparsable file is an answer
+            {
+                return LineOnDisk.UNREADABLE;
+            }
+            for (int i = 0; current != null && i < features.size(); i++)
+            {
+                current = namedChild(current, features.get(i), names.get(i));
+            }
+            Element block = current == null ? null : firstChild(current, EXTENSION_ELEMENT);
+            if (block == null)
+            {
+                return LineOnDisk.ABSENT;
+            }
+            for (Element state : children(block, element))
+            {
+                if (MdPropertyState.EXTENDED.getLiteral().equals(state.getTextContent().trim()))
+                {
+                    return LineOnDisk.PRESENT;
+                }
+            }
+            return LineOnDisk.ABSENT;
+        }
+
+        /** The direct child element {@code feature} whose own {@code <name>} is {@code name}, or {@code null}. */
+        private static Element namedChild(Element parent, String feature, String name)
+        {
+            for (Element child : children(parent, feature))
+            {
+                Element childName = firstChild(child, NAME_ELEMENT);
+                if (childName != null && name.equals(childName.getTextContent().trim()))
+                {
+                    return child;
+                }
+            }
+            return null;
+        }
+
+        private static Element firstChild(Element parent, String name)
+        {
+            List<Element> found = children(parent, name);
+            return found.isEmpty() ? null : found.get(0);
+        }
+
+        /** The DIRECT child elements named {@code name} - never a deeper one: that would be another object's. */
+        private static List<Element> children(Element parent, String name)
+        {
+            List<Element> found = new ArrayList<>();
+            NodeList nodes = parent.getChildNodes();
+            for (int i = 0; i < nodes.getLength(); i++)
+            {
+                Node node = nodes.item(i);
+                if (node instanceof Element)
+                {
+                    Element child = (Element)node;
+                    String local = child.getLocalName() == null ? child.getNodeName() : child.getLocalName();
+                    if (name.equals(local))
+                    {
+                        found.add(child);
+                    }
+                }
+            }
+            return found;
+        }
+
+        /** E.g. {@code commands[Fill]/extension/commandModule} - how the fake platform and the logs name it. */
+        @Override
+        public String toString()
+        {
+            StringBuilder path = new StringBuilder();
+            for (int i = 0; i < features.size(); i++)
+            {
+                path.append(features.get(i)).append('[').append(names.get(i)).append("]/"); //$NON-NLS-1$
+            }
+            return path.append(EXTENSION_ELEMENT).append('/').append(element).toString();
+        }
     }
 
     /** What the state decision found. Package-visible for tests. */
@@ -554,7 +892,7 @@ public final class AdoptedModuleState
         Probe probe = null;
         try
         {
-            if (!env.isExtensionProject(project) || scope == null || scope.configuration() == null)
+            if (!isExtension(project, env) || scope == null || scope.configuration() == null)
             {
                 return Result.notApplicable();
             }
@@ -581,9 +919,9 @@ public final class AdoptedModuleState
             switch (verdict.kind)
             {
             case SWITCH:
-                return Result.exported(Outcome.SWITCHED, context, export(project, probe.topFqn, env));
+                return Result.exported(Outcome.SWITCHED, context, export(project, probe, env));
             case ALREADY_EXTENDED:
-                return Result.exported(Outcome.ALREADY_EXTENDED, context, export(project, probe.topFqn, env));
+                return Result.exported(Outcome.ALREADY_EXTENDED, context, export(project, probe, env));
             case NO_EXTENSION_BLOCK:
                 return Result.finding(Outcome.NO_EXTENSION_BLOCK, context, null);
             case OTHER_STATE:
@@ -611,6 +949,19 @@ public final class AdoptedModuleState
         }
     }
 
+    /**
+     * Whether the module was written in a configuration extension. EDT's project registry is asked first; its
+     * "no" is also what it says for a project it has not registered - as while it disposes and restarts a
+     * project's context, which can fall between the write and this step - so that "no" stands only when the
+     * project's persistent nature verifiably is not the extension's. Natures that cannot be read are no proof
+     * either: the step goes on, and the model and the owner's own belonging decide - without the model, it is
+     * the transient failure that says the text is written; with it, only an ADOPTED owner is touched.
+     */
+    private static boolean isExtension(IProject project, Environment env)
+    {
+        return env.isExtensionProject(project) || !Boolean.FALSE.equals(env.hasExtensionNature(project));
+    }
+
     /** The context of a step that stopped on an exception: what the read had found by then, if anything. */
     private static Result.Context contextOf(ModuleAddress address, String projectRelativePath, IProject project,
         Probe probe)
@@ -627,13 +978,16 @@ public final class AdoptedModuleState
         final Verdict verdict;
         /** The model's FQN of the owner's top object; taken only when the finding names its {@code .mdo}. */
         final String topFqn;
+        /** Where the module's state line sits in that {@code .mdo}; taken with {@link #topFqn}. */
+        final StateLine line;
 
-        Probe(EObject owner, EStructuralFeature feature, Verdict verdict, String topFqn)
+        Probe(EObject owner, EStructuralFeature feature, Verdict verdict, String topFqn, StateLine line)
         {
             this.owner = owner;
             this.feature = feature;
             this.verdict = verdict;
             this.topFqn = topFqn;
+            this.line = line;
         }
     }
 
@@ -646,11 +1000,15 @@ public final class AdoptedModuleState
             : MetadataNodeResolver.resolveAddress(scope, address.ownerFqn, false);
         if (owner == null)
         {
-            return new Probe(null, null, Verdict.of(Verdict.Kind.NOT_APPLICABLE), null);
+            return new Probe(null, null, Verdict.of(Verdict.Kind.NOT_APPLICABLE), null, null);
         }
         EStructuralFeature feature = moduleFeature(owner.eClass(), address.stem);
         Verdict verdict = decide(owner, feature, access);
-        return new Probe(owner, feature, verdict, verdict.namesTheMdo() ? env.topObjectFqn(owner) : null);
+        if (!verdict.namesTheMdo())
+        {
+            return new Probe(owner, feature, verdict, null, null);
+        }
+        return new Probe(owner, feature, verdict, env.topObjectFqn(owner), StateLine.of(owner, feature));
     }
 
     /**
@@ -675,31 +1033,113 @@ public final class AdoptedModuleState
     }
 
     /**
-     * Requests the export of the owner's top object and waits for it. A refused request is reported as
-     * such and never waited for: the queue would be empty, the wait would "drain", and the answer would
-     * claim an export that was never queued. Never throws: the state is committed by now, so a failure
-     * here is an unconfirmed export, not a failed step.
+     * Requests the export of the owner's top object, waits for the export queue, then reads the {@code .mdo}
+     * back for the module's state line - ONE budget, counted from the request, for both. A refused request is
+     * never waited for: the queue would be empty, the wait would "drain", and the answer would claim an export
+     * that was never queued - but the file still decides it ({@link #unscheduled}). Never throws: the state is
+     * committed by now, so a failure here is an unconfirmed export, not a failed step.
      */
-    private static Export export(IProject project, String topFqn, Environment env)
+    private static Export export(IProject project, Probe probe, Environment env)
     {
+        String topFqn = probe.topFqn;
         try
         {
             if (topFqn == null || topFqn.isEmpty() || !env.forceExport(project, topFqn))
             {
-                return Export.NOT_SCHEDULED;
+                return unscheduled(project, topFqn, probe.line, env);
             }
-            BuildUtils.DiskExportState state = env.awaitExport(project, EXPORT_DEADLINE_MS);
-            if (state == BuildUtils.DiskExportState.DRAINED)
+            // The queue's wait starts the budget; the reads of the file get what it leaves.
+            long deadline = env.currentTimeMillis() + EXPORT_DEADLINE_MS;
+            BuildUtils.DiskExportState queue = env.awaitExport(project, EXPORT_DEADLINE_MS);
+            Export export = confirmOnDisk(project, mdoPathOf(topFqn), probe.line, queue, deadline, env);
+            if (export != Export.WRITTEN)
             {
-                return Export.DRAINED;
+                Activator.logInfo("Module state line " + probe.line + " not seen in the .mdo of " + topFqn //$NON-NLS-1$ //$NON-NLS-2$
+                    + " within " + EXPORT_DEADLINE_MS + "ms after its export (queue: " + queue + "): " + export); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             }
-            return state == BuildUtils.DiskExportState.PENDING ? Export.PENDING : Export.UNOBSERVABLE;
+            return export;
         }
         catch (RuntimeException e)
         {
             Activator.logError("Could not export the .mdo of " + topFqn + " after setting a module state", e); //$NON-NLS-1$ //$NON-NLS-2$
-            return Export.NOT_SCHEDULED;
+            return unscheduled(project, topFqn, probe.line, env);
         }
+    }
+
+    /**
+     * An export that could not be scheduled - the platform accepted no request, or exporting threw - is decided
+     * by the FILE all the same: nothing was queued that could still change the {@code .mdo}, so it is read ONCE,
+     * at once - never polled, never waited for. A file that already carries the module's state line (recorded in
+     * EDT's UI, or by an earlier write) is the evidence a confirmed export leaves: WRITTEN. A line not seen -
+     * absent, unreadable, a read that throws, or no file or line to look for - leaves it NOT_SCHEDULED. Never
+     * throws.
+     *
+     * @param project the project
+     * @param topFqn the model's FQN of the owner's top object, may be {@code null} (no file to read)
+     * @param line the module's state line, may be {@code null} (nothing to look for)
+     * @param env the platform
+     * @return WRITTEN or NOT_SCHEDULED
+     */
+    private static Export unscheduled(IProject project, String topFqn, StateLine line, Environment env)
+    {
+        LineOnDisk seen = LineOnDisk.UNREADABLE;
+        try
+        {
+            String mdoPath = mdoPathOf(topFqn);
+            if (mdoPath != null && line != null)
+            {
+                seen = env.readStateLine(project, mdoPath, line);
+            }
+        }
+        catch (RuntimeException e) // NOSONAR a read that throws sees no line: an answer, not a crash
+        {
+            seen = LineOnDisk.UNREADABLE;
+        }
+        return seen == LineOnDisk.PRESENT ? Export.WRITTEN : Export.NOT_SCHEDULED;
+    }
+
+    /**
+     * Confirms an export by the FILE. The queue's answer cannot: EDT's export task processor catches a failed
+     * file write (a locked or read-only {@code .mdo}, a full disk), so DRAINED means only that nothing is queued
+     * any more, and UNOBSERVABLE means nothing at all. So the {@code .mdo} is read back - after the wait, never
+     * before - until it carries the module's own state line or the budget is spent; the first read that finds
+     * the line ends it, whatever the queue said. An interrupted pause ends it too: the call is being cancelled.
+     *
+     * @param project the project
+     * @param mdoPath the owner's top-object {@code .mdo}, may be {@code null} (nothing to read: not confirmed)
+     * @param line the state line, may be {@code null} (nothing to look for: not confirmed)
+     * @param queue how the export queue's wait ended
+     * @param deadline when the budget ends, on {@link Environment#currentTimeMillis()}'s clock
+     * @param env the platform
+     * @return WRITTEN, or why not
+     */
+    private static Export confirmOnDisk(IProject project, String mdoPath, StateLine line,
+        BuildUtils.DiskExportState queue, long deadline, Environment env)
+    {
+        LineOnDisk seen = LineOnDisk.UNREADABLE;
+        if (mdoPath != null && line != null)
+        {
+            long pause = MDO_POLL_FIRST_MS;
+            while (true)
+            {
+                seen = env.readStateLine(project, mdoPath, line);
+                if (seen == LineOnDisk.PRESENT)
+                {
+                    return Export.WRITTEN;
+                }
+                long left = deadline - env.currentTimeMillis();
+                if (left <= 0 || !env.pause(Math.min(pause, left)))
+                {
+                    break;
+                }
+                pause = Math.min(pause * 2, MDO_POLL_MAX_MS);
+            }
+        }
+        if (queue == BuildUtils.DiskExportState.PENDING)
+        {
+            return Export.PENDING;
+        }
+        return seen == LineOnDisk.ABSENT ? Export.MISSING : Export.UNREADABLE;
     }
 
     /** A FAILED verdict: the platform's refusal (logged at ERROR - it is drift), or a missing service. */
@@ -768,14 +1208,23 @@ public final class AdoptedModuleState
         private final Export export;
         private final String detail;
         private final Cause cause;
+        /** Whether the step found the state already Extended rather than switched it; worded, never decided on. */
+        private final boolean foundExtended;
 
         private Result(Outcome outcome, Context context, Export export, String detail, Cause cause)
+        {
+            this(outcome, context, export, detail, cause, false);
+        }
+
+        private Result(Outcome outcome, Context context, Export export, String detail, Cause cause,
+            boolean foundExtended)
         {
             this.outcome = outcome;
             this.context = context;
             this.export = export;
             this.detail = detail;
             this.cause = cause;
+            this.foundExtended = foundExtended;
         }
 
         /** @return the result of a write that is not into an adopted object's module */
@@ -784,16 +1233,26 @@ public final class AdoptedModuleState
             return NOT_APPLICABLE;
         }
 
+        /**
+         * The result of a step that requested the export of the owner's {@code .mdo}. Only the file confirms an
+         * export - read back after the queue's wait (see confirmOnDisk), or read once when the export could not be
+         * scheduled (see unscheduled) - and ONE piece of evidence gets ONE verdict: a {@code .mdo} that, read back,
+         * does not carry the line, or cannot be read back, fails the write whether this call switched the state or
+         * found it already Extended. EDT's own listener flips the model in reaction to the same {@code .bsl} write,
+         * so which of the two the step found is a race; a verdict that turned on it would make a failed export look
+         * done, by chance, to a caller who checks only the error flag. The ordinary-application module, which EDT
+         * does not list among the properties an extension can extend, is the exception: a note on a success.
+         *
+         * @param state SWITCHED or ALREADY_EXTENDED: what the step found
+         * @param context where the step ran
+         * @param export how the export ended
+         * @return the result
+         */
         static Result exported(Outcome state, Context context, Export export)
         {
-            boolean confirmedEnough = export == Export.DRAINED || export == Export.UNOBSERVABLE;
-            // Only an export this call CAUSED may refuse it: after a switch an unconfirmed export is a
-            // failure, while for a state that was already Extended it is a warning on a success - and for
-            // the ordinary-application module, which EDT does not list among the properties an extension
-            // can extend, a note.
-            Outcome outcome = state == Outcome.SWITCHED && !confirmedEnough
-                && !context.address.isOrdinaryApplicationModule() ? Outcome.EXPORT_NOT_CONFIRMED : state;
-            return new Result(outcome, context, export, null, Cause.NONE);
+            boolean success = export == Export.WRITTEN || context.address.isOrdinaryApplicationModule();
+            return new Result(success ? state : Outcome.EXPORT_NOT_CONFIRMED, context, export, null, Cause.NONE,
+                state == Outcome.ALREADY_EXTENDED);
         }
 
         static Result finding(Outcome outcome, Context context, String state)
@@ -834,10 +1293,10 @@ public final class AdoptedModuleState
 
         /**
          * @return whether the step failed, so the write must answer with an error that says the text
-         *     is written: a failure, or a switch whose {@code .mdo} export was not confirmed - never for
-         *     the ordinary-application module, which EDT does not list among the properties an extension
-         *     can extend. A Checked/Notify state or a missing extension block is no failure: the write
-         *     succeeds, and its key and paragraph say so.
+         *     is written: a failure, or a module Extended in EDT's model - switched or found so - whose
+         *     {@code .mdo} export was not confirmed - never for the ordinary-application module, which EDT
+         *     does not list among the properties an extension can extend. A Checked/Notify state or a
+         *     missing extension block is no failure: the write succeeds, and its key and paragraph say so.
          */
         public boolean failed()
         {
@@ -876,8 +1335,8 @@ public final class AdoptedModuleState
 
         /**
          * The paragraph a successful write adds under its first line: a switch, a state left as it is, a
-         * missing extension block, an export that is not known to have finished, or a step that could not
-         * run on the ordinary-application module. A paragraph on every write into an already-Extended
+         * missing extension block - or, on the ordinary-application module only, an export that is not
+         * confirmed or a step that could not run. A paragraph on every write into an already-Extended
          * module would be noise: the key says that much.
          *
          * @return the paragraph, or {@code null} for none
@@ -893,7 +1352,7 @@ public final class AdoptedModuleState
             case NO_EXTENSION_BLOCK:
                 return noBlockParagraph();
             case ALREADY_EXTENDED:
-                return export == Export.DRAINED ? null : alreadyExtendedParagraph();
+                return confirmed() ? null : alreadyExtendedParagraph();
             case FAILED:
                 return ordinaryApplicationModule() ? "The state of the ordinary-application module of " //$NON-NLS-1$
                     + ownerName() + " was left as it is: " + failureReason() + ". " + ORDINARY_NOTE : null; //$NON-NLS-1$ //$NON-NLS-2$
@@ -937,22 +1396,38 @@ public final class AdoptedModuleState
                 + "."; //$NON-NLS-1$
         }
 
+        /**
+         * A module that already was Extended, whose {@code .mdo} was not seen carrying the line - a note on a
+         * success only on the ordinary-application module: on any other module that fails the write (see
+         * {@link #exported}).
+         */
         private String alreadyExtendedParagraph()
         {
             String already = "The module state of " + ownerName() + " is already Extended (" //$NON-NLS-1$ //$NON-NLS-2$
-                + stateLine("Extended") + ")"; //$NON-NLS-1$ //$NON-NLS-2$
-            if (export == Export.UNOBSERVABLE)
+                + stateLine("Extended") + "), but "; //$NON-NLS-1$ //$NON-NLS-2$
+            String why;
+            switch (export)
             {
-                return already + "; the export of the .mdo was requested again, but its completion could " //$NON-NLS-1$
-                    + "not be observed."; //$NON-NLS-1$
+            case MISSING:
+                why = "the export of the .mdo was requested again to match the model and the .mdo, read back, did " //$NON-NLS-1$
+                    + "not carry that line within " + seconds() + "s"; //$NON-NLS-1$ //$NON-NLS-2$
+                break;
+            case UNREADABLE:
+                why = "the export of the .mdo was requested again to match the model and the .mdo could not be " //$NON-NLS-1$
+                    + "read back to confirm that line within " + seconds() + "s"; //$NON-NLS-1$ //$NON-NLS-2$
+                break;
+            case PENDING:
+                why = "the export of the .mdo, requested again to match the model, was not confirmed within " //$NON-NLS-1$
+                    + seconds() + "s, so the .mdo on disk may still lack that line"; //$NON-NLS-1$
+                break;
+            case NOT_SCHEDULED:
+            default:
+                why = "the export of the .mdo could not be scheduled, so the .mdo on disk may still lack that line"; //$NON-NLS-1$
+                break;
             }
-            String why = export == Export.PENDING
-                ? "the export of the .mdo, requested again to match the model, was not confirmed within " //$NON-NLS-1$
-                    + seconds() + "s" //$NON-NLS-1$
-                : "the export of the .mdo could not be scheduled"; //$NON-NLS-1$
-            return already + ", but " + why + ", so the .mdo on disk may still lack that line. Nothing was " //$NON-NLS-1$ //$NON-NLS-2$
-                + "rolled back; check the line before committing, and if it is still missing once list_projects " //$NON-NLS-1$
-                + "reports the project ready, " + RERUN + "."; //$NON-NLS-1$ //$NON-NLS-2$
+            String note = already + why + ". Nothing was rolled back; check the line before committing, and if it " //$NON-NLS-1$
+                + "is still missing once list_projects reports the project ready, " + RERUN + "."; //$NON-NLS-1$ //$NON-NLS-2$
+            return ordinaryApplicationModule() ? note + " " + ORDINARY_NOTE : note; //$NON-NLS-1$
         }
 
         /**
@@ -972,17 +1447,43 @@ public final class AdoptedModuleState
             switch (outcome)
             {
             case EXPORT_NOT_CONFIRMED:
-                String why = export == Export.PENDING ? "was not confirmed within " + seconds() + "s" //$NON-NLS-1$ //$NON-NLS-2$
-                    : "could not be scheduled"; //$NON-NLS-1$
-                return written + ", and the module state of " + ownerName() + " was switched from None to " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "Extended in EDT's model, but the export of its .mdo " + why + ", so " + mdoName() //$NON-NLS-1$ //$NON-NLS-2$
-                    + " may still lack " + element("Extended") + ". Nothing was rolled back. " + STANDS //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                return written + ", and the module state of " + ownerName() //$NON-NLS-1$
+                    + (foundExtended ? " is already Extended" : " was switched from None to Extended") //$NON-NLS-1$ //$NON-NLS-2$
+                    + " in EDT's model, but " + unconfirmedExport() + ". Nothing was rolled back. " + STANDS //$NON-NLS-1$ //$NON-NLS-2$
                     + " And do not commit the working tree in this state: once list_projects reports the " //$NON-NLS-1$
                     + "project ready, check " + mdoName() + " for that line, and if it is still missing, " //$NON-NLS-1$ //$NON-NLS-2$
                     + RERUN + " - that exports the .mdo again."; //$NON-NLS-1$
             case FAILED:
             default:
                 return written + failedMessage();
+            }
+        }
+
+        /**
+         * Why an export is not confirmed: what was asked of EDT - for a module found already Extended, an export
+         * to bring the {@code .mdo} in line with the model - and what the {@code .mdo} showed. A line the file did
+         * not carry names EDT's log - its export task processor logs a file it fails to write and drains all the
+         * same (2026.1 and 2026.2 bytecode).
+         */
+        private String unconfirmedExport()
+        {
+            String line = element("Extended"); //$NON-NLS-1$
+            String requested = foundExtended ? "requested again to match the model" : "requested"; //$NON-NLS-1$ //$NON-NLS-2$
+            switch (export)
+            {
+            case MISSING:
+                return "the export of its .mdo was " + requested + " and " + mdoName() + ", read back, did not carry " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + line + " within " + seconds() + "s; if EDT failed to write the file (a locked or read-only .mdo, " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "a full disk), its log says so"; //$NON-NLS-1$
+            case UNREADABLE:
+                return "the export of its .mdo was " + requested + " and " + mdoName() //$NON-NLS-1$ //$NON-NLS-2$
+                    + " could not be read back to confirm " + line + " within " + seconds() + "s"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            case PENDING:
+                return "the export of its .mdo" + (foundExtended ? ", " + requested + "," : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                    + " was not confirmed within " + seconds() + "s, so " + mdoName() + " may still lack " + line; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            case NOT_SCHEDULED:
+            default:
+                return "the export of its .mdo could not be scheduled, so " + mdoName() + " may still lack " + line; //$NON-NLS-1$ //$NON-NLS-2$
             }
         }
 
@@ -1028,15 +1529,22 @@ public final class AdoptedModuleState
             }
         }
 
-        /** What happened to the export of the {@code .mdo} after a switch, ending the sentence. */
+        /**
+         * What happened to the export of the {@code .mdo} after a switch, ending the sentence: "exported" only
+         * when the file, read back, carries the line.
+         */
         private String exportClause()
         {
             switch (export)
             {
-            case DRAINED:
+            case WRITTEN:
                 return ", and the .mdo was exported."; //$NON-NLS-1$
-            case UNOBSERVABLE:
-                return ", and the export of the .mdo was requested; its completion could not be observed."; //$NON-NLS-1$
+            case MISSING:
+                return ", but the export of the .mdo was requested and the .mdo, read back, did not carry that line " //$NON-NLS-1$
+                    + "within " + seconds() + "s."; //$NON-NLS-1$ //$NON-NLS-2$
+            case UNREADABLE:
+                return ", but the export of the .mdo was requested and the .mdo could not be read back to confirm " //$NON-NLS-1$
+                    + "that line within " + seconds() + "s."; //$NON-NLS-1$ //$NON-NLS-2$
             case PENDING:
                 return ", but the export of the .mdo was not confirmed within " + seconds() + "s."; //$NON-NLS-1$ //$NON-NLS-2$
             case NOT_SCHEDULED:
@@ -1045,10 +1553,10 @@ public final class AdoptedModuleState
             }
         }
 
-        /** @return whether the export is known to have been made, or at least requested and not refused */
+        /** @return whether the export is confirmed: the {@code .mdo}, read back, carries the module's state line */
         private boolean confirmed()
         {
-            return export == Export.DRAINED || export == Export.UNOBSERVABLE;
+            return export == Export.WRITTEN;
         }
 
         /**

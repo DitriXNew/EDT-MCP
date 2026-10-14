@@ -50,13 +50,17 @@ public final class AdoptedModuleStateTestFixtures
 
     /**
      * A fake platform: answers the questions {@link AdoptedModuleState} asks and records every call,
-     * in order, so a test can pin WHAT was exported and that the wait came after the export.
+     * in order, so a test can pin WHAT was exported, that the wait came after the export and that the
+     * {@code .mdo} was read back after the wait. Its clock is virtual: only {@link #pause} and
+     * {@link #awaitExport} move it, so a test can run the whole 60s budget at once and pin where it ends.
      * Package-visible, as the seam it implements.
      */
     static final class FakeEnvironment implements AdoptedModuleState.Environment
     {
-        /** Whether the project is a configuration extension. */
+        /** Whether EDT's project registry names the project a configuration extension. */
         public boolean extension = true;
+        /** Whether the project carries the extension's persistent nature; {@code null} models natures that cannot be read. */
+        public Boolean nature = Boolean.TRUE;
         /** The project's BM model; {@code null} models the transient window without one. */
         public IBmModel model;
         /** EDT's adopted-property service; {@code null} models an inactive md.extension bundle. */
@@ -67,16 +71,42 @@ public final class AdoptedModuleStateTestFixtures
         public RuntimeException exportFailure;
         /** What {@link #awaitExport} answers. */
         public BuildUtils.DiskExportState exportState = BuildUtils.DiskExportState.DRAINED;
+        /** How long {@link #awaitExport} takes on the virtual clock. */
+        public long exportWaitMs;
         /** What {@link #topObjectFqn} answers instead of computing, when set. */
         public String topFqnOverride;
-        /** Every call, in order: {@code isExtension}, {@code model}, {@code access}, {@code forceExport:<fqn>}, {@code awaitExport:<ms>}. */
+        /**
+         * What the reads of the {@code .mdo} find, one entry per read, the last one repeating. Empty: a
+         * healthy export - the line is on disk once an accepted export request's queue DRAINED, and not before.
+         */
+        public final List<AdoptedModuleState.LineOnDisk> disk = new ArrayList<>();
+        /** What {@link #readStateLine} throws - after recording the read - instead of answering, when set. */
+        public RuntimeException readFailure;
+        /** Whether {@link #pause} is interrupted (and answers {@code false}). */
+        public boolean interrupted;
+        /** The virtual clock, in ms. */
+        public long clock;
+        /**
+         * Every call, in order: {@code isExtension}, {@code nature}, {@code model}, {@code access},
+         * {@code forceExport:<fqn>}, {@code awaitExport:<ms>}, {@code readMdo:<path>#<line>}, {@code pause:<ms>}.
+         */
         public final List<String> calls = new ArrayList<>();
+
+        private boolean exportRequested;
+        private int reads;
 
         @Override
         public boolean isExtensionProject(IProject project)
         {
             calls.add("isExtension"); //$NON-NLS-1$
             return extension;
+        }
+
+        @Override
+        public Boolean hasExtensionNature(IProject project)
+        {
+            calls.add("nature"); //$NON-NLS-1$
+            return nature;
         }
 
         /**
@@ -124,6 +154,7 @@ public final class AdoptedModuleStateTestFixtures
             {
                 throw exportFailure;
             }
+            exportRequested |= exportAccepted;
             return exportAccepted;
         }
 
@@ -131,18 +162,72 @@ public final class AdoptedModuleStateTestFixtures
         public BuildUtils.DiskExportState awaitExport(IProject project, long timeoutMs)
         {
             calls.add("awaitExport:" + timeoutMs); //$NON-NLS-1$
+            clock += exportWaitMs;
             return exportState;
+        }
+
+        @Override
+        public AdoptedModuleState.LineOnDisk readStateLine(IProject project, String mdoPath,
+            AdoptedModuleState.StateLine line)
+        {
+            calls.add("readMdo:" + mdoPath + "#" + line); //$NON-NLS-1$ //$NON-NLS-2$
+            if (readFailure != null)
+            {
+                throw readFailure;
+            }
+            if (disk.isEmpty())
+            {
+                return exportRequested && exportState == BuildUtils.DiskExportState.DRAINED
+                    ? AdoptedModuleState.LineOnDisk.PRESENT : AdoptedModuleState.LineOnDisk.ABSENT;
+            }
+            return disk.get(Math.min(reads++, disk.size() - 1));
+        }
+
+        @Override
+        public long currentTimeMillis()
+        {
+            return clock;
+        }
+
+        /** An interrupted pause still takes its time - so a step that ignored the interrupt would read on, not spin. */
+        @Override
+        public boolean pause(long ms)
+        {
+            calls.add("pause:" + ms); //$NON-NLS-1$
+            clock += ms;
+            return !interrupted;
         }
 
         /** @return the calls that touched the export queue, in order */
         public List<String> exportCalls()
         {
+            return callsStartingWith("forceExport:", "awaitExport:"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+
+        /** @return the reads of the {@code .mdo}, in order - each {@code readMdo:<path>#<line>} */
+        public List<String> mdoReads()
+        {
+            return callsStartingWith("readMdo:"); //$NON-NLS-1$
+        }
+
+        /** @return every call that touched the queue or the disk, or paused, in order */
+        public List<String> exportAndDiskCalls()
+        {
+            return callsStartingWith("forceExport:", "awaitExport:", "readMdo:", "pause:"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        }
+
+        private List<String> callsStartingWith(String... prefixes)
+        {
             List<String> out = new ArrayList<>();
             for (String call : calls)
             {
-                if (call.startsWith("forceExport:") || call.startsWith("awaitExport:")) //$NON-NLS-1$ //$NON-NLS-2$
+                for (String prefix : prefixes)
                 {
-                    out.add(call);
+                    if (call.startsWith(prefix))
+                    {
+                        out.add(call);
+                        break;
+                    }
                 }
             }
             return out;
@@ -221,6 +306,13 @@ public final class AdoptedModuleStateTestFixtures
      */
     public static AdoptedModuleState.Result run(MdPropertyState before, BuildUtils.DiskExportState exported)
     {
+        return AdoptedModuleState.ensureExtended(project(),
+            MetadataScope.ofConfiguration(extensionWithAdoptedModule()), MODULE_PATH, platform(before, exported));
+    }
+
+    /** A fake platform whose adopted module reads as {@code before} and whose export wait ends {@code exported}. */
+    private static FakeEnvironment platform(MdPropertyState before, BuildUtils.DiskExportState exported)
+    {
         IMdAdoptedPropertyAccess access = mock(IMdAdoptedPropertyAccess.class);
         when(access.hasPropertyState(any(EObject.class), any(EStructuralFeature.class), eq(before)))
             .thenReturn(Boolean.TRUE);
@@ -228,6 +320,65 @@ public final class AdoptedModuleStateTestFixtures
         env.model = model(identityTransaction(), new boolean[1]);
         env.access = access;
         env.exportState = exported;
+        return env;
+    }
+
+    /**
+     * @return the result of a switch whose export queue DRAINED while the {@code .mdo}, read back to the end of
+     *     the budget, never carried the line - EDT drains also when it fails to write a file: a failure
+     */
+    public static AdoptedModuleState.Result switchedButNotOnDisk()
+    {
+        return notOnDisk(MdPropertyState.NONE);
+    }
+
+    /**
+     * @return the result of a write into a module that already was Extended - EDT's own listener may flip the
+     *     model first - whose export queue DRAINED while the {@code .mdo}, read back to the end of the budget,
+     *     never carried the line: the same failure as {@link #switchedButNotOnDisk()}, one evidence giving one
+     *     verdict
+     */
+    public static AdoptedModuleState.Result alreadyExtendedButNotOnDisk()
+    {
+        return notOnDisk(MdPropertyState.EXTENDED);
+    }
+
+    /** A step whose export queue DRAINED while the {@code .mdo}, read back, never carried the line. */
+    private static AdoptedModuleState.Result notOnDisk(MdPropertyState before)
+    {
+        FakeEnvironment env = platform(before, BuildUtils.DiskExportState.DRAINED);
+        env.disk.add(AdoptedModuleState.LineOnDisk.ABSENT);
+        return AdoptedModuleState.ensureExtended(project(),
+            MetadataScope.ofConfiguration(extensionWithAdoptedModule()), MODULE_PATH, env);
+    }
+
+    /**
+     * @param lineOnDisk whether the {@code .mdo}, read once, already carries the module's state line
+     * @return the result of a switch whose export request the platform refused: the {@code .mdo} is read once, and a
+     *     line already there confirms it as an export does - a success; none is a failure
+     */
+    public static AdoptedModuleState.Result switchedWithARefusedExport(boolean lineOnDisk)
+    {
+        return refusedExport(MdPropertyState.NONE, lineOnDisk);
+    }
+
+    /**
+     * @param lineOnDisk whether the {@code .mdo}, read once, already carries the module's state line - as when the
+     *     state was set in EDT's UI, or by an earlier write
+     * @return the result of a write into a module that already was Extended, whose export request the platform
+     *     refused: decided by the {@code .mdo}, read once, as after a switch
+     */
+    public static AdoptedModuleState.Result alreadyExtendedWithARefusedExport(boolean lineOnDisk)
+    {
+        return refusedExport(MdPropertyState.EXTENDED, lineOnDisk);
+    }
+
+    /** A step whose export request the platform refused, with or without the line in the {@code .mdo}. */
+    private static AdoptedModuleState.Result refusedExport(MdPropertyState before, boolean lineOnDisk)
+    {
+        FakeEnvironment env = platform(before, BuildUtils.DiskExportState.DRAINED);
+        env.exportAccepted = false;
+        env.disk.add(lineOnDisk ? AdoptedModuleState.LineOnDisk.PRESENT : AdoptedModuleState.LineOnDisk.ABSENT);
         return AdoptedModuleState.ensureExtended(project(),
             MetadataScope.ofConfiguration(extensionWithAdoptedModule()), MODULE_PATH, env);
     }
@@ -239,8 +390,10 @@ public final class AdoptedModuleStateTestFixtures
     }
 
     /**
-     * @param exported how the export wait ends
-     * @return the result of a write into a module that already was Extended
+     * @param exported how the export wait ends - DRAINED puts the line in the {@code .mdo}, any other answer leaves
+     *     it out
+     * @return the result of a write into a module that already was Extended: a success when the line is on disk,
+     *     a failure when it is not, as after a switch
      */
     public static AdoptedModuleState.Result alreadyExtended(BuildUtils.DiskExportState exported)
     {

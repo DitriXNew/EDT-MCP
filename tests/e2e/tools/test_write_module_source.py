@@ -782,17 +782,20 @@ def test_oldsource_is_matched_against_the_file_not_normalized():
 #
 # WHERE A JAR WITHOUT #711 FAILS - read this before reading a red run. Each test that expects the line
 # polls the owner's .mdo for it FIRST, for up to _STATE_POLL_S right after the write, and only then
-# asserts the response key. On the branch the tool waits for that export before it answers, so the
-# poll passes at once. On a jar without the step the POLL fails, on the .mdo line - the effect. A run
-# on such a jar that passes the poll and fails only at the key is the stand pin's H0: EDT saved the
-# line by itself, which falsifies the premise the step exports for - STOP and report it. The two
-# tests whose state is left as it is (Checked; a root without its block) fail on such a jar at the
-# key: the write answers a plain success that names nothing.
+# asserts the response key. On the branch the tool reads that .mdo back for the line before it
+# answers, so the poll passes at once; a .mdo that never gets the line fails the WRITE instead
+# (errorAfterMutation at assert_ok: the .mdo "did not carry" the line), whether the tool switched the
+# state or found it Extended. On a jar without the step the POLL fails, on the .mdo line - the
+# effect. A run on such a jar that passes the poll and fails only at the key is the stand pin's H0:
+# EDT saved the line by itself, which falsifies the premise the step exports for - STOP and report
+# it. The two tests whose state is left as it is (Checked; a root without its block) fail on such a
+# jar at the key: the write answers a plain success that names nothing.
 #
 # The KEY's value is not pinned to `switchedToExtended`: EDT's own listener also flips the MODEL
 # state after it synchronizes the written file (it just never saves the .mdo), and when it wins that
 # race the tool reports `alreadyExtended` and exports the .mdo all the same. The .mdo line is the
-# effect, and it is asserted on disk; which of the two values said so depends on a race.
+# effect, and it is asserted on disk; which of the two values said so depends on a race - and only
+# the value does: whether the write succeeds is decided by the .mdo alone, the same either way.
 # ──────────────────────────────────────────────────────────────────────────────
 
 _ADOPTED = "<objectBelonging>Adopted</objectBelonging>"
