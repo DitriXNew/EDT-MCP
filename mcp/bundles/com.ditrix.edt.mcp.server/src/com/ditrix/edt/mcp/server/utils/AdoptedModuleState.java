@@ -13,6 +13,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.ParserConfigurationException;
@@ -72,12 +74,18 @@ import com.ditrix.edt.mcp.server.Activator;
  * was already {@code Extended}, which is how the listener leaves it, so the {@code .mdo} is brought in
  * line with the model - and the export is confirmed by the FILE: after the export queue's wait, the
  * {@code .mdo} is read back from disk for the module's own state line until it carries it, within the
- * metadata writes' one budget. The queue cannot confirm it: EDT's export task processor catches a failed
+ * metadata writes' one budget - counted from BEFORE the export request, so the request, the queue's wait
+ * and the reads share it. No read starts once the budget is spent, and each read is bounded by what is
+ * left: it runs in a {@link BoundedJob}, so a file system that does not answer (a network disk, a
+ * {@code .mdo} too large for what is left) cannot hold the call past the budget - but for BoundedJob's short
+ * grace (0.5s) for a read whose job had not started by the deadline - and a read not answered in time
+ * confirms nothing. The queue cannot confirm it: EDT's export task processor catches a failed
  * file write (a locked or read-only file, a full disk), so the queue DRAINS all the same, and an
  * UNOBSERVABLE queue says nothing either way (see {@link BuildUtils#waitForDiskExport}). An export the
  * platform does not accept is never waited for - nothing was queued - but the file still decides it: the
- * {@code .mdo} is read once, at once, so one that already carries the line (recorded in EDT's UI, or by an
- * earlier write) confirms it all the same.
+ * {@code .mdo} is read once, at once - bounded by what the request left of the budget, and not at all when
+ * it left nothing - so one that already carries the line (recorded in EDT's UI, or by an earlier write)
+ * confirms it all the same.
  * <p>
  * An export the file does not confirm fails the write - the text written, nothing rolled back - whether the
  * step switched the state or found it already {@code Extended}: the listener flips the model in reaction to
@@ -128,12 +136,21 @@ public final class AdoptedModuleState
     public static final String FRONT_MATTER_KEY = "moduleExtensionState"; //$NON-NLS-1$
 
     /**
-     * The one budget for the owner's {@code .mdo} export - the export queue's wait and the reads of the file
-     * back together, counted from the request: the budget the metadata write tools give their own export
-     * (AbstractMetadataWriteTool's EXPORT_DEADLINE_MS, whose javadoc carries the measurement - 0.02-0.15s on
-     * a healthy workspace).
+     * The one budget for the owner's {@code .mdo} export - the export request, the export queue's wait and the
+     * reads of the file back together, counted from BEFORE the request: the budget the metadata write tools give
+     * their own export (AbstractMetadataWriteTool's EXPORT_DEADLINE_MS, whose javadoc carries the measurement -
+     * 0.02-0.15s on a healthy workspace). The request is counted, not interrupted: it only hands EDT a save task.
      */
     static final long EXPORT_DEADLINE_MS = 60_000L;
+
+    /**
+     * The smallest remainder of the budget still worth a wait for the export queue - the rule
+     * AbstractMetadataWriteTool's and WrittenObjectMarkers' MIN_USEFUL_WAIT_MS apply to their own waits. Below a
+     * second a wait cannot plausibly see the queue drain, while it still starts a platform wait that cannot be
+     * cancelled and takes the project's wait slot, whose claim lapses only after three times its own timeout. A
+     * smaller remainder is not waited with: the queue counts as not seen draining, and the reads get the rest.
+     */
+    private static final long MIN_USEFUL_WAIT_MS = 1_000L;
 
     /**
      * The first pause between two reads of the owner's {@code .mdo} while its state line is not there; each
@@ -227,8 +244,9 @@ public final class AdoptedModuleState
          * The state is Extended in EDT's model - switched by this call, or found so - but the export of the
          * owner's {@code .mdo} is not confirmed: the file was not seen carrying the module's state line - read
          * back within the budget after an accepted export request, read ONCE when the export could not be
-         * scheduled, and not read at all when there is no file or line to look for. One outcome for both: which
-         * of the two the step found is a race with EDT's own listener.
+         * scheduled, each read only while the budget lasts and bounded by what is left, and not read at all when
+         * there is no file or line to look for or no time left. One outcome for both: which of the two the step
+         * found is a race with EDT's own listener.
          */
         EXPORT_NOT_CONFIRMED
     }
@@ -252,15 +270,20 @@ public final class AdoptedModuleState
         MISSING,
         /**
          * The export was requested and the queue drained or could not be observed, but the {@code .mdo} could
-         * not be read back - or parsed - until the budget ran out.
+         * not be read back - or parsed - until the budget ran out: also a read the budget cut off, and no read at
+         * all when the queue's wait left no time for one. Never MISSING then: only a file read and found without the
+         * line says that.
          */
         UNREADABLE,
-        /** The export was requested, the queue did not drain within the budget, and the line was not seen. */
+        /**
+         * The export was requested, the queue was not seen draining within the budget - its wait ran out, or the
+         * request itself used the budget up - and the line was not seen.
+         */
         PENDING,
         /**
          * The export could not be scheduled - the platform accepted no request, or exporting threw - and the
-         * {@code .mdo}, read once, was not seen carrying the line: absent, unreadable, or no file or line to look
-         * for.
+         * {@code .mdo}, read once while the budget lasted, was not seen carrying the line: absent, unreadable or not
+         * read in time, or not read at all - no file or line to look for, or no time left.
          */
         NOT_SCHEDULED
     }
@@ -272,7 +295,10 @@ public final class AdoptedModuleState
         PRESENT,
         /** The file was read and parsed, and the owner's block does not carry that line. */
         ABSENT,
-        /** The file could not be read or parsed - EDT may be writing it - so it says nothing either way. */
+        /**
+         * The file could not be read or parsed - EDT may be writing it - or not within the time the read was given,
+         * so it says nothing either way.
+         */
         UNREADABLE
     }
 
@@ -322,20 +348,23 @@ public final class AdoptedModuleState
 
         /**
          * @param project the project
-         * @param timeoutMs the budget
+         * @param timeoutMs what the export request left of the budget, always positive
          * @return how the export wait ended
          */
         BuildUtils.DiskExportState awaitExport(IProject project, long timeoutMs);
 
         /**
-         * Reads a {@code .mdo} as it is on disk NOW and looks for the module's state line in it.
+         * Reads a {@code .mdo} as it is on disk NOW and looks for the module's state line in it - within
+         * {@code timeoutMs}: the caller stops waiting then, and a read that has not answered by then is
+         * UNREADABLE.
          *
          * @param project the project
          * @param mdoPath the project-relative {@code .mdo}
          * @param line the line to look for
+         * @param timeoutMs how long the read may take: what is left of the budget, always positive
          * @return what the read found; never {@code null}
          */
-        LineOnDisk readStateLine(IProject project, String mdoPath, StateLine line);
+        LineOnDisk readStateLine(IProject project, String mdoPath, StateLine line, long timeoutMs);
 
         /** @return a monotonic clock, in milliseconds */
         long currentTimeMillis();
@@ -408,9 +437,10 @@ public final class AdoptedModuleState
         }
 
         @Override
-        public LineOnDisk readStateLine(IProject project, String mdoPath, StateLine line)
+        public LineOnDisk readStateLine(IProject project, String mdoPath, StateLine line, long timeoutMs)
         {
-            return line.in(mdoBytes(project, mdoPath));
+            return readBounded(BoundedJob::run, "Reading back " + mdoPath, timeoutMs, //$NON-NLS-1$
+                () -> line.in(mdoBytes(project, mdoPath)));
         }
 
         @Override
@@ -456,6 +486,64 @@ public final class AdoptedModuleState
         {
             return null;
         }
+    }
+
+    /**
+     * Runs work under a deadline: {@link BoundedJob#run(String, long, BoundedJob.IBoundedWork)} in production, a
+     * fake in a test. Package-visible for tests.
+     */
+    @FunctionalInterface
+    interface BoundedRunner
+    {
+        /**
+         * @param jobName the job's name in EDT's progress view
+         * @param timeoutMs how long the caller waits for the work
+         * @param work the work
+         * @return how the run ended
+         */
+        BoundedJob.Result run(String jobName, long timeoutMs, BoundedJob.IBoundedWork work);
+    }
+
+    /**
+     * One read of a {@code .mdo}, bounded: the read runs in a {@link BoundedJob} - off the caller's thread - and the
+     * caller waits for it no longer than {@code timeoutMs}, so a file system that does not answer (a network disk) or
+     * a file too large for what is left of the budget cannot hold the call open with the write already done. Only a
+     * read that COMPLETED in time is an answer. One the deadline caught (running, or before it started), one that
+     * never ran (a suspended job manager), one that threw, one that could not be scheduled, and a wait in which the
+     * caller's thread was interrupted - BoundedJob keeps that thread's interrupt flag - are UNREADABLE: a file not read
+     * in time proves nothing either way. Nothing left of the budget starts no read at all.
+     * <p>
+     * A read the deadline caught keeps its job until the file system answers; the call does not wait for it, and as
+     * that read spends what was left of the budget, a step leaves at most one such read behind. A read whose job had
+     * not started at the deadline may take up to BoundedJob's short grace (0.5s) more to establish that. Never throws
+     * an exception. Package-visible for tests.
+     *
+     * @param runner what runs the read under its deadline: BoundedJob in production
+     * @param jobName the read's name in EDT's progress view
+     * @param timeoutMs what is left of the budget; nothing left - zero or less - means no read
+     * @param read the read itself, unbounded
+     * @return what the read found, or UNREADABLE
+     */
+    static LineOnDisk readBounded(BoundedRunner runner, String jobName, long timeoutMs, Supplier<LineOnDisk> read)
+    {
+        if (timeoutMs <= 0)
+        {
+            return LineOnDisk.UNREADABLE;
+        }
+        AtomicReference<LineOnDisk> answer = new AtomicReference<>();
+        BoundedJob.Result result;
+        try
+        {
+            result = runner.run(jobName, timeoutMs, monitor -> answer.set(read.get()));
+        }
+        catch (RuntimeException e) // NOSONAR a read that could not be scheduled read nothing: an answer, not a crash
+        {
+            return LineOnDisk.UNREADABLE;
+        }
+        // A read is an answer only when it COMPLETED in time; one that published past the deadline is not.
+        LineOnDisk seen = answer.get();
+        return result.getOutcome() == BoundedJob.Outcome.COMPLETED && result.getFailure() == null && seen != null
+            ? seen : LineOnDisk.UNREADABLE;
     }
 
     private AdoptedModuleState()
@@ -1034,61 +1122,74 @@ public final class AdoptedModuleState
 
     /**
      * Requests the export of the owner's top object, waits for the export queue, then reads the {@code .mdo}
-     * back for the module's state line - ONE budget, counted from the request, for both. A refused request is
-     * never waited for: the queue would be empty, the wait would "drain", and the answer would claim an export
-     * that was never queued - but the file still decides it ({@link #unscheduled}). Never throws: the state is
-     * committed by now, so a failure here is an unconfirmed export, not a failed step.
+     * back for the module's state line - ONE budget for all three, counted from BEFORE the request, so a slow
+     * request leaves the wait and the reads only what it did not use. A refused request is never waited for: the
+     * queue would be empty, the wait would "drain", and the answer would claim an export that was never queued -
+     * but the file still decides it ({@link #unscheduled}). Never throws: the state is committed by now, so a
+     * failure here is an unconfirmed export, not a failed step.
      */
     private static Export export(IProject project, Probe probe, Environment env)
     {
         String topFqn = probe.topFqn;
+        // Taken BEFORE the request: the request, the queue's wait and every read of the file share the one budget.
+        long deadline = env.currentTimeMillis() + EXPORT_DEADLINE_MS;
         try
         {
             if (topFqn == null || topFqn.isEmpty() || !env.forceExport(project, topFqn))
             {
-                return unscheduled(project, topFqn, probe.line, env);
+                return unscheduled(project, topFqn, probe.line, deadline, env);
             }
-            // The queue's wait starts the budget; the reads of the file get what it leaves.
-            long deadline = env.currentTimeMillis() + EXPORT_DEADLINE_MS;
-            BuildUtils.DiskExportState queue = env.awaitExport(project, EXPORT_DEADLINE_MS);
+            // The queue's wait gets what the request left. Less than MIN_USEFUL_WAIT_MS left, nothing waited for: so
+            // short a wait cannot see the queue drain, and BuildUtils' would still start a platform wait it cannot
+            // cancel - so the queue is PENDING, not seen draining within the budget, and the reads get the rest.
+            long left = deadline - env.currentTimeMillis();
+            boolean awaited = left >= MIN_USEFUL_WAIT_MS;
+            BuildUtils.DiskExportState queue =
+                awaited ? env.awaitExport(project, left) : BuildUtils.DiskExportState.PENDING;
             Export export = confirmOnDisk(project, mdoPathOf(topFqn), probe.line, queue, deadline, env);
             if (export != Export.WRITTEN)
             {
+                String queueNote = awaited ? "queue: " + queue //$NON-NLS-1$
+                    : "queue not awaited: the export request left " + Math.max(left, 0L) + "ms of the budget"; //$NON-NLS-1$ //$NON-NLS-2$
                 Activator.logInfo("Module state line " + probe.line + " not seen in the .mdo of " + topFqn //$NON-NLS-1$ //$NON-NLS-2$
-                    + " within " + EXPORT_DEADLINE_MS + "ms after its export (queue: " + queue + "): " + export); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + " within " + EXPORT_DEADLINE_MS + "ms of its export request (" + queueNote + "): " + export); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             }
             return export;
         }
         catch (RuntimeException e)
         {
             Activator.logError("Could not export the .mdo of " + topFqn + " after setting a module state", e); //$NON-NLS-1$ //$NON-NLS-2$
-            return unscheduled(project, topFqn, probe.line, env);
+            return unscheduled(project, topFqn, probe.line, deadline, env);
         }
     }
 
     /**
      * An export that could not be scheduled - the platform accepted no request, or exporting threw - is decided
      * by the FILE all the same: nothing was queued that could still change the {@code .mdo}, so it is read ONCE,
-     * at once - never polled, never waited for. A file that already carries the module's state line (recorded in
-     * EDT's UI, or by an earlier write) is the evidence a confirmed export leaves: WRITTEN. A line not seen -
-     * absent, unreadable, a read that throws, or no file or line to look for - leaves it NOT_SCHEDULED. Never
-     * throws.
+     * at once - never polled, never waited for - within what the request left of the budget: a bounded read, and
+     * none at all when nothing is left. A file that already carries the module's state line (recorded in EDT's UI,
+     * or by an earlier write) is the evidence a confirmed export leaves: WRITTEN. A line not seen - absent,
+     * unreadable or not read in time, a read that throws, no file or line to look for, or no time left to look -
+     * leaves it NOT_SCHEDULED. Never throws.
      *
      * @param project the project
      * @param topFqn the model's FQN of the owner's top object, may be {@code null} (no file to read)
      * @param line the module's state line, may be {@code null} (nothing to look for)
+     * @param deadline when the budget ends, on {@link Environment#currentTimeMillis()}'s clock
      * @param env the platform
      * @return WRITTEN or NOT_SCHEDULED
      */
-    private static Export unscheduled(IProject project, String topFqn, StateLine line, Environment env)
+    private static Export unscheduled(IProject project, String topFqn, StateLine line, long deadline,
+        Environment env)
     {
         LineOnDisk seen = LineOnDisk.UNREADABLE;
         try
         {
             String mdoPath = mdoPathOf(topFqn);
-            if (mdoPath != null && line != null)
+            long left = deadline - env.currentTimeMillis();
+            if (mdoPath != null && line != null && left > 0)
             {
-                seen = env.readStateLine(project, mdoPath, line);
+                seen = env.readStateLine(project, mdoPath, line, left);
             }
         }
         catch (RuntimeException e) // NOSONAR a read that throws sees no line: an answer, not a crash
@@ -1104,6 +1205,8 @@ public final class AdoptedModuleState
      * any more, and UNOBSERVABLE means nothing at all. So the {@code .mdo} is read back - after the wait, never
      * before - until it carries the module's own state line or the budget is spent; the first read that finds
      * the line ends it, whatever the queue said. An interrupted pause ends it too: the call is being cancelled.
+     * No read starts once the budget is spent - not even the first, so a queue's wait that used it all leaves the
+     * file unread - and each read is given only what is left: one not answered by then confirms nothing.
      *
      * @param project the project
      * @param mdoPath the owner's top-object {@code .mdo}, may be {@code null} (nothing to read: not confirmed)
@@ -1122,12 +1225,18 @@ public final class AdoptedModuleState
             long pause = MDO_POLL_FIRST_MS;
             while (true)
             {
-                seen = env.readStateLine(project, mdoPath, line);
+                long left = deadline - env.currentTimeMillis();
+                if (left <= 0)
+                {
+                    // The budget is spent: no read starts with nothing left - the first one included.
+                    break;
+                }
+                seen = env.readStateLine(project, mdoPath, line, left);
                 if (seen == LineOnDisk.PRESENT)
                 {
                     return Export.WRITTEN;
                 }
-                long left = deadline - env.currentTimeMillis();
+                left = deadline - env.currentTimeMillis();
                 if (left <= 0 || !env.pause(Math.min(pause, left)))
                 {
                     break;

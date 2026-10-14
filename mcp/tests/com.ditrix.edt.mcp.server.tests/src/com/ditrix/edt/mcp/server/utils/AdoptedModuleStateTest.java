@@ -9,6 +9,7 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -32,16 +33,21 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IProjectDescription;
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -84,6 +90,15 @@ public class AdoptedModuleStateTest
         0x043D, 0x0438, 0x0435);
 
     private static final String DRY_SIGNAL = "src/CommonModules/DrySignal/Module.bsl"; //$NON-NLS-1$
+
+    /** The {@code .mdo} of DrySignal's top object - the module's owner itself. */
+    private static final String DRY_SIGNAL_MDO = "src/CommonModules/DrySignal/DrySignal.mdo"; //$NON-NLS-1$
+
+    /** A timeout the platform's read of a small local file finishes well within. */
+    private static final long PLATFORM_READ_MS = 30_000L;
+
+    /** The finite ceiling of a hung read in a test: far above the timeout it is given, still bounded itself. */
+    private static final long HUNG_READ_CEILING_MS = 15_000L;
 
     /** The root's ordinary-application module, which EDT does not list as extensible. */
     private static final String ORDINARY = "src/Configuration/OrdinaryApplicationModule.bsl"; //$NON-NLS-1$
@@ -168,6 +183,20 @@ public class AdoptedModuleStateTest
         env = new FakeEnvironment();
         env.model = AdoptedModuleStateTestFixtures.model(tx, inWrite);
         env.access = access;
+    }
+
+    /**
+     * Whatever the scenario, no read of the {@code .mdo} starts with nothing left of the budget, and none is given
+     * more than the budget (#743 review) - checked after every test, on the platform its last scenario ran on.
+     */
+    @After
+    public void noReadStartsWithNothingLeftOfTheBudget()
+    {
+        for (long timeout : env.readTimeouts)
+        {
+            assertTrue("a read started with nothing left of the budget: " + env.readTimeouts, timeout > 0); //$NON-NLS-1$
+            assertTrue("a read was given more than the budget: " + env.readTimeouts, timeout <= 60_000L); //$NON-NLS-1$
+        }
     }
 
     private static String fromCp(int... cps)
@@ -1028,7 +1057,8 @@ public class AdoptedModuleStateTest
 
     /**
      * The platform reads the .mdo's BYTES off the file system - what EDT's export wrote, not the workspace's view
-     * of it - and an absent file, or a project with no location for it, is unreadable, never "absent".
+     * of it - and an absent file, or a project with no location for it, is unreadable, never "absent". Each read
+     * runs through the bounded read; these finish well within their timeout.
      */
     @Test
     public void testThePlatformReadsTheMdoBackFromTheFileSystem() throws Exception
@@ -1040,26 +1070,63 @@ public class AdoptedModuleStateTest
         {
             java.nio.file.Path file = dir.resolve("DrySignal.mdo"); //$NON-NLS-1$
             Files.write(file, drySignalMdo("    <module>Extended</module>\n")); //$NON-NLS-1$
-            IProject onDisk = projectWithFileAt("src/CommonModules/DrySignal/DrySignal.mdo", file); //$NON-NLS-1$
-            assertEquals(AdoptedModuleState.LineOnDisk.PRESENT, AdoptedModuleState.PLATFORM.readStateLine(onDisk,
-                "src/CommonModules/DrySignal/DrySignal.mdo", line)); //$NON-NLS-1$
+            IProject onDisk = projectWithFileAt(DRY_SIGNAL_MDO, file);
+            assertEquals(AdoptedModuleState.LineOnDisk.PRESENT,
+                AdoptedModuleState.PLATFORM.readStateLine(onDisk, DRY_SIGNAL_MDO, line, PLATFORM_READ_MS));
 
             Files.write(file, drySignalMdo("")); //$NON-NLS-1$
-            assertEquals(AdoptedModuleState.LineOnDisk.ABSENT, AdoptedModuleState.PLATFORM.readStateLine(onDisk,
-                "src/CommonModules/DrySignal/DrySignal.mdo", line)); //$NON-NLS-1$
+            assertEquals(AdoptedModuleState.LineOnDisk.ABSENT,
+                AdoptedModuleState.PLATFORM.readStateLine(onDisk, DRY_SIGNAL_MDO, line, PLATFORM_READ_MS));
 
             Files.delete(file);
-            assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, AdoptedModuleState.PLATFORM.readStateLine(onDisk,
-                "src/CommonModules/DrySignal/DrySignal.mdo", line)); //$NON-NLS-1$
+            assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE,
+                AdoptedModuleState.PLATFORM.readStateLine(onDisk, DRY_SIGNAL_MDO, line, PLATFORM_READ_MS));
 
             assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, AdoptedModuleState.PLATFORM.readStateLine(
-                projectWithFileAt("src/CommonModules/DrySignal/DrySignal.mdo", null), //$NON-NLS-1$
-                "src/CommonModules/DrySignal/DrySignal.mdo", line)); //$NON-NLS-1$
+                projectWithFileAt(DRY_SIGNAL_MDO, null), DRY_SIGNAL_MDO, line, PLATFORM_READ_MS));
         }
         finally
         {
             Files.deleteIfExists(dir.resolve("DrySignal.mdo")); //$NON-NLS-1$
             Files.deleteIfExists(dir);
+        }
+    }
+
+    /**
+     * The platform's read of the .mdo is BOUNDED (#743 review): it runs off the caller's thread, in a BoundedJob, and
+     * a file system that does not answer - a network disk, a .mdo too large for what is left - holds the call no
+     * longer than the timeout it is given; a read not answered by then is UNREADABLE. The hung read here waits on a
+     * latch with its own finite ceiling, so a read that lost its bound fails the elapsed-time assertion instead of
+     * hanging the suite.
+     */
+    @Test
+    public void testThePlatformReadIsBoundedAndRunsOffTheCallersThread() throws Exception
+    {
+        AdoptedModuleState.StateLine line =
+            AdoptedModuleState.StateLine.of(drySignal, MdClassPackage.Literals.COMMON_MODULE__MODULE);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicReference<Thread> reader = new AtomicReference<>();
+        IProject hanging = mock(IProject.class);
+        IFile mdoFile = mock(IFile.class);
+        when(hanging.getFile(new Path(DRY_SIGNAL_MDO))).thenReturn(mdoFile);
+        when(mdoFile.getLocation()).thenAnswer(inv -> {
+            reader.set(Thread.currentThread());
+            release.await(HUNG_READ_CEILING_MS, TimeUnit.MILLISECONDS); // a file system that does not answer
+            return null;
+        });
+        long start = System.nanoTime();
+        try
+        {
+            assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE,
+                AdoptedModuleState.PLATFORM.readStateLine(hanging, DRY_SIGNAL_MDO, line, 500L));
+            long waited = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+            assertTrue("the read must give up at its timeout, not at the file system's ceiling (waited " + waited //$NON-NLS-1$
+                + "ms)", waited < HUNG_READ_CEILING_MS / 2); //$NON-NLS-1$
+            assertNotSame("the read must run off the caller's thread", Thread.currentThread(), reader.get()); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
         }
     }
 
@@ -1180,14 +1247,17 @@ public class AdoptedModuleStateTest
         assertTrue(message, message.contains("do not re-send the original edit")); //$NON-NLS-1$
         assertTrue(message, message.contains("mode=append and an empty source")); //$NON-NLS-1$
         assertFalse(message, message.contains("was exported")); //$NON-NLS-1$
-        // The file was read until the budget ran out - ONE 60s budget from the request - and the last read ends it.
+        // The file was read until the budget ran out - ONE 60s budget, counted from before the request - and the last
+        // pause reaches its end: no read starts with nothing left (#743 review), so the calls end on that pause, and
+        // each read was bounded by what was left when it started.
         assertEquals(60_000L, env.clock);
         List<String> disk = env.exportAndDiskCalls();
-        assertTrue(disk.toString(), disk.get(disk.size() - 1).equals(DRY_SIGNAL_READ));
+        assertEquals(disk.toString(), "pause:500", disk.get(disk.size() - 1)); //$NON-NLS-1$
         for (String read : env.mdoReads())
         {
             assertEquals(DRY_SIGNAL_READ, read);
         }
+        assertEachReadGotWhatWasLeftOf(60_000L);
         // The pause doubles from 100ms to 1s: a prompt first look, then no busier than once a second.
         assertEquals(Arrays.asList("pause:100", "pause:200", "pause:400", "pause:800", "pause:1000", "pause:1000"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
             pauses().subList(0, 6));
@@ -1233,9 +1303,10 @@ public class AdoptedModuleStateTest
     }
 
     /**
-     * ONE budget for the queue and the file: a queue wait that spent the whole 60s leaves one read, and no pause.
-     * The file still outranks the queue: a PENDING answer whose .mdo carries the line is confirmed - a previous
-     * wait still outstanding makes the queue answer PENDING at once.
+     * ONE budget for the queue and the file: a queue wait that spent the whole 60s leaves no time for a read, so none
+     * starts (#743 review) - no read, no pause - and the export is not confirmed. The file still outranks the queue: a
+     * PENDING answer whose .mdo carries the line is confirmed - a previous wait still outstanding makes the queue
+     * answer PENDING at once.
      */
     @Test
     public void testTheQueueAndTheFileShareOneSixtySecondBudget()
@@ -1247,8 +1318,9 @@ public class AdoptedModuleStateTest
         Result spent = run(DRY_SIGNAL);
         assertEquals(Outcome.EXPORT_NOT_CONFIRMED, spent.outcome());
         assertTrue(spent.failureMessage(), spent.failureMessage().contains("was not confirmed within 60s")); //$NON-NLS-1$
-        assertEquals("the wait spent the budget: one read, no pause", 1, env.mdoReads().size()); //$NON-NLS-1$
+        assertTrue("the wait spent the budget: no read starts", env.mdoReads().isEmpty()); //$NON-NLS-1$
         assertTrue(pauses().isEmpty());
+        assertEquals(60_000L, env.clock);
 
         freshPlatform();
         reports(MdPropertyState.NONE);
@@ -1272,6 +1344,365 @@ public class AdoptedModuleStateTest
         assertEquals("no read after the interrupted pause", 1, env.mdoReads().size()); //$NON-NLS-1$
         assertEquals(Collections.singletonList("pause:100"), pauses()); //$NON-NLS-1$
         assertEquals(100L, env.clock);
+    }
+
+    // ==================== ONE budget from BEFORE the request; no read with nothing left; every read bounded ====================
+
+    /**
+     * The budget counts the export REQUEST too (#743 review): it is taken before the request, so a request that takes
+     * 20s leaves the queue's wait the 40s left, not a fresh 60s, and the read after it what the wait left. The export
+     * is confirmed exactly as before - the same key and the same paragraph, word for word.
+     */
+    @Test
+    public void testTheBudgetCountsTheExportRequestItself()
+    {
+        reports(MdPropertyState.NONE);
+        Result instant = run(DRY_SIGNAL); // a request that takes no time leaves the queue the whole 60s, as before
+        assertEquals(Arrays.asList("forceExport:CommonModule.DrySignal", "awaitExport:60000"), env.exportCalls()); //$NON-NLS-1$ //$NON-NLS-2$
+
+        freshPlatform();
+        reports(MdPropertyState.NONE);
+        env.exportRequestMs = 20_000L;
+        Result result = run(DRY_SIGNAL);
+        assertEquals(Outcome.SWITCHED, result.outcome());
+        assertFalse(result.failed());
+        assertEquals("switchedToExtended", result.frontMatterValue()); //$NON-NLS-1$
+        assertEquals("the success text is unchanged", instant.bodySentence(), result.bodySentence()); //$NON-NLS-1$
+        assertEquals("the queue's wait gets what the request left of the 60s", //$NON-NLS-1$
+            Arrays.asList("forceExport:CommonModule.DrySignal", "awaitExport:40000", DRY_SIGNAL_READ), //$NON-NLS-1$ //$NON-NLS-2$
+            env.exportAndDiskCalls());
+        assertEquals("the read gets what the wait left", Collections.singletonList(40_000L), env.readTimeouts); //$NON-NLS-1$
+    }
+
+    /**
+     * A queue wait that uses all it is given ends the call within the ONE budget, the request's own time included: the
+     * request took 20s, the wait the 40s left, and nothing is left for a read - so none starts, and the export is not
+     * confirmed within 60s (#743 review).
+     */
+    @Test
+    public void testASlowRequestAndAWaitThatUsesTheRestEndWithinTheBudgetWithNoRead()
+    {
+        reports(MdPropertyState.NONE);
+        env.exportRequestMs = 20_000L;
+        env.exportState = BuildUtils.DiskExportState.PENDING;
+        env.exportWaitMs = Long.MAX_VALUE; // the wait uses all it is given
+        Result result = run(DRY_SIGNAL);
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
+        assertTrue(result.failed());
+        assertTrue(result.failureMessage(), result.failureMessage().contains("was not confirmed within 60s")); //$NON-NLS-1$
+        assertEquals(Arrays.asList("forceExport:CommonModule.DrySignal", "awaitExport:40000"), //$NON-NLS-1$ //$NON-NLS-2$
+            env.exportAndDiskCalls());
+        assertEquals("the whole call, the request included, within the one budget", 60_000L, env.clock); //$NON-NLS-1$
+    }
+
+    /**
+     * A request that itself used the whole budget leaves nothing to wait or read with (#743 review): no wait starts - a
+     * wait of no time cannot see the queue drain, and the platform's wait, once started, cannot be cancelled - and no
+     * read starts, so even a healthy export whose line would be on disk is not confirmed within 60s.
+     */
+    @Test
+    public void testARequestThatUsedTheWholeBudgetIsNeitherAwaitedNorRead()
+    {
+        reports(MdPropertyState.NONE);
+        env.exportRequestMs = 60_000L; // a healthy queue and file otherwise: a read would find the line
+        Result result = run(DRY_SIGNAL);
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
+        assertTrue(result.failed());
+        String message = result.failureMessage();
+        assertTrue(message, message.contains("was switched from None to Extended in EDT's model, but the export of its " //$NON-NLS-1$
+            + ".mdo was not confirmed within 60s, so src/CommonModules/DrySignal/DrySignal.mdo may still lack " //$NON-NLS-1$
+            + "<module>Extended</module>.")); //$NON-NLS-1$
+        assertEquals(Collections.singletonList("forceExport:CommonModule.DrySignal"), env.exportAndDiskCalls()); //$NON-NLS-1$
+        assertEquals(60_000L, env.clock);
+    }
+
+    /**
+     * A request that left less than a second is not waited with either - the rule the metadata writes' own waits keep
+     * (MIN_USEFUL_WAIT_MS): so short a wait cannot see the queue drain, while the platform's wait it starts cannot be
+     * cancelled and takes the project's wait slot. The file still decides it with what is left: a .mdo that carries
+     * the line confirms the switch, and one that does not leaves the export not confirmed within 60s - the queue was
+     * not seen draining.
+     */
+    @Test
+    public void testARequestThatLeftLessThanASecondIsNotAwaitedButTheFileStillDecides()
+    {
+        reports(MdPropertyState.NONE);
+        env.exportRequestMs = 59_500L; // a healthy queue and file otherwise
+        Result confirmed = run(DRY_SIGNAL);
+        assertEquals(Outcome.SWITCHED, confirmed.outcome());
+        assertFalse(confirmed.failed());
+        assertEquals("no wait for the queue, one read with the 500ms left", //$NON-NLS-1$
+            Arrays.asList("forceExport:CommonModule.DrySignal", DRY_SIGNAL_READ), env.exportAndDiskCalls()); //$NON-NLS-1$
+        assertEquals(Collections.singletonList(500L), env.readTimeouts);
+
+        freshPlatform();
+        reports(MdPropertyState.NONE);
+        env.exportRequestMs = 59_500L;
+        env.disk.add(AdoptedModuleState.LineOnDisk.ABSENT);
+        Result result = run(DRY_SIGNAL);
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
+        assertTrue(result.failed());
+        assertTrue(result.failureMessage(), result.failureMessage().contains("was not confirmed within 60s")); //$NON-NLS-1$
+        assertFalse("the queue was never waited for", env.exportCalls().stream() //$NON-NLS-1$
+            .anyMatch(call -> call.startsWith("awaitExport:"))); //$NON-NLS-1$
+        assertEachReadGotWhatWasLeftOf(60_000L);
+        assertEquals("the whole call within the one budget", 60_000L, env.clock); //$NON-NLS-1$
+    }
+
+    /**
+     * A queue wait that spent the whole budget leaves no time for a read, so none starts - whatever the queue said and
+     * whatever the file holds (#743 review). The export is then not confirmed, in honest words: a queue still busy is
+     * "not confirmed within 60s"; a drained or unobservable one leaves a .mdo that "could not be read back ... within
+     * 60s" - never "did not carry", which only a file read and found without the line may say.
+     */
+    @Test
+    public void testAQueueWaitThatSpendsTheWholeBudgetLeavesNoReadAndConfirmsNothing()
+    {
+        for (BuildUtils.DiskExportState queue : BuildUtils.DiskExportState.values())
+        {
+            freshPlatform();
+            reports(MdPropertyState.NONE);
+            env.exportState = queue;
+            env.exportWaitMs = Long.MAX_VALUE;
+            env.disk.add(AdoptedModuleState.LineOnDisk.PRESENT); // on disk - but no time is left to look
+            Result result = run(DRY_SIGNAL);
+            String what = queue.name();
+            assertEquals(what, Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
+            assertTrue(what + ": no read starts with nothing left", env.mdoReads().isEmpty()); //$NON-NLS-1$
+            assertTrue(what, pauses().isEmpty());
+            assertEquals(what, 60_000L, env.clock);
+            String message = result.failureMessage();
+            assertTrue(what + ": " + message, message.contains(queue == BuildUtils.DiskExportState.PENDING //$NON-NLS-1$
+                ? "the export of its .mdo was not confirmed within 60s, so src/CommonModules/DrySignal/DrySignal.mdo may " //$NON-NLS-1$
+                    + "still lack <module>Extended</module>" //$NON-NLS-1$
+                : "the export of its .mdo was requested and src/CommonModules/DrySignal/DrySignal.mdo could not be read " //$NON-NLS-1$
+                    + "back to confirm <module>Extended</module> within 60s")); //$NON-NLS-1$
+            assertFalse(what + ": " + message, message.contains("did not carry")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /**
+     * The poll never starts a read once the budget is spent (#743 review): the last pause takes the clock to the end of
+     * the budget, and a line that only a read AT that end would have seen is not seen - the export is not confirmed -
+     * rather than a read starting with nothing left.
+     */
+    @Test
+    public void testThePollStartsNoReadAtTheEndOfTheBudget()
+    {
+        reports(MdPropertyState.NONE);
+        env.disk.addAll(Collections.nCopies(63, AdoptedModuleState.LineOnDisk.ABSENT));
+        env.disk.add(AdoptedModuleState.LineOnDisk.PRESENT); // what a 64th read, at the end of the budget, would see
+        Result result = run(DRY_SIGNAL);
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
+        assertTrue(result.failureMessage(), result.failureMessage().contains(
+            "did not carry <module>Extended</module> within 60s")); //$NON-NLS-1$
+        assertEquals(63, env.mdoReads().size());
+        assertEquals("the last read starts with time left", 59_500L, env.readStarts.get(62).longValue()); //$NON-NLS-1$
+        assertEquals(60_000L, env.clock);
+        assertEachReadGotWhatWasLeftOf(60_000L);
+    }
+
+    /**
+     * A read that does not answer within what is left - a slow or hung file system, a large .mdo - is cut at the end of
+     * the budget, as the platform's bounded read is: the call returns within the budget, and a read not answered in
+     * time confirms nothing - the .mdo "could not be read back" (#743 review). Each read is given what is left when it
+     * starts, never a fresh budget.
+     */
+    @Test
+    public void testAReadThatOutlastsWhatIsLeftIsCutAtTheEndOfTheBudget()
+    {
+        reports(MdPropertyState.NONE);
+        env.disk.add(AdoptedModuleState.LineOnDisk.ABSENT);
+        env.readTimes.addAll(Arrays.asList(0L, 0L, 600_000L)); // the third read hangs for ten minutes
+        Result result = run(DRY_SIGNAL);
+        assertEquals(Outcome.EXPORT_NOT_CONFIRMED, result.outcome());
+        String message = result.failureMessage();
+        assertTrue(message, message.contains("the export of its .mdo was requested and " //$NON-NLS-1$
+            + "src/CommonModules/DrySignal/DrySignal.mdo could not be read back to confirm <module>Extended</module> " //$NON-NLS-1$
+            + "within 60s")); //$NON-NLS-1$
+        assertFalse(message, message.contains("did not carry")); //$NON-NLS-1$
+        assertEquals("the call ends with the budget, not with the hung read", 60_000L, env.clock); //$NON-NLS-1$
+        assertEquals(Arrays.asList(60_000L, 59_900L, 59_700L), env.readTimeouts);
+        assertEquals(Arrays.asList("pause:100", "pause:200"), pauses()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * A refused export's ONE read is bounded by what the request left of the budget as well (#743 review): a request
+     * refused after 15s leaves the read 45s; one refused after the whole budget leaves no read at all - the export stays
+     * not scheduled even with the line on disk, as nothing was seen; an export that threw after 15s is read within the
+     * 45s left; and a read that outlasts what is left is cut at the end of the budget and confirms nothing.
+     */
+    @Test
+    public void testARefusedExportsOneReadGetsOnlyWhatTheRequestLeft()
+    {
+        reports(MdPropertyState.NONE);
+        env.exportAccepted = false;
+        env.exportRequestMs = 15_000L;
+        env.disk.add(AdoptedModuleState.LineOnDisk.PRESENT);
+        assertEquals("refused after 15s, the line on disk", Outcome.SWITCHED, run(DRY_SIGNAL).outcome()); //$NON-NLS-1$
+        assertEquals(Arrays.asList("forceExport:CommonModule.DrySignal", DRY_SIGNAL_READ), env.exportAndDiskCalls()); //$NON-NLS-1$
+        assertEquals(Collections.singletonList(45_000L), env.readTimeouts);
+
+        freshPlatform();
+        reports(MdPropertyState.NONE);
+        env.exportAccepted = false;
+        env.exportRequestMs = 60_000L;
+        env.disk.add(AdoptedModuleState.LineOnDisk.PRESENT);
+        Result spent = run(DRY_SIGNAL);
+        assertEquals("refused after the whole budget", Outcome.EXPORT_NOT_CONFIRMED, spent.outcome()); //$NON-NLS-1$
+        assertTrue(spent.failureMessage(), spent.failureMessage().contains("the export of its .mdo could not be " //$NON-NLS-1$
+            + "scheduled, so src/CommonModules/DrySignal/DrySignal.mdo may still lack <module>Extended</module>.")); //$NON-NLS-1$
+        assertEquals("no time left: no read", Collections.singletonList("forceExport:CommonModule.DrySignal"), //$NON-NLS-1$ //$NON-NLS-2$
+            env.exportAndDiskCalls());
+
+        freshPlatform();
+        reports(MdPropertyState.NONE);
+        env.exportFailure = new IllegalStateException("save task refused"); //$NON-NLS-1$
+        env.exportRequestMs = 15_000L;
+        env.disk.add(AdoptedModuleState.LineOnDisk.PRESENT);
+        assertEquals("threw after 15s, the line on disk", Outcome.SWITCHED, run(DRY_SIGNAL).outcome()); //$NON-NLS-1$
+        assertEquals(Collections.singletonList(45_000L), env.readTimeouts);
+
+        freshPlatform();
+        reports(MdPropertyState.NONE);
+        env.exportAccepted = false;
+        env.disk.add(AdoptedModuleState.LineOnDisk.PRESENT);
+        env.readTimes.add(600_000L); // the one read hangs for ten minutes
+        Result hung = run(DRY_SIGNAL);
+        assertEquals("a hung read", Outcome.EXPORT_NOT_CONFIRMED, hung.outcome()); //$NON-NLS-1$
+        assertTrue(hung.failureMessage(), hung.failureMessage().contains("could not be scheduled")); //$NON-NLS-1$
+        assertEquals(Collections.singletonList(60_000L), env.readTimeouts);
+        assertEquals("the call ends with the budget, not with the hung read", 60_000L, env.clock); //$NON-NLS-1$
+    }
+
+    /**
+     * The bounded read answers only for a read that COMPLETED in time (#743 review): one the deadline caught - running,
+     * or before it started - one that never ran, one that threw, one whose caller was interrupted and one that could not
+     * be scheduled are UNREADABLE, whatever the read would have found; the read is given exactly the timeout it is
+     * handed, and nothing left starts no read at all. An interrupt stays on the caller's thread. The runner is a fake
+     * that answers a scripted outcome: no real wait.
+     */
+    @Test
+    public void testTheBoundedReadAnswersOnlyForAReadThatCompletedInTime()
+    {
+        for (AdoptedModuleState.LineOnDisk found : AdoptedModuleState.LineOnDisk.values())
+        {
+            FakeRunner runner = new FakeRunner(BoundedJob.Outcome.COMPLETED, true);
+            assertEquals(found, AdoptedModuleState.readBounded(runner, "read", 1_234L, () -> found)); //$NON-NLS-1$
+            assertEquals("the read's timeout is what it is handed", Collections.singletonList(1_234L), runner.timeouts); //$NON-NLS-1$
+        }
+        assertEquals("a read that threw found nothing", AdoptedModuleState.LineOnDisk.UNREADABLE, //$NON-NLS-1$
+            AdoptedModuleState.readBounded(new FakeRunner(BoundedJob.Outcome.COMPLETED, true), "read", 1_000L, () -> { //$NON-NLS-1$
+                throw new IllegalStateException("disk"); //$NON-NLS-1$
+            }));
+        assertEquals("a run that published no answer found nothing", AdoptedModuleState.LineOnDisk.UNREADABLE, //$NON-NLS-1$
+            AdoptedModuleState.readBounded(new FakeRunner(BoundedJob.Outcome.COMPLETED, false), "read", 1_000L, //$NON-NLS-1$
+                () -> AdoptedModuleState.LineOnDisk.PRESENT));
+        for (BoundedJob.Outcome late : new BoundedJob.Outcome[] { BoundedJob.Outcome.TIMED_OUT,
+            BoundedJob.Outcome.TIMED_OUT_BEFORE_START, BoundedJob.Outcome.NOT_RUN })
+        {
+            // Even a read that went on to find the line is no answer once the caller stopped waiting for it.
+            assertEquals(late.name(), AdoptedModuleState.LineOnDisk.UNREADABLE, AdoptedModuleState.readBounded(
+                new FakeRunner(late, true), "read", 1_000L, () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$
+        }
+        // An interrupted caller, as BoundedJob reports it: the read may have run on and found the line, and the result
+        // carries the InterruptedException. Then the same read with no failure on the result: only the outcome is left
+        // to refuse it, so the rule "an answer only for a COMPLETED read" is pinned by itself.
+        for (Throwable carried : new Throwable[] { new InterruptedException(), null })
+        {
+            FakeRunner interrupted = new FakeRunner(BoundedJob.Outcome.INTERRUPTED, true);
+            interrupted.interruptsTheCaller = true;
+            interrupted.failure = carried;
+            try
+            {
+                assertEquals(String.valueOf(carried), AdoptedModuleState.LineOnDisk.UNREADABLE,
+                    AdoptedModuleState.readBounded(interrupted, "read", 1_000L, //$NON-NLS-1$
+                        () -> AdoptedModuleState.LineOnDisk.PRESENT));
+                assertTrue("the interrupt is kept for the caller", Thread.currentThread().isInterrupted()); //$NON-NLS-1$
+            }
+            finally
+            {
+                Thread.interrupted();
+            }
+        }
+        FakeRunner unschedulable = new FakeRunner(BoundedJob.Outcome.COMPLETED, true);
+        unschedulable.scheduleFailure = new IllegalStateException("job manager shut down"); //$NON-NLS-1$
+        assertEquals("a read that could not be scheduled read nothing", AdoptedModuleState.LineOnDisk.UNREADABLE, //$NON-NLS-1$
+            AdoptedModuleState.readBounded(unschedulable, "read", 1_000L, () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$
+        for (long none : new long[] { 0L, -1L })
+        {
+            FakeRunner idle = new FakeRunner(BoundedJob.Outcome.COMPLETED, true);
+            assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE,
+                AdoptedModuleState.readBounded(idle, "read", none, () -> AdoptedModuleState.LineOnDisk.PRESENT)); //$NON-NLS-1$
+            assertTrue("nothing left: no read is started", idle.timeouts.isEmpty()); //$NON-NLS-1$
+        }
+    }
+
+    /** Each read of the .mdo started with time left, and was given exactly what was left of the budget then. */
+    private void assertEachReadGotWhatWasLeftOf(long deadline)
+    {
+        assertEquals(env.readStarts.size(), env.readTimeouts.size());
+        assertFalse("no read was made", env.readStarts.isEmpty()); //$NON-NLS-1$
+        for (int i = 0; i < env.readStarts.size(); i++)
+        {
+            long left = deadline - env.readStarts.get(i);
+            assertTrue("read " + i + " started with nothing left: " + env.readStarts, left > 0); //$NON-NLS-1$ //$NON-NLS-2$
+            assertEquals("read " + i + " is bounded by what was left", left, env.readTimeouts.get(i).longValue()); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /**
+     * A bounded runner that answers a scripted outcome - running the read first, or not, as BoundedJob does when the
+     * read finishes after the caller stopped waiting - and records the timeouts it is given.
+     */
+    private static final class FakeRunner implements AdoptedModuleState.BoundedRunner
+    {
+        private final BoundedJob.Outcome outcome;
+        private final boolean runsTheRead;
+        /** What scheduling throws, when set. */
+        RuntimeException scheduleFailure;
+        /** Whether the caller's thread is left interrupted, as BoundedJob leaves it for INTERRUPTED. */
+        boolean interruptsTheCaller;
+        /**
+         * The failure the result carries for an outcome other than COMPLETED, as BoundedJob's INTERRUPTED result carries
+         * its InterruptedException; none when not set. A COMPLETED result carries what the read threw.
+         */
+        Throwable failure;
+        final List<Long> timeouts = new ArrayList<>();
+
+        FakeRunner(BoundedJob.Outcome outcome, boolean runsTheRead)
+        {
+            this.outcome = outcome;
+            this.runsTheRead = runsTheRead;
+        }
+
+        @Override
+        public BoundedJob.Result run(String jobName, long timeoutMs, BoundedJob.IBoundedWork work)
+        {
+            timeouts.add(timeoutMs);
+            if (scheduleFailure != null)
+            {
+                throw scheduleFailure;
+            }
+            Throwable thrown = null;
+            if (runsTheRead)
+            {
+                try
+                {
+                    work.run(new NullProgressMonitor());
+                }
+                catch (Exception e) // NOSONAR captured, as BoundedJob captures it
+                {
+                    thrown = e;
+                }
+            }
+            if (interruptsTheCaller)
+            {
+                Thread.currentThread().interrupt();
+            }
+            return new BoundedJob.Result(outcome, timeoutMs,
+                outcome == BoundedJob.Outcome.COMPLETED ? thrown : failure);
+        }
     }
 
     /**

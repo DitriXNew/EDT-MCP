@@ -51,8 +51,10 @@ public final class AdoptedModuleStateTestFixtures
     /**
      * A fake platform: answers the questions {@link AdoptedModuleState} asks and records every call,
      * in order, so a test can pin WHAT was exported, that the wait came after the export and that the
-     * {@code .mdo} was read back after the wait. Its clock is virtual: only {@link #pause} and
-     * {@link #awaitExport} move it, so a test can run the whole 60s budget at once and pin where it ends.
+     * {@code .mdo} was read back after the wait. Its clock is virtual: the export request
+     * ({@link #exportRequestMs}), the queue's wait ({@link #exportWaitMs}, never longer than the timeout it is
+     * given - BuildUtils bounds it), each read ({@link #readTimes}, cut at its timeout - the bounded read's
+     * contract) and {@link #pause} move it, so a test can run the whole 60s budget at once and pin where it ends.
      * Package-visible, as the seam it implements.
      */
     static final class FakeEnvironment implements AdoptedModuleState.Environment
@@ -67,11 +69,16 @@ public final class AdoptedModuleStateTestFixtures
         public IMdAdoptedPropertyAccess access;
         /** What {@link #forceExport} answers. */
         public boolean exportAccepted = true;
-        /** What {@link #forceExport} throws instead of answering, when set. */
+        /** What {@link #forceExport} throws instead of answering, when set - after its time is spent. */
         public RuntimeException exportFailure;
+        /** How long {@link #forceExport} takes on the virtual clock: the request itself counts against the budget. */
+        public long exportRequestMs;
         /** What {@link #awaitExport} answers. */
         public BuildUtils.DiskExportState exportState = BuildUtils.DiskExportState.DRAINED;
-        /** How long {@link #awaitExport} takes on the virtual clock. */
+        /**
+         * How long {@link #awaitExport} takes on the virtual clock - never longer than the timeout it is given, as
+         * BuildUtils' bounded wait: {@code Long.MAX_VALUE} models a wait that uses all it is given.
+         */
         public long exportWaitMs;
         /** What {@link #topObjectFqn} answers instead of computing, when set. */
         public String topFqnOverride;
@@ -80,6 +87,16 @@ public final class AdoptedModuleStateTestFixtures
          * healthy export - the line is on disk once an accepted export request's queue DRAINED, and not before.
          */
         public final List<AdoptedModuleState.LineOnDisk> disk = new ArrayList<>();
+        /**
+         * How long the reads of the {@code .mdo} take on the virtual clock, one entry per read, the last one repeating;
+         * empty: no time. A read that takes longer than its timeout is cut there and answers UNREADABLE, whatever
+         * {@link #disk} holds - the contract of the bounded read: the caller stops waiting at the timeout.
+         */
+        public final List<Long> readTimes = new ArrayList<>();
+        /** The timeout each read was given, in order. */
+        public final List<Long> readTimeouts = new ArrayList<>();
+        /** The virtual clock at the start of each read, in order. */
+        public final List<Long> readStarts = new ArrayList<>();
         /** What {@link #readStateLine} throws - after recording the read - instead of answering, when set. */
         public RuntimeException readFailure;
         /** Whether {@link #pause} is interrupted (and answers {@code false}). */
@@ -150,6 +167,7 @@ public final class AdoptedModuleStateTestFixtures
         public boolean forceExport(IProject project, String topObjectFqn)
         {
             calls.add("forceExport:" + topObjectFqn); //$NON-NLS-1$
+            clock += exportRequestMs;
             if (exportFailure != null)
             {
                 throw exportFailure;
@@ -162,25 +180,37 @@ public final class AdoptedModuleStateTestFixtures
         public BuildUtils.DiskExportState awaitExport(IProject project, long timeoutMs)
         {
             calls.add("awaitExport:" + timeoutMs); //$NON-NLS-1$
-            clock += exportWaitMs;
+            clock += Math.max(0L, Math.min(exportWaitMs, timeoutMs));
             return exportState;
         }
 
         @Override
         public AdoptedModuleState.LineOnDisk readStateLine(IProject project, String mdoPath,
-            AdoptedModuleState.StateLine line)
+            AdoptedModuleState.StateLine line, long timeoutMs)
         {
             calls.add("readMdo:" + mdoPath + "#" + line); //$NON-NLS-1$ //$NON-NLS-2$
+            readTimeouts.add(timeoutMs);
+            readStarts.add(clock);
+            int read = reads++;
             if (readFailure != null)
             {
                 throw readFailure;
             }
+            long takes = readTimes.isEmpty() ? 0L : readTimes.get(Math.min(read, readTimes.size() - 1));
+            if (takes > timeoutMs)
+            {
+                // Cut at the timeout, as the bounded read is: the caller stops waiting, and a read that has not
+                // answered by then says nothing either way.
+                clock += Math.max(0L, timeoutMs);
+                return AdoptedModuleState.LineOnDisk.UNREADABLE;
+            }
+            clock += takes;
             if (disk.isEmpty())
             {
                 return exportRequested && exportState == BuildUtils.DiskExportState.DRAINED
                     ? AdoptedModuleState.LineOnDisk.PRESENT : AdoptedModuleState.LineOnDisk.ABSENT;
             }
-            return disk.get(Math.min(reads++, disk.size() - 1));
+            return disk.get(Math.min(read, disk.size() - 1));
         }
 
         @Override

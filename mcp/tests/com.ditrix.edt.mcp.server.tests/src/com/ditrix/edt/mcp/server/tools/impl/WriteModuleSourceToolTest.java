@@ -2701,13 +2701,17 @@ public class WriteModuleSourceToolTest
             + "the file confirms the export")); //$NON-NLS-1$
         // One evidence, one verdict (#743 review): an unconfirmed export fails the write whether the step switched the
         // state or found it Extended - which of the two is a race with EDT's listener - and the failure names every way
-        // an export goes unconfirmed, a refused request included: the .mdo, read once, still decides that one.
+        // an export goes unconfirmed, a refused request included: the .mdo, read once if time was left, still decides
+        // that one - a request that used the whole budget leaves no time for the read (#743 review, round 6).
         assertTrue(section, section.contains("the `.mdo` is exported again to match the model and read back the same " //$NON-NLS-1$
             + "way. Which of the two values a write reports is a race with that listener, so an export that is not " //$NON-NLS-1$
             + "confirmed fails the write either way (below).")); //$NON-NLS-1$
         assertTrue(section, section.contains("or the state is `Extended` in EDT's model - switched or already - but its " //$NON-NLS-1$
             + "`.mdo` export was not confirmed: the `.mdo`, read back, did not carry its line within 60s or could not be " //$NON-NLS-1$
-            + "read back, or the export could not be scheduled and the `.mdo`, read once, was not seen carrying it.")); //$NON-NLS-1$
+            + "read back, or the export could not be scheduled and the `.mdo`, read once if time was left, was not seen " //$NON-NLS-1$
+            + "carrying it.")); //$NON-NLS-1$
+        assertFalse("the one read of a refused export happens only while the budget lasts: " + section, //$NON-NLS-1$
+            section.contains("read once, was not seen carrying it")); //$NON-NLS-1$
         assertFalse("a refused export whose .mdo already carries the line is no failure: " + section, //$NON-NLS-1$
             section.contains("or the export could not be scheduled.")); //$NON-NLS-1$
         assertFalse("an unconfirmed export of an already-Extended module is no success with a note: " + section, //$NON-NLS-1$
