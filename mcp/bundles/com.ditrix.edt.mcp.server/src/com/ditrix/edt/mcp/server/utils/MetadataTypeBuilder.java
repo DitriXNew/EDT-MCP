@@ -676,9 +676,41 @@ public final class MetadataTypeBuilder
         {
             return error(shapeError);
         }
+        return buildShaped(spec, IEObjectProvider.Registry.INSTANCE.get(McorePackage.Literals.TYPE_ITEM, version),
+            config, scope, isExtensionProject, typeTarget);
+    }
 
-        IEObjectProvider provider = IEObjectProvider.Registry.INSTANCE.get(
-            McorePackage.Literals.TYPE_ITEM, version);
+    /**
+     * Builds the {@link TypeDescription} against a platform type provider the caller already holds,
+     * instead of looking one up by platform version. Otherwise identical to {@link #build(JsonElement,
+     * Configuration, MetadataScope, Version, boolean, TypeTarget)}: the spec is validated first, and a
+     * missing provider is a platform failure. A spec naming only platform kinds (String / Number /
+     * Boolean / Date / ValueStorage / UUID ...) resolves against the provider alone, so its caller may
+     * pass {@code null} for {@code config} and {@code scope}; a reference kind needs the configuration.
+     *
+     * @param spec the {@code type} value (object with a {@code types} array)
+     * @param provider the platform type provider for the project's version (may be {@code null})
+     * @param config the configuration (used by the reference-type paths); may be {@code null}
+     * @param scope the project resolution root; {@code null} falls back to the configuration scope
+     * @param isExtensionProject whether the project being modified is a configuration EXTENSION
+     * @param typeTarget what the built type description will be attached to
+     * @return the result (type or error)
+     */
+    public static Result buildWithProvider(JsonElement spec, IEObjectProvider provider, Configuration config,
+        MetadataScope scope, boolean isExtensionProject, TypeTarget typeTarget)
+    {
+        String shapeError = validateShape(spec, typeTarget);
+        if (shapeError != null)
+        {
+            return error(shapeError);
+        }
+        return buildShaped(spec, provider, config, scope, isExtensionProject, typeTarget);
+    }
+
+    /** Builds an already shape-validated spec; a missing provider is the platform's failure. */
+    private static Result buildShaped(JsonElement spec, IEObjectProvider provider, Configuration config,
+        MetadataScope scope, boolean isExtensionProject, TypeTarget typeTarget)
+    {
         if (provider == null)
         {
             return platformError("Platform type provider is not available for this configuration version."); //$NON-NLS-1$

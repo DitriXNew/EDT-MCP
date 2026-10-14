@@ -4199,3 +4199,285 @@ def test_view_role_values_are_set_and_dropped():
     e = assert_error(bad, "an unknown role must be refused")
     assert_error_quality(e, names=["Role.E2ENoSuchRole"], suggests=["Role"])
     assert_tree_unchanged(snap, ctx="a refused role value must not touch the disk")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# #700: a retype resets the type-dependent properties exactly as EDT's designer does
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# EDT's designer changes a type through its own type-change task, which also resets the properties
+# that depend on the type. modify_metadata runs the same task. On a Constant / BasicFeature: the choice
+# form is cleared and quick choice becomes Auto; choice parameters and links go - always on a Constant,
+# otherwise unless the new type has a reference; the fill value becomes Undefined; min / max become
+# Undefined unless the new type has Number; a lone UUID also turns off fillFromFillingValue and
+# full-text search; a lone ValueStorage or unlimited String turns indexing off. Before #700 a retype
+# was a bare set: the member kept the designer's String fill value whatever its new type - a state EDT
+# never writes.
+#
+# Each test checks the .mdo BEFORE the message, so a jar without the resets fails on the stale stored
+# value rather than on the new message text alone. Two rules are unit-only
+# (ModifyMetadataToolTypeChangeTest): min / max and a DefinedType's referrer reset. A fill value and
+# min / max cannot be set through modify_metadata, so an attribute seeded here only ever holds
+# Undefined in them and an e2e assertion on them would pass with or without the reset.
+
+_CATALOG_MDO = "src/Catalogs/Catalog/Catalog.mdo"
+
+# The .mdo leaves a property at its model default out, so an absent element reads as that default.
+_RESET_DEFAULTS = {
+    "fullTextSearch": "DontUse",
+    "fillFromFillingValue": "false",
+    "indexing": "DontIndex",
+    "quickChoice": "Auto",
+}
+_RESET_VALUES = ("fillValue", "minValue", "maxValue")
+_UNDEFINED = "core:UndefinedValue"
+_RESET_CLAUSE = "the type change also reset the properties that depend on the type, as EDT's designer does"
+
+
+def _member_props(mdo_text, collection, name):
+    """{property: stored value} of the ONE <collection> member named `name` directly under the .mdo
+    root: a value's xsi:type (None when absent), an enum's or a flag's text (the model default when
+    absent), and the member's own type - "types" (its <types>, in order), "stringLength" and
+    "precision" (None when absent). None when the member is not (yet) there."""
+    root = ET.fromstring(mdo_text)
+    matches = [el for el in root if _local(el) == collection and el.findtext("name") == name]
+    if len(matches) != 1:
+        return None
+    props = dict(_RESET_DEFAULTS)
+    props.update((value, None) for value in _RESET_VALUES)
+    props.update(types=None, stringLength=None, precision=None)
+    for child in matches[0]:
+        tag = _local(child)
+        if tag in _RESET_VALUES:
+            props[tag] = child.get(_XSI_TYPE)
+        elif tag in _RESET_DEFAULTS:
+            props[tag] = (child.text or "").strip()
+        elif tag == "type":
+            props["types"] = tuple((t.text or "").strip() for t in child if _local(t) == "types")
+            props["stringLength"] = child.findtext("stringQualifiers/length")
+            props["precision"] = child.findtext("numberQualifiers/precision")
+    return props
+
+
+def _poll_member_props(path, collection, name, expected, ctx, timeout=15):
+    """Poll `path` until the member's stored properties include every `expected` key/value; return
+    them. One read decides all of them, so the verdict never mixes two exports."""
+    deadline = time.time() + timeout
+    last = "<never read>"
+    while time.time() < deadline:
+        try:
+            props = _member_props(read_disk(path), collection, name)
+            last = props if props is not None else "<no such member>"
+        except (OSError, ET.ParseError) as e:
+            props, last = None, "unreadable: %s" % e
+        if props is not None and all(props.get(k) == v for k, v in expected.items()):
+            return props
+        time.sleep(0.5)
+    _fail("%s: %s member %r expected %r, the .mdo holds %r" % (ctx, collection, name, expected, last))
+
+
+def _poll_attribute_props(attr, expected, ctx):
+    return _poll_member_props(_CATALOG_MDO, "attributes", attr, expected, ctx)
+
+
+def _seed_designer_attribute(attr):
+    """create_metadata a Catalog attribute: since #700 it carries the designer's String(10) defaults,
+    an empty String fill value among them - the state a retype has to reset."""
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr}),
+              "seed attribute " + attr)
+    wait_for_project_ready()
+    return _poll_attribute_props(attr, {"types": ("String",), "stringLength": "10",
+                                        "fillValue": "core:StringValue", "fullTextSearch": "Use"},
+                                 "precondition: the created attribute carries the designer's defaults")
+
+
+def _modify_attribute(attr, properties, ctx):
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute." + attr,
+                                 "properties": properties})
+    assert_ok(r, ctx)
+    return r
+
+
+def _retype_attribute(attr, type_value, ctx):
+    r = _modify_attribute(attr, [{"name": "type", "value": type_value}], ctx)
+    assert "type" in (r.structured.get("applied") or []), "type must be applied: %r" % (r.structured,)
+    return r
+
+
+def _assert_reset_reported(r, clause=_RESET_CLAUSE):
+    """The message names the reset. Asserted AFTER the .mdo check, so that a jar without the resets
+    fails a test on the stale stored value, not on the new message text alone."""
+    assert clause in (r.structured.get("message") or ""), \
+        "the message must say what the type change reset: %r" % (r.structured,)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_retype_to_number_resets_the_designer_string_fill_value():
+    attr = "E2EResetNumAttr"
+    _seed_designer_attribute(attr)
+    r = _retype_attribute(attr, {"types": [{"kind": "Number", "precision": 10, "scale": 2}]},
+                          "retype to Number(10,2)")
+    _poll_attribute_props(attr, {
+        "types": ("Number",), "precision": "10", "fillValue": _UNDEFINED,
+        "fullTextSearch": "Use", "fillFromFillingValue": "false", "indexing": "DontIndex", "quickChoice": "Auto",
+    }, "a Number attribute must not keep the String fill value (as EDT's designer writes it)")
+    _assert_reset_reported(r)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_retype_to_a_reference_resets_the_fill_value_and_quick_choice():
+    attr = "E2EResetRefAttr"
+    _seed_designer_attribute(attr)
+    _modify_attribute(attr, [{"name": "quickChoice", "value": "DontUse"}], "turn quick choice off first")
+    _poll_attribute_props(attr, {"quickChoice": "DontUse"}, "precondition: quick choice off on disk")
+
+    r = _retype_attribute(attr, {"types": [{"kind": "CatalogRef", "ref": "Catalog"}]},
+                          "retype to CatalogRef.Catalog")
+    _poll_attribute_props(attr, {
+        "types": ("CatalogRef.Catalog",), "fillValue": _UNDEFINED, "fullTextSearch": "Use", "quickChoice": "Auto",
+    }, "a retype resets quick choice to Auto and the fill value to Undefined")
+    _assert_reset_reported(r)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_retype_to_uuid_stops_filling_from_the_filling_value_and_full_text_search():
+    attr = "E2EResetUuidAttr"
+    _seed_designer_attribute(attr)
+    _modify_attribute(attr, [{"name": "fillFromFillingValue", "value": True}], "turn filling on first")
+    _poll_attribute_props(attr, {"fillFromFillingValue": "true", "fullTextSearch": "Use"},
+                          "precondition: filling and full-text search on, on disk")
+
+    r = _retype_attribute(attr, {"types": [{"kind": "UUID"}]}, "retype to UUID")
+    _poll_attribute_props(attr, {
+        "types": ("UUID",), "fillValue": _UNDEFINED, "fillFromFillingValue": "false", "fullTextSearch": "DontUse",
+    }, "a UUID attribute is not filled from the filling value and takes no part in full-text search")
+    _assert_reset_reported(r)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_retype_to_value_storage_stops_indexing():
+    attr = "E2EResetVsAttr"
+    _seed_designer_attribute(attr)
+    _modify_attribute(attr, [{"name": "indexing", "value": "Index"}], "index the attribute first")
+    _poll_attribute_props(attr, {"indexing": "Index"}, "precondition: indexed on disk")
+
+    r = _retype_attribute(attr, {"types": [{"kind": "ValueStorage"}]}, "retype to ValueStorage")
+    _poll_attribute_props(attr, {
+        "types": ("ValueStorage",), "fillValue": _UNDEFINED, "indexing": "DontIndex", "fullTextSearch": "Use",
+    }, "a value storage cannot be indexed")
+    _assert_reset_reported(r)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_retype_to_an_unlimited_string_stops_indexing():
+    attr = "E2EResetLongStrAttr"
+    _seed_designer_attribute(attr)
+    _modify_attribute(attr, [{"name": "indexing", "value": "Index"}], "index the attribute first")
+    _poll_attribute_props(attr, {"indexing": "Index"}, "precondition: indexed on disk")
+
+    # An unlimited String as EDT's designer writes it: string qualifiers of length 0.
+    r = _retype_attribute(attr, {"types": [{"kind": "String", "length": 0}]}, "retype to an unlimited String")
+    _poll_attribute_props(attr, {
+        "types": ("String",), "stringLength": None,
+        "fillValue": _UNDEFINED, "indexing": "DontIndex", "fullTextSearch": "Use",
+    }, "an unlimited string cannot be indexed")
+    _assert_reset_reported(r)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_retype_of_an_edt_made_attribute_resets_its_string_fill_value():
+    # The fixture's Catalog.Catalog.Attribute was made by EDT: String(10) with an empty String fill
+    # value. A retype through MCP left that fill value on the new type before #700 as well.
+    precondition = _member_props(read_disk(_CATALOG_MDO), "attributes", "Attribute")
+    assert precondition is not None and precondition["fillValue"] == "core:StringValue", \
+        "precondition: the fixture attribute carries a String fill value: %r" % (precondition,)
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": "Catalog.Catalog.Attribute.Attribute",
+                                 "properties": [{"name": "type", "value": {
+                                     "types": [{"kind": "Number", "precision": 10, "scale": 2}]}}]})
+    assert_ok(r, "retype the EDT-made fixture attribute to Number(10,2)")
+    _poll_attribute_props("Attribute", {
+        "types": ("Number",), "precision": "10", "fillValue": _UNDEFINED, "fullTextSearch": "Use",
+    }, "an EDT-made attribute retyped to Number must not keep its String fill value")
+    _assert_reset_reported(r)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_writing_the_type_an_attribute_already_has_resets_nothing():
+    # EDT's designer runs its type change only for a real change. The same String(10) again keeps the
+    # designer's fill value and a quick choice set before.
+    attr = "E2EResetSameAttr"
+    _seed_designer_attribute(attr)
+    _modify_attribute(attr, [{"name": "quickChoice", "value": "DontUse"}], "turn quick choice off first")
+    _poll_attribute_props(attr, {"quickChoice": "DontUse"}, "precondition: quick choice off on disk")
+
+    r = _modify_attribute(attr, [{"name": "type", "value": {"types": [{"kind": "String", "length": 10}]}}],
+                          "write the type the attribute already has")
+    props = _member_props(read_disk(_CATALOG_MDO), "attributes", attr)
+    assert props is not None and props["types"] == ("String",) and props["stringLength"] == "10" \
+        and props["fillValue"] == "core:StringValue" and props["quickChoice"] == "DontUse", \
+        "an unchanged type must keep the fill value and quick choice: %r" % (props,)
+    assert _RESET_CLAUSE not in (r.structured.get("message") or ""), \
+        "an unchanged type must not report a reset: %r" % (r.structured,)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_a_property_set_with_the_type_is_not_undone_by_its_reset():
+    # The type goes first whatever the order of the call's properties, so the call's own quick choice
+    # survives the reset a retype makes.
+    attr = "E2EResetOrderAttr"
+    _seed_designer_attribute(attr)
+    r = _modify_attribute(attr, [
+        {"name": "quickChoice", "value": "DontUse"},
+        {"name": "type", "value": {"types": [{"kind": "Number", "precision": 10, "scale": 2}]}},
+    ], "set quick choice and retype in one call")
+    _poll_attribute_props(attr, {"types": ("Number",), "quickChoice": "DontUse", "fillValue": _UNDEFINED},
+                          "the call's own quick choice wins over the reset, the fill value is still reset")
+    _assert_reset_reported(r)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_retype_of_a_constant_resets_its_quick_choice():
+    name = "E2EResetConst"
+    path = "src/Constants/%s/%s.mdo" % (name, name)
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Constant." + name}), "seed Constant")
+    wait_for_project_ready()
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": "Constant." + name,
+                                 "properties": [{"name": "quickChoice", "value": "DontUse"}]})
+    assert_ok(r, "turn the constant's quick choice off first")
+    poll_disk_contains(path, "<quickChoice>DontUse</quickChoice>", ctx="precondition: quick choice off on disk")
+
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": "Constant." + name,
+                                 "properties": [{"name": "type", "value": {
+                                     "types": [{"kind": "Number", "precision": 12, "scale": 3}]}}]})
+    assert_ok(r, "retype the constant")
+    mdo = poll_disk_contains(path, "<precision>12</precision>", ctx="the constant's new type must reach disk")
+    assert "<quickChoice>" not in mdo, \
+        "a retype resets a constant's quick choice to Auto, which the .mdo leaves out:\n%s" % mdo[:1500]
+    _assert_reset_reported(r)
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_retype_of_a_defined_type_runs_the_referrer_reset():
+    # A DefinedType's retype resets the fill value of every editable object typed with it - here an
+    # attribute that uses it. No fill value can be set through MCP, so the referrer already holds
+    # Undefined and the reset itself is not observable here: it is pinned by the unit tests. This is a
+    # smoke test of the live run over a real referrer (BM references, the write transaction, editing
+    # support) and of its report.
+    defined = "E2EResetDefined"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "DefinedType." + defined}),
+              "seed the DefinedType")
+    wait_for_project_ready()
+    attr = "E2EResetDefinedAttr"
+    _seed_designer_attribute(attr)
+    r = _retype_attribute(attr, {"types": [{"kind": "DefinedType", "ref": defined}]}, "type the attribute with it")
+    _poll_attribute_props(attr, {"types": ("DefinedType.%s" % defined,), "fillValue": _UNDEFINED},
+                          "the attribute's own retype reset its fill value")
+    _assert_reset_reported(r)
+
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": "DefinedType." + defined,
+                                 "properties": [{"name": "type", "value": {
+                                     "types": [{"kind": "Number", "precision": 15, "scale": 2}]}}]})
+    assert_ok(r, "retype the DefinedType its attribute uses")
+    poll_disk_contains("src/DefinedTypes/%s/%s.mdo" % (defined, defined), "<precision>15</precision>",
+                       ctx="the DefinedType's new type must reach disk")
+    _assert_reset_reported(r, "the type change also reset the fill value of every editable object typed with it")

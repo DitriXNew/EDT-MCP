@@ -42,12 +42,18 @@ import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EReference;
 import org.junit.Test;
+import org.mockito.Mockito;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
+import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.McorePackage;
+import com._1c.g5.v8.dt.mcore.TypeDescription;
+import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogForm;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonForm;
@@ -58,6 +64,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ReturnValuesReuse;
+import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.tools.impl.CreateMetadataTool.CommonModuleFlags;
@@ -727,6 +734,368 @@ public class CreateMetadataToolTest
         assertNotNull(ref);
         assertNull("ChartOfAccounts predefined items are now supported (gate must return null)", //$NON-NLS-1$
             PredefinedWriter.unsupportedOwnerTypeError(ref.ownerType));
+    }
+
+    // ==================== typed members (issue #700) ====================
+    //
+    // A member that carries a value type is created through the owner-aware model-object factory, so
+    // the owner's type initializer gives it the designer defaults, type included. Where the factory
+    // declines (null) or leaves the type empty, the per-kind default the initializers use is set:
+    // String(10), Number(10,0) for an accumulation / accounting / calculation register resource,
+    // Boolean for a chart of accounts' accounting flags. Driven through the seam the write
+    // transaction calls (createMemberChild), on bare MdClassFactory owners and a mocked factory and
+    // type provider - the same headless split MetadataTypeBuilderTest uses.
+
+    /** The member name every typed-member test creates. */
+    private static final String MEMBER = "Member"; //$NON-NLS-1$
+
+    /** A platform type provider that knows String, Number and Boolean, each as its own type item. */
+    private static final class Platform
+    {
+        final IEObjectProvider provider = mock(IEObjectProvider.class);
+        final TypeItem stringType = McoreFactory.eINSTANCE.createType();
+        final TypeItem numberType = McoreFactory.eINSTANCE.createType();
+        final TypeItem booleanType = McoreFactory.eINSTANCE.createType();
+
+        Platform()
+        {
+            doReturn(stringType).when(provider).createProxy("String"); //$NON-NLS-1$
+            doReturn(numberType).when(provider).createProxy("Number"); //$NON-NLS-1$
+            doReturn(booleanType).when(provider).createProxy("Boolean"); //$NON-NLS-1$
+        }
+    }
+
+    /** Creates {@link #MEMBER} in {@code owner}'s {@code featureName} collection, as the write transaction does. */
+    private static MdObject createMember(MdObject owner, String featureName, IModelObjectFactory factory,
+        IEObjectProvider provider, CreateMetadataTool.Props props, String synonymLanguage)
+    {
+        // Exactly the target MetadataNodeResolver.resolveForCreate builds: the owner's containment
+        // feature and its declared element type.
+        EReference feature = (EReference)owner.eClass().getEStructuralFeature(featureName);
+        assertNotNull(owner.eClass().getName() + " must have a '" + featureName + "' collection", feature); //$NON-NLS-1$ //$NON-NLS-2$
+        CreateMetadataTool.MemberChildSpec spec = new CreateMetadataTool.MemberChildSpec(factory,
+            feature.getEReferenceType(), owner, Version.LATEST, MEMBER, props, synonymLanguage, feature,
+            provider);
+        return CreateMetadataTool.createMemberChild(spec);
+    }
+
+    private static MdObject createMember(MdObject owner, String featureName, IModelObjectFactory factory,
+        IEObjectProvider provider)
+    {
+        return createMember(owner, featureName, factory, provider, new CreateMetadataTool.Props(), null);
+    }
+
+    /** The member's {@code type} feature value, read reflectively: SequenceDimension is no BasicFeature. */
+    private static TypeDescription typeOf(MdObject member)
+    {
+        return (TypeDescription)member.eGet(member.eClass().getEStructuralFeature("type")); //$NON-NLS-1$
+    }
+
+    private static void assertString10(Platform platform, MdObject member)
+    {
+        TypeDescription type = typeOf(member);
+        assertNotNull(member.eClass().getName() + " must not be created without a type", type); //$NON-NLS-1$
+        assertEquals("exactly one type item, String", //$NON-NLS-1$
+            Collections.singletonList(platform.stringType), type.getTypes());
+        assertNotNull("String(10) carries string qualifiers", type.getStringQualifiers()); //$NON-NLS-1$
+        assertEquals(10, type.getStringQualifiers().getLength());
+        assertFalse("the designer default is a variable-length string", type.getStringQualifiers().isFixed()); //$NON-NLS-1$
+        assertNull(type.getNumberQualifiers());
+    }
+
+    private static void assertNumber10(Platform platform, MdObject member)
+    {
+        TypeDescription type = typeOf(member);
+        assertNotNull(member.eClass().getName() + " must not be created without a type", type); //$NON-NLS-1$
+        assertEquals("exactly one type item, Number", //$NON-NLS-1$
+            Collections.singletonList(platform.numberType), type.getTypes());
+        assertNotNull("Number(10,0) carries number qualifiers", type.getNumberQualifiers()); //$NON-NLS-1$
+        assertEquals(10, type.getNumberQualifiers().getPrecision());
+        assertEquals(0, type.getNumberQualifiers().getScale());
+        assertFalse("the designer default allows negatives", type.getNumberQualifiers().isNonNegative()); //$NON-NLS-1$
+        assertNull("a resource must never get a string's qualifiers", type.getStringQualifiers()); //$NON-NLS-1$
+        verify(platform.provider, never()).createProxy("String"); //$NON-NLS-1$
+    }
+
+    private static void assertBoolean(Platform platform, MdObject member)
+    {
+        TypeDescription type = typeOf(member);
+        assertNotNull(member.eClass().getName() + " must not be created without a type", type); //$NON-NLS-1$
+        assertEquals("exactly one type item, Boolean", //$NON-NLS-1$
+            Collections.singletonList(platform.booleanType), type.getTypes());
+        assertNull("a flag has no string qualifiers", type.getStringQualifiers()); //$NON-NLS-1$
+        assertNull("a flag has no number qualifiers", type.getNumberQualifiers()); //$NON-NLS-1$
+        verify(platform.provider, never()).createProxy("String"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATypedMemberIsCreatedByTheFactoryAndKeepsTheTypeItsInitializerSet()
+    {
+        Platform platform = new Platform();
+        IModelObjectFactory factory = mock(IModelObjectFactory.class);
+        MdObject register = MdClassFactory.eINSTANCE.createInformationRegister();
+        com._1c.g5.v8.dt.metadata.mdclass.InformationRegisterDimension byFactory =
+            MdClassFactory.eINSTANCE.createInformationRegisterDimension();
+        TypeDescription initializerType = McoreFactory.eINSTANCE.createTypeDescription();
+        byFactory.setType(initializerType);
+        byFactory.setMainFilter(true);
+        doReturn(byFactory).when(factory).create(MdClassPackage.Literals.INFORMATION_REGISTER_DIMENSION,
+            register, Version.LATEST);
+
+        MdObject created = createMember(register, "dimensions", factory, platform.provider); //$NON-NLS-1$
+
+        assertSame("the member must be the one the owner's initializer built", byFactory, created); //$NON-NLS-1$
+        assertSame("the initializer's type must be kept, not replaced by a default", //$NON-NLS-1$
+            initializerType, typeOf(created));
+        assertTrue("the initializer's other designer defaults survive", byFactory.isMainFilter()); //$NON-NLS-1$
+        assertEquals(MEMBER, created.getName());
+        assertNotNull(created.getUuid());
+        assertTrue("the member must be attached to its owner", //$NON-NLS-1$
+            ((com._1c.g5.v8.dt.metadata.mdclass.InformationRegister)register).getDimensions().contains(created));
+        verify(factory).create(MdClassPackage.Literals.INFORMATION_REGISTER_DIMENSION, register, Version.LATEST);
+        verify(platform.provider, never()).createProxy(Mockito.anyString());
+    }
+
+    @Test
+    public void testADimensionTheFactoryDeclinedGetsTheString10Default()
+    {
+        Platform platform = new Platform();
+        IModelObjectFactory factory = mock(IModelObjectFactory.class);
+        MdObject register = MdClassFactory.eINSTANCE.createInformationRegister();
+
+        MdObject created = createMember(register, "dimensions", factory, platform.provider); //$NON-NLS-1$
+
+        assertEquals(MdClassPackage.Literals.INFORMATION_REGISTER_DIMENSION, created.eClass());
+        assertString10(platform, created);
+        assertNotNull("the bare fallback still gets its UUID", created.getUuid()); //$NON-NLS-1$
+        assertTrue(((com._1c.g5.v8.dt.metadata.mdclass.InformationRegister)register).getDimensions()
+            .contains(created));
+        verify(factory).create(MdClassPackage.Literals.INFORMATION_REGISTER_DIMENSION, register, Version.LATEST);
+    }
+
+    @Test
+    public void testAnUntypedMemberTheFactoryReturnedGetsTheString10Default()
+    {
+        // An owner with no type initializer gets the factory's bare fallback object: non-null, but
+        // still without a type. A null check on the factory's RESULT alone would ship it untyped.
+        Platform platform = new Platform();
+        IModelObjectFactory factory = mock(IModelObjectFactory.class);
+        MdObject register = MdClassFactory.eINSTANCE.createInformationRegister();
+        MdObject bare = MdClassFactory.eINSTANCE.createInformationRegisterDimension();
+        doReturn(bare).when(factory).create(MdClassPackage.Literals.INFORMATION_REGISTER_DIMENSION,
+            register, Version.LATEST);
+
+        MdObject created = createMember(register, "dimensions", factory, platform.provider); //$NON-NLS-1$
+
+        assertSame(bare, created);
+        assertString10(platform, created);
+    }
+
+    @Test
+    public void testAnInformationRegisterResourceDefaultsToString10()
+    {
+        // The one register resource whose designer default is a String, not a Number.
+        Platform platform = new Platform();
+        MdObject register = MdClassFactory.eINSTANCE.createInformationRegister();
+
+        MdObject created = createMember(register, "resources", mock(IModelObjectFactory.class), //$NON-NLS-1$
+            platform.provider);
+
+        assertEquals(MdClassPackage.Literals.INFORMATION_REGISTER_RESOURCE, created.eClass());
+        assertString10(platform, created);
+    }
+
+    @Test
+    public void testAnAccumulationRegisterResourceDefaultsToNumber10And0()
+    {
+        Platform platform = new Platform();
+        MdObject register = MdClassFactory.eINSTANCE.createAccumulationRegister();
+
+        MdObject created = createMember(register, "resources", mock(IModelObjectFactory.class), //$NON-NLS-1$
+            platform.provider);
+
+        assertEquals(MdClassPackage.Literals.ACCUMULATION_REGISTER_RESOURCE, created.eClass());
+        assertNumber10(platform, created);
+    }
+
+    @Test
+    public void testAccountingAndCalculationRegisterResourcesDefaultToNumber10And0()
+    {
+        Platform accounting = new Platform();
+        MdObject created = createMember(MdClassFactory.eINSTANCE.createAccountingRegister(), "resources", //$NON-NLS-1$
+            mock(IModelObjectFactory.class), accounting.provider);
+        assertEquals(MdClassPackage.Literals.ACCOUNTING_REGISTER_RESOURCE, created.eClass());
+        assertNumber10(accounting, created);
+
+        Platform calculation = new Platform();
+        created = createMember(MdClassFactory.eINSTANCE.createCalculationRegister(), "resources", //$NON-NLS-1$
+            mock(IModelObjectFactory.class), calculation.provider);
+        assertEquals(MdClassPackage.Literals.CALCULATION_REGISTER_RESOURCE, created.eClass());
+        assertNumber10(calculation, created);
+    }
+
+    @Test
+    public void testAccountingFlagsDefaultToBoolean()
+    {
+        Platform flag = new Platform();
+        MdObject created = createMember(MdClassFactory.eINSTANCE.createChartOfAccounts(), "accountingFlags", //$NON-NLS-1$
+            mock(IModelObjectFactory.class), flag.provider);
+        assertEquals(MdClassPackage.Literals.ACCOUNTING_FLAG, created.eClass());
+        assertBoolean(flag, created);
+
+        Platform extFlag = new Platform();
+        created = createMember(MdClassFactory.eINSTANCE.createChartOfAccounts(), "extDimensionAccountingFlags", //$NON-NLS-1$
+            mock(IModelObjectFactory.class), extFlag.provider);
+        assertEquals(MdClassPackage.Literals.EXT_DIMENSION_ACCOUNTING_FLAG, created.eClass());
+        assertBoolean(extFlag, created);
+    }
+
+    @Test
+    public void testASequenceDimensionIsATypedMemberThoughItIsNoBasicFeature()
+    {
+        // SequenceDimension carries its own 'contains TypeDescription[1] type' outside BasicFeature, so
+        // a selector keyed on BasicFeature would leave it untyped.
+        assertFalse(MdClassPackage.Literals.BASIC_FEATURE.isSuperTypeOf(MdClassPackage.Literals.SEQUENCE_DIMENSION));
+        assertTrue(CreateMetadataTool.carriesMandatoryType(MdClassPackage.Literals.SEQUENCE_DIMENSION));
+
+        Platform platform = new Platform();
+        IModelObjectFactory factory = mock(IModelObjectFactory.class);
+        MdObject sequence = MdClassFactory.eINSTANCE.createSequence();
+
+        MdObject created = createMember(sequence, "dimensions", factory, platform.provider); //$NON-NLS-1$
+
+        assertEquals(MdClassPackage.Literals.SEQUENCE_DIMENSION, created.eClass());
+        assertString10(platform, created);
+        verify(factory).create(MdClassPackage.Literals.SEQUENCE_DIMENSION, sequence, Version.LATEST);
+    }
+
+    @Test
+    public void testExplicitSynonymAndCommentStillWinOnAFactoryBuiltMember()
+    {
+        Platform platform = new Platform();
+        IModelObjectFactory factory = mock(IModelObjectFactory.class);
+        MdObject catalog = MdClassFactory.eINSTANCE.createCatalog();
+        MdObject byFactory = MdClassFactory.eINSTANCE.createCatalogAttribute();
+        byFactory.setComment("set by the initializer"); //$NON-NLS-1$
+        byFactory.getSynonym().put("en", "Initializer"); //$NON-NLS-1$ //$NON-NLS-2$
+        doReturn(byFactory).when(factory).create(MdClassPackage.Literals.CATALOG_ATTRIBUTE, catalog,
+            Version.LATEST);
+        CreateMetadataTool.Props props = new CreateMetadataTool.Props();
+        props.synonym = "Weight in kg"; //$NON-NLS-1$
+        props.comment = "Explicit comment"; //$NON-NLS-1$
+
+        MdObject created = createMember(catalog, "attributes", factory, platform.provider, props, "en"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertSame("the attribute must come from the factory", byFactory, created); //$NON-NLS-1$
+        assertEquals("Weight in kg", created.getSynonym().get("en")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("Explicit comment", created.getComment()); //$NON-NLS-1$
+        assertString10(platform, created);
+    }
+
+    @Test
+    public void testMembersWithoutAMandatoryTypeKeepThePlainPath()
+    {
+        // A command's parameter type is OPTIONAL (and its own 'Type'-coded feature), an enum value has
+        // no type at all: neither is routed through the factory nor given a default type.
+        assertFalse(CreateMetadataTool.carriesMandatoryType(MdClassPackage.Literals.CATALOG_COMMAND));
+        assertFalse(CreateMetadataTool.carriesMandatoryType(MdClassPackage.Literals.ENUM_VALUE));
+        assertFalse(CreateMetadataTool.carriesMandatoryType(MdClassPackage.Literals.CATALOG_TABULAR_SECTION));
+        for (EClass typed : new EClass[] {MdClassPackage.Literals.CATALOG_ATTRIBUTE,
+            MdClassPackage.Literals.TABULAR_SECTION_ATTRIBUTE, MdClassPackage.Literals.ADDRESSING_ATTRIBUTE,
+            MdClassPackage.Literals.INFORMATION_REGISTER_DIMENSION, MdClassPackage.Literals.ACCOUNTING_FLAG,
+            MdClassPackage.Literals.DATA_PROCESSOR_TABULAR_SECTION_ATTRIBUTE})
+        {
+            assertTrue(typed.getName() + " carries a mandatory type", //$NON-NLS-1$
+                CreateMetadataTool.carriesMandatoryType(typed));
+        }
+
+        Platform platform = new Platform();
+        IModelObjectFactory factory = mock(IModelObjectFactory.class);
+        MdObject enumValue = createMember(MdClassFactory.eINSTANCE.createEnum(), "enumValues", factory, //$NON-NLS-1$
+            platform.provider);
+        MdObject command = createMember(MdClassFactory.eINSTANCE.createCatalog(), "commands", factory, //$NON-NLS-1$
+            platform.provider);
+
+        assertEquals(MEMBER, enumValue.getName());
+        assertEquals(MEMBER, command.getName());
+        assertNull("a command's optional parameter type is not defaulted", //$NON-NLS-1$
+            ((com._1c.g5.v8.dt.metadata.mdclass.BasicCommand)command).getCommandParameterType());
+        verify(factory, never()).create(any(EClass.class), any(org.eclipse.emf.ecore.EObject.class),
+            any(Version.class));
+        verify(platform.provider, never()).createProxy(Mockito.anyString());
+    }
+
+    @Test
+    public void testTheGuideStatesTheDefaultTypeOfEachMemberKind()
+    {
+        String guide = new CreateMetadataTool().getGuide();
+        assertTrue(guide.contains("is created with the designer's defaults, type included: `String(10)` " //$NON-NLS-1$
+            + "(`{types:[{kind:'String', length:10}]}`), except an accumulation / accounting / calculation " //$NON-NLS-1$
+            + "register resource - `Number(10,0)` - and a ChartOfAccounts accounting flag or ext-dimension " //$NON-NLS-1$
+            + "accounting flag - `Boolean`.")); //$NON-NLS-1$
+        assertFalse("the old vague promise must be gone", guide.contains("(e.g. a default type)")); //$NON-NLS-1$ //$NON-NLS-2$
+        // A characteristic created without a valueType is no longer left untyped; a folder still is,
+        // as EDT's folder wizard leaves it.
+        assertTrue(guide.contains("Omitted -> a copy of the chart's own value type, as EDT's \"New predefined " //$NON-NLS-1$
+            + "characteristic\" wizard gives it; a folder (`isFolder: true`) stays untyped, as EDT's folder " //$NON-NLS-1$
+            + "wizard leaves it.")); //$NON-NLS-1$
+        assertFalse(guide.contains("Omitted -> left UNSET. A JSON `null` at CREATE")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheTransactionsSpecResolvesTheTypeProviderForATypedMemberOnly()
+    {
+        // The spec createMember builds inside the write transaction looks the platform type provider up
+        // itself (typeProviderFor) - the provider ensureMandatoryType defaults a member's type with. The
+        // live factory types every member it builds, so no e2e reaches that fallback: this is its pin.
+        // The registry never answers null (it falls back to an empty provider for the class), so the
+        // provider is identified by the class it serves, read from the registry itself.
+        IEObjectProvider registered = IEObjectProvider.Registry.INSTANCE.get(
+            McorePackage.Literals.TYPE_ITEM, Version.LATEST);
+        assertNotNull(registered);
+        IModelObjectFactory factory = mock(IModelObjectFactory.class);
+        CreateMetadataTool.Props props = new CreateMetadataTool.Props();
+        MdObject register = MdClassFactory.eINSTANCE.createInformationRegister();
+        EReference dimensions = (EReference)register.eClass().getEStructuralFeature("dimensions"); //$NON-NLS-1$
+        MdObject catalog = MdClassFactory.eINSTANCE.createCatalog();
+        EReference commands = (EReference)catalog.eClass().getEStructuralFeature("commands"); //$NON-NLS-1$
+
+        CreateMetadataTool.MemberChildSpec dimension = new CreateMetadataTool.MemberChildSpec(factory,
+            dimensions.getEReferenceType(), register, Version.LATEST, MEMBER, props, null, dimensions);
+        CreateMetadataTool.MemberChildSpec command = new CreateMetadataTool.MemberChildSpec(factory,
+            commands.getEReferenceType(), catalog, Version.LATEST, MEMBER, props, null, commands);
+        CreateMetadataTool.MemberChildSpec unknownVersion = new CreateMetadataTool.MemberChildSpec(factory,
+            dimensions.getEReferenceType(), register, null, MEMBER, props, null, dimensions);
+
+        assertNotNull("a member with a value type needs the platform type provider", dimension.typeProvider); //$NON-NLS-1$
+        assertSame("the registry's provider for the project's version", //$NON-NLS-1$
+            registered.getClass(), dimension.typeProvider.getClass());
+        assertEquals("the provider of TypeItems, the key the owner initializers use", //$NON-NLS-1$
+            registered.getEClass(), dimension.typeProvider.getEClass());
+        assertTrue(McorePackage.Literals.TYPE_ITEM.isSuperTypeOf(
+            dimension.typeProvider.getEClass()));
+        assertNull("a command carries no mandatory type and needs no provider", command.typeProvider); //$NON-NLS-1$
+        assertNull("no platform version, no provider", unknownVersion.typeProvider); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheDefaultTypeFailsLoudlyRatherThanWritingAnUntypedMember()
+    {
+        // No platform type provider: the create must fail inside the transaction (which rolls it
+        // back), never attach a member without its mandatory type.
+        IModelObjectFactory factory = mock(IModelObjectFactory.class);
+        com._1c.g5.v8.dt.metadata.mdclass.InformationRegister register =
+            MdClassFactory.eINSTANCE.createInformationRegister();
+        try
+        {
+            createMember(register, "dimensions", factory, null); //$NON-NLS-1$
+            fail("a typed member without a buildable default type must not be created"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertTrue(e.getMessage(), e.getMessage().contains("type provider")); //$NON-NLS-1$
+        }
+        assertTrue("nothing may be attached", register.getDimensions().isEmpty()); //$NON-NLS-1$
     }
 
     // ===== a created form command's unbound action (issue #628) ====================================

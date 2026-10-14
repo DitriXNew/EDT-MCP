@@ -54,6 +54,7 @@ from harness import (
     diff,
     poll_diff_contains,
     poll_disk_contains,
+    poll_disk_contains_all,
     read_disk,
     restore_extension_fixture,
     split_markdown_row,
@@ -62,6 +63,7 @@ from harness import (
     e2e_test,
     PROJECT,
     TESTS_PROJECT,
+    TESTS_PROJECT_REL,
     _fail,
 )
 
@@ -112,6 +114,73 @@ def _assert_unique_nonzero(ids_by_name, ctx):
             _fail("%s ids must be unique, but %s and %s both use %s: %r"
                   % (ctx, seen[value], name, value, ids_by_name))
         seen[value] = name
+
+
+def _children(node, child_name):
+    return [child for child in list(node) if _xml_local(child.tag) == child_name]
+
+
+def _child_named(parent, collection, name, ctx):
+    """The ONE <collection> element directly under `parent` whose <name> is `name`."""
+    matches = [el for el in _children(parent, collection) if _direct_child_text(el, "name") == name]
+    if len(matches) != 1:
+        _fail("%s: expected exactly one <%s> named %r, found %d" % (ctx, collection, name, len(matches)))
+    return matches[0]
+
+
+def _member_element(mdo_text, collection, name, ctx):
+    """The <collection> element directly under a top object's .mdo root whose <name> is `name`."""
+    return _child_named(ET.fromstring(mdo_text), collection, name, ctx)
+
+
+def _type_of(element, ctx):
+    """(types, qualifiers) of the element's ONE direct <type> child: every <types> text in order, and
+    each qualifier block as {child tag: text}. A missing <type> is a member created WITHOUT its type."""
+    type_elements = _children(element, "type")
+    if len(type_elements) != 1:
+        _fail("%s: expected exactly one <type>, found %d in:\n%s"
+              % (ctx, len(type_elements), ET.tostring(element, encoding="unicode")[:800]))
+    type_element = type_elements[0]
+    types = [(t.text or "").strip() for t in _children(type_element, "types")]
+    qualifiers = {}
+    for block in list(type_element):
+        tag = _xml_local(block.tag)
+        if tag.endswith("Qualifiers"):
+            qualifiers[tag] = {_xml_local(q.tag): (q.text or "").strip() for q in list(block)}
+    return types, qualifiers
+
+
+def _assert_string10(element, ctx):
+    types, qualifiers = _type_of(element, ctx)
+    assert types == ["String"], "%s: the type must be exactly String, got %r" % (ctx, types)
+    assert qualifiers == {"stringQualifiers": {"length": "10"}}, \
+        "%s: the designer default is a variable String(10), got %r" % (ctx, qualifiers)
+
+
+def _assert_number10(element, ctx):
+    types, qualifiers = _type_of(element, ctx)
+    assert types == ["Number"], "%s: the type must be exactly Number, got %r" % (ctx, types)
+    assert "stringQualifiers" not in qualifiers, \
+        "%s: a Number must not carry string qualifiers: %r" % (ctx, qualifiers)
+    number = qualifiers.get("numberQualifiers") or {}
+    # A zero scale and a false nonNegative are the model defaults the serializer leaves out.
+    assert number.get("precision") == "10" and number.get("scale", "0") == "0" \
+        and number.get("nonNegative", "false") == "false", \
+        "%s: the designer default is Number(10,0), got %r" % (ctx, qualifiers)
+
+
+def _assert_boolean(element, ctx):
+    types, qualifiers = _type_of(element, ctx)
+    assert types == ["Boolean"], "%s: the type must be exactly Boolean, got %r" % (ctx, types)
+    assert qualifiers == {}, "%s: a Boolean carries no qualifiers, got %r" % (ctx, qualifiers)
+
+
+def _named_element(root, name, ctx):
+    """The ONE element anywhere under root (a predefined item sits at any depth) whose <name> is `name`."""
+    matches = [el for el in root.iter() if el is not root and _direct_child_text(el, "name") == name]
+    if len(matches) != 1:
+        _fail("%s: expected exactly one element named %r, found %d" % (ctx, name, len(matches)))
+    return matches[0]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -318,6 +387,157 @@ def test_create_dimension_member_on_register():
         "kind must be the concrete register-dimension EClass: %r" % (r.structured,)
     poll_diff_contains("<name>%s</name>" % dim,
                        ctx="the new dimension must land in the register's .mdo on disk")
+    # #700: the dimension is created WITH its type. Without one, EDT's derived-data pass for the
+    # register fails, and the register table loses its fields for queries.
+    mdo = poll_disk_contains("src/InformationRegisters/%s/%s.mdo" % (reg, reg), "<name>%s</name>" % dim,
+                             ctx="the register .mdo must hold the new dimension")
+    _assert_string10(_member_element(mdo, "dimensions", dim, "the new dimension"), "the new dimension")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_dimension_on_an_extension_own_register_is_typed():
+    """#700 where #713 was reported: a register the EXTENSION owns. Its new dimension must land on the
+    extension's disk with the designer's String(10) - an untyped one breaks EDT's derived data for the
+    register, and the register table loses its fields for queries.
+
+    Writes into TESTS_PROJECT (the extension fixture), so it reverts the extension itself, like the
+    extension-owned form test above (issue #262)."""
+    reg = "tests_E2ETypedExtReg"
+    dim = "tests_E2ETypedExtDim"
+    try:
+        assert_ok(call("create_metadata", {"projectName": TESTS_PROJECT, "fqn": "InformationRegister." + reg}),
+                  "seed an InformationRegister the extension owns")
+        wait_for_project_ready()
+        r = call("create_metadata", {
+            "projectName": TESTS_PROJECT, "fqn": "InformationRegister.%s.Dimension.%s" % (reg, dim)})
+        assert_ok(r, "create a dimension on the extension's own register")
+        mdo = poll_disk_contains_all("src/InformationRegisters/%s/%s.mdo" % (reg, reg), ["<name>%s</name>" % dim],
+                                     ctx="the extension register's .mdo must hold the new dimension",
+                                     fixture_rel=TESTS_PROJECT_REL)
+        _assert_string10(_member_element(mdo, "dimensions", dim, "the extension register's dimension"),
+                         "the extension register's dimension")
+    except E2ECallTimeout:
+        # NO cleanup here: the timed-out call may still be writing these very files, and a git
+        # reset would race it. The orchestrator aborts the run on this.
+        raise
+    except BaseException:
+        restore_extension_fixture("creating an extension-own register dimension")
+        raise
+    else:
+        restore_extension_fixture("creating an extension-own register dimension")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_accumulation_register_resource_is_numeric():
+    """#700: an accumulation register's resource takes the designer's Number(10,0), not a String."""
+    reg = "E2ETypedAccumReg"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "AccumulationRegister." + reg}),
+              "seed AccumulationRegister")
+    wait_for_project_ready()
+    res = "E2ETypedQuantity"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "AccumulationRegister.%s.Resource.%s" % (reg, res)})
+    assert_ok(r, "create Resource member on the accumulation register")
+    assert r.structured.get("kind") == "AccumulationRegisterResource", \
+        "kind must be the concrete accumulation-register resource EClass: %r" % (r.structured,)
+    mdo = poll_disk_contains("src/AccumulationRegisters/%s/%s.mdo" % (reg, reg), "<name>%s</name>" % res,
+                             ctx="the register .mdo must hold the new resource")
+    _assert_number10(_member_element(mdo, "resources", res, "the new resource"), "the new resource")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_sequence_dimension_is_typed():
+    """#700: a Sequence's dimension carries its mandatory type OUTSIDE BasicFeature, so a member selector
+    keyed on BasicFeature would leave it untyped. It lands on disk with the designer's String(10)."""
+    seq = "E2ETypedSeq"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Sequence." + seq}), "seed Sequence")
+    wait_for_project_ready()
+    dim = "E2ETypedSeqDim"
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "Sequence.%s.Dimension.%s" % (seq, dim)})
+    assert_ok(r, "create a Dimension member on the sequence")
+    assert r.structured.get("kind") == "SequenceDimension", \
+        "kind must be the concrete sequence-dimension EClass: %r" % (r.structured,)
+    mdo = poll_disk_contains("src/Sequences/%s/%s.mdo" % (seq, seq), "<name>%s</name>" % dim,
+                             ctx="the sequence .mdo must hold the new dimension")
+    _assert_string10(_member_element(mdo, "dimensions", dim, "the sequence dimension"), "the sequence dimension")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_attribute_with_a_russian_name_is_typed_and_read_back():
+    """#700 on the Russian path: Russian type and kind tokens and a Russian Name. The attribute lands on
+    disk with its String(10) and get_metadata_details shows the type, where an untyped one shows '-'."""
+    attr = "ВесНетто"  # a Russian Name: "net weight"
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        # "Справочник" / "Реквизит" = the Russian Catalog / Attribute tokens
+        "fqn": "Справочник.Catalog.Реквизит." + attr,
+    })
+    assert_ok(r, "create a Russian-named attribute through the Russian tokens")
+    assert r.structured.get("kind") == "CatalogAttribute", \
+        "kind must be the concrete catalog-attribute EClass: %r" % (r.structured,)
+    mdo = poll_disk_contains("src/Catalogs/Catalog/Catalog.mdo", "<name>%s</name>" % attr,
+                             ctx="the catalog .mdo must hold the new attribute")
+    _assert_string10(_member_element(mdo, "attributes", attr, "the new attribute"), "the new attribute")
+
+    details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": ["Catalog.Catalog"]})
+    assert_ok(details, "read the catalog back")
+    rows = [split_markdown_row(line) for line in details.text.splitlines()]
+    row = next((cells for cells in rows if len(cells) >= 3 and cells[0] == attr), None)
+    assert row is not None, "the attributes table must list %s:\n%s" % (attr, details.text[:1500])
+    assert row[2] == "String", "MODEL read-back: the new attribute's Type cell must be String, got %r" % (row,)
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_characteristic_without_value_type_takes_the_chart_type():
+    """#700, extended by the maintainer to predefined characteristics: an item created without
+    valueType gets a copy of its chart's own type, as EDT's wizard does. An item left untyped crashes
+    EDT's ChartOfCharacteristicTypesValidator. A folder stays untyped, as EDT's folder wizard leaves it.
+
+    The chart first gets a composite type of its own: a fresh chart's type is String(10), the very
+    default a typed member gets, so an item equal to THAT could not tell a copy from a default."""
+    chart = "E2ETypedCct"
+    item = "E2EWeight"
+    folder = "E2ESizes"
+    chart_fqn = "ChartOfCharacteristicTypes." + chart
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": chart_fqn}),
+              "seed ChartOfCharacteristicTypes")
+    wait_for_project_ready()
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": chart_fqn, "properties": [
+        {"name": "type", "value": {"types": [
+            {"kind": "Number", "precision": 15, "scale": 2, "nonNegative": True},
+            {"kind": "Date", "fractions": "Date"}]}}]})
+    assert_ok(r, "give the chart a composite type of its own")
+    assert "type" in (r.structured.get("applied") or []), "the chart's type must be applied: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    item_fqn = "ChartOfCharacteristicTypes.%s.Predefined.%s" % (chart, item)
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": item_fqn}),
+              "create a predefined characteristic without valueType")
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "ChartOfCharacteristicTypes.%s.Predefined.%s" % (chart, folder),
+        "properties": [{"name": "isFolder", "value": True}]}),
+        "create a predefined folder without valueType")
+
+    mdo = poll_disk_contains_all("src/ChartsOfCharacteristicTypes/%s/%s.mdo" % (chart, chart),
+                                 ["<name>%s</name>" % item, "<name>%s</name>" % folder, "<precision>15</precision>"],
+                                 ctx="the chart .mdo must hold its new type and both new items")
+    root = ET.fromstring(mdo)
+    chart_type = _type_of(root, "the chart")
+    assert sorted(chart_type[0]) == ["Date", "Number"] \
+        and chart_type[1].get("numberQualifiers", {}).get("precision") == "15", \
+        "precondition: the chart carries the composite type set above, got %r" % (chart_type,)
+    item_type = _type_of(_named_element(root, item, "the new characteristic"), "the new characteristic")
+    assert item_type == chart_type, \
+        "the characteristic must take the chart's own type: item %r, chart %r" % (item_type, chart_type)
+    folder_element = _named_element(root, folder, "the new folder")
+    assert not [t for t in _children(folder_element, "type") if _children(t, "types")], \
+        "a folder stays untyped, as EDT's folder wizard leaves it:\n%s" \
+        % ET.tostring(folder_element, encoding="unicode")[:800]
+
+    details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [item_fqn]})
+    assert_ok(details, "read the characteristic back")
+    assert_contains(details.text, "Value type", "the single-item view must render the Value type row")
+    assert_contains(details.text, "Number", "MODEL read-back: the item's value type is the chart's")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
@@ -357,6 +577,11 @@ def test_create_nested_tabular_section_attribute():
     # The tabular section and its nested attribute live inline in the owner Catalog.Catalog.mdo.
     poll_diff_contains("<name>%s</name>" % attr,
                        ctx="the nested attribute must land in the owner Catalog.Catalog.mdo on disk")
+    # #700: the nested attribute carries the designer's String(10) as well.
+    mdo = poll_disk_contains("src/Catalogs/Catalog/Catalog.mdo", "<name>%s</name>" % attr,
+                             ctx="the catalog .mdo must hold the nested attribute")
+    section = _member_element(mdo, "tabularSections", tab, "the new tabular section")
+    _assert_string10(_child_named(section, "attributes", attr, "the nested attribute"), "the nested attribute")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
@@ -405,6 +630,13 @@ def test_create_chart_of_accounts_inline_special_flags():
     # Both flags live inline in the chart-of-accounts .mdo on disk.
     poll_diff_contains("<name>%s</name>" % flag, ctx="accountingFlag must land in the ChartOfAccounts .mdo")
     poll_diff_contains("<name>%s</name>" % ext, ctx="extDimensionAccountingFlag must land in the .mdo")
+    # #700: each flag carries the designer's Boolean type (never the String(10) other members default to).
+    mdo = poll_disk_contains_all("src/ChartsOfAccounts/%s/%s.mdo" % (coa, coa),
+                                 ["<name>%s</name>" % flag, "<name>%s</name>" % ext],
+                                 ctx="the ChartOfAccounts .mdo must hold both new flags")
+    _assert_boolean(_member_element(mdo, "accountingFlags", flag, "the accounting flag"), "the accounting flag")
+    _assert_boolean(_member_element(mdo, "extDimensionAccountingFlags", ext, "the ext-dimension accounting flag"),
+                    "the ext-dimension accounting flag")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
@@ -425,6 +657,11 @@ def test_create_task_addressing_attribute():
         "kind must be the concrete AddressingAttribute EClass: %r" % (r2.structured,)
     poll_diff_contains("<name>%s</name>" % addr,
                        ctx="the addressing attribute must land in the Task .mdo on disk")
+    # #700: an addressing attribute carries the designer's String(10).
+    mdo = poll_disk_contains("src/Tasks/%s/%s.mdo" % (task, task), "<name>%s</name>" % addr,
+                             ctx="the Task .mdo must hold the new addressing attribute")
+    _assert_string10(_member_element(mdo, "addressingAttributes", addr, "the addressing attribute"),
+                     "the addressing attribute")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
