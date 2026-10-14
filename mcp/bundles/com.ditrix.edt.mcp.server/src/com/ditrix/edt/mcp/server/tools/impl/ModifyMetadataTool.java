@@ -3536,8 +3536,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         List<JsonObject> properties, List<PreparedChange> changes, MdNameNormalizer.Report normReport,
         boolean isExtensionProject)
     {
-        // A field list is judged on the object as it stands; a length in the same batch would change
-        // that state under an entry it governs (issue #740).
+        // A field list is judged on the object as it stands; a property in the same batch that decides
+        // whether EDT offers a standard field the list names (a length, hierarchical, owners, ...) would
+        // change that state under the entry (issue #740).
         String batchErr = fieldListBatchError(target, properties);
         if (batchErr != null)
         {
@@ -4392,21 +4393,27 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Refuses a field list ({@code inputByString} / {@code dataLockFields}) that NAMES a standard field
-     * batched with the length deciding whether EDT offers that field - Code with {@code codeLength},
-     * Description with {@code descriptionLength}, Number with {@code numberLength} - on the same target
-     * (issue #740).
+     * batched, on the same target, with a property that decides whether EDT offers that field for that
+     * list ({@link FieldListSupport#STANDARD_FIELDS_DECIDED_BY}): Code / Description / Number with
+     * {@code codeLength} / {@code descriptionLength} / {@code numberLength}, Parent and IsFolder with
+     * {@code hierarchical}, a catalog's IsFolder with {@code hierarchyType} and its Owner with
+     * {@code owners}, ActionPeriodIsBasic with {@code actionPeriodUse} (issue #740).
      *
      * <p>The list is checked against the fields EDT derived from the object AS IT STANDS, so in one
-     * call such an entry would be judged on a length the batch is about to change - and nothing would
-     * catch the result afterwards: EDT's model validator never re-checks a standard field of input by
-     * string (its fixed-field table marks Code / Description / Number eligible whatever the length), so
-     * a {@code codeLength:0} batched with Code would be written with no marker anywhere. A list that
-     * leaves the governed field out is judged the same whatever that length becomes, so it shares the
-     * call: {@code codeLength:0} with {@code [Description]} drops the code and its input in one call.
-     * Which field an entry names is read by {@link FieldListSupport#namedFieldGovernedBy}, through the
-     * same parser and lookup the list's own preparation uses. A length the target does not have is
-     * left to its own "not assignable" refusal, and an adopted target to the field list's own refusal
-     * (its lists cannot be set at all). Package-visible for the headless test.</p>
+     * call such an entry would be judged on a property the batch is about to change - in either
+     * direction: a field the call takes away would be written although the object no longer offers it,
+     * and a field the call brings back would be refused as not offered. Nothing reliable catches the
+     * first case afterwards: EDT's model validator never re-checks a standard field of input by string
+     * (its fixed-field table marks Code / Description / Number eligible whatever the length) and accepts
+     * a stale ActionPeriodIsBasic in the data-lock list; it marks the other stale data-lock entries
+     * (error 81), but only after modify_metadata has reported success. A list that leaves the decided
+     * field out is judged the same whatever the property becomes, so it shares the call:
+     * {@code codeLength:0} with {@code [Description]} drops the code and its input in one call. Which
+     * field an entry names is read by {@link FieldListSupport#namedFieldGovernedBy}, through the same
+     * parser and lookup the list's own preparation uses, and only for the lists the property decides. A
+     * deciding property the target does not have is left to its own "not assignable" refusal, and an
+     * adopted target to the field list's own refusal (its lists cannot be set at all). Package-visible
+     * for the headless test.</p>
      *
      * @param target the object being modified
      * @param properties the raw batch
@@ -4418,9 +4425,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return null;
         }
-        List<String> lists = new ArrayList<>();
+        List<PropertyInfo> lists = new ArrayList<>();
         List<JsonElement> values = new ArrayList<>();
-        List<String> lengths = new ArrayList<>();
+        List<String> deciders = new ArrayList<>();
         for (JsonObject prop : properties)
         {
             String name = prop == null ? null : asString(prop.get("name")); //$NON-NLS-1$
@@ -4431,26 +4438,27 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
             if (info.valueKind == MetadataPropertyIntrospector.ValueKind.FIELD_LIST)
             {
-                lists.add(info.name);
+                lists.add(info);
                 values.add(prop.get(KEY_VALUE));
             }
-            else if (FieldListSupport.STANDARD_FIELD_OF_LENGTH.containsKey(info.name))
+            else if (FieldListSupport.STANDARD_FIELDS_DECIDED_BY.containsKey(info.name))
             {
-                lengths.add(info.name);
+                deciders.add(info.name);
             }
         }
         for (int i = 0; i < lists.size(); i++)
         {
-            for (String length : lengths)
+            for (String decider : deciders)
             {
-                String field = FieldListSupport.namedFieldGovernedBy(target, values.get(i), length);
+                String field = FieldListSupport.namedFieldGovernedBy(target, lists.get(i).feature, values.get(i),
+                    decider);
                 if (field != null)
                 {
-                    String list = lists.get(i);
-                    return ToolResult.error("'" + list + "' cannot be set in the same call as '" + length //$NON-NLS-1$ //$NON-NLS-2$
+                    String list = lists.get(i).name;
+                    return ToolResult.error("'" + list + "' cannot be set in the same call as '" + decider //$NON-NLS-1$ //$NON-NLS-2$
                         + "' while it names " + field + ": whether EDT offers that field depends on '" //$NON-NLS-1$ //$NON-NLS-2$
-                        + length + "', and the list is checked against the object as it stands before the " //$NON-NLS-1$
-                        + "call. Set '" + length + "' first, then '" + list + "' in a separate call - or " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        + decider + "', and the list is checked against the object as it stands before the " //$NON-NLS-1$
+                        + "call. Set '" + decider + "' first, then '" + list + "' in a separate call - or " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                         + "leave " + field + " out of the list.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
                 }
             }

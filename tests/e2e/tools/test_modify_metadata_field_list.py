@@ -9,22 +9,27 @@ properties: the value is a JSON array of field addresses - the names EDT itself 
 full replace, `[]` clears, the type / kind tokens and a standard field's name may be Russian, and
 the list is stored and read back in English. Only the fields EDT offers for the list are accepted
 (get_metadata_details(assignable:true) shows them as the row's Allowed values), judged on the object
-as it stands before the call; a field list that names Code / Description / Number may not share a call
-with that field's own length (codeLength / descriptionLength / numberLength), while a list that leaves
-it out may; an extension cannot change an ADOPTED object's lists.
+as it stands before the call; a field list that names a standard field may not share a call with the
+property that decides whether EDT offers it - codeLength / descriptionLength / numberLength for Code /
+Description / Number, hierarchical for Parent and IsFolder, hierarchyType for a catalog's IsFolder,
+owners for a catalog's Owner, actionPeriodUse for ActionPeriodIsBasic - while a list that leaves it out
+may; an extension cannot change an ADOPTED object's lists. Where EDT's validator is narrower than its
+editor, the validator wins: an exchange plan's ExchangeDate, and its Code / Description while the length
+is 0, are not offered for data locking.
 
 Every test here is red on master: there the property is missing from the assignable table, a write
 is refused as "not assignable" (a text that echoes no value), and the full view prints `Field.Code`.
 
 Disk checks parse the .mdo and compare the EXACT ordered list of <inputByString> / <dataLockFields>
-texts. After a step that changes the object's derived fields (indexing, codeLength), the offered list
-is polled through the assignable Allowed cell: EDT recomputes it asynchronously.
+texts. After a step that changes the object's derived fields (indexing, codeLength, hierarchical), the
+offered list is polled through the assignable Allowed cell: EDT recomputes it asynchronously.
 
 reset: kind="write-metadata" -> the orchestrator's reset after each test; the extension-writing
 test restores the extension fixture itself (restore_extension_fixture).
 
-Fixture (shipped): TestConfiguration Catalog.Catalog - codeLength 9, descriptionLength 25,
-inputByString [Code, Description], no dataLockFields, attribute `Attribute` String(10) not indexed.
+Fixture (shipped): TestConfiguration Catalog.Catalog - flat (not hierarchical), codeLength 9,
+descriptionLength 25, inputByString [Code, Description], no dataLockFields, attribute `Attribute`
+String(10) not indexed.
 TestConfiguration.tests: Catalog.Catalog ADOPTED (no inputByString), Catalog.tests_ExtOnly
 extension-own (codeLength 9, descriptionLength 25, inputByString [Code, Description]).
 """
@@ -59,15 +64,16 @@ CATALOG_MDO = "src/Catalogs/Catalog/Catalog.mdo"
 CODE = "Catalog.Catalog.StandardAttribute.Code"
 DESCRIPTION = "Catalog.Catalog.StandardAttribute.Description"
 ATTRIBUTE = "Catalog.Catalog.Attribute.Attribute"
+PARENT = "Catalog.Catalog.StandardAttribute.Parent"
 
 EXT_ONLY = "Catalog.tests_ExtOnly"
 EXT_ONLY_MDO = "src/Catalogs/tests_ExtOnly/tests_ExtOnly.mdo"
 EXT_CODE = "Catalog.tests_ExtOnly.StandardAttribute.Code"
 EXT_DESCRIPTION = "Catalog.tests_ExtOnly.StandardAttribute.Description"
 
-# Russian spellings: the type token of a catalog and of a document, the kind token of a standard
-# attribute and of an attribute, and the platform's Russian names of the Description, Code and
-# Number standard fields.
+# Russian spellings: the type token of a catalog, a document and an exchange plan, the kind token of a
+# standard attribute and of an attribute, and the platform's Russian names of the Description, Code,
+# Number, Parent and ExchangeDate standard fields.
 RU_CATALOG = "\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u0438\u043a"
 RU_DOCUMENT = "\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442"
 RU_STANDARD_ATTRIBUTE = "\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u044b\u0439\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442"
@@ -75,6 +81,9 @@ RU_ATTRIBUTE = "\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442"
 RU_DESCRIPTION = "\u041d\u0430\u0438\u043c\u0435\u043d\u043e\u0432\u0430\u043d\u0438\u0435"
 RU_CODE = "\u041a\u043e\u0434"
 RU_NUMBER = "\u041d\u043e\u043c\u0435\u0440"
+RU_PARENT = "\u0420\u043e\u0434\u0438\u0442\u0435\u043b\u044c"
+RU_EXCHANGE_PLAN = "\u041f\u043b\u0430\u043d\u041e\u0431\u043c\u0435\u043d\u0430"
+RU_EXCHANGE_DATE = "\u0414\u0430\u0442\u0430\u041e\u0431\u043c\u0435\u043d\u0430"
 
 FIELD_LIST = "FIELD_LIST"
 
@@ -262,6 +271,48 @@ def test_field_list_a_length_and_a_list_without_its_field_share_one_call():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Any property that decides a named standard field takes its own call: hierarchical and Parent
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_field_list_hierarchy_and_a_list_naming_parent_take_two_calls():
+    # The fixture catalog is flat: EDT keeps a Parent field on it, but does not offer it for data locking.
+    if PARENT in _allowed(_row(CATALOG, "dataLockFields")):
+        _fail("the fixture catalog is flat; Parent must not be offered for data locking before the call")
+
+    # Making the catalog hierarchical in the same call as a list naming Parent: the list would be
+    # judged on the flat catalog, so the batch is refused with the order to use - in English and in
+    # Russian (type and kind tokens and the platform's own Russian name of Parent).
+    before = tree_snapshot()
+    ru_parent = RU_CATALOG + ".Catalog." + RU_STANDARD_ATTRIBUTE + "." + RU_PARENT
+    for parent in (PARENT, ru_parent):
+        e = assert_error(call("modify_metadata", {"projectName": PROJECT, "fqn": CATALOG, "properties": [
+            {"name": "hierarchical", "value": True}, {"name": "dataLockFields", "value": [parent]}]}),
+            "hierarchical:true batched with a data lock list naming %s" % parent)
+        assert_error_quality(e, names=["hierarchical", "dataLockFields", PARENT], suggests=["separate call"],
+                             ctx="the batch guard names the property, the list, the field and the order to use")
+    assert_tree_unchanged(before, "a refused batch must change nothing")
+
+    # The recipe works: the property first, the list in a separate call.
+    _assert_written(_set(CATALOG, "hierarchical", True), "hierarchical", "make the catalog hierarchical first")
+    wait_for_project_ready()
+    _poll_allowed(CATALOG, "dataLockFields", lambda allowed: PARENT in allowed,
+                  "Parent is lockable once the catalog is hierarchical")
+    _assert_written(_set(CATALOG, "dataLockFields", [PARENT]), "dataLockFields", "then lock by Parent")
+    _poll_stored(_base_mdo, "dataLockFields", [PARENT], "the data lock field on disk")
+
+    # The other direction (PR #744's review): taking the hierarchy away in the same call as a list that
+    # names Parent would store a Parent the catalog no longer has - refused, nothing written.
+    before = tree_snapshot()
+    e = assert_error(call("modify_metadata", {"projectName": PROJECT, "fqn": CATALOG, "properties": [
+        {"name": "hierarchical", "value": False}, {"name": "dataLockFields", "value": [PARENT]}]}),
+        "hierarchical:false batched with a data lock list naming Parent")
+    assert_error_quality(e, names=["hierarchical", "dataLockFields", PARENT], suggests=["separate call"],
+                         ctx="a list naming Parent may not share a call with the property that removes it")
+    assert_tree_unchanged(before, "the refused batch leaves the hierarchical catalog and its list as they were")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Eligibility follows the model: indexing an attribute makes it offered
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -295,6 +346,55 @@ def test_field_list_data_lock_fields_have_their_own_eligibility():
     _poll_stored(_base_mdo, "dataLockFields", [ATTRIBUTE], "the data lock field on disk")
     if _stored(_base_mdo(), "inputByString") != [CODE, DESCRIPTION]:
         _fail("writing dataLockFields must leave inputByString as it was")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Where EDT's validator is narrower than its editor, the validator wins: an exchange plan's data lock
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_field_list_exchange_plan_data_lock_follows_edts_validator():
+    # EDT's editor offers an exchange plan's ExchangeDate (compatibility mode above 8.3.21 - the fixture is
+    # 8.5.1) and its Code / Description whatever their lengths for data locking, but EDT's validator admits
+    # Code / Description only while the length is not 0 and ExchangeDate never, and marks the rest (error 81).
+    name = "E2EFieldListPlan"
+    plan = "ExchangePlan." + name
+    mdo = "src/ExchangePlans/%s/%s.mdo" % (name, name)
+    code = plan + ".StandardAttribute.Code"
+    description = plan + ".StandardAttribute.Description"
+    exchange_date = plan + ".StandardAttribute.ExchangeDate"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": plan}), "create " + plan)
+    wait_for_project_ready()
+    # A new exchange plan has codeLength 9 and descriptionLength 25 (EDT's ExchangePlanInitializer).
+    cells = _poll_allowed(plan, "dataLockFields", lambda allowed: code in allowed and description in allowed,
+                          "a new exchange plan offers its Code and Description for data locking")
+    if exchange_date in _allowed(cells):
+        _fail("EDT's validator never admits ExchangeDate for data locking; Allowed must not offer it: %r" % (cells,))
+
+    # The field is there and EDT's editor offers it - the refusal says it is the VALIDATOR that rejects it,
+    # in English and in Russian (the type and kind tokens and the platform's own Russian name).
+    before = tree_snapshot()
+    ru_exchange_date = RU_EXCHANGE_PLAN + "." + name + "." + RU_STANDARD_ATTRIBUTE + "." + RU_EXCHANGE_DATE
+    for entry in (exchange_date, ru_exchange_date):
+        e = assert_error(_set(plan, "dataLockFields", [entry]), "data locking by ExchangeDate (%s)" % entry)
+        assert_error_quality(e, names=[entry], suggests=["validator rejects in 'dataLockFields'", "ExchangeDate"],
+                             ctx="EDT's editor offers ExchangeDate, its validator rejects it")
+    assert_tree_unchanged(before, "a refused data lock list must change nothing")
+
+    # Code: admitted only while codeLength is not 0.
+    _assert_written(_set(plan, "codeLength", 0), "codeLength", "codeLength 0, in its own call")
+    wait_for_project_ready()
+    _poll_allowed(plan, "dataLockFields", lambda allowed: code not in allowed and description in allowed,
+                  "Code leaves the data lock offer once codeLength is 0")
+    before = tree_snapshot()
+    e = assert_error(_set(plan, "dataLockFields", [code]), "data locking by Code while codeLength is 0")
+    assert_error_quality(e, names=[code], suggests=["validator rejects in 'dataLockFields'", "codeLength"],
+                         ctx="the rule names the length that would admit it")
+    assert_tree_unchanged(before, "a refused data lock list must change nothing")
+
+    # Description still has its length: it is lockable, and written.
+    _assert_written(_set(plan, "dataLockFields", [description]), "dataLockFields", "lock by Description")
+    _poll_stored(lambda: read_disk(mdo), "dataLockFields", [description], "the data lock field on disk")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -36,8 +36,10 @@ import com._1c.g5.v8.dt.metadata.mdclass.AddressingAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicDbObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
+import com._1c.g5.v8.dt.metadata.mdclass.ChartOfCalculationTypes;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.Document;
+import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlan;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
@@ -547,6 +549,99 @@ public class FieldListSupportTest
         assertTrue(FieldListSupport.allowedValues(goods, INPUT).isEmpty());
         assertFalse("the offered list itself is still read for a native object", //$NON-NLS-1$
             FieldListSupport.allowedValues(goods(), INPUT).isEmpty());
+    }
+
+    /**
+     * A data-lock refusal of a standard field EDT does not offer names what would bring the field: an
+     * IsFolder needs a hierarchical object with folders, an ActionPeriodIsBasic needs actionPeriodUse -
+     * so the second call of the batch guard's recipe does not end in a rule that leaves the field out.
+     */
+    @Test
+    public void testADataLockRefusalNamesWhatEachStandardFieldNeeds()
+    {
+        Catalog flat = goods();
+        standard(flat, "IsFolder", "\u042D\u0442\u043E\u0413\u0440\u0443\u043F\u043F\u0430", SourceType.STANDARD_FIELDS); //$NON-NLS-1$ //$NON-NLS-2$
+        assertContains(refused(flat, LOCK, array("Catalog.Goods.StandardAttribute.IsFolder")), //$NON-NLS-1$
+            "an IsFolder on a hierarchical catalog of HierarchyFoldersAndItems or a hierarchical chart of " //$NON-NLS-1$
+                + "characteristic types"); //$NON-NLS-1$
+
+        ChartOfCalculationTypes accruals = MdClassFactory.eINSTANCE.createChartOfCalculationTypes();
+        accruals.setName("Accruals"); //$NON-NLS-1$
+        standard(accruals, "ActionPeriodIsBasic", "\u041F\u0435\u0440\u0438\u043E\u0434\u0414\u0435\u0439\u0441\u0442\u0432\u0438\u044F\u0411\u0430\u0437\u043E\u0432\u044B\u0439", SourceType.STANDARD_FIELDS); //$NON-NLS-1$ //$NON-NLS-2$
+        assertContains(refused(accruals, LOCK,
+            array("ChartOfCalculationTypes.Accruals.StandardAttribute.ActionPeriodIsBasic")), //$NON-NLS-1$
+            "an ActionPeriodIsBasic while actionPeriodUse is true"); //$NON-NLS-1$
+    }
+
+    // ==================== an exchange plan's data lock fields: EDT's validator ====================
+
+    /**
+     * ExchangePlan.Branches as EDT infers it in a compatibility mode above 8.3.21 (MdFieldInferrer, md
+     * 27.1 and 28.0): ExchangeDate, SentNo, DeletionMark, Description and Code all carry
+     * FIELDS_FOR_LOCKING whatever the lengths, and Description and Code INPUT_BY_STRING too.
+     */
+    private static ExchangePlan branches(int codeLength, int descriptionLength)
+    {
+        ExchangePlan plan = MdClassFactory.eINSTANCE.createExchangePlan();
+        plan.setName("Branches"); //$NON-NLS-1$
+        plan.setCodeLength(codeLength);
+        plan.setDescriptionLength(descriptionLength);
+        standard(plan, "ExchangeDate", "\u0414\u0430\u0442\u0430\u041E\u0431\u043C\u0435\u043D\u0430", SourceType.FIELDS_FOR_LOCKING, //$NON-NLS-1$ //$NON-NLS-2$
+            SourceType.STANDARD_FIELDS);
+        standard(plan, "SentNo", "\u041D\u043E\u043C\u0435\u0440\u041E\u0442\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u043D\u043E\u0433\u043E", SourceType.STANDARD_FIELDS, //$NON-NLS-1$ //$NON-NLS-2$
+            SourceType.FIELDS_FOR_LOCKING);
+        standard(plan, "DeletionMark", "\u041F\u043E\u043C\u0435\u0442\u043A\u0430\u0423\u0434\u0430\u043B\u0435\u043D\u0438\u044F", SourceType.STANDARD_FIELDS, //$NON-NLS-1$ //$NON-NLS-2$
+            SourceType.FIELDS_FOR_LOCKING);
+        standard(plan, "Description", "\u041D\u0430\u0438\u043C\u0435\u043D\u043E\u0432\u0430\u043D\u0438\u0435", SourceType.STANDARD_FIELDS, //$NON-NLS-1$ //$NON-NLS-2$
+            SourceType.FIELDS_FOR_LOCKING, SourceType.INPUT_BY_STRING);
+        standard(plan, "Code", "\u041A\u043E\u0434", SourceType.STANDARD_FIELDS, SourceType.FIELDS_FOR_LOCKING, //$NON-NLS-1$ //$NON-NLS-2$
+            SourceType.INPUT_BY_STRING);
+        return plan;
+    }
+
+    /**
+     * RU: EDT's property editor offers an exchange plan's ExchangeDate for data locking, and its Code
+     * and Description whatever their lengths, but EDT's validator admits Code and Description only
+     * while the length is not 0 and ExchangeDate never (FixedFieldDescriptorProvider
+     * .createExchangePlanDataLockFields, metadata 19.0 and 19.1) and marks the rest with error 81. The
+     * intersection is what is offered here; input by string, checked against a table that ignores the
+     * lengths, is not narrowed.
+     */
+    @Test
+    public void testAnExchangePlansDataLockFieldsFollowEdtsValidator()
+    {
+        ExchangePlan plan = branches(0, 25);
+
+        assertEquals(Arrays.asList("ExchangePlan.Branches.StandardAttribute.SentNo", //$NON-NLS-1$
+            "ExchangePlan.Branches.StandardAttribute.DeletionMark", //$NON-NLS-1$
+            "ExchangePlan.Branches.StandardAttribute.Description"), //$NON-NLS-1$
+            FieldListSupport.eligibleAddresses(plan, LOCK));
+        String refusal = refused(plan, LOCK, array("ExchangePlan.Branches.StandardAttribute.ExchangeDate")); //$NON-NLS-1$
+        assertContains(refusal, "is a field of ExchangePlan.Branches that EDT's validator rejects in " //$NON-NLS-1$
+            + "'dataLockFields'"); //$NON-NLS-1$
+        assertContains(refusal, "never its ExchangeDate"); //$NON-NLS-1$
+        assertFalse(refusal, refusal.contains("does not offer it")); //$NON-NLS-1$
+        // ПланОбмена.Branches.СтандартныйРеквизит.Код - the Code of a plan whose codeLength is 0
+        refusal = refused(plan, LOCK, array("\u041F\u043B\u0430\u043D\u041E\u0431\u043C\u0435\u043D\u0430.Branches.\u0421\u0442\u0430\u043D\u0434\u0430\u0440\u0442\u043D\u044B\u0439\u0420\u0435\u043A\u0432\u0438\u0437\u0438\u0442.\u041A\u043E\u0434")); //$NON-NLS-1$
+        assertContains(refusal, "is a field of ExchangePlan.Branches that EDT's validator rejects in " //$NON-NLS-1$
+            + "'dataLockFields'"); //$NON-NLS-1$
+        assertContains(refusal, "codeLength"); //$NON-NLS-1$
+
+        // A Current entry the validator rejects is refused as "drop it".
+        ExchangePlan stale = branches(0, 25);
+        stale.getDataLockFields().add(stale.getFields().get(4));
+        assertContains(refused(stale, LOCK, array("ExchangePlan.Branches.StandardAttribute.Code")), //$NON-NLS-1$
+            "is in the current list, but EDT's validator rejects it in 'dataLockFields' - drop it."); //$NON-NLS-1$
+
+        // With its length, Code is lockable again; without one, Description is not.
+        assertEquals(Collections.singletonList("StandardAttribute:Code"), //$NON-NLS-1$
+            resolved(branches(9, 25), LOCK, array("ExchangePlan.Branches.StandardAttribute.Code"))); //$NON-NLS-1$
+        assertFalse(FieldListSupport.eligibleAddresses(branches(9, 0), LOCK)
+            .contains("ExchangePlan.Branches.StandardAttribute.Description")); //$NON-NLS-1$
+        // Input by string is not narrowed: both are offered there whatever the lengths.
+        assertEquals(Arrays.asList("StandardAttribute:Code", "StandardAttribute:Description"), //$NON-NLS-1$ //$NON-NLS-2$
+            resolved(branches(0, 0), INPUT, array("ExchangePlan.Branches.StandardAttribute.Code", //$NON-NLS-1$
+                "ExchangePlan.Branches.StandardAttribute.Description"))); //$NON-NLS-1$
     }
 
     // ==================== bilingual minimum ====================

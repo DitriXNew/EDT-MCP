@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +32,7 @@ import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.SourceType;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.DbObjectAttribute;
+import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlan;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
@@ -65,11 +67,14 @@ import com.google.gson.JsonElement;
  * {@code FieldsSourceUtil.getFields(object, f -> f.getSourceTypes().contains(SOURCE))} with
  * {@link SourceType#INPUT_BY_STRING} for input by string and {@link SourceType#FIELDS_FOR_LOCKING} for
  * data locking ({@code FieldsSourceContentProvider$InputByStringContentProvider} /
- * {@code $DataLockFieldsContentProvider}, md.ui). One correction is applied on top, because EDT's model
- * validator is narrower than its editor: {@code ValidationUtil.isInputByStringReady} accepts a derived
- * input-by-string field only from an object attribute or a common attribute, so a task's addressing
- * attribute, which the editor offers, is not offered here (it would be written and then marked with
- * error 4). The intersection of the two is what this class offers.</p>
+ * {@code $DataLockFieldsContentProvider}, md.ui). Two corrections are applied on top, the two places
+ * where EDT's model validator is narrower than its editor ({@code validatorRejects}): a task's
+ * addressing attribute is not offered for input by string ({@code ValidationUtil.isInputByStringReady}
+ * accepts a derived input-by-string field only from an object attribute or a common attribute; error
+ * 4), and an exchange plan's ExchangeDate, and its Code / Description while the length is 0, are not
+ * offered for data locking ({@code FixedFieldDescriptorProvider.createExchangePlanDataLockFields};
+ * error 81) - each would be written and then marked. The intersection of the two is what this class
+ * offers.</p>
  */
 public final class FieldListSupport
 {
@@ -93,22 +98,59 @@ public final class FieldListSupport
     }
 
     /**
-     * The lengths that decide whether a standard field is offered for a field list, each mapped to the
-     * English name of the one standard field it governs: EDT's MdFieldInferrer gives Code / Description
-     * / Number their input-by-string and data-lock source types only while {@code codeLength} /
-     * {@code descriptionLength} / {@code numberLength} is not 0. No other length touches either list (a
-     * chart of accounts' Order gets neither source type, whatever its {@code orderLength}). Keyed by
-     * the feature name, which every kind declaring the length shares.
+     * The object properties that decide whether EDT offers a standard field for a field list: each
+     * property maps to the lists it decides - by their source type, {@link SourceType#INPUT_BY_STRING}
+     * or {@link SourceType#FIELDS_FOR_LOCKING} - and, per list, to the English names of the standard
+     * fields it decides there. The one source of modify_metadata's batch guard
+     * ({@link #namedFieldGovernedBy}).
+     *
+     * <p>Measured from EDT's MdFieldInferrer (md 27.1 {@code md.resource}, md 28.0
+     * {@code internal.md.bm.derived.inferrers}; the same rules on both lines). Each of these standard
+     * fields EXISTS whatever the property says; the property only decides whether the inferrer gives
+     * the field the list's source type:</p>
+     * <ul>
+     * <li>{@code codeLength} / {@code descriptionLength} / {@code numberLength}: Code / Description /
+     * Number, for both lists, while the length is not 0;</li>
+     * <li>{@code hierarchical}: Parent and IsFolder, for data locking - on a catalog and on a chart of
+     * characteristic types, which both declare it;</li>
+     * <li>{@code hierarchyType}: a catalog's IsFolder, for data locking (it needs a hierarchical
+     * catalog of HierarchyFoldersAndItems);</li>
+     * <li>{@code owners}: a catalog's Owner, for data locking, while the catalog has an owner;</li>
+     * <li>{@code actionPeriodUse}: a chart of calculation types' ActionPeriodIsBasic, for data
+     * locking.</li>
+     * </ul>
+     * <p>No other property of the eight kinds decides either list: a chart of accounts' Parent is
+     * lockable unconditionally and its Order is never offered, whatever its {@code orderLength}; a
+     * task's RoutePoint and BusinessProcess, a business process's Started / Completed / HeadTask and
+     * every Date and DeletionMark are lockable unconditionally; Posted and ValueType are never offered.
+     * Keyed by the feature name, which every kind declaring the property shares - so on an exchange
+     * plan, whose Code and Description EDT offers for input by string whatever the lengths, the guard
+     * costs a second call there; for data locking an exchange plan's lengths do decide them, through
+     * EDT's validator ({@code validatorRejects}).</p>
      */
-    public static final Map<String, String> STANDARD_FIELD_OF_LENGTH;
+    public static final Map<String, Map<SourceType, List<String>>> STANDARD_FIELDS_DECIDED_BY;
 
     static
     {
-        Map<String, String> lengths = new LinkedHashMap<>();
-        lengths.put(MdClassPackage.Literals.CATALOG__CODE_LENGTH.getName(), "Code"); //$NON-NLS-1$
-        lengths.put(MdClassPackage.Literals.CATALOG__DESCRIPTION_LENGTH.getName(), "Description"); //$NON-NLS-1$
-        lengths.put(MdClassPackage.Literals.DOCUMENT__NUMBER_LENGTH.getName(), "Number"); //$NON-NLS-1$
-        STANDARD_FIELD_OF_LENGTH = Collections.unmodifiableMap(lengths);
+        Map<String, Map<SourceType, List<String>>> table = new LinkedHashMap<>();
+        decides(table, MdClassPackage.Literals.CATALOG__CODE_LENGTH, "Code", SourceType.INPUT_BY_STRING, //$NON-NLS-1$
+            SourceType.FIELDS_FOR_LOCKING);
+        decides(table, MdClassPackage.Literals.CATALOG__DESCRIPTION_LENGTH, "Description", //$NON-NLS-1$
+            SourceType.INPUT_BY_STRING, SourceType.FIELDS_FOR_LOCKING);
+        decides(table, MdClassPackage.Literals.DOCUMENT__NUMBER_LENGTH, "Number", SourceType.INPUT_BY_STRING, //$NON-NLS-1$
+            SourceType.FIELDS_FOR_LOCKING);
+        decides(table, MdClassPackage.Literals.CATALOG__HIERARCHICAL, "Parent", SourceType.FIELDS_FOR_LOCKING); //$NON-NLS-1$
+        decides(table, MdClassPackage.Literals.CATALOG__HIERARCHICAL, "IsFolder", SourceType.FIELDS_FOR_LOCKING); //$NON-NLS-1$
+        decides(table, MdClassPackage.Literals.CATALOG__HIERARCHY_TYPE, "IsFolder", SourceType.FIELDS_FOR_LOCKING); //$NON-NLS-1$
+        decides(table, MdClassPackage.Literals.CATALOG__OWNERS, "Owner", SourceType.FIELDS_FOR_LOCKING); //$NON-NLS-1$
+        decides(table, MdClassPackage.Literals.CHART_OF_CALCULATION_TYPES__ACTION_PERIOD_USE, "ActionPeriodIsBasic", //$NON-NLS-1$
+            SourceType.FIELDS_FOR_LOCKING);
+        for (Map.Entry<String, Map<SourceType, List<String>>> entry : table.entrySet())
+        {
+            entry.getValue().replaceAll((source, fields) -> Collections.unmodifiableList(fields));
+            entry.setValue(Collections.unmodifiableMap(entry.getValue()));
+        }
+        STANDARD_FIELDS_DECIDED_BY = Collections.unmodifiableMap(table);
     }
 
     /**
@@ -141,11 +183,18 @@ public final class FieldListSupport
     private static final String DATA_LOCK_RULE = "EDT offers a field for data locking only when it can " //$NON-NLS-1$
         + "be locked: a String field needs a non-zero length, a ValueStorage or TypeDescription field never " //$NON-NLS-1$
         + "qualifies, and a standard field only while the object has it (a Code / Description / Number " //$NON-NLS-1$
-        + "with a non-zero length, a Parent on a hierarchical object, an Owner on a subordinate one)"; //$NON-NLS-1$
+        + "with a non-zero length, a Parent on a hierarchical object, an IsFolder on a hierarchical catalog " //$NON-NLS-1$
+        + "of HierarchyFoldersAndItems or a hierarchical chart of characteristic types, an Owner on a " //$NON-NLS-1$
+        + "subordinate one, an ActionPeriodIsBasic while actionPeriodUse is true)"; //$NON-NLS-1$
 
-    private static final String VALIDATOR_RULE = "EDT's property editor offers it, but EDT's validator accepts a " //$NON-NLS-1$
-        + "derived input-by-string field only from an attribute or a common attribute and marks anything else - " //$NON-NLS-1$
-        + "a task's addressing attribute - as an error"; //$NON-NLS-1$
+    private static final String INPUT_BY_STRING_VALIDATOR_RULE = "EDT's property editor offers it, but EDT's " //$NON-NLS-1$
+        + "validator accepts a derived input-by-string field only from an attribute or a common attribute and " //$NON-NLS-1$
+        + "marks anything else - a task's addressing attribute - as an error"; //$NON-NLS-1$
+
+    private static final String DATA_LOCK_VALIDATOR_RULE = "EDT's property editor offers it, but EDT's validator " //$NON-NLS-1$
+        + "accepts an exchange plan's Code and Description for data locking only while their length " //$NON-NLS-1$
+        + "(codeLength / descriptionLength) is not 0, never its ExchangeDate, and marks such an entry as an " //$NON-NLS-1$
+        + "error"; //$NON-NLS-1$
 
     private FieldListSupport()
     {
@@ -220,7 +269,7 @@ public final class FieldListSupport
             List<String> addresses = new ArrayList<>();
             for (Field field : ((FieldSource)owner).getFields())
             {
-                String address = isOffered(field, source) ? addressOf(field) : null;
+                String address = isOffered(owner, field, source) ? addressOf(field) : null;
                 if (address != null)
                 {
                     addresses.add(address);
@@ -396,7 +445,7 @@ public final class FieldListSupport
                         + "' (a field is named by its programmatic Name, never by its synonym)."; //$NON-NLS-1$
                 return "'" + entry + why + offeredSentence(property, ownerAddress, offered); //$NON-NLS-1$
             }
-            if (!isOffered(match, source))
+            if (!isOffered(owner, match, source))
             {
                 String address = addressOf(match);
                 boolean inCurrent = address != null && containsIgnoreCase(current, address);
@@ -411,7 +460,8 @@ public final class FieldListSupport
                             + "' - drop it. " //$NON-NLS-1$
                         : "' is a field of " + ownerAddress + " that EDT's validator rejects in '" + property //$NON-NLS-1$ //$NON-NLS-2$
                             + "'. "; //$NON-NLS-1$
-                    rule = VALIDATOR_RULE;
+                    rule = source == SourceType.INPUT_BY_STRING ? INPUT_BY_STRING_VALIDATOR_RULE
+                        : DATA_LOCK_VALIDATOR_RULE;
                 }
                 else
                 {
@@ -500,33 +550,37 @@ public final class FieldListSupport
     }
 
     /**
-     * The address of the standard field a field-list value NAMES whose eligibility {@code length}
-     * decides ({@link #STANDARD_FIELD_OF_LENGTH}), or {@code null} when it names no such field - the
-     * question of modify_metadata's batch guard: such a list may not share a call with that length,
-     * every other list may.
+     * The address of the standard field a field-list value NAMES whose offer for that list
+     * {@code property} decides ({@link #STANDARD_FIELDS_DECIDED_BY}), or {@code null} when it names no
+     * such field - the question of modify_metadata's batch guard: such a list may not share a call with
+     * that property, every other list may. A property decides a field only for the lists it is listed
+     * for: {@code hierarchical} never makes Parent an input-by-string field, so a Parent in
+     * {@code inputByString} is left to {@link #resolve}'s own refusal, which no second call would lift.
      *
      * <p>Read with the parser and the field lookup {@link #resolve} uses, minus every eligibility
-     * check: the question is which field an entry names, not whether EDT offers it. A value of the
-     * wrong shape, or an entry the parser cannot place, is skipped - {@link #resolve} refuses it on its
-     * own, so nothing is written either way. A standard field named in English is recognized even
+     * check: the question is which field an entry names, not whether EDT offers it now - so the answer
+     * is the same whether the property is about to take the field away or to bring it back. A value of
+     * the wrong shape, or an entry the parser cannot place, is skipped - {@link #resolve} refuses it on
+     * its own, so nothing is written either way. A standard field named in English is recognized even
      * before EDT has computed the fields; a Russian name is looked up in them.</p>
      *
      * @param owner the object holding the list
+     * @param list the list feature (one of {@link #ELIGIBILITY})
      * @param value the list's wire value
-     * @param length the length property batched with it ({@code codeLength} / {@code descriptionLength}
-     *     / {@code numberLength})
-     * @return the canonical address of the governed field the value names, or {@code null}
+     * @param property the property batched with it (a key of {@link #STANDARD_FIELDS_DECIDED_BY})
+     * @return the canonical address of the decided field the value names, or {@code null}
      */
-    public static String namedFieldGovernedBy(EObject owner, JsonElement value, String length)
+    public static String namedFieldGovernedBy(EObject owner, EStructuralFeature list, JsonElement value,
+        String property)
     {
-        String governed = length == null ? null : STANDARD_FIELD_OF_LENGTH.get(length);
-        if (governed == null || !(owner instanceof MdObject))
+        List<String> decided = fieldsDecidedBy(property, list);
+        if (decided.isEmpty() || !(owner instanceof MdObject))
         {
             return null;
         }
         // The reader and the parser take a property name only to word a refusal; none is wanted here.
         List<String> entries = new ArrayList<>();
-        if (readEntries(length, value, entries) != null)
+        if (readEntries(property, value, entries) != null)
         {
             return null;
         }
@@ -536,21 +590,48 @@ public final class FieldListSupport
         for (String entry : entries)
         {
             Target target = new Target();
-            if (parse(entry, object, ownerAddress, length, target) != null
+            if (parse(entry, object, ownerAddress, property, target) != null
                 || !STANDARD_ATTRIBUTE.equals(target.kind))
             {
                 continue;
             }
             Field match = find(fields, target.kind, target.name);
-            if (governed.equalsIgnoreCase(match != null ? match.getName() : target.name))
+            String named = match != null ? match.getName() : target.name;
+            for (String field : decided)
             {
-                return symbolicName(ownerAddress, STANDARD_ATTRIBUTE, governed);
+                if (field.equalsIgnoreCase(named))
+                {
+                    return symbolicName(ownerAddress, STANDARD_ATTRIBUTE, field);
+                }
             }
         }
         return null;
     }
 
     // ---- internals ------------------------------------------------------------------------------
+
+    /**
+     * Adds one row to {@link #STANDARD_FIELDS_DECIDED_BY}: {@code property} decides {@code field} for
+     * {@code lists}.
+     */
+    private static void decides(Map<String, Map<SourceType, List<String>>> table, EStructuralFeature property,
+        String field, SourceType... lists)
+    {
+        Map<SourceType, List<String>> byList = table.computeIfAbsent(property.getName(),
+            name -> new EnumMap<>(SourceType.class));
+        for (SourceType list : lists)
+        {
+            byList.computeIfAbsent(list, source -> new ArrayList<>()).add(field);
+        }
+    }
+
+    /** The standard fields {@code property} decides for {@code list} ({@link #STANDARD_FIELDS_DECIDED_BY}). */
+    private static List<String> fieldsDecidedBy(String property, EStructuralFeature list)
+    {
+        Map<SourceType, List<String>> byList = property == null ? null : STANDARD_FIELDS_DECIDED_BY.get(property);
+        List<String> fields = byList == null ? null : byList.get(ELIGIBILITY.get(list));
+        return fields == null ? Collections.<String> emptyList() : fields;
+    }
 
     /** One parsed address: the kind (a field id prefix), the field name as given, the canonical form. */
     private static final class Target
@@ -561,28 +642,54 @@ public final class FieldListSupport
     }
 
     /**
-     * Whether {@code field} is offered for the list of {@code source}: the editor's rule, narrowed by
-     * the validator's.
+     * Whether {@code field} of {@code owner} is offered for the list of {@code source}: the editor's
+     * rule, narrowed by the validator's.
      */
-    private static boolean isOffered(Field field, SourceType source)
+    private static boolean isOffered(EObject owner, Field field, SourceType source)
     {
-        return field != null && field.getSourceTypes().contains(source) && !validatorRejects(field, source);
+        return field != null && field.getSourceTypes().contains(source) && !validatorRejects(owner, field, source);
     }
 
     /**
-     * Whether EDT's model validator rejects {@code field} in the list of {@code source}.
-     * ValidationUtil.isInputByStringReady accepts a derived input-by-string field only from an object
-     * attribute or a common attribute; EDT's editor also offers a task's addressing attribute, and the
-     * validator then marks it (error 4).
+     * Whether EDT's model validator rejects {@code field} of {@code owner} in the list of
+     * {@code source} although EDT's editor offers it. On the eight kinds the validator is narrower than
+     * MdFieldInferrer in two places (md 27.1 / 28.0, metadata 19.0 / 19.1):
+     * <ul>
+     * <li>input by string: ValidationUtil.isInputByStringReady accepts a derived field only from an
+     * object attribute or a common attribute, so a task's addressing attribute is marked (error 4);</li>
+     * <li>data locking on an exchange plan: FixedFieldDescriptorProvider.createExchangePlanDataLockFields
+     * admits Code and Description only while their length is not 0 and has no ExchangeDate at all,
+     * while the inferrer gives all three FIELDS_FOR_LOCKING whatever the lengths, so they are marked
+     * (error 81). ValidationUtil.isDataLockReady judges a standard field by its name against that
+     * table, and a derived field by its type, of which the inferrer never offers more. On the seven
+     * other kinds every standard field the inferrer offers for data locking is in the validator's
+     * table.</li>
+     * </ul>
      */
-    private static boolean validatorRejects(Field field, SourceType source)
+    private static boolean validatorRejects(EObject owner, Field field, SourceType source)
     {
+        if (source == SourceType.FIELDS_FOR_LOCKING)
+        {
+            return owner instanceof ExchangePlan && !(field instanceof DerivedField)
+                && exchangePlanLockRejects((ExchangePlan)owner, field.getName());
+        }
         if (source != SourceType.INPUT_BY_STRING || !(field instanceof DerivedField))
         {
             return false;
         }
         EObject origin = ((DerivedField)field).getSource();
         return !(origin instanceof DbObjectAttribute || origin instanceof CommonAttribute);
+    }
+
+    /**
+     * Whether EDT's validator refuses the exchange plan's standard field {@code name} for data locking
+     * ({@link #validatorRejects}).
+     */
+    private static boolean exchangePlanLockRejects(ExchangePlan plan, String name)
+    {
+        return "ExchangeDate".equals(name) //$NON-NLS-1$
+            || ("Code".equals(name) && plan.getCodeLength() <= 0) //$NON-NLS-1$
+            || ("Description".equals(name) && plan.getDescriptionLength() <= 0); //$NON-NLS-1$
     }
 
     /** Reads the wire value into address strings: an array of strings, or one string. */
