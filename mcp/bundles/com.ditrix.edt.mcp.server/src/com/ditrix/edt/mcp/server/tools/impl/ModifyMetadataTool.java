@@ -4495,12 +4495,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * Description, which EDT's editor offers whatever the length, both speak of what EDT's validator accepts
      * ({@link FieldListSupport.OfferChange#byValidator}).</p>
      *
-     * <p>The batch's values are read with the parsers their own preparation uses, and a repeated property is
-     * decided by its last write, as when the batch is applied ({@link #mainFlagIn} reads the main flag the
-     * same way). A value whose shape or parse that preparation refuses is no end state: the property reads as
-     * unchanged, and its own refusal answers the call - nothing is written either way. Owner FQNs are read by
-     * their shape only: whether each resolves to an object that can own a catalog is checked by
-     * {@link #prepareManyReference}, against the project's scope, which the guard does not take. So an
+     * <p>The batch's values are read with the parsers their own preparation uses, and a repeated property - a
+     * deciding one or a list - is decided by its last write, as when the batch is applied ({@link #mainFlagIn}
+     * reads the main flag the same way). A value whose shape or parse that preparation refuses is no end state:
+     * the property reads as unchanged, and its own refusal answers the call - nothing is written either way.
+     * Owner FQNs are read by their shape only: whether each resolves to an object that can own a catalog is
+     * checked by {@link #prepareManyReference}, against the project's scope, which the guard does not take. So an
      * {@code owners} list of FQNs that do not resolve still counts as non-empty: on a catalog without owners
      * the guard answers first, with the separate-call recipe, and the owners refusal comes on the next call -
      * nothing is written either way. A deciding property the target does not have is left to its own "not
@@ -4517,8 +4517,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return null;
         }
-        List<PropertyInfo> lists = new ArrayList<>();
-        List<JsonElement> values = new ArrayList<>();
+        // Keyed by feature: a repeated list, like a repeated deciding property, is decided by its last write.
+        Map<EStructuralFeature, PropertyInfo> lists = new LinkedHashMap<>();
+        Map<EStructuralFeature, JsonElement> values = new LinkedHashMap<>();
         Map<EStructuralFeature, Object> ends = new LinkedHashMap<>();
         for (JsonObject prop : properties)
         {
@@ -4530,8 +4531,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
             if (info.valueKind == MetadataPropertyIntrospector.ValueKind.FIELD_LIST)
             {
-                lists.add(info);
-                values.add(prop.get(KEY_VALUE));
+                lists.put(info.feature, info);
+                values.put(info.feature, prop.get(KEY_VALUE));
             }
             else if (FieldListSupport.isDecidingProperty(info.feature))
             {
@@ -4546,14 +4547,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 }
             }
         }
-        for (int i = 0; i < lists.size(); i++)
+        for (Map.Entry<EStructuralFeature, PropertyInfo> list : lists.entrySet())
         {
-            FieldListSupport.OfferChange change = FieldListSupport.offerChange(target, lists.get(i).feature,
-                values.get(i), ends);
+            FieldListSupport.OfferChange change = FieldListSupport.offerChange(target, list.getKey(),
+                values.get(list.getKey()), ends);
             if (change != null)
             {
-                return ToolResult.error(change.offeredNow ? takesAwayRefusal(lists.get(i).name, change)
-                    : bringsBackRefusal(lists.get(i).name, change)).toJson();
+                return ToolResult.error(change.offeredNow ? takesAwayRefusal(list.getValue().name, change)
+                    : bringsBackRefusal(list.getValue().name, change)).toJson();
             }
         }
         return null;

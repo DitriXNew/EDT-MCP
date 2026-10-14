@@ -897,6 +897,22 @@ public class ModifyMetadataToolFieldListTest
     }
 
     /**
+     * A repeated LIST is decided by its last write too (#744 review): applied in order, an earlier value of
+     * the same list is overwritten, so only the list the call leaves is judged. [Code], then [Description],
+     * then codeLength 0 leaves [Description] - one call; the other way round leaves [Code] - refused.
+     */
+    @Test
+    public void testTheLastWriteOfAListDecides()
+    {
+        JsonArray code = array("Catalog.Goods.StandardAttribute.Code"); //$NON-NLS-1$
+        JsonArray description = array("Catalog.Goods.StandardAttribute.Description"); //$NON-NLS-1$
+        assertNull(batchRefusal(goods(), property("inputByString", code), property("inputByString", description), //$NON-NLS-1$ //$NON-NLS-2$
+            integer("codeLength", 0))); //$NON-NLS-1$
+        assertTakesAway(batchRefusal(goods(), property("inputByString", description), property("inputByString", code), //$NON-NLS-1$ //$NON-NLS-2$
+            integer("codeLength", 0)), "inputByString", "Catalog.Goods.StandardAttribute.Code", "codeLength"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+    }
+
+    /**
      * A value the property's own preparation cannot parse - a length that is no integer, a flag that is no
      * boolean, an unknown hierarchy type, owners that are no array of FQN strings - is no end state: the
      * guard reads that property as unchanged - nothing is written either way, and the property's own refusal
