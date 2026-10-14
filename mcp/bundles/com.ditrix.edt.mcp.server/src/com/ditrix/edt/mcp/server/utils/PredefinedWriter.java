@@ -23,6 +23,7 @@ import java.util.function.Consumer;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.NumberValue;
@@ -1288,7 +1289,9 @@ public final class PredefinedWriter
      * owner's {@code predefined} container when absent, sets a mandatory random {@code id}, the
      * {@code description} (defaulting to {@code itemName} when omitted), the optional
      * {@code isFolder} flag and the optional {@code code} (matched to the owner's code type; omitted
-     * -&gt; left UNSET, never invented/autonumbered).
+     * -&gt; left UNSET, never invented/autonumbered). A {@code ChartOfCharacteristicTypes} item created
+     * without a {@code valueType} takes a copy of the chart's own value type
+     * ({@link #inheritChartValueType}), as in EDT's wizard; a folder stays untyped, as in EDT.
      *
      * @param owner the (already re-fetched, tx-bound) owner - a {@link Catalog},
      *     {@link ChartOfCharacteristicTypes}, {@code ChartOfAccounts} or
@@ -1343,11 +1346,13 @@ public final class PredefinedWriter
         if (props.valueTypeSet && (props.valueType == null || props.valueType.isJsonNull()))
         {
             // A JSON-null valueType is a MODIFY concept (clearing an existing value); at create there
-            // is nothing to clear - omit the property to leave the value type unset. Checked up front
-            // (before any mutation), mirroring the code-null-at-create guard below.
-            return WriteResult.fail("'valueType' cannot be JSON null at create - omit the property to " //$NON-NLS-1$
-                + "leave the value type unset (an explicit null clears an existing value type via " //$NON-NLS-1$
-                + "modify_metadata)."); //$NON-NLS-1$
+            // is nothing to clear - omit the property: a characteristic then takes a copy of its
+            // chart's value type, a folder stays untyped (inheritChartValueType). Checked up front
+            // (before any mutation, and for every owner), mirroring the code-null-at-create guard below.
+            return WriteResult.fail("'valueType' cannot be JSON null at create - omit the property " //$NON-NLS-1$
+                + "instead: on a ChartOfCharacteristicTypes a characteristic then gets a copy of the " //$NON-NLS-1$
+                + "chart's own value type, and a folder stays untyped (an explicit null clears an " //$NON-NLS-1$
+                + "existing value type via modify_metadata)."); //$NON-NLS-1$
         }
 
         Predefined predefined = getOrCreatePredefined(owner);
@@ -1383,6 +1388,7 @@ public final class PredefinedWriter
                 return WriteResult.fail(valueTypeErr);
             }
         }
+        inheritChartValueType(owner, item);
         String ownerPropsErr = applyOwnerSpecificProps(owner, item, props);
         if (ownerPropsErr != null)
         {
@@ -1390,6 +1396,53 @@ public final class PredefinedWriter
         }
         attach(predefined, parent, item);
         return WriteResult.ok(item);
+    }
+
+    /**
+     * Gives a {@code ChartOfCharacteristicTypes} item that has no value type a copy of its chart's own
+     * value type - what EDT's "New predefined characteristic" wizard does
+     * ({@code PredefinedCharacteristicTypeWizard.createModel} sets
+     * {@code new TypeDescriptionBuilder().clone(chart.getTypeDescription()).build()}). An item left
+     * without a type crashes EDT's {@code ChartOfCharacteristicTypesValidator} (issue #700). Only a
+     * MISSING type is filled, so an explicit {@code valueType}, applied first by {@link #create}, wins.
+     * A FOLDER stays untyped, as EDT's "New predefined folder" wizard leaves it
+     * ({@code PredefinedFolderWizard.createModel} sets only the id and {@code isFolder}; the
+     * validator checks the type of a characteristic, never of a folder). A no-op for every other owner
+     * and item kind. The chart's type is read through {@code getTypeDescription()}, as the wizard reads
+     * it: for a chart ADOPTED into an extension whose own type is empty, that answers with the extension
+     * object's type.
+     *
+     * @param owner the (tx-bound) owner of the new item
+     * @param item the new item, not yet attached, its {@code isFolder} flag already set
+     */
+    static void inheritChartValueType(EObject owner, PredefinedItem item)
+    {
+        if (owner instanceof ChartOfCharacteristicTypes chart
+            && item instanceof ChartOfCharacteristicTypesPredefinedItem cctItem && !cctItem.isIsFolder()
+            && cctItem.getType() == null)
+        {
+            TypeDescription chartType = chart.getTypeDescription();
+            if (chartType != null)
+            {
+                cctItem.setType(copyOf(chartType));
+            }
+        }
+    }
+
+    /**
+     * A copy of {@code source} built the way the platform's {@code TypeDescriptionBuilder.clone}
+     * builds one: a new plain {@link TypeDescription} over the SAME type items (a reference list) with
+     * each qualifier block copied, so the source - contained by its own owner - is never moved.
+     */
+    private static TypeDescription copyOf(TypeDescription source)
+    {
+        TypeDescription copy = McoreFactory.eINSTANCE.createTypeDescription();
+        copy.getTypes().addAll(source.getTypes());
+        copy.setBinaryQualifiers(EcoreUtil.copy(source.getBinaryQualifiers()));
+        copy.setDateQualifiers(EcoreUtil.copy(source.getDateQualifiers()));
+        copy.setNumberQualifiers(EcoreUtil.copy(source.getNumberQualifiers()));
+        copy.setStringQualifiers(EcoreUtil.copy(source.getStringQualifiers()));
+        return copy;
     }
 
     /** A resolved create-time parent (or {@code null} for top-level), or a ready error. */

@@ -112,6 +112,30 @@ public final class MetadataPathResolver
     }
 
     /**
+     * Resolves a form's BSL module - the {@code Module.bsl} EDT keeps beside its {@code Form.form} -
+     * to a file path relative to the project root.
+     *
+     * <p>Supported formats (same as {@link #resolveFormFilePath(String)}):
+     * <ul>
+     *   <li>{@code "Catalog.Products.Forms.ItemForm"} &rarr;
+     *       {@code "src/Catalogs/Products/Forms/ItemForm/Module.bsl"}</li>
+     *   <li>{@code "CommonForm.MyForm"} &rarr; {@code "src/CommonForms/MyForm/Module.bsl"}</li>
+     * </ul>
+     *
+     * <p>The path is built from the names it is given, verbatim: the workspace compares paths
+     * case-sensitively, so a caller holding a user-typed spelling must pass the names the model
+     * resolved instead.
+     *
+     * @param formPath FQN path
+     * @return the module path relative to the project root, or {@code null} if cannot resolve
+     */
+    public static String resolveFormModulePath(String formPath)
+    {
+        String folder = resolveFormFolderPath(formPath);
+        return folder == null ? null : folder + "/Module.bsl"; //$NON-NLS-1$
+    }
+
+    /**
      * Resolves a TOP metadata object FQN (e.g. {@code "Catalog.Products"}) to its
      * {@code .mdo} file path relative to the EDT project root
      * (e.g. {@code "src/Catalogs/Products/Products.mdo"}).

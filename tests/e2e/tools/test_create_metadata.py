@@ -31,6 +31,8 @@ Fixture inventory (TestConfiguration, English Names):
   need one create it first.)
 """
 
+import re
+import time
 import xml.etree.ElementTree as ET
 
 from harness import (
@@ -52,13 +54,16 @@ from harness import (
     diff,
     poll_diff_contains,
     poll_disk_contains,
+    poll_disk_contains_all,
     read_disk,
     restore_extension_fixture,
+    split_markdown_row,
     tree_snapshot,
     wait_for_project_ready,
     e2e_test,
     PROJECT,
     TESTS_PROJECT,
+    TESTS_PROJECT_REL,
     _fail,
 )
 
@@ -109,6 +114,73 @@ def _assert_unique_nonzero(ids_by_name, ctx):
             _fail("%s ids must be unique, but %s and %s both use %s: %r"
                   % (ctx, seen[value], name, value, ids_by_name))
         seen[value] = name
+
+
+def _children(node, child_name):
+    return [child for child in list(node) if _xml_local(child.tag) == child_name]
+
+
+def _child_named(parent, collection, name, ctx):
+    """The ONE <collection> element directly under `parent` whose <name> is `name`."""
+    matches = [el for el in _children(parent, collection) if _direct_child_text(el, "name") == name]
+    if len(matches) != 1:
+        _fail("%s: expected exactly one <%s> named %r, found %d" % (ctx, collection, name, len(matches)))
+    return matches[0]
+
+
+def _member_element(mdo_text, collection, name, ctx):
+    """The <collection> element directly under a top object's .mdo root whose <name> is `name`."""
+    return _child_named(ET.fromstring(mdo_text), collection, name, ctx)
+
+
+def _type_of(element, ctx):
+    """(types, qualifiers) of the element's ONE direct <type> child: every <types> text in order, and
+    each qualifier block as {child tag: text}. A missing <type> is a member created WITHOUT its type."""
+    type_elements = _children(element, "type")
+    if len(type_elements) != 1:
+        _fail("%s: expected exactly one <type>, found %d in:\n%s"
+              % (ctx, len(type_elements), ET.tostring(element, encoding="unicode")[:800]))
+    type_element = type_elements[0]
+    types = [(t.text or "").strip() for t in _children(type_element, "types")]
+    qualifiers = {}
+    for block in list(type_element):
+        tag = _xml_local(block.tag)
+        if tag.endswith("Qualifiers"):
+            qualifiers[tag] = {_xml_local(q.tag): (q.text or "").strip() for q in list(block)}
+    return types, qualifiers
+
+
+def _assert_string10(element, ctx):
+    types, qualifiers = _type_of(element, ctx)
+    assert types == ["String"], "%s: the type must be exactly String, got %r" % (ctx, types)
+    assert qualifiers == {"stringQualifiers": {"length": "10"}}, \
+        "%s: the designer default is a variable String(10), got %r" % (ctx, qualifiers)
+
+
+def _assert_number10(element, ctx):
+    types, qualifiers = _type_of(element, ctx)
+    assert types == ["Number"], "%s: the type must be exactly Number, got %r" % (ctx, types)
+    assert "stringQualifiers" not in qualifiers, \
+        "%s: a Number must not carry string qualifiers: %r" % (ctx, qualifiers)
+    number = qualifiers.get("numberQualifiers") or {}
+    # A zero scale and a false nonNegative are the model defaults the serializer leaves out.
+    assert number.get("precision") == "10" and number.get("scale", "0") == "0" \
+        and number.get("nonNegative", "false") == "false", \
+        "%s: the designer default is Number(10,0), got %r" % (ctx, qualifiers)
+
+
+def _assert_boolean(element, ctx):
+    types, qualifiers = _type_of(element, ctx)
+    assert types == ["Boolean"], "%s: the type must be exactly Boolean, got %r" % (ctx, types)
+    assert qualifiers == {}, "%s: a Boolean carries no qualifiers, got %r" % (ctx, qualifiers)
+
+
+def _named_element(root, name, ctx):
+    """The ONE element anywhere under root (a predefined item sits at any depth) whose <name> is `name`."""
+    matches = [el for el in root.iter() if el is not root and _direct_child_text(el, "name") == name]
+    if len(matches) != 1:
+        _fail("%s: expected exactly one element named %r, found %d" % (ctx, name, len(matches)))
+    return matches[0]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -315,6 +387,157 @@ def test_create_dimension_member_on_register():
         "kind must be the concrete register-dimension EClass: %r" % (r.structured,)
     poll_diff_contains("<name>%s</name>" % dim,
                        ctx="the new dimension must land in the register's .mdo on disk")
+    # #700: the dimension is created WITH its type. Without one, EDT's derived-data pass for the
+    # register fails, and the register table loses its fields for queries.
+    mdo = poll_disk_contains("src/InformationRegisters/%s/%s.mdo" % (reg, reg), "<name>%s</name>" % dim,
+                             ctx="the register .mdo must hold the new dimension")
+    _assert_string10(_member_element(mdo, "dimensions", dim, "the new dimension"), "the new dimension")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_dimension_on_an_extension_own_register_is_typed():
+    """#700 where #713 was reported: a register the EXTENSION owns. Its new dimension must land on the
+    extension's disk with the designer's String(10) - an untyped one breaks EDT's derived data for the
+    register, and the register table loses its fields for queries.
+
+    Writes into TESTS_PROJECT (the extension fixture), so it reverts the extension itself, like the
+    extension-owned form test above (issue #262)."""
+    reg = "tests_E2ETypedExtReg"
+    dim = "tests_E2ETypedExtDim"
+    try:
+        assert_ok(call("create_metadata", {"projectName": TESTS_PROJECT, "fqn": "InformationRegister." + reg}),
+                  "seed an InformationRegister the extension owns")
+        wait_for_project_ready()
+        r = call("create_metadata", {
+            "projectName": TESTS_PROJECT, "fqn": "InformationRegister.%s.Dimension.%s" % (reg, dim)})
+        assert_ok(r, "create a dimension on the extension's own register")
+        mdo = poll_disk_contains_all("src/InformationRegisters/%s/%s.mdo" % (reg, reg), ["<name>%s</name>" % dim],
+                                     ctx="the extension register's .mdo must hold the new dimension",
+                                     fixture_rel=TESTS_PROJECT_REL)
+        _assert_string10(_member_element(mdo, "dimensions", dim, "the extension register's dimension"),
+                         "the extension register's dimension")
+    except E2ECallTimeout:
+        # NO cleanup here: the timed-out call may still be writing these very files, and a git
+        # reset would race it. The orchestrator aborts the run on this.
+        raise
+    except BaseException:
+        restore_extension_fixture("creating an extension-own register dimension")
+        raise
+    else:
+        restore_extension_fixture("creating an extension-own register dimension")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_accumulation_register_resource_is_numeric():
+    """#700: an accumulation register's resource takes the designer's Number(10,0), not a String."""
+    reg = "E2ETypedAccumReg"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "AccumulationRegister." + reg}),
+              "seed AccumulationRegister")
+    wait_for_project_ready()
+    res = "E2ETypedQuantity"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "AccumulationRegister.%s.Resource.%s" % (reg, res)})
+    assert_ok(r, "create Resource member on the accumulation register")
+    assert r.structured.get("kind") == "AccumulationRegisterResource", \
+        "kind must be the concrete accumulation-register resource EClass: %r" % (r.structured,)
+    mdo = poll_disk_contains("src/AccumulationRegisters/%s/%s.mdo" % (reg, reg), "<name>%s</name>" % res,
+                             ctx="the register .mdo must hold the new resource")
+    _assert_number10(_member_element(mdo, "resources", res, "the new resource"), "the new resource")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_sequence_dimension_is_typed():
+    """#700: a Sequence's dimension carries its mandatory type OUTSIDE BasicFeature, so a member selector
+    keyed on BasicFeature would leave it untyped. It lands on disk with the designer's String(10)."""
+    seq = "E2ETypedSeq"
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": "Sequence." + seq}), "seed Sequence")
+    wait_for_project_ready()
+    dim = "E2ETypedSeqDim"
+    r = call("create_metadata", {"projectName": PROJECT, "fqn": "Sequence.%s.Dimension.%s" % (seq, dim)})
+    assert_ok(r, "create a Dimension member on the sequence")
+    assert r.structured.get("kind") == "SequenceDimension", \
+        "kind must be the concrete sequence-dimension EClass: %r" % (r.structured,)
+    mdo = poll_disk_contains("src/Sequences/%s/%s.mdo" % (seq, seq), "<name>%s</name>" % dim,
+                             ctx="the sequence .mdo must hold the new dimension")
+    _assert_string10(_member_element(mdo, "dimensions", dim, "the sequence dimension"), "the sequence dimension")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_attribute_with_a_russian_name_is_typed_and_read_back():
+    """#700 on the Russian path: Russian type and kind tokens and a Russian Name. The attribute lands on
+    disk with its String(10) and get_metadata_details shows the type, where an untyped one shows '-'."""
+    attr = "ВесНетто"  # a Russian Name: "net weight"
+    r = call("create_metadata", {
+        "projectName": PROJECT,
+        # "Справочник" / "Реквизит" = the Russian Catalog / Attribute tokens
+        "fqn": "Справочник.Catalog.Реквизит." + attr,
+    })
+    assert_ok(r, "create a Russian-named attribute through the Russian tokens")
+    assert r.structured.get("kind") == "CatalogAttribute", \
+        "kind must be the concrete catalog-attribute EClass: %r" % (r.structured,)
+    mdo = poll_disk_contains("src/Catalogs/Catalog/Catalog.mdo", "<name>%s</name>" % attr,
+                             ctx="the catalog .mdo must hold the new attribute")
+    _assert_string10(_member_element(mdo, "attributes", attr, "the new attribute"), "the new attribute")
+
+    details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": ["Catalog.Catalog"]})
+    assert_ok(details, "read the catalog back")
+    rows = [split_markdown_row(line) for line in details.text.splitlines()]
+    row = next((cells for cells in rows if len(cells) >= 3 and cells[0] == attr), None)
+    assert row is not None, "the attributes table must list %s:\n%s" % (attr, details.text[:1500])
+    assert row[2] == "String", "MODEL read-back: the new attribute's Type cell must be String, got %r" % (row,)
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_create_characteristic_without_value_type_takes_the_chart_type():
+    """#700, extended by the maintainer to predefined characteristics: an item created without
+    valueType gets a copy of its chart's own type, as EDT's wizard does. An item left untyped crashes
+    EDT's ChartOfCharacteristicTypesValidator. A folder stays untyped, as EDT's folder wizard leaves it.
+
+    The chart first gets a composite type of its own: a fresh chart's type is String(10), the very
+    default a typed member gets, so an item equal to THAT could not tell a copy from a default."""
+    chart = "E2ETypedCct"
+    item = "E2EWeight"
+    folder = "E2ESizes"
+    chart_fqn = "ChartOfCharacteristicTypes." + chart
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": chart_fqn}),
+              "seed ChartOfCharacteristicTypes")
+    wait_for_project_ready()
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": chart_fqn, "properties": [
+        {"name": "type", "value": {"types": [
+            {"kind": "Number", "precision": 15, "scale": 2, "nonNegative": True},
+            {"kind": "Date", "fractions": "Date"}]}}]})
+    assert_ok(r, "give the chart a composite type of its own")
+    assert "type" in (r.structured.get("applied") or []), "the chart's type must be applied: %r" % (r.structured,)
+    wait_for_project_ready()
+
+    item_fqn = "ChartOfCharacteristicTypes.%s.Predefined.%s" % (chart, item)
+    assert_ok(call("create_metadata", {"projectName": PROJECT, "fqn": item_fqn}),
+              "create a predefined characteristic without valueType")
+    assert_ok(call("create_metadata", {
+        "projectName": PROJECT, "fqn": "ChartOfCharacteristicTypes.%s.Predefined.%s" % (chart, folder),
+        "properties": [{"name": "isFolder", "value": True}]}),
+        "create a predefined folder without valueType")
+
+    mdo = poll_disk_contains_all("src/ChartsOfCharacteristicTypes/%s/%s.mdo" % (chart, chart),
+                                 ["<name>%s</name>" % item, "<name>%s</name>" % folder, "<precision>15</precision>"],
+                                 ctx="the chart .mdo must hold its new type and both new items")
+    root = ET.fromstring(mdo)
+    chart_type = _type_of(root, "the chart")
+    assert sorted(chart_type[0]) == ["Date", "Number"] \
+        and chart_type[1].get("numberQualifiers", {}).get("precision") == "15", \
+        "precondition: the chart carries the composite type set above, got %r" % (chart_type,)
+    item_type = _type_of(_named_element(root, item, "the new characteristic"), "the new characteristic")
+    assert item_type == chart_type, \
+        "the characteristic must take the chart's own type: item %r, chart %r" % (item_type, chart_type)
+    folder_element = _named_element(root, folder, "the new folder")
+    assert not [t for t in _children(folder_element, "type") if _children(t, "types")], \
+        "a folder stays untyped, as EDT's folder wizard leaves it:\n%s" \
+        % ET.tostring(folder_element, encoding="unicode")[:800]
+
+    details = call("get_metadata_details", {"projectName": PROJECT, "objectFqns": [item_fqn]})
+    assert_ok(details, "read the characteristic back")
+    assert_contains(details.text, "Value type", "the single-item view must render the Value type row")
+    assert_contains(details.text, "Number", "MODEL read-back: the item's value type is the chart's")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
@@ -354,6 +577,11 @@ def test_create_nested_tabular_section_attribute():
     # The tabular section and its nested attribute live inline in the owner Catalog.Catalog.mdo.
     poll_diff_contains("<name>%s</name>" % attr,
                        ctx="the nested attribute must land in the owner Catalog.Catalog.mdo on disk")
+    # #700: the nested attribute carries the designer's String(10) as well.
+    mdo = poll_disk_contains("src/Catalogs/Catalog/Catalog.mdo", "<name>%s</name>" % attr,
+                             ctx="the catalog .mdo must hold the nested attribute")
+    section = _member_element(mdo, "tabularSections", tab, "the new tabular section")
+    _assert_string10(_child_named(section, "attributes", attr, "the nested attribute"), "the nested attribute")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
@@ -402,6 +630,13 @@ def test_create_chart_of_accounts_inline_special_flags():
     # Both flags live inline in the chart-of-accounts .mdo on disk.
     poll_diff_contains("<name>%s</name>" % flag, ctx="accountingFlag must land in the ChartOfAccounts .mdo")
     poll_diff_contains("<name>%s</name>" % ext, ctx="extDimensionAccountingFlag must land in the .mdo")
+    # #700: each flag carries the designer's Boolean type (never the String(10) other members default to).
+    mdo = poll_disk_contains_all("src/ChartsOfAccounts/%s/%s.mdo" % (coa, coa),
+                                 ["<name>%s</name>" % flag, "<name>%s</name>" % ext],
+                                 ctx="the ChartOfAccounts .mdo must hold both new flags")
+    _assert_boolean(_member_element(mdo, "accountingFlags", flag, "the accounting flag"), "the accounting flag")
+    _assert_boolean(_member_element(mdo, "extDimensionAccountingFlags", ext, "the ext-dimension accounting flag"),
+                    "the ext-dimension accounting flag")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
@@ -422,6 +657,11 @@ def test_create_task_addressing_attribute():
         "kind must be the concrete AddressingAttribute EClass: %r" % (r2.structured,)
     poll_diff_contains("<name>%s</name>" % addr,
                        ctx="the addressing attribute must land in the Task .mdo on disk")
+    # #700: an addressing attribute carries the designer's String(10).
+    mdo = poll_disk_contains("src/Tasks/%s/%s.mdo" % (task, task), "<name>%s</name>" % addr,
+                             ctx="the Task .mdo must hold the new addressing attribute")
+    _assert_string10(_member_element(mdo, "addressingAttributes", addr, "the addressing attribute"),
+                     "the addressing attribute")
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")
@@ -1983,6 +2223,299 @@ def test_create_form_command_action_missing_command_is_error():
     e = assert_error(r, "Action handler on a missing command")
     assert_error_quality(e, names=["NoSuchCmd_zz"], suggests=["Form command not found"],
                          ctx="an Action handler on a missing command is a clean error")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# A created form command's unbound action (issue #628)
+#
+# Creating '...Form.F.Command.C' never binds an action - only '...Command.C.Handler.Action' does -
+# so the create response says the command has no action yet and quotes the address that binds it.
+# It looks into the form's module first. A same-named procedure is named the way the module writes
+# it, together with the owner to revalidate: binding a procedure that already exists changes only
+# the form, and EDT does not re-check the module then. A same-named FUNCTION is answered with a
+# binding to a new name, since a module cannot hold two methods of one name. Every route binds
+# before a procedure is written, and every other member kind keeps the plain "Created <fqn>".
+# The fixture ItemForm has no Module.bsl; the tests that need one write it with
+# write_module_source, and the per-test fixture reset (git `clean -fd` on the fixture root - the
+# file is untracked and not ignored) removes it again.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# The module tools address a module RELATIVE TO src/, while read_disk / poll_disk_* address it
+# relative to the PROJECT - the two spellings are named apart, as in test_rename_metadata_object.
+_ITEM_FORM_MODULE_SRC_REL = "Catalogs/Catalog/Forms/ItemForm/Module.bsl"
+_ITEM_FORM_MODULE = "src/" + _ITEM_FORM_MODULE_SRC_REL
+
+# A procedure and a function named like the commands the tests below create - one in another case,
+# as 1C identifiers compare ignoring case. Russian keywords on purpose: BSL accepts both languages,
+# and the scan that finds them has to as well.
+_ITEM_FORM_MODULE_SOURCE = (
+    "&НаКлиенте\n"
+    "Процедура procact(Команда)\n"
+    "КонецПроцедуры\n"
+    "\n"
+    "&НаКлиенте\n"
+    "Функция FnAct()\n"
+    "\tВозврат 1;\n"
+    "КонецФункции\n"
+)
+
+_QUOTED_ACTION_ADDRESS = re.compile(r"'([^']+\.Handler\.Action)'")
+_QUOTED_REVALIDATION = re.compile(r"Then run revalidate_objects on '([^']+)'")
+
+
+def _quoted_action_address(structured, ctx):
+    """The one '...Handler.Action' address the create message quotes - which must be the created
+    command's own address plus '.Handler.Action', i.e. something the caller can pass straight back."""
+    message = structured.get("message") or ""
+    found = _QUOTED_ACTION_ADDRESS.findall(message)
+    if len(found) != 1:
+        _fail("%s: the message must quote exactly one '...Handler.Action' address, got %r in %r"
+              % (ctx, found, message))
+    if found[0] != "%s.Handler.Action" % structured.get("fqn"):
+        _fail("%s: the quoted address %r is not the created command's own address %r plus "
+              "'.Handler.Action'" % (ctx, found[0], structured.get("fqn")))
+    return found[0]
+
+
+def _item_form_row(section, name):
+    """The cells of `name`'s row in ItemForm's `## <section>` table (get_metadata_details), with the
+    text that was read: (None, text) when the table has no such row."""
+    r = call("get_metadata_details", {
+        "projectName": PROJECT, "objectFqns": ["Catalog.Catalog.Form.ItemForm"]})
+    assert_ok(r, "read the form structure back")
+    in_section = False
+    for line in r.text.splitlines():
+        if line.startswith("## "):
+            in_section = line.strip() == "## " + section
+            continue
+        cells = split_markdown_row(line) if in_section else []
+        if cells and cells[0] == name:
+            return cells, r.text
+    return None, r.text
+
+
+def _item_form_command_action(command):
+    """The 'Action handler' cell of `command` in ItemForm's Commands table (get_metadata_details)."""
+    cells, text = _item_form_row("Commands", command)
+    if cells is None or len(cells) != 3:
+        _fail("command %s is not in ItemForm's Commands table:\n%s" % (command, text[:1500]))
+    return cells[2]
+
+
+def _command_action_on_disk(form_xml, command):
+    """What ItemForm's Form.form binds `command`'s action to: the handler's procedure name, '' when the
+    command's <formCommands> element has no <action>, or None when the command is not there (yet) -
+    or the read landed mid-rewrite and does not parse."""
+    try:
+        root = ET.fromstring(form_xml)
+    except ET.ParseError:
+        return None
+    for node in root.iter():
+        if _xml_local(node.tag) != "formCommands" or _direct_child_text(node, "name") != command:
+            continue
+        for action in node:
+            if _xml_local(action.tag) != "action":
+                continue
+            for handler in action:
+                if _xml_local(handler.tag) == "handler":
+                    return _direct_child_text(handler, "name") or "(a handler without a name)"
+            return "(an action without a handler)"
+        return ""
+    return None
+
+
+def _poll_command_action_on_disk(command, expected, ctx, timeout=60, stable_for=2.0):
+    """Poll ItemForm's Form.form until `command`'s action on disk is `expected` ('' = the command is
+    there with no <action>) and has HELD for `stable_for` seconds: an action bound by something else a
+    moment after the call resets the dwell and fails the poll, naming what it saw."""
+    deadline = time.time() + timeout
+    seen = None
+    since = None
+    while time.time() < deadline:
+        try:
+            seen = _command_action_on_disk(read_disk(_KIND_PROBE_FORM), command)
+        except (OSError, ValueError):
+            # Not there yet, or caught mid-rewrite: read_disk decodes strictly as UTF-8, so a read
+            # landing inside a multi-byte sequence raises UnicodeDecodeError (a ValueError). Either
+            # way it is no verdict - read again.
+            seen = None
+        if seen == expected:
+            if since is None:
+                since = time.time()
+            if time.time() - since >= stable_for:
+                return
+        else:
+            since = None
+        time.sleep(0.2)
+    _fail("%s: expected %s's action in %s to be %r for %.1fs, last saw %r"
+          % (ctx, command, _KIND_PROBE_FORM, expected, stable_for, seen))
+
+
+def _write_item_form_module():
+    # The fixture form has no module, and the per-test reset must take away the one an earlier test
+    # wrote: run in file order, the function test below proves the procedure test's module is gone.
+    try:
+        read_disk(_ITEM_FORM_MODULE)
+    except FileNotFoundError:
+        pass
+    else:
+        _fail("ItemForm already has a Module.bsl before this test wrote one - the fixture reset "
+              "did not remove a module an earlier test wrote")
+    w = call("write_module_source", {
+        "projectName": PROJECT, "modulePath": _ITEM_FORM_MODULE_SRC_REL,
+        "mode": "replace", "overwrite": True, "source": _ITEM_FORM_MODULE_SOURCE,
+    })
+    assert_ok(w, "write ItemForm's module with a procedure and a function")
+    poll_disk_contains(_ITEM_FORM_MODULE, "FnAct", timeout=30,
+                       ctx="the written module must be on disk before a command is created")
+    wait_for_project_ready()
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_created_form_command_says_its_action_is_unbound_and_quotes_the_binding_address():
+    cmd = "NoActCmd"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command." + cmd})
+    assert_ok(r, "create a form command on a form that has no module")
+    # The claim is true - first on disk: the command's <formCommands> element is there with no
+    # <action>, and stays so.
+    _poll_command_action_on_disk(cmd, "", "the new command is on disk without an action")
+    message = r.structured.get("message") or ""
+    assert_contains(message, "The command has no action yet, so a button bound to it does nothing",
+                    "the create must say the new command is a dead button")
+    assert_contains(message, "(its 'procedure' defaults to the command name '%s')" % cmd,
+                    "the hint must say which procedure the binding will name")
+    assert_contains(message, "then add that procedure with write_module_source.",
+                    "the hint must close its sentence before any marker report")
+    assert_not_contains(message, "unless the form module already declares it",
+                        "a form with no module leaves the look-up nothing it could not read")
+    if "markersIncomplete" in r.structured:
+        assert_marker_contract(r.structured, "the marker sentence follows the hint")
+    address = _quoted_action_address(r.structured, "the generic hint")
+    # ... and in the model.
+    assert _item_form_command_action(cmd) == "", \
+        "a freshly created command must have no action handler"
+    wait_for_project_ready()
+    # And the route is not a dead end: the quoted address binds the action, its procedure
+    # defaulting to the command name.
+    r2 = call("create_metadata", {"projectName": PROJECT, "fqn": address})
+    assert_ok(r2, "the address the hint quotes must bind the action")
+    assert "CommandHandler" in (r2.structured.get("kind") or ""), \
+        "kind must be CommandHandler: %r" % (r2.structured,)
+    _poll_command_action_on_disk(cmd, cmd, "the bound action names the command's procedure on disk",
+                                 stable_for=0.5)
+    assert _item_form_command_action(cmd) == cmd, \
+        "the bound action must name the command's own procedure"
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_created_form_command_names_the_same_named_procedure_the_module_already_has():
+    _write_item_form_module()
+    # Russian FORM and KIND tokens: the address the message quotes back keeps them, while its leading
+    # TYPE token comes back canonical English, as in structured.fqn - and it has to work as an
+    # address all the same.
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Справочник.Catalog.Форма.ItemForm.Команда.ProcAct"})
+    assert_ok(r, "create a command named like an existing procedure, through Russian tokens")
+    # Nothing bound the action by itself, even next to a same-named procedure: on disk the command
+    # has no <action>, and keeps none.
+    _poll_command_action_on_disk("ProcAct", "",
+                                 "a command created next to a same-named procedure has no action on disk")
+    message = r.structured.get("message") or ""
+    assert_contains(message, "The command has no action yet, so a button bound to it does nothing",
+                    "a same-named procedure binds nothing by itself")
+    assert_contains(message, "The form module already has procedure 'procact'",
+                    "the procedure is named the way the module writes it")
+    assert_contains(message, "with procedure 'procact' binds it in one call.",
+                    "the hint must name the procedure to pass")
+    assert_contains(message, "EDT does not re-check the form module on that bind",
+                    "the hint must say why binding an existing procedure needs a revalidation")
+    assert_contains(message, "warnings on 'procact' still treat it as unbound.",
+                    "the hint must close its sentence before any marker report")
+    assert_not_contains(message, "write_module_source",
+                        "the procedure exists, so writing it again must not be advised")
+    address = _quoted_action_address(r.structured, "the procedure hint")
+    if address != "Catalog.Catalog.Форма.ItemForm.Команда.ProcAct.Handler.Action":
+        _fail("the quoted address must keep the caller's FORM / KIND tokens behind the canonical TYPE "
+              "token: %r" % address)
+    owners = _QUOTED_REVALIDATION.findall(message)
+    if owners != ["Catalog.Catalog"]:
+        _fail("the hint must name the form's owner to revalidate, as the object's own FQN: %r in %r"
+              % (owners, message))
+    # ... and in the model.
+    assert _item_form_command_action("ProcAct") == "", \
+        "a command created next to a same-named procedure must still have no action handler"
+    wait_for_project_ready()
+    # Following the hint binds the existing procedure in one call.
+    r2 = call("create_metadata", {
+        "projectName": PROJECT, "fqn": address,
+        "properties": [{"name": "procedure", "value": "procact"}]})
+    assert_ok(r2, "the hinted call must bind the existing procedure")
+    _poll_command_action_on_disk("ProcAct", "procact",
+                                 "the bound procedure lands in the command's action on disk",
+                                 stable_for=0.5)
+    assert _item_form_command_action("ProcAct") == "procact", \
+        "the commands table must show the existing procedure as the action handler"
+    # And the owner it names is an address revalidate_objects takes.
+    wait_for_project_ready()
+    rv = call("revalidate_objects", {"projectName": PROJECT, "objects": owners})
+    assert_ok(rv, "revalidate the owner the hint names")
+    assert_contains(rv.text, "objectsFound: 1", "the owner the hint names must resolve")
+    assert_contains(rv.text, "## Validated (1)", "the owner the hint names must be revalidated")
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_created_form_command_named_like_a_module_function_asks_for_a_procedure_elsewhere():
+    _write_item_form_module()
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Command.FnAct"})
+    assert_ok(r, "create a command named like an existing function")
+    # The command is there - on disk, with no <action>: a function of its name binds nothing.
+    _poll_command_action_on_disk("FnAct", "",
+                                 "the command named like a function is on disk without an action")
+    message = r.structured.get("message") or ""
+    assert_contains(message, "The command has no action yet, so a button bound to it does nothing",
+                    "a same-named function binds nothing either")
+    assert_contains(message, "The form module's 'FnAct' is a function",
+                    "the hint must say what holds the command's name")
+    assert_contains(message, "bind the action with create_metadata on",
+                    "the hint must bind first, as on the generic route")
+    assert_contains(message, "with a new name as 'procedure', then add a procedure of that new name "
+                    "with write_module_source.",
+                    "the binding names a new procedure, which is written after the bind")
+    assert_not_contains(message, "add that procedure",
+                        "a second method named FnAct would break the module")
+    assert_not_contains(message, "defaults to the command name",
+                        "the default binding would name the function")
+    _quoted_action_address(r.structured, "the function hint")
+    # ... and in the model.
+    assert _item_form_command_action("FnAct") == "", \
+        "a command created next to a same-named function must have no action handler"
+
+
+@e2e_test(tool="create_metadata", kind="write-metadata")
+def test_created_form_attribute_named_like_a_module_procedure_keeps_the_plain_message():
+    # Only a COMMAND has an action to report on. An attribute named like a procedure of the form
+    # module is answered with the plain "Created <fqn>": no action hint, no address to bind, no
+    # owner to revalidate.
+    _write_item_form_module()
+    attr = "procact"
+    r = call("create_metadata", {
+        "projectName": PROJECT, "fqn": "Catalog.Catalog.Form.ItemForm.Attribute." + attr})
+    assert_ok(r, "create a form attribute named like a procedure of the form module")
+    form_xml = poll_disk_contains(_KIND_PROBE_FORM, "<name>%s</name>" % attr, timeout=60,
+                                  ctx="the new attribute must land in the form's .form on disk")
+    if _form_attribute_block(form_xml, attr) is None:
+        _fail("the new member must be a form <attributes> element in Form.form")
+    message = r.structured.get("message") or ""
+    # The written object's marker report, when there is one, follows as a sentence of its own.
+    if message.split(". EDT ", 1)[0] != "Created %s" % r.structured.get("fqn"):
+        _fail("a created form attribute must be answered with the plain 'Created <fqn>': %r" % message)
+    for hint in ("has no action", "Handler.Action", "procedure 'procact'", "revalidate_objects"):
+        assert_not_contains(message, hint, "an attribute has no action to report on")
+    cells, details = _item_form_row("Attributes", attr)
+    if cells is None:
+        _fail("the new attribute must be in ItemForm's Attributes table:\n%s" % details[:1500])
 
 
 @e2e_test(tool="create_metadata", kind="write-metadata")

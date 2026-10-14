@@ -53,8 +53,10 @@ import com.google.gson.JsonParser;
 
 /**
  * Tests the platform-independent parts of {@link MetadataTypeBuilder}: spec shape validation and the
- * kind / fractions parsing. Primitive/platform {@code build()} happy paths need the platform type
- * provider and are covered by e2e; the model-owned DefinedType path is reachable headlessly.
+ * kind / fractions parsing. The version-keyed {@code build()} looks its type provider up in the
+ * platform registry, so its primitive/platform happy paths are covered by e2e; {@code buildWithProvider}
+ * takes the provider from its caller, so its primitive paths are tested here against a mocked provider.
+ * The model-owned DefinedType path is reachable headlessly.
  */
 public class MetadataTypeBuilderTest
 {
@@ -389,6 +391,42 @@ public class MetadataTypeBuilderTest
         assertTrue(MetadataTypeBuilder.appendType(td, item, "uuid", provider, //$NON-NLS-1$
             MdClassFactory.eINSTANCE.createConfiguration(), null, false,
             MetadataTypeBuilder.TypeTarget.METADATA).platformFailure);
+    }
+
+    @Test
+    public void testBuildWithProviderBuildsAQualifiedPrimitiveAgainstTheGivenProvider()
+    {
+        // The provider-explicit entry create_metadata's default member type goes through: the same
+        // primitive path as build(), against the provider the caller holds.
+        IEObjectProvider provider = Mockito.mock(IEObjectProvider.class);
+        Type numberType = McoreFactory.eINSTANCE.createType();
+        Mockito.doReturn(numberType).when(provider).createProxy("Number"); //$NON-NLS-1$
+
+        MetadataTypeBuilder.Result built = MetadataTypeBuilder.buildWithProvider(
+            json("{\"types\":[{\"kind\":\"Number\",\"precision\":12,\"scale\":3}]}"), provider, null, null, //$NON-NLS-1$
+            false, MetadataTypeBuilder.TypeTarget.METADATA);
+
+        assertNull(built.error);
+        assertEquals(Collections.singletonList(numberType), built.typeDescription.getTypes());
+        assertEquals(12, built.typeDescription.getNumberQualifiers().getPrecision());
+        assertEquals(3, built.typeDescription.getNumberQualifiers().getScale());
+    }
+
+    @Test
+    public void testBuildWithProviderKeepsTheSpecRefusalAheadOfTheMissingProvider()
+    {
+        // A malformed spec is the caller's refusal even with no provider at all; a well-formed one
+        // without a provider is the platform's failure - the order build() has always had.
+        MetadataTypeBuilder.Result malformed = MetadataTypeBuilder.buildWithProvider(json("{\"types\":[]}"), //$NON-NLS-1$
+            null, null, null, false, MetadataTypeBuilder.TypeTarget.METADATA);
+        assertNotNull(malformed.error);
+        assertFalse("a malformed spec is not the platform's failure", malformed.platformFailure); //$NON-NLS-1$
+
+        MetadataTypeBuilder.Result noProvider = MetadataTypeBuilder.buildWithProvider(
+            json("{\"types\":[{\"kind\":\"String\"}]}"), null, null, null, false, //$NON-NLS-1$
+            MetadataTypeBuilder.TypeTarget.METADATA);
+        assertTrue("a missing provider is the platform's failure", noProvider.platformFailure); //$NON-NLS-1$
+        assertNull(noProvider.typeDescription);
     }
 
     @Test
