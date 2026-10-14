@@ -9,11 +9,14 @@ properties: the value is a JSON array of field addresses - the names EDT itself 
 full replace, `[]` clears, the type / kind tokens and a standard field's name may be Russian, and
 the list is stored and read back in English. Only the fields EDT offers for the list are accepted
 (get_metadata_details(assignable:true) shows them as the row's Allowed values), judged on the object
-as it stands before the call; a field list that names a standard field may not share a call with the
-property that decides whether EDT offers it - codeLength / descriptionLength / numberLength for Code /
-Description / Number, hierarchical for Parent and IsFolder, hierarchyType for a catalog's IsFolder,
-owners for a catalog's Owner, actionPeriodUse for ActionPeriodIsBasic - while a list that leaves it out
-may; an extension cannot change an ADOPTED object's lists. Where EDT's validator is narrower than its
+as it stands before the call; a field list is refused only when the same call changes whether EDT
+offers a standard field it names - through codeLength / descriptionLength / numberLength for Code /
+Description / Number (not an exchange plan's input by string, which offers them whatever the length),
+hierarchical for Parent and IsFolder, hierarchyType for a catalog's IsFolder, owners for a catalog's
+Owner, actionPeriodUse for ActionPeriodIsBasic. A call that brings the field back is told to set the
+property first and the list in a separate call, one that takes it away to leave the field out or keep
+the property; one that keeps the offer as it is, or a list that leaves the field out, shares the call.
+An extension cannot change an ADOPTED object's lists. Where EDT's validator is narrower than its
 editor, the validator wins: an exchange plan's ExchangeDate, and its Code / Description while the length
 is 0, are not offered for data locking.
 
@@ -45,6 +48,7 @@ from harness import (
     assert_error,
     assert_error_quality,
     assert_no_diff_rel,
+    assert_not_contains,
     assert_tree_unchanged,
     read_disk,
     read_fixture_file,
@@ -241,12 +245,16 @@ def test_field_list_refusals_are_actionable_and_atomic():
     e = assert_error(_set(CATALOG, "inputByString", [CODE, ru_code]), "the same field twice")
     assert_error_quality(e, names=[CODE, ru_code], suggests=["twice"], ctx="a duplicate across spellings")
 
-    # C1: the length in the same call would change whether the Code the list names is offered.
+    # C1: codeLength 9 -> 0 in the same call would take away the Code the list names, and nothing marks a
+    # stale input-by-string entry - refused, with the way out: leave Code out, or keep the length.
     e = assert_error(call("modify_metadata", {"projectName": PROJECT, "fqn": CATALOG, "properties": [
         {"name": "codeLength", "value": 0}, {"name": "inputByString", "value": [CODE]}]}),
-        "a field list naming Code batched with codeLength")
-    assert_error_quality(e, names=["codeLength", "inputByString", CODE], suggests=["separate call"],
-                         ctx="the batch guard names both properties, the field and the order to use")
+        "a field list naming Code batched with codeLength 0")
+    assert_error_quality(e, names=["codeLength", "inputByString", CODE],
+                         suggests=["would no longer offer it once this call has changed", "out of the list",
+                                   "do not change 'codeLength'"],
+                         ctx="the batch guard names both properties, the field and what to do instead")
+    assert_not_contains(e, "separate call", "a second call would not bring the taken-away Code back")
 
     assert_tree_unchanged(before, "a refused field list must change nothing")
 
@@ -271,11 +279,33 @@ def test_field_list_a_length_and_a_list_without_its_field_share_one_call():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Any property that decides a named standard field takes its own call: hierarchical and Parent
+# A length change that keeps the field offered shares the call with a list naming it
 # ──────────────────────────────────────────────────────────────────────────────
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
-def test_field_list_hierarchy_and_a_list_naming_parent_take_two_calls():
+def test_field_list_a_length_change_that_keeps_the_field_offered_shares_one_call():
+    # codeLength 9 -> 10 keeps Code offered for input by string, so the list naming it is judged right on the
+    # catalog as it stands: both properties are written by the one call (PR #744's second review).
+    r = call("modify_metadata", {"projectName": PROJECT, "fqn": CATALOG, "properties": [
+        {"name": "codeLength", "value": 10}, {"name": "inputByString", "value": [CODE]}]})
+    assert_ok(r, "codeLength 9 -> 10 with a list naming Code, in one call")
+    s = r.structured or {}
+    applied = s.get("applied") or []
+    if s.get("persisted") is not True or "codeLength" not in applied or "inputByString" not in applied:
+        _fail("both properties must be applied and persisted by the one call: %r" % (s,))
+    _poll_stored(_base_mdo, "inputByString", [CODE], "the list holds Code only")
+    _poll_stored(_base_mdo, "codeLength", ["10"], "the new code length on disk")
+    length = _row(CATALOG, "codeLength")
+    if length[2] != "10":
+        _fail("codeLength must read back 10: %r" % (length,))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# hierarchical decides whether Parent is lockable: bringing it back takes two calls, taking it away is refused
+# ──────────────────────────────────────────────────────────────────────────────
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_field_list_a_hierarchy_change_and_a_list_naming_parent():
     # The fixture catalog is flat: EDT keeps a Parent field on it, but does not offer it for data locking.
     if PARENT in _allowed(_row(CATALOG, "dataLockFields")):
         _fail("the fixture catalog is flat; Parent must not be offered for data locking before the call")
@@ -302,13 +332,17 @@ def test_field_list_hierarchy_and_a_list_naming_parent_take_two_calls():
     _poll_stored(_base_mdo, "dataLockFields", [PARENT], "the data lock field on disk")
 
     # The other direction (PR #744's review): taking the hierarchy away in the same call as a list that
-    # names Parent would store a Parent the catalog no longer has - refused, nothing written.
+    # names Parent would leave the list naming a field EDT no longer offers - refused, nothing written, and
+    # the way out is to leave Parent out or keep the hierarchy (a second call would not bring Parent back).
     before = tree_snapshot()
     e = assert_error(call("modify_metadata", {"projectName": PROJECT, "fqn": CATALOG, "properties": [
         {"name": "hierarchical", "value": False}, {"name": "dataLockFields", "value": [PARENT]}]}),
         "hierarchical:false batched with a data lock list naming Parent")
-    assert_error_quality(e, names=["hierarchical", "dataLockFields", PARENT], suggests=["separate call"],
-                         ctx="a list naming Parent may not share a call with the property that removes it")
+    assert_error_quality(e, names=["hierarchical", "dataLockFields", PARENT],
+                         suggests=["would no longer offer it once this call has changed", "out of the list",
+                                   "do not change 'hierarchical'"],
+                         ctx="a list naming Parent may not share a call with the property that takes it away")
+    assert_not_contains(e, "separate call", "a second call would not bring the taken-away Parent back")
     assert_tree_unchanged(before, "the refused batch leaves the hierarchical catalog and its list as they were")
 
 
@@ -381,6 +415,21 @@ def test_field_list_exchange_plan_data_lock_follows_edts_validator():
                              ctx="EDT's editor offers ExchangeDate, its validator rejects it")
     assert_tree_unchanged(before, "a refused data lock list must change nothing")
 
+    # The batch guard speaks of the validator here (PR #744, third gate): EDT's editor offers Code whatever the
+    # length, so codeLength 0 in the same call as a list naming Code would leave the list naming a field the
+    # VALIDATOR rejects - refused, nothing written, and the way out is to leave Code out or keep the length.
+    before = tree_snapshot()
+    e = assert_error(call("modify_metadata", {"projectName": PROJECT, "fqn": plan, "properties": [
+        {"name": "codeLength", "value": 0}, {"name": "dataLockFields", "value": [code]}]}),
+        "codeLength 0 batched with a data lock list naming the plan's Code")
+    assert_error_quality(e, names=["codeLength", "dataLockFields", code],
+                         suggests=["validator accepts that field now", "would reject it once this call has changed",
+                                   "out of the list", "do not change 'codeLength'"],
+                         ctx="the take-away names the validator, the field and what to do instead")
+    assert_not_contains(e, "no longer offer", "EDT's editor keeps offering an exchange plan's Code")
+    assert_not_contains(e, "separate call", "a second call would not make the validator accept Code")
+    assert_tree_unchanged(before, "a refused batch must change nothing")
+
     # Code: admitted only while codeLength is not 0.
     _assert_written(_set(plan, "codeLength", 0), "codeLength", "codeLength 0, in its own call")
     wait_for_project_ready()
@@ -390,6 +439,15 @@ def test_field_list_exchange_plan_data_lock_follows_edts_validator():
     e = assert_error(_set(plan, "dataLockFields", [code]), "data locking by Code while codeLength is 0")
     assert_error_quality(e, names=[code], suggests=["validator rejects in 'dataLockFields'", "codeLength"],
                          ctx="the rule names the length that would admit it")
+    # And back: codeLength 9 in the same call as a list naming Code would have the list judged on the plan as it
+    # stands, whose validator rejects Code - the separate-call recipe, again in the validator's words.
+    e = assert_error(call("modify_metadata", {"projectName": PROJECT, "fqn": plan, "properties": [
+        {"name": "codeLength", "value": 9}, {"name": "dataLockFields", "value": [code]}]}),
+        "codeLength 9 batched with a data lock list naming the plan's Code")
+    assert_error_quality(e, names=["codeLength", "dataLockFields", code],
+                         suggests=["whether EDT's validator accepts that field depends on", "separate call"],
+                         ctx="the bring-back names the validator and the order to use")
+    assert_not_contains(e, "whether EDT offers that field", "EDT's editor offers an exchange plan's Code anyway")
     assert_tree_unchanged(before, "a refused data lock list must change nothing")
 
     # Description still has its length: it is lockable, and written.

@@ -7,11 +7,16 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
-import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.function.Predicate;
 
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.URI;
@@ -33,6 +38,7 @@ import com._1c.g5.v8.dt.mcore.SourceType;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.DbObjectAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlan;
+import com._1c.g5.v8.dt.metadata.mdclass.HierarchyType;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
@@ -75,6 +81,12 @@ import com.google.gson.JsonElement;
  * offered for data locking ({@code FixedFieldDescriptorProvider.createExchangePlanDataLockFields};
  * error 81) - each would be written and then marked. The intersection of the two is what this class
  * offers.</p>
+ *
+ * <h2>Which properties decide it</h2>
+ * <p>Where a property of the object decides whether EDT offers a standard field - a length, the hierarchy,
+ * the owners, the action period - the rule is written down once, in {@link #AVAILABILITY}: the exchange
+ * plan's data-lock correction reads it, and modify_metadata's batch guard judges it on the values a call
+ * leaves ({@link #offerChange}).</p>
  */
 public final class FieldListSupport
 {
@@ -98,59 +110,92 @@ public final class FieldListSupport
     }
 
     /**
-     * The object properties that decide whether EDT offers a standard field for a field list: each
-     * property maps to the lists it decides - by their source type, {@link SourceType#INPUT_BY_STRING}
-     * or {@link SourceType#FIELDS_FOR_LOCKING} - and, per list, to the English names of the standard
-     * fields it decides there. The one source of modify_metadata's batch guard
-     * ({@link #namedFieldGovernedBy}).
+     * When EDT offers a standard field for a field list, as rules over the object's own properties - written
+     * down once, here: modify_metadata's batch guard judges them on the values a call leaves
+     * ({@link #offerChange}), and the exchange plan's data-lock correction reads them
+     * ({@link #validatorRejects}). One rule per kind and standard field whose offer a property of that
+     * object decides, for the lists it decides it for; a standard field without a rule is offered, or not,
+     * whatever the object's properties say.
      *
      * <p>Measured from EDT's MdFieldInferrer (md 27.1 {@code md.resource}, md 28.0
-     * {@code internal.md.bm.derived.inferrers}; the same rules on both lines). Each of these standard
-     * fields EXISTS whatever the property says; the property only decides whether the inferrer gives
-     * the field the list's source type:</p>
+     * {@code internal.md.bm.derived.inferrers}; the same rules on both lines). EDT creates each of these
+     * fields whatever the properties say; a property only decides whether the inferrer gives the field the
+     * list's source type:</p>
      * <ul>
-     * <li>{@code codeLength} / {@code descriptionLength} / {@code numberLength}: Code / Description /
-     * Number, for both lists, while the length is not 0;</li>
-     * <li>{@code hierarchical}: Parent and IsFolder, for data locking - on a catalog and on a chart of
-     * characteristic types, which both declare it;</li>
-     * <li>{@code hierarchyType}: a catalog's IsFolder, for data locking (it needs a hierarchical
-     * catalog of HierarchyFoldersAndItems);</li>
-     * <li>{@code owners}: a catalog's Owner, for data locking, while the catalog has an owner;</li>
-     * <li>{@code actionPeriodUse}: a chart of calculation types' ActionPeriodIsBasic, for data
-     * locking.</li>
+     * <li>Code / Description / Number, for both lists, while the object's {@code codeLength} /
+     * {@code descriptionLength} / {@code numberLength} is above 0;</li>
+     * <li>Parent, for data locking, while a catalog or a chart of characteristic types is
+     * {@code hierarchical} - a chart of accounts' Parent is lockable whatever its properties;</li>
+     * <li>IsFolder, for data locking, while a chart of characteristic types is {@code hierarchical}, and
+     * while a catalog is hierarchical with the {@code hierarchyType} HierarchyFoldersAndItems;</li>
+     * <li>a catalog's Owner, for data locking, while the catalog has {@code owners};</li>
+     * <li>a chart of calculation types' ActionPeriodIsBasic, for data locking, while
+     * {@code actionPeriodUse}.</li>
      * </ul>
-     * <p>No other property of the eight kinds decides either list: a chart of accounts' Parent is
-     * lockable unconditionally and its Order is never offered, whatever its {@code orderLength}; a
-     * task's RoutePoint and BusinessProcess, a business process's Started / Completed / HeadTask and
-     * every Date and DeletionMark are lockable unconditionally; Posted and ValueType are never offered.
-     * Keyed by the feature name, which every kind declaring the property shares - so on an exchange
-     * plan, whose Code and Description EDT offers for input by string whatever the lengths, the guard
-     * costs a second call there; for data locking an exchange plan's lengths do decide them, through
-     * EDT's validator ({@code validatorRejects}).</p>
+     * <p>An exchange plan is the exception: EDT offers its Code and Description for both lists whatever the
+     * lengths, and only EDT's validator decides them - for data locking, by the length
+     * (FixedFieldDescriptorProvider.createExchangePlanDataLockFields, metadata 19.0 / 19.1). Those two rules
+     * are marked {@code byValidator}: {@link #resolve} applies them through {@link #validatorRejects}, and a
+     * batch refusal about them speaks of the validator ({@link OfferChange#byValidator}).
+     * Every other rule is a projection of what {@link #resolve} reads live - the source types EDT derived -
+     * onto property values: it says what EDT derives from given values, which is what lets the guard judge
+     * the values a call leaves before EDT has derived anything from them. The two readings are pinned to one
+     * table on all eight kinds (ModifyMetadataToolFieldListTest). No other property of the eight kinds
+     * decides either list: a chart of accounts' Order is never offered, whatever its {@code orderLength}; a
+     * task's RoutePoint and BusinessProcess, a business process's Started / Completed / HeadTask and every
+     * Date and DeletionMark are lockable unconditionally; Posted and ValueType are never offered.</p>
      */
-    public static final Map<String, Map<SourceType, List<String>>> STANDARD_FIELDS_DECIDED_BY;
+    private static final List<Availability> AVAILABILITY;
 
     static
     {
-        Map<String, Map<SourceType, List<String>>> table = new LinkedHashMap<>();
-        decides(table, MdClassPackage.Literals.CATALOG__CODE_LENGTH, "Code", SourceType.INPUT_BY_STRING, //$NON-NLS-1$
-            SourceType.FIELDS_FOR_LOCKING);
-        decides(table, MdClassPackage.Literals.CATALOG__DESCRIPTION_LENGTH, "Description", //$NON-NLS-1$
-            SourceType.INPUT_BY_STRING, SourceType.FIELDS_FOR_LOCKING);
-        decides(table, MdClassPackage.Literals.DOCUMENT__NUMBER_LENGTH, "Number", SourceType.INPUT_BY_STRING, //$NON-NLS-1$
-            SourceType.FIELDS_FOR_LOCKING);
-        decides(table, MdClassPackage.Literals.CATALOG__HIERARCHICAL, "Parent", SourceType.FIELDS_FOR_LOCKING); //$NON-NLS-1$
-        decides(table, MdClassPackage.Literals.CATALOG__HIERARCHICAL, "IsFolder", SourceType.FIELDS_FOR_LOCKING); //$NON-NLS-1$
-        decides(table, MdClassPackage.Literals.CATALOG__HIERARCHY_TYPE, "IsFolder", SourceType.FIELDS_FOR_LOCKING); //$NON-NLS-1$
-        decides(table, MdClassPackage.Literals.CATALOG__OWNERS, "Owner", SourceType.FIELDS_FOR_LOCKING); //$NON-NLS-1$
-        decides(table, MdClassPackage.Literals.CHART_OF_CALCULATION_TYPES__ACTION_PERIOD_USE, "ActionPeriodIsBasic", //$NON-NLS-1$
-            SourceType.FIELDS_FOR_LOCKING);
-        for (Map.Entry<String, Map<SourceType, List<String>>> entry : table.entrySet())
-        {
-            entry.getValue().replaceAll((source, fields) -> Collections.unmodifiableList(fields));
-            entry.setValue(Collections.unmodifiableMap(entry.getValue()));
-        }
-        STANDARD_FIELDS_DECIDED_BY = Collections.unmodifiableMap(table);
+        Set<SourceType> both = EnumSet.of(SourceType.INPUT_BY_STRING, SourceType.FIELDS_FOR_LOCKING);
+        Set<SourceType> dataLock = EnumSet.of(SourceType.FIELDS_FOR_LOCKING);
+        List<Availability> rules = new ArrayList<>();
+        rules.add(aboveZero(MdClassPackage.Literals.CATALOG, "Code", both, false, //$NON-NLS-1$
+            MdClassPackage.Literals.CATALOG__CODE_LENGTH));
+        rules.add(aboveZero(MdClassPackage.Literals.CATALOG, "Description", both, false, //$NON-NLS-1$
+            MdClassPackage.Literals.CATALOG__DESCRIPTION_LENGTH));
+        rules.add(aboveZero(MdClassPackage.Literals.CHART_OF_CHARACTERISTIC_TYPES, "Code", both, false, //$NON-NLS-1$
+            MdClassPackage.Literals.CHART_OF_CHARACTERISTIC_TYPES__CODE_LENGTH));
+        rules.add(aboveZero(MdClassPackage.Literals.CHART_OF_CHARACTERISTIC_TYPES, "Description", both, false, //$NON-NLS-1$
+            MdClassPackage.Literals.CHART_OF_CHARACTERISTIC_TYPES__DESCRIPTION_LENGTH));
+        rules.add(aboveZero(MdClassPackage.Literals.CHART_OF_ACCOUNTS, "Code", both, false, //$NON-NLS-1$
+            MdClassPackage.Literals.CHART_OF_ACCOUNTS__CODE_LENGTH));
+        rules.add(aboveZero(MdClassPackage.Literals.CHART_OF_ACCOUNTS, "Description", both, false, //$NON-NLS-1$
+            MdClassPackage.Literals.CHART_OF_ACCOUNTS__DESCRIPTION_LENGTH));
+        rules.add(aboveZero(MdClassPackage.Literals.CHART_OF_CALCULATION_TYPES, "Code", both, false, //$NON-NLS-1$
+            MdClassPackage.Literals.CHART_OF_CALCULATION_TYPES__CODE_LENGTH));
+        rules.add(aboveZero(MdClassPackage.Literals.CHART_OF_CALCULATION_TYPES, "Description", both, false, //$NON-NLS-1$
+            MdClassPackage.Literals.CHART_OF_CALCULATION_TYPES__DESCRIPTION_LENGTH));
+        rules.add(aboveZero(MdClassPackage.Literals.TASK, "Description", both, false, //$NON-NLS-1$
+            MdClassPackage.Literals.TASK__DESCRIPTION_LENGTH));
+        rules.add(aboveZero(MdClassPackage.Literals.DOCUMENT, "Number", both, false, //$NON-NLS-1$
+            MdClassPackage.Literals.DOCUMENT__NUMBER_LENGTH));
+        rules.add(aboveZero(MdClassPackage.Literals.BUSINESS_PROCESS, "Number", both, false, //$NON-NLS-1$
+            MdClassPackage.Literals.BUSINESS_PROCESS__NUMBER_LENGTH));
+        rules.add(aboveZero(MdClassPackage.Literals.TASK, "Number", both, false, //$NON-NLS-1$
+            MdClassPackage.Literals.TASK__NUMBER_LENGTH));
+        rules.add(aboveZero(MdClassPackage.Literals.EXCHANGE_PLAN, "Code", dataLock, true, //$NON-NLS-1$
+            MdClassPackage.Literals.EXCHANGE_PLAN__CODE_LENGTH));
+        rules.add(aboveZero(MdClassPackage.Literals.EXCHANGE_PLAN, "Description", dataLock, true, //$NON-NLS-1$
+            MdClassPackage.Literals.EXCHANGE_PLAN__DESCRIPTION_LENGTH));
+        rules.add(whileSet(MdClassPackage.Literals.CATALOG, "Parent", dataLock, //$NON-NLS-1$
+            MdClassPackage.Literals.CATALOG__HIERARCHICAL));
+        rules.add(new Availability(MdClassPackage.Literals.CATALOG, "IsFolder", dataLock, false, //$NON-NLS-1$
+            values -> Boolean.TRUE.equals(values.of(MdClassPackage.Literals.CATALOG__HIERARCHICAL))
+                && values.of(MdClassPackage.Literals.CATALOG__HIERARCHY_TYPE) == HierarchyType.HIERARCHY_FOLDERS_AND_ITEMS,
+            MdClassPackage.Literals.CATALOG__HIERARCHICAL, MdClassPackage.Literals.CATALOG__HIERARCHY_TYPE));
+        rules.add(new Availability(MdClassPackage.Literals.CATALOG, "Owner", dataLock, false, //$NON-NLS-1$
+            values -> !isEmpty(values.of(MdClassPackage.Literals.CATALOG__OWNERS)),
+            MdClassPackage.Literals.CATALOG__OWNERS));
+        rules.add(whileSet(MdClassPackage.Literals.CHART_OF_CHARACTERISTIC_TYPES, "Parent", dataLock, //$NON-NLS-1$
+            MdClassPackage.Literals.CHART_OF_CHARACTERISTIC_TYPES__HIERARCHICAL));
+        rules.add(whileSet(MdClassPackage.Literals.CHART_OF_CHARACTERISTIC_TYPES, "IsFolder", dataLock, //$NON-NLS-1$
+            MdClassPackage.Literals.CHART_OF_CHARACTERISTIC_TYPES__HIERARCHICAL));
+        rules.add(whileSet(MdClassPackage.Literals.CHART_OF_CALCULATION_TYPES, "ActionPeriodIsBasic", dataLock, //$NON-NLS-1$
+            MdClassPackage.Literals.CHART_OF_CALCULATION_TYPES__ACTION_PERIOD_USE));
+        AVAILABILITY = Collections.unmodifiableList(rules);
     }
 
     /**
@@ -550,87 +595,219 @@ public final class FieldListSupport
     }
 
     /**
-     * The address of the standard field a field-list value NAMES whose offer for that list
-     * {@code property} decides ({@link #STANDARD_FIELDS_DECIDED_BY}), or {@code null} when it names no
-     * such field - the question of modify_metadata's batch guard: such a list may not share a call with
-     * that property, every other list may. A property decides a field only for the lists it is listed
-     * for: {@code hierarchical} never makes Parent an input-by-string field, so a Parent in
-     * {@code inputByString} is left to {@link #resolve}'s own refusal, which no second call would lift.
+     * A standard field a field-list value names whose offer for that list a call would change - the answer
+     * {@link #offerChange} gives modify_metadata's batch guard.
+     */
+    public static final class OfferChange
+    {
+        /** The field's canonical address. */
+        public final String address;
+
+        /**
+         * Whether the field is offered now - for a {@link #byValidator} field, accepted by EDT's validator:
+         * {@code true}, the call takes it away; {@code false}, it brings it back.
+         */
+        public final boolean offeredNow;
+
+        /**
+         * Whether only EDT's validator decides the field: an exchange plan's Code and Description for data
+         * locking, which EDT's editor offers whatever the length - so a refusal speaks of what the validator
+         * accepts, never of EDT ceasing to offer the field.
+         */
+        public final boolean byValidator;
+
+        /** The deciding properties the call changes, by their model names, in the order of EDT's rule. */
+        public final List<String> properties;
+
+        OfferChange(String address, boolean offeredNow, boolean byValidator, List<String> properties)
+        {
+            this.address = address;
+            this.offeredNow = offeredNow;
+            this.byValidator = byValidator;
+            this.properties = Collections.unmodifiableList(properties);
+        }
+    }
+
+    /**
+     * Whether {@code feature} decides the offer of a standard field on some kind ({@link #AVAILABILITY}) -
+     * the properties of a batch whose values {@link #offerChange} needs.
      *
-     * <p>Read with the parser and the field lookup {@link #resolve} uses, minus every eligibility
-     * check: the question is which field an entry names, not whether EDT offers it now - so the answer
-     * is the same whether the property is about to take the field away or to bring it back. A value of
-     * the wrong shape, or an entry the parser cannot place, is skipped - {@link #resolve} refuses it on
-     * its own, so nothing is written either way. A standard field named in English is recognized even
-     * before EDT has computed the fields; a Russian name is looked up in them.</p>
+     * @param feature an object's feature (may be {@code null})
+     * @return whether a rule reads it
+     */
+    public static boolean isDecidingProperty(EStructuralFeature feature)
+    {
+        for (Availability rule : AVAILABILITY)
+        {
+            if (rule.decidedBy.contains(feature))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The first standard field a field-list value NAMES whose offer for that list a call would change - the
+     * question of modify_metadata's batch guard. EDT's rule for the field ({@link #AVAILABILITY}) is judged
+     * on the object's current property values and on the values the call leaves: {@code ends}, where a
+     * property the call does not write keeps its current value and everything the call writes applies
+     * together. A field whose offer stays as it is - offered before and after, or neither - is left to
+     * {@link #resolve}, which judges the list on the object as it stands, and for that field that is also how
+     * the call leaves it. A standard field without a rule is offered, or not, whatever the properties say, so
+     * no call changes it.
+     *
+     * <p>The rule is judged on property values both times, never on the derived fields: one rule on two sets
+     * of values cannot disagree with itself while EDT's derived data catches up with an earlier call. Which
+     * field an entry names is read with the parser and the field lookup {@link #resolve} uses, minus every
+     * eligibility check; a value of the wrong shape, or an entry the parser cannot place, is skipped -
+     * {@link #resolve} refuses it on its own, so nothing is written either way. A standard field named in
+     * English is recognized even before EDT has computed the fields; a Russian name is looked up in
+     * them.</p>
      *
      * @param owner the object holding the list
      * @param list the list feature (one of {@link #ELIGIBILITY})
      * @param value the list's wire value
-     * @param property the property batched with it (a key of {@link #STANDARD_FIELDS_DECIDED_BY})
-     * @return the canonical address of the decided field the value names, or {@code null}
+     * @param ends the value the call leaves in each deciding property it writes, keyed by the owner's own
+     *            feature: an {@code Integer} length, a {@code Boolean} flag, an enum literal's instance, or a
+     *            collection of owners, of which only its emptiness is read
+     * @return the first such field, or {@code null} when the call changes the offer of none
      */
-    public static String namedFieldGovernedBy(EObject owner, EStructuralFeature list, JsonElement value,
-        String property)
+    public static OfferChange offerChange(EObject owner, EStructuralFeature list, JsonElement value,
+        Map<EStructuralFeature, Object> ends)
     {
-        List<String> decided = fieldsDecidedBy(property, list);
-        if (decided.isEmpty() || !(owner instanceof MdObject))
+        SourceType source = ELIGIBILITY.get(list);
+        if (source == null || !(owner instanceof MdObject) || ends.isEmpty())
         {
             return null;
         }
         // The reader and the parser take a property name only to word a refusal; none is wanted here.
         List<String> entries = new ArrayList<>();
-        if (readEntries(property, value, entries) != null)
+        if (readEntries(list.getName(), value, entries) != null)
         {
             return null;
         }
         MdObject object = (MdObject)owner;
         String ownerAddress = MetadataNodeResolver.addressOf(object);
         List<Field> fields = owner instanceof FieldSource ? fieldsOf(owner) : Collections.<Field> emptyList();
+        Values now = owner::eGet;
+        Values after = feature -> ends.containsKey(feature) ? ends.get(feature) : owner.eGet(feature);
         for (String entry : entries)
         {
             Target target = new Target();
-            if (parse(entry, object, ownerAddress, property, target) != null
+            if (parse(entry, object, ownerAddress, list.getName(), target) != null
                 || !STANDARD_ATTRIBUTE.equals(target.kind))
             {
                 continue;
             }
             Field match = find(fields, target.kind, target.name);
-            String named = match != null ? match.getName() : target.name;
-            for (String field : decided)
+            Availability rule = availability(owner, source, match != null ? match.getName() : target.name);
+            if (rule == null)
             {
-                if (field.equalsIgnoreCase(named))
+                continue;
+            }
+            boolean offeredNow = rule.offered.test(now);
+            if (offeredNow == rule.offered.test(after))
+            {
+                continue;
+            }
+            List<String> changed = new ArrayList<>();
+            for (EStructuralFeature feature : rule.decidedBy)
+            {
+                if (!Objects.equals(reading(feature, now.of(feature)), reading(feature, after.of(feature))))
                 {
-                    return symbolicName(ownerAddress, STANDARD_ATTRIBUTE, field);
+                    changed.add(feature.getName());
                 }
             }
+            return new OfferChange(symbolicName(ownerAddress, STANDARD_ATTRIBUTE, rule.field), offeredNow,
+                rule.byValidator, changed);
         }
         return null;
     }
 
     // ---- internals ------------------------------------------------------------------------------
 
-    /**
-     * Adds one row to {@link #STANDARD_FIELDS_DECIDED_BY}: {@code property} decides {@code field} for
-     * {@code lists}.
-     */
-    private static void decides(Map<String, Map<SourceType, List<String>>> table, EStructuralFeature property,
-        String field, SourceType... lists)
+    /** Reads one deciding property of the object: its value now, or the value a call leaves in it. */
+    @FunctionalInterface
+    private interface Values
     {
-        Map<SourceType, List<String>> byList = table.computeIfAbsent(property.getName(),
-            name -> new EnumMap<>(SourceType.class));
-        for (SourceType list : lists)
+        Object of(EStructuralFeature feature);
+    }
+
+    /**
+     * One rule of {@link #AVAILABILITY}: EDT offers the standard field {@code field} of a {@code kind} object
+     * for the lists of {@code lists} exactly while {@code offered} holds over {@code decidedBy}.
+     */
+    private static final class Availability
+    {
+        final EClass kind;
+
+        final String field;
+
+        final Set<SourceType> lists;
+
+        /**
+         * EDT's editor offers the field whatever the properties say, and only EDT's validator admits it under
+         * this rule: {@link FieldListSupport#resolve} applies it through
+         * {@link FieldListSupport#validatorRejects}, and the batch guard's refusal speaks of the validator
+         * ({@link OfferChange#byValidator}).
+         */
+        final boolean byValidator;
+
+        final Predicate<Values> offered;
+
+        /** The properties the rule reads, in the order a refusal names them. */
+        final List<EStructuralFeature> decidedBy;
+
+        Availability(EClass kind, String field, Set<SourceType> lists, boolean byValidator, Predicate<Values> offered,
+            EStructuralFeature... decidedBy)
         {
-            byList.computeIfAbsent(list, source -> new ArrayList<>()).add(field);
+            this.kind = kind;
+            this.field = field;
+            this.lists = Collections.unmodifiableSet(lists);
+            this.byValidator = byValidator;
+            this.offered = offered;
+            this.decidedBy = Collections.unmodifiableList(Arrays.asList(decidedBy));
         }
     }
 
-    /** The standard fields {@code property} decides for {@code list} ({@link #STANDARD_FIELDS_DECIDED_BY}). */
-    private static List<String> fieldsDecidedBy(String property, EStructuralFeature list)
+    /** A rule of {@link #AVAILABILITY}: {@code field} is offered while the object's {@code length} is above 0. */
+    private static Availability aboveZero(EClass kind, String field, Set<SourceType> lists, boolean byValidator,
+        EStructuralFeature length)
     {
-        Map<SourceType, List<String>> byList = property == null ? null : STANDARD_FIELDS_DECIDED_BY.get(property);
-        List<String> fields = byList == null ? null : byList.get(ELIGIBILITY.get(list));
-        return fields == null ? Collections.<String> emptyList() : fields;
+        return new Availability(kind, field, lists, byValidator,
+            values -> values.of(length) instanceof Integer && (Integer)values.of(length) > 0, length);
+    }
+
+    /** A rule of {@link #AVAILABILITY}: {@code field} is offered while the object's {@code flag} is set. */
+    private static Availability whileSet(EClass kind, String field, Set<SourceType> lists, EStructuralFeature flag)
+    {
+        return new Availability(kind, field, lists, false, values -> Boolean.TRUE.equals(values.of(flag)), flag);
+    }
+
+    /** The rule of {@link #AVAILABILITY} deciding {@code field} of {@code owner} for the list of {@code list}. */
+    private static Availability availability(EObject owner, SourceType list, String field)
+    {
+        for (Availability rule : AVAILABILITY)
+        {
+            if (rule.kind.isInstance(owner) && rule.lists.contains(list) && rule.field.equalsIgnoreCase(field))
+            {
+                return rule;
+            }
+        }
+        return null;
+    }
+
+    /** What a rule reads of a property's value: a list by whether it holds anything, any other value as it is. */
+    private static Object reading(EStructuralFeature feature, Object value)
+    {
+        return feature.isMany() ? Boolean.valueOf(!isEmpty(value)) : value;
+    }
+
+    /** Whether a list-valued property holds nothing; a value that is no collection holds nothing. */
+    private static boolean isEmpty(Object value)
+    {
+        return !(value instanceof Collection<?>) || ((Collection<?>)value).isEmpty();
     }
 
     /** One parsed address: the kind (a field id prefix), the field name as given, the canonical form. */
@@ -658,7 +835,8 @@ public final class FieldListSupport
      * <li>input by string: ValidationUtil.isInputByStringReady accepts a derived field only from an
      * object attribute or a common attribute, so a task's addressing attribute is marked (error 4);</li>
      * <li>data locking on an exchange plan: FixedFieldDescriptorProvider.createExchangePlanDataLockFields
-     * admits Code and Description only while their length is not 0 and has no ExchangeDate at all,
+     * admits Code and Description only while their length is not 0 (their {@code byValidator} rules of
+     * {@link #AVAILABILITY}) and has no ExchangeDate at all,
      * while the inferrer gives all three FIELDS_FOR_LOCKING whatever the lengths, so they are marked
      * (error 81). ValidationUtil.isDataLockReady judges a standard field by its name against that
      * table, and a derived field by its type, of which the inferrer never offers more. On the seven
@@ -683,13 +861,17 @@ public final class FieldListSupport
 
     /**
      * Whether EDT's validator refuses the exchange plan's standard field {@code name} for data locking
-     * ({@link #validatorRejects}).
+     * ({@link #validatorRejects}): its ExchangeDate always, its Code and Description by their
+     * {@code byValidator} rules of {@link #AVAILABILITY} - the one place their length condition is written.
      */
     private static boolean exchangePlanLockRejects(ExchangePlan plan, String name)
     {
-        return "ExchangeDate".equals(name) //$NON-NLS-1$
-            || ("Code".equals(name) && plan.getCodeLength() <= 0) //$NON-NLS-1$
-            || ("Description".equals(name) && plan.getDescriptionLength() <= 0); //$NON-NLS-1$
+        if ("ExchangeDate".equals(name)) //$NON-NLS-1$
+        {
+            return true;
+        }
+        Availability rule = availability(plan, SourceType.FIELDS_FOR_LOCKING, name);
+        return rule != null && rule.byValidator && !rule.offered.test(plan::eGet);
     }
 
     /** Reads the wire value into address strings: an array of strings, or one string. */

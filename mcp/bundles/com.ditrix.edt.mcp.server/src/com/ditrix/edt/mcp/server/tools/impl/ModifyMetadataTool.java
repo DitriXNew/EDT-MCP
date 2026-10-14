@@ -3618,7 +3618,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         List<JsonObject> properties, List<PreparedChange> changes, MdNameNormalizer.Report normReport,
         boolean isExtensionProject)
     {
-        // A field list is judged on the object as it stands; a property in the same batch that decides
+        // A field list is judged on the object as it stands; a property in the same batch that changes
         // whether EDT offers a standard field the list names (a length, hierarchical, owners, ...) would
         // change that state under the entry (issue #740).
         String batchErr = fieldListBatchError(target, properties);
@@ -4474,28 +4474,38 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Refuses a field list ({@code inputByString} / {@code dataLockFields}) that NAMES a standard field
-     * batched, on the same target, with a property that decides whether EDT offers that field for that
-     * list ({@link FieldListSupport#STANDARD_FIELDS_DECIDED_BY}): Code / Description / Number with
-     * {@code codeLength} / {@code descriptionLength} / {@code numberLength}, Parent and IsFolder with
-     * {@code hierarchical}, a catalog's IsFolder with {@code hierarchyType} and its Owner with
-     * {@code owners}, ActionPeriodIsBasic with {@code actionPeriodUse} (issue #740).
+     * Refuses a field list ({@code inputByString} / {@code dataLockFields}) that NAMES a standard field whose
+     * offer for that list the same call changes, through a property of the same target that decides it -
+     * Code / Description / Number by {@code codeLength} / {@code descriptionLength} / {@code numberLength},
+     * Parent and IsFolder by {@code hierarchical}, a catalog's IsFolder by {@code hierarchyType} and its
+     * Owner by {@code owners}, ActionPeriodIsBasic by {@code actionPeriodUse} (issue #740; EDT's rules,
+     * judged by {@link FieldListSupport#offerChange}).
      *
-     * <p>The list is checked against the fields EDT derived from the object AS IT STANDS, so in one
-     * call such an entry would be judged on a property the batch is about to change - in either
-     * direction: a field the call takes away would be written although the object no longer offers it,
-     * and a field the call brings back would be refused as not offered. Nothing reliable catches the
-     * first case afterwards: EDT's model validator never re-checks a standard field of input by string
-     * (its fixed-field table marks Code / Description / Number eligible whatever the length) and accepts
-     * a stale ActionPeriodIsBasic in the data-lock list; it marks the other stale data-lock entries
-     * (error 81), but only after modify_metadata has reported success. A list that leaves the decided
-     * field out is judged the same whatever the property becomes, so it shares the call:
-     * {@code codeLength:0} with {@code [Description]} drops the code and its input in one call. Which
-     * field an entry names is read by {@link FieldListSupport#namedFieldGovernedBy}, through the same
-     * parser and lookup the list's own preparation uses, and only for the lists the property decides. A
-     * deciding property the target does not have is left to its own "not assignable" refusal, and an
-     * adopted target to the field list's own refusal (its lists cannot be set at all). Package-visible
-     * for the headless test.</p>
+     * <p>The list is checked against the fields EDT derived from the object AS IT STANDS, so an entry is
+     * judged right exactly when its field's offer is the same before and after the call - and such a batch
+     * shares the call: {@code codeLength} from 9 to 10 with [Code], another non-empty {@code owners} list with
+     * [Owner], {@code codeLength:0} with [Description]. When the call would END the offer, the entry would be
+     * written although the object no longer offers it, and nothing reliable catches that afterwards: EDT's
+     * model validator never re-checks a standard field of input by string and accepts a stale
+     * ActionPeriodIsBasic in the data-lock list; it marks the other stale data-lock entries (error 81), but
+     * only after modify_metadata has reported success. That refusal says to leave the field out of the list
+     * or not to change the property - a second call would not bring the field back. When the call would
+     * START the offer, the entry would be refused as not offered, and the refusal gives the separate-call
+     * recipe. Both name the deciding properties the call changes. For an exchange plan's data-lock Code and
+     * Description, which EDT's editor offers whatever the length, both speak of what EDT's validator accepts
+     * ({@link FieldListSupport.OfferChange#byValidator}).</p>
+     *
+     * <p>The batch's values are read with the parsers their own preparation uses, and a repeated property is
+     * decided by its last write, as when the batch is applied ({@link #mainFlagIn} reads the main flag the
+     * same way). A value whose shape or parse that preparation refuses is no end state: the property reads as
+     * unchanged, and its own refusal answers the call - nothing is written either way. Owner FQNs are read by
+     * their shape only: whether each resolves to an object that can own a catalog is checked by
+     * {@link #prepareManyReference}, against the project's scope, which the guard does not take. So an
+     * {@code owners} list of FQNs that do not resolve still counts as non-empty: on a catalog without owners
+     * the guard answers first, with the separate-call recipe, and the owners refusal comes on the next call -
+     * nothing is written either way. A deciding property the target does not have is left to its own "not
+     * assignable" refusal, and an adopted target to the field list's own refusal (its lists cannot be set at
+     * all). Package-visible for the headless test.</p>
      *
      * @param target the object being modified
      * @param properties the raw batch
@@ -4509,7 +4519,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         List<PropertyInfo> lists = new ArrayList<>();
         List<JsonElement> values = new ArrayList<>();
-        List<String> deciders = new ArrayList<>();
+        Map<EStructuralFeature, Object> ends = new LinkedHashMap<>();
         for (JsonObject prop : properties)
         {
             String name = prop == null ? null : asString(prop.get("name")); //$NON-NLS-1$
@@ -4523,29 +4533,137 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 lists.add(info);
                 values.add(prop.get(KEY_VALUE));
             }
-            else if (FieldListSupport.STANDARD_FIELDS_DECIDED_BY.containsKey(info.name))
+            else if (FieldListSupport.isDecidingProperty(info.feature))
             {
-                deciders.add(info.name);
+                Object end = batchEndValue(info, prop.get(KEY_VALUE));
+                if (end != null)
+                {
+                    ends.put(info.feature, end);
+                }
+                else
+                {
+                    ends.remove(info.feature);
+                }
             }
         }
         for (int i = 0; i < lists.size(); i++)
         {
-            for (String decider : deciders)
+            FieldListSupport.OfferChange change = FieldListSupport.offerChange(target, lists.get(i).feature,
+                values.get(i), ends);
+            if (change != null)
             {
-                String field = FieldListSupport.namedFieldGovernedBy(target, lists.get(i).feature, values.get(i),
-                    decider);
-                if (field != null)
-                {
-                    String list = lists.get(i).name;
-                    return ToolResult.error("'" + list + "' cannot be set in the same call as '" + decider //$NON-NLS-1$ //$NON-NLS-2$
-                        + "' while it names " + field + ": whether EDT offers that field depends on '" //$NON-NLS-1$ //$NON-NLS-2$
-                        + decider + "', and the list is checked against the object as it stands before the " //$NON-NLS-1$
-                        + "call. Set '" + decider + "' first, then '" + list + "' in a separate call - or " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                        + "leave " + field + " out of the list.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
-                }
+                return ToolResult.error(change.offeredNow ? takesAwayRefusal(lists.get(i).name, change)
+                    : bringsBackRefusal(lists.get(i).name, change)).toJson();
             }
         }
         return null;
+    }
+
+    /**
+     * The value a write of a deciding property leaves, read by the parser that property's own preparation
+     * uses ({@link #prepare}), or {@code null} when that parser refuses it: an {@code Integer} for a length, a
+     * {@code Boolean} for a flag, the literal's instance for an enum, the FQN strings of a list reference of
+     * the shape {@link #prepareManyReference} accepts (whether they resolve is that preparation's own check;
+     * the guard reads only whether the list is empty).
+     */
+    private static Object batchEndValue(PropertyInfo info, JsonElement raw)
+    {
+        switch (info.valueKind)
+        {
+            case INTEGER:
+                return parseInteger(asString(raw));
+            case BOOLEAN:
+                return parseBoolean(asString(raw));
+            case ENUM:
+                return enumInstance(info.feature, asString(raw));
+            case MANY_REFERENCE:
+                return referenceFqns(raw);
+            default:
+                return null;
+        }
+    }
+
+    /** The instance of the enum literal {@code value} names, resolved as {@link #prepareEnum} does, or {@code null}. */
+    private static Object enumInstance(EStructuralFeature feature, String value)
+    {
+        EEnumLiteral literal = MetadataPropertyIntrospector.resolveEnumLiteral(feature, value);
+        return literal == null ? null : literal.getInstance();
+    }
+
+    /**
+     * The FQN strings of a list-reference value, or {@code null} unless it is a JSON array of non-empty
+     * strings - the shape {@link #prepareManyReference} accepts.
+     */
+    private static List<String> referenceFqns(JsonElement raw)
+    {
+        if (raw == null || !raw.isJsonArray())
+        {
+            return null;
+        }
+        List<String> fqns = new ArrayList<>();
+        for (JsonElement el : raw.getAsJsonArray())
+        {
+            String fqn = (el != null && el.isJsonPrimitive()) ? el.getAsString() : null;
+            if (fqn == null || fqn.isEmpty())
+            {
+                return null;
+            }
+            fqns.add(fqn);
+        }
+        return fqns;
+    }
+
+    /**
+     * The refusal of a batch that would START the offer of the field the list names: the list is judged
+     * before the property changes, so the property goes first and the list into a separate call. For a field
+     * only EDT's validator decides ({@link FieldListSupport.OfferChange#byValidator}) the reason is what the
+     * validator accepts: EDT's editor offers that field whatever the property says.
+     */
+    private static String bringsBackRefusal(String list, FieldListSupport.OfferChange change)
+    {
+        String properties = quotedNames(change.properties, " and "); //$NON-NLS-1$
+        String judged = change.byValidator ? "whether EDT's validator accepts that field depends on " //$NON-NLS-1$
+            : "whether EDT offers that field depends on "; //$NON-NLS-1$
+        return "'" + list + "' cannot be set in the same call as " + properties + " while it names " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + change.address + ": " + judged + properties //$NON-NLS-1$
+            + ", and the list is checked against the object as it stands before the call. Set " + properties //$NON-NLS-1$
+            + " first, then '" + list + "' in a separate call - or leave " + change.address //$NON-NLS-1$ //$NON-NLS-2$
+            + " out of the list."; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal of a batch that would END the offer of the field the list names: the list would be left
+     * naming a field EDT no longer offers - or, for a field only EDT's validator decides
+     * ({@link FieldListSupport.OfferChange#byValidator}), one the validator rejects although EDT's editor
+     * still offers it - and a second call would not bring the field back: so leave it out, or keep the
+     * property.
+     */
+    private static String takesAwayRefusal(String list, FieldListSupport.OfferChange change)
+    {
+        String properties = quotedNames(change.properties, " and "); //$NON-NLS-1$
+        String why = change.byValidator
+            ? "EDT's validator accepts that field now, but would reject it once this call has changed " + properties //$NON-NLS-1$
+                + ", so the list would be left naming a field EDT's validator marks as an error" //$NON-NLS-1$
+            : "EDT offers that field now, but would no longer offer it once this call has changed " + properties //$NON-NLS-1$
+                + ", so the list would be left naming a field EDT does not offer"; //$NON-NLS-1$
+        return "'" + list + "' cannot be set in the same call as " + properties + " while it names " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + change.address + ": " + why + ". Leave " + change.address + " out of the list, or do not change " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + quotedNames(change.properties, " or ") + "."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Property names quoted for a refusal: 'a', 'a' and 'b', 'a', 'b' and 'c' - {@code last} joins the last two. */
+    private static String quotedNames(List<String> names, String last)
+    {
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < names.size(); i++)
+        {
+            if (i > 0)
+            {
+                text.append(i == names.size() - 1 ? last : ", "); //$NON-NLS-1$
+            }
+            text.append('\'').append(names.get(i)).append('\'');
+        }
+        return text.toString();
     }
 
     /**
