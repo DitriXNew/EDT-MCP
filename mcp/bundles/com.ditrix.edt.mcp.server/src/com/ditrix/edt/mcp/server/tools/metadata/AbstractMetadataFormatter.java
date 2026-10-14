@@ -19,10 +19,12 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.StandardAttribute;
+import com._1c.g5.v8.dt.mcore.Field;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.mcore.util.McoreUtil;
 import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.utils.FieldListSupport;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 
 /**
@@ -820,6 +822,13 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
             // Show full FQN: Type.Name (e.g. Catalog.Products)
             MdObject mdObj = (MdObject) item;
             sb.append(mdObj.eClass().getName()).append(".").append(mdObj.getName()); //$NON-NLS-1$
+        }
+        else if (item instanceof Field)
+        {
+            // An entry of inputByString / dataLockFields: the address the .mdo stores and
+            // modify_metadata takes (Catalog.X.StandardAttribute.Code), not the field's EClass name.
+            String address = FieldListSupport.addressOf(item);
+            sb.append(address != null ? address : formatEObjectReference((EObject) item));
         }
         else if (item instanceof EObject)
         {

@@ -385,4 +385,23 @@ public class UniversalMetadataFormatterTest
         assertFalse("no Commands section for a command-less catalog", //$NON-NLS-1$
             md.contains("### Commands")); //$NON-NLS-1$
     }
+
+    // ==================== a stored field prints as its address (issue #740) ====================
+
+    @Test
+    public void testFullModePrintsAStoredFieldByItsAddress()
+    {
+        Catalog cat = MdClassFactory.eINSTANCE.createCatalog();
+        cat.setName("Goods"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.mcore.Field code = McoreFactory.eINSTANCE.createField();
+        code.setName("Code"); //$NON-NLS-1$
+        code.setNameRu("\u041A\u043E\u0434"); //$NON-NLS-1$
+        code.setFieldIdPrefix("StandardAttribute"); //$NON-NLS-1$
+        cat.getFields().add(code);
+        cat.getInputByString().add(code);
+
+        String md = f.format(cat, true, EN);
+        assertTrue(md, md.contains("Catalog.Goods.StandardAttribute.Code")); //$NON-NLS-1$
+        assertFalse("the stored address, not the field's EClass name: " + md, md.contains("Field.Code")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
 }

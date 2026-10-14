@@ -91,6 +91,7 @@ import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.ExchangePlanContentWriter;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
+import com.ditrix.edt.mcp.server.utils.FieldListSupport;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
@@ -3535,6 +3536,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         List<JsonObject> properties, List<PreparedChange> changes, MdNameNormalizer.Report normReport,
         boolean isExtensionProject)
     {
+        // A field list is judged on the object as it stands; a length in the same batch would change
+        // that state under an entry it governs (issue #740).
+        String batchErr = fieldListBatchError(target, properties);
+        if (batchErr != null)
+        {
+            return batchErr;
+        }
         PrepareContext ctx = new PrepareContext(project, scope, config, version,
             declaredCodesAfterBatch(config, target, properties));
         for (JsonObject prop : properties)
@@ -4380,6 +4388,74 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private static boolean decidesFormExtInfo(HolderChange hc)
     {
         return !hc.onExtInfo && PROP_MAIN.equalsIgnoreCase(hc.change.featureName());
+    }
+
+    /**
+     * Refuses a field list ({@code inputByString} / {@code dataLockFields}) that NAMES a standard field
+     * batched with the length deciding whether EDT offers that field - Code with {@code codeLength},
+     * Description with {@code descriptionLength}, Number with {@code numberLength} - on the same target
+     * (issue #740).
+     *
+     * <p>The list is checked against the fields EDT derived from the object AS IT STANDS, so in one
+     * call such an entry would be judged on a length the batch is about to change - and nothing would
+     * catch the result afterwards: EDT's model validator never re-checks a standard field of input by
+     * string (its fixed-field table marks Code / Description / Number eligible whatever the length), so
+     * a {@code codeLength:0} batched with Code would be written with no marker anywhere. A list that
+     * leaves the governed field out is judged the same whatever that length becomes, so it shares the
+     * call: {@code codeLength:0} with {@code [Description]} drops the code and its input in one call.
+     * Which field an entry names is read by {@link FieldListSupport#namedFieldGovernedBy}, through the
+     * same parser and lookup the list's own preparation uses. A length the target does not have is
+     * left to its own "not assignable" refusal, and an adopted target to the field list's own refusal
+     * (its lists cannot be set at all). Package-visible for the headless test.</p>
+     *
+     * @param target the object being modified
+     * @param properties the raw batch
+     * @return the ready JSON error, or {@code null} when the batch is safe
+     */
+    static String fieldListBatchError(EObject target, List<JsonObject> properties)
+    {
+        if (FieldListSupport.isAdopted(target))
+        {
+            return null;
+        }
+        List<String> lists = new ArrayList<>();
+        List<JsonElement> values = new ArrayList<>();
+        List<String> lengths = new ArrayList<>();
+        for (JsonObject prop : properties)
+        {
+            String name = prop == null ? null : asString(prop.get("name")); //$NON-NLS-1$
+            PropertyInfo info = name == null ? null : MetadataPropertyIntrospector.findFeature(target, name);
+            if (info == null)
+            {
+                continue;
+            }
+            if (info.valueKind == MetadataPropertyIntrospector.ValueKind.FIELD_LIST)
+            {
+                lists.add(info.name);
+                values.add(prop.get(KEY_VALUE));
+            }
+            else if (FieldListSupport.STANDARD_FIELD_OF_LENGTH.containsKey(info.name))
+            {
+                lengths.add(info.name);
+            }
+        }
+        for (int i = 0; i < lists.size(); i++)
+        {
+            for (String length : lengths)
+            {
+                String field = FieldListSupport.namedFieldGovernedBy(target, values.get(i), length);
+                if (field != null)
+                {
+                    String list = lists.get(i);
+                    return ToolResult.error("'" + list + "' cannot be set in the same call as '" + length //$NON-NLS-1$ //$NON-NLS-2$
+                        + "' while it names " + field + ": whether EDT offers that field depends on '" //$NON-NLS-1$ //$NON-NLS-2$
+                        + length + "', and the list is checked against the object as it stands before the " //$NON-NLS-1$
+                        + "call. Set '" + length + "' first, then '" + list + "' in a separate call - or " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        + "leave " + field + " out of the list.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
+        }
+        return null;
     }
 
     /**
@@ -5698,6 +5774,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return prepareAppearance(ctx, target, name, prop, info, out);
             case USE_ALWAYS:
                 return prepareUseAlways(target, prop, info, out);
+            case FIELD_LIST:
+                return prepareFieldList(target, name, prop, info, out);
             case STRING:
             default:
                 return prepareString(name, value, info, out, normReport);
@@ -6001,6 +6079,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error(err).toJson();
         }
         out.add(PreparedChange.useAlways(info.feature, plans));
+        return null;
+    }
+
+    /**
+     * Validates a field list ({@code inputByString} / {@code dataLockFields}, issue #740) against the
+     * fields EDT offers for it on the object as it stands, and queues a whole-list replacement carrying
+     * field ids only - the derived fields are rebuilt by EDT between now and the write, a field id is
+     * not.
+     */
+    private static String prepareFieldList(EObject target, String name, JsonObject prop, PropertyInfo info,
+        List<PreparedChange> out)
+    {
+        List<String> fieldIds = new ArrayList<>();
+        String refusal = FieldListSupport.resolve(target, info.feature, name, prop.get(KEY_VALUE), fieldIds);
+        if (refusal != null)
+        {
+            return ToolResult.error(refusal).toJson();
+        }
+        out.add(PreparedChange.fieldList(info.feature, fieldIds));
         return null;
     }
 
@@ -6983,7 +7080,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE, MANY_ENUM, MCORE_VALUE_LIST, STYLE_VALUE,
             CONTAINED, ADJUSTABLE_BOOLEAN,
             /** A form attribute's {@code useAlways} checkboxes; the value is the list of plans. */
-            USE_ALWAYS
+            USE_ALWAYS,
+            /** A field list (issue #740); the value is the list of field ids. */
+            FIELD_LIST
         }
 
         /**
@@ -7056,6 +7155,16 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return new PreparedChange(feature, Kind.USE_ALWAYS, java.util.Collections.unmodifiableList(
                 new ArrayList<>(plans)), null, null, null, null, false);
+        }
+
+        /**
+         * A field list's whole-list replacement (issue #740): only the field ids cross into the write,
+         * where {@link FieldListSupport#apply} turns them into the proxies EDT stores.
+         */
+        static PreparedChange fieldList(EStructuralFeature feature, List<String> fieldIds)
+        {
+            return new PreparedChange(feature, Kind.FIELD_LIST, java.util.Collections.unmodifiableList(
+                new ArrayList<>(fieldIds)), null, null, null, null, false);
         }
 
         /**
@@ -7325,6 +7434,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     }
                     UseAlwaysSupport.apply(formOf(target), (FormAttribute)target,
                         (List<UseAlwaysSupport.Plan>)scalarValue);
+                    return;
+                }
+                case FIELD_LIST:
+                {
+                    // Proxies by field id on the re-fetched top object, through change notifications
+                    // (no eSetDeliver bracket - see FieldListSupport.replace).
+                    FieldListSupport.apply(target, feature, (List<String>)scalarValue);
                     return;
                 }
                 case SCALAR:

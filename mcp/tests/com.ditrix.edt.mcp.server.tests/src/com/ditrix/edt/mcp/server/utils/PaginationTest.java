@@ -9,6 +9,9 @@ package com.ditrix.edt.mcp.server.utils;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import java.util.Arrays;
+import java.util.Collections;
+
 import org.junit.Test;
 
 /**
@@ -104,5 +107,45 @@ public class PaginationTest
         assertTrue(notice.contains("100"));
         assertTrue(notice.contains("limit reached"));
         assertTrue(notice.contains("higher limit"));
+    }
+
+    // ========== boundedListing (inline listing, the rest counted) ==========
+
+    @Test
+    public void testBoundedListingPrintsAListAtTheLimitWhole()
+    {
+        assertEquals("a, b, c", Pagination.boundedListing(Arrays.asList("a", "b", "c"), 3));
+    }
+
+    @Test
+    public void testBoundedListingCountsOneItemPastTheLimitAsOneMore()
+    {
+        assertEquals("a, b, c, ... (1 more)", Pagination.boundedListing(Arrays.asList("a", "b", "c", "d"), 3));
+    }
+
+    @Test
+    public void testBoundedListingPrintsTheFirstItemsInTheOrderGivenAndCountsTheRest()
+    {
+        assertEquals("Weight, Code, Description, ... (2 more)",
+            Pagination.boundedListing(Arrays.asList("Weight", "Code", "Description", "Number", "Parent"), 3));
+    }
+
+    @Test
+    public void testBoundedListingOfASingleItemIsTheItemItself()
+    {
+        assertEquals("a", Pagination.boundedListing(Collections.singletonList("a"), 25));
+    }
+
+    @Test
+    public void testBoundedListingOfNoItemsIsEmpty()
+    {
+        assertEquals("", Pagination.boundedListing(Collections.<String> emptyList(), 25));
+        assertEquals("", Pagination.boundedListing(null, 25));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testBoundedListingRefusesALimitBelowOne()
+    {
+        Pagination.boundedListing(Arrays.asList("a", "b"), 0);
     }
 }

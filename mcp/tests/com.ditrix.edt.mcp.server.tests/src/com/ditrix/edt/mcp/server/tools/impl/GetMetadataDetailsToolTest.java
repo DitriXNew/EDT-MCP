@@ -1170,4 +1170,64 @@ public class GetMetadataDetailsToolTest
         assertFalse(GetMetadataDetailsTool.isMalformedSubsystemChain("Subsystem")); //$NON-NLS-1$
         assertFalse(GetMetadataDetailsTool.isMalformedSubsystemChain(null));
     }
+
+    // ===== FIELD_LIST rows (issue #740) =====
+
+    private static com._1c.g5.v8.dt.mcore.Field offeredField(Catalog owner, String prefix, String name,
+        String nameRu, com._1c.g5.v8.dt.mcore.SourceType... sources)
+    {
+        com._1c.g5.v8.dt.mcore.Field field = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createField();
+        field.setName(name);
+        field.setNameRu(nameRu);
+        field.setFieldIdPrefix(prefix);
+        field.getSourceTypes().addAll(java.util.Arrays.asList(sources));
+        owner.getFields().add(field);
+        return field;
+    }
+
+    /**
+     * The assignable row of a field list: Kind FIELD_LIST, Current the stored addresses as the JSON
+     * array modify_metadata takes, Allowed the addresses EDT offers - and the section header says how
+     * a FIELD_LIST is set (missing 4).
+     */
+    @Test
+    public void testAFieldListRowShowsTheStoredAndTheOfferedAddresses()
+    {
+        Catalog goods = MdClassFactory.eINSTANCE.createCatalog();
+        goods.setName("Goods"); //$NON-NLS-1$
+        offeredField(goods, "StandardAttribute", "Description", "\u041D\u0430\u0438\u043C\u0435\u043D\u043E\u0432\u0430\u043D\u0438\u0435", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            com._1c.g5.v8.dt.mcore.SourceType.INPUT_BY_STRING);
+        goods.getInputByString().add(offeredField(goods, "StandardAttribute", "Code", "\u041A\u043E\u0434", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            com._1c.g5.v8.dt.mcore.SourceType.INPUT_BY_STRING));
+
+        String md = GetMetadataDetailsTool.formatAssignable("Catalog.Goods", goods); //$NON-NLS-1$
+
+        assertTrue(md, md.contains("| inputByString | FIELD_LIST | [\"Catalog.Goods.StandardAttribute.Code\"] | " //$NON-NLS-1$
+            + "Catalog.Goods.StandardAttribute.Description, Catalog.Goods.StandardAttribute.Code |")); //$NON-NLS-1$
+        String header = md.substring(0, md.indexOf("| Property |")); //$NON-NLS-1$
+        assertTrue(header, header.contains("FIELD_LIST")); //$NON-NLS-1$
+    }
+
+    /** missing 6: Allowed of a long lockable list is printed bounded, with the rest counted. */
+    @Test
+    public void testALongOfferedFieldListIsPrintedBounded()
+    {
+        Catalog goods = MdClassFactory.eINSTANCE.createCatalog();
+        goods.setName("Goods"); //$NON-NLS-1$
+        int total = com.ditrix.edt.mcp.server.utils.FieldListSupport.MAX_LISTED + 7;
+        for (int i = 0; i < total; i++)
+        {
+            offeredField(goods, "Attribute", "A" + i, "A" + i, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                com._1c.g5.v8.dt.mcore.SourceType.FIELDS_FOR_LOCKING);
+        }
+
+        String md = GetMetadataDetailsTool.formatAssignable("Catalog.Goods", goods); //$NON-NLS-1$
+        String row = md.substring(md.indexOf("| dataLockFields |")); //$NON-NLS-1$
+        row = row.substring(0, row.indexOf('\n'));
+
+        assertTrue(row, row.contains("Catalog.Goods.Attribute.A0, ")); //$NON-NLS-1$
+        assertTrue(row, row.contains(", ... (7 more)")); //$NON-NLS-1$
+        assertFalse(row, row.contains("Catalog.Goods.Attribute.A" //$NON-NLS-1$
+            + com.ditrix.edt.mcp.server.utils.FieldListSupport.MAX_LISTED + ","));
+    }
 }
