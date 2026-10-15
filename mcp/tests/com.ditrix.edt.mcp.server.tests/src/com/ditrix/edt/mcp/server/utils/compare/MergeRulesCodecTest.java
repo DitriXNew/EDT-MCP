@@ -34,7 +34,6 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.nio.file.attribute.UserPrincipalLookupService;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
@@ -54,6 +53,7 @@ import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
 
+import com.ditrix.edt.mcp.server.utils.TemporaryDirectories;
 import com.ditrix.edt.mcp.server.utils.compare.MergeRulesCodec.MergeRulesFormatException;
 import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.Decision;
 import com.ditrix.edt.mcp.server.utils.compare.MergeRulesDocument.Element;
@@ -138,49 +138,11 @@ public class MergeRulesCodecTest
         workDir = Files.createTempDirectory("merge-rules-codec-test"); //$NON-NLS-1$
     }
 
-    /**
-     * Removes the work directory, retrying briefly.
-     * <p>
-     * The retry is for Windows and nothing else: a file deleted while another thread still holds a
-     * handle to it lingers as a directory entry, so the parent reports {@code DirectoryNotEmpty}
-     * for a few milliseconds after every child has been deleted. The concurrent-write test makes
-     * that likely, and a suite that fails in TEARDOWN over it reports a defect nobody has.
-     * <p>
-     * It masks nothing: leftovers are asserted INSIDE the tests that care about them
-     * ({@code testWriteLeavesNoTemporaryFileBehind}, {@code testAFailedWriteLeavesNoTemporaryBehind}),
-     * never here.
-     */
+    /** Removes the work directory - with a short retry, see {@link TemporaryDirectories}. */
     @After
     public void tearDown() throws IOException, InterruptedException
     {
-        IOException last = null;
-        for (int attempt = 0; attempt < 20; attempt++)
-        {
-            if (workDir == null || !Files.exists(workDir))
-            {
-                return;
-            }
-            try
-            {
-                try (Stream<Path> walk = Files.walk(workDir))
-                {
-                    for (Path path : walk.sorted(Comparator.reverseOrder()).toList())
-                    {
-                        Files.deleteIfExists(path);
-                    }
-                }
-                return;
-            }
-            catch (IOException e)
-            {
-                last = e;
-                Thread.sleep(100L);
-            }
-        }
-        if (last != null)
-        {
-            throw last;
-        }
+        TemporaryDirectories.deleteRecursively(workDir);
     }
 
     // ==================== round trip ====================

@@ -171,6 +171,13 @@ jobs:
       # DefaultModuleExtensionService (everything empty) and the footer never appears. Install
       # the bundle so the real service registers.
       BSL_EXTENSION_IU: "com._1c.g5.v8.dt.bsl.extension"
+      # modify_metadata on an adopted object asks EDT's IMdPropertyTypeProvider which extension states a
+      # property takes at the extension's runtime. Its per-runtime rules come ONLY from the md.extension_v8.*
+      # fragments of the extension feature, which nothing above pulls. Without them the provider answers an
+      # empty list for every runtime (and logs 'Md property type delegate for requested version 8.5.1 not
+      # found' about a million times per run), so EDT on CI behaves as if an extension could change nothing.
+      # Install the feature so CI's EDT matches a desktop install.
+      EXTENSION_IU: "com._1c.g5.v8.dt.extension.feature.group"
       PLUGIN_REPO: "plugin-p2"
       MCP_PORT: "8765"
     steps:
@@ -249,9 +256,9 @@ jobs:
           # served EDT build qualifier. EVERY repository fed to the director below must be in
           # here: they are caller-settable inputs now, and a repo that changes without changing
           # the key would restore a base assembled from the OLD one and skip the reinstall.
-          H=$(printf '%s|%s|%s|%s|%s|%s|%s|%s|%s' \
+          H=$(printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' \
                 "$ECLIPSE_ARCHIVE" "$EDT_P2" "$ECLIPSE_P2" "$ORBIT_P2" "$ORBIT_SIMREL_P2" \
-                "$PLATFORM_SUPPORT_IU" "$PROFILING_IU" "$BSL_EXTENSION_IU" \
+                "$PLATFORM_SUPPORT_IU" "$PROFILING_IU" "$BSL_EXTENSION_IU" "$EXTENSION_IU" \
                 "$EDT_BUILD" \
                 | sha256sum | cut -c1-16)
           echo "key=edt-base-${{ runner.os }}-$H" >> "$GITHUB_OUTPUT"
@@ -284,6 +291,7 @@ jobs:
           if [ -n "$PLATFORM_SUPPORT_IU" ]; then IUS="$IUS,$PLATFORM_SUPPORT_IU"; fi
           if [ -n "$PROFILING_IU" ]; then IUS="$IUS,$PROFILING_IU"; fi
           if [ -n "$BSL_EXTENSION_IU" ]; then IUS="$IUS,$BSL_EXTENSION_IU"; fi
+          if [ -n "$EXTENSION_IU" ]; then IUS="$IUS,$EXTENSION_IU"; fi
           # edt.1c.ru intermittently 404s artifacts under the burst download (rate-limit;
           # files DO exist). A failed director transaction rolls back cleanly, so retry with
           # a cooldown; p2's own transport retry handles transient read errors per attempt.
