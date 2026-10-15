@@ -14,6 +14,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IFolder;
@@ -30,11 +32,13 @@ import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.AdoptedModuleState;
 import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.BslSyntaxChecker;
 import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
 import com.ditrix.edt.mcp.server.utils.InvalidFileCharacters;
+import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
@@ -198,8 +202,16 @@ public class WriteModuleSourceTool implements IMcpTool
                 ". Only 'replace' mode can create new files.").toJson(); //$NON-NLS-1$
         }
 
-        // 6. Vendor support: the module and the object that owns it must be editable (#642).
-        String locked = vendorSupportRefusal(ctx, file, fileExists);
+        // 6. The metadata root, resolved ONCE and here - where the vendor guard always resolved it, so
+        // the order of the refusals is unchanged - for the guard and for the adopted-module step after
+        // the write (#711). Then vendor support: the module and the object that owns it must be
+        // editable (#642).
+        ProjectContext.ConfigurationResult root = ctx.resolveMetadataRoot();
+        if (!root.ok())
+        {
+            return root.errorJson();
+        }
+        String locked = vendorSupportRefusal(ctx, root, file);
         if (locked != null)
         {
             return locked;
@@ -209,7 +221,7 @@ public class WriteModuleSourceTool implements IMcpTool
         AtomicBoolean mutationCommitted = new AtomicBoolean();
         try
         {
-            return writeModule(req, file, fileExists, mutationEntered, mutationCommitted);
+            return writeModule(req, file, fileExists, root.scope(), mutationEntered, mutationCommitted);
         }
         catch (Exception e)
         {
@@ -255,21 +267,17 @@ public class WriteModuleSourceTool implements IMcpTool
 
     /**
      * The vendor-support refusal for writing {@code file}, as ready JSON: the module (when it
-     * exists) and the object that owns it must be editable. Fails closed when the project's
-     * metadata root cannot be read.
+     * exists) and the object that owns it must be editable. The caller has already refused a
+     * project whose metadata root cannot be read (fail closed).
      *
      * @param ctx the resolved project
+     * @param root the project's resolved metadata root
      * @param file the module file
-     * @param fileExists whether the file exists (a new module has no parsed model yet)
      * @return the error JSON, or {@code null} when the write may proceed
      */
-    private static String vendorSupportRefusal(ProjectContext ctx, IFile file, boolean fileExists)
+    private static String vendorSupportRefusal(ProjectContext ctx, ProjectContext.ConfigurationResult root,
+        IFile file)
     {
-        ProjectContext.ConfigurationResult root = ctx.resolveMetadataRoot();
-        if (!root.ok())
-        {
-            return root.errorJson();
-        }
         String refusal = VendorSupportGuard.refusalForModuleFile(ctx.project(), root.scope(), file);
         return refusal == null ? null : ToolResult.error(refusal).toJson();
     }
@@ -340,10 +348,14 @@ public class WriteModuleSourceTool implements IMcpTool
      * @param req the parsed request (its {@code modulePath} is already resolved)
      * @param file the resolved module file
      * @param fileExists whether {@code file} already exists on disk
+     * @param scope the project's metadata root, for the adopted-module step after the write
      * @return the success response, or a ready {@link ToolResult#error} JSON payload from a
-     *         guard (returned verbatim) — the same value in the same case as the inline flow
+     *         guard (returned verbatim) — the same value in the same case as the inline flow; once
+     *         the text is written, a failed adopted-module step answers instead with a
+     *         {@link ToolResult#errorAfterMutation} payload ({@code mutationCommitted:true}), see
+     *         {@link #finishWrite}
      */
-    private String writeModule(WriteRequest req, IFile file, boolean fileExists,
+    private String writeModule(WriteRequest req, IFile file, boolean fileExists, MetadataScope scope,
         AtomicBoolean mutationEntered, AtomicBoolean mutationCommitted) throws Exception
     {
         // Normalize source: \r\n -> \n (same point and order as the inline try block,
@@ -457,9 +469,37 @@ public class WriteModuleSourceTool implements IMcpTool
             mutationCommitted.set(true);
         }
 
-        // Return success
-        return buildSuccessResponse(req.projectName, req.modulePath, req.mode, req.skipSyntaxCheck,
-            newLines, fileExists, totalOriginal, charFix.summary());
+        // The module of an object ADOPTED into an extension gets the state EDT's UI records in the owner's
+        // .mdo when code is added to an adopted module - Extended - recorded at once (#711): EDT's own
+        // listener sets it only in the model and never saves the .mdo. Every other module is untouched and
+        // answers as before. A dry run (#465) must skip this step - it changes the model and exports the
+        // owner's .mdo.
+        return finishWrite(
+            () -> AdoptedModuleState.ensureExtended(file.getProject(), scope, file.getProjectRelativePath().toString()),
+            moduleState -> buildSuccessResponse(req.projectName, req.modulePath, req.mode, req.skipSyntaxCheck,
+                newLines, fileExists, totalOriginal, charFix.summary(), moduleState));
+    }
+
+    /**
+     * The end of a write whose text has landed: runs the adopted-module step, then answers with the
+     * success response - or, when the step failed, with an error that says the text IS written
+     * ({@code mutationCommitted:true}), so neither the caller nor a harness takes it for a refusal and
+     * re-sends the edit. The step is run HERE, not handed in as a result, so a write cannot run it and
+     * answer past its failure: leaving this call out leaves the step out with it. Package-visible for tests.
+     *
+     * @param step the adopted-module step; run exactly once
+     * @param successResponse builds the success response from the step's result; not called when it failed
+     * @return the response
+     */
+    static String finishWrite(Supplier<AdoptedModuleState.Result> step,
+        Function<AdoptedModuleState.Result, String> successResponse)
+    {
+        AdoptedModuleState.Result moduleState = step.get();
+        if (moduleState.failed())
+        {
+            return ToolResult.errorAfterMutation(moduleState.failureMessage()).toJson();
+        }
+        return successResponse.apply(moduleState);
     }
 
     /**
@@ -686,9 +726,7 @@ public class WriteModuleSourceTool implements IMcpTool
 
             case MODE_APPEND:
             {
-                List<String> appended = new ArrayList<>(originalLines);
-                appended.addAll(splitSourceLines(source));
-                return new NewLinesResult(null, appended);
+                return new NewLinesResult(null, appendLines(originalLines, source));
             }
 
             case MODE_SEARCH_REPLACE:
@@ -955,13 +993,15 @@ public class WriteModuleSourceTool implements IMcpTool
     /**
      * Builds the success frontmatter + content returned after the module is written
      * (pure string building — no side effects), preserving the exact keys and the
-     * {@code linesBefore}/{@code newFile} branch the inline flow used.
+     * {@code linesBefore}/{@code newFile} branch the inline flow used. Package-visible for tests.
      *
+     * @param moduleState the adopted-module step's result: a key and, when it has one, a paragraph
+     *     for the module of an adopted object; nothing for any other module
      * @return the wrapped success response
      */
-    private static String buildSuccessResponse(String projectName, String modulePath, String mode,
+    static String buildSuccessResponse(String projectName, String modulePath, String mode, // NOSONAR the response's facts; a parameter object would only rename them
         boolean skipSyntaxCheck, List<String> newLines, boolean fileExists, int totalOriginal,
-        String normalizedCharacters)
+        String normalizedCharacters, AdoptedModuleState.Result moduleState)
     {
         FrontMatter fm = FrontMatter.create()
             .put("tool", NAME) //$NON-NLS-1$
@@ -989,7 +1029,18 @@ public class WriteModuleSourceTool implements IMcpTool
             fm.put("normalizedCharacters", normalizedCharacters); //$NON-NLS-1$
         }
 
-        return fm.wrapContent("File written successfully"); //$NON-NLS-1$
+        // The same rule: only for the module of an object adopted into an extension (#711) - every
+        // other write answers byte for byte as before. The paragraph comes only with a switch, a state
+        // left as it is, a missing extension block or a warning; on every write into an already-Extended
+        // module the key alone says it.
+        String extensionState = moduleState.frontMatterValue();
+        if (extensionState != null)
+        {
+            fm.put(AdoptedModuleState.FRONT_MATTER_KEY, extensionState);
+        }
+        String note = moduleState.bodySentence();
+        return fm.wrapContent(note == null ? "File written successfully" //$NON-NLS-1$
+            : "File written successfully\n\n" + note); //$NON-NLS-1$
     }
 
     /**
@@ -1293,7 +1344,24 @@ public class WriteModuleSourceTool implements IMcpTool
     }
 
     /**
-     * Splits source code into lines, handling trailing newline artifact.
+     * The module's lines after {@code mode=append}: the current lines, then the source's. An EMPTY
+     * source appends nothing, so the write rewrites the module's current text - the no-op an adopted
+     * module's step is re-run with (#711). Package-visible for tests.
+     *
+     * @param originalLines the module's current lines
+     * @param source the appended text
+     * @return the new lines
+     */
+    static List<String> appendLines(List<String> originalLines, String source)
+    {
+        List<String> appended = new ArrayList<>(originalLines);
+        appended.addAll(splitSourceLines(source));
+        return appended;
+    }
+
+    /**
+     * Splits source code into lines, handling trailing newline artifact. An empty source is no line
+     * at all, not one empty line.
      */
     static List<String> splitSourceLines(String source)
     {

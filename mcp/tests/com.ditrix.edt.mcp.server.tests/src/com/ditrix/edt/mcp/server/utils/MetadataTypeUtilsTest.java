@@ -773,6 +773,10 @@ public class MetadataTypeUtilsTest
         addOwner(owners, "Subsystem",
             t -> SubsystemUtils.nestedChain(t + ".Parent." + t + ".Child") != null);
         addOwner(owners, "Predefined", MetadataTypeUtilsTest::predefinedTokenAccepted);
+        // The kind segment of a standard attribute's field address in inputByString /
+        // dataLockFields (issue #740), asked of the REAL field-list parser - a consumer, not the
+        // catalogue checked against itself.
+        addOwner(owners, "StandardAttribute", MetadataTypeUtilsTest::standardAttributeTokenAccepted);
         // Resolver groups are built by a FULL pass over the resolver's own map, and its
         // applicability is decided by THAT, never by asking the resolver about the canonical token.
         // Deriving applicability from the thing under test let it opt out: deleting just the
@@ -988,6 +992,7 @@ public class MetadataTypeUtilsTest
                 assertFalse(why, FormElementWriter.isHandlerToken(token));
                 assertFalse(why, SubsystemUtils.isSubsystemTypeToken(token));
                 assertFalse(why, predefinedTokenAccepted(token));
+                assertFalse(why, standardAttributeTokenAccepted(token));
                 assertNull(why, MetadataNodeResolver.featureNameForKind(token));
             }
         }
@@ -1008,6 +1013,7 @@ public class MetadataTypeUtilsTest
         Map<String, String> derived = new LinkedHashMap<>();
         derived.put("Form", "FormElementWriter.isFormToken -> isNestedKind -> resolveNestedKind");
         derived.put("Handler", "FormElementWriter.isHandlerToken -> isNestedKind -> resolveNestedKind");
+        derived.put("StandardAttribute", "FieldListSupport.resolve -> parse -> resolveNestedKind");
         CATALOG_DERIVED_KINDS = Collections.unmodifiableMap(derived);
     }
 
@@ -1021,7 +1027,7 @@ public class MetadataTypeUtilsTest
      * deleted kind take its own check away.</p>
      */
     private static final Set<String> KIND_SPECIFIC_TOKEN_OWNERS = Collections.unmodifiableSet(
-        new LinkedHashSet<>(Arrays.asList("Form", "Handler", "Subsystem", "Predefined")));
+        new LinkedHashSet<>(Arrays.asList("Form", "Handler", "Subsystem", "Predefined", "StandardAttribute")));
 
     /** The same tokens, lowercased with {@link Locale#ROOT} so two sets can be compared. */
     private static Set<String> lowercased(Collection<String> tokens)
@@ -1058,6 +1064,27 @@ public class MetadataTypeUtilsTest
     private static boolean predefinedTokenAccepted(String token)
     {
         return PredefinedWriter.parseRef("Catalog.Products." + token + ".Sample") != null;
+    }
+
+    /**
+     * Whether the field-list parser reads {@code token} as the kind segment of a standard attribute -
+     * asked of the REAL parser, {@link FieldListSupport#resolve}, on the address of a standard
+     * Description field EDT offers for input by string, so the token alone decides (issue #740).
+     */
+    private static boolean standardAttributeTokenAccepted(String token)
+    {
+        com._1c.g5.v8.dt.metadata.mdclass.Catalog goods =
+            com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory.eINSTANCE.createCatalog();
+        goods.setName("Goods"); //$NON-NLS-1$
+        com._1c.g5.v8.dt.mcore.Field description = com._1c.g5.v8.dt.mcore.McoreFactory.eINSTANCE.createField();
+        description.setName("Description"); //$NON-NLS-1$
+        description.setFieldIdPrefix("StandardAttribute"); //$NON-NLS-1$
+        description.getSourceTypes().add(com._1c.g5.v8.dt.mcore.SourceType.INPUT_BY_STRING);
+        goods.getFields().add(description);
+        return FieldListSupport.resolve(goods,
+            com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage.Literals.BASIC_DB_OBJECT__INPUT_BY_STRING,
+            "inputByString", new com.google.gson.JsonPrimitive("Catalog.Goods." + token + ".Description"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            new ArrayList<>()) == null;
     }
 
 
@@ -1390,5 +1417,26 @@ public class MetadataTypeUtilsTest
         assertEquals(Arrays.asList("Alpha", "Alphabet"), //$NON-NLS-1$ //$NON-NLS-2$
             MetadataTypeUtils.similarNames(objects, "alp", 5)); //$NON-NLS-1$
         assertEquals(Arrays.asList("Alpha"), MetadataTypeUtils.similarNames(objects, "alp", 1)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The kind segment of a standard attribute's field address (issue #740): EDT writes
+     * {@code Catalog.X.StandardAttribute.Description}, and 1C's Russian full name spells the kind
+     * СтандартныйРеквизит - with a CYRILLIC first letter, not the Latin C of EDT's
+     * getFullyQualifiendNameRu.
+     */
+    @Test
+    public void testStandardAttributeIsABilingualNestedKind()
+    {
+        // StandardAttribute / СтандартныйРеквизит / СтандартныеРеквизиты
+        for (String token : new String[] {"StandardAttribute", "standardattributes", "\u0421\u0442\u0430\u043D\u0434\u0430\u0440\u0442\u043D\u044B\u0439\u0420\u0435\u043A\u0432\u0438\u0437\u0438\u0442", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "\u0421\u0442\u0430\u043D\u0434\u0430\u0440\u0442\u043D\u044B\u0435\u0420\u0435\u043A\u0432\u0438\u0437\u0438\u0442\u044B"}) //$NON-NLS-1$
+        {
+            MetadataTypeUtils.NestedKindInfo info = MetadataTypeUtils.resolveNestedKind(token);
+            assertNotNull(token, info);
+            assertEquals("StandardAttribute", info.getEnglish()); //$NON-NLS-1$
+            assertEquals("\u0421\u0442\u0430\u043D\u0434\u0430\u0440\u0442\u043D\u044B\u0439\u0420\u0435\u043A\u0432\u0438\u0437\u0438\u0442", info.getRussian()); //$NON-NLS-1$
+            assertEquals("the Russian token starts with the Cyrillic Es", 0x0421, info.getRussian().charAt(0)); //$NON-NLS-1$
+        }
     }
 }

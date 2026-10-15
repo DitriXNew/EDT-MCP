@@ -496,6 +496,15 @@ public final class MetadataTypeUtils
         putNestedKind(m, "Parameter", "Parameters", //$NON-NLS-1$ //$NON-NLS-2$
             cp(0x041f, 0x0430, 0x0440, 0x0430, 0x043c, 0x0435, 0x0442, 0x0440),
             cp(0x041f, 0x0430, 0x0440, 0x0430, 0x043c, 0x0435, 0x0442, 0x0440, 0x044b));
+        // StandardAttribute - the kind segment of a standard attribute's address in a field list
+        // (inputByString / dataLockFields, issue #740): the token EDT writes
+        // (Catalog.X.StandardAttribute.Description) and 1C's Russian full name uses, spelled with a
+        // CYRILLIC first letter (0x0421) - not the Latin C of EDT's getFullyQualifiendNameRu.
+        putNestedKind(m, "StandardAttribute", "StandardAttributes", //$NON-NLS-1$ //$NON-NLS-2$
+            cp(0x0421, 0x0442, 0x0430, 0x043d, 0x0434, 0x0430, 0x0440, 0x0442, 0x043d, 0x044b, 0x0439,
+                0x0420, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442),
+            cp(0x0421, 0x0442, 0x0430, 0x043d, 0x0434, 0x0430, 0x0440, 0x0442, 0x043d, 0x044b, 0x0435,
+                0x0420, 0x0435, 0x043a, 0x0432, 0x0438, 0x0437, 0x0438, 0x0442, 0x044b));
         NESTED_KIND_LOOKUP = Collections.unmodifiableMap(m);
     }
 

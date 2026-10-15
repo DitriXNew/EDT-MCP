@@ -168,8 +168,7 @@ public class MetadataRenameService
 
         // Vendor support, before any refactoring exists: EDT's rename checks only the referencing
         // objects, never the renamed one itself (#642).
-        String locked = VendorSupportGuard.refusalForFqn(MetadataScope.of(project, config), objectFqn,
-            VendorSupportGuard.Intent.MODIFY, "renamed"); //$NON-NLS-1$
+        String locked = vendorSupportRefusal(MetadataScope.of(project, config), objectFqn);
         if (locked != null)
         {
             return ToolResult.error(locked).toJson();
@@ -432,6 +431,22 @@ public class MetadataRenameService
             return ToolResult.error("Failed to rename form element: " //$NON-NLS-1$
                 + causeMessage(e)).toJson();
         }
+    }
+
+    /**
+     * The vendor-support refusal of renaming {@code objectFqn}, judged before any refactoring exists
+     * (#642): the object the address names is asked like any changed object, with the shared guard's
+     * {@link VendorSupportGuard.Intent#RENAME}. That intent leaves a configuration ROOT address unjudged:
+     * this tool cannot address the root (it answers "not found" for it), so the root's lock is never the
+     * reason a rename of it fails (issue #741). Package-visible for tests.
+     *
+     * @param scope the project's resolution root
+     * @param objectFqn the normalized FQN of the rename target
+     * @return the refusal message, or {@code null} when the rename may go on to its own checks
+     */
+    static String vendorSupportRefusal(MetadataScope scope, String objectFqn)
+    {
+        return VendorSupportGuard.refusalForFqn(scope, objectFqn, VendorSupportGuard.Intent.RENAME);
     }
 
     /**

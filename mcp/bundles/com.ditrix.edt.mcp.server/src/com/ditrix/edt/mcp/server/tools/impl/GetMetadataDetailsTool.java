@@ -50,8 +50,10 @@ import com.ditrix.edt.mcp.server.tools.metadata.MetadataFormatterRegistry;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceAddress;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSupport;
+import com.ditrix.edt.mcp.server.utils.ConfigurationRoot;
 import com.ditrix.edt.mcp.server.utils.DcsStructureReader;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
+import com.ditrix.edt.mcp.server.utils.FieldListSupport;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
@@ -61,6 +63,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.RoleRightsReader;
@@ -90,6 +93,11 @@ public class GetMetadataDetailsTool implements IMcpTool
     static final String MALFORMED_SUBSYSTEM_CHAIN = "Not a subsystem address. " //$NON-NLS-1$
         + SubsystemUtils.addressingHint();
 
+    /** Which tool reads the configuration root, and what this tool renders of it (issue #741). */
+    static final String ROOT_DETAILS_ROUTE = "the configuration root is read with " //$NON-NLS-1$
+        + "get_configuration_properties; pass assignable:true for the properties modify_metadata sets on '" //$NON-NLS-1$
+        + ConfigurationRoot.FQN + "'"; //$NON-NLS-1$
+
     @Override
     public String getName()
     {
@@ -111,7 +119,8 @@ public class GetMetadataDetailsTool implements IMcpTool
             .stringProperty(McpKeys.PROJECT_NAME,
                 "EDT project name (required)", true) //$NON-NLS-1$
             .stringArrayProperty("objectFqns", //$NON-NLS-1$
-                "Required. FQNs as Type.Name, e.g. ['Catalog.Products', 'Document.SalesOrder']; " + //$NON-NLS-1$
+                "Required. FQNs as Type.Name, e.g. ['Catalog.Products', 'Document.SalesOrder'], or " + //$NON-NLS-1$
+                "'Configuration' for the configuration root itself; " + //$NON-NLS-1$
                 "Russian type tokens also work (e.g. '\u0421\u043F\u0440\u0430\u0432\u043E\u0447\u043D\u0438\u043A.Products').", //$NON-NLS-1$
                 true)
             .booleanProperty("full", //$NON-NLS-1$
@@ -126,7 +135,8 @@ public class GetMetadataDetailsTool implements IMcpTool
                 "per property its value kind, current value and ALLOWED values (enum literals). This " + //$NON-NLS-1$
                 "is what modify_metadata can set; FQNs may address managed-form roots " + //$NON-NLS-1$
                 "('Catalog.Products.Form.ItemForm' / 'CommonForm.Main') and members (e.g. " + //$NON-NLS-1$
-                "'Catalog.Products.Attribute.Weight'). For CommonForm.Main the mdclass properties " + //$NON-NLS-1$
+                "'Catalog.Products.Attribute.Weight'), and 'Configuration' the configuration root (only the " + //$NON-NLS-1$
+                "properties modify_metadata sets on it). For CommonForm.Main the mdclass properties " + //$NON-NLS-1$
                 "remain first and content-root properties are added in a labeled second section. " + //$NON-NLS-1$
                 "This mode does NOT cover a predefined item " + //$NON-NLS-1$
                 "('...Predefined.<Item>' is not resolvable in this mode - its settable surface is " + //$NON-NLS-1$
@@ -304,6 +314,15 @@ public class GetMetadataDetailsTool implements IMcpTool
         if (ctx.assignable)
         {
             appendAssignableView(fqn, sb, failures, ctx);
+            return;
+        }
+
+        // The configuration ROOT (issue #741) is read with get_configuration_properties, and what
+        // modify_metadata sets on it renders with assignable=true; this view does not render it.
+        ConfigurationRoot.Resolution root = ConfigurationRoot.resolve(ctx.scope, fqn);
+        if (root != null)
+        {
+            failures.add(new String[] { fqn, root.error != null ? root.error : ROOT_DETAILS_ROUTE });
             return;
         }
 
@@ -513,6 +532,20 @@ public class GetMetadataDetailsTool implements IMcpTool
      */
     private void appendAssignableView(String fqn, StringBuilder sb, List<String[]> failures, RenderContext ctx)
     {
+        // The configuration ROOT (issue #741): its own address, never the generic resolver's, which
+        // has no root to offer (and must not: it backs delete, rename, adopt and reference targets).
+        ConfigurationRoot.Resolution root = ConfigurationRoot.resolve(ctx.scope, fqn);
+        if (root != null)
+        {
+            if (root.error != null)
+            {
+                failures.add(new String[] { fqn, root.error });
+                return;
+            }
+            sb.append(formatConfigurationRootAssignable((Configuration)root.node.object));
+            sb.append(SECTION_SEPARATOR);
+            return;
+        }
         String normFqn = MetadataTypeUtils.normalizeFqn(fqn);
         // A four-part owned-form ROOT has no mdclass node at that address. Resolve it through the
         // form seams before the mdclass resolver and render the editable form:Form object's own
@@ -860,13 +893,32 @@ public class GetMetadataDetailsTool implements IMcpTool
         return formatAssignableSection("## Form content root assignable properties: ", fqn, obj); //$NON-NLS-1$
     }
 
+    /**
+     * Renders the configuration ROOT's assignable section (issue #741) under its canonical address: the
+     * shared table, which for a {@link Configuration} lists only the properties {@code modify_metadata}
+     * sets on the root, then the sentence that says what else reads the root - no more than
+     * {@code get_configuration_properties} renders (its name, behaviour settings and languages, not every
+     * other property).
+     *
+     * @param config the project's own configuration
+     * @return the Markdown section
+     */
+    static String formatConfigurationRootAssignable(Configuration config)
+    {
+        return formatAssignable(ConfigurationRoot.FQN, config) + "\nOnly these properties of the " //$NON-NLS-1$
+            + "configuration root are settable; get_configuration_properties also reads its name, behaviour " //$NON-NLS-1$
+            + "settings and languages.\n"; //$NON-NLS-1$
+    }
+
     /** Shared table body; callers supply the heading that identifies the represented surface. */
     private static String formatAssignableSection(String heading, String fqn, EObject obj)
     {
         StringBuilder sb = new StringBuilder();
         sb.append(heading).append(fqn).append("\n\n"); //$NON-NLS-1$
         sb.append("Set these with `modify_metadata`. For an ENUM property the value must be one of " //$NON-NLS-1$
-            + "the listed Allowed values.\n\n"); //$NON-NLS-1$
+            + "the listed Allowed values; a FIELD_LIST property takes a JSON array of the listed field " //$NON-NLS-1$
+            + "addresses (at most " + FieldListSupport.MAX_LISTED + " are listed, then the rest is " //$NON-NLS-1$ //$NON-NLS-2$
+            + "counted).\n\n"); //$NON-NLS-1$
         sb.append(MarkdownUtils.tableHeader("Property", "Kind", "Current", "Allowed values")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         // A form element additionally exposes the assignable properties nested in its <extInfo> (e.g. a
         // UsualGroup's group / united layout props). When it carries a LIVE extInfo instance (the common
@@ -891,13 +943,24 @@ public class GetMetadataDetailsTool implements IMcpTool
         {
             props = MetadataPropertyIntrospector.introspect(obj, extInfoEClass);
         }
+        else if (obj instanceof Configuration)
+        {
+            // The configuration root offers only what modify_metadata sets on it (issue #741), and its
+            // collections - every top object of the configuration - are never read for the table.
+            props = MetadataPropertyIntrospector.introspectOnly(obj, ConfigurationRoot::isSettable);
+        }
         else
         {
             props = MetadataPropertyIntrospector.introspect(obj);
         }
         for (MetadataPropertyIntrospector.PropertyInfo p : props)
         {
-            String allowed = p.allowedValues.isEmpty() ? null : String.join(", ", p.allowedValues); //$NON-NLS-1$
+            // A field list offers every lockable field of the object for data locking - several KB on an
+            // ERP-size document - so its Allowed cell is bounded (issue #740); every other list is short.
+            String allowed = p.allowedValues.isEmpty() ? null
+                : p.valueKind == MetadataPropertyIntrospector.ValueKind.FIELD_LIST
+                    ? Pagination.boundedListing(p.allowedValues, FieldListSupport.MAX_LISTED)
+                    : String.join(", ", p.allowedValues); //$NON-NLS-1$
             sb.append(MarkdownUtils.tableRow(p.name, p.valueKind.toString(), p.currentValue, allowed));
         }
         return sb.toString();
@@ -1529,7 +1592,8 @@ public class GetMetadataDetailsTool implements IMcpTool
         String[] parts = fqn.split("\\."); //$NON-NLS-1$
         if (parts.length < 2)
         {
-            return "Invalid FQN. Expected format: Type.Name (e.g. Catalog.Products)"; //$NON-NLS-1$
+            return "Invalid FQN. Expected format: Type.Name (e.g. Catalog.Products); the configuration " //$NON-NLS-1$
+                + "root itself is '" + ConfigurationRoot.FQN + "'"; //$NON-NLS-1$ //$NON-NLS-2$
         }
         String hint = scope == null ? "" : scope.addressingHint(fqn); //$NON-NLS-1$
         return "Object not found - use get_metadata_objects to list valid FQNs" + hint; //$NON-NLS-1$

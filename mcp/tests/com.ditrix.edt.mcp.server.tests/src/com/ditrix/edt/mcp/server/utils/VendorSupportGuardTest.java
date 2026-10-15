@@ -361,6 +361,38 @@ public class VendorSupportGuardTest
         assertNull(VendorSupportGuard.moduleOwnerFqn("src/Unknown/X/Module.bsl")); //$NON-NLS-1$
     }
 
+    /**
+     * ONE reading of a module path, how far it reaches being the parameter (#711): strictly, only a
+     * module its owner holds itself has an owner - a nested object's module, which the guard's lenient
+     * reading hands to an object above it, has none - and on the three shapes both readings agree.
+     */
+    @Test
+    public void testTheStrictReadingNamesOnlyTheOwnerOfAModuleItHoldsItself()
+    {
+        for (String[] agreed : new String[][] {
+            { "src/CommonModules/Calc/Module.bsl", "CommonModule.Calc" }, //$NON-NLS-1$ //$NON-NLS-2$
+            { "Catalogs/Goods/ObjectModule.bsl", "Catalog.Goods" }, //$NON-NLS-1$ //$NON-NLS-2$
+            { "src\\CommonModules\\" + RU_CALC + "\\Module.bsl", "CommonModule." + RU_CALC }, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            { "src/Catalogs/Goods/Commands/Print/CommandModule.bsl", "Catalog.Goods.Command.Print" }, //$NON-NLS-1$ //$NON-NLS-2$
+            { "src/Configuration/SessionModule.bsl", "Configuration" } }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            assertEquals(agreed[0], agreed[1], VendorSupportGuard.moduleOwnerFqn(agreed[0], true));
+            assertEquals(agreed[0], agreed[1], VendorSupportGuard.moduleOwnerFqn(agreed[0], false));
+        }
+        for (String[] nested : new String[][] {
+            { "src/Catalogs/Goods/Forms/ItemForm/Module.bsl", "Catalog.Goods.Form.ItemForm" }, //$NON-NLS-1$ //$NON-NLS-2$
+            { "src/CalculationRegisters/R/Recalculations/Q/RecordSetModule.bsl", "CalculationRegister.R" }, //$NON-NLS-1$ //$NON-NLS-2$
+            { "src/ExternalDataSources/S/Tables/T/ObjectModule.bsl", "ExternalDataSource.S" }, //$NON-NLS-1$ //$NON-NLS-2$
+            { "src/Catalogs/Goods/Commands/Print/ObjectModule.bsl", "Catalog.Goods.Command.Print" }, //$NON-NLS-1$ //$NON-NLS-2$
+            { "src/Configuration/Nested/SessionModule.bsl", "Configuration" }, //$NON-NLS-1$ //$NON-NLS-2$
+            { "src/CommonModules/Calc/Module.bsl/", "CommonModule.Calc" } }) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            assertEquals("the guard's lenient reading: " + nested[0], nested[1], //$NON-NLS-1$
+                VendorSupportGuard.moduleOwnerFqn(nested[0], false));
+            assertNull("the strict reading: " + nested[0], VendorSupportGuard.moduleOwnerFqn(nested[0], true)); //$NON-NLS-1$
+        }
+    }
+
     @Test
     public void testAModuleIsJudgedOnItsOwnerThenOnItself()
     {
