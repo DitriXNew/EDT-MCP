@@ -52,6 +52,7 @@ import com.ditrix.edt.mcp.server.utils.CommandInterfaceAddress;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSupport;
 import com.ditrix.edt.mcp.server.utils.DcsStructureReader;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
+import com.ditrix.edt.mcp.server.utils.FieldListSupport;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
@@ -61,6 +62,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
+import com.ditrix.edt.mcp.server.utils.Pagination;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.RoleRightsReader;
@@ -866,7 +868,9 @@ public class GetMetadataDetailsTool implements IMcpTool
         StringBuilder sb = new StringBuilder();
         sb.append(heading).append(fqn).append("\n\n"); //$NON-NLS-1$
         sb.append("Set these with `modify_metadata`. For an ENUM property the value must be one of " //$NON-NLS-1$
-            + "the listed Allowed values.\n\n"); //$NON-NLS-1$
+            + "the listed Allowed values; a FIELD_LIST property takes a JSON array of the listed field " //$NON-NLS-1$
+            + "addresses (at most " + FieldListSupport.MAX_LISTED + " are listed, then the rest is " //$NON-NLS-1$ //$NON-NLS-2$
+            + "counted).\n\n"); //$NON-NLS-1$
         sb.append(MarkdownUtils.tableHeader("Property", "Kind", "Current", "Allowed values")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         // A form element additionally exposes the assignable properties nested in its <extInfo> (e.g. a
         // UsualGroup's group / united layout props). When it carries a LIVE extInfo instance (the common
@@ -897,7 +901,12 @@ public class GetMetadataDetailsTool implements IMcpTool
         }
         for (MetadataPropertyIntrospector.PropertyInfo p : props)
         {
-            String allowed = p.allowedValues.isEmpty() ? null : String.join(", ", p.allowedValues); //$NON-NLS-1$
+            // A field list offers every lockable field of the object for data locking - several KB on an
+            // ERP-size document - so its Allowed cell is bounded (issue #740); every other list is short.
+            String allowed = p.allowedValues.isEmpty() ? null
+                : p.valueKind == MetadataPropertyIntrospector.ValueKind.FIELD_LIST
+                    ? Pagination.boundedListing(p.allowedValues, FieldListSupport.MAX_LISTED)
+                    : String.join(", ", p.allowedValues); //$NON-NLS-1$
             sb.append(MarkdownUtils.tableRow(p.name, p.valueKind.toString(), p.currentValue, allowed));
         }
         return sb.toString();
