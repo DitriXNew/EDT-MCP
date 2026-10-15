@@ -45,7 +45,6 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.type.MdPropertyState;
-import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
 
 /**
@@ -438,14 +437,7 @@ public final class AdoptedModuleState
         @Override
         public IMdAdoptedPropertyAccess access()
         {
-            try
-            {
-                return ServiceAccess.get(IMdAdoptedPropertyAccess.class);
-            }
-            catch (RuntimeException e) // NOSONAR a missing service is an answer (the step fails), not a crash
-            {
-                return null;
-            }
+            return ExtensionServices.adoptedPropertyAccess();
         }
 
         @Override

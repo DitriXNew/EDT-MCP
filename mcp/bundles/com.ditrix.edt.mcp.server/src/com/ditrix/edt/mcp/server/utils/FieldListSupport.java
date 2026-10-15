@@ -41,7 +41,6 @@ import com._1c.g5.v8.dt.metadata.mdclass.ExchangePlan;
 import com._1c.g5.v8.dt.metadata.mdclass.HierarchyType;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
-import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com.google.gson.JsonElement;
 
 /**
@@ -277,7 +276,7 @@ public final class FieldListSupport
      */
     public static boolean isAdopted(EObject owner)
     {
-        return owner instanceof MdObject && ((MdObject)owner).getObjectBelonging() == ObjectBelonging.ADOPTED;
+        return ExtensionServices.isAdopted(owner);
     }
 
     /**

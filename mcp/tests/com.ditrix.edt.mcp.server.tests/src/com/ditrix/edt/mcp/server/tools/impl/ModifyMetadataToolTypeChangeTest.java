@@ -18,6 +18,7 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyZeroInteractions;
 import static org.mockito.Mockito.withSettings;
 
 import java.math.BigDecimal;
@@ -87,8 +88,11 @@ import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
  * {@code ValueStorage} or unlimited {@code String} stops indexing;</li>
  * <li>a DefinedType: the fill value of every editable metadata object typed with it becomes
  * {@code Undefined};</li>
- * <li>any other owner (a chart of characteristic types, an external data source field, ...), and any
- * object an extension adopted from its base configuration: only the type is set.</li>
+ * <li>any other owner (a chart of characteristic types, an external data source field, ...): only the
+ * type is set;</li>
+ * <li>an object an extension adopted from its base configuration: nothing - its type lives in the
+ * extension's type extension, which {@code AdoptedPropertyRouter} writes or refuses before the transaction,
+ * so a type write that still reaches the native type fails closed (issues #709 / #710).</li>
  * </ul>
  * Each property the task resets is found BY NAME on the owner's class, so a class without one is simply
  * skipped. The designer runs the task only for a real change (its type editor commits nothing when the
@@ -404,28 +408,33 @@ public class ModifyMetadataToolTypeChangeTest
     }
 
     @Test
-    public void testAnAdoptedMemberIsOnlyRetyped()
+    public void testAnAdoptedMemberIsNeverRetypedNatively()
     {
-        // EDT's designer retypes an object an extension adopted through the extension's type extension,
-        // never through its type-change task, so the base-configuration resets do not apply to it.
+        // EDT's designer changes the type of an object an extension adopted only in the extension's type
+        // extension, and EDT's .mdo writer drops a native type written on an adopted object - such a write
+        // answered success over a file that never changed (issues #709 / #710). modify_metadata routes or
+        // refuses every type write on an adopted object before the transaction (AdoptedPropertyRouter); one
+        // that still reaches the type write fails closed - rolled back with the transaction - and writes
+        // nothing, the base-configuration resets included.
         CatalogAttribute attribute = designerString10Attribute();
         attribute.setObjectBelonging(ObjectBelonging.ADOPTED);
+        TypeDescription before = attribute.getType();
         Value fill = attribute.getFillValue();
         CatalogForm form = MdClassFactory.eINSTANCE.createCatalogForm();
         attribute.setChoiceForm(form);
         attribute.setQuickChoice(UseQuickChoice.DONT_USE);
         attribute.setFillFromFillingValue(true);
-        TypeDescription uuid = types("UUID"); //$NON-NLS-1$
+        IBmTransaction tx = mock(IBmTransaction.class);
 
-        Reset reset = applyType(attribute, MdClassPackage.Literals.BASIC_FEATURE__TYPE, uuid);
+        assertFailsClosed(attribute, MdClassPackage.Literals.BASIC_FEATURE__TYPE, types("UUID"), tx); //$NON-NLS-1$
 
-        assertEquals("an adopted member's retype resets nothing", Reset.NONE, reset); //$NON-NLS-1$
-        assertSame("the type is still written", uuid, attribute.getType()); //$NON-NLS-1$
+        assertSame("the type is not written", before, attribute.getType()); //$NON-NLS-1$
         assertSame(fill, attribute.getFillValue());
         assertSame(form, attribute.getChoiceForm());
         assertEquals(UseQuickChoice.DONT_USE, attribute.getQuickChoice());
         assertTrue(attribute.isFillFromFillingValue());
         assertEquals(FullTextSearchUsing.USE, attribute.getFullTextSearch());
+        verifyZeroInteractions(tx);
     }
 
     // ==================== DefinedType ====================
@@ -466,10 +475,11 @@ public class ModifyMetadataToolTypeChangeTest
     }
 
     @Test
-    public void testAnAdoptedDefinedTypeLeavesTheObjectsTypedWithItAlone()
+    public void testAnAdoptedDefinedTypeIsNeverRetypedNatively()
     {
-        // The referrer set-up a native defined type resets: an adopted one is only retyped, and the
-        // transaction is never asked for an object typed with it.
+        // The referrer set-up a native defined type resets: an adopted one fails closed before its type is
+        // written, so neither the defined type nor an object typed with it changes, and the transaction is
+        // never asked for one. Its type lives in the extension's type extension (issue #709).
         DefinedType definedType = mock(DefinedType.class, withSettings().extraInterfaces(IBmObject.class));
         doReturn(ObjectBelonging.ADOPTED).when(definedType).getObjectBelonging();
         DefinedTypeTypes produced = mock(DefinedTypeTypes.class);
@@ -485,13 +495,11 @@ public class ModifyMetadataToolTypeChangeTest
         doReturn(referrer.getType()).when(tx).getObjectById(11L);
         TypeDescription number = number(15, 2);
 
-        Reset reset = ModifyMetadataTool.PreparedChange.typeDescription(MdClassPackage.Literals.DEFINED_TYPE__TYPE,
-            number).applyTo(definedType, tx);
+        assertFailsClosed(definedType, MdClassPackage.Literals.DEFINED_TYPE__TYPE, number, tx);
 
-        assertEquals(Reset.NONE, reset);
         assertSame("an object typed with an adopted defined type keeps its fill value", fill, //$NON-NLS-1$
             referrer.getFillValue());
-        verify(definedType).eSet(MdClassPackage.Literals.DEFINED_TYPE__TYPE, number);
+        verify(definedType, never()).eSet(any(), any());
         verify(tx, never()).getObjectById(anyLong());
     }
 
@@ -706,10 +714,11 @@ public class ModifyMetadataToolTypeChangeTest
     }
 
     @Test
-    public void testAnAdoptedOwnerGetsNoReset()
+    public void testAnAdoptedOwnerGetsNoResetAndNoNativeType()
     {
         // The belonging decides, not the class: EDT's designer retypes an adopted object through the
-        // extension's type extension, never through its type-change task.
+        // extension's type extension, never through its type-change task - and never through its native
+        // type either, so the type write itself fails closed on every adopted owner (issue #709).
         MdClassFactory md = MdClassFactory.eINSTANCE;
         CatalogAttribute nativeAttribute = md.createCatalogAttribute();
         nativeAttribute.setObjectBelonging(ObjectBelonging.NATIVE);
@@ -723,6 +732,19 @@ public class ModifyMetadataToolTypeChangeTest
         DefinedType adoptedDefinedType = md.createDefinedType();
         adoptedDefinedType.setObjectBelonging(ObjectBelonging.ADOPTED);
         assertEquals(Reset.NONE, TypeChangeDefaults.resetFor(adoptedDefinedType));
+
+        TypeDescription number = number(10, 2);
+        assertFailsClosed(adoptedAttribute, MdClassPackage.Literals.BASIC_FEATURE__TYPE, number,
+            mock(IBmTransaction.class));
+        assertFailsClosed(adoptedConstant, MdClassPackage.Literals.CONSTANT__TYPE, number,
+            mock(IBmTransaction.class));
+        assertFailsClosed(adoptedDefinedType, MdClassPackage.Literals.DEFINED_TYPE__TYPE, number,
+            mock(IBmTransaction.class));
+        assertEquals("nothing reached the adopted attribute", null, adoptedAttribute.getType()); //$NON-NLS-1$
+        assertEquals("nothing reached the adopted constant", null, adoptedConstant.getType()); //$NON-NLS-1$
+        assertEquals("nothing reached the adopted defined type", null, adoptedDefinedType.getType()); //$NON-NLS-1$
+        assertSame("a native owner of the same class is still retyped", number, //$NON-NLS-1$
+            setTypeOf(nativeAttribute, number));
     }
 
     // ==================== the guide ====================
@@ -768,6 +790,34 @@ public class ModifyMetadataToolTypeChangeTest
     {
         return ModifyMetadataTool.PreparedChange.scalar(MdClassPackage.Literals.BASIC_FEATURE__QUICK_CHOICE,
             value);
+    }
+
+    /**
+     * A type write that must fail closed: {@link TypeChangeDefaults#setType} on an adopted owner throws
+     * an {@link IllegalStateException} that points at the router and says nothing was changed.
+     */
+    private static void assertFailsClosed(EObject owner, EStructuralFeature feature, TypeDescription newType,
+        IBmTransaction tx)
+    {
+        try
+        {
+            ModifyMetadataTool.PreparedChange.typeDescription(feature, newType).applyTo(owner, tx);
+            fail("a native type write on an adopted " + owner.getClass().getSimpleName() //$NON-NLS-1$
+                + " must fail closed"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertTrue(e.getMessage(), e.getMessage().contains("AdoptedPropertyRouter")); //$NON-NLS-1$
+            assertTrue(e.getMessage(), e.getMessage().contains("Nothing was changed")); //$NON-NLS-1$
+        }
+    }
+
+    /** The type of a native owner after a type write through the production apply step. */
+    private static TypeDescription setTypeOf(CatalogAttribute owner, TypeDescription newType)
+    {
+        ModifyMetadataTool.PreparedChange.typeDescription(MdClassPackage.Literals.BASIC_FEATURE__TYPE, newType)
+            .applyTo(owner, mock(IBmTransaction.class));
+        return owner.getType();
     }
 
     /** {@link #retype} answering what the write reset besides the type. */
