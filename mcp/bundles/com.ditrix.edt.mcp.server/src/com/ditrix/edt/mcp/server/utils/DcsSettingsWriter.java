@@ -69,6 +69,7 @@ import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFields;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFieldsCaseVariants;
 import com._1c.g5.v8.dt.dcs.model.settings.DataCompositionUserFieldsVariant;
 import com._1c.g5.v8.dt.dcs.model.settings.DcsFactory;
+import com._1c.g5.v8.dt.dcs.model.settings.DcsPackage;
 import com._1c.g5.v8.dt.dcs.model.settings.FilterItem;
 import com._1c.g5.v8.dt.dcs.model.settings.GroupItem;
 import com._1c.g5.v8.dt.dcs.model.settings.OrderItem;
@@ -2272,23 +2273,51 @@ public final class DcsSettingsWriter
             }
             field.setPeriodAdditionType(value.value);
         }
-        if (body.has("periodAdditionBegin")) //$NON-NLS-1$
+        String error = applyPeriodBound(field, body, "periodAdditionBegin", //$NON-NLS-1$
+            DcsPackage.Literals.DATA_COMPOSITION_GROUP_FIELD__PERIOD_ADDITION_BEGIN, path);
+        if (error != null)
         {
-            ValueResult value = value(body.get("periodAdditionBegin"), path + ".periodAdditionBegin"); //$NON-NLS-1$ //$NON-NLS-2$
-            if (value.error != null)
-            {
-                return value.error;
-            }
-            field.setPeriodAdditionBegin(value.value);
+            return error;
         }
-        if (body.has("periodAdditionEnd")) //$NON-NLS-1$
+        return applyPeriodBound(field, body, "periodAdditionEnd", //$NON-NLS-1$
+            DcsPackage.Literals.DATA_COMPOSITION_GROUP_FIELD__PERIOD_ADDITION_END, path);
+    }
+
+    /**
+     * Writes one period bound of a grouping field. A JSON null or the null ValueSpec leaves the bound
+     * not set, which also clears a bound the field already has (#672).
+     *
+     * <p>The bound is a plain containment, not an unsettable one, so "not set" is no value at all. That
+     * is the state EDT reads from a Template.dcs without the element, and EDT writes no element for it.
+     * A NullValue is not an option: EDT's DCS serializer has no form for it, so the Template.dcs export
+     * fails. Neither is an UndefinedValue: EDT writes that as an {@code xsi:nil} element, which is a set
+     * bound, not an absent one.</p>
+     */
+    private static String applyPeriodBound(DataCompositionGroupField field, JsonObject body, String member,
+        EReference feature, String path)
+    {
+        if (!body.has(member))
         {
-            ValueResult value = value(body.get("periodAdditionEnd"), path + ".periodAdditionEnd"); //$NON-NLS-1$ //$NON-NLS-2$
+            return null;
+        }
+        JsonElement raw = body.get(member);
+        Value bound = null;
+        if (!raw.isJsonNull())
+        {
+            ValueResult value = value(raw, path + "." + member); //$NON-NLS-1$
             if (value.error != null)
             {
                 return value.error;
             }
-            field.setPeriodAdditionEnd(value.value);
+            bound = value.value instanceof NullValue ? null : value.value;
+        }
+        if (bound == null)
+        {
+            field.eUnset(feature);
+        }
+        else
+        {
+            field.eSet(feature, bound);
         }
         return null;
     }

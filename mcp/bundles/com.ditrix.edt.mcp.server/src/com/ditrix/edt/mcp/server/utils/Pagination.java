@@ -6,6 +6,8 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
+import java.util.List;
+
 /**
  * Shared pagination helpers for MCP tools.
  *
@@ -75,5 +77,37 @@ public final class Pagination
     public static String limitReachedNotice(int limit)
     {
         return " (showing first " + limit + ", limit reached; pass a higher limit for more)"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * An inline listing bounded at {@code limit}, with the rest counted: {@code a, b, ... (N more)}.
+     * The first {@code limit} items are printed in the order given, joined by {@code ", "}; when any
+     * are left out, {@code ", ... (N more)"} follows, {@code N} being how many. A list of at most
+     * {@code limit} items is printed whole, with nothing appended.
+     *
+     * <p>For a refusal or a table cell that names the values a caller may choose from, where the whole
+     * list can be long - a data-lock field list of an ERP-size document runs to several KB. Unlike
+     * {@link #truncationNotice}, nothing is paged here: the reader learns how many were left out, not
+     * how to fetch them. New code calls this rather than spelling the suffix out again.</p>
+     *
+     * @param items the items, in the order to print them ({@code null} lists nothing)
+     * @param limit how many items to print before the rest is counted; at least 1
+     * @return the listing, or an empty string when there are no items
+     * @throws IllegalArgumentException if {@code limit} is below 1
+     */
+    public static String boundedListing(List<String> items, int limit)
+    {
+        if (limit < 1)
+        {
+            throw new IllegalArgumentException("a bounded listing prints at least 1 item, got limit " + limit); //$NON-NLS-1$
+        }
+        if (items == null || items.isEmpty())
+        {
+            return ""; //$NON-NLS-1$
+        }
+        int shown = Math.min(limit, items.size());
+        String joined = String.join(", ", items.subList(0, shown)); //$NON-NLS-1$
+        int rest = items.size() - shown;
+        return rest > 0 ? joined + ", ... (" + rest + " more)" : joined; //$NON-NLS-1$ //$NON-NLS-2$
     }
 }
