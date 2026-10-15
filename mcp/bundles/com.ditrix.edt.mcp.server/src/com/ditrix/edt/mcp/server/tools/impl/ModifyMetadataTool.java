@@ -87,6 +87,7 @@ import com.ditrix.edt.mcp.server.utils.CommandInterfaceAddress;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSection;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSupport;
 import com.ditrix.edt.mcp.server.utils.CommonAttributeContentWriter;
+import com.ditrix.edt.mcp.server.utils.ConfigurationRoot;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
@@ -344,7 +345,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .stringProperty("fqn", //$NON-NLS-1$
                 "Full-name FQN of the node to modify (required), e.g. 'Catalog.Products' or " //$NON-NLS-1$
                 + "'Catalog.Products.Attribute.Weight'; a managed-form root is " //$NON-NLS-1$
-                + "'Catalog.Products.Form.ItemForm' or 'CommonForm.Main'. On CommonForm.Main, any " //$NON-NLS-1$
+                + "'Catalog.Products.Form.ItemForm' or 'CommonForm.Main'; the configuration root is " //$NON-NLS-1$
+                + "'Configuration'. On CommonForm.Main, any " //$NON-NLS-1$
                 + "mdclass-assignable property keeps the whole call on the mdclass surface; only " //$NON-NLS-1$
                 + "an all-root-only batch falls back to the content root. Type / kind tokens may " //$NON-NLS-1$
                 + "be English or Russian; the Name parts are the programmatic Name.", true) //$NON-NLS-1$
@@ -533,6 +535,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (commandInterfaceResult != null)
         {
             return commandInterfaceResult;
+        }
+
+        // The configuration ROOT ('Configuration', issue #741) is its own address with a fixed set of
+        // settable properties; the generic resolver below has no root to offer.
+        String rootResult = dispatchConfigurationRoot(ctx, args);
+        if (rootResult != null)
+        {
+            return rootResult;
         }
 
         // A FQN that addresses a FORM member (item / attribute / command) is dispatched to its own
@@ -1143,6 +1153,144 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * Dispatches the configuration ROOT (issue #741): {@code Configuration}, its Russian token, or
+     * {@code Configuration.<its Name>}. The root takes only 'properties', and of them only
+     * {@link ConfigurationRoot#settableProperties()}; every refusal comes before anything is written. An
+     * accepted call goes down the generic property path with the root as a top-level node, so its
+     * validation, its one BM write transaction, the export of the root's own top object
+     * ({@link ConfigurationRoot#FQN}) and its result are those of any other object. Returns {@code null}
+     * when the FQN is not a root address, so the caller continues down the normal path.
+     */
+    private String dispatchConfigurationRoot(ProjectContext ctx, ModifyArgs args)
+    {
+        return dispatchConfigurationRoot(ctx.scope, args.fqn, args.hasRolePayload, args.hasContentPayload,
+            args.hasTemplatePayload, args.properties,
+            root -> applyGenericPropertyChanges(ctx, args.projectName, ConfigurationRoot.FQN, root, root.object,
+                args.properties, args.normReport));
+    }
+
+    /**
+     * The root dispatch itself: resolves a root address, judges the call with
+     * {@link #configurationRootRefusal}, and hands the root to {@code write} only when nothing was
+     * refused. The allow-list is the only barrier between a root call and the generic property path,
+     * which can set ANY assignable feature of the root - its object collections included - so the order
+     * is the point: no refused call reaches {@code write}. Package-visible for tests.
+     *
+     * @param scope the project's resolution root
+     * @param fqn the requested address
+     * @param rolePayload whether a role payload was sent
+     * @param contentPayload whether a 'content' payload was sent
+     * @param templatePayload whether a 'template' payload was sent
+     * @param properties the 'properties' entries
+     * @param write writes the properties on the resolved root (a top-level node) and answers the result
+     * @return {@code null} when {@code fqn} is not a root address; else the refusal as ready JSON, or
+     *     what {@code write} answered
+     */
+    static String dispatchConfigurationRoot(MetadataScope scope, String fqn, boolean rolePayload,
+        boolean contentPayload, boolean templatePayload, List<JsonObject> properties,
+        Function<MetadataNodeResolver.MetadataNode, String> write)
+    {
+        ConfigurationRoot.Resolution root = ConfigurationRoot.resolve(scope, fqn);
+        if (root == null)
+        {
+            return null;
+        }
+        String refusal = configurationRootRefusal(root.error, rolePayload, contentPayload, templatePayload,
+            properties);
+        if (refusal != null)
+        {
+            return ToolResult.error(refusal).toJson();
+        }
+        return write.apply(root.node);
+    }
+
+    /**
+     * The refusal of a call on the configuration root, judged in the order the dispatch must: the address
+     * (another configuration's Name, a project with no root of its own), then the payload, then the
+     * properties. Package-visible for tests.
+     *
+     * @param resolutionError why the address does not name this project's root, or {@code null}
+     * @param rolePayload whether a role payload was sent
+     * @param contentPayload whether a 'content' payload was sent
+     * @param templatePayload whether a 'template' payload was sent
+     * @param properties the 'properties' entries
+     * @return the first refusal that applies, or {@code null} when the call may proceed
+     */
+    static String configurationRootRefusal(String resolutionError, boolean rolePayload, boolean contentPayload,
+        boolean templatePayload, List<JsonObject> properties)
+    {
+        if (resolutionError != null)
+        {
+            return resolutionError;
+        }
+        String payloadError = configurationRootPayloadError(rolePayload, contentPayload, templatePayload);
+        return payloadError != null ? payloadError : configurationRootPropertiesError(properties);
+    }
+
+    /**
+     * The refusal of a payload other than 'properties' on the configuration root (a 'commands' payload is
+     * refused by the command-interface dispatch before this). Package-visible for tests.
+     *
+     * @param rolePayload whether a role payload was sent
+     * @param contentPayload whether a 'content' payload was sent
+     * @param templatePayload whether a 'template' payload was sent
+     * @return the refusal naming the payload, or {@code null} when none was sent
+     */
+    static String configurationRootPayloadError(boolean rolePayload, boolean contentPayload,
+        boolean templatePayload)
+    {
+        String payload;
+        if (rolePayload)
+        {
+            payload = "a role payload ('rights' / 'templates' / 'roleProperties')"; //$NON-NLS-1$
+        }
+        else if (contentPayload)
+        {
+            payload = "'content'"; //$NON-NLS-1$
+        }
+        else if (templatePayload)
+        {
+            payload = "'template'"; //$NON-NLS-1$
+        }
+        else
+        {
+            return null;
+        }
+        return "'" + ConfigurationRoot.FQN + "' (the configuration root) accepts only 'properties'; " //$NON-NLS-1$ //$NON-NLS-2$
+            + payload + " is not taken there. Set its properties as properties=[{name, value, language?}]."; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal of the configuration root's 'properties' when any entry is not settable there - checked
+     * for the whole batch before anything is written, like the generic validation. Package-visible for
+     * tests.
+     *
+     * @param properties the 'properties' entries
+     * @return the refusal of the first entry without a name or with a property the root does not take, or
+     *     {@code null} when every entry is settable
+     */
+    static String configurationRootPropertiesError(List<JsonObject> properties)
+    {
+        if (properties == null)
+        {
+            return null;
+        }
+        for (JsonObject prop : properties)
+        {
+            String name = asString(prop.get("name")); //$NON-NLS-1$
+            if (name == null || name.isEmpty())
+            {
+                return "Each entry in 'properties' needs a non-empty 'name'."; //$NON-NLS-1$
+            }
+            if (!ConfigurationRoot.isSettable(name))
+            {
+                return ConfigurationRoot.notSettableMessage(name);
+            }
+        }
+        return null;
+    }
+
+    /**
      * Reads the 'commands' payload strictly: a skipped entry would apply part of a batch that is
      * validated as a whole.
      *
@@ -1516,11 +1664,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         MetadataNodeResolver.MetadataNode node = resolved.node;
         if (node == null || node.object == null)
         {
-            return ResolvedTarget.notFound(
-                ToolResult.error("Node not found: " + fqn + ". Use 'Type.Name' for a top object or " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "'Type.Name.Kind.Name' for a member. Use get_metadata_objects to find an FQN." //$NON-NLS-1$
-                    + MetadataNodeResolver.yoNotFoundHint(normFqn)
-                    + scope.addressingHint(normFqn)).toJson());
+            return ResolvedTarget.notFound(ToolResult.error(nodeNotFoundMessage(scope, fqn, normFqn)).toJson());
         }
         if (resolved.yoFallback)
         {
@@ -1530,6 +1674,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             normFqn = resolved.fqn;
         }
         return ResolvedTarget.of(node, normFqn);
+    }
+
+    /**
+     * The refusal of a modify target that resolves to no node: the address forms this tool takes - the
+     * configuration root's own among them (issue #741) - and where to find an FQN. Package-visible for
+     * tests.
+     *
+     * @param scope the project's resolution root
+     * @param fqn the address as the caller wrote it
+     * @param normFqn the normalized address
+     * @return the message
+     */
+    static String nodeNotFoundMessage(MetadataScope scope, String fqn, String normFqn)
+    {
+        return "Node not found: " + fqn + ". Use 'Type.Name' for a top object, " //$NON-NLS-1$ //$NON-NLS-2$
+            + "'Type.Name.Kind.Name' for a member, or '" + ConfigurationRoot.FQN + "' for the " //$NON-NLS-1$ //$NON-NLS-2$
+            + "configuration root. Use get_metadata_objects to find an FQN." //$NON-NLS-1$
+            + MetadataNodeResolver.yoNotFoundHint(normFqn)
+            + scope.addressingHint(normFqn);
     }
 
     /**

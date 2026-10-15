@@ -932,7 +932,10 @@ support-derived platform prohibition `supportLock=true`, and `force=true` does n
 When EDT's support check cannot be answered, the write is refused (fail closed). A configuration
 extension and an external data processor/report project are never locked. The way out is an
 extension (`adopt_metadata_object`) or the user allowing changes in EDT's support settings; the
-server never changes support settings itself. `get_metadata_details` shows one
+server never changes support settings itself. A change to the configuration root itself
+(`modify_metadata` on `Configuration`) is judged on the root, and for a locked root only the support
+settings help: an extension's root is its own and describes the extension, not the configuration it
+extends. `get_metadata_details` shows one
 `Vendor support:` line for a locked object.
 
 ### Infobase authentication dialog

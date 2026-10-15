@@ -34,14 +34,11 @@ public final class CommandInterfaceAddress
     /** The platform's tail token of the main section's command interface. */
     public static final String MAIN_SECTION_TOKEN = "MainSectionCommandInterface"; //$NON-NLS-1$
 
-    private static final String CONFIGURATION_TOKEN = "Configuration"; //$NON-NLS-1$
+    private static final String CONFIGURATION_TOKEN = ConfigurationRoot.FQN;
 
     private static final String RU_COMMAND_INTERFACE = MetadataLanguageUtils.cp(0x043a, 0x043e, 0x043c,
         0x0430, 0x043d, 0x0434, 0x043d, 0x044b, 0x0439, 0x0438, 0x043d, 0x0442, 0x0435, 0x0440, 0x0444, 0x0435,
         0x0439, 0x0441);
-
-    private static final String RU_CONFIGURATION = MetadataLanguageUtils.cp(0x043a, 0x043e, 0x043d, 0x0444,
-        0x0438, 0x0433, 0x0443, 0x0440, 0x0430, 0x0446, 0x0438, 0x044f);
 
     private static final String RU_MAIN_SECTION = RU_COMMAND_INTERFACE + MetadataLanguageUtils.cp(0x043e,
         0x0441, 0x043d, 0x043e, 0x0432, 0x043d, 0x043e, 0x0433, 0x043e, 0x0440, 0x0430, 0x0437, 0x0434, 0x0435,
@@ -140,10 +137,10 @@ public final class CommandInterfaceAddress
         return ownerFqn() + '.' + (kind == Kind.MAIN_SECTION ? MAIN_SECTION_TOKEN : COMMAND_INTERFACE_TOKEN);
     }
 
+    /** The configuration's type token, English or Russian - the one {@link ConfigurationRoot} reads. */
     static boolean isConfigurationToken(String token)
     {
-        String t = token.trim().toLowerCase(Locale.ROOT);
-        return t.equals("configuration") || t.equals(RU_CONFIGURATION); //$NON-NLS-1$
+        return ConfigurationRoot.isToken(token);
     }
 
     private static boolean isCommandInterfaceToken(String token)

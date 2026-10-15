@@ -59,12 +59,18 @@ public final class VendorSupportGuard
         CREATE,
         /** Changes the addressed node (or its nearest existing ancestor). */
         MODIFY,
+        /**
+         * Renames the addressed node: judged like {@link #MODIFY}, except that a configuration ROOT
+         * address is not judged at all - a rename cannot address the root (its resolver answers "not
+         * found" for it), so the root's lock is never the reason it fails (issue #741).
+         */
+        RENAME,
         /** Removes the addressed node. */
         DELETE
     }
 
     /** The configuration pseudo-address used by command-interface and module paths. */
-    private static final String CONFIGURATION = "Configuration"; //$NON-NLS-1$
+    private static final String CONFIGURATION = ConfigurationRoot.FQN;
 
     /** The folder of an object's commands, below the object's own folder. */
     private static final String COMMANDS = "Commands"; //$NON-NLS-1$
@@ -87,6 +93,17 @@ public final class VendorSupportGuard
         + "copy, or create new objects in the extension project), or ask the user to allow " //$NON-NLS-1$
         + "changes in EDT's support settings (Configuration > Support > Support settings); this " //$NON-NLS-1$
         + "server does not change support settings."; //$NON-NLS-1$
+
+    /**
+     * The remedy of a refusal to change the configuration ROOT itself (issue #741). An extension is no way
+     * out there: its root is its own, so what is set on it describes the extension, never the root of the
+     * configuration it extends.
+     */
+    private static final String ROOT_REMEDY = " Nothing was changed. The root of a configuration on " //$NON-NLS-1$
+        + "vendor support changes only once the user allows changes to it in EDT's support settings " //$NON-NLS-1$
+        + "(Configuration > Support > Support settings); this server does not change support settings. " //$NON-NLS-1$
+        + "A configuration extension does not help here: its root is its own, so what is set on it " //$NON-NLS-1$
+        + "describes the extension, not this configuration."; //$NON-NLS-1$
 
     /** Test seam: replaces the platform service lookup when set. */
     private static final AtomicReference<Supplier<IModelEditingSupport>> SERVICE = new AtomicReference<>();
@@ -136,7 +153,8 @@ public final class VendorSupportGuard
     public static String refusalForFqn(MetadataScope scope, String normFqn, Intent intent)
     {
         String verb = intent == Intent.CREATE ? "created" //$NON-NLS-1$
-            : intent == Intent.DELETE ? "deleted" : "changed"; //$NON-NLS-1$ //$NON-NLS-2$
+            : intent == Intent.DELETE ? "deleted" //$NON-NLS-1$
+            : intent == Intent.RENAME ? "renamed" : "changed"; //$NON-NLS-1$ //$NON-NLS-2$
         return refusalForFqn(scope, normFqn, intent, verb);
     }
 
@@ -164,7 +182,7 @@ public final class VendorSupportGuard
                 return null;
             }
             return check(target.object, intent == Intent.DELETE && target.exact, target.label,
-                scope.configuration(), normFqn, verb);
+                scope.configuration(), normFqn, verb, target.remedy);
         });
     }
 
@@ -186,7 +204,7 @@ public final class VendorSupportGuard
         {
             return null;
         }
-        return check(object, false, label, scope.configuration(), callerAddress, verb);
+        return check(object, false, label, scope.configuration(), callerAddress, verb, REMEDY);
     }
 
     /**
@@ -207,8 +225,9 @@ public final class VendorSupportGuard
         {
             return null;
         }
-        String refusal = check(object, false, label, scope.configuration(), callerAddress, verb);
-        return refusal != null ? refusal : check(object, true, label, scope.configuration(), callerAddress, verb);
+        String refusal = check(object, false, label, scope.configuration(), callerAddress, verb, REMEDY);
+        return refusal != null ? refusal
+            : check(object, true, label, scope.configuration(), callerAddress, verb, REMEDY);
     }
 
     /**
@@ -244,12 +263,12 @@ public final class VendorSupportGuard
                 label = configurationLabel(configuration);
             }
             String refusal = owner == null ? null
-                : check(owner, false, label, configuration, projectRelativePath, verb);
+                : check(owner, false, label, configuration, projectRelativePath, verb, REMEDY);
             if (refusal != null || module == null)
             {
                 return refusal;
             }
-            return check(module, false, "the module", configuration, projectRelativePath, verb); //$NON-NLS-1$
+            return check(module, false, "the module", configuration, projectRelativePath, verb, REMEDY); //$NON-NLS-1$
         });
     }
 
@@ -638,20 +657,32 @@ public final class VendorSupportGuard
         final EObject object;
         final String label;
         final boolean exact;
+        /** The way out a refusal names: the shared one, or the configuration root's own. */
+        final String remedy;
 
         Target(EObject object, String label, boolean exact)
+        {
+            this(object, label, exact, REMEDY);
+        }
+
+        Target(EObject object, String label, boolean exact, String remedy)
         {
             this.object = object;
             this.label = label;
             this.exact = exact;
+            this.remedy = remedy;
         }
     }
 
     /**
      * The nearest existing object an FQN-addressed write changes. A CREATE starts from the
      * parent (the node itself does not exist yet) and falls back to the configuration for a
-     * top-level {@code Type.Name}; a MODIFY / DELETE starts from the node itself. Package-visible
-     * for tests.
+     * top-level {@code Type.Name}; a MODIFY / RENAME / DELETE starts from the node itself. A MODIFY of
+     * the configuration root ({@link ConfigurationRoot}) changes the configuration itself - judged only
+     * when the address names THIS project's root, so {@code Configuration.OtherName} is not answered
+     * about a configuration the caller never named (the write path refuses that address on its own). A
+     * RENAME of a root address is not judged: the rename cannot address the root at all.
+     * Package-visible for tests.
      *
      * @param scope the resolution root
      * @param normFqn the normalized FQN
@@ -669,6 +700,13 @@ public final class VendorSupportGuard
             return object == null ? null
                 : new Target(object, CONFIGURATION.equals(owner) ? configurationLabel(scope.configuration())
                     : owner, false);
+        }
+        if (intent == Intent.MODIFY && ConfigurationRoot.isAddress(normFqn))
+        {
+            // An external-objects scope resolves to no node: its configuration is the LINKED base.
+            ConfigurationRoot.Resolution root = ConfigurationRoot.resolve(scope, normFqn);
+            return root == null || root.node == null ? null
+                : new Target(root.node.object, configurationLabel(scope.configuration()), true, ROOT_REMEDY);
         }
         String[] parts = normFqn.split("\\."); //$NON-NLS-1$
         int longest = intent == Intent.CREATE ? parts.length - 1 : parts.length;
@@ -688,9 +726,9 @@ public final class VendorSupportGuard
         return null;
     }
 
-    /** Asks EDT about one object and words the refusal. */
+    /** Asks EDT about one object and words the refusal, ending it with {@code remedy}. */
     private static String check(EObject object, boolean delete, String label, Configuration configuration,
-        String callerAddress, String verb)
+        String callerAddress, String verb, String remedy)
     {
         IModelEditingSupport support = service();
         if (support == null)
@@ -722,7 +760,7 @@ public final class VendorSupportGuard
                 + " (it, one of its members, or the object that contains it is locked by its support rule)" //$NON-NLS-1$
             : subject + " is under vendor support and its support rule does not allow changes"; //$NON-NLS-1$
         return "'" + callerAddress + "' cannot be " + verb + ": " + reason + "." //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            + configurationClause(support, object, configuration) + REMEDY;
+            + configurationClause(support, object, configuration) + remedy;
     }
 
     /** The "configuration itself is locked" sentence, computed only for a refusal. */
