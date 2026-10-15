@@ -489,16 +489,35 @@ public class ExtensionRootBuilderTest
 
     // ==================== the root on disk ====================
 
-    /** The extension block and the mapping flag, as EDT serializes a wizard-made root. */
+    /**
+     * The root these looks expect: the one {@link #spec} builds over the base of {@link #setUp} - its name, its prefix,
+     * the caller's purpose and the base's mode - so {@link #WIZARD_ROOT} is this create's root.
+     */
+    private static final ExtensionRootBuilder.RootIdentity ROOT = new ExtensionRootBuilder.RootIdentity("MyExt", //$NON-NLS-1$
+        "Ext1_", ConfigurationExtensionPurpose.ADD_ON, CompatibilityMode.VERSION8_321); //$NON-NLS-1$
+
+    /**
+     * The extension block and the mapping flag, as EDT serializes a wizard-made root, with the name, the prefix, the
+     * extension compatibility mode and the purpose of {@link #ROOT} in EDT's order (as in the live root of the #747 stand).
+     */
     private static final String WIZARD_ROOT = "<mdclass:Configuration>\n" //$NON-NLS-1$
+        + "  <name>MyExt</name>\n" //$NON-NLS-1$
         + "  <extension xsi:type=\"mdclassExtension:ConfigurationExtension\">\n" //$NON-NLS-1$
         + "    <defaultRunMode>Checked</defaultRunMode>\n" //$NON-NLS-1$
         + "  </extension>\n" //$NON-NLS-1$
         + "  <keepMappingToExtendedConfigurationObjectsByIDs>true</keepMappingToExtendedConfigurationObjectsByIDs>\n" //$NON-NLS-1$
+        + "  <namePrefix>Ext1_</namePrefix>\n" //$NON-NLS-1$
+        + "  <configurationExtensionCompatibilityMode>8.3.21</configurationExtensionCompatibilityMode>\n" //$NON-NLS-1$
+        + "  <configurationExtensionPurpose>AddOn</configurationExtensionPurpose>\n" //$NON-NLS-1$
         + "</mdclass:Configuration>\n"; //$NON-NLS-1$
 
-    /** A factory-made root: base-only properties, no block, no mapping flag (the #706 report). */
+    /**
+     * A factory-made root: base-only properties, no block, no mapping flag (the #706 report) - with the name and prefix
+     * of {@link #ROOT}, which that root carried too: only the wizard's shape is what it lacks.
+     */
     private static final String FACTORY_ROOT = "<mdclass:Configuration>\n" //$NON-NLS-1$
+        + "  <name>MyExt</name>\n" //$NON-NLS-1$
+        + "  <namePrefix>Ext1_</namePrefix>\n" //$NON-NLS-1$
         + "  <objectBelonging>Adopted</objectBelonging>\n" //$NON-NLS-1$
         + "  <dataLockControlMode>Managed</dataLockControlMode>\n" //$NON-NLS-1$
         + "</mdclass:Configuration>\n"; //$NON-NLS-1$
@@ -506,23 +525,32 @@ public class ExtensionRootBuilderTest
     @Test
     public void testAWizardShapedRootLacksNothing()
     {
-        assertEquals(Collections.emptyList(), ExtensionRootBuilder.missingOnDisk(WIZARD_ROOT));
+        assertEquals(Collections.emptyList(), ExtensionRootBuilder.missingOnDisk(WIZARD_ROOT, ROOT));
     }
 
     @Test
     public void testAFactoryShapedRootLacksBothMarks()
     {
-        List<String> missing = ExtensionRootBuilder.missingOnDisk(FACTORY_ROOT);
-        assertEquals(2, missing.size());
+        List<String> missing = ExtensionRootBuilder.missingOnDisk(FACTORY_ROOT, ROOT);
+        assertEquals(missing.toString(), 2, missing.size());
         assertTrue(missing.toString(), missing.get(0).contains("ConfigurationExtension")); //$NON-NLS-1$
         assertTrue(missing.toString(), missing.get(1).contains("keepMappingToExtendedConfigurationObjectsByIDs")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFileWithoutANameOrAPrefixLacksThem()
+    {
+        List<String> missing = ExtensionRootBuilder.missingOnDisk("<mdclass:Configuration>\n</mdclass:Configuration>", //$NON-NLS-1$
+            ROOT);
+        assertEquals(Arrays.asList("the ConfigurationExtension block", //$NON-NLS-1$
+            "keepMappingToExtendedConfigurationObjectsByIDs=true", "name 'MyExt'", "namePrefix 'Ext1_'"), missing); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     @Test
     public void testAFalseMappingFlagIsNotTheMark()
     {
         String text = WIZARD_ROOT.replace(">true</keepMapping", ">false</keepMapping"); //$NON-NLS-1$ //$NON-NLS-2$
-        List<String> missing = ExtensionRootBuilder.missingOnDisk(text);
+        List<String> missing = ExtensionRootBuilder.missingOnDisk(text, ROOT);
         assertEquals(1, missing.size());
         assertTrue(missing.toString(), missing.get(0).contains("keepMappingToExtendedConfigurationObjectsByIDs")); //$NON-NLS-1$
     }
@@ -530,7 +558,132 @@ public class ExtensionRootBuilderTest
     @Test
     public void testAnAbsentFileIsNotConfirmed()
     {
-        assertFalse(ExtensionRootBuilder.missingOnDisk(null).isEmpty());
+        assertFalse(ExtensionRootBuilder.missingOnDisk(null, ROOT).isEmpty());
+    }
+
+    // ==================== the root on disk is THIS create's (PR #747 review, round 6) ====================
+
+    /**
+     * delete_project without deleteContent leaves a project's files on disk, and create_project refuses only a project
+     * the workspace still holds: a new create of that project name finds the old Configuration.mdo there, the extension
+     * block and the mapping flag included. It is not this create's root.
+     */
+    @Test
+    public void testARootAnotherCreateLeftOnDiskIsNotThisCreatesRoot()
+    {
+        String stale = WIZARD_ROOT.replace("<name>MyExt</name>", "<name>OldExt</name>") //$NON-NLS-1$ //$NON-NLS-2$
+            .replace("<namePrefix>Ext1_</namePrefix>", "<namePrefix>Old_</namePrefix>"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        List<String> missing = ExtensionRootBuilder.missingOnDisk(stale, ROOT);
+
+        assertEquals(Arrays.asList("name 'MyExt' (the file shows 'OldExt')", //$NON-NLS-1$
+            "namePrefix 'Ext1_' (the file shows 'Old_')"), missing); //$NON-NLS-1$
+        ExtensionRootBuilder.RootOnDisk disk = look(waitMs -> DiskExportState.DRAINED, () -> stale, 300L, 10L);
+        assertFalse("a stale root with the generic marks is never confirmed", disk.confirmed); //$NON-NLS-1$
+        assertTrue(disk.describe(), disk.describe().contains("does not show name 'MyExt' (the file shows 'OldExt')")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheNameAloneDecides()
+    {
+        String other = WIZARD_ROOT.replace("<name>MyExt</name>", "<name>OldExt</name>"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(Collections.singletonList("name 'MyExt' (the file shows 'OldExt')"), //$NON-NLS-1$
+            ExtensionRootBuilder.missingOnDisk(other, ROOT));
+        assertEquals(Collections.singletonList("name 'MyExt'"), //$NON-NLS-1$
+            ExtensionRootBuilder.missingOnDisk(WIZARD_ROOT.replace("  <name>MyExt</name>\n", ""), ROOT)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testThePrefixAloneDecides()
+    {
+        String other = WIZARD_ROOT.replace("<namePrefix>Ext1_</namePrefix>", "<namePrefix>Old_</namePrefix>"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(Collections.singletonList("namePrefix 'Ext1_' (the file shows 'Old_')"), //$NON-NLS-1$
+            ExtensionRootBuilder.missingOnDisk(other, ROOT));
+        assertEquals(Collections.singletonList("namePrefix 'Ext1_'"), //$NON-NLS-1$
+            ExtensionRootBuilder.missingOnDisk(WIZARD_ROOT.replace("  <namePrefix>Ext1_</namePrefix>\n", ""), ROOT)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** The root's name is its FIRST name element: a language's later in the file is not the root's. */
+    @Test
+    public void testTheRootsNameIsItsFirstNameElement()
+    {
+        String other = WIZARD_ROOT.replace("<name>MyExt</name>", "<name>OldExt</name>") //$NON-NLS-1$ //$NON-NLS-2$
+            .replace("</mdclass:Configuration>", //$NON-NLS-1$
+                "  <languages><name>MyExt</name></languages>\n</mdclass:Configuration>"); //$NON-NLS-1$
+
+        assertEquals(Collections.singletonList("name 'MyExt' (the file shows 'OldExt')"), //$NON-NLS-1$
+            ExtensionRootBuilder.missingOnDisk(other, ROOT));
+    }
+
+    @Test
+    public void testAPurposeOrModeTheFileNamesMustBeTheOnesSet()
+    {
+        String purpose = WIZARD_ROOT.replace(">AddOn<", ">Patch<"); //$NON-NLS-1$ //$NON-NLS-2$
+        String mode = WIZARD_ROOT.replace(">8.3.21</configurationExtension", ">8.5.1</configurationExtension"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(Collections.singletonList("configurationExtensionPurpose 'AddOn' (the file shows 'Patch')"), //$NON-NLS-1$
+            ExtensionRootBuilder.missingOnDisk(purpose, ROOT));
+        assertEquals(Collections.singletonList(
+            "configurationExtensionCompatibilityMode '8.3.21' (the file shows '8.5.1')"), //$NON-NLS-1$
+            ExtensionRootBuilder.missingOnDisk(mode, ROOT));
+    }
+
+    /**
+     * A file that names neither a purpose nor a mode is accepted - merely lenient: EDT writes the mode even when it equals
+     * its model's default (8.5.1), so such a file is not one EDT wrote, and for the purpose's default (Patch) that was not
+     * verified. Only a file that names ANOTHER value is evidence against the root.
+     */
+    @Test
+    public void testAPurposeOrModeTheFileDoesNotNameIsNoEvidenceAgainst()
+    {
+        String neither = WIZARD_ROOT
+            .replace("  <configurationExtensionCompatibilityMode>8.3.21</configurationExtensionCompatibilityMode>\n", "") //$NON-NLS-1$ //$NON-NLS-2$
+            .replace("  <configurationExtensionPurpose>AddOn</configurationExtensionPurpose>\n", ""); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(Collections.emptyList(), ExtensionRootBuilder.missingOnDisk(neither, ROOT));
+    }
+
+    @Test
+    public void testAnEmptyPrefixIsMetByNoPrefixOrAnEmptyOneOnly()
+    {
+        ExtensionRootBuilder.RootIdentity noPrefix = new ExtensionRootBuilder.RootIdentity("MyExt", "", //$NON-NLS-1$ //$NON-NLS-2$
+            ConfigurationExtensionPurpose.ADD_ON, CompatibilityMode.VERSION8_321);
+        String absent = WIZARD_ROOT.replace("  <namePrefix>Ext1_</namePrefix>\n", ""); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(Collections.emptyList(), ExtensionRootBuilder.missingOnDisk(absent, noPrefix));
+        assertEquals(Collections.emptyList(), ExtensionRootBuilder.missingOnDisk(
+            WIZARD_ROOT.replace("<namePrefix>Ext1_</namePrefix>", "<namePrefix></namePrefix>"), noPrefix)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Collections.emptyList(), ExtensionRootBuilder.missingOnDisk(
+            WIZARD_ROOT.replace("<namePrefix>Ext1_</namePrefix>", "<namePrefix/>"), noPrefix)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(Collections.singletonList("an empty namePrefix (the file shows 'Ext1_')"), //$NON-NLS-1$
+            ExtensionRootBuilder.missingOnDisk(WIZARD_ROOT, noPrefix));
+    }
+
+    @Test
+    public void testWithoutTheRootThisCreateBuiltNoFileIsConfirmed()
+    {
+        List<String> missing = ExtensionRootBuilder.missingOnDisk(WIZARD_ROOT, null);
+
+        assertEquals(missing.toString(), 1, missing.size());
+        assertTrue(missing.toString(), missing.get(0).contains("not known")); //$NON-NLS-1$
+    }
+
+    /** What a file must show is what the root handed to EDT's create carries - read from that root, once built. */
+    @Test
+    public void testTheBuiltRootsIdentityIsWhatItsFileMustShow()
+    {
+        ExtensionRootBuilder.Result result = ExtensionRootBuilder.build(adopter, base, VERSION, spec(null));
+
+        assertNotNull(result.identity);
+        assertEquals(Collections.emptyList(), ExtensionRootBuilder.missingOnDisk(WIZARD_ROOT, result.identity));
+        assertEquals(1, ExtensionRootBuilder.missingOnDisk(
+            WIZARD_ROOT.replace(">AddOn<", ">Customization<"), result.identity).size()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, ExtensionRootBuilder.missingOnDisk(
+            WIZARD_ROOT.replace("<name>MyExt</name>", "<name>BaseConfiguration</name>"), result.identity).size()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("a refusal builds no root, so it has no identity", //$NON-NLS-1$
+            ExtensionRootBuilder.build(null, base, VERSION, spec(null)).identity);
     }
 
     @Test
@@ -797,7 +950,7 @@ public class ExtensionRootBuilderTest
         ExtensionRootBuilder.RootFileReader reader, List<String> files, Predicate<String> fileExists, long budgetMs,
         long pollMs)
     {
-        return ExtensionRootBuilder.confirmOnDisk(AT_ONCE, nextProject(), exportWait, reader, files, fileExists,
+        return ExtensionRootBuilder.confirmOnDisk(AT_ONCE, nextProject(), ROOT, exportWait, reader, files, fileExists,
             budgetMs, pollMs);
     }
 
@@ -861,7 +1014,7 @@ public class ExtensionRootBuilderTest
         ScriptedRunner runner = new ScriptedRunner(BoundedJob.Outcome.COMPLETED, BoundedJob.Outcome.TIMED_OUT_BEFORE_START);
         AtomicInteger reads = new AtomicInteger();
 
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(),
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), ROOT,
             waitMs -> DiskExportState.DRAINED, () -> {
                 reads.incrementAndGet();
                 return WIZARD_ROOT;
@@ -888,7 +1041,7 @@ public class ExtensionRootBuilderTest
         ScriptedRunner runner = new ScriptedRunner(BoundedJob.Outcome.COMPLETED, BoundedJob.Outcome.TIMED_OUT);
         AtomicInteger touches = new AtomicInteger();
 
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, project,
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, project, ROOT,
             waitMs -> DiskExportState.DRAINED, () -> {
                 touches.incrementAndGet();
                 return WIZARD_ROOT;
@@ -926,7 +1079,7 @@ public class ExtensionRootBuilderTest
             return WIZARD_ROOT;
         };
 
-        ExtensionRootBuilder.RootOnDisk refused = ExtensionRootBuilder.confirmOnDisk(runner, project,
+        ExtensionRootBuilder.RootOnDisk refused = ExtensionRootBuilder.confirmOnDisk(runner, project, ROOT,
             waitMs -> DiskExportState.DRAINED, reader, Collections.emptyList(), path -> true, 200L, 10L);
 
         assertFalse(refused.confirmed);
@@ -935,7 +1088,7 @@ public class ExtensionRootBuilderTest
         assertEquals(0, reads.get());
 
         stateLineRead.set(true); // that read returned
-        assertTrue("once it returned, the look reads and confirms", ExtensionRootBuilder.confirmOnDisk(runner, project, //$NON-NLS-1$
+        assertTrue("once it returned, the look reads and confirms", ExtensionRootBuilder.confirmOnDisk(runner, project, ROOT, //$NON-NLS-1$
             waitMs -> DiskExportState.DRAINED, reader, Collections.emptyList(), path -> true, 1_000L, 10L).confirmed);
         assertEquals(1, reads.get());
     }
@@ -950,7 +1103,7 @@ public class ExtensionRootBuilderTest
     {
         String project = nextProject();
         ScriptedRunner look = new ScriptedRunner(BoundedJob.Outcome.COMPLETED, BoundedJob.Outcome.TIMED_OUT);
-        assertFalse(ExtensionRootBuilder.confirmOnDisk(look, project, waitMs -> DiskExportState.DRAINED, () -> WIZARD_ROOT,
+        assertFalse(ExtensionRootBuilder.confirmOnDisk(look, project, ROOT, waitMs -> DiskExportState.DRAINED, () -> WIZARD_ROOT,
             Collections.emptyList(), path -> true, 100L, 10L).confirmed);
 
         ScriptedRunner stateLine = new ScriptedRunner(BoundedJob.Outcome.COMPLETED);
@@ -983,7 +1136,7 @@ public class ExtensionRootBuilderTest
         ExtensionRootBuilder.RootOnDisk disk;
         try
         {
-            disk = ExtensionRootBuilder.confirmOnDisk(project, waitMs -> DiskExportState.DRAINED, () -> {
+            disk = ExtensionRootBuilder.confirmOnDisk(project, ROOT, waitMs -> DiskExportState.DRAINED, () -> {
                 entered.set(true);
                 try
                 {
@@ -1025,7 +1178,7 @@ public class ExtensionRootBuilderTest
         ScriptedRunner runner = new ScriptedRunner(BoundedJob.Outcome.COMPLETED);
         List<Long> given = new ArrayList<>();
 
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), waitMs -> {
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), ROOT, waitMs -> {
             given.add(waitMs);
             sleep(waitMs); // a queue EDT does not drain: the wait takes all it is given
             return DiskExportState.PENDING;
@@ -1052,7 +1205,7 @@ public class ExtensionRootBuilderTest
         long budget = 1_500L;
         long start = System.nanoTime();
 
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(AT_THE_DEADLINE, nextProject(),
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(AT_THE_DEADLINE, nextProject(), ROOT,
             waitMs -> {
                 sleep(waitMs + 500L); // all it is given, and BoundedJob's grace on top
                 return DiskExportState.PENDING;
@@ -1084,7 +1237,7 @@ public class ExtensionRootBuilderTest
         };
         long start = System.nanoTime();
 
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), waitMs -> {
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), ROOT, waitMs -> {
             sleep(waitMs + 500L); // all it is given, and BoundedJob's grace on top
             return DiskExportState.PENDING;
         }, () -> WIZARD_ROOT, Collections.singletonList(CMI), path -> true, budget, 10L);
@@ -1116,7 +1269,7 @@ public class ExtensionRootBuilderTest
         };
         long start = System.nanoTime();
 
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), waitMs -> {
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), ROOT, waitMs -> {
             sleep(waitMs + 500L); // all it is given, and BoundedJob's grace on top
             return DiskExportState.PENDING;
         }, () -> WIZARD_ROOT, Collections.singletonList(CMI), path -> true, budget, 10L);
@@ -1138,7 +1291,7 @@ public class ExtensionRootBuilderTest
     {
         ScriptedRunner runner = new ScriptedRunner(BoundedJob.Outcome.COMPLETED);
 
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), waitMs -> {
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), ROOT, waitMs -> {
             throw new AssertionError("no wait with nothing to give it: " + waitMs); //$NON-NLS-1$
         }, () -> WIZARD_ROOT, Collections.emptyList(), path -> true, 1_000L, 10L);
 
@@ -1170,7 +1323,7 @@ public class ExtensionRootBuilderTest
         long budget = 1_200L;
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budget); // no later than the look's own
 
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, project, drained, absent,
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, project, ROOT, drained, absent,
             files, neverSeen, budget, 50L);
 
         assertFalse(disk.confirmed);
@@ -1206,7 +1359,7 @@ public class ExtensionRootBuilderTest
             BoundedJob.Outcome.COMPLETED, BoundedJob.Outcome.COMPLETED, BoundedJob.Outcome.COMPLETED);
         List<String> asked = new ArrayList<>();
 
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(),
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), ROOT,
             waitMs -> DiskExportState.DRAINED, () -> WIZARD_ROOT, Arrays.asList(CMI, MAIN_CMI), path -> {
                 asked.add(path);
                 return CMI.equals(path);
@@ -1253,7 +1406,7 @@ public class ExtensionRootBuilderTest
             BoundedJob.Outcome.COMPLETED, BoundedJob.Outcome.TIMED_OUT);
         List<String> asked = new ArrayList<>();
 
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, project,
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, project, ROOT,
             waitMs -> DiskExportState.DRAINED, () -> WIZARD_ROOT, Arrays.asList(CMI, MAIN_CMI), path -> {
                 asked.add(path);
                 return true;
@@ -1290,7 +1443,7 @@ public class ExtensionRootBuilderTest
         ExtensionRootBuilder.RootOnDisk disk;
         try
         {
-            disk = ExtensionRootBuilder.confirmOnDisk(project, waitMs -> DiskExportState.DRAINED, () -> WIZARD_ROOT,
+            disk = ExtensionRootBuilder.confirmOnDisk(project, ROOT, waitMs -> DiskExportState.DRAINED, () -> WIZARD_ROOT,
                 Arrays.asList(CMI, MAIN_CMI), path -> {
                     if (MAIN_CMI.equals(path))
                     {
@@ -1332,7 +1485,7 @@ public class ExtensionRootBuilderTest
             return new BoundedJob.Result(BoundedJob.Outcome.INTERRUPTED, 0L, new InterruptedException());
         };
 
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(interrupted, nextProject(),
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(interrupted, nextProject(), ROOT,
             waitMs -> DiskExportState.DRAINED, () -> WIZARD_ROOT, Arrays.asList(CMI, MAIN_CMI), path -> true, 5_000L,
             10L);
         boolean flagKept = Thread.interrupted(); // clears it, too
@@ -1363,7 +1516,7 @@ public class ExtensionRootBuilderTest
         ScriptedRunner runner = new ScriptedRunner(BoundedJob.Outcome.TIMED_OUT_BEFORE_START,
             BoundedJob.Outcome.COMPLETED);
 
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(),
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), ROOT,
             waitMs -> DiskExportState.DRAINED, () -> null, Collections.emptyList(), path -> true, 500L, 10L);
 
         assertTrue("later reads of the root were made: " + runner.timeouts, runner.timeouts.size() > 1); //$NON-NLS-1$
@@ -1390,7 +1543,7 @@ public class ExtensionRootBuilderTest
         ExtensionRootBuilder.RootOnDisk disk;
         try
         {
-            disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), waitMs -> DiskExportState.DRAINED,
+            disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), ROOT, waitMs -> DiskExportState.DRAINED,
                 () -> FACTORY_ROOT, Collections.emptyList(), path -> true, 500L, 10L);
         }
         finally
@@ -1420,7 +1573,7 @@ public class ExtensionRootBuilderTest
         ScriptedRunner runner = new ScriptedRunner(BoundedJob.Outcome.TIMED_OUT_BEFORE_START,
             BoundedJob.Outcome.COMPLETED);
 
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(),
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), ROOT,
             waitMs -> DiskExportState.DRAINED, () -> {
                 throw new IOException("sharing violation"); //$NON-NLS-1$
             }, Collections.emptyList(), path -> true, 500L, 10L);
@@ -1443,7 +1596,7 @@ public class ExtensionRootBuilderTest
         ScriptedRunner runner = new ScriptedRunner(BoundedJob.Outcome.TIMED_OUT_BEFORE_START);
         AtomicInteger reads = new AtomicInteger();
 
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(),
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), ROOT,
             waitMs -> DiskExportState.DRAINED, () -> {
                 reads.incrementAndGet();
                 return WIZARD_ROOT;
@@ -1454,7 +1607,7 @@ public class ExtensionRootBuilderTest
         assertFalse(disk.confirmed);
         assertFalse(disk.readInTime);
         assertEquals(NOT_READ_IN_TIME, disk.describe());
-        assertEquals(ExtensionRootBuilder.missingOnDisk(null), disk.missing);
+        assertEquals(ExtensionRootBuilder.missingOnDisk(null, ROOT), disk.missing);
         assertFalse(disk.fileFound);
         assertNull(disk.readFailure);
     }
@@ -1472,7 +1625,7 @@ public class ExtensionRootBuilderTest
             BoundedJob.Outcome.TIMED_OUT_BEFORE_START);
         AtomicInteger reads = new AtomicInteger();
 
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(),
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), ROOT,
             waitMs -> DiskExportState.DRAINED, () -> {
                 if (reads.incrementAndGet() == 1)
                 {
@@ -1499,7 +1652,8 @@ public class ExtensionRootBuilderTest
     public void testTheDescriptionOfARootNotConfirmedNamesItsCause()
     {
         assertEquals(NOT_READ_IN_TIME, ExtensionRootBuilder.confirmOnDisk(
-            new ScriptedRunner(BoundedJob.Outcome.TIMED_OUT_BEFORE_START), nextProject(), waitMs -> DiskExportState.DRAINED,
+            new ScriptedRunner(BoundedJob.Outcome.TIMED_OUT_BEFORE_START), nextProject(), ROOT,
+            waitMs -> DiskExportState.DRAINED,
             () -> WIZARD_ROOT, Collections.emptyList(), path -> true, 50L, 10L).describe());
         assertEquals(ExtensionRootBuilder.ROOT_FILE + " could not be read (sharing violation)", //$NON-NLS-1$
             look(waitMs -> DiskExportState.DRAINED, () -> {

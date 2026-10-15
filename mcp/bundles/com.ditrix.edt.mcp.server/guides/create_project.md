@@ -215,15 +215,19 @@ External objects with version:
 
 On success the response includes:
 - `action` — `created` after a completed create (and on the unchanged empty-project slow
-  path); `verificationRequired` when a seeded create exceeded the wait window.
+  path); `verificationRequired` when a seeded create, or an extension's create, exceeded the
+  wait window.
 - `project` — the workspace project name (the round-trip key for sibling tools).
 - `projectKind` — kind of project created.
 - `name` — the Configuration name (configuration and extension only).
 - `baseProject` — the base configuration project (extension only).
-- `prefix` / `purpose` — extension-only attributes applied.
+- `prefix` / `purpose` — extension-only attributes applied (not reported by a slow
+  extension create: see Gotchas).
 - `compatibilityMode` — the extension's effective compatibility mode as its enum name, e.g.
-  `Version8_5_1` (extension only): the base configuration's unless one was requested.
-- `scriptVariant` — script variant applied or inherited.
+  `Version8_5_1` (extension only): the base configuration's unless one was requested (not
+  reported by a slow extension create).
+- `scriptVariant` — script variant applied or inherited (not reported by a slow extension
+  create).
 - `version` — platform version used for project creation.
 - `externalObject` — canonical FQN of the seeded root, including the stored (possibly
   normalized) Name, when a root was requested.
@@ -232,11 +236,17 @@ On success the response includes:
 - `normalized` — fields rewritten by the default `ё`->`е` normalization; `name` here means
   the seeded root Name.
 - `state` — `ready` when EDT reported the project's context started. For an extension,
-  `ready` also means its root file was seen on disk with the extension block; for a
+  `ready` also means its root file was seen on disk with the extension block, the mapping
+  flag and the name and name prefix this call set (and the purpose and extension compatibility
+  mode it set, where the file names them), so a `Configuration.mdo` that an earlier project of
+  that name left on disk with another name, prefix, purpose or mode does not confirm it. One
+  with the same values cannot be told from this create's root: remove a project with
+  `delete_project deleteContent=true` before creating it again; for a
   configuration or externalObjects project nothing on disk is checked, and EDT may still
   be saving the new project's files for a few seconds. `created` when that was not
   confirmed (for an extension, `message` says what was not); `rootConfirmed` /
-  `rootUnconfirmed` records whether a requested root was observed during a slow create.
+  `rootUnconfirmed` records whether a requested root was observed during a slow create (a
+  slow extension create always answers `rootUnconfirmed`: nothing looks at its root).
   Both slow seeded-root states use `action=verificationRequired`, not `created`, because
   the create job has not finished. `ready` does not mean EDT has finished computing the
   project's derived data: `list_projects` may still report it `building` for a while.
@@ -271,12 +281,17 @@ On success the response includes:
   the root.
 - **A slow extension create writes nothing more.** If an extension's create exceeds the
   120 s wait window while its project already exists, EDT's create may still be running: the
-  call asks it to stop, makes no further write to the project and answers `state=created`.
-  Its `message` says that nothing checked whether EDT attached the adopted root, and that the
-  command interface files were not created: no MCP tool attaches them to an existing
-  extension — to have them, remove the project with `delete_project` and
+  call asks it to stop, makes no further write to the project and answers
+  `action=verificationRequired`, `state=rootUnconfirmed`, without `prefix`, `purpose`,
+  `scriptVariant` or `compatibilityMode` — nothing checked whether EDT attached the adopted
+  root. Its `message` also says that the command interface files were not created: no MCP
+  tool attaches them to an existing extension. Do not remove or recreate the project while
+  that create may still be running — a delete or a second create would race it: first make
+  sure it has ended (restarting EDT ends it; until then EDT's Progress view lists it as
+  `create_project: <project>`), then check `list_projects` before using the project. To
+  have the command interface files, remove the project with `delete_project` and
   `deleteContent=true` (without it the project's files stay on disk under the new create)
-  and run `create_project` again. Check `list_projects` before using the project.
+  and run `create_project` again.
 - **autoSortTopObjects is not yet applied.** See `codestyle.autoSortNote` in the response.
 - **Client-side timeouts.** A create normally answers within seconds, but on a busy
   workspace the create operation alone may take up to its 120 s limit. If your MCP client

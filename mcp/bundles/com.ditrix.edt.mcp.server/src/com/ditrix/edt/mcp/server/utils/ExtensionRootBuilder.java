@@ -149,6 +149,8 @@ public final class ExtensionRootBuilder
         public final ScriptVariant scriptVariant;
         /** The warning for an explicit mode above the base's, or {@code null}. */
         public final String compatibilityNote;
+        /** What a file of {@link #root} must show to be its file ({@link RootIdentity#of}); {@code null} on error. */
+        public final RootIdentity identity;
 
         private Result(Configuration root, String error, boolean synonymApplied, CompatibilityMode compatibilityMode, // NOSONAR one immutable value per field
             CompatibilityMode baseCompatibilityMode, ScriptVariant scriptVariant, String compatibilityNote)
@@ -160,6 +162,7 @@ public final class ExtensionRootBuilder
             this.baseCompatibilityMode = baseCompatibilityMode;
             this.scriptVariant = scriptVariant;
             this.compatibilityNote = compatibilityNote;
+            this.identity = root != null ? RootIdentity.of(root) : null;
         }
 
         static Result failure(String error)
@@ -392,19 +395,71 @@ public final class ExtensionRootBuilder
     // ===== the root on disk ===========================================================================
 
     /**
-     * What a root file lacks of the wizard's shape: the {@code ConfigurationExtension} block and the
-     * mapping flag set to {@code true}.
+     * What a file must show to be the file of the root ONE create built, beyond the wizard's shape: the root's name and
+     * name prefix, and - where the file names them - its purpose and extension compatibility mode. The wizard's shape
+     * alone is no such evidence: create_project refuses only a project the workspace still holds, and
+     * {@code delete_project} without {@code deleteContent} keeps the project's files on disk, so a new create of that
+     * project name can find the {@code Configuration.mdo} of an earlier extension there, extension block and mapping
+     * flag included. Taken from the built root itself ({@link #of}), so it is what EDT's create was handed. It tells
+     * such a file apart only when it shows another name or prefix, or names another purpose or mode: an earlier root
+     * with the same values - the common case of re-running the same create, since the prefix defaults to none and
+     * the purpose to Customization - is not told apart (its synonym, comment and UUID are not compared; whether EDT's
+     * create keeps the root's UUID was not verified).
+     */
+    public static final class RootIdentity
+    {
+        final String name;
+        final String prefix;
+        final ConfigurationExtensionPurpose purpose;
+        final CompatibilityMode compatibilityMode;
+
+        /**
+         * @param name the root's name
+         * @param prefix the root's name prefix; {@code null} or {@code ""} for none
+         * @param purpose the root's purpose, or {@code null} when it has none
+         * @param compatibilityMode the root's extension compatibility mode, or {@code null} when it has none
+         */
+        public RootIdentity(String name, String prefix, ConfigurationExtensionPurpose purpose,
+            CompatibilityMode compatibilityMode)
+        {
+            this.name = name;
+            this.prefix = prefix;
+            this.purpose = purpose;
+            this.compatibilityMode = compatibilityMode;
+        }
+
+        /**
+         * @param root a built root (detached: read without a transaction)
+         * @return what that root's file must show
+         */
+        public static RootIdentity of(Configuration root)
+        {
+            return new RootIdentity(root.getName(), root.getNamePrefix(), root.getConfigurationExtensionPurpose(),
+                root.getConfigurationExtensionCompatibilityMode());
+        }
+    }
+
+    /**
+     * What a root file lacks to be the file of the root {@code expected} names: the wizard's shape - the
+     * {@code ConfigurationExtension} block and the mapping flag set to {@code true} - then the root's name (the file's
+     * FIRST {@code name} element: a language's comes later), its name prefix (none or an empty one for an empty prefix),
+     * and its purpose and extension compatibility mode where the file names them. A file that names ANOTHER value is
+     * evidence against the root; one that names neither of those last two is accepted, which is merely lenient: EDT
+     * writes the mode even when it equals its model's default (8.5.1, the first literal - so does the EDT-written
+     * extension root of the test fixture), so such a file is not one EDT wrote, and for the purpose's default (Patch)
+     * that was not verified. Each value the file shows instead is said.
      *
      * @param text the file's text, or {@code null} when there is no file
-     * @return what was not found, in that order; empty when the file shows both
+     * @param expected the root this create built, or {@code null} when it is not known - then no file is its file
+     * @return what was not found, in that order; empty when the file shows all of it
      */
-    public static List<String> missingOnDisk(String text)
+    public static List<String> missingOnDisk(String text, RootIdentity expected)
     {
         if (text == null)
         {
             return Collections.singletonList("the file itself"); //$NON-NLS-1$
         }
-        List<String> missing = new ArrayList<>(2);
+        List<String> missing = new ArrayList<>(4);
         if (!text.contains(EXTENSION_BLOCK_MARK))
         {
             missing.add("the ConfigurationExtension block"); //$NON-NLS-1$
@@ -413,7 +468,82 @@ public final class ExtensionRootBuilder
         {
             missing.add("keepMappingToExtendedConfigurationObjectsByIDs=true"); //$NON-NLS-1$
         }
+        if (expected == null)
+        {
+            missing.add("the name and namePrefix of the root this create built (not known to the look)"); //$NON-NLS-1$
+            return missing;
+        }
+        String name = elementText(text, "name"); //$NON-NLS-1$
+        if (!String.valueOf(expected.name).equals(name))
+        {
+            missing.add(shows("name '" + expected.name + "'", name)); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        String prefix = elementText(text, "namePrefix"); //$NON-NLS-1$
+        if (expected.prefix == null || expected.prefix.isEmpty())
+        {
+            if (prefix != null && !prefix.isEmpty())
+            {
+                missing.add(shows("an empty namePrefix", prefix)); //$NON-NLS-1$
+            }
+        }
+        else if (!expected.prefix.equals(prefix))
+        {
+            missing.add(shows("namePrefix '" + expected.prefix + "'", prefix)); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (expected.purpose != null)
+        {
+            notAnother(missing, text, "configurationExtensionPurpose", expected.purpose.getLiteral()); //$NON-NLS-1$
+        }
+        if (expected.compatibilityMode != null)
+        {
+            notAnother(missing, text, "configurationExtensionCompatibilityMode", //$NON-NLS-1$
+                expected.compatibilityMode.getLiteral());
+        }
         return missing;
+    }
+
+    /** Adds {@code element}'s expected value to {@code missing} when the file names another value for it. */
+    private static void notAnother(List<String> missing, String text, String element, String literal)
+    {
+        String value = elementText(text, element);
+        if (value != null && !value.equals(literal))
+        {
+            missing.add(shows(element + " '" + literal + "'", value)); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /** {@code what}, and what the file shows instead when it shows something. */
+    private static String shows(String what, String found)
+    {
+        return found == null ? what : what + " (the file shows '" + found + "')"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The text of the first {@code <element>} of a root file, its XML entities resolved; {@code ""} for an empty one,
+     * {@code null} when the file has none.
+     */
+    static String elementText(String text, String element)
+    {
+        String open = "<" + element + ">"; //$NON-NLS-1$ //$NON-NLS-2$
+        String empty = "<" + element + "/>"; //$NON-NLS-1$ //$NON-NLS-2$
+        int start = text.indexOf(open);
+        int emptyAt = text.indexOf(empty);
+        if (emptyAt >= 0 && (start < 0 || emptyAt < start))
+        {
+            return ""; //$NON-NLS-1$
+        }
+        if (start < 0)
+        {
+            return null;
+        }
+        int from = start + open.length();
+        int end = text.indexOf("</" + element + ">", from); //$NON-NLS-1$ //$NON-NLS-2$
+        if (end < 0)
+        {
+            return null;
+        }
+        return text.substring(from, end).replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
+            .replace("&apos;", "'").replace("&amp;", "&"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
     }
 
     /** Reads a root file; {@code null} means the file does not exist. */
@@ -430,7 +560,10 @@ public final class ExtensionRootBuilder
     /** What a bounded look at a new root's file - and at the files saved beside it - found. */
     public static final class RootOnDisk
     {
-        /** Whether one read of the root file showed the wizard's shape; the files beside it never change this. */
+        /**
+         * Whether one read of the root file showed the wizard's shape and this create's root ({@link #missingOnDisk});
+         * the files beside it never change this.
+         */
         public final boolean confirmed;
         /**
          * What the last completed read of the root file did not show - all of it when no read of it completed in time;
@@ -486,8 +619,8 @@ public final class ExtensionRootBuilder
         {
             if (confirmed)
             {
-                return ROOT_FILE + " shows the ConfigurationExtension block and " //$NON-NLS-1$
-                    + "keepMappingToExtendedConfigurationObjectsByIDs=true"; //$NON-NLS-1$
+                return ROOT_FILE + " shows the ConfigurationExtension block, " //$NON-NLS-1$
+                    + "keepMappingToExtendedConfigurationObjectsByIDs=true and the name and namePrefix this create set"; //$NON-NLS-1$
             }
             if (!readInTime)
             {
@@ -514,7 +647,9 @@ public final class ExtensionRootBuilder
 
     /**
      * Confirms a new root on disk, bounded: waits for EDT's export queue ({@code exportWait}), then reads the root file
-     * until one read shows the wizard's shape - it is not read again after that - and looks, within the SAME budget, for
+     * until one read shows the wizard's shape and the root {@code expected} names ({@link #missingOnDisk}) - not the
+     * wizard's shape alone, which a root file an earlier extension of that project name left on disk shows too - and it
+     * is not read again after that - and looks, within the SAME budget, for
      * the files saved beside it - a new extension's two command interface files ({@link #COMMAND_INTERFACE_FILES}) -
      * until each has been seen once. The FILE is the evidence, not the queue: a drained queue also drains a write that
      * failed, so "drained" alone never confirms anything. Only the root decides {@link RootOnDisk#confirmed}; a file no
@@ -546,6 +681,7 @@ public final class ExtensionRootBuilder
      * that fails.
      *
      * @param projectName the project whose files are read: the key of the reads' claim
+     * @param expected the root this create built ({@link Result#identity}); {@code null} confirms no file
      * @param exportWait the bounded wait for the project's export queue, given how long it may take
      * @param reader reads the root file
      * @param files the project-relative paths to look for beside the root; empty for none
@@ -554,18 +690,22 @@ public final class ExtensionRootBuilder
      * @param pollMs the pause between two rounds
      * @return what was found
      */
-    public static RootOnDisk confirmOnDisk(String projectName, LongFunction<DiskExportState> exportWait, // NOSONAR the project, the root, the files beside it and the bounds, one each
-        RootFileReader reader, List<String> files, Predicate<String> fileExists, long budgetMs, long pollMs)
+    public static RootOnDisk confirmOnDisk(String projectName, RootIdentity expected, // NOSONAR the project, the root, its file, the files beside it and the bounds, one each
+        LongFunction<DiskExportState> exportWait, RootFileReader reader, List<String> files,
+        Predicate<String> fileExists, long budgetMs, long pollMs)
     {
-        return confirmOnDisk(BoundedJob::run, projectName, exportWait, reader, files, fileExists, budgetMs, pollMs);
+        return confirmOnDisk(BoundedJob::run, projectName, expected, exportWait, reader, files, fileExists, budgetMs,
+            pollMs);
     }
 
     /**
-     * {@link #confirmOnDisk(String, LongFunction, RootFileReader, List, Predicate, long, long)} with what runs each read
-     * under its deadline as a parameter: BoundedJob in production, a fake in a test. Package-visible for tests.
+     * {@link #confirmOnDisk(String, RootIdentity, LongFunction, RootFileReader, List, Predicate, long, long)} with what
+     * runs each read under its deadline as a parameter: BoundedJob in production, a fake in a test. Package-visible for
+     * tests.
      *
      * @param runner what runs a read under its deadline
      * @param projectName the project whose files are read: the key of the reads' claim
+     * @param expected the root this create built; {@code null} confirms no file
      * @param exportWait the bounded wait for the project's export queue, given how long it may take
      * @param reader reads the root file
      * @param files the project-relative paths to look for beside the root; empty for none
@@ -574,8 +714,8 @@ public final class ExtensionRootBuilder
      * @param pollMs the pause between two rounds
      * @return what was found
      */
-    static RootOnDisk confirmOnDisk(AdoptedModuleState.BoundedRunner runner, String projectName, // NOSONAR the runner, the project, the root, the files beside it and the bounds, one each
-        LongFunction<DiskExportState> exportWait, RootFileReader reader, List<String> files,
+    static RootOnDisk confirmOnDisk(AdoptedModuleState.BoundedRunner runner, String projectName, // NOSONAR the runner, the project, the root, its file, the files beside it and the bounds, one each
+        RootIdentity expected, LongFunction<DiskExportState> exportWait, RootFileReader reader, List<String> files,
         Predicate<String> fileExists, long budgetMs, long pollMs)
     {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budgetMs);
@@ -586,7 +726,7 @@ public final class ExtensionRootBuilder
         // What the look knows of the root is what its last completed read found. Until a read of it completes, nothing:
         // the file itself is what no read showed, and the root reads as not read in time.
         boolean rootConfirmed = false;
-        List<String> missing = missingOnDisk(null);
+        List<String> missing = missingOnDisk(null, expected);
         boolean fileFound = false;
         String failure = null;
         boolean readInTime = false;
@@ -610,7 +750,7 @@ public final class ExtensionRootBuilder
                 lastReadCompleted = read != null;
                 if (read != null)
                 {
-                    missing = missingOnDisk(read.text);
+                    missing = missingOnDisk(read.text, expected);
                     fileFound = read.text != null;
                     failure = read.failure;
                     rootConfirmed = missing.isEmpty();

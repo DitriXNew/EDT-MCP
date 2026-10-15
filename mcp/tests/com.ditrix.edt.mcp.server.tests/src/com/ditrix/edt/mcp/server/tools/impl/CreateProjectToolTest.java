@@ -275,6 +275,32 @@ public class CreateProjectToolTest
         assertTrue(flat, flat.contains("no MCP tool attaches them to an existing extension")); //$NON-NLS-1$
         assertTrue(flat, flat.contains("`delete_project` and `deleteContent=true` (without it the project's files " //$NON-NLS-1$
             + "stay on disk under the new create)")); //$NON-NLS-1$
+        // PR #747 review, round 6: the slow answer asks for verification and reports no value of the unchecked root, and
+        // the recipe ends the running create before it deletes or creates anything.
+        assertTrue(flat, flat.contains("answers `action=verificationRequired`, `state=rootUnconfirmed`, without " //$NON-NLS-1$
+            + "`prefix`, `purpose`, `scriptVariant` or `compatibilityMode`")); //$NON-NLS-1$
+        String wait = "Do not remove or recreate the project while that create may still be running"; //$NON-NLS-1$
+        assertTrue(flat, flat.contains(wait + " \u2014 a delete or a second create would race it: first make sure it has " //$NON-NLS-1$
+            + "ended (restarting EDT ends it;")); //$NON-NLS-1$
+        int slow = flat.indexOf("**A slow extension create writes nothing more.**"); //$NON-NLS-1$
+        assertTrue("in the slow-create gotcha, the wait comes before the delete", //$NON-NLS-1$
+            flat.indexOf(wait, slow) < flat.indexOf("`delete_project`", slow)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testGuideSaysReadyIsThisCreatesRootOnDisk()
+    {
+        // PR #747 review, round 6: a Configuration.mdo an earlier project of that name left on disk with other values
+        // does not confirm; one with the same values is a named residual, with the way to avoid it.
+        String flat = flat(new CreateProjectTool().getGuide());
+        assertTrue(flat, flat.contains("`ready` also means its root file was seen on disk with the extension block, " //$NON-NLS-1$
+            + "the mapping flag and the name and name prefix this call set")); //$NON-NLS-1$
+        assertTrue(flat, flat.contains("so a `Configuration.mdo` that an earlier project of that name left on disk with " //$NON-NLS-1$
+            + "another name, prefix, purpose or mode does not confirm it.")); //$NON-NLS-1$
+        assertTrue(flat, flat.contains("One with the same values cannot be told from this create's root: remove a " //$NON-NLS-1$
+            + "project with `delete_project deleteContent=true` before creating it again;")); //$NON-NLS-1$
+        assertFalse("the unqualified claim is gone", //$NON-NLS-1$
+            flat.contains("an earlier project of that name left on disk does not confirm it")); //$NON-NLS-1$
     }
 
     private static String flat(String text)
