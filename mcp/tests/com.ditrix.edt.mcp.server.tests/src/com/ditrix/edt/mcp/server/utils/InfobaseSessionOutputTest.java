@@ -700,6 +700,114 @@ public class InfobaseSessionOutputTest
             EN_PASSWORD_FOR_ADMINISTRATOR.replace("Administrator", ""))); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    /**
+     * The name in the password prompt that names the user holds something besides whitespace: a
+     * name of whitespace alone names no one, so such a line is not the prompt and the run has not
+     * shown that the list is empty. Whitespace is what {@code String.isBlank} counts, Unicode
+     * whitespace that {@code trim} keeps (U+3000) included.
+     */
+    @Test
+    public void thePasswordPromptForAWhitespaceOnlyNameIsNotThePrompt()
+    {
+        for (String name : List.of(" ", "   ", "\t", " \t ", "\u3000", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            " \u3000 ")) //$NON-NLS-1$
+        {
+            assertEquals("Russian, name [" + name + "]", 0, //$NON-NLS-1$ //$NON-NLS-2$
+                promptEnd(RU_GREETING, ruPasswordFor(name)));
+            assertEquals("English, name [" + name + "]", 0, //$NON-NLS-1$ //$NON-NLS-2$
+                promptEnd(EN_GREETING, enPasswordFor(name)));
+            assertOneUnreadableBlock(listedWithExitZero(
+                RU_GREETING + "\r\n" + ruPasswordFor(name) + "\r\n")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertOneUnreadableBlock(listedWithExitZero(
+                EN_GREETING + "\n" + enPasswordFor(name) + "\n")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    /**
+     * ibcmd prints the name as it is, and a user name may hold ':': in English the name ends at the
+     * line's last ':', so such a prompt is the prompt.
+     */
+    @Test
+    public void anEnglishUserNameMayHoldColons()
+    {
+        List<String> names = List.of("Ops:Admin", "a:b:c", //$NON-NLS-1$ //$NON-NLS-2$
+            ":Ops", "Ops:"); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String name : names)
+        {
+            assertEquals("name [" + name + "]", 2, //$NON-NLS-1$ //$NON-NLS-2$
+                promptEnd(EN_GREETING, enPasswordFor(name)));
+        }
+        ReadResult alone = listedWithExitZero(
+            EN_GREETING + "\n" + enPasswordFor("Ops:Admin") + "\n"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertTrue("one complete prompt proves an empty list: " + alone.unreachableReason(), //$NON-NLS-1$
+            alone.isReadable());
+        assertTrue(alone.sessions().isEmpty());
+
+        ReadResult listed = listedWithExitZero(EN_GREETING + "\r\n" //$NON-NLS-1$
+            + enPasswordFor("Ops:Admin") + "\r\n" //$NON-NLS-1$ //$NON-NLS-2$
+            + sessionBlock(FIRST_ID, 249, "Ops:Admin", "1CV8C")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the list after the prompt is read: " + listed.unreachableReason(), //$NON-NLS-1$
+            listed.isReadable());
+        assertEquals(1, listed.sessions().size());
+        assertEquals(FIRST_ID, listed.sessions().get(0).sessionId());
+    }
+
+    /**
+     * The same in Russian, where ibcmd quotes the name and does not escape a quote in it: the name
+     * ends at the line's last quote and ':', so it may hold quotes as well as ':'.
+     */
+    @Test
+    public void aRussianUserNameMayHoldQuotesAndColons()
+    {
+        List<String> names = List.of("O'Brien", "'Ops'", "Ops':Admin", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Ops:Admin", "Ops: Admin"); //$NON-NLS-1$ //$NON-NLS-2$
+        for (String name : names)
+        {
+            assertEquals("name [" + name + "]", 2, //$NON-NLS-1$ //$NON-NLS-2$
+                promptEnd(RU_GREETING, ruPasswordFor(name)));
+        }
+        ReadResult listed = listedWithExitZero(RU_GREETING + "\r\n" //$NON-NLS-1$
+            + ruPasswordFor("O'Brien") + "\r\n" //$NON-NLS-1$ //$NON-NLS-2$
+            + sessionBlock(FIRST_ID, 249, "O'Brien", "1CV8C")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue("the list after the prompt is read: " + listed.unreachableReason(), //$NON-NLS-1$
+            listed.isReadable());
+        assertEquals(1, listed.sessions().size());
+        assertEquals(FIRST_ID, listed.sessions().get(0).sessionId());
+    }
+
+    /**
+     * ibcmd follows every prompt with a space, so inside the name the prompt's own delimiter followed
+     * by whitespace is where a second prompt on the line would begin: such a line is list content,
+     * whatever follows.
+     */
+    @Test
+    public void theDelimiterBeforeWhitespaceInsideTheNameIsNotOnePrompt()
+    {
+        assertEquals(0, promptEnd(EN_GREETING, enPasswordFor("Ops: Admin"))); //$NON-NLS-1$
+        assertEquals(0, promptEnd(EN_GREETING, enPasswordFor("Ops:\tAdmin"))); //$NON-NLS-1$
+        assertEquals(0, promptEnd(RU_GREETING, ruPasswordFor("Ops': Admin"))); //$NON-NLS-1$
+        assertEquals(0, promptEnd(EN_GREETING,
+            enPasswordFor("Administrator: Password for Administrator"))); //$NON-NLS-1$
+        assertOneUnreadableBlock(listedWithExitZero(EN_GREETING + "\n" //$NON-NLS-1$
+            + enPasswordFor("Ops: Admin") + "\n")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The password prompt that names the user, repeated thousands of times on one line or ending in
+     * thousands of delimiters, is judged at once: the name has no repeated group to recurse on.
+     */
+    @Test(timeout = 10_000)
+    public void aHugePasswordPromptForAUserIsJudgedQuickly()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(EN_GREETING + "\r\n" //$NON-NLS-1$
+            + EN_PASSWORD_FOR_ADMINISTRATOR.repeat(50_000) + "\r\n")); //$NON-NLS-1$
+        assertOneUnreadableBlock(listedWithExitZero(RU_GREETING + "\r\n" //$NON-NLS-1$
+            + RU_PASSWORD_FOR_ADMINISTRATOR.repeat(50_000) + "\r\n")); //$NON-NLS-1$
+        assertOneUnreadableBlock(listedWithExitZero(EN_GREETING + "\r\n" //$NON-NLS-1$
+            + enPasswordFor("a" + ": ".repeat(200_000) + "b") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "x\r\n")); //$NON-NLS-1$
+    }
+
     /** The prompt alone, as a list without sessions prints it. */
     private static String promptOnly()
     {
@@ -710,6 +818,18 @@ public class InfobaseSessionOutputTest
     private static String reportedOutput()
     {
         return promptOnly() + sessionBlock(FIRST_ID, 249, ADMINISTRATOR, "1CV8C"); //$NON-NLS-1$
+    }
+
+    /** The Russian password prompt that names this user, as ibcmd prints it. */
+    private static String ruPasswordFor(String name)
+    {
+        return RU_PASSWORD_FOR_ADMINISTRATOR.replace(ADMINISTRATOR, name);
+    }
+
+    /** The English password prompt that names this user, as ibcmd prints it. */
+    private static String enPasswordFor(String name)
+    {
+        return EN_PASSWORD_FOR_ADMINISTRATOR.replace("Administrator", name); //$NON-NLS-1$
     }
 
     /** Where the authentication prompt ends in output made of these lines. */

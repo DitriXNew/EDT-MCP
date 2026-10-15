@@ -30,6 +30,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongConsumer;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.eclipse.core.runtime.IPath;
@@ -860,12 +861,16 @@ public final class InfobaseSessionSupport
      *
      * <p>ibcmd prints one of two complete prompts (its code in 8.3.27 and 8.5): the greeting,
      * which it ends with a line break, and then either the user-name prompt followed by the
-     * password prompt or the password prompt that names a user it already knows. The user-name and
+     * password prompt or the password prompt that names a user it already knows, the name printed
+     * as it is (see {@link AuthenticationPrompt#namesAUser}). The user-name and
      * password prompts share a line, because ibcmd does not echo the answers piped to it; split
      * over two lines they are the same prompt. Each text appears exactly once and in one language;
      * blank lines between the parts and whitespace around them are allowed. Anything else is not
      * the prompt: a part on its own, a part repeated, the greeting followed by anything but one
      * complete prompt, the greeting and the prompts on one line, or the texts of two languages.
+     * The one exception is the name in the password prompt that names a user: ibcmd prints it as
+     * it is, so prompt text inside the name is read as part of the name (see
+     * {@link AuthenticationPrompt#namesAUser}).
      * The greeting alone is not the prompt either: ibcmd follows it with a prompt or fails.
      *
      * @param lines the output, split into lines
@@ -917,12 +922,12 @@ public final class InfobaseSessionSupport
             + "\u0438\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u043E\u043D\u043D\u043E\u0439 \u0431\u0430\u0437\u0435", //$NON-NLS-1$
             "\u0418\u043C\u044F \u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044F:", //$NON-NLS-1$
             "\u041F\u0430\u0440\u043E\u043B\u044C:", //$NON-NLS-1$
-            Pattern.quote("\u041F\u0430\u0440\u043E\u043B\u044C \u0434\u043B\u044F '") + "[^']+':"), //$NON-NLS-1$ //$NON-NLS-2$
+            "\u041F\u0430\u0440\u043E\u043B\u044C \u0434\u043B\u044F '", "':"), //$NON-NLS-1$ //$NON-NLS-2$
         /** The English resources; the password prompt that names the user does not quote the name. */
         ENGLISH("Authentication in the infobase is required to perform the operation", //$NON-NLS-1$
             "User:", //$NON-NLS-1$
             "Password:", //$NON-NLS-1$
-            Pattern.quote("Password for ") + "[^:]+:"); //$NON-NLS-1$ //$NON-NLS-2$
+            "Password for ", ":"); //$NON-NLS-1$ //$NON-NLS-2$
 
         /** The greeting. */
         private final Pattern greeting;
@@ -936,18 +941,22 @@ public final class InfobaseSessionSupport
         /** The password prompt alone. */
         private final Pattern password;
 
-        /** The password prompt that names the user. */
+        /** The password prompt that names the user, the name captured as the text before its last delimiter. */
         private final Pattern passwordForUser;
 
+        /** The delimiter that ends the password prompt that names the user, followed by whitespace. */
+        private final Pattern delimiterBeforeWhitespace;
+
         AuthenticationPrompt(String greetingText, String userPrompt, String passwordPrompt,
-            String passwordForUserRegex)
+            String beforeUser, String afterUser)
         {
             greeting = line(Pattern.quote(greetingText));
             userAndPassword = line(Pattern.quote(userPrompt) + "\\s*" //$NON-NLS-1$
                 + Pattern.quote(passwordPrompt));
             user = line(Pattern.quote(userPrompt));
             password = line(Pattern.quote(passwordPrompt));
-            passwordForUser = line(passwordForUserRegex);
+            passwordForUser = line(Pattern.quote(beforeUser) + "(.+)" + Pattern.quote(afterUser)); //$NON-NLS-1$
+            delimiterBeforeWhitespace = Pattern.compile(Pattern.quote(afterUser) + "\\s"); //$NON-NLS-1$
         }
 
         /**
@@ -961,8 +970,7 @@ public final class InfobaseSessionSupport
             {
                 return 0;
             }
-            if (userAndPassword.matcher(lines[prompts]).matches()
-                || passwordForUser.matcher(lines[prompts]).matches())
+            if (userAndPassword.matcher(lines[prompts]).matches() || namesAUser(lines[prompts]))
             {
                 return prompts + 1;
             }
@@ -973,6 +981,27 @@ public final class InfobaseSessionSupport
             int passwordLine = nextContentLine(lines, prompts + 1);
             return passwordLine >= 0 && password.matcher(lines[passwordLine]).matches()
                 ? passwordLine + 1 : 0;
+        }
+
+        /**
+         * Whether the line is the password prompt that names a user. ibcmd prints the name as it
+         * is, so the name is the text before the line's last delimiter and may hold ':' and, in
+         * Russian, quotes. The name must hold something besides whitespace, and it must not hold
+         * the delimiter followed by whitespace: ibcmd follows every prompt with a space, so that
+         * is where a second prompt on the line would begin, and such a line is list content.
+         * A name may still spell out prompt text: a repeat glued without that space
+         * ({@code Password for A:Password for A:}) or the text of the other language is read as a
+         * name, as a real user name of that spelling must be. ibcmd never prints such a line.
+         */
+        private boolean namesAUser(String line)
+        {
+            Matcher matcher = passwordForUser.matcher(line);
+            if (!matcher.matches())
+            {
+                return false;
+            }
+            String name = matcher.group(1);
+            return !name.isBlank() && !delimiterBeforeWhitespace.matcher(name).find();
         }
 
         /** One whole line holding the given text, with any whitespace around it. */
