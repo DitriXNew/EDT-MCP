@@ -395,16 +395,15 @@ public final class ExtensionRootBuilder
     // ===== the root on disk ===========================================================================
 
     /**
-     * What a file must show to be the file of the root ONE create built, beyond the wizard's shape: the root's name and
-     * name prefix, and - where the file names them - its purpose and extension compatibility mode. The wizard's shape
-     * alone is no such evidence: create_project refuses only a project the workspace still holds, and
-     * {@code delete_project} without {@code deleteContent} keeps the project's files on disk, so a new create of that
-     * project name can find the {@code Configuration.mdo} of an earlier extension there, extension block and mapping
-     * flag included. Taken from the built root itself ({@link #of}), so it is what EDT's create was handed. It tells
-     * such a file apart only when it shows another name or prefix, or names another purpose or mode: an earlier root
-     * with the same values - the common case of re-running the same create, since the prefix defaults to none and
-     * the purpose to Customization - is not told apart (its synonym, comment and UUID are not compared; whether EDT's
-     * create keeps the root's UUID was not verified).
+     * What a file must show to be the file of the root ONE create built, beyond the wizard's shape: the root's name, name
+     * prefix, purpose and extension compatibility mode. Taken from the built root itself ({@link #of}), so it is what
+     * EDT's create was handed. An earlier extension's {@code Configuration.mdo} - extension block and mapping flag
+     * included - is not left in a new project's directory by a normal create: create_project refuses a project whose
+     * directory already exists on disk ({@code CreateProjectTool.takenProjectRefusal}), which is where
+     * {@code delete_project} without {@code deleteContent} leaves one. This identity is hardening beyond that refusal: a
+     * file that shows another name, prefix, purpose or mode, or lacks one, is not confirmed. A file that shows the same
+     * values but was not written by this create - written by hand, or left by a directory made after the refusal's check
+     * - is not told apart (its synonym, comment and UUID are not compared).
      */
     public static final class RootIdentity
     {
@@ -443,11 +442,14 @@ public final class ExtensionRootBuilder
      * What a root file lacks to be the file of the root {@code expected} names: the wizard's shape - the
      * {@code ConfigurationExtension} block and the mapping flag set to {@code true} - then the root's name (the file's
      * FIRST {@code name} element: a language's comes later), its name prefix (none or an empty one for an empty prefix),
-     * and its purpose and extension compatibility mode where the file names them. A file that names ANOTHER value is
-     * evidence against the root; one that names neither of those last two is accepted, which is merely lenient: EDT
-     * writes the mode even when it equals its model's default (8.5.1, the first literal - so does the EDT-written
-     * extension root of the test fixture), so such a file is not one EDT wrote, and for the purpose's default (Patch)
-     * that was not verified. Each value the file shows instead is said.
+     * its purpose and its extension compatibility mode. Absence is no evidence for the purpose or the mode except where
+     * EDT's writer omits the value: for an adopted root (an extension's), EDT's formatters ({@code MdExtXmlFormatter},
+     * {@code MdXmlFormatter}) always write a CompatibilityMode-typed feature - the mode at its model's default (8.5.1)
+     * too, as the EDT-written extension root of
+     * the test fixture shows - and leave every other attribute to {@code XmlFormatter}, which writes it only when it is
+     * set, that is, not its model's default; MdClass.xcore gives the purpose no default, so EMF's is its first literal,
+     * Patch (the fixture's English configuration omits its scriptVariant, English, the same way). So only a Patch purpose
+     * may be absent. Each value the file shows instead is said.
      *
      * @param text the file's text, or {@code null} when there is no file
      * @param expected the root this create built, or {@code null} when it is not known - then no file is its file
@@ -492,21 +494,26 @@ public final class ExtensionRootBuilder
         }
         if (expected.purpose != null)
         {
-            notAnother(missing, text, "configurationExtensionPurpose", expected.purpose.getLiteral()); //$NON-NLS-1$
+            mustShow(missing, text, "configurationExtensionPurpose", expected.purpose.getLiteral(), //$NON-NLS-1$
+                expected.purpose == ConfigurationExtensionPurpose.PATCH);
         }
         if (expected.compatibilityMode != null)
         {
-            notAnother(missing, text, "configurationExtensionCompatibilityMode", //$NON-NLS-1$
-                expected.compatibilityMode.getLiteral());
+            mustShow(missing, text, "configurationExtensionCompatibilityMode", //$NON-NLS-1$
+                expected.compatibilityMode.getLiteral(), false);
         }
         return missing;
     }
 
-    /** Adds {@code element}'s expected value to {@code missing} when the file names another value for it. */
-    private static void notAnother(List<String> missing, String text, String element, String literal)
+    /**
+     * Adds {@code element}'s expected value to {@code missing} when the file names another value for it, or names none
+     * while EDT's writer would have written it ({@code mayBeOmitted} is {@code false}).
+     */
+    private static void mustShow(List<String> missing, String text, String element, String literal,
+        boolean mayBeOmitted)
     {
         String value = elementText(text, element);
-        if (value != null && !value.equals(literal))
+        if (value == null ? !mayBeOmitted : !value.equals(literal))
         {
             missing.add(shows(element + " '" + literal + "'", value)); //$NON-NLS-1$ //$NON-NLS-2$
         }

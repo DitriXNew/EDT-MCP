@@ -59,10 +59,15 @@ public class CreateProjectToolExtensionRootTest
     private static final ExtensionRootBuilder.RootIdentity ROOT = new ExtensionRootBuilder.RootIdentity("MyExt", "", //$NON-NLS-1$ //$NON-NLS-2$
         ConfigurationExtensionPurpose.CUSTOMIZATION, CompatibilityMode.VERSION8_51);
 
-    /** The marks of a wizard-made root of {@link #ROOT}, as {@link ExtensionRootBuilder#missingOnDisk} looks for them. */
+    /**
+     * The marks of a wizard-made root of {@link #ROOT}, as {@link ExtensionRootBuilder#missingOnDisk} looks for them: the
+     * name, the block, the mapping flag, and the mode and purpose EDT writes.
+     */
     private static final String WIZARD_ROOT = "<name>MyExt</name>" //$NON-NLS-1$
         + "<extension xsi:type=\"mdclassExtension:ConfigurationExtension\"></extension>" //$NON-NLS-1$
-            + "<keepMappingToExtendedConfigurationObjectsByIDs>true</keepMappingToExtendedConfigurationObjectsByIDs>"; //$NON-NLS-1$
+            + "<keepMappingToExtendedConfigurationObjectsByIDs>true</keepMappingToExtendedConfigurationObjectsByIDs>" //$NON-NLS-1$
+            + "<configurationExtensionCompatibilityMode>8.5.1</configurationExtensionCompatibilityMode>" //$NON-NLS-1$
+            + "<configurationExtensionPurpose>Customization</configurationExtensionPurpose>"; //$NON-NLS-1$
 
     // These looks - confirmed(), notOnDisk(), rootSeenWithout() - and every other look here with a budget of 1s or
     // less never ask the export wait they are given: such a budget is no larger than the second the look keeps for the
@@ -298,14 +303,17 @@ public class CreateProjectToolExtensionRootTest
         assertEquals("Version8_3_27", json.get("compatibilityMode").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("ready", json.get("state").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(BASE, json.get("baseProject").getAsString()); //$NON-NLS-1$
+        // An ended create reports the configuration name it set (PR #747 review, round 7: only the slow answer omits it).
+        assertEquals("MyExt", json.get("name").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(PROJECT, json.get("project").getAsString()); //$NON-NLS-1$
         assertEquals("English", json.get("scriptVariant").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(json.get("message").getAsString().contains("adopted from the root of")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
-     * A create that had not ended attached nothing anyone checked (PR #747 review, round 6): the slow answer asks for
-     * verification as the slow seeded create does, and reports none of the root's values as applied - only what names
-     * the project.
+     * A create that had not ended attached nothing anyone checked (PR #747 review, rounds 6 and 7): the slow answer asks
+     * for verification as the slow seeded create does, and reports none of the root's values as applied - not even the
+     * configuration name, which outputSchema documents as the Configuration's - only what names the project.
      */
     @Test
     public void testTheSlowAnswerReportsNoneOfTheRootsValuesAndCarriesTheNotes()
@@ -318,19 +326,18 @@ public class CreateProjectToolExtensionRootTest
 
         assertEquals("verificationRequired", json.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("rootUnconfirmed", json.get("state").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
-        for (String key : Arrays.asList("prefix", "purpose", "scriptVariant", "compatibilityMode")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        for (String key : Arrays.asList("name", "prefix", "purpose", "scriptVariant", "compatibilityMode")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
         {
             assertFalse("a value of a root nobody checked is not reported as applied: " + key, json.has(key)); //$NON-NLS-1$
         }
         assertEquals(PROJECT, json.get("project").getAsString()); //$NON-NLS-1$
         assertEquals("extension", json.get("projectKind").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
-        assertEquals("MyExt", json.get("name").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(BASE, json.get("baseProject").getAsString()); //$NON-NLS-1$
         assertEquals("8.5.1", json.get("version").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(json.get("success").getAsBoolean()); //$NON-NLS-1$
         String message = json.get("message").getAsString(); //$NON-NLS-1$
-        assertTrue(message, message.contains("so this answer reports none of the root's values (prefix, purpose, " //$NON-NLS-1$
-            + "scriptVariant, compatibilityMode) as applied")); //$NON-NLS-1$
+        assertTrue(message, message.contains("so this answer reports none of the root's values (name, prefix, " //$NON-NLS-1$
+            + "purpose, scriptVariant, compatibilityMode) as applied")); //$NON-NLS-1$
         assertTrue(message, message.contains("The requested mode is above the base's.")); //$NON-NLS-1$
         assertTrue(message, message.contains("EDT's wizard also creates a default role")); //$NON-NLS-1$
     }
@@ -377,7 +384,8 @@ public class CreateProjectToolExtensionRootTest
             message.contains("was handed to that create; nothing checked that EDT attached it")); //$NON-NLS-1$
         assertTrue(message, message.contains("no MCP tool attaches them to an existing extension")); //$NON-NLS-1$
         assertTrue(message, message.contains("remove the project with delete_project and deleteContent=true - without " //$NON-NLS-1$
-            + "it the project's files stay on disk under the new create - and run create_project again")); //$NON-NLS-1$
+            + "it the project's directory stays on disk and create_project refuses it - and run create_project again")); //$NON-NLS-1$
+        assertFalse(message, message.contains("stay on disk under the new create")); //$NON-NLS-1$
         // The recipe first ends the create still running (PR #747 review, round 6): a delete or a second create while it
         // runs would race it.
         String wait = "Do not remove or recreate the project while that create may still be running - a delete or a " //$NON-NLS-1$
@@ -620,6 +628,28 @@ public class CreateProjectToolExtensionRootTest
         assertEquals("created", CreateProjectTool.extensionState(facts)); //$NON-NLS-1$
         String message = CreateProjectTool.extensionMessage(DATA, facts);
         assertTrue(message, message.contains("does not show name 'MyExt' (the file shows 'OldExt')")); //$NON-NLS-1$
+    }
+
+    /**
+     * A root file that shows everything but the purpose this call set (PR #747 review, round 7) does not make the project
+     * ready: EDT writes a purpose other than its default, so a file without it is not this create's root.
+     */
+    @Test
+    public void testARootFileWithoutThePurposeSetDoesNotMakeTheProjectReady()
+    {
+        ExtensionFacts facts = facts(CompatibilityMode.VERSION8_51, CompatibilityMode.VERSION8_51, false);
+        facts.lifecycleStarted = true;
+        String noPurpose = WIZARD_ROOT
+            .replace("<configurationExtensionPurpose>Customization</configurationExtensionPurpose>", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        ExtensionDisk disk = new ExtensionDisk((project, fqns) -> true, (project, waitMs) -> DiskExportState.DRAINED,
+            () -> noPurpose, path -> true);
+
+        CreateProjectTool.saveAndLook(mock(IProject.class), CI_FQNS, facts, disk, 300L, 10L);
+
+        assertFalse(facts.disk.confirmed);
+        assertEquals("created", CreateProjectTool.extensionState(facts)); //$NON-NLS-1$
+        String message = CreateProjectTool.extensionMessage(DATA, facts);
+        assertTrue(message, message.contains("configurationExtensionPurpose 'Customization'")); //$NON-NLS-1$
     }
 
     @Test

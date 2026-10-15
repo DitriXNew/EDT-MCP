@@ -195,7 +195,8 @@ External objects with version:
 On success the response includes:
 - `project` — the workspace project name (the round-trip key for sibling tools).
 - `projectKind` — kind of project created.
-- `name` — the Configuration name (configuration and extension only).
+- `name` — the Configuration name (configuration and extension only; not reported by a slow
+  extension create).
 - `baseProject` — the base configuration project (extension only).
 - `prefix` / `purpose` — extension-only attributes applied (not reported by a slow
   extension create: see Gotchas).
@@ -207,11 +208,10 @@ On success the response includes:
 - `version` — platform version used for project creation.
 - `state` — `ready` when EDT reported the project's context started. For an extension,
   `ready` also means its root file was seen on disk with the extension block, the mapping
-  flag and the name and name prefix this call set (and the purpose and extension compatibility
-  mode it set, where the file names them), so a `Configuration.mdo` that an earlier project of
-  that name left on disk with another name, prefix, purpose or mode does not confirm it. One
-  with the same values cannot be told from this create's root: remove a project with
-  `delete_project deleteContent=true` before creating it again; for a
+  flag and the name, name prefix, purpose and extension compatibility mode this call set (a
+  purpose of `Patch`, EDT's default, which EDT does not write, may be absent). No earlier
+  project's `Configuration.mdo` is left there to confirm it: `create_project` refuses a
+  project whose directory already exists on disk (see Gotchas); for a
   configuration or externalObjects project nothing on disk is checked, and EDT may still
   be saving the new project's files for a few seconds. `created` when that was not
   confirmed (for an extension, `message` says what was not); `rootConfirmed` /
@@ -233,6 +233,12 @@ On success the response includes:
 
 - **Project name must be new.** The call is rejected if a workspace project with the
   computed name already exists. Use a unique `name` or pass an explicit `projectName`.
+  It is also rejected, for every kind, when the project's directory
+  `<workspace>/<project>` already exists on disk without a workspace project of that name
+  (as `delete_project` without `deleteContent` leaves it): EDT would create the new project
+  over the files there, and delete them with it if that create failed. Nothing is created:
+  remove that directory, or, if a workspace project keeps its files there, delete it with
+  `delete_project deleteContent=true`; then retry.
 - **Extension: base must be a configuration, not an extension.** Pass the BASE
   configuration's project name. Passing an extension project name returns an error.
 - **After creation, check `state=ready`** before calling `adopt_metadata_object` or
@@ -243,7 +249,7 @@ On success the response includes:
 - **A slow extension create writes nothing more.** If an extension's create exceeds the
   120 s wait window while its project already exists, EDT's create may still be running: the
   call asks it to stop, makes no further write to the project and answers
-  `action=verificationRequired`, `state=rootUnconfirmed`, without `prefix`, `purpose`,
+  `action=verificationRequired`, `state=rootUnconfirmed`, without `name`, `prefix`, `purpose`,
   `scriptVariant` or `compatibilityMode` — nothing checked whether EDT attached the adopted
   root. Its `message` also says that the command interface files were not created: no MCP
   tool attaches them to an existing extension. Do not remove or recreate the project while
@@ -251,8 +257,8 @@ On success the response includes:
   sure it has ended (restarting EDT ends it; until then EDT's Progress view lists it as
   `create_project: <project>`), then check `list_projects` before using the project. To
   have the command interface files, remove the project with `delete_project` and
-  `deleteContent=true` (without it the project's files stay on disk under the new create)
-  and run `create_project` again.
+  `deleteContent=true` (without it the project's directory stays on disk and
+  `create_project` refuses it) and run `create_project` again.
 - **autoSortTopObjects is not yet applied.** See `codestyle.autoSortNote` in the response.
 - **Client-side timeouts.** A create normally answers within seconds, but on a busy
   workspace the create operation alone may take up to its 120 s limit. If your MCP client

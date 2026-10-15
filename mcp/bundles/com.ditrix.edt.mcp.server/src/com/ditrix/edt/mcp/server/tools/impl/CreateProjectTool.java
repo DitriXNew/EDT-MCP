@@ -6,6 +6,10 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -67,6 +71,7 @@ import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
 
 /**
  * Tool that creates a new 1C project of one of three kinds:
@@ -1086,11 +1091,11 @@ public class CreateProjectTool implements IMcpTool
         // Derive default EDT project name: <configName>
         String effectiveProjectName = (req.projectName != null) ? req.projectName : configName;
 
-        // Check the new project name does not already exist
-        if (ProjectContext.of(effectiveProjectName).exists())
+        // Check the new project name is not taken - in the workspace or by a directory on disk
+        String taken = takenProjectRefusal(effectiveProjectName);
+        if (taken != null)
         {
-            return ToolResult.error(ERR_PROJECT_EXISTS_PREFIX + effectiveProjectName
-                + ERR_PROJECT_EXISTS_SUFFIX).toJson();
+            return taken;
         }
 
         // Parse version (read-only)
@@ -1187,6 +1192,86 @@ public class CreateProjectTool implements IMcpTool
 
         return buildConfigurationSuccessResponse(finalEffectiveProjectName, configName, scriptVariant,
             finalVersion, projectState, codestyleMap, synonymApplied);
+    }
+
+    /**
+     * The refusal of a create whose project name is illegal or taken, or {@code null} when it is free. A name the
+     * workspace does not accept as a project name ({@code WorkspacePaths.projectNameProblem} - the same validation
+     * {@code IProject.create} applies, so EDT's create could not have used it either) is refused first, before anything
+     * looks it up: a name a path cannot hold would otherwise throw out of the call. The name is taken by a workspace
+     * project of that name, or - with none - by a directory or file at the place EDT's create would put the project.
+     * create_project passes
+     * EDT no location, and for every kind EDT's project manager then puts the project in the workspace location joined
+     * with its name ({@code ConfigurationProjectManager}, {@code AbstractDependentProjectManager} for extensions and
+     * external objects - EDT 2026.1.2, 2026.2.0 and 2026.2.1); {@code V8ProjectCreator} then creates the project over
+     * whatever that directory holds, and deletes the project WITH its content when the create fails. Such a directory
+     * is what {@code delete_project} without {@code deleteContent} leaves, and an extension created over it would find
+     * the old root file there. The check and EDT's create are not atomic: a directory made between them is not caught.
+     * Package-visible for tests.
+     *
+     * @param projectName the workspace project name the create would use
+     * @return the ready JSON refusal, or {@code null}
+     */
+    static String takenProjectRefusal(String projectName)
+    {
+        String problem = WorkspacePaths.projectNameProblem(projectName);
+        if (problem != null)
+        {
+            return ToolResult.error(illegalProjectNameRefusal(projectName, problem)).toJson();
+        }
+        if (ProjectContext.of(projectName).exists())
+        {
+            return ToolResult.error(ERR_PROJECT_EXISTS_PREFIX + projectName + ERR_PROJECT_EXISTS_SUFFIX).toJson();
+        }
+        Path directory;
+        try
+        {
+            directory = WorkspacePaths.defaultProjectFolder(projectName);
+        }
+        catch (InvalidPathException e)
+        {
+            // A name the workspace accepts but this file system's paths cannot hold. On Windows the workspace already
+            // refuses every character a path cannot hold; this keeps any other platform's case a refusal too.
+            return ToolResult.error(illegalProjectNameRefusal(projectName, e.getReason())).toJson();
+        }
+        String refusal = existingDirectoryRefusal(projectName, directory);
+        return refusal == null ? null : ToolResult.error(refusal).toJson();
+    }
+
+    /**
+     * The refusal text for a project name that cannot be a workspace project's name. Package-visible for tests.
+     *
+     * @param projectName the project name the create would use
+     * @param reason why it cannot, as the workspace or the file system says
+     * @return the refusal
+     */
+    static String illegalProjectNameRefusal(String projectName, String reason)
+    {
+        return "The project name '" + projectName + "' is not a legal workspace project name: " + reason //$NON-NLS-1$ //$NON-NLS-2$
+            + ". Nothing was created. Pass another projectName, or, without projectName, another name (the " //$NON-NLS-1$
+            + "project name defaults from it)."; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal text when {@code directory} - the place of project {@code projectName}, which no workspace project
+     * has - exists on disk; {@code null} when it does not, or is not known. Package-visible for tests.
+     *
+     * @param projectName the project name
+     * @param directory where EDT's create would put it, or {@code null} when the workspace has no local location
+     * @return the refusal, or {@code null}
+     */
+    static String existingDirectoryRefusal(String projectName, Path directory)
+    {
+        if (directory == null || !Files.exists(directory, LinkOption.NOFOLLOW_LINKS))
+        {
+            return null;
+        }
+        return "The directory " + directory + " of project '" + projectName + "' already exists on disk, though " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "the workspace has no project of that name (delete_project without deleteContent leaves one): EDT " //$NON-NLS-1$
+            + "would create the new project over the files there, and delete them with it if that create failed. " //$NON-NLS-1$
+            + "Nothing was created. If a workspace project keeps its files there, delete it with delete_project and " //$NON-NLS-1$
+            + "deleteContent=true; otherwise check what the directory holds and remove it. Then retry, or pass " //$NON-NLS-1$
+            + "another name or projectName."; //$NON-NLS-1$
     }
 
     /**
@@ -1339,11 +1424,11 @@ public class CreateProjectTool implements IMcpTool
         // Derive default EDT project name: <configName>
         String effectiveProjectName = (req.projectName != null) ? req.projectName : configName;
 
-        // Check the new project name does not already exist
-        if (ProjectContext.of(effectiveProjectName).exists())
+        // Check the new project name is not taken - in the workspace or by a directory on disk
+        String taken = takenProjectRefusal(effectiveProjectName);
+        if (taken != null)
         {
-            return ToolResult.error(ERR_PROJECT_EXISTS_PREFIX + effectiveProjectName
-                + ERR_PROJECT_EXISTS_SUFFIX).toJson();
+            return taken;
         }
 
         // Parse version (read-only)
@@ -1972,9 +2057,10 @@ public class CreateProjectTool implements IMcpTool
         /** The warning for a requested mode above the base's, or {@code null}. */
         final String compatibilityNote;
         /**
-         * The root handed to EDT's create, as its file must show it: the look confirms no root file with another name
-         * or prefix, or another purpose or mode it names, such as one an earlier extension of that project name left
-         * on disk ({@link ExtensionRootBuilder#missingOnDisk}); one left with the same values is not told apart.
+         * The root handed to EDT's create, as its file must show it: the look confirms no root file that shows another
+         * name, prefix, purpose or mode, or lacks one ({@link ExtensionRootBuilder#missingOnDisk}) - hardening beyond
+         * {@link CreateProjectTool#takenProjectRefusal}, which keeps an earlier project's files out of a new project's
+         * directory.
          */
         final ExtensionRootBuilder.RootIdentity root;
         /** Why the command interfaces were not created, or {@code null} when they were. */
@@ -2183,11 +2269,11 @@ public class CreateProjectTool implements IMcpTool
         String effectiveProjectName = (projectName != null) ? projectName
             : baseProjectName + "." + configName; //$NON-NLS-1$
 
-        // Check the new project name does not already exist
-        if (ProjectContext.of(effectiveProjectName).exists())
+        // Check the new project name is not taken - in the workspace or by a directory on disk
+        String taken = takenProjectRefusal(effectiveProjectName);
+        if (taken != null)
         {
-            return BaseProjectResolution.failure(ToolResult.error(ERR_PROJECT_EXISTS_PREFIX + effectiveProjectName
-                + ERR_PROJECT_EXISTS_SUFFIX).toJson());
+            return BaseProjectResolution.failure(taken);
         }
 
         // Validate the base project
@@ -2408,13 +2494,13 @@ public class CreateProjectTool implements IMcpTool
      * Builds the JSON response for an extension whose create job had not ended when the wait window closed
      * ({@link CreateStatus#SLOW_EXISTS}; read-only): the project exists, and the answer asks for verification as a
      * slow seeded create does - {@code action="verificationRequired"}, {@code state="rootUnconfirmed"},
-     * {@code codestyle.applied=false} - with what names the project and none of the root's values (prefix, purpose,
-     * script variant, compatibility mode): nobody checked that EDT attached that root. Nothing after {@code create()}
-     * ran, and the message says so: EDT's {@code create()} may still be running, so the root handed to it is not claimed
-     * as attached, and the command interface files EDT's wizard creates were not created - with how to get them once
-     * that create has ended, since no MCP tool attaches them to an existing extension and a delete or a second create
-     * while it runs would race it. Adds {@code synonymNote} when the synonym could not be applied. Package-visible for
-     * tests.
+     * {@code codestyle.applied=false} - with what names the project and none of the root's values (configuration name,
+     * prefix, purpose, script variant, compatibility mode): nobody checked that EDT attached that root. Nothing after
+     * {@code create()} ran, and the message says so: EDT's {@code create()} may still be running, so the root handed to it
+     * is not claimed as attached, and the command interface files EDT's wizard creates were not created - with how to
+     * get them once that create has ended, since no MCP tool attaches them to an existing extension and a delete or a
+     * second create while it runs would race it. Adds {@code synonymNote} when the synonym could not be applied.
+     * Package-visible for tests.
      */
     static String buildExtensionSlowResponse(ExtensionResponseData data, ExtensionFacts facts)
     {
@@ -2425,16 +2511,16 @@ public class CreateProjectTool implements IMcpTool
             + "still finish it or stop partway."); //$NON-NLS-1$
         parts.add("Its root - the root of '" + data.baseProjectName //$NON-NLS-1$
             + "' adopted the way EDT's new-extension wizard builds it - was handed to that create; nothing " //$NON-NLS-1$
-            + "checked that EDT attached it, so this answer reports none of the root's values (prefix, purpose, " //$NON-NLS-1$
-            + "scriptVariant, compatibilityMode) as applied."); //$NON-NLS-1$
+            + "checked that EDT attached it, so this answer reports none of the root's values (name, prefix, " //$NON-NLS-1$
+            + "purpose, scriptVariant, compatibilityMode) as applied."); //$NON-NLS-1$
         addNotes(parts, facts, COMMAND_INTERFACE_FILES + " were not created: this call writes nothing to a " //$NON-NLS-1$
             + "project EDT may still be creating, and no MCP tool attaches them to an existing extension. Do not " //$NON-NLS-1$
             + "remove or recreate the project while that create may still be running - a delete or a second create " //$NON-NLS-1$
             + "would race it: first make sure it has ended - restarting EDT ends it; until then EDT's Progress view " //$NON-NLS-1$
             + "lists it as '" + LOG_PREFIX + data.effectiveProjectName + "'. Then check list_projects before using " //$NON-NLS-1$ //$NON-NLS-2$
             + "the project; to have the command interface files, remove the project with delete_project and " //$NON-NLS-1$
-            + "deleteContent=true - without it the project's files stay on disk under the new create - and run " //$NON-NLS-1$
-            + "create_project again."); //$NON-NLS-1$
+            + "deleteContent=true - without it the project's directory stays on disk and create_project refuses it - " //$NON-NLS-1$
+            + "and run create_project again."); //$NON-NLS-1$
         // Only what names the project: a value of a root nobody checked is not reported as applied.
         ToolResult slowResult = extensionProject(VAL_VERIFICATION_REQUIRED, data)
             .put(KEY_VERSION, data.version.toString())
@@ -2461,14 +2547,16 @@ public class CreateProjectTool implements IMcpTool
         return result.toJson();
     }
 
-    /** The fields every extension answer carries: what names the project. */
+    /**
+     * The fields every extension answer carries: what names the project - not the configuration name ({@code name}),
+     * which outputSchema documents as the root's Configuration name, a value of the root.
+     */
     private static ToolResult extensionProject(String action, ExtensionResponseData data)
     {
         return ToolResult.success()
             .put(McpKeys.ACTION, action)
             .put(McpKeys.PROJECT, data.effectiveProjectName)
             .put(KEY_PROJECT_KIND, KIND_EXTENSION)
-            .put("name", data.configName) //$NON-NLS-1$
             .put(KEY_BASE_PROJECT, data.baseProjectName);
     }
 
@@ -2476,6 +2564,7 @@ public class CreateProjectTool implements IMcpTool
     private static ToolResult extensionResult(ExtensionResponseData data, ExtensionFacts facts)
     {
         ToolResult result = extensionProject(VAL_CREATED, data)
+            .put("name", data.configName) //$NON-NLS-1$
             .put(KEY_PREFIX, data.prefix)
             .put(KEY_PURPOSE, data.purpose.getLiteral())
             .put(KEY_SCRIPT_VARIANT, data.scriptVariant.getLiteral())
@@ -2499,11 +2588,11 @@ public class CreateProjectTool implements IMcpTool
 
     /**
      * The state of a created extension: {@code ready} only when EDT reported its context started AND the
-     * root file on disk showed the wizard's shape and this call's root - never on a root nobody saw, nor on one an
-     * earlier extension of that project name left on disk with another name or prefix (or another purpose or mode it
-     * names); one left with the same values cannot be told apart. The command interface files do not enter it:
-     * {@code ready} is documented as the root seen on disk, and {@link #commandInterfaceNote} names a
-     * command interface file that was not. Package-visible for tests.
+     * root file on disk showed the wizard's shape and this call's root - never on a root nobody saw, nor on one that
+     * shows another name, prefix, purpose or mode, or lacks one; an earlier project's root is not left in the new
+     * project's directory, as {@link #takenProjectRefusal} refuses an existing one. The command interface files do not
+     * enter it: {@code ready} is documented as the root seen on disk, and {@link #commandInterfaceNote} names a command
+     * interface file that was not. Package-visible for tests.
      *
      * @param facts what the post-create steps found
      * @return {@code ready} or {@code created}

@@ -512,12 +512,15 @@ public class ExtensionRootBuilderTest
         + "</mdclass:Configuration>\n"; //$NON-NLS-1$
 
     /**
-     * A factory-made root: base-only properties, no block, no mapping flag (the #706 report) - with the name and prefix
-     * of {@link #ROOT}, which that root carried too: only the wizard's shape is what it lacks.
+     * A factory-made root: base-only properties, no block, no mapping flag (the #706 report) - with the name, prefix,
+     * purpose and mode of {@link #ROOT}, which that root carried too (the factory path set them, and EDT writes the mode
+     * anyway): only the wizard's shape is what it lacks.
      */
     private static final String FACTORY_ROOT = "<mdclass:Configuration>\n" //$NON-NLS-1$
         + "  <name>MyExt</name>\n" //$NON-NLS-1$
         + "  <namePrefix>Ext1_</namePrefix>\n" //$NON-NLS-1$
+        + "  <configurationExtensionCompatibilityMode>8.3.21</configurationExtensionCompatibilityMode>\n" //$NON-NLS-1$
+        + "  <configurationExtensionPurpose>AddOn</configurationExtensionPurpose>\n" //$NON-NLS-1$
         + "  <objectBelonging>Adopted</objectBelonging>\n" //$NON-NLS-1$
         + "  <dataLockControlMode>Managed</dataLockControlMode>\n" //$NON-NLS-1$
         + "</mdclass:Configuration>\n"; //$NON-NLS-1$
@@ -543,7 +546,8 @@ public class ExtensionRootBuilderTest
         List<String> missing = ExtensionRootBuilder.missingOnDisk("<mdclass:Configuration>\n</mdclass:Configuration>", //$NON-NLS-1$
             ROOT);
         assertEquals(Arrays.asList("the ConfigurationExtension block", //$NON-NLS-1$
-            "keepMappingToExtendedConfigurationObjectsByIDs=true", "name 'MyExt'", "namePrefix 'Ext1_'"), missing); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "keepMappingToExtendedConfigurationObjectsByIDs=true", "name 'MyExt'", "namePrefix 'Ext1_'", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "configurationExtensionPurpose 'AddOn'", "configurationExtensionCompatibilityMode '8.3.21'"), missing); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -631,18 +635,55 @@ public class ExtensionRootBuilderTest
     }
 
     /**
-     * A file that names neither a purpose nor a mode is accepted - merely lenient: EDT writes the mode even when it equals
-     * its model's default (8.5.1), so such a file is not one EDT wrote, and for the purpose's default (Patch) that was not
-     * verified. Only a file that names ANOTHER value is evidence against the root.
+     * A file that names no purpose or no mode lacks it (PR #747 review, round 7): absence is no evidence that the file is
+     * this create's root. EDT's formatters always write a CompatibilityMode-typed feature (8.5.1, its model's default,
+     * too), and they write the purpose whenever it is not its model's default.
      */
     @Test
-    public void testAPurposeOrModeTheFileDoesNotNameIsNoEvidenceAgainst()
+    public void testAPurposeOrModeTheFileDoesNotNameIsMissing()
     {
-        String neither = WIZARD_ROOT
-            .replace("  <configurationExtensionCompatibilityMode>8.3.21</configurationExtensionCompatibilityMode>\n", "") //$NON-NLS-1$ //$NON-NLS-2$
+        String noMode = WIZARD_ROOT
+            .replace("  <configurationExtensionCompatibilityMode>8.3.21</configurationExtensionCompatibilityMode>\n", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        String noPurpose = WIZARD_ROOT
+            .replace("  <configurationExtensionPurpose>AddOn</configurationExtensionPurpose>\n", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        String neither = noMode
             .replace("  <configurationExtensionPurpose>AddOn</configurationExtensionPurpose>\n", ""); //$NON-NLS-1$ //$NON-NLS-2$
 
-        assertEquals(Collections.emptyList(), ExtensionRootBuilder.missingOnDisk(neither, ROOT));
+        assertEquals(Collections.singletonList("configurationExtensionCompatibilityMode '8.3.21'"), //$NON-NLS-1$
+            ExtensionRootBuilder.missingOnDisk(noMode, ROOT));
+        assertEquals(Collections.singletonList("configurationExtensionPurpose 'AddOn'"), //$NON-NLS-1$
+            ExtensionRootBuilder.missingOnDisk(noPurpose, ROOT));
+        assertEquals(Arrays.asList("configurationExtensionPurpose 'AddOn'", //$NON-NLS-1$
+            "configurationExtensionCompatibilityMode '8.3.21'"), ExtensionRootBuilder.missingOnDisk(neither, ROOT)); //$NON-NLS-1$
+        ExtensionRootBuilder.RootOnDisk disk = look(waitMs -> DiskExportState.DRAINED, () -> neither, 300L, 10L);
+        assertFalse("a file without the purpose and mode set is never confirmed", disk.confirmed); //$NON-NLS-1$
+    }
+
+    /**
+     * The one omission EDT's writer makes is the purpose at its model's default, Patch (MdClass.xcore declares no other
+     * default, so EMF's is the first literal, and XmlFormatter writes an attribute only when it is set): a Patch root's
+     * file may name no purpose, or name Patch, but not another one. The mode at its default is still written, so a file
+     * without it lacks it.
+     */
+    @Test
+    public void testOnlyThePurposesDefaultPatchMayBeAbsent()
+    {
+        ExtensionRootBuilder.RootIdentity patch = new ExtensionRootBuilder.RootIdentity("MyExt", "Ext1_", //$NON-NLS-1$ //$NON-NLS-2$
+            ConfigurationExtensionPurpose.PATCH, CompatibilityMode.VERSION8_51);
+        String patchRoot = WIZARD_ROOT.replace(">AddOn<", ">Patch<") //$NON-NLS-1$ //$NON-NLS-2$
+            .replace(">8.3.21</configurationExtension", ">8.5.1</configurationExtension"); //$NON-NLS-1$ //$NON-NLS-2$
+        String noPurpose = patchRoot
+            .replace("  <configurationExtensionPurpose>Patch</configurationExtensionPurpose>\n", ""); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals(Collections.emptyList(), ExtensionRootBuilder.missingOnDisk(patchRoot, patch));
+        assertEquals(Collections.emptyList(), ExtensionRootBuilder.missingOnDisk(noPurpose, patch));
+        assertEquals(Collections.singletonList("configurationExtensionPurpose 'Patch' (the file shows 'AddOn')"), //$NON-NLS-1$
+            ExtensionRootBuilder.missingOnDisk(patchRoot.replace(">Patch<", ">AddOn<"), patch)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("the mode's default is written, so its absence is not EDT's", //$NON-NLS-1$
+            Collections.singletonList("configurationExtensionCompatibilityMode '8.5.1'"), //$NON-NLS-1$
+            ExtensionRootBuilder.missingOnDisk(noPurpose.replace(
+                "  <configurationExtensionCompatibilityMode>8.5.1</configurationExtensionCompatibilityMode>\n", ""), //$NON-NLS-1$ //$NON-NLS-2$
+                patch));
     }
 
     @Test
