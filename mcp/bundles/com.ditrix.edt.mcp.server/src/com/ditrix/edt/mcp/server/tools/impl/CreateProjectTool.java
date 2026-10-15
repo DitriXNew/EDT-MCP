@@ -971,8 +971,9 @@ public class CreateProjectTool implements IMcpTool
          * EDT's own for {@code project}: its save ({@link BmTransactions#forceExportToDisk(IProject, List)}), its
          * export wait ({@link BuildUtils#waitForDiskExport}, within {@link CreateProjectTool#ROOT_CONFIRM_TIMEOUT_MS}),
          * and the root file and the files beside it, read straight from the project's location
-         * ({@link ExtensionRootBuilder#readRootFile}, {@link ExtensionRootBuilder#projectFileExists}). Nothing is
-         * asked of the project until a step runs.
+         * ({@link ExtensionRootBuilder#readRootFile}, {@link ExtensionRootBuilder#projectFileExists}) - unbounded reads
+         * the look runs only inside its bounded rounds ({@link CreateProjectTool#saveAndLook}). Nothing is asked of the
+         * project until a step runs.
          *
          * @param project the new extension project
          * @return its disk
@@ -991,7 +992,12 @@ public class CreateProjectTool implements IMcpTool
      * interfaces this call attached ({@link #exportWithRoot}) and - once EDT reported the context started - looks for
      * the root file and, in the same budget, for the files of those command interfaces
      * ({@link #commandInterfaceFiles}), recording in {@code facts} a save EDT did not accept and what the look found.
-     * The files looked for are decided here, from what this call attached. Package-visible for tests.
+     * The files looked for are decided here, from what this call attached. Every read of the look runs in a bounded job
+     * under the project's claim on reads of its files, keyed by the project's name
+     * ({@link ExtensionRootBuilder#confirmOnDisk(String, Supplier, ExtensionRootBuilder.RootFileReader, List, Predicate,
+     * long, long)}), so a file system that does not answer holds the call no longer than the bound that method states:
+     * the look's budget - or 1s past the export wait, when the wait left less - plus BoundedJob's 0.5s grace for a round
+     * whose job had not started by its deadline. Package-visible for tests.
      *
      * @param project the new extension project
      * @param commandInterfaceFqns the command interfaces' FQNs this call ensured (attached, or found attached); empty
@@ -1007,7 +1013,7 @@ public class CreateProjectTool implements IMcpTool
         exportWithRoot(project, commandInterfaceFqns, facts, disk.save);
         if (facts.lifecycleStarted)
         {
-            facts.disk = ExtensionRootBuilder.confirmOnDisk(disk.exportWait, disk.rootFile,
+            facts.disk = ExtensionRootBuilder.confirmOnDisk(project.getName(), disk.exportWait, disk.rootFile,
                 commandInterfaceFiles(commandInterfaceFqns), disk.fileExists, budgetMs, pollMs);
         }
     }
@@ -2503,8 +2509,9 @@ public class CreateProjectTool implements IMcpTool
         }
         if (!notSeen.isEmpty())
         {
+            // "Not seen", not "not found": a file whose check did not complete in time - or failed - was not seen either.
             note.append(String.join(" and ", notSeen)).append(notSeen.size() == 1 ? " was" : " were") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                .append(" not found on disk after ").append(seconds(facts.disk.budgetMs)).append('s'); //$NON-NLS-1$
+                .append(" not seen on disk after ").append(seconds(facts.disk.budgetMs)).append('s'); //$NON-NLS-1$
         }
         note.append('.');
         if (!notSeen.isEmpty() && facts.disk.confirmed)

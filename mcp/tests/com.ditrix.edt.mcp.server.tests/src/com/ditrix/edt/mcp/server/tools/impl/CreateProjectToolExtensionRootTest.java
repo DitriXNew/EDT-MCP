@@ -20,6 +20,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.core.resources.IProject;
 import org.junit.Test;
@@ -58,12 +61,14 @@ public class CreateProjectToolExtensionRootTest
 
     private static RootOnDisk confirmed()
     {
-        return ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.DRAINED, () -> WIZARD_ROOT, 1_000L, 10L);
+        return ExtensionRootBuilder.confirmOnDisk(PROJECT, () -> DiskExportState.DRAINED, () -> WIZARD_ROOT,
+            Collections.emptyList(), path -> true, 1_000L, 10L);
     }
 
     private static RootOnDisk notOnDisk()
     {
-        return ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.PENDING, () -> null, 50L, 10L);
+        return ExtensionRootBuilder.confirmOnDisk(PROJECT, () -> DiskExportState.PENDING, () -> null,
+            Collections.emptyList(), path -> true, 50L, 10L);
     }
 
     private static ExtensionFacts facts(CompatibilityMode mode, CompatibilityMode baseMode, boolean requested)
@@ -317,7 +322,7 @@ public class CreateProjectToolExtensionRootTest
     private static RootOnDisk rootSeenWithout(String... notOnDisk)
     {
         List<String> missing = Arrays.asList(notOnDisk);
-        return ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.DRAINED, () -> WIZARD_ROOT,
+        return ExtensionRootBuilder.confirmOnDisk(PROJECT, () -> DiskExportState.DRAINED, () -> WIZARD_ROOT,
             ExtensionRootBuilder.COMMAND_INTERFACE_FILES, path -> !missing.contains(path), 50L, 10L);
     }
 
@@ -397,7 +402,7 @@ public class CreateProjectToolExtensionRootTest
 
         assertTrue(message, message.contains("CommandInterface.cmi and MainSectionCommandInterface.cmi")); //$NON-NLS-1$
         assertTrue(message, message.contains("were attached but not queued for saving: EDT accepted no save task")); //$NON-NLS-1$
-        assertFalse("no look ran, so no file is said missing", message.contains("not found on disk")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("no look ran, so no file is said missing", message.contains("not seen on disk")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -410,7 +415,7 @@ public class CreateProjectToolExtensionRootTest
         String message = CreateProjectTool.extensionMessage(DATA, facts);
 
         assertTrue(message, message.contains("were attached but not queued for saving: the services are gone; " //$NON-NLS-1$
-            + CMI + " and " + MAIN_CMI + " were not found on disk after 1s.")); //$NON-NLS-1$ //$NON-NLS-2$
+            + CMI + " and " + MAIN_CMI + " were not seen on disk after 1s.")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(message, message.contains("EDT may still be writing them")); //$NON-NLS-1$
         assertEquals("the files never change the root's state", "ready", CreateProjectTool.extensionState(facts)); //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -436,7 +441,7 @@ public class CreateProjectToolExtensionRootTest
 
         String message = CreateProjectTool.extensionMessage(DATA, facts);
 
-        assertTrue(message, message.contains("were attached, but " + MAIN_CMI + " was not found on disk after 1s.")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(message, message.contains("were attached, but " + MAIN_CMI + " was not seen on disk after 1s.")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(message, message.contains("EDT may still be writing it; wait a few seconds before restarting EDT")); //$NON-NLS-1$
         assertFalse("the file that WAS seen is not named", message.contains(CMI + " ")); //$NON-NLS-1$ //$NON-NLS-2$
         assertFalse("a queued save is no refusal", message.contains("not queued for saving")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -448,13 +453,13 @@ public class CreateProjectToolExtensionRootTest
     {
         ExtensionFacts facts = facts(CompatibilityMode.VERSION8_51, CompatibilityMode.VERSION8_51, false);
         facts.lifecycleStarted = true;
-        facts.disk = ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.PENDING, () -> null,
+        facts.disk = ExtensionRootBuilder.confirmOnDisk(PROJECT, () -> DiskExportState.PENDING, () -> null,
             ExtensionRootBuilder.COMMAND_INTERFACE_FILES, path -> false, 50L, 10L);
 
         String message = CreateProjectTool.extensionMessage(DATA, facts);
 
         assertTrue(message, message.contains("not confirmed on disk")); //$NON-NLS-1$
-        assertTrue(message, message.contains(CMI + " and " + MAIN_CMI + " were not found on disk after 1s.")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(message, message.contains(CMI + " and " + MAIN_CMI + " were not seen on disk after 1s.")); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("the root's note already advises against racing the save: " + message, 1, //$NON-NLS-1$
             message.split("which would race that save", -1).length - 1); //$NON-NLS-1$
         assertEquals("created", CreateProjectTool.extensionState(facts)); //$NON-NLS-1$
@@ -524,7 +529,7 @@ public class CreateProjectToolExtensionRootTest
         assertEquals(Collections.singletonList(MAIN_CMI), facts.disk.missingFiles);
         assertEquals("ready", CreateProjectTool.extensionState(facts)); //$NON-NLS-1$
         String message = CreateProjectTool.extensionMessage(DATA, facts);
-        assertTrue(message, message.contains("were attached, but " + MAIN_CMI + " was not found on disk")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(message, message.contains("were attached, but " + MAIN_CMI + " was not seen on disk")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     @Test
@@ -615,5 +620,115 @@ public class CreateProjectToolExtensionRootTest
 
         assertFalse("EDT accepted no save task", disk.save.submit(project, Collections.singletonList("Configuration"))); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(DiskExportState.UNOBSERVABLE, disk.exportWait.get());
+    }
+
+    // ==================== the look's reads are bounded (#747 review, round 3) ====================
+
+    /** A project the look reads, by name: the name is the key of the claim its reads take. */
+    private static IProject named(String name)
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn(name);
+        return project;
+    }
+
+    /** A disk whose root file the file system does not answer until {@code answers} is counted down. */
+    private static ExtensionDisk hungDisk(CountDownLatch answers, AtomicInteger rootReads)
+    {
+        return new ExtensionDisk((project, fqns) -> true, () -> DiskExportState.DRAINED, () -> {
+            rootReads.incrementAndGet();
+            try
+            {
+                answers.await(60, TimeUnit.SECONDS);
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            return WIZARD_ROOT;
+        }, path -> true);
+    }
+
+    /**
+     * A created extension's save and look, on a thread of its own, waited for no longer than {@code waitMs}: a look that
+     * the file system holds fails this assertion instead of hanging the run.
+     */
+    private static ExtensionFacts lookWithin(IProject project, ExtensionDisk disk, long budgetMs, long waitMs)
+        throws InterruptedException
+    {
+        ExtensionFacts facts = facts(CompatibilityMode.VERSION8_51, CompatibilityMode.VERSION8_51, false);
+        facts.lifecycleStarted = true;
+        Thread look = new Thread(() -> CreateProjectTool.saveAndLook(project, CI_FQNS, facts, disk, budgetMs, 10L),
+            "look of " + project.getName()); //$NON-NLS-1$
+        look.setDaemon(true);
+        look.start();
+        look.join(waitMs);
+        assertFalse("the look of " + project.getName() + " is still running " + waitMs + "ms after it started; its " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "budget was " + budgetMs + "ms", look.isAlive()); //$NON-NLS-1$ //$NON-NLS-2$
+        return facts;
+    }
+
+    /**
+     * A root read the file system never answers does not hold create_project past the look's budget (#747 review, round
+     * 3): the look ends with its budget, and the answer says the root could not be read in time - not that it is missing -
+     * and stays {@code created}.
+     */
+    @Test
+    public void testALookWhoseRootReadNeverAnswersEndsWithItsBudgetNotConfirmed() throws Exception
+    {
+        CountDownLatch answers = new CountDownLatch(1);
+        AtomicInteger rootReads = new AtomicInteger();
+        try
+        {
+            ExtensionFacts facts = lookWithin(named(PROJECT + ".Hung" + System.nanoTime()), hungDisk(answers, rootReads), //$NON-NLS-1$
+                1_500L, 6_500L);
+
+            assertEquals("the root was read once, in a job the look then stopped waiting for", 1, rootReads.get()); //$NON-NLS-1$
+            assertNotNull("the look ran", facts.disk); //$NON-NLS-1$
+            assertFalse(facts.disk.confirmed);
+            assertEquals("created", CreateProjectTool.extensionState(facts)); //$NON-NLS-1$
+            String message = CreateProjectTool.extensionMessage(DATA, facts);
+            assertTrue(message, message.contains("Its root was not confirmed on disk: src/Configuration/Configuration.mdo " //$NON-NLS-1$
+                + "could not be read in time")); //$NON-NLS-1$
+            assertFalse(message, message.contains("was not found on disk")); //$NON-NLS-1$
+        }
+        finally
+        {
+            answers.countDown();
+        }
+    }
+
+    /**
+     * One hung read per project (#747 review, round 3): while the look's read of a project's files hangs, a second look of
+     * that project starts no read - its rounds are refused at once, and its root reads as not read in time - and a look of
+     * another project is not held up. The project is told apart by its name.
+     */
+    @Test
+    public void testWhileALookOfAProjectHangsNoOtherLookOfThatProjectStartsARead() throws Exception
+    {
+        String name = PROJECT + ".Held" + System.nanoTime(); //$NON-NLS-1$
+        CountDownLatch answers = new CountDownLatch(1);
+        try
+        {
+            lookWithin(named(name), hungDisk(answers, new AtomicInteger()), 1_500L, 6_500L);
+
+            AtomicInteger reads = new AtomicInteger();
+            ExtensionDisk counting = new ExtensionDisk((project, fqns) -> true, () -> DiskExportState.DRAINED, () -> {
+                reads.incrementAndGet();
+                return WIZARD_ROOT;
+            }, path -> true);
+            ExtensionFacts second = lookWithin(named(name), counting, 300L, 5_300L);
+            assertEquals("no read of the project's files started while its first one hangs", 0, reads.get()); //$NON-NLS-1$
+            assertFalse(second.disk.confirmed);
+            assertTrue(second.disk.describe(), second.disk.describe().contains("could not be read in time")); //$NON-NLS-1$
+
+            ExtensionFacts other = lookWithin(named(name + ".Other"), counting, 1_000L, 6_000L); //$NON-NLS-1$
+            assertTrue("another project's look is not held up", other.disk.confirmed); //$NON-NLS-1$
+            assertEquals(1, reads.get());
+        }
+        finally
+        {
+            answers.countDown();
+        }
     }
 }

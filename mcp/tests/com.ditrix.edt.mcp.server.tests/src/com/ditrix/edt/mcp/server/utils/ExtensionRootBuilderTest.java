@@ -28,9 +28,15 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.emf.ecore.EObject;
 import org.junit.Before;
 import org.junit.Test;
@@ -79,6 +85,8 @@ public class ExtensionRootBuilderTest
     @Before
     public void setUp()
     {
+        // The look's rounds claim a per-project slot that a hung read of an earlier test may still hold.
+        BuildUtils.forgetExportWaits();
         // The base: a language whose NAME differs from its CODE, so a synonym keyed by the name is caught.
         base = MdClassFactory.eINSTANCE.createConfiguration();
         base.setName("BaseConfiguration"); //$NON-NLS-1$
@@ -529,7 +537,7 @@ public class ExtensionRootBuilderTest
     public void testADrainedExportWithTheMarksOnDiskConfirmsTheRootAtTheFirstRead()
     {
         AtomicInteger reads = new AtomicInteger();
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.DRAINED,
+        ExtensionRootBuilder.RootOnDisk disk = look(() -> DiskExportState.DRAINED,
             () -> {
                 reads.incrementAndGet();
                 return WIZARD_ROOT;
@@ -546,7 +554,7 @@ public class ExtensionRootBuilderTest
     {
         // The queue drained, but the file on disk still lacks the marks: a drained queue also drains a
         // write that failed, so this is NOT a confirmation, however long the poll is allowed to run.
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.DRAINED,
+        ExtensionRootBuilder.RootOnDisk disk = look(() -> DiskExportState.DRAINED,
             () -> FACTORY_ROOT, 200L, 10L);
 
         assertFalse(disk.confirmed);
@@ -559,7 +567,7 @@ public class ExtensionRootBuilderTest
     {
         List<String> answers = new ArrayList<>(Arrays.asList(null, FACTORY_ROOT, WIZARD_ROOT));
         AtomicInteger reads = new AtomicInteger();
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.UNOBSERVABLE,
+        ExtensionRootBuilder.RootOnDisk disk = look(() -> DiskExportState.UNOBSERVABLE,
             () -> {
                 reads.incrementAndGet();
                 return answers.size() > 1 ? answers.remove(0) : answers.get(0);
@@ -573,7 +581,7 @@ public class ExtensionRootBuilderTest
     public void testTheConfirmationGivesUpAtItsBudget()
     {
         long start = System.nanoTime();
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.PENDING,
+        ExtensionRootBuilder.RootOnDisk disk = look(() -> DiskExportState.PENDING,
             () -> null, 300L, 20L);
         long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
 
@@ -617,7 +625,7 @@ public class ExtensionRootBuilderTest
     @Test
     public void testAFailingReadIsReportedNotThrown()
     {
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.DRAINED,
+        ExtensionRootBuilder.RootOnDisk disk = look(() -> DiskExportState.DRAINED,
             () -> {
                 throw new IOException("sharing violation"); //$NON-NLS-1$
             }, 100L, 10L);
@@ -643,7 +651,7 @@ public class ExtensionRootBuilderTest
     {
         AtomicInteger reads = new AtomicInteger();
         AtomicInteger checks = new AtomicInteger();
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.DRAINED,
+        ExtensionRootBuilder.RootOnDisk disk = look(() -> DiskExportState.DRAINED,
             () -> {
                 reads.incrementAndGet();
                 return WIZARD_ROOT;
@@ -659,7 +667,7 @@ public class ExtensionRootBuilderTest
     public void testAFileStillMissingAtTheBudgetIsNamedButTheRootStaysConfirmed()
     {
         long start = System.nanoTime();
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.DRAINED,
+        ExtensionRootBuilder.RootOnDisk disk = look(() -> DiskExportState.DRAINED,
             () -> WIZARD_ROOT, Arrays.asList(CMI, MAIN_CMI), path -> !MAIN_CMI.equals(path), 300L, 20L);
         long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
 
@@ -671,7 +679,7 @@ public class ExtensionRootBuilderTest
     @Test
     public void testFilesOnDiskNeverConfirmARootThatIsNot()
     {
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.DRAINED,
+        ExtensionRootBuilder.RootOnDisk disk = look(() -> DiskExportState.DRAINED,
             () -> FACTORY_ROOT, Arrays.asList(CMI, MAIN_CMI), path -> true, 100L, 10L);
 
         assertFalse(disk.confirmed);
@@ -682,7 +690,7 @@ public class ExtensionRootBuilderTest
     @Test
     public void testAFileCheckThatThrowsCountsTheFileAsNotSeen()
     {
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.DRAINED,
+        ExtensionRootBuilder.RootOnDisk disk = look(() -> DiskExportState.DRAINED,
             () -> WIZARD_ROOT, Arrays.asList(CMI, MAIN_CMI), path -> {
                 if (CMI.equals(path))
                 {
@@ -698,7 +706,7 @@ public class ExtensionRootBuilderTest
     @Test
     public void testTheRootOnlyLookAsksForNoFiles()
     {
-        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.DRAINED,
+        ExtensionRootBuilder.RootOnDisk disk = look(() -> DiskExportState.DRAINED,
             () -> WIZARD_ROOT, 1_000L, 10L);
 
         assertTrue(disk.confirmed);
@@ -735,5 +743,398 @@ public class ExtensionRootBuilderTest
     public void testAProjectWithoutALocalLocationHasNoFiles()
     {
         assertFalse(ExtensionRootBuilder.projectFileExists(mock(IProject.class)).test(CMI));
+    }
+
+    // ==================== every look at the file system is bounded (#747 review, round 3) ====================
+
+    /** The description of a root whose last read did not complete in time. */
+    private static final String NOT_READ_IN_TIME = ExtensionRootBuilder.ROOT_FILE + " could not be read in time (the read " //$NON-NLS-1$
+        + "did not complete, or an earlier read of the project's files had not returned)"; //$NON-NLS-1$
+
+    /** Project names: each look claims its own project's slot, so no look is refused for another test's claim. */
+    private static final AtomicInteger PROJECTS = new AtomicInteger();
+
+    private static String nextProject()
+    {
+        return "ExtensionRootBuilderTest" + PROJECTS.incrementAndGet(); //$NON-NLS-1$
+    }
+
+    /**
+     * Runs each round at once, on the caller's thread, and reports it completed and its job ended: a file system that
+     * answers.
+     */
+    private static final AdoptedModuleState.BoundedRunner AT_ONCE = (name, timeoutMs, work, jobEnded) -> {
+        Throwable thrown = null;
+        try
+        {
+            work.run(new NullProgressMonitor());
+        }
+        catch (Exception e) // NOSONAR captured, as BoundedJob captures it
+        {
+            thrown = e;
+        }
+        jobEnded.run();
+        return new BoundedJob.Result(BoundedJob.Outcome.COMPLETED, 0L, thrown);
+    };
+
+    /** A look at the root alone, whose rounds a file system that answers reads at once. */
+    private static ExtensionRootBuilder.RootOnDisk look(Supplier<DiskExportState> exportWait,
+        ExtensionRootBuilder.RootFileReader reader, long budgetMs, long pollMs)
+    {
+        return look(exportWait, reader, Collections.emptyList(), path -> true, budgetMs, pollMs);
+    }
+
+    /** A look at the root and the files beside it, whose rounds a file system that answers reads at once. */
+    private static ExtensionRootBuilder.RootOnDisk look(Supplier<DiskExportState> exportWait, // NOSONAR the look's own parameters, one each
+        ExtensionRootBuilder.RootFileReader reader, List<String> files, Predicate<String> fileExists, long budgetMs,
+        long pollMs)
+    {
+        return ExtensionRootBuilder.confirmOnDisk(AT_ONCE, nextProject(), exportWait, reader, files, fileExists,
+            budgetMs, pollMs);
+    }
+
+    /**
+     * Answers each round from a script - COMPLETED runs the round at once, any other outcome does not - then every later
+     * round with {@code rest}, and records the timeout each round was given. A TIMED_OUT round keeps its job, and so its
+     * project's claim, until {@link #endKept}: a read the file system has not answered. Any other round that did not run
+     * ends its job at once, as a job cancelled before it started does.
+     */
+    private static final class ScriptedRunner implements AdoptedModuleState.BoundedRunner
+    {
+        private final BoundedJob.Outcome rest;
+        private final List<BoundedJob.Outcome> script;
+        final List<Long> timeouts = new ArrayList<>();
+        private final List<Runnable> kept = new ArrayList<>();
+
+        ScriptedRunner(BoundedJob.Outcome rest, BoundedJob.Outcome... script)
+        {
+            this.rest = rest;
+            this.script = new ArrayList<>(Arrays.asList(script));
+        }
+
+        @Override
+        public BoundedJob.Result run(String jobName, long timeoutMs, BoundedJob.IBoundedWork work, Runnable jobEnded)
+        {
+            timeouts.add(timeoutMs);
+            BoundedJob.Outcome outcome = script.isEmpty() ? rest : script.remove(0);
+            if (outcome == BoundedJob.Outcome.COMPLETED)
+            {
+                return AT_ONCE.run(jobName, timeoutMs, work, jobEnded);
+            }
+            if (outcome == BoundedJob.Outcome.TIMED_OUT)
+            {
+                kept.add(jobEnded);
+            }
+            else
+            {
+                jobEnded.run();
+            }
+            return new BoundedJob.Result(outcome, timeoutMs, null);
+        }
+
+        /** The file system answers the reads it kept, long after the look stopped waiting: their jobs end. */
+        void endKept()
+        {
+            kept.forEach(Runnable::run);
+            kept.clear();
+        }
+    }
+
+    /**
+     * A round that did not complete in time is no evidence either way (#747 review, round 3): it confirms nothing, and the
+     * poll goes on - the next round reads the root and confirms it.
+     */
+    @Test
+    public void testARoundNotReadInTimeConfirmsNothingAndThePollGoesOn()
+    {
+        ScriptedRunner runner = new ScriptedRunner(BoundedJob.Outcome.COMPLETED, BoundedJob.Outcome.TIMED_OUT_BEFORE_START);
+        AtomicInteger reads = new AtomicInteger();
+
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(),
+            () -> DiskExportState.DRAINED, () -> {
+                reads.incrementAndGet();
+                return WIZARD_ROOT;
+            }, Collections.emptyList(), path -> true, 5_000L, 10L);
+
+        assertTrue("a later round confirmed the root", disk.confirmed); //$NON-NLS-1$
+        assertTrue(disk.readInTime);
+        assertEquals("two rounds: the one not read in time, then the one that read the root", 2, //$NON-NLS-1$
+            runner.timeouts.size());
+        assertEquals("only the second round ran the read", 1, reads.get()); //$NON-NLS-1$
+    }
+
+    /**
+     * A read the file system never answers neither confirms the root nor says it is missing (#747 review, round 3): the
+     * root is described as not read in time - not as not found, not as lacking the block - and every later round of the
+     * look is refused at once by the project's claim that the hung read keeps, so no second read joins it. The files
+     * beside the root were not looked at in time, so none counts as seen. Once the hung read's job ends, the claim is
+     * released.
+     */
+    @Test
+    public void testARootReadThatNeverAnswersIsNotReadInTimeAndRefusesEveryLaterRound()
+    {
+        String project = nextProject();
+        ScriptedRunner runner = new ScriptedRunner(BoundedJob.Outcome.COMPLETED, BoundedJob.Outcome.TIMED_OUT);
+        AtomicInteger touches = new AtomicInteger();
+
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, project,
+            () -> DiskExportState.DRAINED, () -> {
+                touches.incrementAndGet();
+                return WIZARD_ROOT;
+            }, Arrays.asList(CMI, MAIN_CMI), path -> touches.incrementAndGet() > 0, 300L, 10L);
+
+        assertFalse(disk.confirmed);
+        assertFalse(disk.readInTime);
+        assertEquals(NOT_READ_IN_TIME, disk.describe());
+        assertEquals("only the first round reached a job: the claim its hung read keeps refused every later one", 1, //$NON-NLS-1$
+            runner.timeouts.size());
+        assertEquals("nothing was read or checked", 0, touches.get()); //$NON-NLS-1$
+        assertEquals("no file was looked at in time, so none counts as seen", Arrays.asList(CMI, MAIN_CMI), //$NON-NLS-1$
+            disk.missingFiles);
+        assertNull("the hung read still holds the project's claim", BuildUtils.beginStateLineRead(project, 1_000L)); //$NON-NLS-1$
+
+        runner.endKept();
+        assertNotNull("released once the hung read's job ended", BuildUtils.beginStateLineRead(project, 1_000L)); //$NON-NLS-1$
+    }
+
+    /**
+     * One claim per project's files, whoever reads them (#747 review, round 3): while #743's read of a module's state line
+     * from a .mdo of the project is still out, the look starts no read of that project's files - every round is refused at
+     * once and the root reads as not read in time - and once that read has returned, the look reads and confirms.
+     */
+    @Test
+    public void testWhileAModuleStateReadOfTheProjectIsOutTheLookStartsNoRead()
+    {
+        String project = nextProject();
+        AtomicBoolean stateLineRead = BuildUtils.beginStateLineRead(project, 60_000L);
+        assertNotNull("a read of a module's state line is out", stateLineRead); //$NON-NLS-1$
+        ScriptedRunner runner = new ScriptedRunner(BoundedJob.Outcome.COMPLETED);
+        AtomicInteger reads = new AtomicInteger();
+        ExtensionRootBuilder.RootFileReader reader = () -> {
+            reads.incrementAndGet();
+            return WIZARD_ROOT;
+        };
+
+        ExtensionRootBuilder.RootOnDisk refused = ExtensionRootBuilder.confirmOnDisk(runner, project,
+            () -> DiskExportState.DRAINED, reader, Collections.emptyList(), path -> true, 200L, 10L);
+
+        assertFalse(refused.confirmed);
+        assertEquals(NOT_READ_IN_TIME, refused.describe());
+        assertTrue("no round started a job", runner.timeouts.isEmpty()); //$NON-NLS-1$
+        assertEquals(0, reads.get());
+
+        stateLineRead.set(true); // that read returned
+        assertTrue("once it returned, the look reads and confirms", ExtensionRootBuilder.confirmOnDisk(runner, project, //$NON-NLS-1$
+            () -> DiskExportState.DRAINED, reader, Collections.emptyList(), path -> true, 1_000L, 10L).confirmed);
+        assertEquals(1, reads.get());
+    }
+
+    /**
+     * The other way round (#747 review, round 3): while a round of the look is still in the file system, #743's reads of
+     * the same project's module state lines start no job - they are refused at once - and another project's are not held
+     * up.
+     */
+    @Test
+    public void testAHungRoundOfTheLookRefusesTheModuleStateReadsOfItsProjectOnly()
+    {
+        String project = nextProject();
+        ScriptedRunner look = new ScriptedRunner(BoundedJob.Outcome.COMPLETED, BoundedJob.Outcome.TIMED_OUT);
+        assertFalse(ExtensionRootBuilder.confirmOnDisk(look, project, () -> DiskExportState.DRAINED, () -> WIZARD_ROOT,
+            Collections.emptyList(), path -> true, 100L, 10L).confirmed);
+
+        ScriptedRunner stateLine = new ScriptedRunner(BoundedJob.Outcome.COMPLETED);
+        assertEquals(AdoptedModuleState.LineOnDisk.UNREADABLE, AdoptedModuleState.readBounded(stateLine, project, "read", //$NON-NLS-1$
+            1_000L, () -> AdoptedModuleState.LineOnDisk.PRESENT));
+        assertTrue("refused at once: no job", stateLine.timeouts.isEmpty()); //$NON-NLS-1$
+        assertEquals("another project's read is not held up", AdoptedModuleState.LineOnDisk.PRESENT, //$NON-NLS-1$
+            AdoptedModuleState.readBounded(stateLine, nextProject(), "read", 1_000L, //$NON-NLS-1$
+                () -> AdoptedModuleState.LineOnDisk.PRESENT));
+
+        look.endKept();
+        assertEquals("once the look's read returned, the project's reads start again", //$NON-NLS-1$
+            AdoptedModuleState.LineOnDisk.PRESENT, AdoptedModuleState.readBounded(stateLine, project, "read", 1_000L, //$NON-NLS-1$
+                () -> AdoptedModuleState.LineOnDisk.PRESENT));
+    }
+
+    /**
+     * The production look, on EDT's job manager (#747 review, round 3): a root read the file system never answers does
+     * not hold the call past the look's budget - the look ends with it, the root not confirmed and not read in time -
+     * and the read's job, once the file system answers, ends and releases the project's claim.
+     */
+    @Test
+    public void testARealReadThatNeverAnswersDoesNotHoldTheLookPastItsBudget() throws Exception
+    {
+        String project = nextProject();
+        CountDownLatch answers = new CountDownLatch(1);
+        AtomicBoolean entered = new AtomicBoolean();
+        long budget = 1_500L;
+        long start = System.nanoTime();
+        ExtensionRootBuilder.RootOnDisk disk;
+        try
+        {
+            disk = ExtensionRootBuilder.confirmOnDisk(project, () -> DiskExportState.DRAINED, () -> {
+                entered.set(true);
+                try
+                {
+                    answers.await(60, TimeUnit.SECONDS); // a file system that does not answer
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+                return WIZARD_ROOT;
+            }, Collections.emptyList(), path -> true, budget, 10L);
+        }
+        finally
+        {
+            answers.countDown();
+        }
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+
+        assertTrue("the read ran, in a job of its own", entered.get()); //$NON-NLS-1$
+        assertFalse(disk.confirmed);
+        assertFalse(disk.readInTime);
+        assertEquals(NOT_READ_IN_TIME, disk.describe());
+        assertTrue("the look ended with its budget, not with the read: " + elapsedMs + "ms", //$NON-NLS-1$ //$NON-NLS-2$
+            elapsedMs < budget + 2_000L);
+        assertTrue("the read's job ended once the file system answered, and released the claim", //$NON-NLS-1$
+            awaitReleased(project));
+    }
+
+    /**
+     * An export wait that used the whole budget still leaves the root file one look (#747 review, round 3), as the look
+     * always gave it: the first round is given at least {@link ExtensionRootBuilder#FIRST_LOOK_MIN_MS}, so a queue EDT did
+     * not drain in time cannot alone keep a root that is on disk from being confirmed. The minimum is pinned as the
+     * literal second it is, not read from the constant: a pin built from the constant would follow any change to it.
+     */
+    @Test
+    public void testAnExportWaitThatUsedTheBudgetStillLeavesTheFileOneLook()
+    {
+        ScriptedRunner runner = new ScriptedRunner(BoundedJob.Outcome.COMPLETED);
+
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(), () -> {
+            try
+            {
+                Thread.sleep(150L); // longer than the whole budget
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+            return DiskExportState.PENDING;
+        }, () -> WIZARD_ROOT, Collections.emptyList(), path -> true, 50L, 10L);
+
+        assertTrue("the one look after the wait confirmed the root", disk.confirmed); //$NON-NLS-1$
+        assertEquals(DiskExportState.PENDING, disk.exportState);
+        assertEquals("one round, given the minimum - one second", Collections.singletonList(1_000L), //$NON-NLS-1$
+            runner.timeouts);
+    }
+
+    /**
+     * Each round is given what is left of the budget - the first one all of it here, as the export wait took nothing -
+     * and none starts with nothing left (#747 review, round 3).
+     */
+    @Test
+    public void testEachRoundIsGivenWhatIsLeftOfTheBudgetAndNoneStartsWithNothingLeft()
+    {
+        ScriptedRunner runner = new ScriptedRunner(BoundedJob.Outcome.COMPLETED);
+        long budget = 1_200L;
+
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(),
+            () -> DiskExportState.DRAINED, () -> null, Collections.emptyList(), path -> true, budget, 50L);
+
+        assertFalse(disk.confirmed);
+        assertTrue(disk.readInTime);
+        assertTrue(disk.describe(), disk.describe().contains("was not found on disk")); //$NON-NLS-1$
+        assertTrue("the poll went on: " + runner.timeouts, runner.timeouts.size() > 2); //$NON-NLS-1$
+        assertTrue("the first round got what was left - the whole budget: " + runner.timeouts, //$NON-NLS-1$
+            runner.timeouts.get(0) > budget - 300L && runner.timeouts.get(0) <= budget);
+        long previous = Long.MAX_VALUE;
+        for (long timeout : runner.timeouts)
+        {
+            assertTrue("no round starts with nothing left: " + runner.timeouts, timeout > 0); //$NON-NLS-1$
+            assertTrue("each round is given what is left, less each time: " + runner.timeouts, timeout <= previous); //$NON-NLS-1$
+            previous = timeout;
+        }
+    }
+
+    /**
+     * A file a completed round saw stays seen (#747 review, round 3): a later round that did not complete in time saw
+     * nothing, and must not make the look forget a file it saw - only the file no round saw is named.
+     */
+    @Test
+    public void testAFileSeenOnceStaysSeenWhenALaterRoundIsNotReadInTime()
+    {
+        ScriptedRunner runner = new ScriptedRunner(BoundedJob.Outcome.TIMED_OUT_BEFORE_START,
+            BoundedJob.Outcome.COMPLETED);
+        List<String> asked = new ArrayList<>();
+
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(runner, nextProject(),
+            () -> DiskExportState.DRAINED, () -> WIZARD_ROOT, Arrays.asList(CMI, MAIN_CMI), path -> {
+                asked.add(path);
+                return CMI.equals(path);
+            }, 200L, 10L);
+
+        assertTrue(disk.confirmed);
+        assertTrue("the root's one read completed in time", disk.readInTime); //$NON-NLS-1$
+        assertTrue("later rounds were tried: " + runner.timeouts, runner.timeouts.size() > 1); //$NON-NLS-1$
+        assertEquals("only the first round ran its checks", Arrays.asList(CMI, MAIN_CMI), asked); //$NON-NLS-1$
+        assertEquals("the file a completed round saw stays seen", Collections.singletonList(MAIN_CMI), //$NON-NLS-1$
+            disk.missingFiles);
+    }
+
+    /** A file seen once is not looked for again (#747 review, round 3): each round checks only the files not seen yet. */
+    @Test
+    public void testARoundLooksOnlyForTheFilesNotSeenYet()
+    {
+        List<String> asked = new ArrayList<>();
+        AtomicInteger cmiChecks = new AtomicInteger();
+
+        ExtensionRootBuilder.RootOnDisk disk = look(() -> DiskExportState.DRAINED, () -> WIZARD_ROOT,
+            Arrays.asList(CMI, MAIN_CMI), path -> {
+                asked.add(path);
+                return MAIN_CMI.equals(path) || cmiChecks.incrementAndGet() > 1;
+            }, 5_000L, 10L);
+
+        assertTrue(disk.confirmed);
+        assertEquals(Collections.emptyList(), disk.missingFiles);
+        assertEquals("the second round looked only for the file the first did not see", //$NON-NLS-1$
+            Arrays.asList(CMI, MAIN_CMI, CMI), asked);
+    }
+
+    /**
+     * The four answers a root not confirmed can get tell their causes apart (#747 review, round 3): not read in time, read
+     * and failed, read and not there, read and lacking the wizard's shape.
+     */
+    @Test
+    public void testTheDescriptionOfARootNotConfirmedNamesItsCause()
+    {
+        assertEquals(NOT_READ_IN_TIME, ExtensionRootBuilder.confirmOnDisk(
+            new ScriptedRunner(BoundedJob.Outcome.TIMED_OUT_BEFORE_START), nextProject(), () -> DiskExportState.DRAINED,
+            () -> WIZARD_ROOT, Collections.emptyList(), path -> true, 50L, 10L).describe());
+        assertEquals(ExtensionRootBuilder.ROOT_FILE + " could not be read (sharing violation)", //$NON-NLS-1$
+            look(() -> DiskExportState.DRAINED, () -> {
+                throw new IOException("sharing violation"); //$NON-NLS-1$
+            }, 50L, 10L).describe());
+        assertEquals(ExtensionRootBuilder.ROOT_FILE + " was not found on disk", //$NON-NLS-1$
+            look(() -> DiskExportState.DRAINED, () -> null, 50L, 10L).describe());
+        assertEquals(ExtensionRootBuilder.ROOT_FILE + " does not show the ConfigurationExtension block or " //$NON-NLS-1$
+            + "keepMappingToExtendedConfigurationObjectsByIDs=true yet", //$NON-NLS-1$
+            look(() -> DiskExportState.DRAINED, () -> FACTORY_ROOT, 50L, 10L).describe());
+    }
+
+    /** Waits, within ten seconds, until {@code project} holds no claim on reads of its files. */
+    private static boolean awaitReleased(String project) throws InterruptedException
+    {
+        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(10L);
+        while (BuildUtils.stateLineReadHoldLeftMs(project) > 0)
+        {
+            if (System.nanoTime() - until >= 0)
+            {
+                return false;
+            }
+            Thread.sleep(10);
+        }
+        return true;
     }
 }
