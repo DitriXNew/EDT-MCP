@@ -2823,7 +2823,14 @@ public class AdoptedModuleStateTest
         assertNoRemovedClaim("the missing-block note", note); //$NON-NLS-1$
     }
 
-    /** An extension root without its block (one made outside EDT's wizard) - named as the ROOT; a success. */
+    /**
+     * An extension root without its block - one an earlier create_project made from a new configuration (#706) - named as
+     * the ROOT; a success. The note says which roots carry the block now - EDT's wizard's and create_project's - that a
+     * root an earlier create_project made has none, and the two ways out: recreating the extension, or setting the state
+     * of the root's default language in EDT, which adds the root's block; then the step's own rerun (#747 review, round
+     * 3). That property, not just any of the root's: a state set on 'Extended configuration object' gets a block of
+     * another class, without module states, and a Checked default run mode gets no state while the block is missing.
+     */
     @Test
     public void testARootWithoutItsExtensionBlockNamesTheRootAndTheWizard()
     {
@@ -2838,8 +2845,19 @@ public class AdoptedModuleStateTest
         assertTrue(note, note.contains("This module belongs to the extension's root object (Configuration), " //$NON-NLS-1$
             + "adopted from the base configuration: there is no extension block in " //$NON-NLS-1$
             + "src/Configuration/Configuration.mdo, so the module state cannot be recorded.")); //$NON-NLS-1$
-        assertTrue(note, note.contains("An extension root that EDT's own new-extension wizard creates carries " //$NON-NLS-1$
-            + "that block.")); //$NON-NLS-1$
+        assertTrue(note, note.contains("An extension root that EDT's own new-extension wizard creates carries that " //$NON-NLS-1$
+            + "block, and so does one that create_project creates, as it adopts the base's root the way that wizard " //$NON-NLS-1$
+            + "does; a root made by an earlier version of create_project - a new configuration, not the base's root " //$NON-NLS-1$
+            + "adopted - has none.")); //$NON-NLS-1$
+        assertTrue(note, note.contains("To record the state, recreate the extension with create_project and add its " //$NON-NLS-1$
+            + "objects and code again, then run this step again: call write_module_source on the same module with " //$NON-NLS-1$
+            + "mode=append and an empty source")); //$NON-NLS-1$
+        assertFalse("no property state set in EDT is advised: on such a root a Checked default language is a " //$NON-NLS-1$
+            + "critical error that stops EDT from updating an infobase: " + note, note.contains("default language")); //$NON-NLS-1$
+        assertFalse("a state of just any of the root's properties does not give it the block this step needs: " //$NON-NLS-1$
+            + note, note.contains("one of the root's properties")); //$NON-NLS-1$
+        assertFalse("the old note said only the wizard's roots carry the block: " + note, //$NON-NLS-1$
+            note.contains("carries that block.")); //$NON-NLS-1$
         assertNoRemovedClaim("the root's missing-block note", note); //$NON-NLS-1$
         assertTrue(env.exportCalls().isEmpty());
         verify(access, never()).setPropertyState(any(), any(), any());

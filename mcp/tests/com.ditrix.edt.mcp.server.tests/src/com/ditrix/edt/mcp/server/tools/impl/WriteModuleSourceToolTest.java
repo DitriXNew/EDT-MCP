@@ -2673,6 +2673,22 @@ public class WriteModuleSourceToolTest
     }
 
     /**
+     * The guide's {@code noExtensionBlock} line says which extension roots carry the block (#747 review, round 3): EDT's
+     * own wizard's and create_project's, which adopts the base's root as that wizard does - while a root an earlier
+     * create_project made has none, and the body says how to get one.
+     */
+    @Test
+    public void testTheGuideSaysWhichExtensionRootsCarryTheBlock()
+    {
+        String guide = new WriteModuleSourceTool().getGuide();
+        assertTrue(guide, guide.contains("A root created by EDT's own new-extension wizard, or by `create_project` " //$NON-NLS-1$
+            + "(which adopts the base's root as that wizard does), has the block; a root made by an earlier version of " //$NON-NLS-1$
+            + "`create_project` has none, and the body says how to get one.")); //$NON-NLS-1$
+        assertFalse("the old line named only the wizard's roots", //$NON-NLS-1$
+            guide.contains("A root created by EDT's own new-extension wizard has the block.")); //$NON-NLS-1$
+    }
+
+    /**
      * The guide states only what was verified: EDT's UI records the state in the .mdo, EDT's listener sets
      * it only in the model, and this tool records it at once. The claim round 2 removed - that EDT leaves a
      * module that is not Extended out of the extension it exports and loads into the infobase - is gone from

@@ -112,6 +112,45 @@ public class AdoptMetadataObjectToolTest
         assertTrue(schema.contains("\"action\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"objectBelonging\"")); //$NON-NLS-1$
         assertTrue(schema.contains("\"persisted\"")); //$NON-NLS-1$
+        // #706: 'alreadyAdopted' always carried a message, and an adoption mapped by name now carries one
+        // too - a field the result emits is a field the schema declares.
+        assertTrue("outputSchema must declare message", schema.contains("\"message\"")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTheGuideMakesTheByIdLinkConditional()
+    {
+        String guide = new AdoptMetadataObjectTool().getGuide();
+        assertTrue("the link depends on the extension root's mapping flag", //$NON-NLS-1$
+            guide.contains("keepMappingToExtendedConfigurationObjectsByIDs")); //$NON-NLS-1$
+        assertTrue("and on the platform version", guide.contains("8.3.14")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("the old unconditional promise is gone", //$NON-NLS-1$
+            guide.contains("and an `extendedConfigurationObject` UUID link back to the base object (mapping is by-ID")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheGuideSaysTheCopyItselfDecidesTheMapping()
+    {
+        // EDT writes the link at adoption only: a copy adopted before the flag was turned on has none, and one adopted
+        // while it was on keeps it - so 'message' is decided by the copy, not by the root's flag now.
+        String guide = new AdoptMetadataObjectTool().getGuide();
+        assertTrue(guide, guide.contains("EDT writes the link only at adoption, so the result looks at the copy itself")); //$NON-NLS-1$
+        assertTrue(guide, guide.contains("when the adopted copy carries no `extendedConfigurationObject` link")); //$NON-NLS-1$
+        assertFalse("the note is no longer about the extension's current mode", //$NON-NLS-1$
+            guide.contains("when the extension maps adopted objects to the base by name")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheResultPromisesARemedyOnlyWhereTheNoteHasOne()
+    {
+        // The note advises a change only for a reason that has one - a false flag, a version at or below 8.3.14. A copy
+        // adopted earlier with neither, or a flag that could not be read, gets the reason and no advice.
+        String guide = new AdoptMetadataObjectTool().getGuide();
+        assertTrue(guide, guide.contains("(it says the likely reason and, where it can, how to change that)")); //$NON-NLS-1$
+        assertFalse(guide, guide.contains("(it says the likely reason and how to change that)")); //$NON-NLS-1$
+        String schema = new AdoptMetadataObjectTool().getOutputSchema();
+        assertTrue(schema, schema.contains("(it says the likely reason and, where it can, how to change it)")); //$NON-NLS-1$
+        assertFalse(schema, schema.contains("(it says the likely reason and how to change it)")); //$NON-NLS-1$
     }
 
     // ==================== source resolution (issue #708) ====================
@@ -436,17 +475,17 @@ public class AdoptMetadataObjectToolTest
         assertSame(orders, source.object);
         String chain = "Subsystem.Sales.Subsystem.Orders"; //$NON-NLS-1$
 
-        JsonObject adopted = json(AdoptMetadataObjectTool.adoptedResult(source, "Ext", true)); //$NON-NLS-1$
+        JsonObject adopted = json(AdoptMetadataObjectTool.adoptedResult(source, "Ext", true, null)); //$NON-NLS-1$
         assertTrue(adopted.get("success").getAsBoolean()); //$NON-NLS-1$
         assertEquals("adopted", adopted.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(chain, adopted.get("fqn").getAsString()); //$NON-NLS-1$
         assertEquals("Ext", adopted.get("extensionProject").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("ADOPTED", adopted.get("objectBelonging").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(adopted.get("persisted").getAsBoolean()); //$NON-NLS-1$
-        assertFalse(json(AdoptMetadataObjectTool.adoptedResult(source, "Ext", false)) //$NON-NLS-1$
+        assertFalse(json(AdoptMetadataObjectTool.adoptedResult(source, "Ext", false, null)) //$NON-NLS-1$
             .get("persisted").getAsBoolean()); //$NON-NLS-1$
 
-        JsonObject already = json(AdoptMetadataObjectTool.alreadyAdoptedResult(source, "Ext")); //$NON-NLS-1$
+        JsonObject already = json(AdoptMetadataObjectTool.alreadyAdoptedResult(source, "Ext", null)); //$NON-NLS-1$
         assertTrue(already.get("success").getAsBoolean()); //$NON-NLS-1$
         assertEquals("alreadyAdopted", already.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals(chain, already.get("fqn").getAsString()); //$NON-NLS-1$

@@ -1022,6 +1022,69 @@ public final class CommandInterfaceSupport
         return new Target(created, fqn);
     }
 
+    // ===== a new configuration root's command interfaces ============================================
+
+    /**
+     * The two command interfaces EDT's new-configuration and new-extension wizards attach to a new root, in
+     * the order they attach them ({@code CmiModelUtil.createConfigurationCommandInterface} /
+     * {@code createMainSectionCommandInterface}): {@code CommandInterface.cmi} and
+     * {@code MainSectionCommandInterface.cmi}.
+     */
+    private static final List<EReference> CONFIGURATION_COMMAND_INTERFACES = List.of(
+        MdClassPackage.Literals.CONFIGURATION__COMMAND_INTERFACE,
+        MdClassPackage.Literals.CONFIGURATION__MAIN_SECTION_COMMAND_INTERFACE);
+
+    /** The outcome of {@link #ensureConfigurationCommandInterfaces}. */
+    public static final class Ensured
+    {
+        /** Both command interfaces' FQNs - present before or attached now - for the caller to export. */
+        public final List<String> fqns;
+        /** Why nothing was ensured, or {@code null}. */
+        public final String skipped;
+
+        Ensured(List<String> fqns, String skipped)
+        {
+            this.fqns = Collections.unmodifiableList(fqns);
+            this.skipped = skipped;
+        }
+    }
+
+    /**
+     * Ensures the configuration root of {@code tx}'s model has both command interfaces EDT's wizards create,
+     * attaching each one that is not registered yet under the platform's external-property FQN - the same two
+     * calls EDT's {@code CmiModelUtil} makes. Idempotent. Run it inside a WRITE transaction; the caller
+     * force-exports {@link Ensured#fqns}.
+     *
+     * @param tx the write transaction
+     * @return the outcome; skipped, never thrown, while the root is not in the model yet
+     */
+    public static Ensured ensureConfigurationCommandInterfaces(IBmTransaction tx)
+    {
+        return ensureConfigurationCommandInterfaces(tx, Activator.getDefault().getTopObjectFqnGenerator());
+    }
+
+    /** {@link #ensureConfigurationCommandInterfaces(IBmTransaction)} with the FQN generator given; for tests. */
+    static Ensured ensureConfigurationCommandInterfaces(IBmTransaction tx, ITopObjectFqnGenerator generator)
+    {
+        IBmObject root = tx.getTopObjectByFqn(CONFIGURATION_FQN);
+        if (!(root instanceof Configuration))
+        {
+            return new Ensured(new ArrayList<>(), "the extension's root was not in its model yet"); //$NON-NLS-1$
+        }
+        if (generator == null)
+        {
+            return new Ensured(new ArrayList<>(), "EDT's top-object FQN generator is not available"); //$NON-NLS-1$
+        }
+        List<String> fqns = new ArrayList<>(CONFIGURATION_COMMAND_INTERFACES.size());
+        for (EReference feature : CONFIGURATION_COMMAND_INTERFACES)
+        {
+            String fqn = generator.generateExternalPropertyFqn((Configuration)root, feature);
+            registeredOrAttached(tx, fqn);
+            fqns.add(fqn);
+        }
+        return new Ensured(fqns, null);
+    }
+
     private static String externalPropertyFqn(EObject owner, EReference feature, Object proxy)
     {
         ITopObjectFqnGenerator generator = Activator.getDefault().getTopObjectFqnGenerator();
