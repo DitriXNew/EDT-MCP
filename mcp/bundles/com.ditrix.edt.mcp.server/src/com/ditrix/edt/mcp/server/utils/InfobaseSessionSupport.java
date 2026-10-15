@@ -6,14 +6,15 @@
 
 package com.ditrix.edt.mcp.server.utils;
 
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -29,6 +30,8 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongConsumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -257,12 +260,7 @@ public final class InfobaseSessionSupport
             {
                 return ReadResult.unreachable("The standalone server is not running."); //$NON-NLS-1$
             }
-            String commandFailure = commandFailure("list", command); //$NON-NLS-1$
-            if (commandFailure != null)
-            {
-                return ReadResult.unreachable(commandFailure);
-            }
-            return readSessionsOutput(command.stdout);
+            return listOutcome(command);
         }
         catch (RuntimeException e)
         {
@@ -603,10 +601,9 @@ public final class InfobaseSessionSupport
         }
         try
         {
-            Charset readCharset = isWindows()
-                ? Charset.forName("CP866") : StandardCharsets.UTF_8; //$NON-NLS-1$
-            FutureTask<String> stdout = streamReader(process.getInputStream(), readCharset);
-            FutureTask<String> stderr = streamReader(process.getErrorStream(), readCharset);
+            Charset fallback = legacyOutputCharset(isWindows());
+            FutureTask<String> stdout = streamReader(process.getInputStream(), fallback);
+            FutureTask<String> stderr = streamReader(process.getErrorStream(), fallback);
             writeCredentials(process, credentials);
 
             boolean finished = process.waitFor(COMMAND_TIMEOUT_MS, TimeUnit.MILLISECONDS);
@@ -638,29 +635,65 @@ public final class InfobaseSessionSupport
     }
 
     /** Starts a daemon reader so a verbose session list cannot fill a process pipe and deadlock. */
-    private static FutureTask<String> streamReader(InputStream stream, Charset charset)
+    private static FutureTask<String> streamReader(InputStream stream, Charset fallback)
     {
-        FutureTask<String> task = new FutureTask<>(() -> readAll(stream, charset));
+        FutureTask<String> task = new FutureTask<>(() -> readAll(stream, fallback));
         Thread thread = new Thread(task, "EDT-MCP ibcmd output reader"); //$NON-NLS-1$
         thread.setDaemon(true);
         thread.start();
         return task;
     }
 
-    /** Reads one process stream to EOF. */
-    private static String readAll(InputStream stream, Charset charset) throws IOException
+    /** Reads one process stream to EOF and decodes it as {@link #decodeOutput} describes. */
+    private static String readAll(InputStream stream, Charset fallback) throws IOException
     {
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, charset)))
+        try (InputStream input = stream)
         {
-            StringBuilder text = new StringBuilder();
-            char[] buffer = new char[4096];
-            int read;
-            while ((read = reader.read(buffer)) >= 0)
-            {
-                text.append(buffer, 0, read);
-            }
-            return text.toString();
+            return decodeOutput(input.readAllBytes(), fallback);
         }
+    }
+
+    /**
+     * Decodes one captured ibcmd stream: as UTF-8 when its bytes are valid UTF-8, otherwise with
+     * the charset this reader always used before.
+     *
+     * <p>ibcmd 8.3.27 writes UTF-8 to the pipe, so reading it as CP866 - which is also what EDT's
+     * own {@code StandaloneServerCommandExecutor.getCharsetForReadFromServer()} returns on
+     * Windows - turned a Cyrillic user name into mojibake (#698). The UTF-8 check is strict.
+     * CP866 puts most Cyrillic letters on bytes UTF-8 reserves for continuations, so output in
+     * that code page practically never passes it and still decodes as before, and ASCII reads the
+     * same either way.
+     *
+     * @param bytes the stream's bytes
+     * @param fallback the charset for bytes that are not valid UTF-8
+     * @return the decoded text
+     */
+    static String decodeOutput(byte[] bytes, Charset fallback)
+    {
+        try
+        {
+            return StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes))
+                .toString();
+        }
+        catch (CharacterCodingException e)
+        {
+            return new String(bytes, fallback);
+        }
+    }
+
+    /**
+     * The charset every ibcmd stream was read with before #698, kept for output that is not valid
+     * UTF-8: the OEM code page CP866 on Windows, UTF-8 elsewhere.
+     *
+     * @param windows whether EDT runs on Windows
+     * @return the fallback charset
+     */
+    static Charset legacyOutputCharset(boolean windows)
+    {
+        return windows ? Charset.forName("CP866") : StandardCharsets.UTF_8; //$NON-NLS-1$
     }
 
     /** Supplies EDT's stored interactive credentials and closes stdin so a prompt fails fast. */
@@ -710,8 +743,12 @@ public final class InfobaseSessionSupport
         }
     }
 
-    /** Parsed sessions plus contentful blocks that were malformed or had no usable session UUID. */
-    static record ParsedSessions(List<SessionInfo> sessions, int unreadableBlocks)
+    /**
+     * Parsed sessions, the contentful blocks that were malformed or had no usable session UUID,
+     * and whether the output held anything besides ibcmd's authentication prompt.
+     */
+    static record ParsedSessions(List<SessionInfo> sessions, int unreadableBlocks,
+        boolean outputBeyondPrompt)
     {
         ParsedSessions
         {
@@ -719,7 +756,33 @@ public final class InfobaseSessionSupport
         }
     }
 
-    /** Turns successful command output into a readable list only when every parsed block is usable. */
+    /**
+     * The list verdict for one completed ibcmd run: a timeout or a non-zero exit is judged first,
+     * and only then the output. Since output that is nothing but ibcmd's complete authentication
+     * prompt reads as a proven empty list, a failed run must never reach
+     * {@link #readSessionsOutput}.
+     *
+     * @param command the completed run
+     * @return the readable list, or an unreachable result naming why
+     */
+    static ReadResult listOutcome(CommandExecution command)
+    {
+        String commandFailure = commandFailure("list", command); //$NON-NLS-1$
+        if (commandFailure != null)
+        {
+            return ReadResult.unreachable(commandFailure);
+        }
+        return readSessionsOutput(command.stdout);
+    }
+
+    /**
+     * Turns successful command output into a readable list only when every parsed block is usable.
+     * Output that is nothing but one complete authentication prompt of ibcmd
+     * ({@link #authenticationPromptEnd}) is a readable empty list, as blank output is: it is what a
+     * list without sessions prints once the credentials were asked for. Prompt text that is not one
+     * complete prompt - a fragment, a repetition - is list content, as it was before #698, and so
+     * never makes a proven empty list.
+     */
     static ReadResult readSessionsOutput(String output)
     {
         ParsedSessions parsed = parseSessions(output);
@@ -731,7 +794,7 @@ public final class InfobaseSessionSupport
                 + (parsed.unreadableBlocks() == 1 ? "" : "s") //$NON-NLS-1$ //$NON-NLS-2$
                 + ". The raw output was written to the EDT log."); //$NON-NLS-1$
         }
-        if (parsed.sessions().isEmpty() && output != null && !output.isBlank())
+        if (parsed.sessions().isEmpty() && parsed.outputBeyondPrompt())
         {
             logRawOutput("ibcmd session list returned unrecognized output", output); //$NON-NLS-1$
             return ReadResult.unreachable("ibcmd session list returned output that could not be " //$NON-NLS-1$
@@ -740,16 +803,28 @@ public final class InfobaseSessionSupport
         return ReadResult.readable(parsed.sessions());
     }
 
-    /** Parses one blank-line-separated key/value block per session. */
+    /**
+     * Parses one blank-line-separated key/value block per session.
+     *
+     * <p>Asked for the infobase credentials, ibcmd prints its authentication prompt before the
+     * list, with no blank line after it (#698). When the output opens with one complete prompt
+     * ({@link #authenticationPromptEnd}), exactly those lines are skipped; nothing else ever is.
+     * Every other line - prompt text that is not that one complete prompt included - is list
+     * content, read as before #698: a line without ':' makes its block unreadable, and a key: value
+     * line joins the block it stands in.
+     */
     static ParsedSessions parseSessions(String output)
     {
         List<SessionInfo> sessions = new ArrayList<>();
         Map<String, String> current = new LinkedHashMap<>();
         boolean currentMalformed = false;
         int unreadableBlocks = 0;
+        boolean outputBeyondPrompt = false;
         String normalized = output == null ? "" : output; //$NON-NLS-1$
-        for (String line : normalized.split("\\R", -1)) //$NON-NLS-1$
+        String[] lines = normalized.split("\\R", -1); //$NON-NLS-1$
+        for (int index = authenticationPromptEnd(lines); index < lines.length; index++)
         {
+            String line = lines[index];
             if (line.isBlank())
             {
                 unreadableBlocks += addSession(current, currentMalformed, sessions);
@@ -757,6 +832,7 @@ public final class InfobaseSessionSupport
                 currentMalformed = false;
                 continue;
             }
+            outputBeyondPrompt = true;
             int colon = line.indexOf(':');
             if (colon < 0)
             {
@@ -774,7 +850,165 @@ public final class InfobaseSessionSupport
             current.put(key, value);
         }
         unreadableBlocks += addSession(current, currentMalformed, sessions);
-        return new ParsedSessions(sessions, unreadableBlocks);
+        return new ParsedSessions(sessions, unreadableBlocks, outputBeyondPrompt);
+    }
+
+    /**
+     * Where ibcmd's authentication prompt ends when the output opens with it: the index of the
+     * first line after the prompt, or {@code 0} when the output does not open with one complete
+     * prompt. Only that one prompt is recognised; what follows it, another prompt included, is
+     * list content.
+     *
+     * <p>ibcmd prints one of two complete prompts (its code in 8.3.27 and 8.5): the greeting,
+     * which it ends with a line break, and then either the user-name prompt followed by the
+     * password prompt or the password prompt that names a user it already knows, the name printed
+     * as it is (see {@link AuthenticationPrompt#namesAUser}). The user-name and
+     * password prompts share a line, because ibcmd does not echo the answers piped to it; split
+     * over two lines they are the same prompt. Each text appears exactly once and in one language;
+     * blank lines between the parts and whitespace around them are allowed. Anything else is not
+     * the prompt: a part on its own, a part repeated, the greeting followed by anything but one
+     * complete prompt, the greeting and the prompts on one line, or the texts of two languages.
+     * The one exception is the name in the password prompt that names a user: ibcmd prints it as
+     * it is, so prompt text inside the name is read as part of the name (see
+     * {@link AuthenticationPrompt#namesAUser}).
+     * The greeting alone is not the prompt either: ibcmd follows it with a prompt or fails.
+     *
+     * @param lines the output, split into lines
+     * @return the index of the first line after the prompt, or {@code 0} without one
+     */
+    static int authenticationPromptEnd(String[] lines)
+    {
+        int greeting = nextContentLine(lines, 0);
+        if (greeting < 0)
+        {
+            return 0;
+        }
+        for (AuthenticationPrompt prompt : AuthenticationPrompt.values())
+        {
+            if (prompt.greeting.matcher(lines[greeting]).matches())
+            {
+                return prompt.endAfterGreeting(lines, greeting + 1);
+            }
+        }
+        return 0;
+    }
+
+    /** The index of the first non-blank line at or after {@code from}, or {@code -1}. */
+    private static int nextContentLine(String[] lines, int from)
+    {
+        for (int index = from; index < lines.length; index++)
+        {
+            if (!lines[index].isBlank())
+            {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * ibcmd's authentication prompt in one interface language. The texts are the platform's own,
+     * the {@code IDS_INFOBASE_AUTHENTICATION_*} resources of its ibcli module (the same in 8.3.27
+     * and 8.5); ibcmd loads every text of the prompt from that one module, so one prompt is in one
+     * language. Each pattern matches a whole line: its texts and any whitespace around them.
+     * No pattern repeats a group, so even a very long line is judged without deep recursion.
+     */
+    private enum AuthenticationPrompt
+    {
+        /** The Russian resources. */
+        RUSSIAN("\u0414\u043B\u044F \u0432\u044B\u043F\u043E\u043B\u043D\u0435\u043D\u0438\u044F " //$NON-NLS-1$
+            + "\u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438 \u0442\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044F " //$NON-NLS-1$
+            + "\u0430\u0443\u0442\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0446\u0438\u044F \u0432 " //$NON-NLS-1$
+            + "\u0438\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u043E\u043D\u043D\u043E\u0439 \u0431\u0430\u0437\u0435", //$NON-NLS-1$
+            "\u0418\u043C\u044F \u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044F:", //$NON-NLS-1$
+            "\u041F\u0430\u0440\u043E\u043B\u044C:", //$NON-NLS-1$
+            "\u041F\u0430\u0440\u043E\u043B\u044C \u0434\u043B\u044F '", "':"), //$NON-NLS-1$ //$NON-NLS-2$
+        /** The English resources; the password prompt that names the user does not quote the name. */
+        ENGLISH("Authentication in the infobase is required to perform the operation", //$NON-NLS-1$
+            "User:", //$NON-NLS-1$
+            "Password:", //$NON-NLS-1$
+            "Password for ", ":"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        /** The greeting. */
+        private final Pattern greeting;
+
+        /** The user-name prompt and the password prompt on one line. */
+        private final Pattern userAndPassword;
+
+        /** The user-name prompt alone. */
+        private final Pattern user;
+
+        /** The password prompt alone. */
+        private final Pattern password;
+
+        /** The password prompt that names the user, the name captured as the text before its last delimiter. */
+        private final Pattern passwordForUser;
+
+        /** The delimiter that ends the password prompt that names the user, followed by whitespace. */
+        private final Pattern delimiterBeforeWhitespace;
+
+        AuthenticationPrompt(String greetingText, String userPrompt, String passwordPrompt,
+            String beforeUser, String afterUser)
+        {
+            greeting = line(Pattern.quote(greetingText));
+            userAndPassword = line(Pattern.quote(userPrompt) + "\\s*" //$NON-NLS-1$
+                + Pattern.quote(passwordPrompt));
+            user = line(Pattern.quote(userPrompt));
+            password = line(Pattern.quote(passwordPrompt));
+            passwordForUser = line(Pattern.quote(beforeUser) + "(.+)" + Pattern.quote(afterUser)); //$NON-NLS-1$
+            delimiterBeforeWhitespace = Pattern.compile(Pattern.quote(afterUser) + "\\s"); //$NON-NLS-1$
+        }
+
+        /**
+         * The index of the first line after the prompt whose greeting stands right before
+         * {@code from}, or {@code 0} when one complete prompt does not follow that greeting.
+         */
+        int endAfterGreeting(String[] lines, int from)
+        {
+            int prompts = nextContentLine(lines, from);
+            if (prompts < 0)
+            {
+                return 0;
+            }
+            if (userAndPassword.matcher(lines[prompts]).matches() || namesAUser(lines[prompts]))
+            {
+                return prompts + 1;
+            }
+            if (!user.matcher(lines[prompts]).matches())
+            {
+                return 0;
+            }
+            int passwordLine = nextContentLine(lines, prompts + 1);
+            return passwordLine >= 0 && password.matcher(lines[passwordLine]).matches()
+                ? passwordLine + 1 : 0;
+        }
+
+        /**
+         * Whether the line is the password prompt that names a user. ibcmd prints the name as it
+         * is, so the name is the text before the line's last delimiter and may hold ':' and, in
+         * Russian, quotes. The name must hold something besides whitespace, and it must not hold
+         * the delimiter followed by whitespace: ibcmd follows every prompt with a space, so that
+         * is where a second prompt on the line would begin, and such a line is list content.
+         * A name may still spell out prompt text: a repeat glued without that space
+         * ({@code Password for A:Password for A:}) or the text of the other language is read as a
+         * name, as a real user name of that spelling must be. ibcmd never prints such a line.
+         */
+        private boolean namesAUser(String line)
+        {
+            Matcher matcher = passwordForUser.matcher(line);
+            if (!matcher.matches())
+            {
+                return false;
+            }
+            String name = matcher.group(1);
+            return !name.isBlank() && !delimiterBeforeWhitespace.matcher(name).find();
+        }
+
+        /** One whole line holding the given text, with any whitespace around it. */
+        private static Pattern line(String text)
+        {
+            return Pattern.compile("\\s*" + text + "\\s*"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
     }
 
     /** Converts a parsed block, returning one when any content cannot form a usable session. */
