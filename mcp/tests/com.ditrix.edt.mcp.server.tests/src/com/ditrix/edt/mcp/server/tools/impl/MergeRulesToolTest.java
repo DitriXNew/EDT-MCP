@@ -29,7 +29,6 @@ import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -40,7 +39,6 @@ import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -62,6 +60,7 @@ import com.ditrix.edt.mcp.server.tools.impl.MergeRulesTool.MergeRuleAuthority;
 import com.ditrix.edt.mcp.server.tools.impl.MergeRulesTool.RuleSnapshot;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.utils.TemporaryDirectories;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -311,19 +310,11 @@ public class MergeRulesToolTest
         workDir = Files.createTempDirectory("merge-rules-tool-test"); //$NON-NLS-1$
     }
 
+    /** Removes the work directory - with a short retry, see {@link TemporaryDirectories}. */
     @After
-    public void tearDown() throws IOException
+    public void tearDown() throws IOException, InterruptedException
     {
-        if (workDir != null && Files.exists(workDir))
-        {
-            try (Stream<Path> walk = Files.walk(workDir))
-            {
-                for (Path path : walk.sorted(Comparator.reverseOrder()).toList())
-                {
-                    Files.deleteIfExists(path);
-                }
-            }
-        }
+        TemporaryDirectories.deleteRecursively(workDir);
     }
 
     // ==================== metadata ====================
