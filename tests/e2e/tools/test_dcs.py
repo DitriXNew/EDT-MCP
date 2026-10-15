@@ -2332,6 +2332,136 @@ def test_indexed_group_field_replace_resets_omitted_members_on_model_and_disk():
 
 
 @e2e_test(tool="dcs", kind="write-metadata")
+def test_period_bound_null_leaves_group_fields_unbounded_on_model_and_disk():
+    """#672: a null period bound of a grouping field means the bound is not set.
+
+    EDT's DCS serializer has no form for a NullValue. The old build stored ``{"kind": "null"}``
+    as one, so the Template.dcs export threw and ``get format='xml'`` was refused. The second field
+    sends a bare JSON null instead; the MCP transport drops a null member of ``body`` before the
+    tool sees it, so that field behaves like an omitted bound on every build - the first field is
+    the one that tells the builds apart.
+    """
+    report_name = "E2EDcsNullPeriodBound"
+    root = _seed_report(report_name)
+    null_kind_field = "NullKindBoundField"
+    json_null_field = "JsonNullBoundField"
+    written = _write(root, "upsert", "schema", {
+        "defaultSettings": {
+            "items": [{
+                "name": "PeriodGroup",
+                "groupFields": {"items": [
+                    {
+                        "field": {"kind": "field", "value": null_kind_field},
+                        "groupType": "Hierarchy",
+                        "periodAdditionType": "Month",
+                        "periodAdditionBegin": {"kind": "null"},
+                        "periodAdditionEnd": {"kind": "null"},
+                    },
+                    {
+                        "field": {"kind": "field", "value": json_null_field},
+                        "periodAdditionType": "Quarter",
+                        "periodAdditionBegin": None,
+                        "periodAdditionEnd": None,
+                    },
+                ]},
+            }],
+        },
+    })
+    assert_ok(written, "upsert group fields whose period bounds are null")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the null period-bound fixture")
+    # On the old build the export threw, so the file never received the new group fields.
+    on_disk = poll_disk_contains_all(
+        dcs_rel, [null_kind_field, json_null_field, "periodAdditionType>Month<",
+                  "periodAdditionType>Quarter<"],
+        ctx="both group fields and their non-default members must reach Template.dcs")
+    assert "periodAdditionBegin" not in on_disk and "periodAdditionEnd" not in on_disk, \
+        "a null bound must leave no element in Template.dcs:\n%s" % on_disk
+
+    xml, _pages = _read_all_xml(root)
+    assert null_kind_field in xml and json_null_field in xml, \
+        "format='xml' must serialize the schema that carries both fields"
+    assert "periodAdditionBegin" not in xml and "periodAdditionEnd" not in xml, \
+        "EDT's own serializer must see no period bound:\n%s" % xml
+
+    for index, name, addition in ((0, null_kind_field, "Month"), (1, json_null_field, "Quarter")):
+        address = root + "#/defaultSettings/items/0/groupFields/items/%d" % index
+        field = _get(address, "grouping")
+        assert_ok(field, "read group field %d back from the model" % index)
+        assert name in field.text and ("| periodAdditionType | %s |" % addition) in field.text, \
+            "the read must show the authored field %d: %s" % (index, field.text)
+        assert "/periodAdditionBegin`" not in field.text \
+            and "/periodAdditionEnd`" not in field.text, \
+            "an unset bound must not be listed as contained structure: %s" % field.text
+        assert "NullValue" not in field.text, \
+            "no NullValue may reach the model: %s" % field.text
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
+def test_period_bound_null_update_clears_only_that_bound_on_model_and_disk():
+    """#672: ``{"kind": "null"}`` in an update clears an existing period bound and nothing else.
+
+    A bare JSON null cannot do this over MCP: the transport drops a null member of ``body``, so
+    such an update arrives without the member and leaves the bound as it was.
+    """
+    report_name = "E2EDcsClearPeriodBound"
+    root = _seed_report(report_name)
+    marker = "ClearedBoundField"
+    seeded = _write(root, "upsert", "schema", {
+        "defaultSettings": {
+            "items": [{
+                "name": "Group",
+                "groupFields": {"items": [{
+                    "field": {"kind": "field", "value": marker},
+                    "periodAdditionType": "Month",
+                    "periodAdditionBegin": {"kind": "number", "value": 31337},
+                    "periodAdditionEnd": {"kind": "number", "value": 31338},
+                }]},
+            }],
+        },
+    })
+    assert_ok(seeded, "seed a group field carrying both period bounds")
+    dcs_rel = _poll_report_dcs(report_name, ctx="the period-bound clearing fixture")
+    poll_disk_contains_all(dcs_rel, [marker, "31337", "31338"],
+                           ctx="both bounds must reach Template.dcs before the update")
+
+    address = root + "#/defaultSettings/items/0/groupFields/items/0"
+    before = _get(address, "grouping")
+    assert_ok(before, "read the bounded group field")
+    assert "/periodAdditionBegin`" in before.text and "31337" in before.text, \
+        "the begin bound must be in the model before it is cleared: %s" % before.text
+
+    # A null ValueSpec that carries a value is still refused. It writes nothing: the clearing call
+    # below reuses the same expectedHash, which a changed model would fail.
+    refused = _write(address, "update", "grouping",
+                     {"periodAdditionBegin": {"kind": "null", "value": 1}},
+                     expectedHash=_hash(before))
+    error = assert_error(refused, "a null period bound that carries a value")
+    assert_error_quality(error, names=["periodAdditionBegin"], suggests=["omit 'value'"],
+                         ctx="the refused null bound")
+
+    cleared = _write(address, "update", "grouping", {"periodAdditionBegin": {"kind": "null"}},
+                     expectedHash=_hash(before))
+    assert_ok(cleared, "clear the begin bound with the null ValueSpec")
+    # On the old build the update stored a NullValue, the export threw, and 31337 stayed on disk.
+    poll_disk_lacks(dcs_rel, "31337", ctx="the cleared begin bound must leave Template.dcs")
+    on_disk = poll_disk_contains_all(
+        dcs_rel, [marker, "periodAdditionType>Month<", "periodAdditionEnd", "31338"],
+        ctx="the rest of the group field must stay in Template.dcs")
+    assert "periodAdditionBegin" not in on_disk and "31337" not in on_disk, \
+        "the cleared bound must leave no element:\n%s" % on_disk
+
+    after = _get(address, "grouping")
+    assert_ok(after, "read the group field after clearing its begin bound")
+    assert "/periodAdditionBegin`" not in after.text and "31337" not in after.text, \
+        "the cleared bound must be gone from the model: %s" % after.text
+    assert "/periodAdditionEnd`" in after.text and "31338" in after.text, \
+        "the end bound must stay: %s" % after.text
+    assert marker in after.text and "| periodAdditionType | Month |" in after.text, \
+        "the other members must stay: %s" % after.text
+    assert "NullValue" not in after.text, "no NullValue may reach the model: %s" % after.text
+
+
+@e2e_test(tool="dcs", kind="write-metadata")
 def test_table_selection_item_address_copied_from_read_can_be_updated():
     report_name = "E2EDcsTableSelectionAddress"
     root = _seed_report(report_name)

@@ -14,14 +14,26 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.UUID;
+import java.util.regex.Pattern;
 
+import org.eclipse.core.resources.IProject;
+import org.eclipse.emf.ecore.EReference;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.core.platform.IDtProject;
+import com._1c.g5.v8.dt.core.platform.IResourceLookup;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionAppearance;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionField;
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionGroupType;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionParameterValue;
+import com._1c.g5.v8.dt.dcs.model.core.DataCompositionPeriodAdditionType;
 import com._1c.g5.v8.dt.dcs.model.core.DataCompositionTotalPlacement;
 import com._1c.g5.v8.dt.dcs.model.core.LocalString;
 import com._1c.g5.v8.dt.dcs.model.schema.DataCompositionSchema;
@@ -48,15 +60,19 @@ import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameter;
 import com._1c.g5.v8.dt.dcs.parameters.DcsAvailableParameterCollection;
 import com._1c.g5.v8.dt.dcs.parameters.output.DcsOutputParameters;
 import com._1c.g5.v8.dt.dcs.path.DcsPathException;
+import com._1c.g5.v8.dt.dcs.util.DcsV8Serializer;
 import com._1c.g5.v8.dt.form.model.DynamicListExtInfo;
 import com._1c.g5.v8.dt.form.model.FormFactory;
 import com._1c.g5.v8.dt.mcore.ColorValue;
+import com._1c.g5.v8.dt.mcore.DateValue;
 import com._1c.g5.v8.dt.mcore.EnumValue;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
+import com._1c.g5.v8.dt.mcore.NullValue;
 import com._1c.g5.v8.dt.mcore.NumberValue;
 import com._1c.g5.v8.dt.mcore.StringValue;
 import com._1c.g5.v8.dt.mcore.Structure;
 import com._1c.g5.v8.dt.mcore.StructureProperty;
+import com._1c.g5.v8.dt.mcore.UndefinedValue;
 import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com.google.gson.JsonObject;
@@ -67,6 +83,20 @@ public class DcsSettingsWriterTest
 {
     private static final DcsPresentationParser.LanguageContext LANGUAGES =
         new DcsPresentationParser.LanguageContext(Arrays.asList("en", "uk")); //$NON-NLS-1$ //$NON-NLS-2$
+
+    private static final EReference PERIOD_BEGIN = com._1c.g5.v8.dt.dcs.model.settings.DcsPackage.Literals
+        .DATA_COMPOSITION_GROUP_FIELD__PERIOD_ADDITION_BEGIN;
+
+    private static final EReference PERIOD_END = com._1c.g5.v8.dt.dcs.model.settings.DcsPackage.Literals
+        .DATA_COMPOSITION_GROUP_FIELD__PERIOD_ADDITION_END;
+
+    /** The first group field of the first grouping, as the writer addresses it. */
+    private static final java.util.List<String> GROUP_FIELD_ADDRESS = java.util.Collections.unmodifiableList(
+        Arrays.asList("items", "0", "groupFields", "items", "0")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+
+    /** EDT's serialized form of an UndefinedValue period bound: an empty element marked xsi:nil. */
+    private static final Pattern XSI_NIL_BEGIN = Pattern.compile(
+        "<(?:\\w+:)?periodAdditionBegin\\s+xsi:nil=\"true\"\\s*/>"); //$NON-NLS-1$
 
     @Test
     public void testSmallSettableSettingsMembersAreAuthoredAndRetained()
@@ -1570,6 +1600,228 @@ public class DcsSettingsWriterTest
         assertNull(after.getPeriodAdditionEnd());
     }
 
+    // ---- #672: a null period bound of a grouping field means the bound is not set ----------------
+    // EDT's DCS serializer has no form for a NullValue: a bound stored as one made the Template.dcs
+    // export fail. EDT reads a grouping field whose file has no such element as a field whose bound was
+    // never set, and writes no element for it, so that is the state a null bound has to produce.
+
+    @Test
+    public void testNullKindPeriodAdditionBeginLeavesTheBoundUnset()
+    {
+        DataCompositionGroupField field = firstGroupField(plan(groupFieldSettings(
+            "\"periodAdditionBegin\":{\"kind\":\"null\"}," //$NON-NLS-1$
+                + "\"periodAdditionEnd\":{\"kind\":\"number\",\"value\":31338}"))); //$NON-NLS-1$
+
+        assertNull("a null bound must not be stored as a value", field.getPeriodAdditionBegin()); //$NON-NLS-1$
+        assertFalse("a null bound must leave the feature unset", field.eIsSet(PERIOD_BEGIN)); //$NON-NLS-1$
+        assertEquals("31338", ((NumberValue)field.getPeriodAdditionEnd()).getValue().toPlainString()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNullKindWithNullValuePeriodAdditionEndLeavesTheBoundUnset()
+    {
+        DataCompositionGroupField field = firstGroupField(plan(groupFieldSettings(
+            "\"periodAdditionBegin\":{\"kind\":\"number\",\"value\":31337}," //$NON-NLS-1$
+                + "\"periodAdditionEnd\":{\"kind\":\"null\",\"value\":null}"))); //$NON-NLS-1$
+
+        assertNull("a null bound must not be stored as a value", field.getPeriodAdditionEnd()); //$NON-NLS-1$
+        assertFalse("a null bound must leave the feature unset", field.eIsSet(PERIOD_END)); //$NON-NLS-1$
+        assertEquals("31337", ((NumberValue)field.getPeriodAdditionBegin()).getValue().toPlainString()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testJsonNullPeriodBoundsLeaveBothBoundsUnset()
+    {
+        // The old writer refused a bare JSON null ("must be an object").
+        DataCompositionGroupField field = firstGroupField(plan(groupFieldSettings(
+            "\"periodAdditionBegin\":null,\"periodAdditionEnd\":null"))); //$NON-NLS-1$
+
+        assertNull(field.getPeriodAdditionBegin());
+        assertFalse(field.eIsSet(PERIOD_BEGIN));
+        assertNull(field.getPeriodAdditionEnd());
+        assertFalse(field.eIsSet(PERIOD_END));
+        assertEquals("Period", field.getField().getValue()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testJsonNullClearsAnExistingPeriodAdditionBeginAndKeepsTheField()
+    {
+        DataCompositionSettings settings = plan(boundedGroupFieldSettings());
+
+        DcsSettingsWriter.SettingsResult cleared = DcsSettingsWriter.planSettings(settings,
+            GROUP_FIELD_ADDRESS, "update", "grouping", //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"periodAdditionBegin\":null}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(cleared.error(), cleared.isSuccess());
+
+        DataCompositionGroupField field = firstGroupField(cleared.settings());
+        assertNull("the cleared bound must be gone", field.getPeriodAdditionBegin()); //$NON-NLS-1$
+        assertFalse(field.eIsSet(PERIOD_BEGIN));
+        assertEquals("the other bound must stay", "31338", //$NON-NLS-1$ //$NON-NLS-2$
+            ((NumberValue)field.getPeriodAdditionEnd()).getValue().toPlainString());
+        assertBoundedGroupFieldMembersKept(field);
+    }
+
+    @Test
+    public void testNullKindClearsAnExistingPeriodAdditionEndAndKeepsTheField()
+    {
+        DataCompositionSettings settings = plan(boundedGroupFieldSettings());
+
+        DcsSettingsWriter.SettingsResult cleared = DcsSettingsWriter.planSettings(settings,
+            GROUP_FIELD_ADDRESS, "update", "grouping", //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"periodAdditionEnd\":{\"kind\":\"null\"}}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(cleared.error(), cleared.isSuccess());
+
+        DataCompositionGroupField field = firstGroupField(cleared.settings());
+        assertNull("the cleared bound must be gone", field.getPeriodAdditionEnd()); //$NON-NLS-1$
+        assertFalse(field.eIsSet(PERIOD_END));
+        assertEquals("the other bound must stay", "31337", //$NON-NLS-1$ //$NON-NLS-2$
+            ((NumberValue)field.getPeriodAdditionBegin()).getValue().toPlainString());
+        assertBoundedGroupFieldMembersKept(field);
+    }
+
+    @Test
+    public void testNonNullPeriodBoundsAreStillStored()
+    {
+        DataCompositionGroupField field = firstGroupField(plan(groupFieldSettings(
+            "\"periodAdditionBegin\":{\"kind\":\"date\",\"value\":\"2026-08-24T00:00:00\"}," //$NON-NLS-1$
+                + "\"periodAdditionEnd\":{\"kind\":\"field\",\"value\":\"EndOfPeriod\"}"))); //$NON-NLS-1$
+
+        assertTrue(field.eIsSet(PERIOD_BEGIN));
+        assertTrue(String.valueOf(field.getPeriodAdditionBegin()),
+            field.getPeriodAdditionBegin() instanceof DateValue);
+        assertTrue(field.eIsSet(PERIOD_END));
+        assertEquals("EndOfPeriod", ((DataCompositionField)field.getPeriodAdditionEnd()).getValue()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNullKindWithAValueOrAnUnknownMemberIsStillRefusedForAPeriodBound()
+    {
+        DcsSettingsWriter.SettingsResult withValue = DcsSettingsWriter.planSettings(null,
+            java.util.Collections.<String>emptyList(), "upsert", "userSettings", //$NON-NLS-1$ //$NON-NLS-2$
+            groupFieldSettings("\"periodAdditionBegin\":{\"kind\":\"null\",\"value\":1}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse(withValue.isSuccess());
+        assertTrue(withValue.error(), withValue.error().contains("must omit 'value' or set it to null")); //$NON-NLS-1$
+        assertTrue(withValue.error(), withValue.error().contains("periodAdditionBegin")); //$NON-NLS-1$
+
+        DcsSettingsWriter.SettingsResult misspelt = DcsSettingsWriter.planSettings(null,
+            java.util.Collections.<String>emptyList(), "upsert", "userSettings", //$NON-NLS-1$ //$NON-NLS-2$
+            groupFieldSettings("\"periodAdditionEnd\":{\"kind\":\"null\",\"valeu\":null}"), LANGUAGES); //$NON-NLS-1$
+        assertFalse("a null bound must still pass the ValueSpec member check", misspelt.isSuccess()); //$NON-NLS-1$
+        assertTrue(misspelt.error(), misspelt.error().contains("valeu")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNullKindOutsideAPeriodBoundStillBuildsANullValue()
+    {
+        // Scope guard: only a grouping field's period bounds read null as "not set". A null in a filter,
+        // a parameter value or additionalProperties is the question left to the maintainer in #672, so
+        // the shared ValueSpec parser keeps building a NullValue until that is decided.
+        DataCompositionSettings settings = plan(json("{\"filter\":{\"items\":[{\"left\":{" //$NON-NLS-1$
+            + "\"kind\":\"field\",\"value\":\"Quantity\"},\"comparisonType\":\"Equal\"," //$NON-NLS-1$
+            + "\"right\":[{\"kind\":\"null\"}]}]}}")); //$NON-NLS-1$
+
+        DataCompositionFilterItem item = (DataCompositionFilterItem)settings.getFilter().getItems().get(0);
+        assertEquals(1, item.getRight().size());
+        assertTrue(String.valueOf(item.getRight().get(0)), item.getRight().get(0) instanceof NullValue);
+    }
+
+    @Test
+    public void testAnUnsetPeriodBoundIsAbsentFromTheSettingsOutline()
+    {
+        DataCompositionSettings settings = plan(groupFieldSettings(
+            "\"periodAdditionType\":\"Month\",\"periodAdditionBegin\":{\"kind\":\"null\"}," //$NON-NLS-1$
+                + "\"periodAdditionEnd\":{\"kind\":\"null\"}")); //$NON-NLS-1$
+
+        String outline = DcsReadProjection.renderSettingsOutline("Report.Sales#/defaultSettings", //$NON-NLS-1$
+            settings, "en"); //$NON-NLS-1$
+
+        assertTrue(outline, outline.contains("groupFields/items/0`")); //$NON-NLS-1$
+        assertTrue(outline, outline.contains("value: Period")); //$NON-NLS-1$
+        assertTrue(outline, outline.contains("periodAdditionType: Month")); //$NON-NLS-1$
+        assertFalse(outline, outline.contains("periodAdditionBegin")); //$NON-NLS-1$
+        assertFalse(outline, outline.contains("periodAdditionEnd")); //$NON-NLS-1$
+        assertFalse(outline, outline.contains("NullValue")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNullPeriodBoundsLeaveASchemaEdtCanSerialize() throws Exception
+    {
+        // The defect itself: EDT's serializer threw "Value '...NullValueImpl' serialization is not
+        // implemented" for a NullValue bound, so the report's Template.dcs could not be exported.
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        JsonObject body = new JsonObject();
+        body.add("defaultSettings", groupFieldSettings( //$NON-NLS-1$
+            "\"periodAdditionType\":\"Month\",\"periodAdditionBegin\":{\"kind\":\"null\"}," //$NON-NLS-1$
+                + "\"periodAdditionEnd\":{\"kind\":\"null\"}")); //$NON-NLS-1$
+        DcsSettingsWriter.SchemaResult planned = DcsSettingsWriter.planSchema(schema, "upsert", "schema", //$NON-NLS-1$ //$NON-NLS-2$
+            address("Report.Sales"), body, LANGUAGES); //$NON-NLS-1$
+        assertTrue(planned.error(), planned.isSuccess());
+        planned.plan().commit(schema);
+
+        String xml = edtXml(schema);
+
+        assertTrue(xml, xml.contains(">Period<")); //$NON-NLS-1$
+        assertTrue(xml, xml.contains("periodAdditionType>Month<")); //$NON-NLS-1$
+        assertFalse(xml, xml.contains("periodAdditionBegin")); //$NON-NLS-1$
+        assertFalse(xml, xml.contains("periodAdditionEnd")); //$NON-NLS-1$
+        DataCompositionGroupField committed = firstGroupField(schema.getDefaultSettings());
+        assertFalse(committed.eIsSet(PERIOD_BEGIN));
+        assertFalse(committed.eIsSet(PERIOD_END));
+    }
+
+    // #672 also asked how an xsi:nil bound behaves. EDT reads <periodAdditionBegin xsi:nil="true"/> as an
+    // UndefinedValue and writes that value back as the same element, so it is a SET bound, not an absent
+    // one. These two tests start from what EDT's own reader builds out of such a file.
+
+    @Test
+    public void testAnXsiNilPeriodBoundSurvivesAnUpdateThatDoesNotNameItAndBlocksReplace() throws Exception
+    {
+        DataCompositionSchema read = xsiNilBoundSchema();
+
+        DcsSettingsWriter.SettingsResult updated = DcsSettingsWriter.planSettings(read.getDefaultSettings(),
+            GROUP_FIELD_ADDRESS, "update", "grouping", //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"periodAdditionType\":\"Quarter\"}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(updated.error(), updated.isSuccess());
+
+        DataCompositionGroupField field = firstGroupField(updated.settings());
+        assertEquals(DataCompositionPeriodAdditionType.QUARTER, field.getPeriodAdditionType());
+        assertTrue("an update that does not name the bound must keep it", //$NON-NLS-1$
+            field.getPeriodAdditionBegin() instanceof UndefinedValue);
+        String xml = edtXml(schemaWith(updated.settings()));
+        assertTrue(xml, XSI_NIL_BEGIN.matcher(xml).find());
+        assertTrue(xml, xml.contains("periodAdditionType>Quarter<")); //$NON-NLS-1$
+
+        // The writer has no ValueSpec for an UndefinedValue, so an authoritative replace would drop the
+        // bound; the shared replace guard lists it as unmodellable and refuses (unchanged by #672).
+        String refusal = DcsMutationGuard.replaceError(read,
+            address("Report.Sales#/defaultSettings/items/0/groupFields/items/0")); //$NON-NLS-1$
+        assertNotNull("replace must not silently drop an xsi:nil bound", refusal); //$NON-NLS-1$
+        assertTrue(refusal, refusal.contains("UndefinedValue at Report.Sales#/defaultSettings/items/0" //$NON-NLS-1$
+            + "/groupFields/items/0/periodAdditionBegin")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testNullKindClearsAnXsiNilPeriodBoundAndEdtThenWritesNoElement() throws Exception
+    {
+        DataCompositionSchema read = xsiNilBoundSchema();
+
+        DcsSettingsWriter.SettingsResult cleared = DcsSettingsWriter.planSettings(read.getDefaultSettings(),
+            GROUP_FIELD_ADDRESS, "update", "grouping", //$NON-NLS-1$ //$NON-NLS-2$
+            json("{\"periodAdditionBegin\":{\"kind\":\"null\"}}"), LANGUAGES); //$NON-NLS-1$
+        assertTrue(cleared.error(), cleared.isSuccess());
+
+        DataCompositionGroupField field = firstGroupField(cleared.settings());
+        assertNull("{kind:'null'} must clear the xsi:nil bound", field.getPeriodAdditionBegin()); //$NON-NLS-1$
+        assertFalse(field.eIsSet(PERIOD_BEGIN));
+        assertEquals(DataCompositionPeriodAdditionType.MONTH, field.getPeriodAdditionType());
+        DataCompositionSchema clearedSchema = schemaWith(cleared.settings());
+        String xml = edtXml(clearedSchema);
+        assertFalse(xml, xml.contains("periodAdditionBegin")); //$NON-NLS-1$
+        assertTrue(xml, xml.contains("periodAdditionType>Month<")); //$NON-NLS-1$
+        assertNull("a cleared field is fully modelled again", DcsMutationGuard.replaceError(clearedSchema, //$NON-NLS-1$
+            address("Report.Sales#/defaultSettings/items/0/groupFields/items/0"))); //$NON-NLS-1$
+    }
+
     @Test
     public void testRemoveChecksResolvedNodeTypeAndKeepsNestedLegitimateTargets()
     {
@@ -2274,6 +2526,74 @@ public class DcsSettingsWriterTest
         assertTrue(result.error(), result.isSuccess());
         assertNotNull(result.settings());
         return result.settings();
+    }
+
+    /** Settings with one grouping holding one group field on 'Period' plus the given members. */
+    private static JsonObject groupFieldSettings(String members)
+    {
+        return json("{\"items\":[{\"name\":\"G\",\"groupFields\":{\"items\":[{" //$NON-NLS-1$
+            + "\"field\":{\"kind\":\"field\",\"value\":\"Period\"}," + members + "}]}}]}"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A group field carrying both period bounds next to non-default members. */
+    private static JsonObject boundedGroupFieldSettings()
+    {
+        return groupFieldSettings("\"use\":false,\"groupType\":\"Hierarchy\",\"periodAdditionType\":\"Month\"," //$NON-NLS-1$
+            + "\"periodAdditionBegin\":{\"kind\":\"number\",\"value\":31337}," //$NON-NLS-1$
+            + "\"periodAdditionEnd\":{\"kind\":\"number\",\"value\":31338}"); //$NON-NLS-1$
+    }
+
+    private static void assertBoundedGroupFieldMembersKept(DataCompositionGroupField field)
+    {
+        assertEquals("Period", field.getField().getValue()); //$NON-NLS-1$
+        assertFalse(field.isUse());
+        assertEquals(DataCompositionGroupType.HIERARCHY, field.getGroupType());
+        assertEquals(DataCompositionPeriodAdditionType.MONTH, field.getPeriodAdditionType());
+    }
+
+    private static DataCompositionGroupField firstGroupField(DataCompositionSettings settings)
+    {
+        DataCompositionGroup group = (DataCompositionGroup)settings.getItems().get(0);
+        return (DataCompositionGroupField)group.getGroupFields().getItems().get(0);
+    }
+
+    private static DataCompositionSchema schemaWith(DataCompositionSettings settings)
+    {
+        DataCompositionSchema schema = DcsFactory.eINSTANCE.createDataCompositionSchema();
+        schema.setDefaultSettings(settings);
+        return schema;
+    }
+
+    /** The schema's Template.dcs text as EDT's own serializer writes it on export. */
+    private static String edtXml(DataCompositionSchema schema) throws Exception
+    {
+        DcsV8Serializer serializer = new DcsV8Serializer((IResourceLookup)null);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        serializer.serializeXML(schema, output, serializer.createExportContext((IProject)null, Version.LATEST),
+            new HashMap<String, UUID>(), "\n"); //$NON-NLS-1$
+        return output.toString(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * A schema as EDT's own reader builds it from a Template.dcs whose first group field carries
+     * {@code <periodAdditionBegin xsi:nil="true"/>}. The file comes from EDT's serializer writing an
+     * UndefinedValue bound, so both directions of the xsi:nil mapping are EDT's, not assumed here.
+     */
+    private static DataCompositionSchema xsiNilBoundSchema() throws Exception
+    {
+        DataCompositionSettings settings = plan(groupFieldSettings("\"periodAdditionType\":\"Month\"")); //$NON-NLS-1$
+        firstGroupField(settings).setPeriodAdditionBegin(McoreFactory.eINSTANCE.createUndefinedValue());
+        String xml = edtXml(schemaWith(settings));
+        assertTrue(xml, XSI_NIL_BEGIN.matcher(xml).find());
+
+        DcsV8Serializer reader = new DcsV8Serializer((IDtProject)null, Version.LATEST, (IResourceLookup)null);
+        DataCompositionSchema read = reader.deserializeXML(
+            new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+        assertNotNull(xml, read);
+        Value bound = firstGroupField(read.getDefaultSettings()).getPeriodAdditionBegin();
+        assertTrue("EDT reads an xsi:nil bound as an UndefinedValue: " + bound, //$NON-NLS-1$
+            bound instanceof UndefinedValue);
+        return read;
     }
 
     private static DataCompositionSettings settingsWithUserFields()
