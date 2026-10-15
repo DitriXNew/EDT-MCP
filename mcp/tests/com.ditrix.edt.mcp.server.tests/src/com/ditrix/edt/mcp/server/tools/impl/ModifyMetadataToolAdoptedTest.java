@@ -20,13 +20,19 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -59,6 +65,8 @@ import com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouter;
 import com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess;
 import com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.FakePlatform;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
+import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
+import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.TypeChangeDefaults;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -212,6 +220,198 @@ public class ModifyMetadataToolAdoptedTest
 
         assertNull("no type change, no preview", ModifyMetadataTool.typeChangePreview("Catalog.Goods", //$NON-NLS-1$ //$NON-NLS-2$
             List.of(ModifyMetadataTool.PreparedChange.scalar(MdClassPackage.Literals.MD_OBJECT__COMMENT, "x")))); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testThePlainChangeWhoseStateBecameNoneIsRefusedInTheWrite()
+    {
+        // T3 through the write: a synonym routed as prepared while its state was Extended, whose state was set to
+        // None while the call waited, is refused before anything of the batch is written.
+        Catalog catalog = adoptedCatalog();
+        CatalogExtension block = (CatalogExtension)catalog.getExtension();
+        block.setSynonym(MdPropertyState.EXTENDED);
+        List<ModifyMetadataTool.PreparedChange> changes = new ArrayList<>();
+        changes.add(ModifyMetadataTool.PreparedChange.scalar(MdClassPackage.Literals.MD_OBJECT__COMMENT, "note")); //$NON-NLS-1$
+        changes.add(ModifyMetadataTool.PreparedChange.localized(MdClassPackage.Literals.MD_OBJECT__SYNONYM, "en", //$NON-NLS-1$
+            "Goods")); //$NON-NLS-1$
+        AdoptedPropertyRouter.Routing routing = route("Catalog.Goods", catalog, changes, new FakePlatform()); //$NON-NLS-1$
+        assertFalse(routing.refusal(), routing.isRefused());
+
+        block.setSynonym(MdPropertyState.NONE);
+        try
+        {
+            ModifyMetadataTool.applyChanges(catalog, changes, mock(IBmTransaction.class), "Catalog.Goods"); //$NON-NLS-1$
+            fail("a value EDT would now drop must roll the write back"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertTrue(e.getMessage(), e.getMessage().startsWith("'synonym' of Catalog.Goods was not written: " //$NON-NLS-1$
+                + "Catalog.Goods is adopted, and the extension state of 'synonym' became None while the call waited")); //$NON-NLS-1$
+        }
+        assertNull("nothing of the batch was written", catalog.getComment()); //$NON-NLS-1$
+        assertTrue(catalog.getSynonym().isEmpty());
+
+        // While the state stays Extended the batch is written.
+        block.setSynonym(MdPropertyState.EXTENDED);
+        ModifyMetadataTool.applyChanges(catalog, changes, mock(IBmTransaction.class), "Catalog.Goods"); //$NON-NLS-1$
+        assertEquals("note", catalog.getComment()); //$NON-NLS-1$
+        assertEquals("Goods", catalog.getSynonym().get("en")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** The source read to pin the call sites no headless test can drive. */
+    private static final String TOOL_SOURCE = "mcp/bundles/com.ditrix.edt.mcp.server/src/com/ditrix/edt/mcp/" //$NON-NLS-1$
+        + "server/tools/impl/ModifyMetadataTool.java"; //$NON-NLS-1$
+
+    @Test
+    public void testTheWritePathsCallTheChecksTheTestsAbovePin()
+    {
+        // applyGenericPropertyChanges and dispatchPredefinedItemFqn need a workspace project, a BM model and a
+        // write transaction, so no headless test drives them, and every test above stays green if they stop
+        // calling the seams those tests pin. Their call sites are therefore read here - comments removed, so a
+        // commented-out call is no call.
+        File source = locate(TOOL_SOURCE);
+        assertNotNull("could not locate " + TOOL_SOURCE + " from user.dir=" //$NON-NLS-1$ //$NON-NLS-2$
+            + System.getProperty("user.dir"), source); //$NON-NLS-1$
+        String text = read(source);
+
+        String generic = code(methodBody(text, "private String applyGenericPropertyChanges(")); //$NON-NLS-1$
+        assertTrue("the generic path must ask consent and then read the base again (T1): " + generic, //$NON-NLS-1$
+            generic.contains("consentThenBaseCheck(normFqn, changes, routing)")); //$NON-NLS-1$
+        assertFalse("the generic path must not ask consent without reading the base again", //$NON-NLS-1$
+            generic.contains("consentForTypeChanges(")); //$NON-NLS-1$
+        assertTrue("the generic write must check the prepared changes again in the transaction (T3): " //$NON-NLS-1$
+            + generic, generic.contains("applyChanges(applyTo, changes, tx, normFqn)")); //$NON-NLS-1$
+
+        String predefined = code(methodBody(text, "private String dispatchPredefinedItemFqn(")); //$NON-NLS-1$
+        assertTrue("the predefined write must check the owner's state again in the transaction (T3): " //$NON-NLS-1$
+            + predefined, predefined.contains("modifyPredefinedInWrite(txOwner, itemName, props, ownerFqn)")); //$NON-NLS-1$
+        assertFalse("the predefined write must not call the writer past that check", //$NON-NLS-1$
+            predefined.contains("PredefinedWriter.modify(")); //$NON-NLS-1$
+    }
+
+    /** The body of the method {@code signature} opens, comments removed. */
+    private static String methodBody(String source, String signature)
+    {
+        String text = source.replace("\r\n", "\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        int start = text.indexOf(signature);
+        assertTrue("signature not found: " + signature, start >= 0); //$NON-NLS-1$
+        int end = text.indexOf("\n    }\n", start); //$NON-NLS-1$
+        assertTrue("no closing brace after " + signature, end > start); //$NON-NLS-1$
+        return text.substring(start, end)
+            .replaceAll("(?s)/\\*.*?\\*/", "") //$NON-NLS-1$ //$NON-NLS-2$
+            .replaceAll("//[^\\n]*", ""); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** {@code body} with every run of whitespace made one space. */
+    private static String code(String body)
+    {
+        return body.replaceAll("\\s+", " "); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static String read(File file)
+    {
+        try
+        {
+            return new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+        }
+        catch (IOException e)
+        {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    private static File locate(String relative)
+    {
+        File dir = new File(System.getProperty("user.dir")); //$NON-NLS-1$
+        for (int i = 0; i < 12 && dir != null; i++)
+        {
+            File candidate = new File(dir, relative);
+            if (candidate.exists())
+            {
+                return candidate;
+            }
+            dir = dir.getParentFile();
+        }
+        return null;
+    }
+
+    @Test
+    public void testAPredefinedItemWhoseOwnersStateBecameNoneIsRefusedInTheWrite()
+    {
+        // T3 on the predefined path: the guard judged the owner's 'predefined' state before the consent gate of a
+        // retype; set to None while the call waited there, the write refuses before the item is changed.
+        Catalog catalog = adoptedCatalog();
+        assertFalse(PredefinedWriter.create(catalog, "Blue", new PredefinedWriter.ItemProps(), false).isError()); //$NON-NLS-1$
+        CatalogExtension block = (CatalogExtension)catalog.getExtension();
+        block.setPredefined(MdPropertyState.EXTENDED);
+        assertNull(AdoptedPropertyRouter.refusalIfDropped(catalog, MdClassPackage.Literals.CATALOG__PREDEFINED, //$NON-NLS-1$
+            "Catalog.Goods", null, null)); //$NON-NLS-1$
+        PredefinedWriter.ItemProps props = new PredefinedWriter.ItemProps();
+        props.description = "Sky blue"; //$NON-NLS-1$
+        props.descriptionSet = true;
+        String before = PredefinedWriter.findByName(catalog, "Blue").getDescription(); //$NON-NLS-1$
+
+        block.setPredefined(MdPropertyState.NONE);
+        try
+        {
+            ModifyMetadataTool.modifyPredefinedInWrite(catalog, "Blue", props, "Catalog.Goods"); //$NON-NLS-1$ //$NON-NLS-2$
+            fail("predefined items EDT would now drop must roll the write back"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException e)
+        {
+            assertTrue(e.getMessage(), e.getMessage().startsWith("'predefined' of Catalog.Goods was not written: " //$NON-NLS-1$
+                + "Catalog.Goods is adopted, and the extension state of 'predefined' became None while the call " //$NON-NLS-1$
+                + "waited")); //$NON-NLS-1$
+        }
+        assertEquals("the item was not changed", before, PredefinedWriter.findByName(catalog, "Blue").getDescription()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("Sky blue".equals(before)); //$NON-NLS-1$
+
+        // While the state stays Extended the item is written.
+        block.setPredefined(MdPropertyState.EXTENDED);
+        PredefinedWriter.WriteResult written = ModifyMetadataTool.modifyPredefinedInWrite(catalog, "Blue", props, //$NON-NLS-1$
+            "Catalog.Goods"); //$NON-NLS-1$
+        assertFalse(written.error, written.isError());
+        assertEquals("Sky blue", PredefinedWriter.findByName(catalog, "Blue").getDescription()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testTheBaseIsReadAgainAfterTheConsentGateAndAChangedOneRefuses()
+    {
+        // T1 through the tool: the consent gate can hold the call while the base configuration changes; the base is
+        // read again only once consent is given, and a changed base refuses the call before the write.
+        TypeItem goods = type("CatalogObject.Goods"); //$NON-NLS-1$
+        EventSubscription subscription = adoptedSubscription("OnWrite", null, null); //$NON-NLS-1$
+        List<ModifyMetadataTool.PreparedChange> changes = new ArrayList<>();
+        changes.add(ModifyMetadataTool.PreparedChange.typeDescription(
+            MdClassPackage.Literals.EVENT_SUBSCRIPTION__SOURCE, description(type("CatalogObject.Own")))); //$NON-NLS-1$
+        FakePlatform platform = new FakePlatform().base("CatalogObject.Goods").buildable("CatalogObject.Goods", goods); //$NON-NLS-1$ //$NON-NLS-2$
+        AdoptedPropertyRouter.Routing routing = route("EventSubscription.OnWrite", subscription, changes, platform); //$NON-NLS-1$
+        assertFalse(routing.refusal(), routing.isRefused());
+        int reads = platform.baseReads();
+
+        // Consent given while the base gained a source: refused, naming it.
+        ModifyMetadataTool changedMeanwhile = new ModifyMetadataTool((tool, preview) -> {
+            platform.base("CatalogObject.Goods", "CatalogObject.Other"); //$NON-NLS-1$ //$NON-NLS-2$
+            return ConsentDecision.ALLOW;
+        });
+        String refused = changedMeanwhile.consentThenBaseCheck("EventSubscription.OnWrite", changes, routing); //$NON-NLS-1$
+        assertNotNull("a base changed while the call waited refuses it", refused); //$NON-NLS-1$
+        assertTrue(refused, refused.contains("'source' of EventSubscription.OnWrite was not written: the base " //$NON-NLS-1$
+            + "configuration 'TestConfiguration' changed the base value of 'source' while the call waited")); //$NON-NLS-1$
+
+        // Consent denied: the denial, and the base is not read.
+        int before = platform.baseReads();
+        String denied = new ModifyMetadataTool((tool, preview) -> ConsentDecision.REJECT)
+            .consentThenBaseCheck("EventSubscription.OnWrite", changes, routing); //$NON-NLS-1$
+        assertNotNull(denied);
+        assertFalse(denied, denied.contains("changed the base value")); //$NON-NLS-1$
+        assertEquals("a denied call reads no base", before, platform.baseReads()); //$NON-NLS-1$
+
+        // The base as it was: the write goes on.
+        platform.base("CatalogObject.Goods"); //$NON-NLS-1$
+        assertNull(new ModifyMetadataTool((tool, preview) -> ConsentDecision.ALLOW)
+            .consentThenBaseCheck("EventSubscription.OnWrite", changes, routing)); //$NON-NLS-1$
+        assertTrue("the base was read again", platform.baseReads() > reads); //$NON-NLS-1$
     }
 
     @Test

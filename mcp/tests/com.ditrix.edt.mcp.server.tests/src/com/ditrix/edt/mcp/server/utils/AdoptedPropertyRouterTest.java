@@ -1404,10 +1404,237 @@ public class AdoptedPropertyRouterTest
             null, V8_5_1, new FakePlatform()));
     }
 
+    // ==================== round 3: what changed while the call waited, and what cannot be read ====================
+
+    @Test
+    public void testABaseSourceAddedWhileTheCallWaitedRefusesTheWrite()
+    {
+        // T1: the base configuration is another project; the plan composes the extended source from the base
+        // sources it read. A base source added meanwhile (while the call waited for consent) would be left out of
+        // the written value - the base value is read again before the write, and a changed one refuses the call.
+        Type goods = type("CatalogObject.Goods"); //$NON-NLS-1$
+        EventSubscription subscription = adoptedSubscription("OnWrite", null, null); //$NON-NLS-1$
+        FakePlatform platform = new FakePlatform().base("CatalogObject.Goods").buildable("CatalogObject.Goods", goods) //$NON-NLS-1$ //$NON-NLS-2$
+            .buildable("CatalogObject.Other", type("CatalogObject.Other")); //$NON-NLS-1$ //$NON-NLS-2$
+        Routing routing = route(subscription, FQN_SUB, V8_5_1, platform, sourceChange(type("CatalogObject.Own"))); //$NON-NLS-1$
+        assertEquals(Decision.Kind.EXTENDED_SOURCE, routing.decision(0).kind());
+        int reads = platform.baseReads();
+
+        assertNull("the same base: the write goes on", routing.baseChangedRefusal()); //$NON-NLS-1$
+        assertEquals("the base is read again", reads + 1, platform.baseReads()); //$NON-NLS-1$
+
+        platform.base("CatalogObject.Other", "CatalogObject.Goods"); //$NON-NLS-1$ //$NON-NLS-2$
+        String refusal = routing.baseChangedRefusal();
+        assertNotNull("a base source added meanwhile refuses the write", refusal); //$NON-NLS-1$
+        assertTrue(refusal, refusal.contains("'source' of EventSubscription.OnWrite was not written: the base " //$NON-NLS-1$
+            + "configuration 'TestConfiguration' changed the base value of 'source' while the call waited " //$NON-NLS-1$
+            + "(CatalogObject.Goods when the call was checked, CatalogObject.Other, CatalogObject.Goods now)")); //$NON-NLS-1$
+        assertTrue(refusal, refusal.contains("retry the call. Nothing was changed.")); //$NON-NLS-1$
+
+        // The order of a type description's types carries no meaning: the same sources in another order are the
+        // same base.
+        platform.base("CatalogObject.Goods", "CatalogObject.Other"); //$NON-NLS-1$ //$NON-NLS-2$
+        Routing again = route(adoptedSubscription("OnWrite", null, null), FQN_SUB, V8_5_1, platform, //$NON-NLS-1$
+            sourceChange(type("CatalogObject.Own"))); //$NON-NLS-1$
+        assertEquals(Decision.Kind.EXTENDED_SOURCE, again.decision(0).kind());
+        platform.base("CatalogObject.Other", "CatalogObject.Goods"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("the same sources in another order", again.baseChangedRefusal()); //$NON-NLS-1$
+
+        // A base that cannot be read any more refuses as the routing would.
+        platform.baseNotReady();
+        String notReady = again.baseChangedRefusal();
+        assertNotNull(notReady);
+        assertTrue(notReady, notReady.contains("is not ready yet")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testABaseTypeChangedWhileTheCallWaitedRefusesTheWrite()
+    {
+        // T1 for the defined type: the plan keeps the base types and judged them by their qualifiers.
+        DefinedType definedType = adoptedDefinedType("Amount", //$NON-NLS-1$
+            withString(typeExtension(type("String"), MdPropertyState.CHECKED), 10)); //$NON-NLS-1$
+        FakePlatform platform = new FakePlatform().baseWithString(10, "String").offer("String") //$NON-NLS-1$ //$NON-NLS-2$
+            .offer("CatalogRef.Own"); //$NON-NLS-1$
+        Routing routing = route(definedType, V8_5_1, platform, typeChange(catalogRefType("Own", ObjectBelonging.NATIVE))); //$NON-NLS-1$
+        assertEquals(Decision.Kind.TYPE_EXTENSION, routing.decision(0).kind());
+        assertNull(routing.baseChangedRefusal());
+
+        platform.baseWithString(20, "String"); //$NON-NLS-1$
+        String qualifiers = routing.baseChangedRefusal();
+        assertNotNull("other qualifiers of the same base type refuse the write", qualifiers); //$NON-NLS-1$
+        assertTrue(qualifiers, qualifiers.contains("'type' of DefinedType.Amount was not written: the base " //$NON-NLS-1$
+            + "configuration 'TestConfiguration' changed the base value of 'type' while the call waited (the same " //$NON-NLS-1$
+            + "types with other qualifiers)")); //$NON-NLS-1$
+
+        platform.baseWithString(10, "String", "Number"); //$NON-NLS-1$ //$NON-NLS-2$
+        String types = routing.baseChangedRefusal();
+        assertNotNull("a base type added meanwhile refuses the write", types); //$NON-NLS-1$
+        assertTrue(types, types.contains("(String when the call was checked, String, Number now)")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testABaseTypeThatBecameATypeSetIsNotCalledAQualifierChange()
+    {
+        // The label of a changed base value is chosen from what was compared: the same names with a type turned
+        // into a type set are not 'the same types with other qualifiers'.
+        AdoptedPropertyRouter.BaseRead planned = AdoptedPropertyRouter.BaseRead.found(List.of("Characteristic.Kinds"), //$NON-NLS-1$
+            List.of(Boolean.FALSE), AdoptedPropertyRouter.Qualifiers.NONE);
+        AdoptedPropertyRouter.BaseRead now = AdoptedPropertyRouter.BaseRead.found(List.of("Characteristic.Kinds"), //$NON-NLS-1$
+            List.of(Boolean.TRUE), AdoptedPropertyRouter.Qualifiers.NONE);
+        String text = AdoptedPropertyRouter.baseChanged(planned, now, "type", "DefinedType.Amount", "Base"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        assertNotNull("a type that became a type set is a change", text); //$NON-NLS-1$
+        assertTrue(text, text.contains("(the same type names, one of them now a type set or no longer one)")); //$NON-NLS-1$
+        assertFalse(text, text.contains("other qualifiers")); //$NON-NLS-1$
+        assertNull("the same value is no change", AdoptedPropertyRouter.baseChanged(planned, planned, "type", //$NON-NLS-1$ //$NON-NLS-2$
+            "DefinedType.Amount", "Base")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testABatchWithoutAPlannedWriteReadsNoBaseAgain()
+    {
+        Catalog catalog = catalogWithBlock(ObjectBelonging.ADOPTED);
+        ((CatalogExtension)catalog.getExtension()).setSynonym(MdPropertyState.EXTENDED);
+        FakePlatform platform = new FakePlatform();
+        Routing routing = route(catalog, "Catalog.Goods", V8_5_1, platform, //$NON-NLS-1$
+            new AdoptedPropertyRouter.Change(MdClassPackage.Literals.MD_OBJECT__SYNONYM, null, null));
+        assertEquals(Decision.Kind.PLAIN, routing.decision(0).kind());
+
+        assertNull(routing.baseChangedRefusal());
+        assertEquals("nothing planned from the base, nothing read", 0, platform.baseReads()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testATypeExtensionHoldingATypeWhoseNameCannotBeReadIsNotReplaced()
+    {
+        // T2: the write replaces the whole type extension; a type whose name cannot be read (an unresolved
+        // reference) could not be told a base type from an earlier addition, and would be lost. Refused before the
+        // transaction ...
+        DefinedType definedType = adoptedDefinedType("Amount", //$NON-NLS-1$
+            typeExtension(type("String"), MdPropertyState.CHECKED, nameless(), MdPropertyState.EXTENDED)); //$NON-NLS-1$
+        FakePlatform platform = new FakePlatform().base("String").offer("String").offer("CatalogRef.Own"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        Routing routing = route(definedType, V8_5_1, platform, typeChange(catalogRefType("Own", ObjectBelonging.NATIVE))); //$NON-NLS-1$
+        assertRefused(routing, "'type' of DefinedType.Amount was not written: the type extension of adopted " //$NON-NLS-1$
+            + "DefinedType.Amount (base configuration 'TestConfiguration') holds a type (typeExtension[1], ", //$NON-NLS-1$
+            "whose name cannot be read", "would lose that type", "EDT's type-extension editor does not list such a " //$NON-NLS-1$ //$NON-NLS-2$
+                + "type either. Restore the object it refers to, or remove the item from the extension's .mdo", //$NON-NLS-1$
+            "get_project_errors on the extension may show it", "Nothing was changed."); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // ... and inside it, when such a type appeared while the call waited.
+        DefinedType waited = adoptedDefinedType("Amount", typeExtension(type("String"), MdPropertyState.CHECKED)); //$NON-NLS-1$ //$NON-NLS-2$
+        AdoptedPropertyRouter.TypePlan plan = plan(waited, platform, typeChange(catalogRefType("Own", ObjectBelonging.NATIVE))); //$NON-NLS-1$
+        TypeDescriptionExtension edited = ((DefinedTypeExtension)waited.getExtension()).getTypeExtension();
+        TypeExtension unreadable = MdClassExtensionFactory.eINSTANCE.createTypeExtension();
+        unreadable.setType(nameless());
+        unreadable.setState(MdPropertyState.EXTENDED);
+        edited.getTypes().add(unreadable);
+        assertRefusedInTheWrite(() -> AdoptedPropertyRouter.applyTypeExtension(waited, plan),
+            "'type' of DefinedType.Amount was not written", "typeExtension[1]", "whose name cannot be read", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "Nothing was changed."); //$NON-NLS-1$
+        assertNull("nothing was written", plan.outcome()); //$NON-NLS-1$
+        assertSame(edited, ((DefinedTypeExtension)waited.getExtension()).getTypeExtension());
+        assertEquals("the type stays", 2, edited.getTypes().size()); //$NON-NLS-1$
+        assertSame(unreadable, edited.getTypes().get(1));
+    }
+
+    @Test
+    public void testAnOwnSourceHoldingASourceWhoseNameCannotBeReadIsNotReplaced()
+    {
+        // T2 for the source: the write replaces the subscription's whole own source.
+        Type goods = type("CatalogObject.Goods"); //$NON-NLS-1$
+        EventSubscription subscription = adoptedSubscription("OnWrite", description(goods, nameless()), //$NON-NLS-1$
+            MdPropertyState.EXTENDED);
+        FakePlatform platform = new FakePlatform().base("CatalogObject.Goods").buildable("CatalogObject.Goods", goods); //$NON-NLS-1$ //$NON-NLS-2$
+        Routing routing = route(subscription, FQN_SUB, V8_5_1, platform, sourceChange(type("CatalogObject.Own"))); //$NON-NLS-1$
+        assertRefused(routing, "'source' of EventSubscription.OnWrite was not written: the own source of adopted " //$NON-NLS-1$
+            + "EventSubscription.OnWrite (base configuration 'TestConfiguration') in the extension holds a source " //$NON-NLS-1$
+            + "(source[1]) whose name cannot be read", "would lose that source", //$NON-NLS-1$ //$NON-NLS-2$
+            "Restore the object it refers to, or remove the source from the extension's .mdo", //$NON-NLS-1$
+            "get_project_errors on the extension may show it", "Nothing was changed."); //$NON-NLS-1$ //$NON-NLS-2$
+
+        // ... and inside the write, when such a source appeared while the call waited.
+        EventSubscription waited = adoptedSubscription("OnWrite", description(type("CatalogObject.Goods")), //$NON-NLS-1$ //$NON-NLS-2$
+            MdPropertyState.EXTENDED);
+        FakeAccess access = new FakeAccess();
+        AdoptedPropertyRouter.SourcePlan plan = route(waited, FQN_SUB, V8_5_1, platform.access(access),
+            sourceChange(type("CatalogObject.Own"))).decision(0).sourcePlan(); //$NON-NLS-1$
+        TypeItem unreadable = nameless();
+        waited.getSource().getTypes().add(unreadable);
+        assertRefusedInTheWrite(() -> AdoptedPropertyRouter.applySource(waited, plan),
+            "'source' of EventSubscription.OnWrite was not written", "(source[1]) whose name cannot be read", //$NON-NLS-1$ //$NON-NLS-2$
+            "Nothing was changed."); //$NON-NLS-1$
+        assertTrue("nothing was written: " + access.calls, access.calls.isEmpty()); //$NON-NLS-1$
+        assertEquals(2, waited.getSource().getTypes().size());
+        assertSame(unreadable, waited.getSource().getTypes().get(1));
+
+        // Returning the source to the base replaces it too.
+        EventSubscription back = adoptedSubscription("OnWrite", description(type("CatalogObject.Goods")), //$NON-NLS-1$ //$NON-NLS-2$
+            MdPropertyState.EXTENDED);
+        AdoptedPropertyRouter.SourcePlan backPlan = route(back, FQN_SUB, V8_5_1, platform,
+            sourceChange(type("CatalogObject.Goods"))).decision(0).sourcePlan(); //$NON-NLS-1$
+        back.getSource().getTypes().add(nameless());
+        assertRefusedInTheWrite(() -> AdoptedPropertyRouter.applySource(back, backPlan),
+            "whose name cannot be read"); //$NON-NLS-1$
+        assertEquals(MdPropertyState.EXTENDED, ((EventSubscriptionExtension)back.getExtension()).getSource());
+    }
+
+    @Test
+    public void testAPropertyWhoseStateBecameNoneIsRefusedInTheWrite()
+    {
+        // T3: the routing wrote the synonym as prepared while its state was Extended; set to None meanwhile,
+        // EDT's .mdo writer would drop it - the write refuses instead of reporting it written.
+        Catalog catalog = catalogWithBlock(ObjectBelonging.ADOPTED);
+        CatalogExtension block = (CatalogExtension)catalog.getExtension();
+        block.setSynonym(MdPropertyState.EXTENDED);
+        AdoptedPropertyRouter.requireStillWritten(catalog, MdClassPackage.Literals.MD_OBJECT__SYNONYM, null,
+            "Catalog.Goods"); //$NON-NLS-1$
+
+        block.setSynonym(MdPropertyState.NONE);
+        assertRefusedInTheWrite(() -> AdoptedPropertyRouter.requireStillWritten(catalog,
+            MdClassPackage.Literals.MD_OBJECT__SYNONYM, null, "Catalog.Goods"), //$NON-NLS-1$
+            "'synonym' of Catalog.Goods was not written: Catalog.Goods is adopted, and the extension state of " //$NON-NLS-1$
+                + "'synonym' became None while the call waited", //$NON-NLS-1$
+            "retry the call", "Nothing was changed."); //$NON-NLS-1$ //$NON-NLS-2$
+        // The second feature a change writes is checked too, and an object without an FQN is named by its name.
+        block.setSynonym(MdPropertyState.EXTENDED);
+        assertRefusedInTheWrite(() -> AdoptedPropertyRouter.requireStillWritten(catalog,
+            MdClassPackage.Literals.MD_OBJECT__SYNONYM, MdClassPackage.Literals.CATALOG__CODE_LENGTH, null),
+            "'codeLength' of Goods was not written"); //$NON-NLS-1$
+
+        // Never for an object the extension owns, or a property without a state.
+        Catalog own = catalogWithBlock(ObjectBelonging.NATIVE);
+        AdoptedPropertyRouter.requireStillWritten(own, MdClassPackage.Literals.CATALOG__CODE_LENGTH, null, "Catalog.Goods"); //$NON-NLS-1$
+        AdoptedPropertyRouter.requireStillWritten(catalog, MdClassPackage.Literals.MD_OBJECT__COMMENT, null,
+            "Catalog.Goods"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheValidatorCountsOnlyTheTypesTheTypeExtensionHolds()
+    {
+        // T4 (declined, pinned): EDT's TypeExtensionTreeValidator counts only the tree items whose state is not
+        // None, and a base type the type extension does not hold is None in its tree (its state comes from the type
+        // extension alone; TypeExtensionTreeItem reads a missing state as None). An adopted defined type with an
+        // ordinary base type and an empty type extension therefore takes an unlimited String in EDT's own editor -
+        // and so does the router. A base type that cannot be part of a composite type still blocks any addition.
+        DefinedType definedType = adoptedDefinedType("Amount", typeExtension()); //$NON-NLS-1$
+        TypeDescription unlimited = description(type("String")); //$NON-NLS-1$
+        unlimited.setStringQualifiers(stringQualifiers(0));
+        FakePlatform platform = new FakePlatform().base("Number").offer("Number").offer("String"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        Routing routing = route(definedType, V8_5_1, platform,
+            new AdoptedPropertyRouter.Change(MdClassPackage.Literals.DEFINED_TYPE__TYPE, unlimited, null));
+        assertFalse(routing.refusal(), routing.isRefused());
+        assertEquals(Decision.Kind.TYPE_EXTENSION, routing.decision(0).kind());
+    }
+
     // ==================== helpers ====================
 
     private static final EStructuralFeature DT_TYPE_EXTENSION =
         com._1c.g5.v8.dt.metadata.mdclass.extension.MdClassExtensionPackage.Literals.DEFINED_TYPE_EXTENSION__TYPE_EXTENSION;
+
+    /** A type item whose name cannot be read - as an unresolved reference reads. */
+    private static Type nameless()
+    {
+        return McoreFactory.eINSTANCE.createType();
+    }
 
     private static Catalog catalogWithBlock(ObjectBelonging belonging)
     {

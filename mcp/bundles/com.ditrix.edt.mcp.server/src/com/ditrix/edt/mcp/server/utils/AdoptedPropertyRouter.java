@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -351,12 +352,59 @@ public final class AdoptedPropertyRouter
         private final String refusal;
         private final List<Decision> decisions;
         private final List<String> notes;
+        /** The call and the platform the routing asked, to read the base again before the write. */
+        private final Request request;
+        private final Environment env;
+        /** The base value each planned write was built from, by the feature it writes. */
+        private final Map<EStructuralFeature, BaseRead> bases;
 
         private Routing(String refusal, List<Decision> decisions, List<String> notes)
+        {
+            this(refusal, decisions, notes, null, null, Map.of());
+        }
+
+        private Routing(String refusal, List<Decision> decisions, List<String> notes, Request request, // NOSONAR the routing keeps what its base re-check needs
+            Environment env, Map<EStructuralFeature, BaseRead> bases)
         {
             this.refusal = refusal;
             this.decisions = decisions;
             this.notes = notes;
+            this.request = request;
+            this.env = env;
+            this.bases = bases;
+        }
+
+        /**
+         * Reads the base value of every planned write ({@link Decision.Kind#TYPE_EXTENSION},
+         * {@link Decision.Kind#EXTENDED_SOURCE}) again, in a read transaction of the BASE project's model, and
+         * refuses the call when it is not the one the plan was built from: the base configuration is another
+         * project, edited independently, and a plan composes the extension's value from its base types or
+         * sources, so a plan built from a base value that changed meanwhile - while the call waited for
+         * consent - would write a value that drops what the base added. The caller asks right before the write
+         * transaction: no transaction spans two projects' models, so this is the last point where the base can
+         * be read before the extension is written.
+         *
+         * @return the ready {@link ToolResult#error} JSON when a base value changed or can no longer be read,
+         *     else {@code null}; {@code null} too for a batch with no planned write (nothing is read then)
+         */
+        public String baseChangedRefusal()
+        {
+            if (request == null || bases.isEmpty())
+            {
+                return null;
+            }
+            String base = env.baseProjectName(request.project);
+            for (Map.Entry<EStructuralFeature, BaseRead> planned : bases.entrySet())
+            {
+                EStructuralFeature feature = planned.getKey();
+                BaseRead now = env.readBase(request.project, request.target, feature);
+                String text = baseChanged(planned.getValue(), now, feature.getName(), request.fqn, base);
+                if (text != null)
+                {
+                    return ToolResult.error(text).toJson();
+                }
+            }
+            return null;
         }
 
         /** @return whether the batch is refused; nothing may be written then */
@@ -404,7 +452,10 @@ public final class AdoptedPropertyRouter
      * an adopted event subscription's {@code source} are routed (only the LAST write of each counts, as when
      * a batch is applied; an earlier one is dropped); any other type is refused; any other property
      * {@link #wouldDrop} answers {@code true} for - a style value's {@code type} binding included - is refused;
-     * everything else is written as prepared. The first refusal wins, and nothing is written then.
+     * everything else is written as prepared. The first refusal wins, and nothing is written then. A routing
+     * that plans a write keeps the base value each plan was built from, for {@link Routing#baseChangedRefusal};
+     * the write itself checks again what the routing judged on the object ({@link #applyTypeExtension},
+     * {@link #applySource}, {@link #requireStillWritten}).
      *
      * @param request the batch
      * @param env the platform calls
@@ -424,6 +475,7 @@ public final class AdoptedPropertyRouter
         {
             lastWrite.put(changes.get(i).feature, Integer.valueOf(i));
         }
+        Map<EStructuralFeature, BaseRead> bases = new LinkedHashMap<>();
         for (int i = 0; i < changes.size(); i++)
         {
             Change change = changes.get(i);
@@ -446,6 +498,10 @@ public final class AdoptedPropertyRouter
                 {
                     notes.add(routed.note);
                 }
+                if (routed.base != null)
+                {
+                    bases.put(feature, routed.base);
+                }
             }
             else if (MdExtensionTypeUtil.isTypeDescriptionFeature(feature))
             {
@@ -459,7 +515,7 @@ public final class AdoptedPropertyRouter
                     request.project, request.version, env)).toJson(), decisions, notes);
             }
         }
-        return new Routing(null, decisions, notes);
+        return new Routing(null, decisions, notes, request, env, bases);
     }
 
     /**
@@ -490,33 +546,35 @@ public final class AdoptedPropertyRouter
         return ToolResult.error(droppedRefusal(target, feature, fqn, project, version, env)).toJson();
     }
 
-    /** A decision with its note, or a refusal text. */
+    /** A decision with its note, or a refusal text; a plan also keeps the base value it was built from. */
     private static final class Routed
     {
         private final Decision decision;
         private final String note;
         private final String refusal;
+        private final BaseRead base;
 
-        private Routed(Decision decision, String note, String refusal)
+        private Routed(Decision decision, String note, String refusal, BaseRead base)
         {
             this.decision = decision;
             this.note = note;
             this.refusal = refusal;
+            this.base = base;
         }
 
         static Routed refuse(String refusal)
         {
-            return new Routed(null, null, refusal);
+            return new Routed(null, null, refusal, null);
         }
 
         static Routed unchanged(String note)
         {
-            return new Routed(Decision.DROP, note, null);
+            return new Routed(Decision.DROP, note, null, null);
         }
 
-        static Routed plan(Decision decision)
+        static Routed plan(Decision decision, BaseRead base)
         {
-            return new Routed(decision, null, null);
+            return new Routed(decision, null, null, base);
         }
     }
 
@@ -585,6 +643,11 @@ public final class AdoptedPropertyRouter
             return Routed.unchanged("'type' of " + fqn + " unchanged: its type extension already holds what the " //$NON-NLS-1$ //$NON-NLS-2$
                 + "call asks for" + typeDetails(classified.requestedBase, classified.requestedKept)); //$NON-NLS-1$
         }
+        String unreadable = unreadableTypeRefusal(current, fqn, base);
+        if (unreadable != null)
+        {
+            return Routed.refuse(unreadable);
+        }
         String compositionRefusal = compositionRefusal(predicted, baseRead, infos, fqn, base);
         if (compositionRefusal != null)
         {
@@ -593,7 +656,7 @@ public final class AdoptedPropertyRouter
         TypePlan plan = new TypePlan(fqn, change.feature, baseNames, classified.additions, requested,
             classified.requestedBase, classified.requestedKept, predicted.added, predicted.removed,
             statesByName(current), Qualifiers.of(current));
-        return Routed.plan(new Decision(Decision.Kind.TYPE_EXTENSION, plan));
+        return Routed.plan(new Decision(Decision.Kind.TYPE_EXTENSION, plan), baseRead);
     }
 
     /** The request's types sorted into base types, types the extension checks, and additions. */
@@ -895,6 +958,10 @@ public final class AdoptedPropertyRouter
             return Routed.unchanged("'source' of " + fqn + " unchanged: the call adds no source beyond the base " //$NON-NLS-1$ //$NON-NLS-2$
                 + "configuration's, and the source already follows the base (state None)"); //$NON-NLS-1$
         }
+        // Compared as a set: the order of a type description's types carries no meaning - EDT's own type editor
+        // sorts every type description it writes into the platform's runtime order
+        // (AbstractTypeDescriptionModel.buildTypeDescriptionValue -> IModelObjectCollectionRuntimeOrderSorter),
+        // whatever order the base or a caller lists them in.
         Set<String> wanted = new LinkedHashSet<>(baseNames);
         wanted.addAll(additionNames);
         if (!additions.isEmpty() && state == MdPropertyState.EXTENDED && copy.keySet().equals(wanted))
@@ -902,9 +969,14 @@ public final class AdoptedPropertyRouter
             return Routed.unchanged("'source' of " + fqn + " unchanged: it is already Extended with the base " //$NON-NLS-1$ //$NON-NLS-2$
                 + "sources plus " + String.join(", ", additionNames)); //$NON-NLS-1$ //$NON-NLS-2$
         }
+        String unreadable = unreadableSourceRefusal(target.eGet(change.feature), fqn, base);
+        if (unreadable != null)
+        {
+            return Routed.refuse(unreadable);
+        }
         SourcePlan plan = new SourcePlan(fqn, change.feature, baseNames, built, additions, additionNames, access,
             copy.keySet(), state);
-        return Routed.plan(new Decision(Decision.Kind.EXTENDED_SOURCE, plan));
+        return Routed.plan(new Decision(Decision.Kind.EXTENDED_SOURCE, plan), baseRead);
     }
 
     private static String notCarriedRefusal(String fqn, List<String> missing, String base)
@@ -1071,12 +1143,13 @@ public final class AdoptedPropertyRouter
      * replace the earlier ones as {@code Extended} ({@link #composeTypeExtension}), and the result is set - or
      * the feature unset when no type is left, as EDT's type-extension dialog leaves it with nothing selected.
      * The native type is left as it is, as that dialog leaves it; while the defined type's {@code type} state
-     * is None, EDT's {@code .mdo} writer leaves it out of the extension's file.
+     * is None, EDT's {@code .mdo} writer leaves it out of the extension's file. A type extension that holds a
+     * type whose name cannot be read is never replaced: the write could not tell whether to keep that type.
      *
      * @param target the adopted defined type, inside the transaction
      * @param plan the plan
-     * @throws IllegalStateException when the object has no type extension any more, or its type extension is
-     *             not the one the routing judged (rolls back)
+     * @throws IllegalStateException when the object has no type extension any more, its type extension is
+     *             not the one the routing judged, or it holds a type whose name cannot be read (rolls back)
      */
     public static void applyTypeExtension(EObject target, TypePlan plan)
     {
@@ -1095,6 +1168,11 @@ public final class AdoptedPropertyRouter
         Composition composition = composeTypeExtension(current, plan.baseNames, plan.additions, plan.request);
         if (composition.changed)
         {
+            String unreadable = unreadableTypeRefusal(current, plan.fqn, null);
+            if (unreadable != null)
+            {
+                throw Refusals.state(unreadable);
+            }
             if (composition.next.getTypes().isEmpty())
             {
                 extension.eUnset(typeExtensionFeature);
@@ -1120,8 +1198,8 @@ public final class AdoptedPropertyRouter
      * @param target the adopted event subscription, inside the transaction
      * @param plan the plan, with the adopted-property access it is written through
      * @throws IllegalStateException when the object has no extension block any more, its source or source
-     *             state is not the one the routing judged, or a base source can no longer be carried (rolls
-     *             back)
+     *             state is not the one the routing judged, a base source can no longer be carried, or the own
+     *             source to be replaced holds a source whose name cannot be read (rolls back)
      */
     public static void applySource(EObject target, SourcePlan plan)
     {
@@ -1152,6 +1230,7 @@ public final class AdoptedPropertyRouter
                     + "the base sources plus " + String.join(", ", plan.additionNames)); //$NON-NLS-1$ //$NON-NLS-2$
                 return;
             }
+            requireReadableSource(current, plan.fqn);
             access.setValue(target, plan.feature, MdPropertyType.EXTENSIBLE, value);
             plan.outcome = new Outcome(true, plan.fqn + " is adopted: its source is Extended - the base sources " //$NON-NLS-1$ //$NON-NLS-2$
                 + listOrNone(plan.baseNames) + " plus " + String.join(", ", plan.additionNames)); //$NON-NLS-1$ //$NON-NLS-2$
@@ -1163,6 +1242,7 @@ public final class AdoptedPropertyRouter
                 + "configuration (state None)"); //$NON-NLS-1$
             return;
         }
+        requireReadableSource(current, plan.fqn);
         target.eSet(plan.feature, value);
         access.setPropertyState(target, plan.feature, MdPropertyState.NONE);
         plan.outcome = new Outcome(true, plan.fqn + " is adopted and the call adds no source beyond the base " //$NON-NLS-1$ //$NON-NLS-2$
@@ -1320,7 +1400,9 @@ public final class AdoptedPropertyRouter
     }
 
     /**
-     * The source a write leaves: each base source in base order - the item the subscription's own source already
+     * The source a write leaves: each base source in base order (a writing order only - the order of a type
+     * description's types carries no meaning, and EDT's own type editor sorts them into the platform's runtime
+     * order) - the item the subscription's own source already
      * holds for it, as it does after an earlier extended write (this serves a {@code .mdo} written that way; an
      * adoption leaves the own source empty), else the item built for it in the extension - then each addition,
      * deduplicated by name.
@@ -1451,6 +1533,143 @@ public final class AdoptedPropertyRouter
     {
         return "'" + property + "' of " + fqn + " was not written: " + what + " changed while the call waited; " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
             + "retry the call." + NOTHING_CHANGED; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal of a planned write whose base value is not the one its plan was built from - read again
+     * right before the write ({@link Routing#baseChangedRefusal}); {@code null} when it is the same. The same
+     * means the same types (by name, and whether each is a type set) with the same qualifiers; the order of the
+     * types is not compared, as it carries no meaning (see {@link #composeSource}).
+     */
+    static String baseChanged(BaseRead planned, BaseRead now, String property, String fqn, String base)
+    {
+        String unreadable = baseRefusal(now, property, fqn, base);
+        if (unreadable != null)
+        {
+            return unreadable;
+        }
+        if (sameTypes(planned, now) && planned.qualifiers.equals(now.qualifiers))
+        {
+            return null;
+        }
+        String what = sameTypes(planned, now) ? "the same types with other qualifiers" //$NON-NLS-1$
+            : new LinkedHashSet<>(planned.typeNames).equals(new LinkedHashSet<>(now.typeNames))
+                ? "the same type names, one of them now a type set or no longer one" //$NON-NLS-1$
+                : listOrNone(planned.typeNames) + " when the call was checked, " + listOrNone(now.typeNames) //$NON-NLS-1$
+                    + " now"; //$NON-NLS-1$
+        return "'" + property + "' of " + fqn + " was not written: the base configuration" + named(base) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + " changed the base value of '" + property + "' while the call waited (" + what + "), and the " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "base value decides what the extension writes; retry the call." + NOTHING_CHANGED; //$NON-NLS-1$
+    }
+
+    private static boolean sameTypes(BaseRead a, BaseRead b)
+    {
+        return typeKeys(a).equals(typeKeys(b));
+    }
+
+    private static Set<String> typeKeys(BaseRead read)
+    {
+        Set<String> keys = new HashSet<>();
+        for (int i = 0; i < read.typeNames.size(); i++)
+        {
+            keys.add(read.typeNames.get(i) + (read.typeSets.get(i).booleanValue() ? "|set" : "|type")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return keys;
+    }
+
+    /**
+     * The refusal of a write that would replace an adopted defined type's type extension while it holds a
+     * type - in any state but None - whose name cannot be read (an unresolved reference): the write could not
+     * tell whether that type is a base type to keep or an earlier addition to replace, and replacing the whole
+     * type extension without it would lose it. {@code null} when every such name can be read.
+     */
+    private static String unreadableTypeRefusal(TypeDescriptionExtension current, String fqn, String base)
+    {
+        if (current == null)
+        {
+            return null;
+        }
+        List<TypeExtension> types = current.getTypes();
+        for (int i = 0; i < types.size(); i++)
+        {
+            TypeExtension type = types.get(i);
+            MdPropertyState state = type.getState();
+            if (state != null && state != MdPropertyState.NONE && typeName(type.getType()) == null)
+            {
+                return "'type' of " + fqn + " was not written: the type extension of " + adopted(fqn, base) //$NON-NLS-1$ //$NON-NLS-2$
+                    + " holds a type (typeExtension[" + i + "], " + state.getName() + ") whose name cannot be read - " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    + "an unresolved reference - and the write replaces the whole type extension, so it would lose " //$NON-NLS-1$
+                    + "that type; EDT's type-extension editor does not list such a type either. Restore the object " //$NON-NLS-1$
+                    + "it refers to, or remove the item from the extension's .mdo, then retry; get_project_errors on " //$NON-NLS-1$
+                    + "the extension may show it." + NOTHING_CHANGED; //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The refusal of a write that would replace an adopted event subscription's own source while it holds a
+     * source whose name cannot be read (an unresolved reference): replacing the whole list without it would
+     * lose it. {@code null} when every name can be read.
+     */
+    private static String unreadableSourceRefusal(Object current, String fqn, String base)
+    {
+        if (!(current instanceof TypeDescription))
+        {
+            return null;
+        }
+        List<TypeItem> items = ((TypeDescription)current).getTypes();
+        for (int i = 0; i < items.size(); i++)
+        {
+            if (typeName(items.get(i)) == null)
+            {
+                return "'source' of " + fqn + " was not written: the own source of " + adopted(fqn, base) //$NON-NLS-1$ //$NON-NLS-2$
+                    + " in the extension holds a source (source[" + i + "]) whose name cannot be read - an " //$NON-NLS-1$ //$NON-NLS-2$
+                    + "unresolved reference - and the write replaces the whole source, so it would lose that " //$NON-NLS-1$
+                    + "source. Restore the object it refers to, or remove the source from the extension's .mdo, then " //$NON-NLS-1$
+                    + "retry; get_project_errors on the extension may show it." + NOTHING_CHANGED; //$NON-NLS-1$
+            }
+        }
+        return null;
+    }
+
+    private static void requireReadableSource(Object current, String fqn)
+    {
+        String unreadable = unreadableSourceRefusal(current, fqn, null);
+        if (unreadable != null)
+        {
+            throw Refusals.state(unreadable);
+        }
+    }
+
+    /**
+     * Inside the write transaction, for a change the routing wrote as prepared ({@link Decision.Kind#PLAIN}):
+     * refuses - and so rolls back - when EDT's {@code .mdo} writer would now leave it out ({@link #wouldDrop}),
+     * because the extension state of the property (or of the second feature the change writes) was set to None
+     * after the routing judged it, while the call waited; written anyway, the value would not reach the file
+     * while the call reports it written. A property of any other object never refuses.
+     *
+     * @param target the object written, inside the transaction
+     * @param feature the native feature the change writes
+     * @param binding a second feature the same change writes, or {@code null}
+     * @param fqn the FQN the call addresses, for the message, or {@code null}
+     * @throws IllegalStateException when the value would be dropped (rolls back)
+     */
+    public static void requireStillWritten(EObject target, EStructuralFeature feature, EStructuralFeature binding,
+        String fqn)
+    {
+        EStructuralFeature dropped = wouldDrop(target, feature) ? feature
+            : wouldDrop(target, binding) ? binding : null;
+        if (dropped == null)
+        {
+            return;
+        }
+        String name = fqn != null ? fqn : ((MdObject)target).getName();
+        String property = dropped.getName();
+        throw Refusals.state("'" + property + "' of " + name + " was not written: " + name + " is adopted, and " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            + "the extension state of '" + property + "' became None while the call waited - EDT writes a property " //$NON-NLS-1$ //$NON-NLS-2$
+            + "of an adopted object to the extension's .mdo only while the extension marks it, so the value would " //$NON-NLS-1$
+            + "not reach the file; retry the call, which then says how it can be changed." + NOTHING_CHANGED); //$NON-NLS-1$
     }
 
     /** A source state as the routing reads it: an unset state is None. */
