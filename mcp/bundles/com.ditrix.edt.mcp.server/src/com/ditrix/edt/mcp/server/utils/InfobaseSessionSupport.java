@@ -66,9 +66,6 @@ public final class InfobaseSessionSupport
     /** Grace for a force-killed process and its stream readers to close. */
     private static final long PROCESS_CLEANUP_TIMEOUT_MS = 2_000L;
 
-    /** One line of ibcmd's authentication prompt; see {@link #isAuthenticationPromptLine}. */
-    private static final Pattern AUTHENTICATION_PROMPT_LINE = authenticationPromptLine();
-
     private InfobaseSessionSupport()
     {
     }
@@ -760,8 +757,9 @@ public final class InfobaseSessionSupport
 
     /**
      * The list verdict for one completed ibcmd run: a timeout or a non-zero exit is judged first,
-     * and only then the output. Since output that is nothing but the authentication prompt reads
-     * as a proven empty list, a failed run must never reach {@link #readSessionsOutput}.
+     * and only then the output. Since output that is nothing but ibcmd's complete authentication
+     * prompt reads as a proven empty list, a failed run must never reach
+     * {@link #readSessionsOutput}.
      *
      * @param command the completed run
      * @return the readable list, or an unreachable result naming why
@@ -778,8 +776,11 @@ public final class InfobaseSessionSupport
 
     /**
      * Turns successful command output into a readable list only when every parsed block is usable.
-     * Output that is nothing but ibcmd's authentication prompt is a readable empty list, as blank
-     * output is: it is what a list without sessions prints once the credentials were asked for.
+     * Output that is nothing but one complete authentication prompt of ibcmd
+     * ({@link #authenticationPromptEnd}) is a readable empty list, as blank output is: it is what a
+     * list without sessions prints once the credentials were asked for. Prompt text that is not one
+     * complete prompt - a fragment, a repetition - is list content, as it was before #698, and so
+     * never makes a proven empty list.
      */
     static ReadResult readSessionsOutput(String output)
     {
@@ -805,10 +806,10 @@ public final class InfobaseSessionSupport
      * Parses one blank-line-separated key/value block per session.
      *
      * <p>Asked for the infobase credentials, ibcmd prints its authentication prompt before the
-     * list, with no blank line after it (#698). Leading lines made only of the prompt's texts
-     * ({@link #isAuthenticationPromptLine}) are therefore skipped. Nothing else is skipped: the
-     * first other line ends that prefix, the prompt is not recognised after it, and from there on
-     * every line is list content - a line without ':' makes its block unreadable, and a key: value
+     * list, with no blank line after it (#698). When the output opens with one complete prompt
+     * ({@link #authenticationPromptEnd}), exactly those lines are skipped; nothing else ever is.
+     * Every other line - prompt text that is not that one complete prompt included - is list
+     * content, read as before #698: a line without ':' makes its block unreadable, and a key: value
      * line joins the block it stands in.
      */
     static ParsedSessions parseSessions(String output)
@@ -817,10 +818,12 @@ public final class InfobaseSessionSupport
         Map<String, String> current = new LinkedHashMap<>();
         boolean currentMalformed = false;
         int unreadableBlocks = 0;
-        boolean promptOnly = true;
+        boolean outputBeyondPrompt = false;
         String normalized = output == null ? "" : output; //$NON-NLS-1$
-        for (String line : normalized.split("\\R", -1)) //$NON-NLS-1$
+        String[] lines = normalized.split("\\R", -1); //$NON-NLS-1$
+        for (int index = authenticationPromptEnd(lines); index < lines.length; index++)
         {
+            String line = lines[index];
             if (line.isBlank())
             {
                 unreadableBlocks += addSession(current, currentMalformed, sessions);
@@ -828,11 +831,7 @@ public final class InfobaseSessionSupport
                 currentMalformed = false;
                 continue;
             }
-            if (promptOnly && isAuthenticationPromptLine(line))
-            {
-                continue;
-            }
-            promptOnly = false;
+            outputBeyondPrompt = true;
             int colon = line.indexOf(':');
             if (colon < 0)
             {
@@ -850,56 +849,137 @@ public final class InfobaseSessionSupport
             current.put(key, value);
         }
         unreadableBlocks += addSession(current, currentMalformed, sessions);
-        return new ParsedSessions(sessions, unreadableBlocks, !promptOnly);
+        return new ParsedSessions(sessions, unreadableBlocks, outputBeyondPrompt);
     }
 
     /**
-     * Whether a whole output line is made only of ibcmd's authentication prompt.
+     * Where ibcmd's authentication prompt ends when the output opens with it: the index of the
+     * first line after the prompt, or {@code 0} when the output does not open with one complete
+     * prompt. Only that one prompt is recognised; what follows it, another prompt included, is
+     * list content.
      *
-     * <p>The texts are the platform's own, from the {@code IDS_INFOBASE_AUTHENTICATION_*}
-     * resources of its ibcli module (the same in 8.3.27 and 8.5), in Russian and in English: the
-     * greeting, which ends its line, then the user-name and password prompts, which share the next
-     * one because ibcmd does not echo the answers piped to it. The password prompt that names the
-     * user is accepted too. No session line can match: the line must hold these texts and nothing
-     * else, and ibcmd's session keys are lower-case.
+     * <p>ibcmd prints one of two complete prompts (its code in 8.3.27 and 8.5): the greeting,
+     * which it ends with a line break, and then either the user-name prompt followed by the
+     * password prompt or the password prompt that names a user it already knows. The user-name and
+     * password prompts share a line, because ibcmd does not echo the answers piped to it; split
+     * over two lines they are the same prompt. Each text appears exactly once and in one language;
+     * blank lines between the parts and whitespace around them are allowed. Anything else is not
+     * the prompt: a part on its own, a part repeated, the greeting followed by anything but one
+     * complete prompt, the greeting and the prompts on one line, or the texts of two languages.
+     * The greeting alone is not the prompt either: ibcmd follows it with a prompt or fails.
      *
-     * @param line one line of output
-     * @return {@code true} only for a line of prompt texts
+     * @param lines the output, split into lines
+     * @return the index of the first line after the prompt, or {@code 0} without one
      */
-    static boolean isAuthenticationPromptLine(String line)
+    static int authenticationPromptEnd(String[] lines)
     {
-        return AUTHENTICATION_PROMPT_LINE.matcher(line).matches();
+        int greeting = nextContentLine(lines, 0);
+        if (greeting < 0)
+        {
+            return 0;
+        }
+        for (AuthenticationPrompt prompt : AuthenticationPrompt.values())
+        {
+            if (prompt.greeting.matcher(lines[greeting]).matches())
+            {
+                return prompt.endAfterGreeting(lines, greeting + 1);
+            }
+        }
+        return 0;
+    }
+
+    /** The index of the first non-blank line at or after {@code from}, or {@code -1}. */
+    private static int nextContentLine(String[] lines, int from)
+    {
+        for (int index = from; index < lines.length; index++)
+        {
+            if (!lines[index].isBlank())
+            {
+                return index;
+            }
+        }
+        return -1;
     }
 
     /**
-     * Compiles {@link #AUTHENTICATION_PROMPT_LINE}; each Russian text precedes its English twin.
-     *
-     * <p>Every quantifier is possessive. {@code java.util.regex} recurses once per repetition of a
-     * greedy group, so a line of a couple of thousand prompt texts would overflow the stack, and a
-     * {@link StackOverflowError} is not caught by the {@code catch (RuntimeException)} in
-     * {@link #listSessions}. Possessive matching gives up no match here: no text starts with
-     * whitespace, at most one text can match at any position, and each matches in one way only,
-     * because {@code [^']+} and {@code [^:]+} cannot cross the quote or colon that ends their text.
+     * ibcmd's authentication prompt in one interface language. The texts are the platform's own,
+     * the {@code IDS_INFOBASE_AUTHENTICATION_*} resources of its ibcli module (the same in 8.3.27
+     * and 8.5); ibcmd loads every text of the prompt from that one module, so one prompt is in one
+     * language. Each pattern matches a whole line: its texts and any whitespace around them.
+     * No pattern repeats a group, so even a very long line is judged without deep recursion.
      */
-    private static Pattern authenticationPromptLine()
+    private enum AuthenticationPrompt
     {
-        String token = String.join("|", //$NON-NLS-1$
-            // the greeting
-            Pattern.quote("\u0414\u043B\u044F \u0432\u044B\u043F\u043E\u043B\u043D\u0435\u043D\u0438\u044F " //$NON-NLS-1$
-                + "\u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438 \u0442\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044F " //$NON-NLS-1$
-                + "\u0430\u0443\u0442\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0446\u0438\u044F \u0432 " //$NON-NLS-1$
-                + "\u0438\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u043E\u043D\u043D\u043E\u0439 \u0431\u0430\u0437\u0435"), //$NON-NLS-1$
-            Pattern.quote("Authentication in the infobase is required to perform the operation"), //$NON-NLS-1$
-            // the user-name prompt
-            Pattern.quote("\u0418\u043C\u044F \u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044F:"), //$NON-NLS-1$
-            Pattern.quote("User:"), //$NON-NLS-1$
-            // the password prompt
-            Pattern.quote("\u041F\u0430\u0440\u043E\u043B\u044C:"), //$NON-NLS-1$
-            Pattern.quote("Password:"), //$NON-NLS-1$
-            // the password prompt that names the user
-            Pattern.quote("\u041F\u0430\u0440\u043E\u043B\u044C \u0434\u043B\u044F '") + "[^']+':", //$NON-NLS-1$ //$NON-NLS-2$
+        /** The Russian resources. */
+        RUSSIAN("\u0414\u043B\u044F \u0432\u044B\u043F\u043E\u043B\u043D\u0435\u043D\u0438\u044F " //$NON-NLS-1$
+            + "\u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438 \u0442\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044F " //$NON-NLS-1$
+            + "\u0430\u0443\u0442\u0435\u043D\u0442\u0438\u0444\u0438\u043A\u0430\u0446\u0438\u044F \u0432 " //$NON-NLS-1$
+            + "\u0438\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u043E\u043D\u043D\u043E\u0439 \u0431\u0430\u0437\u0435", //$NON-NLS-1$
+            "\u0418\u043C\u044F \u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044F:", //$NON-NLS-1$
+            "\u041F\u0430\u0440\u043E\u043B\u044C:", //$NON-NLS-1$
+            Pattern.quote("\u041F\u0430\u0440\u043E\u043B\u044C \u0434\u043B\u044F '") + "[^']+':"), //$NON-NLS-1$ //$NON-NLS-2$
+        /** The English resources; the password prompt that names the user does not quote the name. */
+        ENGLISH("Authentication in the infobase is required to perform the operation", //$NON-NLS-1$
+            "User:", //$NON-NLS-1$
+            "Password:", //$NON-NLS-1$
             Pattern.quote("Password for ") + "[^:]+:"); //$NON-NLS-1$ //$NON-NLS-2$
-        return Pattern.compile("\\s*+(?:" + token + ")(?:\\s*+(?:" + token + "))*+\\s*+"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        /** The greeting. */
+        private final Pattern greeting;
+
+        /** The user-name prompt and the password prompt on one line. */
+        private final Pattern userAndPassword;
+
+        /** The user-name prompt alone. */
+        private final Pattern user;
+
+        /** The password prompt alone. */
+        private final Pattern password;
+
+        /** The password prompt that names the user. */
+        private final Pattern passwordForUser;
+
+        AuthenticationPrompt(String greetingText, String userPrompt, String passwordPrompt,
+            String passwordForUserRegex)
+        {
+            greeting = line(Pattern.quote(greetingText));
+            userAndPassword = line(Pattern.quote(userPrompt) + "\\s*" //$NON-NLS-1$
+                + Pattern.quote(passwordPrompt));
+            user = line(Pattern.quote(userPrompt));
+            password = line(Pattern.quote(passwordPrompt));
+            passwordForUser = line(passwordForUserRegex);
+        }
+
+        /**
+         * The index of the first line after the prompt whose greeting stands right before
+         * {@code from}, or {@code 0} when one complete prompt does not follow that greeting.
+         */
+        int endAfterGreeting(String[] lines, int from)
+        {
+            int prompts = nextContentLine(lines, from);
+            if (prompts < 0)
+            {
+                return 0;
+            }
+            if (userAndPassword.matcher(lines[prompts]).matches()
+                || passwordForUser.matcher(lines[prompts]).matches())
+            {
+                return prompts + 1;
+            }
+            if (!user.matcher(lines[prompts]).matches())
+            {
+                return 0;
+            }
+            int passwordLine = nextContentLine(lines, prompts + 1);
+            return passwordLine >= 0 && password.matcher(lines[passwordLine]).matches()
+                ? passwordLine + 1 : 0;
+        }
+
+        /** One whole line holding the given text, with any whitespace around it. */
+        private static Pattern line(String text)
+        {
+            return Pattern.compile("\\s*" + text + "\\s*"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
     }
 
     /** Converts a parsed block, returning one when any content cannot form a usable session. */

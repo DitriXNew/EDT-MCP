@@ -18,8 +18,11 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -35,7 +38,8 @@ import com.ditrix.edt.mcp.server.utils.InfobaseSessionSupport.SessionInfo;
  * output.
  *
  * <p>The prompt texts are the platform's own (the ibcli resources of 8.3.27 and 8.5, Russian and
- * English); the Russian form is exactly what #698's reporter found in the EDT log.
+ * English); the Russian form is exactly what #698's reporter found in the EDT log. Only one
+ * complete prompt at the start is skipped: a fragment or a repetition of it is list content.
  */
 public class InfobaseSessionOutputTest
 {
@@ -63,6 +67,25 @@ public class InfobaseSessionOutputTest
 
     /** The platform's password prompt that names the user. */
     private static final String RU_PASSWORD_FOR_ADMINISTRATOR = "\u041F\u0430\u0440\u043E\u043B\u044C \u0434\u043B\u044F '\u0410\u0434\u043C\u0438\u043D\u0438\u0441\u0442\u0440\u0430\u0442\u043E\u0440': "; //$NON-NLS-1$
+
+    /**
+     * The user-name prompt alone: ibcmd asks for the user name first when it does not know it, and
+     * the password prompt follows on the same line.
+     */
+    private static final String RU_USER_PROMPT = "\u0418\u043C\u044F \u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044F: "; //$NON-NLS-1$
+
+    /** The password prompt alone. */
+    private static final String RU_PASSWORD_PROMPT = "\u041F\u0430\u0440\u043E\u043B\u044C: "; //$NON-NLS-1$
+
+    /** The same prompts, alone, in the platform's English resources. */
+    private static final String EN_USER_PROMPT = "User: "; //$NON-NLS-1$
+    private static final String EN_PASSWORD_PROMPT = "Password: "; //$NON-NLS-1$
+
+    /** The English password prompt that names the user; it does not quote the name. */
+    private static final String EN_PASSWORD_FOR_ADMINISTRATOR = "Password for Administrator: "; //$NON-NLS-1$
+
+    /** A line that is no part of ibcmd's prompt: the start of some other message. */
+    private static final String UNKNOWN_LINE = "The connection to the server is unstable"; //$NON-NLS-1$
 
     /** The OEM code page ibcmd output was always read with on Windows. */
     private static final Charset CP866 = Charset.forName("CP866"); //$NON-NLS-1$
@@ -150,7 +173,7 @@ public class InfobaseSessionOutputTest
     @Test
     public void anUnrecognisedLeadingLineStillMakesTheListUnreadable()
     {
-        String output = "The connection to the server is unstable\r\n" //$NON-NLS-1$
+        String output = UNKNOWN_LINE + "\r\n" //$NON-NLS-1$
             + sessionBlock(FIRST_ID, 5, "Operator", "1CV8C"); //$NON-NLS-1$ //$NON-NLS-2$
 
         ReadResult result = InfobaseSessionSupport.readSessionsOutput(output);
@@ -349,59 +372,332 @@ public class InfobaseSessionOutputTest
         }
     }
 
+    /** Each complete prompt ends right after its last line; blank lines and whitespace may surround its parts. */
     @Test
-    public void thePlatformsPromptTextsMakePromptLines()
+    public void eachCompletePromptEndsRightAfterItsLastLine()
     {
-        assertTrue(InfobaseSessionSupport.isAuthenticationPromptLine(RU_GREETING));
-        assertTrue(InfobaseSessionSupport.isAuthenticationPromptLine(RU_PROMPTS));
-        assertTrue(InfobaseSessionSupport.isAuthenticationPromptLine(EN_GREETING));
-        assertTrue(InfobaseSessionSupport.isAuthenticationPromptLine(EN_PROMPTS));
-        assertTrue(InfobaseSessionSupport.isAuthenticationPromptLine(RU_PASSWORD_FOR_ADMINISTRATOR));
-        assertTrue(InfobaseSessionSupport.isAuthenticationPromptLine("Password for Administrator: ")); //$NON-NLS-1$
+        assertEquals("greeting, user and password on one line", 2, //$NON-NLS-1$
+            promptEnd(RU_GREETING, RU_PROMPTS, "session : " + FIRST_ID)); //$NON-NLS-1$
+        assertEquals("the same in English", 2, promptEnd(EN_GREETING, EN_PROMPTS)); //$NON-NLS-1$
+        assertEquals("user and password on two lines", 3, //$NON-NLS-1$
+            promptEnd(RU_GREETING, RU_USER_PROMPT, RU_PASSWORD_PROMPT));
+        assertEquals("the password prompt that names the user", 2, //$NON-NLS-1$
+            promptEnd(RU_GREETING, RU_PASSWORD_FOR_ADMINISTRATOR));
+        assertEquals("the same in English", 2, //$NON-NLS-1$
+            promptEnd(EN_GREETING, EN_PASSWORD_FOR_ADMINISTRATOR));
+        assertEquals("blank lines and whitespace around the parts", 5, //$NON-NLS-1$
+            promptEnd("", "  " + EN_GREETING + "\t", "", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                "\t" + EN_USER_PROMPT, EN_PASSWORD_PROMPT, "")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    /** Without one complete prompt at its start, the output is read from its first line. */
     @Test
-    public void nothingElseMakesAPromptLine()
+    public void nothingButOneCompletePromptIsThePrompt()
     {
-        assertFalse("a session line", InfobaseSessionSupport.isAuthenticationPromptLine( //$NON-NLS-1$
-            "session                          : " + FIRST_ID)); //$NON-NLS-1$
-        assertFalse("the prompt is matched exactly, and ibcmd's keys are lower-case", //$NON-NLS-1$
-            InfobaseSessionSupport.isAuthenticationPromptLine("user: password:")); //$NON-NLS-1$
-        assertFalse("an echoed answer is not the prompt", //$NON-NLS-1$
-            InfobaseSessionSupport.isAuthenticationPromptLine(RU_PROMPTS + ADMINISTRATOR));
-        assertFalse("the refusal is not the prompt", //$NON-NLS-1$
-            InfobaseSessionSupport.isAuthenticationPromptLine(RU_AUTHENTICATION_FAILED));
+        assertEquals("the greeting alone", 0, promptEnd(RU_GREETING)); //$NON-NLS-1$
+        assertEquals("the greeting and the user-name prompt", 0, //$NON-NLS-1$
+            promptEnd(RU_GREETING, RU_USER_PROMPT));
+        assertEquals("the prompts before the greeting", 0, promptEnd(RU_PROMPTS, RU_GREETING)); //$NON-NLS-1$
+        assertEquals("the texts are matched case-sensitively", 0, //$NON-NLS-1$
+            promptEnd(EN_GREETING, "user: password: ")); //$NON-NLS-1$
+        assertEquals("an echoed answer", 0, promptEnd(RU_GREETING, RU_PROMPTS + ADMINISTRATOR)); //$NON-NLS-1$
+        assertEquals("the refusal", 0, promptEnd(RU_GREETING, RU_AUTHENTICATION_FAILED)); //$NON-NLS-1$
+        assertEquals("a line before the greeting", 0, //$NON-NLS-1$
+            promptEnd(UNKNOWN_LINE, EN_GREETING, EN_PROMPTS));
+        assertEquals("the password prompt twice", 0, //$NON-NLS-1$
+            promptEnd(RU_GREETING, RU_PROMPTS + RU_PASSWORD_PROMPT));
+        assertEquals("the bare password prompt after the one that names the user", 0, //$NON-NLS-1$
+            promptEnd(EN_GREETING, EN_PASSWORD_FOR_ADMINISTRATOR + EN_PASSWORD_PROMPT));
+        assertEquals("the password prompt that names the user, twice", 0, //$NON-NLS-1$
+            promptEnd(RU_GREETING, RU_PASSWORD_FOR_ADMINISTRATOR + RU_PASSWORD_FOR_ADMINISTRATOR));
+        assertEquals("a session line", 0, //$NON-NLS-1$
+            promptEnd("session                          : " + FIRST_ID)); //$NON-NLS-1$
+        assertEquals("no output", 0, promptEnd("")); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
-     * Each repetition of the prompt grammar is matched without growing the stack, so even a line
-     * far longer than any prompt ibcmd prints gets a verdict: a {@link StackOverflowError} would
-     * escape the list's {@code catch (RuntimeException)}.
+     * Split over two lines, the prompt is the user-name prompt and then the bare password prompt:
+     * any other line in between or in its place, or text after it, makes no prompt.
      */
     @Test
-    public void aVeryLongPromptLineIsJudgedWithoutExhaustingTheStack()
+    public void theSplitPromptIsTheUserPromptAndThenExactlyThePasswordPrompt()
     {
-        String repeated = EN_PROMPTS.repeat(50_000);
-
-        assertTrue(InfobaseSessionSupport.isAuthenticationPromptLine(repeated));
-        assertFalse("other text after the repeated prompts still ends the prompt", //$NON-NLS-1$
-            InfobaseSessionSupport.isAuthenticationPromptLine(repeated + "x")); //$NON-NLS-1$
+        assertEquals("another line after the user-name prompt", 0, //$NON-NLS-1$
+            promptEnd(EN_GREETING, EN_USER_PROMPT, UNKNOWN_LINE));
+        assertEquals("another line before the password prompt", 0, //$NON-NLS-1$
+            promptEnd(EN_GREETING, EN_USER_PROMPT, UNKNOWN_LINE, EN_PASSWORD_PROMPT));
+        assertEquals("text after the password prompt", 0, //$NON-NLS-1$
+            promptEnd(EN_GREETING, EN_USER_PROMPT, EN_PASSWORD_PROMPT + "s3cret")); //$NON-NLS-1$
+        assertEquals("the one-line prompt after the user-name prompt", 0, //$NON-NLS-1$
+            promptEnd(EN_GREETING, EN_USER_PROMPT, EN_PROMPTS));
+        assertEquals("the password prompt that names the user after the user-name prompt", 0, //$NON-NLS-1$
+            promptEnd(EN_GREETING, EN_USER_PROMPT, EN_PASSWORD_FOR_ADMINISTRATOR));
     }
 
-    /** The same through the list: a very long prompt before it is skipped, and the list is read. */
+    /**
+     * The user-name prompt on its own is a fragment of ibcmd's prompt, not the prompt: a run that
+     * printed only it has not shown that the list is empty.
+     */
     @Test
-    public void aVeryLongPromptBeforeTheListIsSkippedWithoutExhaustingTheStack()
+    public void theUserPromptAloneIsNotAnEmptyList()
     {
-        String output = RU_GREETING + "\r\n" + RU_PROMPTS.repeat(50_000) + "\r\n" //$NON-NLS-1$ //$NON-NLS-2$
-            + sessionBlock(FIRST_ID, 249, ADMINISTRATOR, "1CV8C"); //$NON-NLS-1$
+        assertOneUnreadableBlock(listedWithExitZero(EN_USER_PROMPT + "\r\n")); //$NON-NLS-1$
+    }
 
-        ReadResult result = InfobaseSessionSupport.listOutcome(
-            new InfobaseSessionSupport.CommandExecution(0, output, "", false)); //$NON-NLS-1$
+    @Test
+    public void thePasswordPromptAloneIsNotAnEmptyList()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(EN_PASSWORD_PROMPT + "\r\n")); //$NON-NLS-1$
+    }
 
-        assertTrue("a long prompt is still a prompt: " + result.unreachableReason(), //$NON-NLS-1$
+    /** ibcmd follows its greeting with a prompt or fails, so the greeting alone proves nothing. */
+    @Test
+    public void theGreetingAloneIsNotAnEmptyList()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(RU_GREETING + "\r\n")); //$NON-NLS-1$
+    }
+
+    /** After the user-name prompt ibcmd always asks for the password: without it the prompt is cut short. */
+    @Test
+    public void theGreetingWithOnlyTheUserPromptIsNotAnEmptyList()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(
+            RU_GREETING + "\r\n" + RU_USER_PROMPT + "\r\n")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Right after its greeting ibcmd asks for the user name, or names the user whose password it
+     * asks for; a bare password prompt there is not its prompt.
+     */
+    @Test
+    public void theGreetingWithOnlyTheBarePasswordPromptIsNotAnEmptyList()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(
+            RU_GREETING + "\r\n" + RU_PASSWORD_PROMPT + "\r\n")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Prompt texts repeated on a line, as truncated or garbled output could show them, are not one prompt. */
+    @Test
+    public void repeatedPromptsAreNotAnEmptyList()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(EN_PROMPTS.repeat(3) + "\r\n")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void theUserPromptTwiceIsNotThePrompt()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(RU_GREETING + "\r\n" //$NON-NLS-1$
+            + RU_USER_PROMPT + RU_PROMPTS + "\r\n")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void twoGreetingsAreNotOnePrompt()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(RU_GREETING + "\r\n" + RU_GREETING + "\r\n" //$NON-NLS-1$ //$NON-NLS-2$
+            + RU_PROMPTS + "\r\n")); //$NON-NLS-1$
+    }
+
+    /** The prompt is recognised once: a second one after it is list content. */
+    @Test
+    public void theWholePromptTwiceIsNotOnePrompt()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(promptOnly() + promptOnly()));
+    }
+
+    /** ibcmd ends its greeting with a line break, so the greeting and the prompts never share a line. */
+    @Test
+    public void theGreetingAndThePromptsOnOneLineAreNotThePrompt()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(
+            RU_GREETING + " " + RU_PROMPTS + "\r\n")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** ibcmd prints all the texts of its prompt in one language. */
+    @Test
+    public void aPromptMixingTwoLanguagesIsNotThePrompt()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(
+            RU_GREETING + "\r\n" + EN_PROMPTS + "\r\n")); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** A second password prompt after the one that names the user is a repetition, not part of one prompt. */
+    @Test
+    public void aPasswordPromptAfterThePasswordForTheUserIsNotThePrompt()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(RU_GREETING + "\r\n" //$NON-NLS-1$
+            + RU_PASSWORD_FOR_ADMINISTRATOR + RU_PASSWORD_PROMPT + "\r\n")); //$NON-NLS-1$
+    }
+
+    /**
+     * After the user-name prompt ibcmd asks for the password, so a refusal right after it leaves the
+     * prompt cut short: the run has not shown that the list is empty.
+     */
+    @Test
+    public void aRefusalRightAfterTheUserPromptIsNotAnEmptyList()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(RU_GREETING + "\r\n" + RU_USER_PROMPT + "\r\n" //$NON-NLS-1$ //$NON-NLS-2$
+            + RU_AUTHENTICATION_FAILED + "\r\n")); //$NON-NLS-1$
+    }
+
+    /** The password prompt repeated on the prompt line is a repetition, not part of one prompt. */
+    @Test
+    public void thePasswordPromptTwiceIsNotOnePrompt()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(RU_GREETING + "\r\n" //$NON-NLS-1$
+            + RU_PROMPTS + RU_PASSWORD_PROMPT + "\r\n")); //$NON-NLS-1$
+    }
+
+    /** Only a prompt at the start is skipped: after an unknown line, even a complete prompt is list content. */
+    @Test
+    public void anUnknownLineBeforeACompletePromptIsNotAnEmptyList()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(UNKNOWN_LINE + "\r\n" + EN_GREETING + "\r\n" //$NON-NLS-1$ //$NON-NLS-2$
+            + EN_PROMPTS + "\r\n")); //$NON-NLS-1$
+    }
+
+    /**
+     * Thousands of prompt texts on one line after the greeting are not a prompt either, and the
+     * prompt patterns judge that line at once: a {@link StackOverflowError} would escape the list's
+     * {@code catch (RuntimeException)}.
+     */
+    @Test(timeout = 10_000)
+    public void thousandsOfRepeatedPromptsAreUnreadableAndJudgedQuickly()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(EN_GREETING + "\r\n" //$NON-NLS-1$
+            + EN_PROMPTS.repeat(50_000) + "\r\n")); //$NON-NLS-1$
+    }
+
+    /** The same in Russian and before a list: the list behind such a line is not read either. */
+    @Test(timeout = 10_000)
+    public void aHugeRepeatedPromptBeforeTheListMakesItUnreadable()
+    {
+        assertOneUnreadableBlock(listedWithExitZero(RU_GREETING + "\r\n" //$NON-NLS-1$
+            + RU_PROMPTS.repeat(50_000) + "\r\n" //$NON-NLS-1$
+            + sessionBlock(FIRST_ID, 249, ADMINISTRATOR, "1CV8C"))); //$NON-NLS-1$
+    }
+
+    /** The password prompt that names a user ibcmd already knows is the other complete prompt. */
+    @Test
+    public void thePasswordPromptThatNamesTheUserAloneIsAReadableEmptyList()
+    {
+        ReadResult result = listedWithExitZero(
+            RU_GREETING + "\r\n" + RU_PASSWORD_FOR_ADMINISTRATOR + "\r\n"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("one complete prompt proves an empty list: " + result.unreachableReason(), //$NON-NLS-1$
+            result.isReadable());
+        assertTrue(result.sessions().isEmpty());
+    }
+
+    @Test
+    public void theEnglishPasswordPromptThatNamesTheUserAloneIsAReadableEmptyList()
+    {
+        ReadResult result = listedWithExitZero(
+            EN_GREETING + "\n" + EN_PASSWORD_FOR_ADMINISTRATOR + "\n"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertTrue("one complete prompt proves an empty list: " + result.unreachableReason(), //$NON-NLS-1$
+            result.isReadable());
+        assertTrue(result.sessions().isEmpty());
+    }
+
+    @Test
+    public void theListAfterThePasswordPromptThatNamesTheUserIsRead()
+    {
+        ReadResult result = listedWithExitZero(RU_GREETING + "\r\n" //$NON-NLS-1$
+            + RU_PASSWORD_FOR_ADMINISTRATOR + "\r\n" //$NON-NLS-1$
+            + sessionBlock(FIRST_ID, 249, ADMINISTRATOR, "1CV8C")); //$NON-NLS-1$
+
+        assertTrue("a list behind the prompt must be readable: " + result.unreachableReason(), //$NON-NLS-1$
             result.isReadable());
         assertEquals(1, result.sessions().size());
         assertEquals(FIRST_ID, result.sessions().get(0).sessionId());
+    }
+
+    /** The user-name and password prompts are the same prompt when a line break separates them. */
+    @Test
+    public void thePromptsSplitOverTwoLinesAreThePrompt()
+    {
+        InfobaseSessionSupport.ParsedSessions parsed = InfobaseSessionSupport.parseSessions(RU_GREETING
+            + "\r\n" + RU_USER_PROMPT + "\r\n" + RU_PASSWORD_PROMPT + "\r\n" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + sessionBlock(FIRST_ID, 249, ADMINISTRATOR, "1CV8C")); //$NON-NLS-1$
+
+        assertEquals("the split prompt must not be counted as an unreadable session block", 0, //$NON-NLS-1$
+            parsed.unreadableBlocks());
+        assertEquals(1, parsed.sessions().size());
+        assertEquals(FIRST_ID, parsed.sessions().get(0).sessionId());
+    }
+
+    @Test
+    public void thePromptsSplitOverTwoLinesAloneAreAReadableEmptyList()
+    {
+        ReadResult result = listedWithExitZero(EN_GREETING + "\n" + EN_USER_PROMPT + "\n" //$NON-NLS-1$ //$NON-NLS-2$
+            + EN_PASSWORD_PROMPT + "\n"); //$NON-NLS-1$
+
+        assertTrue("one complete prompt proves an empty list: " + result.unreachableReason(), //$NON-NLS-1$
+            result.isReadable());
+        assertTrue(result.sessions().isEmpty());
+    }
+
+    /** Blank lines may stand before the prompt, between its parts and after it. */
+    @Test
+    public void blankLinesAroundThePromptPartsAreAllowed()
+    {
+        ReadResult result = listedWithExitZero("\r\n" + RU_GREETING + "\r\n\r\n" //$NON-NLS-1$ //$NON-NLS-2$
+            + RU_USER_PROMPT + "\r\n\r\n" + RU_PASSWORD_PROMPT + "\r\n\r\n" //$NON-NLS-1$ //$NON-NLS-2$
+            + sessionBlock(FIRST_ID, 249, ADMINISTRATOR, "1CV8C")); //$NON-NLS-1$
+
+        assertTrue("blank lines do not end the prompt: " + result.unreachableReason(), //$NON-NLS-1$
+            result.isReadable());
+        assertEquals(1, result.sessions().size());
+        assertEquals(FIRST_ID, result.sessions().get(0).sessionId());
+    }
+
+    /**
+     * The rule rather than a list of shapes: every one-line edit of a complete prompt that is not
+     * itself a complete prompt is not a proven empty list. A one-line edit here is exactly one of
+     * these: a line deleted or duplicated; a prompt part (the greeting, the user-name prompt, the
+     * password prompt, the user-name and password prompts on one line, the password prompt that
+     * names the user, in either language) or an unknown line inserted anywhere, put in place of a
+     * line, or glued before or after one; other text before or after a line; and "x" glued to the
+     * last visible character of a line, since the prompts end in a space that the other suffixes
+     * keep. Other edits of one line, such as a changed character inside a prompt part, are not
+     * generated. None of the edits adds a blank line or bare whitespace, so the only edits skipped
+     * are the ones that give a complete prompt back: the prompt itself or another of the six.
+     *
+     * <p>No edit holds a session block, so a readable verdict could only be a proven empty list:
+     * each edit must be unreadable, as any output whose first block is not a session always was.
+     */
+    @Test
+    public void everyOneLineEditOfACompletePromptIsNotAnEmptyList()
+    {
+        List<List<String>> complete = completePrompts();
+        int checked = 0;
+        for (List<String> prompt : complete)
+        {
+            ReadResult alone = listedWithExitZero(asOutput(prompt));
+            assertTrue("a complete prompt alone is a readable empty list: " + prompt, //$NON-NLS-1$
+                alone.isReadable() && alone.sessions().isEmpty());
+            for (List<String> edit : oneLineEdits(prompt))
+            {
+                if (complete.contains(edit))
+                {
+                    continue;
+                }
+                checked++;
+                assertFalse("not one complete prompt, yet a proven empty list: " + edit, //$NON-NLS-1$
+                    listedWithExitZero(asOutput(edit)).isReadable());
+            }
+        }
+        assertTrue("too few edits checked: " + checked, checked > 600); //$NON-NLS-1$
+    }
+
+    /** The password prompt that names the user names someone: with an empty name it is not the prompt. */
+    @Test
+    public void thePasswordPromptThatNamesNoUserIsNotThePrompt()
+    {
+        assertEquals(0, promptEnd(RU_GREETING,
+            RU_PASSWORD_FOR_ADMINISTRATOR.replace(ADMINISTRATOR, ""))); //$NON-NLS-1$
+        assertEquals(0, promptEnd(EN_GREETING,
+            EN_PASSWORD_FOR_ADMINISTRATOR.replace("Administrator", ""))); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** The prompt alone, as a list without sessions prints it. */
@@ -414,6 +710,112 @@ public class InfobaseSessionOutputTest
     private static String reportedOutput()
     {
         return promptOnly() + sessionBlock(FIRST_ID, 249, ADMINISTRATOR, "1CV8C"); //$NON-NLS-1$
+    }
+
+    /** Where the authentication prompt ends in output made of these lines. */
+    private static int promptEnd(String... lines)
+    {
+        return InfobaseSessionSupport.authenticationPromptEnd(lines);
+    }
+
+    /** A completed run that exited with 0 and printed this, judged as the list judges every run. */
+    private static ReadResult listedWithExitZero(String stdout)
+    {
+        return InfobaseSessionSupport.listOutcome(
+            new InfobaseSessionSupport.CommandExecution(0, stdout, "", false)); //$NON-NLS-1$
+    }
+
+    /**
+     * ibcmd's six complete prompts: in each language the greeting and then the user-name and
+     * password prompts on one line, the same on two lines, or the password prompt that names the user.
+     */
+    private static List<List<String>> completePrompts()
+    {
+        return List.of(List.of(RU_GREETING, RU_PROMPTS),
+            List.of(RU_GREETING, RU_USER_PROMPT, RU_PASSWORD_PROMPT),
+            List.of(RU_GREETING, RU_PASSWORD_FOR_ADMINISTRATOR),
+            List.of(EN_GREETING, EN_PROMPTS),
+            List.of(EN_GREETING, EN_USER_PROMPT, EN_PASSWORD_PROMPT),
+            List.of(EN_GREETING, EN_PASSWORD_FOR_ADMINISTRATOR));
+    }
+
+    /** Every part of ibcmd's prompts in both languages, and a line that is no part of them. */
+    private static List<String> linesAnEditMayAdd()
+    {
+        return List.of(RU_GREETING, RU_USER_PROMPT, RU_PASSWORD_PROMPT, RU_PROMPTS,
+            RU_PASSWORD_FOR_ADMINISTRATOR, EN_GREETING, EN_USER_PROMPT, EN_PASSWORD_PROMPT, EN_PROMPTS,
+            EN_PASSWORD_FOR_ADMINISTRATOR, UNKNOWN_LINE);
+    }
+
+    /** Every output that differs from these lines by one edited line of the kinds the test that uses it lists. */
+    private static Set<List<String>> oneLineEdits(List<String> lines)
+    {
+        Set<List<String>> edits = new LinkedHashSet<>();
+        for (int index = 0; index < lines.size(); index++)
+        {
+            String line = lines.get(index);
+            edits.add(removed(lines, index));
+            edits.add(inserted(lines, index, line));
+            for (String text : List.of("x", "x ", " x")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            {
+                edits.add(replaced(lines, index, text + line));
+                edits.add(replaced(lines, index, line + text));
+            }
+            edits.add(replaced(lines, index, line.strip() + "x")); //$NON-NLS-1$
+        }
+        for (String added : linesAnEditMayAdd())
+        {
+            for (int index = 0; index <= lines.size(); index++)
+            {
+                edits.add(inserted(lines, index, added));
+            }
+            for (int index = 0; index < lines.size(); index++)
+            {
+                String line = lines.get(index);
+                edits.add(replaced(lines, index, added));
+                edits.add(replaced(lines, index, added + line));
+                edits.add(replaced(lines, index, line + added));
+            }
+        }
+        return edits;
+    }
+
+    private static List<String> removed(List<String> lines, int index)
+    {
+        List<String> edit = new ArrayList<>(lines);
+        edit.remove(index);
+        return edit;
+    }
+
+    private static List<String> inserted(List<String> lines, int index, String line)
+    {
+        List<String> edit = new ArrayList<>(lines);
+        edit.add(index, line);
+        return edit;
+    }
+
+    private static List<String> replaced(List<String> lines, int index, String line)
+    {
+        List<String> edit = new ArrayList<>(lines);
+        edit.set(index, line);
+        return edit;
+    }
+
+    /** These lines as ibcmd output: each ends with a line break. */
+    private static String asOutput(List<String> lines)
+    {
+        return String.join("\r\n", lines) + "\r\n"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The verdict ibcmd output got before #698 whenever its first block was not a session: one
+     * unreadable block, so not a proven empty list.
+     */
+    private static void assertOneUnreadableBlock(ReadResult result)
+    {
+        assertFalse("must not be a proven empty list: " + result.sessions(), result.isReadable()); //$NON-NLS-1$
+        assertNull(result.sessions());
+        assertEquals(ONE_UNREADABLE_BLOCK, result.unreachableReason());
     }
 
     /** One ibcmd session block in the column-padded layout a real server prints. */
