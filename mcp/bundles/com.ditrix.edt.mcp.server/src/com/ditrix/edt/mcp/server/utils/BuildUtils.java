@@ -72,8 +72,8 @@ public final class BuildUtils
 
     /**
      * Slot-key prefix of a bounded read of a project's files - a module's state line read back from a {@code .mdo},
-     * and a round of the new-extension root look at the root file and the files beside it - apart from both waits
-     * and the marker read.
+     * and each read of the new-extension root look, of the root file and of each file beside it - apart from both
+     * waits and the marker read.
      */
     private static final String STATE_LINE_READ_SLOT_PREFIX = "mdo-state-line:"; //$NON-NLS-1$
 
@@ -673,8 +673,8 @@ public final class BuildUtils
 
     /**
      * Claims the single slot for a bounded read of a project's files - a module's state line read back from a
-     * {@code .mdo} (AdoptedModuleState), and a round of ExtensionRootBuilder's look at a new extension's root file and
-     * the files beside it, which share it: both read files under the project's location, and a file system that does
+     * {@code .mdo} (AdoptedModuleState), and each read of ExtensionRootBuilder's look at a new extension's root file and
+     * at each file beside it, which share it: both read files under the project's location, and a file system that does
      * not answer one of them answers neither - so reads stuck in it do not pile up one job per write: a read its
      * deadline cut off keeps its job until the file system answers. A key of its own, so it never refuses - and is
      * never refused by - the export wait, the validation wait or the marker read.

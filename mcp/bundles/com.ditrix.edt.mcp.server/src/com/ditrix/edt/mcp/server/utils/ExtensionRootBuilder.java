@@ -15,8 +15,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongFunction;
 import java.util.function.Predicate;
-import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IPath;
@@ -84,9 +84,10 @@ public final class ExtensionRootBuilder
         "<keepMappingToExtendedConfigurationObjectsByIDs>true</keepMappingToExtendedConfigurationObjectsByIDs>"; //$NON-NLS-1$
 
     /**
-     * The least time the look's first round is given, also when EDT's export wait used the whole budget: the root file
-     * still gets that one bounded look after the wait - the look always read it at least once after the wait - so a
-     * queue EDT did not drain in time cannot alone keep a root that is on disk from being confirmed.
+     * The part of the look's budget it keeps from EDT's export wait for the root file ({@link #confirmOnDisk}): the wait
+     * is given the rest, so a wait that used all it was given still leaves the root file a bounded look after it - a
+     * queue EDT did not drain in time cannot alone keep a root that is on disk from being confirmed - and the look gives
+     * it that look within its budget, not past it.
      */
     static final long FIRST_LOOK_MIN_MS = 1_000L;
 
@@ -431,30 +432,43 @@ public final class ExtensionRootBuilder
     {
         /** Whether one read of the root file showed the wizard's shape; the files beside it never change this. */
         public final boolean confirmed;
-        /** What the last read did not show - all of it when that read did not complete in time; empty when confirmed. */
+        /**
+         * What the last completed read of the root file did not show - all of it when no read of it completed in time;
+         * empty when confirmed.
+         */
         public final List<String> missing;
-        /** Whether the last read found the file. */
+        /** Whether the last completed read of the root file found it; {@code false} when no read of it completed. */
         public final boolean fileFound;
-        /** How EDT's export queue answered. */
+        /** How EDT's export queue answered - PENDING, not seen draining, when the budget left it no wait. */
         public final DiskExportState exportState;
-        /** Why the last read failed, or {@code null}. */
+        /** Why the last completed read of the root file failed, or {@code null}. */
         public final String readFailure;
         /**
-         * Whether the last read of the root file completed in time: {@code false} when what was left of the budget cut
-         * it, or it was not started because an earlier read of the project's files had not returned - a read that says
-         * nothing either way. Always {@code true} once confirmed.
+         * Whether a read of the root file completed in time: {@code false} only when none did - each did not answer in
+         * time, or was not started because nothing of the budget was left or an earlier read of the project's files had
+         * not returned: reads that say nothing either way. A read that did not complete changes nothing that an
+         * earlier, completed one found: the root is described by its last completed read, and the description says
+         * when a later read did not complete ({@link #lastReadCompleted}). Always {@code true} once confirmed.
          */
         public final boolean readInTime;
+        /**
+         * Whether the root file's last read - the last one the look made while the root was not confirmed - completed
+         * in time; {@code false} when it did not, or no read of it was made. When a read completed but a later one did
+         * not, the root is described by a read made before that later one - not at the end of the budget - and
+         * {@link #describe()} says so. Always {@code true} once confirmed.
+         */
+        public final boolean lastReadCompleted;
         /** How long the look was allowed to take. */
         public final long budgetMs;
         /**
-         * The files looked for beside the root that no round of the look saw - not seen on disk, or not looked at in time;
+         * The files looked for beside the root that no read of the look saw - not seen on disk, or not looked at in time;
          * empty when all were seen or none was asked.
          */
         public final List<String> missingFiles;
 
         private RootOnDisk(boolean confirmed, List<String> missing, boolean fileFound, DiskExportState exportState, // NOSONAR one immutable value per field
-            String readFailure, boolean readInTime, long budgetMs, List<String> missingFiles)
+            String readFailure, boolean readInTime, boolean lastReadCompleted, long budgetMs,
+            List<String> missingFiles)
         {
             this.confirmed = confirmed;
             this.missing = Collections.unmodifiableList(missing);
@@ -462,6 +476,7 @@ public final class ExtensionRootBuilder
             this.exportState = exportState;
             this.readFailure = readFailure;
             this.readInTime = readInTime;
+            this.lastReadCompleted = lastReadCompleted;
             this.budgetMs = budgetMs;
             this.missingFiles = Collections.unmodifiableList(missingFiles);
         }
@@ -479,114 +494,139 @@ public final class ExtensionRootBuilder
                 return ROOT_FILE + " could not be read in time (the read did not complete, or an earlier read of the " //$NON-NLS-1$
                     + "project's files had not returned)"; //$NON-NLS-1$
             }
+            String found;
             if (readFailure != null)
             {
-                return ROOT_FILE + " could not be read (" + readFailure + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+                found = ROOT_FILE + " could not be read (" + readFailure + ")"; //$NON-NLS-1$ //$NON-NLS-2$
             }
-            if (!fileFound)
+            else if (!fileFound)
             {
-                return ROOT_FILE + " was not found on disk"; //$NON-NLS-1$
+                found = ROOT_FILE + " was not found on disk"; //$NON-NLS-1$
             }
-            return ROOT_FILE + " does not show " + String.join(" or ", missing) + " yet"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            else
+            {
+                found = ROOT_FILE + " does not show " + String.join(" or ", missing) + " yet"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            }
+            // What a completed read found, made before a later read that did not complete: that later read is said too.
+            return lastReadCompleted ? found : found + "; a later read of it did not complete"; //$NON-NLS-1$
         }
     }
 
     /**
-     * Confirms a new root on disk, bounded: waits for EDT's export queue ({@code exportWait}, which the caller bounds by
-     * {@code budgetMs} too), then reads the root file until one read shows the wizard's shape - it is not read again
-     * after that - and looks, within the SAME budget, for the files saved beside it - a new extension's two command
-     * interface files ({@link #COMMAND_INTERFACE_FILES}) - until each has been seen once. The FILE is the evidence, not
-     * the queue: a drained queue also drains a write that failed, so "drained" alone never confirms anything. Only the
-     * root decides {@link RootOnDisk#confirmed}; a file no round saw is named in {@link RootOnDisk#missingFiles}, and a
-     * file whose check fails counts as not seen.
+     * Confirms a new root on disk, bounded: waits for EDT's export queue ({@code exportWait}), then reads the root file
+     * until one read shows the wizard's shape - it is not read again after that - and looks, within the SAME budget, for
+     * the files saved beside it - a new extension's two command interface files ({@link #COMMAND_INTERFACE_FILES}) -
+     * until each has been seen once. The FILE is the evidence, not the queue: a drained queue also drains a write that
+     * failed, so "drained" alone never confirms anything. Only the root decides {@link RootOnDisk#confirmed}; a file no
+     * read saw is named in {@link RootOnDisk#missingFiles}, and a file whose check fails counts as not seen.
      * <p>
-     * Every look at the file system is bounded. Each round - the read of the root while it is not confirmed, and the
-     * checks of the files not seen yet - runs off the caller's thread in one job, through the one bounded read of a
-     * project's files ({@link AdoptedModuleState#readBounded(AdoptedModuleState.BoundedRunner, String, String, long,
-     * Supplier, Object)}), under the project's one claim on such reads, which the reads of #743's module state lines
-     * share. A round is given what is left of the budget - the first one at least {@link #FIRST_LOOK_MIN_MS}, so an
-     * export wait that used the whole budget still leaves the file one look - and no other round starts once the budget
-     * is spent. A round that did not complete in time - its read did not answer, or it was not started because an earlier
-     * read of the project's files had not returned - is no evidence either way: it confirms nothing and sees no file, a
-     * root it was to read reads as one that could not be read in time ({@link RootOnDisk#readInTime}), and the poll goes
-     * on while the budget lasts. So a file system that does not answer holds the call no longer than the budget - or
-     * than {@link #FIRST_LOOK_MIN_MS} past the export wait, when the wait left less - plus BoundedJob's short grace (0.5s)
-     * for a round whose job had not started by its deadline; and a round it does not answer keeps its job, and the
-     * project's claim, until it answers or the claim lapses. Never throws for a read or a check that fails.
+     * Every look at the file system is bounded, and is a read of its own: each round reads the root file while it is not
+     * confirmed, then checks each file not seen yet, one after another, each read off the caller's thread through the one
+     * bounded read of a project's files ({@link AdoptedModuleState#readBounded(AdoptedModuleState.BoundedRunner, String,
+     * String, long, java.util.function.Supplier, Object)}), under the project's one claim on such reads, which the reads
+     * of #743's module state lines share. A read that completed in time is an answer whatever a later read does: a
+     * later read of the root that does not complete erases nothing it found, as the root is described by its last
+     * completed read - with a note that a later read did not complete ({@link RootOnDisk#lastReadCompleted}) - and a
+     * check of a file beside the root that does not answer discards neither the root's read nor
+     * the check of another file. A read that did not complete in time - it did not answer, or it was not started
+     * because nothing was left of the budget or an earlier read of the project's files had not returned - is no
+     * evidence either way: the root reads as one that could not be read in time ({@link RootOnDisk#readInTime}) only
+     * while no read of it completed, a file it was to check is not seen, and the poll goes on while the budget lasts. A
+     * read that does not answer keeps its job, and the project's claim, until it answers or the claim lapses, and every
+     * later read of the project's files - the root's too, while it is not confirmed - is refused at once meanwhile: a
+     * file system that does not answer costs a project one hung job, not one per read.
+     * <p>
+     * The export wait is given the budget less {@link #FIRST_LOOK_MIN_MS}, which the look keeps for the root file: a wait
+     * that used all it was given still leaves the file one bounded look - that second, less BoundedJob's grace (0.5s)
+     * when the wait's own job had not started by its deadline. A budget no larger than that second leaves the wait
+     * nothing: it is not asked, and the queue reads as {@link DiskExportState#PENDING}, not seen draining. Each read is
+     * given what is left of the budget, and none starts with nothing left. So the whole look, the wait included, ends
+     * within its budget - plus BoundedJob's grace for a last read whose job had not started by its deadline - with a wait
+     * that keeps to what it is given but for that same grace, as BuildUtils' does. Never throws for a read or a check
+     * that fails.
      *
-     * @param projectName the project whose files are read: the key of the rounds' claim
-     * @param exportWait the bounded wait for the project's export queue
+     * @param projectName the project whose files are read: the key of the reads' claim
+     * @param exportWait the bounded wait for the project's export queue, given how long it may take
      * @param reader reads the root file
      * @param files the project-relative paths to look for beside the root; empty for none
      * @param fileExists whether a project-relative path is a file on disk ({@link #projectFileExists})
-     * @param budgetMs how long the whole look may take
+     * @param budgetMs how long the whole look may take, the export wait included
      * @param pollMs the pause between two rounds
      * @return what was found
      */
-    public static RootOnDisk confirmOnDisk(String projectName, Supplier<DiskExportState> exportWait, // NOSONAR the project, the root, the files beside it and the bounds, one each
+    public static RootOnDisk confirmOnDisk(String projectName, LongFunction<DiskExportState> exportWait, // NOSONAR the project, the root, the files beside it and the bounds, one each
         RootFileReader reader, List<String> files, Predicate<String> fileExists, long budgetMs, long pollMs)
     {
         return confirmOnDisk(BoundedJob::run, projectName, exportWait, reader, files, fileExists, budgetMs, pollMs);
     }
 
     /**
-     * {@link #confirmOnDisk(String, Supplier, RootFileReader, List, Predicate, long, long)} with what runs each round under
-     * its deadline as a parameter: BoundedJob in production, a fake in a test. Package-visible for tests.
+     * {@link #confirmOnDisk(String, LongFunction, RootFileReader, List, Predicate, long, long)} with what runs each read
+     * under its deadline as a parameter: BoundedJob in production, a fake in a test. Package-visible for tests.
      *
-     * @param runner what runs a round under its deadline
-     * @param projectName the project whose files are read: the key of the rounds' claim
-     * @param exportWait the bounded wait for the project's export queue
+     * @param runner what runs a read under its deadline
+     * @param projectName the project whose files are read: the key of the reads' claim
+     * @param exportWait the bounded wait for the project's export queue, given how long it may take
      * @param reader reads the root file
      * @param files the project-relative paths to look for beside the root; empty for none
      * @param fileExists whether a project-relative path is a file on disk
-     * @param budgetMs how long the whole look may take
+     * @param budgetMs how long the whole look may take, the export wait included
      * @param pollMs the pause between two rounds
      * @return what was found
      */
     static RootOnDisk confirmOnDisk(AdoptedModuleState.BoundedRunner runner, String projectName, // NOSONAR the runner, the project, the root, the files beside it and the bounds, one each
-        Supplier<DiskExportState> exportWait, RootFileReader reader, List<String> files, Predicate<String> fileExists,
-        long budgetMs, long pollMs)
+        LongFunction<DiskExportState> exportWait, RootFileReader reader, List<String> files,
+        Predicate<String> fileExists, long budgetMs, long pollMs)
     {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budgetMs);
-        DiskExportState exportState = exportWait.get();
-        String jobName = "Looking for the root of new extension " + projectName + " on disk"; //$NON-NLS-1$ //$NON-NLS-2$
+        // The wait is given the budget less the second the look keeps for the root file; a budget no larger, nothing.
+        long waitMs = budgetMs - FIRST_LOOK_MIN_MS;
+        DiskExportState exportState = waitMs > 0 ? exportWait.apply(waitMs) : DiskExportState.PENDING;
+        String rootJob = "Looking for the root of new extension " + projectName + " on disk"; //$NON-NLS-1$ //$NON-NLS-2$
+        // What the look knows of the root is what its last completed read found. Until a read of it completes, nothing:
+        // the file itself is what no read showed, and the root reads as not read in time.
         boolean rootConfirmed = false;
         List<String> missing = missingOnDisk(null);
         boolean fileFound = false;
         String failure = null;
-        boolean readInTime = true;
+        boolean readInTime = false;
+        boolean lastReadCompleted = false;
         List<String> notSeen = new ArrayList<>(files);
-        // The first round runs whatever the export wait left: the file always gets one look after the wait.
-        long timeoutMs = Math.max(millisLeft(deadline), FIRST_LOOK_MIN_MS);
+        // What the root's read of a round is given, measured once: the first round's after the wait, every later
+        // round's by the guard that lets it start. Measured again at the read, a guard's 1ms could be 0 there, and the
+        // round the guard let start would start no read.
+        long rootShareMs = millisLeft(deadline);
         while (true)
         {
-            boolean readRoot = !rootConfirmed;
-            List<String> lookFor = new ArrayList<>(notSeen);
-            Round round = AdoptedModuleState.readBounded(runner, projectName, jobName, timeoutMs,
-                () -> Round.read(readRoot ? reader : null, lookFor, fileExists), null);
-            if (readRoot)
+            if (!rootConfirmed)
             {
-                // The root's last read decides how it is described; a round not read in time found nothing either way.
-                String text = round == null ? null : round.text;
-                failure = round == null ? null : round.failure;
-                missing = missingOnDisk(text);
-                fileFound = text != null;
-                rootConfirmed = missing.isEmpty();
-                readInTime = round != null;
+                // The root first, in a read of its own: no check of a file beside it shares that read's job.
+                RootRead read = AdoptedModuleState.readBounded(runner, projectName, rootJob, rootShareMs,
+                    () -> RootRead.of(reader), null);
+                // Only a read that completed in time replaces what the look knows of the root. One that did not - most
+                // often a later round's sliver of the budget, given up on before a worker ran it - found nothing either
+                // way, and erases nothing that an earlier, completed read found; the answer still says it did not
+                // complete, as what the look knows of the root is then older than that read.
+                lastReadCompleted = read != null;
+                if (read != null)
+                {
+                    missing = missingOnDisk(read.text);
+                    fileFound = read.text != null;
+                    failure = read.failure;
+                    rootConfirmed = missing.isEmpty();
+                    readInTime = true;
+                }
             }
-            if (round != null)
-            {
-                notSeen.removeAll(round.seen);
-            }
+            lookForFiles(runner, projectName, notSeen, fileExists, deadline);
             if (rootConfirmed && notSeen.isEmpty())
             {
-                return new RootOnDisk(true, missing, true, exportState, null, true, budgetMs, notSeen);
+                return new RootOnDisk(true, missing, true, exportState, null, true, true, budgetMs, notSeen);
             }
             long remainingNanos = deadline - System.nanoTime();
             if (remainingNanos <= 0)
             {
-                return new RootOnDisk(rootConfirmed, missing, fileFound, exportState, failure, readInTime, budgetMs,
-                    notSeen);
+                return new RootOnDisk(rootConfirmed, missing, fileFound, exportState, failure, readInTime,
+                    lastReadCompleted, budgetMs, notSeen);
             }
             try
             {
@@ -595,15 +635,15 @@ public final class ExtensionRootBuilder
             catch (InterruptedException e)
             {
                 Thread.currentThread().interrupt();
-                return new RootOnDisk(rootConfirmed, missing, fileFound, exportState, failure, readInTime, budgetMs,
-                    notSeen);
+                return new RootOnDisk(rootConfirmed, missing, fileFound, exportState, failure, readInTime,
+                    lastReadCompleted, budgetMs, notSeen);
             }
-            timeoutMs = millisLeft(deadline);
-            if (timeoutMs <= 0)
+            rootShareMs = millisLeft(deadline);
+            if (rootShareMs <= 0)
             {
                 // The pause used what was left: no round starts with nothing left of the budget.
-                return new RootOnDisk(rootConfirmed, missing, fileFound, exportState, failure, readInTime, budgetMs,
-                    notSeen);
+                return new RootOnDisk(rootConfirmed, missing, fileFound, exportState, failure, readInTime,
+                    lastReadCompleted, budgetMs, notSeen);
             }
         }
     }
@@ -615,82 +655,91 @@ public final class ExtensionRootBuilder
     }
 
     /**
-     * What one round of the look read, built on the round's own job thread: the root file - when the round read it - and
-     * the files beside it that the round saw. A round handed to the caller completed in time; one that did not is
-     * {@code null}.
+     * Checks each file of {@code notSeen}, each in a bounded read of its own given what is left of the budget, one after
+     * another, and drops from {@code notSeen} each file a check saw: a check that answered counts whatever the check after
+     * it does. Starts no check once the caller's thread is interrupted: the call is being cancelled.
+     *
+     * @param runner what runs a check under its deadline
+     * @param projectName the project whose files are checked: the key of the checks' claim
+     * @param notSeen the files not seen yet; the ones a check sees now are removed
+     * @param fileExists whether a project-relative path is a file on disk
+     * @param deadline when the look's budget ends, a {@link System#nanoTime()} reading
      */
-    private static final class Round
+    private static void lookForFiles(AdoptedModuleState.BoundedRunner runner, String projectName, List<String> notSeen,
+        Predicate<String> fileExists, long deadline)
     {
-        /** The root file's text, or {@code null}: not read in this round, not there, or not readable. */
-        final String text;
-        /** Why the root file could not be read, or {@code null}. */
-        final String failure;
-        /** The files this round looked for and saw on disk. */
-        final List<String> seen;
-
-        private Round(String text, String failure, List<String> seen)
+        for (String file : new ArrayList<>(notSeen))
         {
-            this.text = text;
-            this.failure = failure;
-            this.seen = seen;
-        }
-
-        /**
-         * The round's reads, unbounded: they run inside the bounded job. Never throws for a read or a check that fails:
-         * a root that cannot be read carries why, and a file whose check fails is not seen.
-         *
-         * @param reader reads the root file, or {@code null} when this round does not read it
-         * @param files the files to look for
-         * @param fileExists whether a project-relative path is a file on disk
-         * @return what the round read
-         */
-        static Round read(RootFileReader reader, List<String> files, Predicate<String> fileExists)
-        {
-            String text = null;
-            String failure = null;
-            if (reader != null)
+            if (Thread.currentThread().isInterrupted())
             {
-                try
-                {
-                    text = reader.read();
-                }
-                catch (IOException | RuntimeException e)
-                {
-                    failure = reason(e);
-                }
+                return;
             }
-            return new Round(text, failure, seenOnDisk(files, fileExists));
+            Boolean seen = AdoptedModuleState.readBounded(runner, projectName,
+                "Looking for " + file + " of new extension " + projectName + " on disk", millisLeft(deadline), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                () -> seenOnDisk(file, fileExists), null);
+            if (Boolean.TRUE.equals(seen))
+            {
+                notSeen.remove(file);
+            }
         }
     }
 
-    /** The {@code files} that {@code fileExists} sees, in their order; a check that throws counts as not seen. */
-    private static List<String> seenOnDisk(List<String> files, Predicate<String> fileExists)
+    /**
+     * What one read of the root file found, built on the read's own job thread: a read handed to the caller completed in
+     * time, and one that did not is {@code null}.
+     */
+    private static final class RootRead
     {
-        List<String> seen = new ArrayList<>(files.size());
-        for (String file : files)
+        /** The root file's text, or {@code null}: not there, or not readable. */
+        final String text;
+        /** Why the root file could not be read, or {@code null}. */
+        final String failure;
+
+        private RootRead(String text, String failure)
         {
-            boolean exists;
+            this.text = text;
+            this.failure = failure;
+        }
+
+        /**
+         * The read itself, unbounded: it runs inside the bounded job. Never throws for a read that fails: a root that
+         * cannot be read carries why.
+         *
+         * @param reader reads the root file
+         * @return what the read found
+         */
+        static RootRead of(RootFileReader reader)
+        {
             try
             {
-                exists = fileExists.test(file);
+                return new RootRead(reader.read(), null);
             }
-            catch (RuntimeException e)
+            catch (IOException | RuntimeException e)
             {
-                exists = false;
-            }
-            if (exists)
-            {
-                seen.add(file);
+                return new RootRead(null, reason(e));
             }
         }
-        return seen;
+    }
+
+    /** Whether {@code fileExists} sees {@code file} - the check itself, unbounded; one that throws does not see it. */
+    private static boolean seenOnDisk(String file, Predicate<String> fileExists)
+    {
+        try
+        {
+            return fileExists.test(file);
+        }
+        catch (RuntimeException e)
+        {
+            return false;
+        }
     }
 
     /**
      * Whether a project-relative path is a regular file under the project's location, checked straight on the file
      * system, past the workspace's resource cache - as {@link #readRootFile} reads the root. A project with no local
      * location has no files. The check itself is unbounded - a stat of the file, which blocks on a file system that does
-     * not answer just as a read does - so the look makes it only inside its bounded rounds ({@link #confirmOnDisk}).
+     * not answer just as a read does - so the look makes it only inside a bounded read of its own
+     * ({@link #confirmOnDisk}).
      *
      * @param project the project
      * @return the check
@@ -705,7 +754,7 @@ public final class ExtensionRootBuilder
     /**
      * Reads a project's root file straight from the file system, past the workspace's resource cache. The read itself
      * is unbounded - one synchronous {@link Files#readAllBytes}, which blocks on a file system that does not answer -
-     * so the look makes it only inside its bounded rounds, off the caller's thread ({@link #confirmOnDisk}).
+     * so the look makes it only inside a bounded read of its own, off the caller's thread ({@link #confirmOnDisk}).
      *
      * @param project the project
      * @return the text, or {@code null} when the project has no local location or the file does not exist

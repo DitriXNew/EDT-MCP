@@ -12,8 +12,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.LongFunction;
 import java.util.function.Predicate;
-import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ProjectScope;
@@ -116,9 +116,9 @@ public class CreateProjectTool implements IMcpTool
     private static final long STARTED_TIMEOUT_MS = 60_000L;
 
     /**
-     * Budget (ms) for confirming a new extension's root on disk: EDT's export queue drained and the root
-     * file read back, and in the same budget its two command interface files seen. EDT saves them
-     * asynchronously after create() attached the root.
+     * Budget (ms) for confirming a new extension's root on disk: EDT's export queue drained - waited for with all of
+     * it but the second the look keeps for the root file - and the root file read back, and in the same budget its
+     * two command interface files seen. EDT saves them asynchronously after create() attached the root.
      */
     private static final long ROOT_CONFIRM_TIMEOUT_MS = 30_000L;
 
@@ -893,6 +893,22 @@ public class CreateProjectTool implements IMcpTool
     }
 
     /**
+     * The bounded wait for a project's export queue: {@link BuildUtils#waitForDiskExport(IProject, long)} outside
+     * tests. It is handed the project and how long it may take, and binds no timeout of its own: how long is the look's
+     * to decide - its share of the look's budget ({@link #saveAndLook}).
+     */
+    @FunctionalInterface
+    interface ExportWait
+    {
+        /**
+         * @param project the project whose export queue to wait for
+         * @param timeoutMs how long the wait may take
+         * @return how the wait ended
+         */
+        DiskExportState await(IProject project, long timeoutMs);
+    }
+
+    /**
      * Queues the export of the root and of the command interfaces this call attached ({@code commandInterfaceFqns}),
      * and records in {@code facts} a submission EDT did not accept - or one that threw - while there were command
      * interfaces to save: they are then in the model, but this call queued no save of their files. EDT already
@@ -951,15 +967,15 @@ public class CreateProjectTool implements IMcpTool
     {
         /** Hands save tasks to EDT. */
         final ExportSubmission save;
-        /** The bounded wait for the project's export queue. */
-        final Supplier<DiskExportState> exportWait;
+        /** The bounded wait for a project's export queue, handed the project and how long it may take. */
+        final ExportWait exportWait;
         /** Reads the root file. */
         final ExtensionRootBuilder.RootFileReader rootFile;
         /** Whether a project-relative path is a file on disk. */
         final Predicate<String> fileExists;
 
-        ExtensionDisk(ExportSubmission save, Supplier<DiskExportState> exportWait,
-            ExtensionRootBuilder.RootFileReader rootFile, Predicate<String> fileExists)
+        ExtensionDisk(ExportSubmission save, ExportWait exportWait, ExtensionRootBuilder.RootFileReader rootFile,
+            Predicate<String> fileExists)
         {
             this.save = save;
             this.exportWait = exportWait;
@@ -969,19 +985,18 @@ public class CreateProjectTool implements IMcpTool
 
         /**
          * EDT's own for {@code project}: its save ({@link BmTransactions#forceExportToDisk(IProject, List)}), its
-         * export wait ({@link BuildUtils#waitForDiskExport}, within {@link CreateProjectTool#ROOT_CONFIRM_TIMEOUT_MS}),
-         * and the root file and the files beside it, read straight from the project's location
-         * ({@link ExtensionRootBuilder#readRootFile}, {@link ExtensionRootBuilder#projectFileExists}) - unbounded reads
-         * the look runs only inside its bounded rounds ({@link CreateProjectTool#saveAndLook}). Nothing is asked of the
-         * project until a step runs.
+         * export wait ({@link BuildUtils#waitForDiskExport} as it is: {@link CreateProjectTool#saveAndLook} hands it
+         * the project and the share of the budget the look gives it), and the root file and the files beside it, read
+         * straight from the project's location ({@link ExtensionRootBuilder#readRootFile},
+         * {@link ExtensionRootBuilder#projectFileExists}) - unbounded reads the look runs only inside bounded reads of
+         * its own ({@link CreateProjectTool#saveAndLook}). Nothing is asked of the project until a step runs.
          *
          * @param project the new extension project
          * @return its disk
          */
         static ExtensionDisk of(IProject project)
         {
-            return new ExtensionDisk(BmTransactions::forceExportToDisk,
-                () -> BuildUtils.waitForDiskExport(project, ROOT_CONFIRM_TIMEOUT_MS),
+            return new ExtensionDisk(BmTransactions::forceExportToDisk, BuildUtils::waitForDiskExport,
                 () -> ExtensionRootBuilder.readRootFile(project),
                 path -> ExtensionRootBuilder.projectFileExists(project).test(path));
         }
@@ -992,19 +1007,20 @@ public class CreateProjectTool implements IMcpTool
      * interfaces this call attached ({@link #exportWithRoot}) and - once EDT reported the context started - looks for
      * the root file and, in the same budget, for the files of those command interfaces
      * ({@link #commandInterfaceFiles}), recording in {@code facts} a save EDT did not accept and what the look found.
-     * The files looked for are decided here, from what this call attached. Every read of the look runs in a bounded job
-     * under the project's claim on reads of its files, keyed by the project's name
-     * ({@link ExtensionRootBuilder#confirmOnDisk(String, Supplier, ExtensionRootBuilder.RootFileReader, List, Predicate,
-     * long, long)}), so a file system that does not answer holds the call no longer than the bound that method states:
-     * the look's budget - or 1s past the export wait, when the wait left less - plus BoundedJob's 0.5s grace for a round
-     * whose job had not started by its deadline. Package-visible for tests.
+     * The files looked for are decided here, from what this call attached; and here the project's export wait is handed
+     * the share of the budget the look gives it - the budget less the second the look keeps for the root file. Every
+     * read of the look runs in a bounded job of its own under the project's claim on reads of its files, keyed by the
+     * project's name ({@link ExtensionRootBuilder#confirmOnDisk(String, LongFunction,
+     * ExtensionRootBuilder.RootFileReader, List, Predicate, long, long)}), so a file system that does not answer holds
+     * the call no longer than the bound that method states: the look's budget, the export wait included, plus
+     * BoundedJob's 0.5s grace for a last read whose job had not started by its deadline. Package-visible for tests.
      *
      * @param project the new extension project
      * @param commandInterfaceFqns the command interfaces' FQNs this call ensured (attached, or found attached); empty
      *     for none
      * @param facts where a refused save and the look's findings are recorded
      * @param disk the project's files ({@link ExtensionDisk#of} outside tests)
-     * @param budgetMs how long the whole look may take
+     * @param budgetMs how long the whole look may take, the export wait included
      * @param pollMs the pause between two rounds of the look
      */
     static void saveAndLook(IProject project, List<String> commandInterfaceFqns, ExtensionFacts facts, // NOSONAR the project, what to save, where to record, the disk and the two bounds
@@ -1013,7 +1029,9 @@ public class CreateProjectTool implements IMcpTool
         exportWithRoot(project, commandInterfaceFqns, facts, disk.save);
         if (facts.lifecycleStarted)
         {
-            facts.disk = ExtensionRootBuilder.confirmOnDisk(project.getName(), disk.exportWait, disk.rootFile,
+            // The look decides the wait's share of its budget; this project's wait is handed that share as it is.
+            LongFunction<DiskExportState> exportWait = timeoutMs -> disk.exportWait.await(project, timeoutMs);
+            facts.disk = ExtensionRootBuilder.confirmOnDisk(project.getName(), exportWait, disk.rootFile,
                 commandInterfaceFiles(commandInterfaceFqns), disk.fileExists, budgetMs, pollMs);
         }
     }
