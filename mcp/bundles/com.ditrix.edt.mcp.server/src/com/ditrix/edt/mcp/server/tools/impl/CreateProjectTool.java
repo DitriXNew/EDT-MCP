@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.function.LongFunction;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ProjectScope;
@@ -91,7 +92,9 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  *       started.</li>
  *   <li>For {@code extension}: attaches the two command interfaces EDT's wizard creates,
  *       force-exports them with the root, and answers {@code ready} only once the root file on
- *       disk shows the wizard's shape (a bounded wait).</li>
+ *       disk shows the wizard's shape (a bounded wait) - all of it only once {@code create()} ended
+ *       within the wait window: a create still running then gets an answer and no write
+ *       ({@link #afterExtensionCreate}).</li>
  *   <li>For {@code externalObjects}: if {@code scriptVariant} was supplied, calls
  *       {@link IExternalObjectProjectManager#setScriptVariant} after lifecycle wait
  *       (non-fatal on failure).</li>
@@ -228,6 +231,10 @@ public class CreateProjectTool implements IMcpTool
 
     /** Message suffix: creation completed past the wait window. */
     private static final String MSG_WAIT_WINDOW_SUFFIX = "s wait window; project now exists)."; //$NON-NLS-1$
+
+    /** How an extension answer names the two command interface files EDT's new-extension wizard creates. */
+    private static final String COMMAND_INTERFACE_FILES = "The command interface files CommandInterface.cmi and " //$NON-NLS-1$
+        + "MainSectionCommandInterface.cmi that EDT's wizard creates"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -798,38 +805,65 @@ public class CreateProjectTool implements IMcpTool
             compatMode != null, built.compatibilityNote);
 
         CreateJobResult jobResult = runCreateJob(createJob, finalEffectiveProjectName, KIND_EXTENSION);
-        if (jobResult.status == CreateStatus.SLOW_EXISTS)
-        {
-            // Creation completed past the wait window. The command interfaces are attached when the root
-            // already is (best effort, never waited for); the answer stays 'created'.
-            IProject slowProject = ProjectContext.of(finalEffectiveProjectName).project();
-            List<String> slowCommandInterfaces = ensureCommandInterfaces(slowProject, facts);
-            if (!slowCommandInterfaces.isEmpty())
-            {
-                exportWithRoot(slowProject, slowCommandInterfaces, facts, ExtensionDisk.of(slowProject).save);
-            }
-            return buildExtensionSlowResponse(responseData, facts);
-        }
-        if (jobResult.errorJson != null)
-        {
-            return jobResult.errorJson;
-        }
+        // The steps that write to the new project run only once EDT's create() has ended.
+        return afterExtensionCreate(jobResult.status, jobResult.errorJson, responseData, facts,
+            () -> concludeExtensionCreate(req, finalEffectiveProjectName, baseProjectName, createdHolder[0],
+                errorHolder[0], responseData, facts));
+    }
 
+    /**
+     * Where an extension's create goes once {@link #runCreateJob} has told how its job ended. Only a job that ENDED
+     * within the wait window ({@link CreateStatus#OK}) goes on to {@code concluded}: the steps after {@code create()} -
+     * those that write to the new project (its command interfaces, the save of them with its root), the look at its
+     * files and the codestyle preferences. On {@link CreateStatus#SLOW_EXISTS} the project exists but the job had not
+     * ended: {@link #runCreateJob} only asked it to stop, and EDT's {@code create()} may still be running - a write
+     * then would race it, and could wait on its model's locks past the window - so the answer
+     * ({@link #buildExtensionSlowResponse}) is all this call does, and it says what was not done. Any other outcome
+     * answers its error. Package-visible for tests.
+     *
+     * @param status how the create job ended
+     * @param errorJson the ready answer of {@link CreateStatus#TIMED_OUT} and {@link CreateStatus#INTERRUPTED}
+     * @param data the response data
+     * @param facts what the steps before {@code create()} found
+     * @param concluded the steps after an ended {@code create()}, and their answer
+     * @return the answer
+     */
+    static String afterExtensionCreate(CreateStatus status, String errorJson, ExtensionResponseData data,
+        ExtensionFacts facts, Supplier<String> concluded)
+    {
+        if (status == CreateStatus.OK)
+        {
+            return concluded.get();
+        }
+        if (status == CreateStatus.SLOW_EXISTS)
+        {
+            return buildExtensionSlowResponse(data, facts);
+        }
+        return errorJson;
+    }
+
+    /**
+     * The steps after an extension's {@code create()} that ENDED within the wait window
+     * ({@link #afterExtensionCreate}): its error, or the lifecycle wait, the command interfaces saved with the root and
+     * the bounded look at their files, and the codestyle preferences.
+     */
+    private static String concludeExtensionCreate(CreateRequest req, String projectName, String baseProjectName, // NOSONAR the extension path's state after create(), passed on as it is
+        IProject created, Throwable error, ExtensionResponseData responseData, ExtensionFacts facts)
+    {
         // Check for creation errors reported via errorHolder
-        if (errorHolder[0] != null)
+        if (error != null)
         {
-            Activator.logError("create_project (extension) failed", errorHolder[0]); //$NON-NLS-1$
-            return creationFailure(finalEffectiveProjectName,
-                "Failed to create extension project: " + errorHolder[0].getMessage()); //$NON-NLS-1$
+            Activator.logError("create_project (extension) failed", error); //$NON-NLS-1$
+            return creationFailure(projectName,
+                "Failed to create extension project: " + error.getMessage()); //$NON-NLS-1$
         }
 
-        Activator.logInfo(LOG_PREFIX + "created extension '" + finalEffectiveProjectName //$NON-NLS-1$
+        Activator.logInfo(LOG_PREFIX + "created extension '" + projectName //$NON-NLS-1$
             + "' extending '" + baseProjectName + "'"); //$NON-NLS-1$ //$NON-NLS-2$
 
         // Wait for lifecycle STARTED (create() started the context itself, so this is normally immediate)
-        IProject createdProject = createdHolder[0] != null ? createdHolder[0]
-            : ProjectContext.of(finalEffectiveProjectName).project();
-        facts.lifecycleStarted = waitForStarted(finalEffectiveProjectName, createdHolder[0], KIND_EXTENSION);
+        IProject createdProject = created != null ? created : ProjectContext.of(projectName).project();
+        facts.lifecycleStarted = waitForStarted(projectName, created, KIND_EXTENSION);
 
         // The two command interfaces EDT's wizard creates, exported with the root EDT attached; then the
         // root file must show the wizard's shape before the answer may say 'ready'. The command interface files are
@@ -838,8 +872,7 @@ public class CreateProjectTool implements IMcpTool
             ExtensionDisk.of(createdProject), ROOT_CONFIRM_TIMEOUT_MS, ROOT_CONFIRM_POLL_MS);
 
         // Apply v8codestyle preferences
-        Map<String, Object> codestyleMap =
-            applyCodestylePrefs(finalEffectiveProjectName, req.standardChecks, req.commonChecks);
+        Map<String, Object> codestyleMap = applyCodestylePrefs(projectName, req.standardChecks, req.commonChecks);
 
         return buildExtensionSuccessResponse(responseData, facts, codestyleMap);
     }
@@ -1699,8 +1732,8 @@ public class CreateProjectTool implements IMcpTool
         }
     }
 
-    /** Status codes returned by {@link #runCreateJob}. */
-    private enum CreateStatus
+    /** Status codes returned by {@link #runCreateJob}. Package-visible for tests. */
+    enum CreateStatus
     {
         /** Job completed within the timeout window; caller must check {@code errorHolder}. */
         OK,
@@ -1708,6 +1741,8 @@ public class CreateProjectTool implements IMcpTool
          * Job timed out but the project already exists in the workspace (slow creation
          * past the wait window). Existence is the only fact this status carries; the caller
          * must build a kind-specific response and verify any finer-grained mutation it needs.
+         * The job had NOT ended: its cancellation was only requested, so the project manager's
+         * {@code create()} may still be running - the caller writes nothing to the project.
          */
         SLOW_EXISTS,
         /** Job timed out and the project does NOT exist — return an error response. */
@@ -2355,19 +2390,28 @@ public class CreateProjectTool implements IMcpTool
     }
 
     /**
-     * Builds the slow-path JSON response for a created extension project (read-only): creation
-     * completed past the wait window, so {@code state="created"} and {@code codestyle.applied=false}.
-     * Mirrors the normal success response, adding {@code synonymNote} when the synonym could not
-     * be applied. Package-visible for tests.
+     * Builds the JSON response for an extension whose create job had not ended when the wait window closed
+     * ({@link CreateStatus#SLOW_EXISTS}; read-only): the project exists, {@code state="created"} and
+     * {@code codestyle.applied=false}. Nothing after {@code create()} ran, and the message says so: EDT's
+     * {@code create()} may still be running, so the root handed to it is not claimed as attached, and the command
+     * interface files EDT's wizard creates were not created - with how to get them, since no MCP tool attaches them to
+     * an existing extension. Mirrors the normal success response, adding {@code synonymNote} when the synonym could
+     * not be applied. Package-visible for tests.
      */
     static String buildExtensionSlowResponse(ExtensionResponseData data, ExtensionFacts facts)
     {
         List<String> parts = new ArrayList<>();
         parts.add("Extension project '" + data.effectiveProjectName //$NON-NLS-1$
-            + "' created and bound to '" + data.baseProjectName //$NON-NLS-1$
-            + "' (creation completed past the " //$NON-NLS-1$
-            + (CREATE_TIMEOUT_MS / 1000) + MSG_WAIT_WINDOW_SUFFIX);
-        addNotes(parts, facts);
+            + "' exists, but EDT's create of it was still running when the " + (CREATE_TIMEOUT_MS / 1000) //$NON-NLS-1$
+            + "s wait window ended; this call asked that create to stop and did not wait for it, so EDT may " //$NON-NLS-1$
+            + "still finish it or stop partway."); //$NON-NLS-1$
+        parts.add("Its root - the root of '" + data.baseProjectName //$NON-NLS-1$
+            + "' adopted the way EDT's new-extension wizard builds it - was handed to that create; nothing " //$NON-NLS-1$
+            + "checked that EDT attached it. Check list_projects before using the project."); //$NON-NLS-1$
+        addNotes(parts, facts, COMMAND_INTERFACE_FILES + " were not created: this call writes nothing to a " //$NON-NLS-1$
+            + "project EDT may still be creating. No MCP tool attaches them to an existing extension; to have " //$NON-NLS-1$
+            + "them, remove the project with delete_project and deleteContent=true - without it the project's " //$NON-NLS-1$
+            + "files stay on disk under the new create - and run create_project again."); //$NON-NLS-1$
         ToolResult slowResult = extensionResult(data, facts)
             .put(KEY_STATE, VAL_CREATED)
             .put(KEY_CODESTYLE, slowPathCodestyleMap())
@@ -2464,18 +2508,20 @@ public class CreateProjectTool implements IMcpTool
                 + "). EDT may still be writing it; wait a few seconds before restarting EDT or running " //$NON-NLS-1$
                 + "clean_project on this project, which would race that save."); //$NON-NLS-1$
         }
-        addNotes(parts, facts);
+        addNotes(parts, facts, commandInterfaceNote(facts));
         return String.join(" ", parts); //$NON-NLS-1$
     }
 
-    /** The notes every extension answer carries when they apply, in a stable order. */
-    private static void addNotes(List<String> parts, ExtensionFacts facts)
+    /**
+     * The notes every extension answer carries when they apply, in a stable order; {@code commandInterfaces} is the
+     * answer's note on the command interface files, or {@code null} for none.
+     */
+    private static void addNotes(List<String> parts, ExtensionFacts facts, String commandInterfaces)
     {
         if (facts.compatibilityNote != null)
         {
             parts.add(facts.compatibilityNote);
         }
-        String commandInterfaces = commandInterfaceNote(facts);
         if (commandInterfaces != null)
         {
             parts.add(commandInterfaces);
@@ -2499,8 +2545,7 @@ public class CreateProjectTool implements IMcpTool
      */
     static String commandInterfaceNote(ExtensionFacts facts)
     {
-        String files = "The command interface files CommandInterface.cmi and MainSectionCommandInterface.cmi that " //$NON-NLS-1$
-            + "EDT's wizard creates"; //$NON-NLS-1$
+        String files = COMMAND_INTERFACE_FILES;
         if (facts.commandInterfaceFailure != null)
         {
             return files + " were not created: " + withoutFinalPeriod(facts.commandInterfaceFailure) + "."; //$NON-NLS-1$ //$NON-NLS-2$
@@ -2608,7 +2653,9 @@ public class CreateProjectTool implements IMcpTool
      * <ul>
      *   <li>{@link CreateStatus#OK} — job completed in time; caller checks {@code errorHolder}.</li>
      *   <li>{@link CreateStatus#SLOW_EXISTS} — timed out but project already exists; caller
-     *       builds a kind-specific response without inferring any finer-grained mutation.</li>
+     *       builds a kind-specific response without inferring any finer-grained mutation. The job
+     *       had not ended (its cancellation is only requested), so the caller writes nothing
+     *       to the project.</li>
      *   <li>{@link CreateStatus#TIMED_OUT} — timed out and project absent; {@code errorJson}
      *       is ready to return.</li>
      *   <li>{@link CreateStatus#INTERRUPTED} — job interrupted; {@code errorJson} is ready

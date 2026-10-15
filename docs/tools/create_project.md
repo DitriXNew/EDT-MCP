@@ -107,10 +107,10 @@ The root of a new extension is the base configuration's root ADOPTED, the way ED
 - it adopts the base's default language and inherits the base's script variant and
   compatibility mode (unless `compatibilityMode` is given);
 - the two command interface files the wizard creates, `CommandInterface.cmi` and
-  `MainSectionCommandInterface.cmi`, are created too, and looked for on disk within the same
-  check as the root file: `message` names a file that was not seen on disk, and a save of them
-  EDT did not accept when a file was not seen or no check could run (they do not change
-  `state`).
+  `MainSectionCommandInterface.cmi`, are created too (unless the create exceeds the 120 s wait
+  window — see Gotchas), and looked for on disk within the same check as the root file:
+  `message` names a file that was not seen on disk, and a save of them EDT did not accept
+  when a file was not seen or no check could run (they do not change `state`).
 
 Not replicated: EDT's wizard also creates a default role (named from the prefix in EDT's UI
 language, e.g. `Ext1_DefaultRole`; only over a base whose compatibility mode is above
@@ -231,6 +231,14 @@ On success the response includes:
   after a few seconds (for an extension, `message` says what was not confirmed). Do not
   restart EDT or run `clean_project` on a new project in its first seconds: EDT saves its
   files asynchronously, and only an extension's `ready` confirms its root file is on disk.
+- **A slow extension create writes nothing more.** If an extension's create exceeds the
+  120 s wait window while its project already exists, EDT's create may still be running: the
+  call asks it to stop, makes no further write to the project and answers `state=created`.
+  Its `message` says that nothing checked whether EDT attached the adopted root, and that the
+  command interface files were not created: no MCP tool attaches them to an existing
+  extension — to have them, remove the project with `delete_project` and
+  `deleteContent=true` (without it the project's files stay on disk under the new create)
+  and run `create_project` again. Check `list_projects` before using the project.
 - **autoSortTopObjects is not yet applied.** See `codestyle.autoSortNote` in the response.
 - **Client-side timeouts.** A create normally answers within seconds, but on a busy
   workspace the create operation alone may take up to its 120 s limit. If your MCP client

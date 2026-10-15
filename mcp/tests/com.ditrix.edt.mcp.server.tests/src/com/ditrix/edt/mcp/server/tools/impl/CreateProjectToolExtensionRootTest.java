@@ -31,6 +31,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.CompatibilityMode;
 import com._1c.g5.v8.dt.metadata.mdclass.ConfigurationExtensionPurpose;
 import com._1c.g5.v8.dt.metadata.mdclass.ScriptVariant;
 import com._1c.g5.v8.dt.platform.version.Version;
+import com.ditrix.edt.mcp.server.tools.impl.CreateProjectTool.CreateStatus;
 import com.ditrix.edt.mcp.server.tools.impl.CreateProjectTool.ExtensionDisk;
 import com.ditrix.edt.mcp.server.tools.impl.CreateProjectTool.ExtensionFacts;
 import com.ditrix.edt.mcp.server.tools.impl.CreateProjectTool.ExtensionResponseData;
@@ -300,8 +301,8 @@ public class CreateProjectToolExtensionRootTest
     @Test
     public void testTheSlowAnswerEchoesTheModeAndCarriesTheNotes()
     {
-        ExtensionFacts facts = facts(CompatibilityMode.VERSION8_51, CompatibilityMode.VERSION8_51, false);
-        facts.commandInterfaceFailure = "the extension's root was not in its model yet"; //$NON-NLS-1$
+        ExtensionFacts facts = new ExtensionFacts(CompatibilityMode.VERSION8_51, CompatibilityMode.VERSION8_51, true,
+            "The requested mode is above the base's."); //$NON-NLS-1$
 
         JsonObject json = JsonParser.parseString(CreateProjectTool.buildExtensionSlowResponse(DATA, facts))
             .getAsJsonObject();
@@ -309,9 +310,91 @@ public class CreateProjectToolExtensionRootTest
         assertEquals("created", json.get("state").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         assertEquals("Version8_5_1", json.get("compatibilityMode").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
         String message = json.get("message").getAsString(); //$NON-NLS-1$
-        assertTrue(message, message.contains("creation completed past the 120s wait window")); //$NON-NLS-1$
-        assertTrue(message, message.contains("were not created: the extension's root was not in its model yet")); //$NON-NLS-1$
+        assertTrue(message, message.contains("The requested mode is above the base's.")); //$NON-NLS-1$
         assertTrue(message, message.contains("EDT's wizard also creates a default role")); //$NON-NLS-1$
+    }
+
+    // ==================== a create job still running when the wait window closed (SLOW_EXISTS) ====================
+
+    /** What the steps after an ended create answer in these tests. */
+    private static final String CONCLUDED = "{\"concluded\":true}"; //$NON-NLS-1$
+
+    @Test
+    public void testWhileEdtsCreateMayStillRunNothingIsWrittenAndTheAnswerSaysSo()
+    {
+        ExtensionFacts facts = facts(CompatibilityMode.VERSION8_51, CompatibilityMode.VERSION8_51, false);
+        AtomicInteger writes = new AtomicInteger();
+
+        String answer = CreateProjectTool.afterExtensionCreate(CreateStatus.SLOW_EXISTS, null, DATA, facts, () -> {
+            writes.incrementAndGet();
+            return CONCLUDED;
+        });
+
+        assertEquals("no step that writes to the project may run while EDT's create may still be running", //$NON-NLS-1$
+            0, writes.get());
+        JsonObject json = JsonParser.parseString(answer).getAsJsonObject();
+        assertEquals("created", json.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("created", json.get("state").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        String message = json.get("message").getAsString(); //$NON-NLS-1$
+        assertTrue(message, message.contains("EDT's create of it was still running when the 120s wait window ended")); //$NON-NLS-1$
+        assertTrue(message, message.contains("CommandInterface.cmi and MainSectionCommandInterface.cmi")); //$NON-NLS-1$
+        assertTrue(message, message.contains("were not created: this call writes nothing to a project EDT may still be creating")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheSlowAnswerSaysWhatWasNotDoneAndHowToGetIt()
+    {
+        ExtensionFacts facts = facts(CompatibilityMode.VERSION8_51, CompatibilityMode.VERSION8_51, false);
+
+        String message = JsonParser.parseString(CreateProjectTool.buildExtensionSlowResponse(DATA, facts))
+            .getAsJsonObject().get("message").getAsString(); //$NON-NLS-1$
+
+        assertTrue(message, message.contains("Extension project '" + PROJECT + "' exists, but EDT's create of it was " //$NON-NLS-1$ //$NON-NLS-2$
+            + "still running when the 120s wait window ended")); //$NON-NLS-1$
+        assertTrue(message, message.contains("this call asked that create to stop and did not wait for it")); //$NON-NLS-1$
+        assertTrue("the root handed to the create is not claimed as attached: " + message, //$NON-NLS-1$
+            message.contains("was handed to that create; nothing checked that EDT attached it")); //$NON-NLS-1$
+        assertTrue(message, message.contains("No MCP tool attaches them to an existing extension")); //$NON-NLS-1$
+        assertTrue(message, message.contains("remove the project with delete_project and deleteContent=true - without " //$NON-NLS-1$
+            + "it the project's files stay on disk under the new create - and run create_project again")); //$NON-NLS-1$
+        assertFalse("a create that had not ended is not said to have completed: " + message, //$NON-NLS-1$
+            message.contains("completed")); //$NON-NLS-1$
+        assertFalse("nothing is said to be attached when nothing was written: " + message, //$NON-NLS-1$
+            message.contains("were attached")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnEndedCreateGoesOnToTheStepsThatWrite()
+    {
+        ExtensionFacts facts = facts(CompatibilityMode.VERSION8_51, CompatibilityMode.VERSION8_51, false);
+        AtomicInteger writes = new AtomicInteger();
+
+        String answer = CreateProjectTool.afterExtensionCreate(CreateStatus.OK, null, DATA, facts, () -> {
+            writes.incrementAndGet();
+            return CONCLUDED;
+        });
+
+        assertEquals("a create that ended goes on to its steps once", 1, writes.get()); //$NON-NLS-1$
+        assertEquals(CONCLUDED, answer);
+    }
+
+    @Test
+    public void testACreateThatTimedOutWithNoProjectOrWasInterruptedAnswersItsErrorAndWritesNothing()
+    {
+        for (CreateStatus status : Arrays.asList(CreateStatus.TIMED_OUT, CreateStatus.INTERRUPTED))
+        {
+            ExtensionFacts facts = facts(CompatibilityMode.VERSION8_51, CompatibilityMode.VERSION8_51, false);
+            AtomicInteger writes = new AtomicInteger();
+            String error = "{\"error\":\"" + status + "\"}"; //$NON-NLS-1$ //$NON-NLS-2$
+
+            String answer = CreateProjectTool.afterExtensionCreate(status, error, DATA, facts, () -> {
+                writes.incrementAndGet();
+                return CONCLUDED;
+            });
+
+            assertEquals(status.toString(), 0, writes.get());
+            assertEquals(status.toString(), error, answer);
+        }
     }
 
     // ==================== the command interfaces' save: queued, and seen on disk ====================
@@ -467,18 +550,6 @@ public class CreateProjectToolExtensionRootTest
         assertEquals("the root's note already advises against racing the save: " + message, 1, //$NON-NLS-1$
             message.split("which would race that save", -1).length - 1); //$NON-NLS-1$
         assertEquals("created", CreateProjectTool.extensionState(facts)); //$NON-NLS-1$
-    }
-
-    @Test
-    public void testTheSlowAnswerCarriesARefusedSave()
-    {
-        ExtensionFacts facts = facts(CompatibilityMode.VERSION8_51, CompatibilityMode.VERSION8_51, false);
-        CreateProjectTool.exportWithRoot(mock(IProject.class), CI_FQNS, facts, (project, fqns) -> false);
-
-        String message = JsonParser.parseString(CreateProjectTool.buildExtensionSlowResponse(DATA, facts))
-            .getAsJsonObject().get("message").getAsString(); //$NON-NLS-1$
-
-        assertTrue(message, message.contains("were attached but not queued for saving")); //$NON-NLS-1$
     }
 
     // ==================== the save and the look of a created extension (saveAndLook, ExtensionDisk) ====================

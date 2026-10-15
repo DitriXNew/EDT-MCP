@@ -264,6 +264,19 @@ public class CreateProjectToolTest
         assertTrue(flat, flat.contains("what was not confirmed (its root file, its command interface files)")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testGuideSaysASlowExtensionCreateWritesNothingMore()
+    {
+        // A create still running when the wait window ended gets an answer and no write (afterExtensionCreate), and no
+        // MCP tool attaches the command interfaces to an existing extension later.
+        String flat = flat(new CreateProjectTool().getGuide());
+        assertTrue(flat, flat.contains("are created too (unless the create exceeds the 120 s wait window")); //$NON-NLS-1$
+        assertTrue(flat, flat.contains("**A slow extension create writes nothing more.**")); //$NON-NLS-1$
+        assertTrue(flat, flat.contains("no MCP tool attaches them to an existing extension")); //$NON-NLS-1$
+        assertTrue(flat, flat.contains("`delete_project` and `deleteContent=true` (without it the project's files " //$NON-NLS-1$
+            + "stay on disk under the new create)")); //$NON-NLS-1$
+    }
+
     private static String flat(String text)
     {
         return text.replaceAll("\\s+", " "); //$NON-NLS-1$ //$NON-NLS-2$
