@@ -14,7 +14,9 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.InternalEObject;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.integration.IBmModel;
@@ -128,8 +130,9 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
                     + "wait is skipped where the export state cannot be observed", false) //$NON-NLS-1$
             .stringArrayProperty(WriteScope.RESULT_MEMBER, WriteScope.OUTPUT_SCHEMA_DESCRIPTION)
             .stringProperty(McpKeys.MESSAGE,
-                "Present when the object was already adopted, and when the extension maps adopted objects to " //$NON-NLS-1$
-                    + "the base by name rather than by ID (it says why and how to change it)") //$NON-NLS-1$
+                "Present when the object was already adopted, and when the adopted copy carries no " //$NON-NLS-1$
+                    + "extendedConfigurationObject link, so it is mapped to the base by name rather than by ID (it " //$NON-NLS-1$
+                    + "says the likely reason and, where it can, how to change it)") //$NON-NLS-1$
             .build();
     }
 
@@ -220,8 +223,12 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
 
         String extName = target.getProject().getName();
 
-        // Read before the adoption, as EDT's copier reads it during the adoption (#706).
-        String mappingNote = mappingNote(extName, platformVersion(target), extensionModel(target));
+        // The mapping note says what the COPY is - whether it carries the extendedConfigurationObject link to its base
+        // object - and the root's flag and the platform version only name the likely reason (#706). The flag is read
+        // before the adoption, as EDT's copier reads it during the adoption.
+        IBmModel extensionModel = extensionModel(target);
+        MappingEvidence mapping = new MappingEvidence(extName, extensionModel, platformVersion(target),
+            extensionModel == null ? null : keepsMappingByIds(extensionModel));
 
         if (adopter.isAdopted(source.object, target))
         {
@@ -229,7 +236,9 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
             // queued anywhere. Stated rather than left silent, because "queued nothing" and "did
             // not say" owe the barrier different answers.
             WriteScope.recordNothingQueued();
-            return alreadyAdoptedResult(source, extName, mappingNote);
+            // The existing copy's link was decided when it was adopted, under the flag and the version of that time.
+            return alreadyAdoptedResult(source, extName,
+                mapping.forEarlierCopy(adoptedCopy(adopter, source.object, target)));
         }
 
         // Vendor support (#642) does not apply: the base side is only read, and EDT reads support
@@ -255,7 +264,54 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         List<String> dirty = collectDirtyFqns(adopted, target);
         boolean persisted = !dirty.isEmpty() && BmTransactions.forceExportToDisk(target.getProject(), dirty);
 
-        return adoptedResult(source, extName, persisted, mappingNote);
+        // What the new copy IS, read back after the adoption - not what the flag and the version say it should be.
+        return adoptedResult(source, extName, persisted, mapping.forNewCopy(adopted));
+    }
+
+    /**
+     * What a call's mapping note is judged with besides the copy: the extension's model, where the copy is read
+     * ({@link AdoptMetadataObjectTool#carriesBaseLink}), the platform version and the root's flag, read before the
+     * adoption as EDT's copier reads it. The two paths differ only in the copy's history. Package-visible for tests.
+     */
+    static final class MappingEvidence
+    {
+        private final String extName;
+        private final IBmModel extensionModel;
+        private final Version version;
+        private final Boolean keepsMappingByIds;
+
+        /**
+         * @param extName the extension project's name
+         * @param extensionModel the extension project's model, or {@code null} when it is not available
+         * @param version the extension's platform version, or {@code null}
+         * @param keepsMappingByIds the root's flag ({@link AdoptMetadataObjectTool#keepsMappingByIds}), or {@code null}
+         *     when it could not be read
+         */
+        MappingEvidence(String extName, IBmModel extensionModel, Version version, Boolean keepsMappingByIds)
+        {
+            this.extName = extName;
+            this.extensionModel = extensionModel;
+            this.version = version;
+            this.keepsMappingByIds = keepsMappingByIds;
+        }
+
+        /**
+         * @param copy the copy that was already there ('alreadyAdopted'), or {@code null}
+         * @return its note, or {@code null}
+         */
+        String forEarlierCopy(EObject copy)
+        {
+            return mappingNote(extName, extensionModel, copy, version, keepsMappingByIds, true);
+        }
+
+        /**
+         * @param copy the copy this call adopted, or {@code null}
+         * @return its note, or {@code null}
+         */
+        String forNewCopy(EObject copy)
+        {
+            return mappingNote(extName, extensionModel, copy, version, keepsMappingByIds, false);
+        }
     }
 
     /**
@@ -322,29 +378,41 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Why objects adopted into the extension are mapped to the base by NAME, or {@code null} when they are
-     * mapped by ID - or when that cannot be told. The predicate is EDT's own: its adopter's copier writes an
-     * object's {@code extendedConfigurationObject} link (with the state Checked) only when the platform
-     * version is above 8.3.14 ({@link ExtensionRootBuilder#versionMapsByNameOnly}) AND the extension ROOT keeps
-     * mapping by IDs, and nothing in EDT adds the link later. Either fact alone decides when it is known to
-     * fail; an unknown fact is never blamed. Turning the flag on (or recreating the extension) is advised only
-     * when the version does not already decide, since a recreated extension keeps its base's version.
-     * Package-visible for tests.
+     * Why an adopted copy is mapped to its base object by NAME, or {@code null} when it is mapped by ID - or when that
+     * cannot be told. The COPY decides, not the root's flag: EDT links an adopted object to its base object by ID only
+     * through the {@code extendedConfigurationObject} link its copier writes at adoption, and only when, at that
+     * moment, the platform version is above 8.3.14 ({@link ExtensionRootBuilder#versionMapsByNameOnly}) and the
+     * extension ROOT keeps mapping by IDs; nothing in EDT adds the link later, and EDT's own rename of a base object
+     * carries along exactly the counterpart whose link names it ({@code MdRefactoringService.getAdoptedCounterpart}).
+     * So a copy with the link gets no note whatever the root's flag says now, a copy without one gets the note
+     * whatever it says now, and a copy that could not be read gets none - an unknown fact is never blamed (what counts
+     * as the link, and what that leaves out, is at {@link #carriesBaseLink}). The flag and the version only name the
+     * reason: for a copy adopted by this call they are the ones its adoption ran under, for an earlier copy they are
+     * read now, so they are named as the likely reason, and when neither holds the copy is said to have most likely
+     * been adopted while the extension mapped by name - inferred, not known: such a copy also comes from an XML import
+     * of an extension exported without IDs, or from a platform version raised after the adoption. A change is advised
+     * only for a reason that has one: turning the flag on (or recreating the extension) only when the version does not
+     * already decide, since a recreated extension keeps its base's version; an earlier copy with neither reason gets no
+     * advice, as EDT adds no link to an existing copy. Package-visible for tests.
      *
      * @param extName the extension project's name
+     * @param copyLinked whether the adopted copy carries the link, or {@code null} when the copy could not be read
      * @param version the extension's platform version - the one EDT adopts with - or {@code null}
      * @param keepsMappingByIds the root's {@code keepMappingToExtendedConfigurationObjectsByIDs}, or
      *     {@code null} when it could not be read
+     * @param adoptedEarlier {@code true} for a copy that was already there ('alreadyAdopted'), {@code false} for one
+     *     this call adopted
      * @return the note, or {@code null}
      */
-    static String byNameMappingNote(String extName, Version version, Boolean keepsMappingByIds)
+    static String byNameMappingNote(String extName, Boolean copyLinked, Version version, Boolean keepsMappingByIds, // NOSONAR the copy's fact, the two reasons and the path, one each
+        boolean adoptedEarlier)
     {
-        boolean flagOff = Boolean.FALSE.equals(keepsMappingByIds);
-        boolean versionTooOld = ExtensionRootBuilder.versionMapsByNameOnly(version);
-        if (!flagOff && !versionTooOld)
+        if (!Boolean.FALSE.equals(copyLinked))
         {
             return null;
         }
+        boolean flagOff = Boolean.FALSE.equals(keepsMappingByIds);
+        boolean versionTooOld = ExtensionRootBuilder.versionMapsByNameOnly(version);
         List<String> reasons = new ArrayList<>(2);
         if (flagOff)
         {
@@ -354,12 +422,25 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
         {
             reasons.add("the extension's platform version is " + version); //$NON-NLS-1$
         }
-        StringBuilder note = new StringBuilder("Extension '").append(extName) //$NON-NLS-1$
-            .append("' maps adopted objects to the base by NAME, not by ID: EDT writes an adopted object's ") //$NON-NLS-1$
-            .append("extendedConfigurationObject link only when, at adoption, the extension root keeps mapping ") //$NON-NLS-1$
-            .append("by IDs (keepMappingToExtendedConfigurationObjectsByIDs) and the platform version is above ") //$NON-NLS-1$
-            .append("8.3.14, and here ").append(String.join(" and ", reasons)) //$NON-NLS-1$ //$NON-NLS-2$
-            .append(". Renaming the base object or the copy breaks such a mapping."); //$NON-NLS-1$
+        StringBuilder note = new StringBuilder("The adopted copy in extension '").append(extName) //$NON-NLS-1$
+            .append("' is mapped to the base by NAME, not by ID: it carries no extendedConfigurationObject link, ") //$NON-NLS-1$
+            .append("which EDT writes only when, at adoption, the extension root keeps mapping by IDs ") //$NON-NLS-1$
+            .append("(keepMappingToExtendedConfigurationObjectsByIDs) and the platform version is above 8.3.14"); //$NON-NLS-1$
+        if (!reasons.isEmpty())
+        {
+            String why = String.join(" and ", reasons); //$NON-NLS-1$
+            note.append(adoptedEarlier ? "; it was adopted earlier, and now " + why + " - the likely reason" //$NON-NLS-1$ //$NON-NLS-2$
+                : ", and here " + why); //$NON-NLS-1$
+        }
+        else if (adoptedEarlier)
+        {
+            // Inferred, never stated as a fact: only the copy, the flag and the version NOW are known, and a copy
+            // without a link also comes from an XML import of an extension exported without IDs, or from a version
+            // raised later.
+            note.append("; it was most likely adopted while the extension mapped by name, and EDT does not add the ") //$NON-NLS-1$
+                .append("link afterwards, so objects adopted before stay mapped by name"); //$NON-NLS-1$
+        }
+        note.append(". Renaming the base object or the copy breaks such a mapping."); //$NON-NLS-1$
         if (versionTooOld)
         {
             note.append(" Mapping by ID needs a platform version above 8.3.14."); //$NON-NLS-1$
@@ -376,18 +457,88 @@ public class AdoptMetadataObjectTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * The {@link #byNameMappingNote} for an adoption into the extension whose model is {@code extensionModel}: its
-     * root's mapping flag, read by {@link #keepsMappingByIds}, judged together with the platform version.
-     * Package-visible for tests.
+     * The {@link #byNameMappingNote} for the adopted copy {@code copy} in the extension whose model is
+     * {@code extensionModel}: whether the copy carries the link, read by {@link #carriesBaseLink}, with the root's
+     * flag and the platform version as the reason. Package-visible for tests.
      *
      * @param extName the extension project's name
-     * @param version the extension's platform version, or {@code null}
      * @param extensionModel the extension project's model, or {@code null} when it is not available
+     * @param copy the adopted copy - the object this call adopted, or the one already there - or {@code null}
+     * @param version the extension's platform version, or {@code null}
+     * @param keepsMappingByIds the root's flag ({@link #keepsMappingByIds}), or {@code null} when it could not be read
+     * @param adoptedEarlier whether the copy was already there
      * @return the note, or {@code null}
      */
-    static String mappingNote(String extName, Version version, IBmModel extensionModel)
+    static String mappingNote(String extName, IBmModel extensionModel, EObject copy, Version version, // NOSONAR the copy, where to read it, the two reasons and the path
+        Boolean keepsMappingByIds, boolean adoptedEarlier)
     {
-        return byNameMappingNote(extName, version, extensionModel == null ? null : keepsMappingByIds(extensionModel));
+        return byNameMappingNote(extName, carriesBaseLink(extensionModel, copy), version, keepsMappingByIds,
+            adoptedEarlier);
+    }
+
+    /**
+     * Whether the adopted copy carries the {@code extendedConfigurationObject} link to its base object - the
+     * {@code .mdo} attribute of that name, {@code MdObject.extendedConfigurationObject} - read in a READ transaction
+     * of the extension's model, the copy re-resolved there: by its BM id, or by its URI when it is a proxy (EDT's
+     * adopter can name an existing copy by a global-scope entry, {@code IEObjectDescription.getEObjectOrProxy}, whose id
+     * means nothing). {@code null} when that cannot be told: no model, no BM object, nothing there, or a read that
+     * failed. Package-visible for tests.
+     * <p>
+     * The link counts as soon as it is set: EDT's adopter and its XML import always set it together with the copy's
+     * own state for it ({@code MdObjectExtension.extendedConfigurationObject}) Checked. EDT's readers of the link ask
+     * more, and not the same: its XML export writes the link only while that state is Checked or Notify, and its
+     * model updater follows a copy found by its base object's UUID only while that state is set and not None - but
+     * its rename of a base object carries along the counterpart whose link equals the base object's UUID, whatever
+     * that state ({@code MdRefactoringService}). So two kinds of copy read as linked here are mapped by name by some of
+     * EDT: one whose link is left in the state None, and one whose link names a base object that is gone (a recreated
+     * base object; EDT's validator reports it while the root keeps mapping by IDs). EDT's readers disagree on both, so
+     * neither is told apart here.
+     *
+     * @param extensionModel the extension project's model, or {@code null}
+     * @param copy the adopted copy, or {@code null}
+     * @return the answer, or {@code null}
+     */
+    static Boolean carriesBaseLink(IBmModel extensionModel, EObject copy)
+    {
+        if (extensionModel == null || !(copy instanceof IBmObject))
+        {
+            return null; // NOSONAR tri-state: null means "could not be read"
+        }
+        try
+        {
+            URI proxyUri = copy.eIsProxy() ? ((InternalEObject)copy).eProxyURI() : null;
+            long id = ((IBmObject)copy).bmGetId();
+            return BmTransactions.read(extensionModel, "adopt_metadata_object: read the copy's link", //$NON-NLS-1$
+                (tx, monitor) -> {
+                    IBmObject inTx = proxyUri != null ? tx.getObjectByUri(proxyUri) : tx.getObjectById(id);
+                    return inTx instanceof MdObject
+                        ? Boolean.valueOf(((MdObject)inTx).getExtendedConfigurationObject() != null)
+                        : null;
+                });
+        }
+        catch (RuntimeException e)
+        {
+            // The note is informational: a failed read claims nothing either way.
+            Activator.logInfo("adopt_metadata_object: could not read the adopted copy's link: " + e); //$NON-NLS-1$
+            return null; // NOSONAR tri-state: null means "could not be read"
+        }
+    }
+
+    /**
+     * The copy of {@code source} already adopted into {@code target}, as EDT's adopter finds it (the lookup its
+     * {@code isAdopted} answers with), or {@code null} when it names none or the lookup fails.
+     */
+    private static EObject adoptedCopy(IModelObjectAdopter adopter, EObject source, IExtensionProject target)
+    {
+        try
+        {
+            return adopter.getAdopted(source, target);
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logInfo("adopt_metadata_object: could not find the adopted copy: " + e); //$NON-NLS-1$
+            return null;
+        }
     }
 
     /**

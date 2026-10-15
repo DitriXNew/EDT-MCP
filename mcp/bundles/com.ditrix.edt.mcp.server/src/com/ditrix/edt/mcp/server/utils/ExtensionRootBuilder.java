@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -62,6 +63,13 @@ public final class ExtensionRootBuilder
     /** Project-relative path of a configuration root's file. */
     public static final String ROOT_FILE = "src/Configuration/Configuration.mdo"; //$NON-NLS-1$
 
+    /**
+     * Project-relative paths of the two command interface files EDT's new-extension wizard creates beside the root
+     * ({@link CommandInterfaceSupport#ensureConfigurationCommandInterfaces}), where EDT saves them.
+     */
+    public static final List<String> COMMAND_INTERFACE_FILES = List.of(
+        "src/Configuration/CommandInterface.cmi", "src/Configuration/MainSectionCommandInterface.cmi"); //$NON-NLS-1$ //$NON-NLS-2$
+
     /** Top-object FQN of a configuration's root. */
     private static final String CONFIGURATION_FQN = "Configuration"; //$NON-NLS-1$
 
@@ -99,7 +107,8 @@ public final class ExtensionRootBuilder
          * @param prefix the name prefix, kept as given ({@code ""} included)
          * @param purpose the purpose, or {@code null} to keep the adopter's Customization
          * @param compatibilityMode an explicit extension compatibility mode, or {@code null} for the base's
-         * @param comment the comment, or {@code null}/empty to write none
+         * @param comment the comment, or {@code null}/empty for none: the root's comment is then {@code null}, what EDT's
+         *     wizard writes for an untouched comment field, whatever the adopted root carried
          * @param synonym the synonym, or {@code null}/empty to use {@code name}
          */
         public Spec(String baseProjectName, String name, String prefix, ConfigurationExtensionPurpose purpose, // NOSONAR the wizard's overrides plus this tool's two parameters, one each
@@ -232,12 +241,11 @@ public final class ExtensionRootBuilder
             return Result.failure(adopterRefused(spec.baseProjectName, "it returned no root")); //$NON-NLS-1$
         }
 
-        // The wizard's overrides, in its order (ExtensionWizard.adopt).
+        // The wizard's overrides, in its order (ExtensionWizard.adopt). It writes the comment UNCONDITIONALLY, from its
+        // placeholder model, whose comment stays null while the comment field is untouched: so a comment nobody asked
+        // for is written as null - never left as whatever the adopted root carried.
         root.setName(spec.name);
-        if (spec.comment != null && !spec.comment.isEmpty())
-        {
-            root.setComment(spec.comment);
-        }
+        root.setComment(spec.comment != null && !spec.comment.isEmpty() ? spec.comment : null);
         boolean synonymApplied = applySynonym(root, languageCode, spec);
         root.setNamePrefix(spec.prefix);
         root.setKeepMappingToExtendedConfigurationObjectsByIDs(true);
@@ -411,10 +419,10 @@ public final class ExtensionRootBuilder
         String read() throws IOException;
     }
 
-    /** What a bounded look at a new root's file found. */
+    /** What a bounded look at a new root's file - and at the files saved beside it - found. */
     public static final class RootOnDisk
     {
-        /** Whether one read of the file showed the wizard's shape. */
+        /** Whether one read of the root file showed the wizard's shape; the files beside it never change this. */
         public final boolean confirmed;
         /** What the last read did not show; empty when confirmed. */
         public final List<String> missing;
@@ -426,9 +434,11 @@ public final class ExtensionRootBuilder
         public final String readFailure;
         /** How long the look was allowed to take. */
         public final long budgetMs;
+        /** The files looked for beside the root that the look did not see; empty when all were seen or none was asked. */
+        public final List<String> missingFiles;
 
         private RootOnDisk(boolean confirmed, List<String> missing, boolean fileFound, DiskExportState exportState, // NOSONAR one immutable value per field
-            String readFailure, long budgetMs)
+            String readFailure, long budgetMs, List<String> missingFiles)
         {
             this.confirmed = confirmed;
             this.missing = Collections.unmodifiableList(missing);
@@ -436,6 +446,7 @@ public final class ExtensionRootBuilder
             this.exportState = exportState;
             this.readFailure = readFailure;
             this.budgetMs = budgetMs;
+            this.missingFiles = Collections.unmodifiableList(missingFiles);
         }
 
         /** @return what the look saw, as a clause naming {@link #ROOT_FILE} */
@@ -475,29 +486,61 @@ public final class ExtensionRootBuilder
     public static RootOnDisk confirmOnDisk(Supplier<DiskExportState> exportWait, RootFileReader reader, long budgetMs,
         long pollMs)
     {
+        return confirmOnDisk(exportWait, reader, Collections.emptyList(), path -> true, budgetMs, pollMs);
+    }
+
+    /**
+     * {@link #confirmOnDisk(Supplier, RootFileReader, long, long)} that also looks, within the SAME budget, for the files
+     * saved beside the root - a new extension's two command interface files ({@link #COMMAND_INTERFACE_FILES}). The root
+     * file is read until one read shows the wizard's shape and is not read again after that; the files beside it are
+     * looked for on every round, until all are there or the budget is spent. Only the root decides
+     * {@link RootOnDisk#confirmed}; a file still missing at the end is named in {@link RootOnDisk#missingFiles}, and a
+     * file whose check fails counts as not seen. Never throws for a read or a check that fails.
+     *
+     * @param exportWait the bounded wait for the project's export queue
+     * @param reader reads the root file
+     * @param files the project-relative paths to look for beside the root; empty for none
+     * @param fileExists whether a project-relative path is a file on disk ({@link #projectFileExists})
+     * @param budgetMs how long the whole look may take
+     * @param pollMs the pause between two rounds
+     * @return what was found
+     */
+    public static RootOnDisk confirmOnDisk(Supplier<DiskExportState> exportWait, RootFileReader reader, // NOSONAR the root, the files beside it and the bounds, one each
+        List<String> files, Predicate<String> fileExists, long budgetMs, long pollMs)
+    {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budgetMs);
         DiskExportState exportState = exportWait.get();
+        boolean rootConfirmed = false;
+        List<String> missing = Collections.emptyList();
+        boolean fileFound = false;
+        String failure = null;
         while (true)
         {
-            String text = null;
-            String failure = null;
-            try
+            if (!rootConfirmed)
             {
-                text = reader.read();
+                String text = null;
+                failure = null;
+                try
+                {
+                    text = reader.read();
+                }
+                catch (IOException | RuntimeException e)
+                {
+                    failure = reason(e);
+                }
+                missing = missingOnDisk(text);
+                fileFound = text != null;
+                rootConfirmed = missing.isEmpty();
             }
-            catch (IOException | RuntimeException e)
+            List<String> missingFiles = notOnDisk(files, fileExists);
+            if (rootConfirmed && missingFiles.isEmpty())
             {
-                failure = reason(e);
-            }
-            List<String> missing = missingOnDisk(text);
-            if (missing.isEmpty())
-            {
-                return new RootOnDisk(true, missing, true, exportState, null, budgetMs);
+                return new RootOnDisk(true, missing, true, exportState, null, budgetMs, missingFiles);
             }
             long remainingNanos = deadline - System.nanoTime();
             if (remainingNanos <= 0)
             {
-                return new RootOnDisk(false, missing, text != null, exportState, failure, budgetMs);
+                return new RootOnDisk(rootConfirmed, missing, fileFound, exportState, failure, budgetMs, missingFiles);
             }
             try
             {
@@ -506,9 +549,47 @@ public final class ExtensionRootBuilder
             catch (InterruptedException e)
             {
                 Thread.currentThread().interrupt();
-                return new RootOnDisk(false, missing, text != null, exportState, failure, budgetMs);
+                return new RootOnDisk(rootConfirmed, missing, fileFound, exportState, failure, budgetMs, missingFiles);
             }
         }
+    }
+
+    /** The {@code files} that {@code fileExists} does not see, in their order; a check that throws counts as not seen. */
+    private static List<String> notOnDisk(List<String> files, Predicate<String> fileExists)
+    {
+        List<String> notSeen = new ArrayList<>(files.size());
+        for (String file : files)
+        {
+            boolean seen;
+            try
+            {
+                seen = fileExists.test(file);
+            }
+            catch (RuntimeException e)
+            {
+                seen = false;
+            }
+            if (!seen)
+            {
+                notSeen.add(file);
+            }
+        }
+        return notSeen;
+    }
+
+    /**
+     * Whether a project-relative path is a regular file under the project's location, checked straight on the file
+     * system, past the workspace's resource cache - as {@link #readRootFile} reads the root. A project with no local
+     * location has no files.
+     *
+     * @param project the project
+     * @return the check
+     */
+    public static Predicate<String> projectFileExists(IProject project)
+    {
+        IPath location = project.getLocation();
+        return relativePath -> location != null
+            && Files.isRegularFile(Paths.get(location.toOSString(), relativePath.split("/"))); //$NON-NLS-1$
     }
 
     /**

@@ -12,6 +12,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ProjectScope;
@@ -55,6 +57,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.BmModelResolver;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.BuildUtils;
+import com.ditrix.edt.mcp.server.utils.BuildUtils.DiskExportState;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSupport;
 import com.ditrix.edt.mcp.server.utils.ExtensionRootBuilder;
 import com.ditrix.edt.mcp.server.utils.ExternalObjectRoots;
@@ -114,7 +117,8 @@ public class CreateProjectTool implements IMcpTool
 
     /**
      * Budget (ms) for confirming a new extension's root on disk: EDT's export queue drained and the root
-     * file read back. EDT saves the root asynchronously after create() attached it.
+     * file read back, and in the same budget its two command interface files seen. EDT saves them
+     * asynchronously after create() attached the root.
      */
     private static final long ROOT_CONFIRM_TIMEOUT_MS = 30_000L;
 
@@ -123,6 +127,14 @@ public class CreateProjectTool implements IMcpTool
 
     /** Top-object FQN of a configuration root. */
     private static final String CONFIGURATION_FQN = "Configuration"; //$NON-NLS-1$
+
+    /**
+     * Why a save submission was refused, as {@link BmTransactions#forceExportToDisk(IProject, List)} reports it: by a
+     * {@code false} that covers all of these at once.
+     */
+    private static final String EXPORT_NOT_ACCEPTED = "EDT accepted no save task for them (its project services " //$NON-NLS-1$
+        + "or the new project's DtProject were not available, or EDT declined or failed the submission; a failure " //$NON-NLS-1$
+        + "is in the EDT log)"; //$NON-NLS-1$
 
     /** Parameter/output key: the extension compatibility mode. */
     private static final String KEY_COMPATIBILITY_MODE = "compatibilityMode"; //$NON-NLS-1$
@@ -794,7 +806,7 @@ public class CreateProjectTool implements IMcpTool
             List<String> slowCommandInterfaces = ensureCommandInterfaces(slowProject, facts);
             if (!slowCommandInterfaces.isEmpty())
             {
-                exportWithRoot(slowProject, slowCommandInterfaces);
+                exportWithRoot(slowProject, slowCommandInterfaces, facts, ExtensionDisk.of(slowProject).save);
             }
             return buildExtensionSlowResponse(responseData, facts);
         }
@@ -820,15 +832,10 @@ public class CreateProjectTool implements IMcpTool
         facts.lifecycleStarted = waitForStarted(finalEffectiveProjectName, createdHolder[0], KIND_EXTENSION);
 
         // The two command interfaces EDT's wizard creates, exported with the root EDT attached; then the
-        // root file must show the wizard's shape before the answer may say 'ready'.
-        exportWithRoot(createdProject, ensureCommandInterfaces(createdProject, facts));
-        if (facts.lifecycleStarted)
-        {
-            facts.disk = ExtensionRootBuilder.confirmOnDisk(
-                () -> BuildUtils.waitForDiskExport(createdProject, ROOT_CONFIRM_TIMEOUT_MS),
-                () -> ExtensionRootBuilder.readRootFile(createdProject), ROOT_CONFIRM_TIMEOUT_MS,
-                ROOT_CONFIRM_POLL_MS);
-        }
+        // root file must show the wizard's shape before the answer may say 'ready'. The command interface files are
+        // looked for in the same bounded look - the same budget, not a second one - and never change 'ready'.
+        saveAndLook(createdProject, ensureCommandInterfaces(createdProject, facts), facts,
+            ExtensionDisk.of(createdProject), ROOT_CONFIRM_TIMEOUT_MS, ROOT_CONFIRM_POLL_MS);
 
         // Apply v8codestyle preferences
         Map<String, Object> codestyleMap =
@@ -873,16 +880,136 @@ public class CreateProjectTool implements IMcpTool
         }
     }
 
-    /**
-     * Queues the export of the root and of {@code topObjectFqns}. EDT already scheduled its own save of the
-     * root it attached; queuing it here as well puts the root on the queue the confirmation waits for.
-     */
-    private static void exportWithRoot(IProject project, List<String> topObjectFqns)
+    /** Hands save tasks to EDT: {@link BmTransactions#forceExportToDisk(IProject, List)} outside tests. */
+    @FunctionalInterface
+    interface ExportSubmission
     {
-        List<String> fqns = new ArrayList<>(topObjectFqns.size() + 1);
+        /**
+         * @param project the project the objects belong to
+         * @param topObjectFqns the top objects whose files to save
+         * @return whether EDT accepted a save task
+         */
+        boolean submit(IProject project, List<String> topObjectFqns);
+    }
+
+    /**
+     * Queues the export of the root and of the command interfaces this call attached ({@code commandInterfaceFqns}),
+     * and records in {@code facts} a submission EDT did not accept - or one that threw - while there were command
+     * interfaces to save: they are then in the model, but this call queued no save of their files. EDT already
+     * scheduled its own save of the root it attached; queuing it here as well puts the root on the queue the
+     * confirmation waits for, and the root's file is judged on disk, so nothing is recorded for the root alone. Never
+     * throws. Package-visible for tests.
+     *
+     * @param project the new extension project
+     * @param commandInterfaceFqns the command interfaces' FQNs this call ensured (attached, or found attached); empty
+     *     for none
+     * @param facts where a refused submission is recorded
+     * @param submission hands the save tasks to EDT
+     */
+    static void exportWithRoot(IProject project, List<String> commandInterfaceFqns, ExtensionFacts facts,
+        ExportSubmission submission)
+    {
+        List<String> fqns = new ArrayList<>(commandInterfaceFqns.size() + 1);
         fqns.add(CONFIGURATION_FQN);
-        fqns.addAll(topObjectFqns);
-        BmTransactions.forceExportToDisk(project, fqns);
+        fqns.addAll(commandInterfaceFqns);
+        String refused;
+        try
+        {
+            refused = submission.submit(project, fqns) ? null : EXPORT_NOT_ACCEPTED;
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError(LOG_PREFIX + "the save of the new root and command interfaces of '" //$NON-NLS-1$
+                + project.getName() + "' could not be queued", e); //$NON-NLS-1$
+            refused = e.getMessage() != null && !e.getMessage().isEmpty() ? e.getMessage()
+                : e.getClass().getSimpleName();
+        }
+        if (refused != null && !commandInterfaceFqns.isEmpty())
+        {
+            facts.commandInterfaceSaveFailure = refused;
+        }
+    }
+
+    /**
+     * The command interface files the bounded look waits for beside the root: both of them when this call attached
+     * the command interfaces, none when it did not (a failure the answer already names). Package-visible for tests.
+     *
+     * @param commandInterfaceFqns the command interfaces' FQNs this call ensured (attached, or found attached)
+     * @return the project-relative paths to look for
+     */
+    static List<String> commandInterfaceFiles(List<String> commandInterfaceFqns)
+    {
+        return commandInterfaceFqns.isEmpty() ? Collections.emptyList() : ExtensionRootBuilder.COMMAND_INTERFACE_FILES;
+    }
+
+    /**
+     * A new extension's files as the steps after create() reach them: EDT's save of top objects, the bounded wait for
+     * the project's export queue, the root file, and the check of a file beside it. {@link #of} binds EDT's own to a
+     * project; tests pass theirs. Package-visible for tests.
+     */
+    static final class ExtensionDisk
+    {
+        /** Hands save tasks to EDT. */
+        final ExportSubmission save;
+        /** The bounded wait for the project's export queue. */
+        final Supplier<DiskExportState> exportWait;
+        /** Reads the root file. */
+        final ExtensionRootBuilder.RootFileReader rootFile;
+        /** Whether a project-relative path is a file on disk. */
+        final Predicate<String> fileExists;
+
+        ExtensionDisk(ExportSubmission save, Supplier<DiskExportState> exportWait,
+            ExtensionRootBuilder.RootFileReader rootFile, Predicate<String> fileExists)
+        {
+            this.save = save;
+            this.exportWait = exportWait;
+            this.rootFile = rootFile;
+            this.fileExists = fileExists;
+        }
+
+        /**
+         * EDT's own for {@code project}: its save ({@link BmTransactions#forceExportToDisk(IProject, List)}), its
+         * export wait ({@link BuildUtils#waitForDiskExport}, within {@link CreateProjectTool#ROOT_CONFIRM_TIMEOUT_MS}),
+         * and the root file and the files beside it, read straight from the project's location
+         * ({@link ExtensionRootBuilder#readRootFile}, {@link ExtensionRootBuilder#projectFileExists}). Nothing is
+         * asked of the project until a step runs.
+         *
+         * @param project the new extension project
+         * @return its disk
+         */
+        static ExtensionDisk of(IProject project)
+        {
+            return new ExtensionDisk(BmTransactions::forceExportToDisk,
+                () -> BuildUtils.waitForDiskExport(project, ROOT_CONFIRM_TIMEOUT_MS),
+                () -> ExtensionRootBuilder.readRootFile(project),
+                path -> ExtensionRootBuilder.projectFileExists(project).test(path));
+        }
+    }
+
+    /**
+     * The save and the bounded look a created extension gets: queues the save of the root and of the command
+     * interfaces this call attached ({@link #exportWithRoot}) and - once EDT reported the context started - looks for
+     * the root file and, in the same budget, for the files of those command interfaces
+     * ({@link #commandInterfaceFiles}), recording in {@code facts} a save EDT did not accept and what the look found.
+     * The files looked for are decided here, from what this call attached. Package-visible for tests.
+     *
+     * @param project the new extension project
+     * @param commandInterfaceFqns the command interfaces' FQNs this call ensured (attached, or found attached); empty
+     *     for none
+     * @param facts where a refused save and the look's findings are recorded
+     * @param disk the project's files ({@link ExtensionDisk#of} outside tests)
+     * @param budgetMs how long the whole look may take
+     * @param pollMs the pause between two rounds of the look
+     */
+    static void saveAndLook(IProject project, List<String> commandInterfaceFqns, ExtensionFacts facts, // NOSONAR the project, what to save, where to record, the disk and the two bounds
+        ExtensionDisk disk, long budgetMs, long pollMs)
+    {
+        exportWithRoot(project, commandInterfaceFqns, facts, disk.save);
+        if (facts.lifecycleStarted)
+        {
+            facts.disk = ExtensionRootBuilder.confirmOnDisk(disk.exportWait, disk.rootFile,
+                commandInterfaceFiles(commandInterfaceFqns), disk.fileExists, budgetMs, pollMs);
+        }
     }
 
     // ─────────────────────── CONFIGURATION path ──────────────────────────────
@@ -1779,9 +1906,14 @@ public class CreateProjectTool implements IMcpTool
         final String compatibilityNote;
         /** Why the command interfaces were not created, or {@code null} when they were. */
         String commandInterfaceFailure;
+        /** Why the save of the command interfaces this call created was not queued, or {@code null} when it was. */
+        String commandInterfaceSaveFailure;
         /** Whether EDT reported the new project's context started. */
         boolean lifecycleStarted;
-        /** What the bounded look at the root file found, or {@code null} when it was not looked at. */
+        /**
+         * What the bounded look at the root file - and at the command interface files - found, or {@code null} when it
+         * was not looked at.
+         */
         ExtensionRootBuilder.RootOnDisk disk;
 
         ExtensionFacts(CompatibilityMode mode, CompatibilityMode baseMode, boolean modeRequested,
@@ -2268,7 +2400,9 @@ public class CreateProjectTool implements IMcpTool
 
     /**
      * The state of a created extension: {@code ready} only when EDT reported its context started AND the
-     * root file on disk showed the wizard's shape - never on a root nobody saw. Package-visible for tests.
+     * root file on disk showed the wizard's shape - never on a root nobody saw. The command interface files do not
+     * enter it: {@code ready} is documented as the root seen on disk, and {@link #commandInterfaceNote} names a
+     * command interface file that was not. Package-visible for tests.
      *
      * @param facts what the post-create steps found
      * @return {@code ready} or {@code created}
@@ -2317,17 +2451,70 @@ public class CreateProjectTool implements IMcpTool
         {
             parts.add(facts.compatibilityNote);
         }
-        if (facts.commandInterfaceFailure != null)
+        String commandInterfaces = commandInterfaceNote(facts);
+        if (commandInterfaces != null)
         {
-            parts.add("The command interface files CommandInterface.cmi and MainSectionCommandInterface.cmi that " //$NON-NLS-1$
-                + "EDT's wizard creates were not created: " + withoutFinalPeriod(facts.commandInterfaceFailure) //$NON-NLS-1$
-                + "."); //$NON-NLS-1$
+            parts.add(commandInterfaces);
         }
         String role = defaultRoleNote(facts.baseMode, facts.mode);
         if (role != null)
         {
             parts.add(role);
         }
+    }
+
+    /**
+     * What the answer says of the two command interface files EDT's wizard creates, or {@code null} when there is
+     * nothing to say. Their FILES are the evidence, as the root's file is the root's: a save submission EDT did not
+     * accept is reported only while the files were not seen - by a look that did not run or that ended without them -
+     * since EDT also saves a committed change on its own; files the look did see need no note. A file the look did not
+     * see is named. None of this changes {@code state}, which is the root's. Package-visible for tests.
+     *
+     * @param facts what the post-create steps found
+     * @return the note, or {@code null}
+     */
+    static String commandInterfaceNote(ExtensionFacts facts)
+    {
+        String files = "The command interface files CommandInterface.cmi and MainSectionCommandInterface.cmi that " //$NON-NLS-1$
+            + "EDT's wizard creates"; //$NON-NLS-1$
+        if (facts.commandInterfaceFailure != null)
+        {
+            return files + " were not created: " + withoutFinalPeriod(facts.commandInterfaceFailure) + "."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        List<String> notSeen = facts.disk == null ? Collections.emptyList() : facts.disk.missingFiles;
+        boolean refused = facts.commandInterfaceSaveFailure != null && (facts.disk == null || !notSeen.isEmpty());
+        if (!refused && notSeen.isEmpty())
+        {
+            return null;
+        }
+        StringBuilder note = new StringBuilder(files);
+        if (refused)
+        {
+            note.append(" were attached but not queued for saving: ") //$NON-NLS-1$
+                .append(withoutFinalPeriod(facts.commandInterfaceSaveFailure));
+            if (!notSeen.isEmpty())
+            {
+                note.append("; "); //$NON-NLS-1$
+            }
+        }
+        else
+        {
+            note.append(" were attached, but "); //$NON-NLS-1$
+        }
+        if (!notSeen.isEmpty())
+        {
+            note.append(String.join(" and ", notSeen)).append(notSeen.size() == 1 ? " was" : " were") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                .append(" not found on disk after ").append(seconds(facts.disk.budgetMs)).append('s'); //$NON-NLS-1$
+        }
+        note.append('.');
+        if (!notSeen.isEmpty() && facts.disk.confirmed)
+        {
+            // The root's own note gives the same advice when the root was not confirmed either.
+            note.append(" EDT may still be writing ").append(notSeen.size() == 1 ? "it" : "them") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                .append("; wait a few seconds before restarting EDT or running clean_project on this project, ") //$NON-NLS-1$
+                .append("which would race that save."); //$NON-NLS-1$
+        }
+        return note.toString();
     }
 
     /**

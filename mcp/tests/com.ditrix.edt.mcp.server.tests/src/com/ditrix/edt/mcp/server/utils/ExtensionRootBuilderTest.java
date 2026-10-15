@@ -197,8 +197,51 @@ public class ExtensionRootBuilderTest
         ExtensionRootBuilder.Result result = ExtensionRootBuilder.build(adopter, base, VERSION, noSynonym);
 
         assertEquals("MyExt", result.root.getSynonym().get("en")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertNull("a blank comment is not written", result.root.getComment()); //$NON-NLS-1$
+        assertNull("no comment was asked for, so the root has none", result.root.getComment()); //$NON-NLS-1$
         assertEquals("the empty prefix is kept as given", "", result.root.getNamePrefix()); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    // EDT's wizard writes the comment UNCONDITIONALLY (ExtensionWizard.adopt: setComment(model.getComment())), and its
+    // placeholder model's comment stays null while the comment field is untouched. EDT's copier carries only the name
+    // today (MdObjectAdopterParticipant.shouldCopyAttribute), so the adopter below is one that DID carry the base's
+    // comment: what these pin is the builder's override, which must never let such a comment through.
+
+    @Test
+    public void testAnOmittedCommentIsWrittenAsTheWizardsNullNotLeftAsTheAdoptedOne()
+    {
+        base.setComment("The base configuration's own comment"); //$NON-NLS-1$
+        adopted.setComment("The base configuration's own comment"); //$NON-NLS-1$
+        ExtensionRootBuilder.Spec noComment = new ExtensionRootBuilder.Spec(BASE_PROJECT, "MyExt", "Ext1_", //$NON-NLS-1$ //$NON-NLS-2$
+            ConfigurationExtensionPurpose.CUSTOMIZATION, null, null, "My extension"); //$NON-NLS-1$
+
+        ExtensionRootBuilder.Result result = ExtensionRootBuilder.build(adopter, base, VERSION, noComment);
+
+        assertNull(result.error, result.error);
+        assertNull("the root gets the wizard's untouched value, null - not the base's comment", //$NON-NLS-1$
+            result.root.getComment());
+    }
+
+    @Test
+    public void testAnEmptyCommentIsWrittenAsTheWizardsNullNotLeftAsTheAdoptedOne()
+    {
+        adopted.setComment("The base configuration's own comment"); //$NON-NLS-1$
+        ExtensionRootBuilder.Spec emptyComment = new ExtensionRootBuilder.Spec(BASE_PROJECT, "MyExt", "Ext1_", //$NON-NLS-1$ //$NON-NLS-2$
+            ConfigurationExtensionPurpose.CUSTOMIZATION, null, "", "My extension"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        ExtensionRootBuilder.Result result = ExtensionRootBuilder.build(adopter, base, VERSION, emptyComment);
+
+        assertNull(result.error, result.error);
+        assertNull("an empty comment is no comment: null, as for an untouched field", result.root.getComment()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testARequestedCommentReplacesTheAdoptedOne()
+    {
+        adopted.setComment("The base configuration's own comment"); //$NON-NLS-1$
+
+        ExtensionRootBuilder.Result result = ExtensionRootBuilder.build(adopter, base, VERSION, spec(null));
+
+        assertEquals("A comment", result.root.getComment()); //$NON-NLS-1$
     }
 
     @Test
@@ -582,5 +625,115 @@ public class ExtensionRootBuilderTest
         assertFalse(disk.confirmed);
         assertNotNull(disk.readFailure);
         assertTrue(disk.readFailure, disk.readFailure.contains("sharing violation")); //$NON-NLS-1$
+    }
+
+    // ==================== the command interface files, in the same look ====================
+
+    private static final String CMI = "src/Configuration/CommandInterface.cmi"; //$NON-NLS-1$
+    private static final String MAIN_CMI = "src/Configuration/MainSectionCommandInterface.cmi"; //$NON-NLS-1$
+
+    @Test
+    public void testTheCommandInterfaceFilesAreWhereEdtSavesThem()
+    {
+        assertEquals(Arrays.asList(CMI, MAIN_CMI), ExtensionRootBuilder.COMMAND_INTERFACE_FILES);
+    }
+
+    @Test
+    public void testTheFilesBesideTheRootAreWaitedForWhileTheRootIsReadOnce()
+    {
+        AtomicInteger reads = new AtomicInteger();
+        AtomicInteger checks = new AtomicInteger();
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.DRAINED,
+            () -> {
+                reads.incrementAndGet();
+                return WIZARD_ROOT;
+            }, Arrays.asList(CMI, MAIN_CMI), path -> checks.incrementAndGet() > 2, 5_000L, 10L);
+
+        assertTrue(disk.confirmed);
+        assertEquals("both files were seen in the end", Collections.emptyList(), disk.missingFiles); //$NON-NLS-1$
+        assertEquals("a root one read confirmed is not read again", 1, reads.get()); //$NON-NLS-1$
+        assertTrue("the files were looked for again after the root was confirmed: " + checks.get(), checks.get() > 2); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFileStillMissingAtTheBudgetIsNamedButTheRootStaysConfirmed()
+    {
+        long start = System.nanoTime();
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.DRAINED,
+            () -> WIZARD_ROOT, Arrays.asList(CMI, MAIN_CMI), path -> !MAIN_CMI.equals(path), 300L, 20L);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+
+        assertTrue("the root alone decides 'confirmed'", disk.confirmed); //$NON-NLS-1$
+        assertEquals(Collections.singletonList(MAIN_CMI), disk.missingFiles);
+        assertTrue("the same budget bounds the files, took " + elapsedMs + " ms", elapsedMs < 3_000L); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    @Test
+    public void testFilesOnDiskNeverConfirmARootThatIsNot()
+    {
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.DRAINED,
+            () -> FACTORY_ROOT, Arrays.asList(CMI, MAIN_CMI), path -> true, 100L, 10L);
+
+        assertFalse(disk.confirmed);
+        assertEquals(Collections.emptyList(), disk.missingFiles);
+        assertEquals(2, disk.missing.size());
+    }
+
+    @Test
+    public void testAFileCheckThatThrowsCountsTheFileAsNotSeen()
+    {
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.DRAINED,
+            () -> WIZARD_ROOT, Arrays.asList(CMI, MAIN_CMI), path -> {
+                if (CMI.equals(path))
+                {
+                    throw new SecurityException("access denied"); //$NON-NLS-1$
+                }
+                return true;
+            }, 100L, 10L);
+
+        assertTrue(disk.confirmed);
+        assertEquals(Collections.singletonList(CMI), disk.missingFiles);
+    }
+
+    @Test
+    public void testTheRootOnlyLookAsksForNoFiles()
+    {
+        ExtensionRootBuilder.RootOnDisk disk = ExtensionRootBuilder.confirmOnDisk(() -> DiskExportState.DRAINED,
+            () -> WIZARD_ROOT, 1_000L, 10L);
+
+        assertTrue(disk.confirmed);
+        assertEquals(Collections.emptyList(), disk.missingFiles);
+    }
+
+    @Test
+    public void testAProjectFileIsLookedForUnderTheProjectLocation() throws IOException
+    {
+        java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("erb706cmi"); //$NON-NLS-1$
+        try
+        {
+            IProject project = mock(IProject.class);
+            when(project.getLocation()).thenReturn(new org.eclipse.core.runtime.Path(dir.toString()));
+            java.nio.file.Path file = dir.resolve("src").resolve("Configuration").resolve("CommandInterface.cmi"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            java.nio.file.Files.createDirectories(file.getParent());
+            java.nio.file.Files.write(file, "<cmi:CommandInterface/>".getBytes(StandardCharsets.UTF_8)); //$NON-NLS-1$
+
+            assertTrue(ExtensionRootBuilder.projectFileExists(project).test(CMI));
+            assertFalse(ExtensionRootBuilder.projectFileExists(project).test(MAIN_CMI));
+            assertFalse("a directory is not a file", //$NON-NLS-1$
+                ExtensionRootBuilder.projectFileExists(project).test("src/Configuration")); //$NON-NLS-1$
+        }
+        finally
+        {
+            try (java.util.stream.Stream<java.nio.file.Path> walk = java.nio.file.Files.walk(dir))
+            {
+                walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
+            }
+        }
+    }
+
+    @Test
+    public void testAProjectWithoutALocalLocationHasNoFiles()
+    {
+        assertFalse(ExtensionRootBuilder.projectFileExists(mock(IProject.class)).test(CMI));
     }
 }

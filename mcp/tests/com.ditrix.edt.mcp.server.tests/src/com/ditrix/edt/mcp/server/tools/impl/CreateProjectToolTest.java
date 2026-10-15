@@ -249,6 +249,21 @@ public class CreateProjectToolTest
         assertFalse(flat, flat.contains("only above extension compatibility 8.3.13")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testGuideSaysTheCommandInterfaceFilesAreLookedForButLeaveStateToTheRoot()
+    {
+        // The two .cmi files are looked for in the same bounded check as the root; a file not seen is said in
+        // 'message', and a save EDT did not accept only when a file was not seen or no check could run - not when the
+        // check saw both (commandInterfaceNote). And 'ready' stays what it is documented as: the root seen on disk.
+        String flat = flat(new CreateProjectTool().getGuide());
+        assertTrue(flat, flat.contains("looked for on disk within the same check as the root file")); //$NON-NLS-1$
+        assertTrue(flat, flat.contains("`message` names a file that was not seen on disk, and a save of them " //$NON-NLS-1$
+            + "EDT did not accept when a file was not seen or no check could run (they do not change `state`)")); //$NON-NLS-1$
+        assertFalse("a refused save of files the check saw is not said", //$NON-NLS-1$
+            flat.contains("says when they were not queued for saving")); //$NON-NLS-1$
+        assertTrue(flat, flat.contains("what was not confirmed (its root file, its command interface files)")); //$NON-NLS-1$
+    }
+
     private static String flat(String text)
     {
         return text.replaceAll("\\s+", " "); //$NON-NLS-1$ //$NON-NLS-2$

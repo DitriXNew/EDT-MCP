@@ -212,11 +212,11 @@ public class MetadataRenameService
         }
 
         // NB: an ADOPTED object in a configuration extension CAN be renamed - exactly as the EDT UI rename
-        // allows. Where the extension maps by ID (its root keeps keepMappingToExtendedConfigurationObjectsByIDs
-        // and the platform version is above 8.3.14), the link to the base object is held by UUID in a separate
-        // field (extendedConfigurationObject), so the EDT rename refactoring below keeps the adoption intact.
-        // An extension that maps by name has no such link, and renaming the copy breaks its mapping, as in the
-        // UI; adopt_metadata_object says which kind an extension is. (Do NOT refuse adopted objects.)
+        // allows. A copy adopted while its extension's root kept keepMappingToExtendedConfigurationObjectsByIDs
+        // on a platform above 8.3.14 holds its link to the base object by UUID in a separate field
+        // (extendedConfigurationObject), which the EDT rename refactoring below leaves intact. A copy adopted
+        // without it has no such link (EDT never adds one later), and renaming it breaks its mapping, as in the
+        // UI; adopt_metadata_object says which kind a copy is. (Do NOT refuse adopted objects.)
 
         BmModelResolver.Resolution modelResolution = BmModelResolver.resolveForRefactoring(project);
         return prepareMdClassRename(project, objectFqn, newName, targetObject, confirm,

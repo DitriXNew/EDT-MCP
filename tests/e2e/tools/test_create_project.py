@@ -23,10 +23,11 @@ the base language by ID, the BASE's compatibility mode, and the two command inte
 no base-only properties. The wizard-made fixture extension (tests/tests) is the oracle: it extends
 the same base, so its extension block must be equal to a created one. An adoption into a root that
 does not keep mapping by IDs - one an earlier create_project made - is mapped by name, and
-adopt_metadata_object says so. And a create no longer waits out a 60 s lifecycle timeout: EDT starts
-the context inside create(), so the answer is 'ready' in seconds. The created projects' paths come
-from list_projects (the workspace differs per machine and CI runs on Linux), and every created
-project is removed in a finally block.
+adopt_metadata_object says so; it judges the COPY, which EDT links by ID only at adoption, so turning
+the root's flag on or off later moves no copy adopted before. And a create no longer waits out a 60 s
+lifecycle timeout: EDT starts the context inside create(), so the answer is 'ready' in seconds. The
+created projects' paths come from list_projects (the workspace differs per machine and CI runs on
+Linux), and every created project is removed in a finally block.
 """
 
 import os
@@ -66,6 +67,7 @@ SEEDED_ROOT = "ExternalDataProcessor.CreateProjSeededRoot_e2e"
 NEW_EXT_WIZARD = "CreateProjTest_ExtWizard_e2e"
 NEW_EXT_ADOPT = "CreateProjTest_ExtAdopt_e2e"
 NEW_EXT_BY_NAME = "CreateProjTest_ExtByName_e2e"
+NEW_EXT_LINKED = "CreateProjTest_ExtLinked_e2e"
 NEW_EXT_COMPAT = "CreateProjTest_ExtCompat_e2e"
 NEW_EXT_REFUSED = "CreateProjTest_ExtRefused_e2e"
 NEW_BASE_8327 = "CreateProjTest_Base8327_e2e"
@@ -176,14 +178,32 @@ _KEEP_MAPPING_LINE_RE = re.compile(
 
 def _drop_keep_mapping(root_path):
     """Removes the mapping flag's line from a root file, every other byte kept, line ends included -
-    the root an earlier create_project made. Returns how many lines went (0: the flag was never set)."""
+    the root an earlier create_project made. Returns (the removed line, the line that followed it), what
+    _restore_keep_mapping needs to put it back, or None when the flag was never set."""
     with open(root_path, encoding="utf-8", newline="") as f:
         text = f.read()
-    stripped, removed = _KEEP_MAPPING_LINE_RE.subn("", text)
-    if removed:
-        with open(root_path, "w", encoding="utf-8", newline="") as f:
-            f.write(stripped)
-    return removed
+    match = _KEEP_MAPPING_LINE_RE.search(text)
+    if match is None:
+        return None
+    rest = text[match.end():]
+    following = rest.splitlines(True)[0] if rest else ""
+    with open(root_path, "w", encoding="utf-8", newline="") as f:
+        f.write(text[:match.start()] + rest)
+    return match.group(0), following
+
+
+def _restore_keep_mapping(root_path, removed):
+    """Puts a line _drop_keep_mapping removed back before the line that followed it, in the root as EDT has
+    rewritten it since (an adoption adds the copy to the root's lists, so the old text cannot be written back)."""
+    line, following = removed
+    with open(root_path, encoding="utf-8", newline="") as f:
+        text = f.read()
+    at = text.find(following) if following else -1
+    if at < 0:
+        raise AssertionError("cannot restore the mapping flag: the line %r that followed it is no longer in %s:\n%s"
+                             % (following, root_path, text[:1500]))
+    with open(root_path, "w", encoding="utf-8", newline="") as f:
+        f.write(text[:at] + line + text[at:])
 
 
 def _create_extension(name, base=PROJECT, **extra):
@@ -402,6 +422,10 @@ def test_extension_root_is_adopted_from_the_base_like_edt_wizard():
             "the effective mode is the BASE's %r, got %r" % (_mode_name(compat), s.get("compatibilityMode"))
         assert_contains(s.get("message") or "", "adopted from the root of '%s'" % PROJECT,
                         "the answer says how the root was built")
+        # The command interface files are looked for in the same bounded check as the root: both are on disk
+        # (read above), so the answer names neither as unsaved or unseen.
+        assert "CommandInterface.cmi" not in (s.get("message") or ""), \
+            "both command interface files are on disk, so the answer says nothing of them: %r" % (s.get("message"),)
     finally:
         _ensure_absent(effective)
 
@@ -450,17 +474,41 @@ def test_adopt_into_a_created_extension_links_to_the_base_by_id():
     assert_no_diff("adopting reads the base; the copy lands in the created extension only")
 
 
+def _adopt_into(effective, fqn, ctx):
+    """Adopts a base fixture object into the created extension `effective` and returns the response."""
+    adopted = call("adopt_metadata_object", {
+        "projectName": PROJECT,
+        "fqn": fqn,
+        # Two extensions extend the base now - the fixture's and this one.
+        "extensionProjectName": effective,
+    })
+    assert_ok(adopted, ctx)
+    return adopted
+
+
+def _adopted_copy_path(directory, module):
+    return os.path.join(directory, "src", "CommonModules", module, module + ".mdo")
+
+
+def _reimport(effective, ctx):
+    """clean_project on the created extension - the deterministic re-import of its edited root - then settles."""
+    assert_ok(call("clean_project", {"projectName": effective}), "re-import the extension root " + ctx)
+    settle_or_fail("the extension after its root was re-imported " + ctx)
+
+
 @e2e_test(tool="adopt_metadata_object", kind="write-metadata")
 def test_adopt_into_an_extension_that_does_not_keep_mapping_by_ids_says_it_maps_by_name():
     """An extension root that does not keep mapping by IDs - the root an earlier create_project made -
-    gets its adoptions mapped by NAME, and adopt_metadata_object says so in `message`.
+    gets its adoptions mapped by NAME, and adopt_metadata_object says so in `message`. And the COPY
+    decides that, not the root's flag now: once the flag is turned back on, the copy adopted without a
+    link still has none - EDT writes the link only at adoption - and is still reported mapped by name.
 
     The flag is removed from the disk of a freshly created extension and brought into its model with
-    clean_project, the deterministic re-import. That checks live what the unit tests only mock: the
-    tool reads the flag EDT's copier reads, and under such a root the copier writes no
-    extendedConfigurationObject link. The disk is read first - the copy without a link holds on any
-    jar; the note is what a jar without #706 lacks. kind=write-metadata: the adoption names the base
-    fixture as projectName."""
+    clean_project, the deterministic re-import. That checks live what the unit tests only mock: under
+    such a root EDT's copier writes no extendedConfigurationObject link, and the tool reads the copy.
+    The disk is read first - the copy without a link holds on any jar; the note is what a jar without
+    #706 lacks, and the note after the flag is restored is what a jar that judges by the flag lacks.
+    kind=write-metadata: the adoption names the base fixture as projectName."""
     effective = PROJECT + "." + NEW_EXT_BY_NAME
     _ensure_absent(effective)
     try:
@@ -470,21 +518,15 @@ def test_adopt_into_an_extension_that_does_not_keep_mapping_by_ids_says_it_maps_
         root_path = os.path.join(directory, *ROOT_MDO.split("/"))
         _poll_file(root_path, ["<mdclass:Configuration"], ctx="the created root on disk")
         settle_or_fail("the created extension before its root is edited on disk")
-        # 0 lines removed means the root never kept mapping by IDs - the state this test needs anyway.
-        _drop_keep_mapping(root_path)
-        assert_ok(call("clean_project", {"projectName": effective}),
-                  "re-import the extension root without its mapping flag")
-        settle_or_fail("the extension after its root was re-imported without the flag")
+        # None means the root never kept mapping by IDs - the state the first half needs anyway; the
+        # second half, which turns the flag back on, needs the removed line and checks for it there.
+        removed = _drop_keep_mapping(root_path)
+        _reimport(effective, "without its mapping flag")
 
-        adopted = call("adopt_metadata_object", {
-            "projectName": PROJECT,
-            "fqn": "CommonModule.Calc",
-            # Two extensions extend the base now - the fixture's and this one.
-            "extensionProjectName": effective,
-        })
-        assert_ok(adopted, "adopt a base object into the extension that maps by name")
+        adopted = _adopt_into(effective, "CommonModule.Calc",
+                              "adopt a base object into the extension that maps by name")
 
-        copy = _poll_file(os.path.join(directory, "src", "CommonModules", "Calc", "Calc.mdo"),
+        copy = _poll_file(_adopted_copy_path(directory, "Calc"),
                           ["<objectBelonging>Adopted</objectBelonging>"], ctx="the adopted copy on disk")
         if "extendedConfigurationObject" in copy:
             raise AssertionError(
@@ -496,16 +538,15 @@ def test_adopt_into_an_extension_that_does_not_keep_mapping_by_ids_says_it_maps_
 
         message = (adopted.structured or {}).get("message") or ""
         assert_contains(message, "by NAME, not by ID", "the result says the copy is mapped by name")
-        assert_contains(message, "keepMappingToExtendedConfigurationObjectsByIDs is false",
-                        "the result names the root's flag as the reason")
+        # The copy THIS call adopted ran under the flag read just before it, so the flag is its reason, not a
+        # likely one: a jar that judged it as a copy adopted earlier says "adopted earlier ... - the likely reason".
+        assert_contains(message, ", and here the root's keepMappingToExtendedConfigurationObjectsByIDs is false",
+                        "the result names the flag this adoption ran under as the reason")
+        if "adopted earlier" in message:
+            raise AssertionError("a copy adopted by this very call has no earlier history: %r" % message)
 
         # The second adoption takes the alreadyAdopted branch, which carries the same note.
-        again = call("adopt_metadata_object", {
-            "projectName": PROJECT,
-            "fqn": "CommonModule.Calc",
-            "extensionProjectName": effective,
-        })
-        assert_ok(again, "adopt the same object again")
+        again = _adopt_into(effective, "CommonModule.Calc", "adopt the same object again")
         again_s = again.structured or {}
         if again_s.get("action") != "alreadyAdopted":
             raise AssertionError("expected action=alreadyAdopted; got %r" % again_s.get("action"))
@@ -514,10 +555,102 @@ def test_adopt_into_an_extension_that_does_not_keep_mapping_by_ids_says_it_maps_
                         "the second answer is the alreadyAdopted one")
         assert_contains(again_message, "by NAME, not by ID",
                         "the alreadyAdopted answer carries the by-name note too")
+
+        # Turn the flag back on: the copy adopted without it gains no link, and is still mapped by name.
+        if removed is None:
+            raise AssertionError("premise failed: the created root never kept mapping by IDs, so there is no "
+                                 "flag to turn back on")
+        _poll_file(root_path, ["<commonModules>CommonModule.Calc</commonModules>"],
+                   ctx="the root lists the adopted copy before the flag is written back")
+        settle_or_fail("the extension before its root's flag is written back")
+        _restore_keep_mapping(root_path, removed)
+        _reimport(effective, "with its mapping flag back")
+        # Premise: the flag is back in EDT's model - a fresh adoption is linked by ID again.
+        _adopt_into(effective, "CommonModule.OK", "adopt another object under the restored flag")
+        linked = _poll_file(_adopted_copy_path(directory, "OK"), ["<objectBelonging>Adopted</objectBelonging>"],
+                            ctx="the copy adopted under the restored flag")
+        if "extendedConfigurationObject" not in linked:
+            raise AssertionError("premise failed: a copy adopted after the flag was written back has no link, so "
+                                 "the flag never came back into EDT's model:\n%s" % linked[:1500])
+
+        later = _adopt_into(effective, "CommonModule.Calc", "adopt the copy made without a link once more")
+        later_s = later.structured or {}
+        if later_s.get("action") != "alreadyAdopted":
+            raise AssertionError("expected action=alreadyAdopted; got %r" % later_s.get("action"))
+        copy = _poll_file(_adopted_copy_path(directory, "Calc"), ["<objectBelonging>Adopted</objectBelonging>"],
+                          ctx="the copy made without a link, after the flag came back")
+        if "extendedConfigurationObject" in copy:
+            raise AssertionError("EDT added a link to a copy adopted without one - nothing should:\n%s" % copy[:1500])
+        later_message = later_s.get("message") or ""
+        assert_contains(later_message, "by NAME, not by ID",
+                        "the copy decides, not the root's flag now: still mapped by name")
+        assert_contains(later_message, "it was most likely adopted while the extension mapped by name",
+                        "with the flag on and the version fine, the copy's likely history is the reason")
+        if "is false" in later_message:
+            raise AssertionError("the flag is on now and must not be blamed: %r" % later_message)
     finally:
         _ensure_absent(effective)
 
     assert_no_diff("adopting reads the base; the copy lands in the created extension only")
+
+
+@e2e_test(tool="adopt_metadata_object", kind="write-metadata")
+def test_a_copy_adopted_while_the_root_kept_mapping_keeps_its_link_after_the_flag_is_dropped():
+    """A copy adopted while the extension root kept mapping by IDs carries its by-ID link from then on,
+    whatever the root's flag says later - EDT's rename of the base object still carries such a copy
+    along - so adopting it again under a root that no longer keeps mapping says nothing of a mapping by
+    name. adopt_metadata_object reads the COPY: a jar that judges by the root's flag appends the
+    by-name note here.
+
+    The flag is removed on disk after the adoption and brought into the model with clean_project; a
+    fresh adoption of another object then gets no link, which proves the flag left the model. The disk
+    is read before the answer's message. kind=write-metadata: the adoption names the base fixture as
+    projectName."""
+    effective = PROJECT + "." + NEW_EXT_LINKED
+    base_calc = read_disk("src/CommonModules/Calc/Calc.mdo")
+    base_uuid = re.search(r'<mdclass:CommonModule [^>]*uuid="([^"]+)"', base_calc)
+    assert base_uuid, "the base fixture's CommonModule.Calc must carry its uuid"
+    link = 'extendedConfigurationObject="%s"' % base_uuid.group(1)
+    _ensure_absent(effective)
+    try:
+        r, _ = _create_extension(NEW_EXT_LINKED)
+        assert_ok(r, "create the extension to adopt into")
+        directory = _project_dir(effective)
+        root_path = os.path.join(directory, *ROOT_MDO.split("/"))
+
+        first = _adopt_into(effective, "CommonModule.Calc", "adopt while the root keeps mapping by IDs")
+        _poll_file(_adopted_copy_path(directory, "Calc"), [link], ctx="the copy is linked to the base by ID")
+        if "message" in (first.structured or {}):
+            raise AssertionError("a copy linked by ID needs no by-name note, got %r" % (first.structured["message"],))
+        _poll_file(root_path, ["<commonModules>CommonModule.Calc</commonModules>"],
+                   ctx="the root lists the adopted copy before its flag is removed")
+        settle_or_fail("the extension before its root is edited on disk")
+        if _drop_keep_mapping(root_path) is None:
+            raise AssertionError("premise failed: the created root never kept mapping by IDs")
+        _reimport(effective, "without its mapping flag")
+
+        # Premise: the flag left EDT's model - a fresh adoption is no longer linked by ID.
+        _adopt_into(effective, "CommonModule.OK", "adopt another object without the flag")
+        unlinked = _poll_file(_adopted_copy_path(directory, "OK"), ["<objectBelonging>Adopted</objectBelonging>"],
+                              ctx="the copy adopted without the flag")
+        if "extendedConfigurationObject" in unlinked:
+            raise AssertionError("premise failed: a copy adopted after the flag was removed is linked by ID, so the "
+                                 "flag never left EDT's model:\n%s" % unlinked[:1500])
+
+        again = _adopt_into(effective, "CommonModule.Calc", "adopt the linked copy again")
+        s = again.structured or {}
+        if s.get("action") != "alreadyAdopted":
+            raise AssertionError("expected action=alreadyAdopted; got %r" % s.get("action"))
+        _poll_file(_adopted_copy_path(directory, "Calc"), [link],
+                   ctx="the copy keeps its link after the root's flag was removed")
+        expected = "'CommonModule.Calc' is already adopted in extension '%s'." % effective
+        if s.get("message") != expected:
+            raise AssertionError("a copy linked by ID gets no by-name note, whatever the root's flag says now: "
+                                 "expected %r; got %r" % (expected, s.get("message")))
+    finally:
+        _ensure_absent(effective)
+
+    assert_no_diff("adopting reads the base; the copies land in the created extension only")
 
 
 @e2e_test(tool="create_project", kind="action")

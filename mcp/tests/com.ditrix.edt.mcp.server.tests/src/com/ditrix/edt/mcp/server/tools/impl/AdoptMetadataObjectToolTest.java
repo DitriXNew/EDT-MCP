@@ -128,6 +128,31 @@ public class AdoptMetadataObjectToolTest
             guide.contains("and an `extendedConfigurationObject` UUID link back to the base object (mapping is by-ID")); //$NON-NLS-1$
     }
 
+    @Test
+    public void testTheGuideSaysTheCopyItselfDecidesTheMapping()
+    {
+        // EDT writes the link at adoption only: a copy adopted before the flag was turned on has none, and one adopted
+        // while it was on keeps it - so 'message' is decided by the copy, not by the root's flag now.
+        String guide = new AdoptMetadataObjectTool().getGuide();
+        assertTrue(guide, guide.contains("EDT writes the link only at adoption, so the result looks at the copy itself")); //$NON-NLS-1$
+        assertTrue(guide, guide.contains("when the adopted copy carries no `extendedConfigurationObject` link")); //$NON-NLS-1$
+        assertFalse("the note is no longer about the extension's current mode", //$NON-NLS-1$
+            guide.contains("when the extension maps adopted objects to the base by name")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testTheResultPromisesARemedyOnlyWhereTheNoteHasOne()
+    {
+        // The note advises a change only for a reason that has one - a false flag, a version at or below 8.3.14. A copy
+        // adopted earlier with neither, or a flag that could not be read, gets the reason and no advice.
+        String guide = new AdoptMetadataObjectTool().getGuide();
+        assertTrue(guide, guide.contains("(it says the likely reason and, where it can, how to change that)")); //$NON-NLS-1$
+        assertFalse(guide, guide.contains("(it says the likely reason and how to change that)")); //$NON-NLS-1$
+        String schema = new AdoptMetadataObjectTool().getOutputSchema();
+        assertTrue(schema, schema.contains("(it says the likely reason and, where it can, how to change it)")); //$NON-NLS-1$
+        assertFalse(schema, schema.contains("(it says the likely reason and how to change it)")); //$NON-NLS-1$
+    }
+
     // ==================== source resolution (issue #708) ====================
     //
     // An in-memory configuration: Sales -> Orders -> Backlog, the reporter's Russian pair

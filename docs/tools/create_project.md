@@ -107,7 +107,10 @@ The root of a new extension is the base configuration's root ADOPTED, the way ED
 - it adopts the base's default language and inherits the base's script variant and
   compatibility mode (unless `compatibilityMode` is given);
 - the two command interface files the wizard creates, `CommandInterface.cmi` and
-  `MainSectionCommandInterface.cmi`, are created too.
+  `MainSectionCommandInterface.cmi`, are created too, and looked for on disk within the same
+  check as the root file: `message` names a file that was not seen on disk, and a save of them
+  EDT did not accept when a file was not seen or no check could run (they do not change
+  `state`).
 
 Not replicated: EDT's wizard also creates a default role (named from the prefix in EDT's UI
 language, e.g. `Ext1_DefaultRole`; only over a base whose compatibility mode is above
@@ -208,8 +211,8 @@ On success the response includes:
   Both slow seeded-root states use `action=verificationRequired`, not `created`, because
   the create job has not finished. `ready` does not mean EDT has finished computing the
   project's derived data: `list_projects` may still report it `building` for a while.
-- `message` — for an extension: how its root was built, what was not confirmed, and the
-  wizard's default role this tool does not create.
+- `message` — for an extension: how its root was built, what was not confirmed (its root
+  file, its command interface files), and the wizard's default role this tool does not create.
 - `codestyle` — `{applied: bool, note: string, autoSortNote: string}` reporting the
   v8codestyle preference write result.
 - `synonymNote` — present only when the synonym (configuration/extension) could not be
