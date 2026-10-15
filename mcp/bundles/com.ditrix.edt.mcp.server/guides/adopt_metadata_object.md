@@ -16,7 +16,7 @@ A NESTED subsystem is addressed by its whole chain, exactly as list_subsystems p
 JSON with `action` ('adopted', or 'alreadyAdopted' when it was already adopted), the adopted `fqn`, the `extensionProject`, `objectBelonging='ADOPTED'`, and `persisted`. After an adopt, run get_project_errors on the extension to confirm the adoption is valid.
 
 ## Notes & gotchas
-- This adopts the metadata OBJECT side only. Intercepting a BSL method (`&Before/&After/&Around/&ChangeAndValidate`) is NOT done here.
+- This adopts the metadata OBJECT side only. Intercepting a BSL method (`&Before/&After/&Around/&ChangeAndValidate`) is NOT done here: write the interceptor with write_module_source, and that write marks the module `Extended`.
 - An object the platform reports as not adoptable is rejected with a clear error.
 - No automatic undo: an adopted copy is removed with delete_metadata against the extension - except a NESTED subsystem, whose chain delete_metadata cannot address yet (remove that copy in EDT).
 
