@@ -866,6 +866,9 @@ public final class AdoptedPropertyRouter
                 additions.add(items.get(i));
             }
         }
+        // An adoption leaves the subscription's own source empty (EDT 2026.2); an earlier extended write fills it
+        // with the base sources plus its additions, and a base source found there is carried from there. Every other
+        // base source is built by name in the extension - from an object it adopted - or the call is refused.
         Map<String, TypeItem> copy = itemsByName(target.eGet(change.feature));
         Map<String, TypeItem> built = new LinkedHashMap<>();
         List<String> missing = new ArrayList<>();
@@ -913,9 +916,9 @@ public final class AdoptedPropertyRouter
         }
         return "'source' of " + fqn + " was not written: the base source " + quoted(missing) + " of the base " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             + "configuration" + named(base) + " names " + String.join(", ", objects) + ", which the extension has " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-            + "not adopted, and EDT's copy of the base sources in the extension does not hold it; written without " //$NON-NLS-1$
-            + "it, the extended source would drop that base source. Adopt " + String.join(", ", objects) //$NON-NLS-1$ //$NON-NLS-2$
-            + " with adopt_metadata_object, then retry." + NOTHING_CHANGED; //$NON-NLS-1$
+            + "not adopted, and no earlier extended write left it in the subscription's own source in the extension; " //$NON-NLS-1$
+            + "written without it, the extended source would drop that base source. Adopt " //$NON-NLS-1$
+            + String.join(", ", objects) + " with adopt_metadata_object, then retry." + NOTHING_CHANGED; //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** The metadata object a source type names: {@code DocumentObject.Invoice} names {@code Document.Invoice}. */
@@ -1023,7 +1026,7 @@ public final class AdoptedPropertyRouter
         private final List<TypeItem> additions;
         private final List<String> additionNames;
         private final IMdAdoptedPropertyAccess access;
-        /** The source the routing judged: the names of the extension's copy, and the state ({@code null}: unset). */
+        /** The source the routing judged: the names its own source held, and the state ({@code null}: unset). */
         private final Set<String> readNames;
         private final MdPropertyState readState;
         private Outcome outcome;
@@ -1105,10 +1108,11 @@ public final class AdoptedPropertyRouter
     }
 
     /**
-     * Writes an adopted event subscription's source inside the write transaction: the extension's copy of
-     * the source and the source state are read again and must be the ones the routing judged (the consent
-     * gate can hold the call between the two, and EDT's editor can change them meanwhile); then the base
-     * sources (the extension's current copy of each, else the item built for it) followed by the additions.
+     * Writes an adopted event subscription's source inside the write transaction: the subscription's own source
+     * and its source state are read again and must be the ones the routing judged (the consent gate can hold the
+     * call between the two, and EDT's editor can change them meanwhile); then the base sources - each the item
+     * the own source already holds for it, as it does after an earlier extended write (an adoption leaves it
+     * empty), else the item built for it in the extension - followed by the additions.
      * With additions the list is written through {@link IMdAdoptedPropertyAccess#setValue} with
      * {@link MdPropertyType#EXTENSIBLE} - the value and the state {@code Extended}; without, the state goes
      * back to None and the list to the base sources, so the source follows the base again.
@@ -1316,8 +1320,10 @@ public final class AdoptedPropertyRouter
     }
 
     /**
-     * The source a write leaves: each base source in base order - the extension's current copy of it when
-     * it has one, else the item built for it in the extension - then each addition, deduplicated by name.
+     * The source a write leaves: each base source in base order - the item the subscription's own source already
+     * holds for it, as it does after an earlier extended write (this serves a {@code .mdo} written that way; an
+     * adoption leaves the own source empty), else the item built for it in the extension - then each addition,
+     * deduplicated by name.
      *
      * @param current the current native source, may be {@code null}
      * @param baseNames the base sources, in base order

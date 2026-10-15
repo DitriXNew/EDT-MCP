@@ -193,6 +193,30 @@ public class AdoptedPropertyFormatterConformanceTest
         assertFalse(AdoptedPropertyRouter.wouldDrop(object, MdClassPackage.Literals.BASIC_FEATURE__TOOL_TIP));
     }
 
+    @Test
+    public void testAnAdoptedSubsystemsContentIsDroppedByBothExactlyWhileItsStateIsNone()
+        throws ReflectiveOperationException
+    {
+        // Subsystem.content against SubsystemExtension.content by name, so the row cannot leave the enumeration above
+        // unnoticed. EDT's writer takes no platform version, so this holds on every one: the state is part of
+        // SubsystemExtension on every version (MdClassExtension.xcore: "MdPropertyState content // since 8.3.25" -
+        // a comment), EDT's adopter marks it Extended (SubsystemAdopterParticipant), and only an unset or None state
+        // drops the list.
+        EClass subsystem = MdClassPackage.Literals.SUBSYSTEM;
+        EClass extension = extensionClassOf(subsystem);
+        assertEquals(MdClassExtensionPackage.Literals.SUBSYSTEM_EXTENSION, extension);
+        for (MdPropertyState value : STATES)
+        {
+            MdObject object = object(subsystem, extension, MdClassExtensionPackage.Literals.SUBSYSTEM_EXTENSION__CONTENT,
+                Belonging.ADOPTED_WITH_BLOCK, value);
+            boolean dropped = value == null || value == MdPropertyState.NONE;
+            assertEquals("EDT's writer, a content state " + value, Boolean.valueOf(!dropped), //$NON-NLS-1$
+                Boolean.valueOf(saves(object, MdClassPackage.Literals.SUBSYSTEM__CONTENT)));
+            assertEquals("the mirror, a content state " + value, Boolean.valueOf(dropped), //$NON-NLS-1$
+                Boolean.valueOf(AdoptedPropertyRouter.wouldDrop(object, MdClassPackage.Literals.SUBSYSTEM__CONTENT)));
+        }
+    }
+
     // ==================== helpers ====================
 
     /**

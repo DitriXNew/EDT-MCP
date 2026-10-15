@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.utils;
 
 import static com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.adoptedDefinedType;
 import static com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.adoptedSubscription;
+import static com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.adoptedSubsystem;
 import static com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.catalogRefType;
 import static com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.description;
 import static com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.stringQualifiers;
@@ -63,6 +64,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.metadata.mdclass.StyleItem;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.BasicFeatureExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.CatalogExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.ConfigurationExtension;
@@ -70,6 +72,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.extension.DefinedTypeExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.EventSubscriptionExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.MdClassExtensionFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.StyleItemExtension;
+import com._1c.g5.v8.dt.metadata.mdclass.extension.SubsystemExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.TypeDescriptionExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.TypeExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.type.MdPropertyState;
@@ -974,16 +977,20 @@ public class AdoptedPropertyRouterTest
     @Test
     public void testABaseSourceTheExtensionCannotCarryIsRefusedNamingTheObject()
     {
-        // The BSP shape: the base subscription also handles a document the extension has not adopted, and
-        // the extension's copy of the base sources does not hold it.
+        // The BSP shape: the base subscription also handles a document the extension has not adopted, and the
+        // subscription's own source does not hold it: an adoption leaves that source empty (EDT 2026.2), and an
+        // earlier extended write is what fills it.
         EventSubscription subscription = adoptedSubscription("OnWrite", null, null); //$NON-NLS-1$
         FakePlatform platform = new FakePlatform().base("CatalogObject.Goods", "DocumentObject.Invoice") //$NON-NLS-1$ //$NON-NLS-2$
             .buildable("CatalogObject.Goods", type("CatalogObject.Goods")); //$NON-NLS-1$ //$NON-NLS-2$
         Routing routing = route(subscription, FQN_SUB, V8_5_1, platform, sourceChange(type("CatalogObject.Own"))); //$NON-NLS-1$
         assertRefused(routing, "'DocumentObject.Invoice'", "names Document.Invoice", "not adopted", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "no earlier extended write left it in the subscription's own source in the extension", //$NON-NLS-1$
             "Adopt Document.Invoice with adopt_metadata_object", "Nothing was changed."); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("the refusal must not suggest that EDT keeps a copy of the base sources in the extension: " //$NON-NLS-1$
+            + routing.refusal(), routing.refusal().contains("copy of the base sources")); //$NON-NLS-1$
 
-        // ... but a base source the extension's copy already holds is carried as it is.
+        // ... but a base source an earlier extended write left in the subscription's own source is carried as it is.
         Type copied = type("DocumentObject.Invoice"); //$NON-NLS-1$
         EventSubscription withCopy = adoptedSubscription("OnWrite", description(copied), null); //$NON-NLS-1$
         routing = route(withCopy, FQN_SUB, V8_5_1, platform, sourceChange(type("CatalogObject.Own"))); //$NON-NLS-1$
@@ -1019,7 +1026,8 @@ public class AdoptedPropertyRouterTest
 
         List<TypeItem> written = subscription.getSource().getTypes();
         assertEquals(2, written.size());
-        assertSame("a base source is taken from the extension's copy", copied, written.get(0)); //$NON-NLS-1$
+        assertSame("a base source the subscription's own source holds is taken from there", copied, //$NON-NLS-1$
+            written.get(0));
         assertSame(addition, written.get(1));
         assertEquals(List.of("setValue source EXTENSIBLE"), access.calls); //$NON-NLS-1$
         assertEquals(MdPropertyState.EXTENDED, ((EventSubscriptionExtension)subscription.getExtension()).getSource());
@@ -1125,7 +1133,7 @@ public class AdoptedPropertyRouterTest
         List<TypeItem> next = AdoptedPropertyRouter.composeSource(description(copied), List.of("CatalogObject.Goods"), //$NON-NLS-1$
             built, List.of(addition, type("CatalogObject.Own")), FQN_SUB); //$NON-NLS-1$
         assertEquals(2, next.size());
-        assertSame("the copy wins over the built item", copied, next.get(0)); //$NON-NLS-1$
+        assertSame("the item the own source holds wins over the built one", copied, next.get(0)); //$NON-NLS-1$
         assertSame("additions are deduplicated", addition, next.get(1)); //$NON-NLS-1$
     }
 
@@ -1353,6 +1361,32 @@ public class AdoptedPropertyRouterTest
     }
 
     // ==================== the content / predefined guard ====================
+
+    @Test
+    public void testAnAdoptedSubsystemsContentIsRefusedOnlyWhileNoneWordedByTheVersion()
+    {
+        // EDT's writer drops an adopted subsystem's content list while its state is None, on every platform version
+        // (it reads none); the version only decides what the refusal offers - EDT's property-type delegates offer no
+        // state for it below 8.3.24 and EXTENSIBLE from 8.3.24 (both EDT lines).
+        EStructuralFeature content = MdClassPackage.Literals.SUBSYSTEM__CONTENT;
+        Subsystem subsystem = adoptedSubsystem("Sales", MdPropertyState.NONE); //$NON-NLS-1$
+        String below = AdoptedPropertyRouter.refusalIfDropped(subsystem, content, "Subsystem.Sales", null, //$NON-NLS-1$
+            Version.V8_3_23, new FakePlatform().propertyTypes(content));
+        assertNotNull("a None content is refused below 8.3.24 too", below); //$NON-NLS-1$
+        assertTrue(below, below.contains("'content' of Subsystem.Sales was not written")); //$NON-NLS-1$
+        assertTrue(below, below.contains("An extension for platform 8.3.23 cannot change 'content'")); //$NON-NLS-1$
+        String from = AdoptedPropertyRouter.refusalIfDropped(subsystem, content, "Subsystem.Sales", null, //$NON-NLS-1$
+            Version.V8_3_24, new FakePlatform().propertyTypes(content, MdPropertyType.EXTENSIBLE));
+        assertNotNull("a None content is refused from 8.3.24", from); //$NON-NLS-1$
+        assertTrue(from, from.contains("mark 'content' Extended in EDT's property editor")); //$NON-NLS-1$
+
+        ((SubsystemExtension)subsystem.getExtension()).setContent(MdPropertyState.EXTENDED);
+        for (Version version : List.of(Version.V8_3_23, Version.V8_3_24, V8_5_1))
+        {
+            assertNull("an Extended content is written at " + version, AdoptedPropertyRouter.refusalIfDropped( //$NON-NLS-1$
+                subsystem, content, "Subsystem.Sales", null, version, new FakePlatform())); //$NON-NLS-1$
+        }
+    }
 
     @Test
     public void testTheGuardOfTheWritersOutsideTheBatch()

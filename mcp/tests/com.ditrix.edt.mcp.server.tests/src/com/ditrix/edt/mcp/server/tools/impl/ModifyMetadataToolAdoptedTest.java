@@ -8,6 +8,7 @@ package com.ditrix.edt.mcp.server.tools.impl;
 
 import static com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.adoptedDefinedType;
 import static com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.adoptedSubscription;
+import static com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.adoptedSubsystem;
 import static com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.catalogRefType;
 import static com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.description;
 import static com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.stringQualifiers;
@@ -20,10 +21,16 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
 import com._1c.g5.v8.bm.core.IBmTransaction;
@@ -31,6 +38,7 @@ import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonAttribute;
+import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.DefinedType;
 import com._1c.g5.v8.dt.metadata.mdclass.Document;
 import com._1c.g5.v8.dt.metadata.mdclass.EventSubscription;
@@ -43,6 +51,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.CatalogExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.DefinedTypeExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.MdClassExtensionFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.extension.SubsystemExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.TypeDescriptionExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.type.MdPropertyState;
 import com._1c.g5.v8.dt.platform.version.Version;
@@ -51,6 +60,8 @@ import com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess;
 import com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouterTestAccess.FakePlatform;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.TypeChangeDefaults;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Issues #709 / #710 through modify_metadata's own seams: the generic path routes the prepared batch of an
@@ -262,6 +273,55 @@ public class ModifyMetadataToolAdoptedTest
             ModifyMetadataTool.membershipList(own), "Catalog.Goods", null, V8_5_1)); //$NON-NLS-1$
     }
 
+    @Test
+    public void testTheContentOfAnAdoptedSubsystemInStateNoneIsRefusedOnItsOwnPath()
+        throws ReflectiveOperationException
+    {
+        // modify_metadata's own content path for a Subsystem FQN (dispatchSubsystemContentPayload), reached as
+        // executeOnUiThread reaches it: the resolution, the adopted-content guard, then the membership writer. EDT's
+        // adopter marks an adopted subsystem's content Extended, so MCP cannot produce this state (the e2e control
+        // pins the Extended case); with the state None EDT's .mdo writer drops the list, and the call is refused
+        // before the membership writer, changing nothing. None is the state's generated default, so an unset state is
+        // this same state. EDT's writer reads no platform version, so neither does the verdict: the version only
+        // words the refusal (AdoptedPropertyRouterTest pins those words), and here the project is one EDT does not
+        // know, so the version reads as unknown.
+        Catalog member = adoptedCatalog();
+        Subsystem subsystem = adoptedSubsystem("Sales", MdPropertyState.NONE, member); //$NON-NLS-1$
+
+        String refusal = errorOf(dispatchSubsystemContent(subsystem, false), "a content state of None"); //$NON-NLS-1$
+
+        assertTrue(refusal, refusal.startsWith("'content' of Subsystem.Sales was not written: Subsystem.Sales is " //$NON-NLS-1$
+            + "adopted from the base configuration")); //$NON-NLS-1$
+        assertTrue(refusal, refusal.contains("the extension state of 'content' is None")); //$NON-NLS-1$
+        assertTrue(refusal, refusal.endsWith("Nothing was changed.")); //$NON-NLS-1$
+        assertEquals("nothing changed: the members", List.of(member), subsystem.getContent()); //$NON-NLS-1$
+        assertEquals("nothing changed: the state", MdPropertyState.NONE, //$NON-NLS-1$
+            ((SubsystemExtension)subsystem.getExtension()).getContent());
+    }
+
+    @Test
+    public void testTheContentOfAnAdoptedSubsystemInStateExtendedPassesTheGuard() throws ReflectiveOperationException
+    {
+        // The control: as EDT's adopter leaves it (content Extended) EDT's .mdo writer keeps the list, so the guard lets
+        // the call through to the membership writer - which, handed a role payload as well, refuses that payload by
+        // its own first check: proof that the guard did not refuse. So does the subsystem the extension owns, whatever
+        // its block says. The real write of an adopted subsystem's content is the e2e control's.
+        Subsystem extended = adoptedSubsystem("Sales", MdPropertyState.EXTENDED); //$NON-NLS-1$
+        Subsystem own = adoptedSubsystem("Sales", MdPropertyState.NONE); //$NON-NLS-1$
+        own.setObjectBelonging(ObjectBelonging.NATIVE);
+        for (Subsystem subsystem : List.of(extended, own))
+        {
+            String ctx = subsystem.getObjectBelonging() + " with a content state " //$NON-NLS-1$
+                + ((SubsystemExtension)subsystem.getExtension()).getContent();
+
+            String refusal = errorOf(dispatchSubsystemContent(subsystem, true), ctx);
+
+            assertFalse(ctx + ": " + refusal, refusal.contains("was not written")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertTrue(ctx + ": " + refusal, refusal.startsWith( //$NON-NLS-1$
+                "'rights' / 'templates' / 'roleProperties' are only valid for a Role FQN")); //$NON-NLS-1$
+        }
+    }
+
     // ==================== helpers ====================
 
     private static Catalog adoptedCatalog()
@@ -271,6 +331,80 @@ public class ModifyMetadataToolAdoptedTest
         catalog.setObjectBelonging(ObjectBelonging.ADOPTED);
         catalog.setExtension(MdClassExtensionFactory.eINSTANCE.createCatalogExtension());
         return catalog;
+    }
+
+    /**
+     * modify_metadata's own content path for {@code Subsystem.<name>} ({@code dispatchSubsystemContentPayload}: the
+     * subsystem's resolution, the adopted-content guard, then the membership writer), called as executeOnUiThread
+     * calls it - with one content member and, when {@code rolePayload}, a role payload too - on a headless
+     * configuration that holds the subsystem. The project is a handle EDT does not know, so the platform version
+     * reads as unknown. A throw comes back as {@code threw: <exception>}, so the assertion that meets it names it.
+     */
+    private static String dispatchSubsystemContent(Subsystem subsystem, boolean rolePayload)
+        throws ReflectiveOperationException
+    {
+        Method dispatch = null;
+        for (Method method : ModifyMetadataTool.class.getDeclaredMethods())
+        {
+            if ("dispatchSubsystemContentPayload".equals(method.getName())) //$NON-NLS-1$
+            {
+                dispatch = method;
+            }
+        }
+        assertNotNull("modify_metadata's subsystem content path is not where this test looks for it", dispatch); //$NON-NLS-1$
+        dispatch.setAccessible(true);
+        Class<?>[] parameters = dispatch.getParameterTypes();
+
+        Configuration config = MdClassFactory.eINSTANCE.createConfiguration();
+        config.getSubsystems().add(subsystem);
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn("ZZNoSuchProject709"); //$NON-NLS-1$
+        Object context = newInstance(parameters[0]);
+        set(context, "project", project); //$NON-NLS-1$
+        set(context, "config", config); //$NON-NLS-1$
+
+        String fqn = "Subsystem." + subsystem.getName(); //$NON-NLS-1$
+        JsonObject member = new JsonObject();
+        member.addProperty("metadata", "Catalog.Own"); //$NON-NLS-1$ //$NON-NLS-2$
+        Object args = newInstance(parameters[2]);
+        set(args, "projectName", "ZZNoSuchProject709"); //$NON-NLS-1$ //$NON-NLS-2$
+        set(args, "fqn", fqn); //$NON-NLS-1$
+        set(args, "properties", List.of()); //$NON-NLS-1$
+        set(args, "content", List.of(member)); //$NON-NLS-1$
+        set(args, "hasContentPayload", Boolean.TRUE); //$NON-NLS-1$
+        set(args, "hasRolePayload", Boolean.valueOf(rolePayload)); //$NON-NLS-1$
+        try
+        {
+            return (String)dispatch.invoke(new ModifyMetadataTool(), context, fqn, args);
+        }
+        catch (InvocationTargetException e)
+        {
+            return "threw: " + e.getCause(); //$NON-NLS-1$
+        }
+    }
+
+    private static Object newInstance(Class<?> type) throws ReflectiveOperationException
+    {
+        Constructor<?> constructor = type.getDeclaredConstructor();
+        constructor.setAccessible(true);
+        return constructor.newInstance();
+    }
+
+    private static void set(Object target, String field, Object value) throws ReflectiveOperationException
+    {
+        Field declared = target.getClass().getDeclaredField(field);
+        declared.setAccessible(true);
+        declared.set(target, value);
+    }
+
+    /** The text of a {@code ToolResult} error; fails naming {@code answer} when it is anything else. */
+    private static String errorOf(String answer, String ctx)
+    {
+        assertNotNull(ctx + ": the content path must answer", answer); //$NON-NLS-1$
+        assertTrue(ctx + ": an error is expected, got: " + answer, answer.startsWith("{")); //$NON-NLS-1$ //$NON-NLS-2$
+        JsonObject result = JsonParser.parseString(answer).getAsJsonObject();
+        assertFalse(ctx + ": " + answer, result.get("success").getAsBoolean()); //$NON-NLS-1$ //$NON-NLS-2$
+        return result.get("error").getAsString(); //$NON-NLS-1$
     }
 
     private static AdoptedPropertyRouter.Routing route(String fqn, MdObject target,

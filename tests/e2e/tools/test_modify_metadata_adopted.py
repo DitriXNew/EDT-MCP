@@ -11,19 +11,20 @@ WHAT IT PINS (read AdoptedPropertyRouter.java and ModifyMetadataTool.routeAdopte
     call states the whole set of additions;
   - an adopted event subscription's `source` (#710) becomes the base sources plus the additions, with
     the state Extended; a call that adds nothing returns the state to None;
-  - any other write EDT would leave out - an adopted object's synonym, a catalog's owners, a
-    subsystem's content, the predefined items of an adopted owner - is refused before anything is
-    written;
-  - controls: a property without a state (comment) of an adopted object, and every property of an
-    object the extension owns, are written as before.
+  - any other write EDT would leave out - an adopted object's synonym, a catalog's owners, the
+    predefined items of an adopted owner - is refused before anything is written;
+  - controls: a property without a state (comment) of an adopted object, every property of an object
+    the extension owns, and the content of an adopted subsystem - EDT's adopter marks it Extended, so
+    EDT keeps it - are written as before. (The guard of the subsystem content path refuses a content
+    state of None, which MCP cannot produce: ModifyMetadataToolAdoptedTest pins that refusal.)
 
 ENVIRONMENT / SCOPE:
   The fixture extension `TestConfiguration.tests` (Runtime-Version 8.5.1: the type route needs 8.3.20,
   the source route 8.3.17) adopts Catalog.Catalog and owns Catalog.tests_ExtOnly. A routed test seeds its
   object in the BASE (create_metadata + modify_metadata), adopts it into the extension with
   adopt_metadata_object and then writes it through the extension; the refusal tests address objects
-  the fixture extension already adopts (Subsystem.Subsystem is adopted first). Every test that writes
-  into the extension - or might, on a jar without the fix - restores it through
+  the fixture extension already adopts, and the subsystem control adopts Subsystem.Subsystem first.
+  Every test that writes into the extension - or might, on a jar without the fix - restores it through
   harness.restore_extension_fixture; the orchestrator resets the base model after the test from the
   `writtenProjects` evidence, as for every write-metadata test.
 
@@ -35,7 +36,7 @@ never as substrings. The message is asserted after the file, so a jar without th
 RED ON THE OLD JAR (the stand phase pins it): the routed tests fail on their disk poll after a
 "successful" call (the file does not change); the refusal tests fail on assert_error (old answer:
 success) or on assert_error_quality (the predefined item: "not found" instead of the refusal); the
-controls stay green on both jars.
+controls - the adopted subsystem's content among them - stay green on both jars.
 """
 
 import os
@@ -53,6 +54,7 @@ from harness import (
     assert_not_contains,
     assert_no_diff_rel,
     project_error_rows,
+    read_disk,
     read_fixture_file,
     restore_extension_fixture,
     status_porcelain_rel,
@@ -167,6 +169,12 @@ def _root_types(root, name, ctx):
     """The type names of the ROOT's own <name> element (the native value), or None when it is absent."""
     element = _one_or_none(root, name, ctx)
     return None if element is None else [_text(t) for t in _children(element, "types")]
+
+
+def _root_values(root, name):
+    """The texts of the ROOT's own <name> elements, in order - a list reference writes one element per member -
+    never the same-named state inside the <extension> block."""
+    return [_text(element) for element in _children(root, name)]
 
 
 def _block_state(root, name, ctx):
@@ -470,10 +478,12 @@ def test_an_adopted_event_subscription_extends_its_source():
 def test_an_adopted_subscription_never_drops_a_base_source():
     """#710, the BSP shape: the base subscription also handles a document the extension has NOT adopted.
     An extended source is the base sources plus the additions, so a base source the extension cannot
-    carry must not silently go: either the extension's copy of the base sources holds it and the write
-    carries it, or the call is refused naming the document to adopt. Which of the two happens depends on
-    what EDT's derived data copied into the extension (probe P1/P2 of the stand phase records it); the
-    invariant is the same either way - no base source is ever dropped.
+    carry must not silently go. The extension carries a base source whose object it adopted, or one an
+    earlier extended write left in the subscription's own source in the extension; this document is
+    neither, so the call is refused naming the document to adopt. On EDT 2026.2 an adoption leaves the
+    subscription's own source empty (stand probes P1/P2), so this fixture takes the refused branch; the
+    carried branch (a source an earlier extended write left there - by EDT's editor, for one) is still
+    accepted, and the invariant is the same either way: no base source is ever dropped.
 
     PREMISE, checked: the document stays out of the extension - after the adoption and after the write - so the
     test cannot pass in the carried branch on a shape that is no longer the BSP one. EDT's verdict on the carried
@@ -509,15 +519,16 @@ def test_an_adopted_subscription_never_drops_a_base_source():
             assert_error_quality(err, names=["Document." + doc, "DocumentObject." + doc],
                                  suggests=["adopt_metadata_object", "Nothing was changed"],
                                  ctx="the refusal names the document to adopt")
-            print("    [BSP] refused: the extension's copy of the base sources did not hold DocumentObject.%s" % doc)
+            print("    [BSP] refused: Document.%s is not adopted and the subscription's own source does not hold "
+                  "DocumentObject.%s" % (doc, doc))
             return
         after = _poll_ext(mdo, "the extended source must reach the file", needles=[own, ">" + _EXTENDED + "<"])
         written = set(_root_types(after, "source", "after the extension") or [])
         if written != sources | {own}:
             raise AssertionError("an extended source carries every base source; got %r" % sorted(written))
         incomplete, rows = assert_marker_contract(r.structured, "the carried BSP write")
-        print("    [BSP] carried: the extension's copy of the base sources held DocumentObject.%s; the write's "
-              "markers: incomplete=%s rows=%r" % (doc, incomplete, rows))
+        print("    [BSP] carried: an earlier extended write left DocumentObject.%s in the subscription's own source; "
+              "the write's markers: incomplete=%s rows=%r" % (doc, incomplete, rows))
         _assert_no_marker_names(doc, rows, "the write's marker report")
         wait_for_project_ready()
         _assert_no_marker_names(doc, [{"checkId": check, "message": message, "location": location}
@@ -573,29 +584,51 @@ def test_the_owners_of_an_adopted_catalog_are_refused():
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
-def test_the_content_of_an_adopted_subsystem_is_refused():
-    """The subsystem's own content path: Subsystem.Subsystem is adopted first, then a `content` member is
-    added through the extension. EDT would leave the content out while its state is None, so the call is
-    refused and the adopted subsystem's .mdo does not list the member.
+def test_the_content_of_an_adopted_subsystem_is_written_while_its_state_is_extended():
+    """Control on the subsystem's own content path - no false refusal: EDT's adopter marks an adopted subsystem's
+    `content` Extended (SubsystemAdopterParticipant), so EDT's .mdo writer keeps the list, and a member added
+    through the extension lands in the extension's Subsystem.mdo - there, and not in the base's. The guard of this
+    path refuses a content state of None, which MCP cannot produce (adopt_metadata_object always leaves it
+    Extended); ModifyMetadataToolAdoptedTest pins that refusal on the same path.
 
-    Mutation thinking: without the guard on the subsystem content path master adds the member and
-    answers success."""
+    PREMISE, checked: right after the adoption the extension's Subsystem.mdo holds the content state Extended in
+    its extension block and lists no member. On a fixture where it does not, the test fails naming the premise
+    instead of judging the guard.
+
+    Mutation thinking: a guard that refused an adopted subsystem's content whatever its state (wouldDrop forced
+    true for it) answers an error and leaves the file - the disk poll fails; a write that landed in the base
+    instead of the extension leaves the extension's .mdo without the member and lists it in the base's."""
     fqn = "Subsystem.Subsystem"
     mdo = "src/Subsystems/Subsystem/Subsystem.mdo"
+    member = "Catalog." + _OWN_CATALOG
 
     def body():
         _adopt(fqn, "the subsystem whose content is written")
-        _poll_ext(mdo, "the adopted subsystem's .mdo", needles=[_ADOPTED])
-        text, _ = _read_ext(mdo, "before the write")
-        status = status_porcelain_rel(TESTS_PROJECT_REL)
-        r = _modify_ext(fqn, content=[{"metadata": "Catalog." + _OWN_CATALOG}])
-        err = _assert_refused_without_a_trace(r, mdo, text, status, "the content of an adopted subsystem")
-        assert_error_quality(err, names=["content", fqn, "adopted", "None"],
-                             suggests=["Extended", "Nothing was changed"],
-                             ctx="the refusal names the content and the way out")
-        assert_not_contains(text, "Catalog." + _OWN_CATALOG, "the adopted subsystem does not list the member")
+        before = _poll_ext(mdo, "the adopted subsystem's .mdo", needles=[_ADOPTED])
+        state = _block_state(before, "content", "after the adoption")
+        if state != _EXTENDED:
+            raise AssertionError("PREMISE (EDT's adopter): the adopted subsystem's content state is Extended right after "
+                                 "the adoption; got %r - this control needs it" % (state,))
+        if _root_values(before, "content"):
+            raise AssertionError("PREMISE: a fresh adoption lists no content member; got %r"
+                                 % _root_values(before, "content"))
 
-    _restoring("refused content of an adopted subsystem", body)
+        r = _modify_ext(fqn, content=[{"metadata": member}])
+        after = _poll_ext(mdo, "the member must reach the extension's .mdo (the call answered: %s)"
+                          % (r.text or "")[:300], needles=[">%s<" % member])
+        if _root_values(after, "content") != [member]:
+            raise AssertionError("the adopted subsystem lists exactly the member; got %r" % _root_values(after, "content"))
+        if _block_state(after, "content", "after the write") != _EXTENDED:
+            raise AssertionError("the content state stays Extended; got %r"
+                                 % _block_state(after, "content", "after the write"))
+        assert_ok(r, "the content of an adopted subsystem whose state is Extended")
+        added = ((r.structured or {}).get("content") or {}).get("added")
+        if added != 1:
+            raise AssertionError("the answer counts one member added; got %r" % (r.structured,))
+        assert_not_contains(read_disk(mdo), member,
+                            "the base's Subsystem.mdo does not list the extension's member")
+
+    _restoring("the content of an adopted subsystem", body)
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

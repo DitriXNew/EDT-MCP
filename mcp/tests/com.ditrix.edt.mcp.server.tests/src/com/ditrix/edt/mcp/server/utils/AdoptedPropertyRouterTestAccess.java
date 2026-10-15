@@ -34,9 +34,11 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectExtension;
+import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.DefinedTypeExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.EventSubscriptionExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.MdClassExtensionFactory;
+import com._1c.g5.v8.dt.metadata.mdclass.extension.SubsystemExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.TypeDescriptionExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.TypeExtension;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.type.MdPropertyState;
@@ -146,7 +148,8 @@ public final class AdoptedPropertyRouterTestAccess
     }
 
     /**
-     * An event subscription an extension adopted, with its native source copy and the source state of its
+     * An event subscription an extension adopted, with its own source ({@code null}: none, as an adoption leaves
+     * it; an earlier extended write leaves the base sources plus its additions there) and the source state of its
      * extension block ({@code null}: not set).
      */
     public static EventSubscription adoptedSubscription(String name, TypeDescription source, MdPropertyState state)
@@ -165,6 +168,29 @@ public final class AdoptedPropertyRouterTestAccess
         }
         subscription.setExtension(extension);
         return subscription;
+    }
+
+    /**
+     * A subsystem an extension adopted, with the content state of its extension block ({@code null}: not set,
+     * which a generated block reads as None) and its content members. EDT's adopter marks an adopted subsystem's
+     * content Extended ({@code SubsystemAdopterParticipant}); a test passes None for a state set back after that.
+     */
+    public static Subsystem adoptedSubsystem(String name, MdPropertyState contentState, MdObject... members)
+    {
+        Subsystem subsystem = MdClassFactory.eINSTANCE.createSubsystem();
+        subsystem.setName(name);
+        subsystem.setObjectBelonging(ObjectBelonging.ADOPTED);
+        SubsystemExtension extension = MdClassExtensionFactory.eINSTANCE.createSubsystemExtension();
+        if (contentState != null)
+        {
+            extension.setContent(contentState);
+        }
+        subsystem.setExtension(extension);
+        for (MdObject member : members)
+        {
+            subsystem.getContent().add(member);
+        }
+        return subsystem;
     }
 
     // ================================ the platform ================================

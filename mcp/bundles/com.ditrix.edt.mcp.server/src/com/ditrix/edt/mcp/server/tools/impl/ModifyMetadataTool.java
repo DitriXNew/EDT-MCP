@@ -1088,6 +1088,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return templateOnlyForTemplateFqnError(normFqn, ERR_IS_A + subsystem.eClass().getName());
         }
+        // EDT's adopter marks an adopted subsystem's content Extended and EDT's .mdo writer then keeps the list, so
+        // this refuses only a content state of None (issues #709 / #710).
         String dropped = AdoptedPropertyRouter.refusalIfDropped(subsystem, membershipList(subsystem), normFqn,
             ctx.project, resolvePlatformVersion(ctx));
         if (dropped != null)
