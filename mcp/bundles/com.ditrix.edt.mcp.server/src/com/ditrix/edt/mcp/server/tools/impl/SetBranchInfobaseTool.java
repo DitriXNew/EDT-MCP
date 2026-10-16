@@ -6,14 +6,21 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -37,6 +44,7 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.PlatformFailures;
+import com.ditrix.edt.mcp.server.utils.git.AssociationStoreFile;
 import com.ditrix.edt.mcp.server.utils.git.BranchContexts;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
 import com.e1c.g5.dt.applications.IApplication;
@@ -66,9 +74,11 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  * binding from a context other than the one it reads now
  * ({@link BranchContexts#current(IInfobaseAssociationContextProvider, IProject)}) by
  * deleting that context's whole binding file, and the same-named file of each dependent
- * extension project whose own current context differs. Such a detach runs only when that
- * deletion can take nothing but the binding being removed; see
- * {@link #applyResolved}.
+ * extension project whose own current context differs; it removes a binding from a legacy short
+ * key the same way. Such a detach runs only when that deletion can take nothing but the binding
+ * being removed - judged from EDT's read AND from the persisted files, since EDT's read hides
+ * stale entries ({@link AssociationStoreFile}) - and this tool's binding changes are serialized;
+ * see {@link #applyResolved}.
  */
 public class SetBranchInfobaseTool implements IMcpTool
 {
@@ -270,11 +280,13 @@ public class SetBranchInfobaseTool implements IMcpTool
      * <p>
      * A detach is planned before anything changes ({@link #planDetach}): bound means bound by UUID, the
      * key EDT's own dissociation matches by, and any failure to read what the detach would touch refuses
-     * it. A detach from the branch EDT reads now goes through as before. A detach from a branch that is
-     * not checked out runs only when deleting that branch's whole binding file - which is how EDT removes
-     * a binding from a context it does not read now - can take nothing else; otherwise it is refused,
-     * naming what would be lost. A legacy short key is never read by EDT, so its detach always goes
-     * through, and the message names the other bindings stored under it, which may go with it.
+     * it. A detach from the branch EDT reads now goes through as before. A detach that EDT carries out by
+     * deleting a whole binding file - from a branch that is not checked out, or from a legacy short key,
+     * which EDT never reads - runs only when that deletion can take nothing but the binding being removed;
+     * otherwise it is refused, naming what would be lost.
+     * <p>
+     * The whole change - plan, re-check, EDT's write and the read-back - runs under {@link #BINDING_WRITES},
+     * and the plan is re-checked right before EDT's write ({@link DetachPlan#recheck()}).
      *
      * @param provider EDT's current-context provider (may be {@code null}: a detach that needs it refuses)
      * @param dependents the project's dependent extension projects; may throw, which refuses a detach
@@ -289,7 +301,60 @@ public class SetBranchInfobaseTool implements IMcpTool
         {
             return ToolResult.error(resolution.error()).toJson();
         }
-        BranchContexts.Target target = resolution.target();
+        if (!lockBindingWrites())
+        {
+            return ToolResult.error("Another set_branch_infobase call is still changing infobase bindings (waited " //$NON-NLS-1$
+                + BINDING_WRITE_WAIT_SECONDS + " s). Nothing was changed; retry.").toJson(); //$NON-NLS-1$
+        }
+        try
+        {
+            return applyLocked(assocManager, provider, dependents, project, branch, applicationId, ref, attach,
+                setDefault, resolution.target());
+        }
+        finally
+        {
+            BINDING_WRITES.unlock();
+        }
+    }
+
+    /** How long a call waits for another call's binding change before it refuses. */
+    static final long BINDING_WRITE_WAIT_SECONDS = 60;
+
+    /**
+     * Serializes this tool's own binding changes (#656): an attach or a detach - its plan, the re-check,
+     * EDT's write and the read-back - runs under this one lock, so two calls of this tool never interleave
+     * (MCP calls run concurrently). It is one lock for the whole tool, not one per project: a detach also
+     * deletes binding files of the project's dependent extension projects, and a per-project lock would
+     * leave those open to an attach to such a project.
+     * <p>
+     * What it cannot cover: EDT's own UI, and association writes of other tools ({@code create_infobase},
+     * {@code delete_infobase}, {@code create_git_branch}). For those the re-check right before EDT's write
+     * ({@link DetachPlan#recheck()}) leaves the window between that re-check and EDT's own write. The re-check
+     * reads the binding files and the stored branch references again; the list of dependent extension projects
+     * and each dependent's current context are read once, at plan time (inside this lock), so for a change to
+     * those the window runs from the plan to EDT's write.
+     */
+    private static final ReentrantLock BINDING_WRITES = new ReentrantLock(true);
+
+    private static boolean lockBindingWrites()
+    {
+        try
+        {
+            return BINDING_WRITES.tryLock(BINDING_WRITE_WAIT_SECONDS, TimeUnit.SECONDS);
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    /** {@link #applyResolved} under {@link #BINDING_WRITES}. */
+    private static String applyLocked(IInfobaseAssociationManager assocManager,
+        IInfobaseAssociationContextProvider provider, Supplier<Collection<IProject>> dependents, IProject project,
+        String branch, String applicationId, InfobaseReference ref, boolean attach, boolean setDefault,
+        BranchContexts.Target target)
+    {
         InfobaseAssociationContext ctx = target.context();
         String note = null;
 
@@ -299,6 +364,11 @@ public class SetBranchInfobaseTool implements IMcpTool
             if (plan.refusal() != null)
             {
                 return ToolResult.error(plan.refusal()).toJson();
+            }
+            String changed = plan.recheck();
+            if (changed != null)
+            {
+                return ToolResult.error(changed).toJson();
             }
             ctx = plan.context();
             note = plan.note();
@@ -382,14 +452,11 @@ public class SetBranchInfobaseTool implements IMcpTool
      * fallback, as before.</li>
      * <li>When the branch's context is the one EDT reads now, the detach goes through: EDT rewrites the
      * file without this binding.</li>
-     * <li>Otherwise EDT deletes the context's whole binding file - and, for every dependent extension
-     * project whose own current context differs, that project's same-named file - when it holds a
-     * synchronization for the project, which on a running EDT it practically always does. The detach
-     * then runs only when that deletion can take nothing else: no other base in the branch's file, no
-     * dependent extension binding under the branch, and the branch neither references another branch's
-     * binding nor is referenced by one (the file would be the shared one).</li>
-     * <li>A legacy short key is never the current context, so its file always goes as a whole; it is
-     * dead (EDT never reads it), so the detach goes through and the note names what went with it.</li>
+     * <li>Otherwise - a branch that is not checked out, and always a legacy short key, which is never the
+     * current context - EDT deletes the context's whole binding file, and the same-named file of every
+     * dependent extension project whose own current context differs, when it holds a synchronization for
+     * the project, which on a running EDT it practically always does. The detach then runs only when that
+     * deletion can take nothing else ({@link #checkWholeFile}).</li>
      * <li>Any failure to read one of these facts refuses the detach: nothing after the call shows a loss
      * (EDT logs none), so an unread fact cannot be reported later.</li>
      * </ul>
@@ -437,7 +504,7 @@ public class SetBranchInfobaseTool implements IMcpTool
             }
             if (containsUuid(inLegacy, uuid))
             {
-                return planLegacyDetach(assocManager, dependents, project, target, uuid, inLegacy);
+                return planLegacyDetach(assocManager, dependents, project, applicationId, target, uuid, inLegacy);
             }
         }
         return DetachPlan.refused("Application '" + applicationId + "' is not bound to branch '" //$NON-NLS-1$ //$NON-NLS-2$
@@ -457,80 +524,36 @@ public class SetBranchInfobaseTool implements IMcpTool
         {
             return DetachPlan.refused(current.error());
         }
-        if (ctx.equals(current.context()))
+        InfobaseAssociationContext readNow = current.context();
+        if (ctx.equals(readNow))
         {
-            return DetachPlan.of(ctx, null);
+            // EDT rewrites the file only while it still reads this branch; a checkout in between would make
+            // the write a deletion of the whole file.
+            return DetachPlan.of(ctx, null, () -> checkoutUnchanged(provider, project, target, readNow));
         }
 
-        List<String> lost = new ArrayList<>();
-        boolean dependentLost = false;
-        try
+        WholeFileCheck check = checkWholeFile(assocManager, provider, dependents, project, applicationId, target,
+            ctx, uuid, inBranch, false, readNow);
+        if (check.refusal != null)
         {
-            Collection<InfobaseAssociationContext> contexts = assocManager.getAssociationContexts(project);
-            if (contexts != null)
-            {
-                for (InfobaseAssociationContext stored : contexts)
-                {
-                    if (stored == null || stored.getReference().isEmpty())
-                    {
-                        continue;
-                    }
-                    InfobaseAssociationContext referenced = stored.getReference().get();
-                    if (ctx.getContext().equals(stored.getContext()))
-                    {
-                        return DetachPlan.refused(sharesAnotherBranchRefusal(applicationId, target, referenced,
-                            current.context()));
-                    }
-                    if (ctx.getContext().equals(referenced.getContext()))
-                    {
-                        lost.add("the binding of branch '" + referencingLabel(stored) //$NON-NLS-1$
-                            + "', which shares this branch's binding file"); //$NON-NLS-1$
-                    }
-                }
-            }
-            for (InfobaseReference sibling : inBranch)
-            {
-                if (!uuid.equals(sibling.getUuid()))
-                {
-                    lost.add("infobase '" + sibling.getName() + "'"); //$NON-NLS-1$ //$NON-NLS-2$
-                }
-            }
-            for (IProject dependent : dependents.get())
-            {
-                List<InfobaseReference> inDependent = boundInfobases(assocManager, dependent, ctx);
-                if (inDependent.isEmpty())
-                {
-                    continue;
-                }
-                BranchContexts.Current dependentCurrent = BranchContexts.current(provider, dependent);
-                if (!dependentCurrent.ok())
-                {
-                    return DetachPlan.refused(dependentCurrent.error());
-                }
-                if (!ctx.equals(dependentCurrent.context()))
-                {
-                    lost.add("the binding of extension project '" + dependent.getName() + "' to this branch (" //$NON-NLS-1$ //$NON-NLS-2$
-                        + String.join(", ", names(inDependent)) + ")"); //$NON-NLS-1$ //$NON-NLS-2$
-                    dependentLost = true;
-                }
-            }
+            return DetachPlan.refused(check.refusal);
         }
-        catch (RuntimeException e)
-        {
-            return DetachPlan.refused(readFailure(project, target.fullRef(), e));
-        }
-
-        if (!lost.isEmpty())
+        if (!check.lost.isEmpty())
         {
             return DetachPlan.refused("Branch '" + target.shortName() + "' is not checked out. EDT may remove a " //$NON-NLS-1$ //$NON-NLS-2$
                 + "binding from a branch that is not checked out by deleting the branch's whole binding file, " //$NON-NLS-1$
                 + "so detaching application '" + applicationId + "' here may also remove: " //$NON-NLS-1$ //$NON-NLS-2$
-                + String.join("; ", lost) + ". Nothing was changed. " //$NON-NLS-1$
-                + notCheckedOutRemedy(target, current.context(), dependentLost));
+                + String.join("; ", check.lost) + ". Nothing was changed. " //$NON-NLS-1$ //$NON-NLS-2$
+                + notCheckedOutRemedy(target, readNow, check.dependentLost) + check.hiddenEntriesNote());
+        }
+        if (check.ownProblem != null)
+        {
+            return DetachPlan.refused(check.ownProblem);
         }
         return DetachPlan.of(ctx, "Branch '" + target.shortName() + "' is not checked out, and EDT may remove a " //$NON-NLS-1$ //$NON-NLS-2$
             + "binding from such a branch by deleting its whole binding file; that file held no other " //$NON-NLS-1$
-            + "binding, so no other binding was removed."); //$NON-NLS-1$
+            + "binding, so no other binding was removed.", //$NON-NLS-1$
+            () -> check.recheck(assocManager, project, ctx, target.fullRef(), uuid));
     }
 
     /**
@@ -566,46 +589,289 @@ public class SetBranchInfobaseTool implements IMcpTool
             + "branch."; //$NON-NLS-1$
     }
 
-    /** The detach of a binding stored under the legacy short key; see {@link #planDetach}. */
+    /**
+     * The detach of a binding stored under the legacy short key; see {@link #planDetach}. EDT never reads a
+     * legacy key, so it is never the current context and EDT always removes a binding from it by deleting
+     * its whole file. A legacy entry is dead and harmless where it is, so the detach goes through only when
+     * it deletes nothing but this binding, and is refused otherwise: no call can remove one binding of such
+     * a file without the others.
+     */
     private static DetachPlan planLegacyDetach(IInfobaseAssociationManager assocManager,
-        Supplier<Collection<IProject>> dependents, IProject project, BranchContexts.Target target, UUID uuid,
-        List<InfobaseReference> inLegacy)
+        Supplier<Collection<IProject>> dependents, IProject project, String applicationId,
+        BranchContexts.Target target, UUID uuid, List<InfobaseReference> inLegacy)
     {
         InfobaseAssociationContext legacy = target.legacyContext();
-        List<String> alsoHeld = new ArrayList<>();
-        for (InfobaseReference sibling : inLegacy)
+        WholeFileCheck check = checkWholeFile(assocManager, null, dependents, project, applicationId, target, legacy,
+            uuid, inLegacy, true, null);
+        if (check.refusal != null)
         {
-            if (!uuid.equals(sibling.getUuid()))
-            {
-                alsoHeld.add("infobase '" + sibling.getName() + "'"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
+            return DetachPlan.refused(check.refusal);
         }
+        if (!check.lost.isEmpty())
+        {
+            return DetachPlan.refused("Application '" + applicationId + "' is bound only under the legacy short " //$NON-NLS-1$ //$NON-NLS-2$
+                + "key '" + target.shortName() + "' (written by an older version of this tool), not under '" //$NON-NLS-1$ //$NON-NLS-2$
+                + target.fullRef() + "'. EDT never reads legacy entries: they are dead and harmless where they " //$NON-NLS-1$
+                + "are. But EDT removes a binding from such a key by deleting the key's whole binding file, so " //$NON-NLS-1$
+                + "detaching it would also remove: " + String.join("; ", check.lost) //$NON-NLS-1$ //$NON-NLS-2$
+                + ". There is no way to remove one binding of such a file without the others, so nothing was " //$NON-NLS-1$
+                + "changed; leave the legacy entry in place." + check.hiddenEntriesNote()); //$NON-NLS-1$
+        }
+        if (check.ownProblem != null)
+        {
+            return DetachPlan.refused(check.ownProblem);
+        }
+        return DetachPlan.of(legacy, "Removed the binding stored under the legacy short key '" + target.shortName() //$NON-NLS-1$
+            + "' (written by an older version of this tool; EDT never read it as a branch " //$NON-NLS-1$
+            + "context). No binding existed under '" + target.fullRef() + "'. That key's binding file held no " //$NON-NLS-1$ //$NON-NLS-2$
+            + "other binding, so no other binding was removed.", //$NON-NLS-1$
+            () -> check.recheck(assocManager, project, legacy, target.shortName(), uuid));
+    }
+
+    /**
+     * What deleting the whole binding file of {@code ctx} would take besides the binding being removed - read
+     * from both sources, because neither alone shows it all:
+     * <ul>
+     * <li>EDT's read ({@code getAssociation}, {@code getAssociationContexts}): the other infobases bound
+     * there, the branches that keep their binding as a reference to this one, and the dependent extension
+     * projects bound there. It shows only infobases EDT can resolve.</li>
+     * <li>The persisted files, located as EDT locates them ({@link AssociationStoreFile}): every entry EDT
+     * does not show - a UUID no registered infobase has (stale: EDT drops it on every read, but it is still
+     * a record, and it binds again once a base with that UUID is registered), a value it cannot parse, a
+     * key it does not write. The project's own file must be found where EDT keeps it, since EDT shows the
+     * binding there; a dependent without a working location has no file EDT could delete.</li>
+     * </ul>
+     * A dependent extension project counts only when its own current context differs from {@code ctx}
+     * (EDT deletes its file only then); a legacy key is never anyone's current context.
+     *
+     * @param current the context EDT reads now for the project ({@code null} for a legacy key: only used to
+     *            word the referencing-branch refusal)
+     */
+    private static WholeFileCheck checkWholeFile(IInfobaseAssociationManager assocManager,
+        IInfobaseAssociationContextProvider provider, Supplier<Collection<IProject>> dependents, IProject project,
+        String applicationId, BranchContexts.Target target, InfobaseAssociationContext ctx, UUID uuid,
+        List<InfobaseReference> inContext, boolean legacyKey, InfobaseAssociationContext current)
+    {
+        WholeFileCheck check = new WholeFileCheck();
+        String label = legacyKey ? target.shortName() : target.fullRef();
+        String ownFile = legacyKey ? "this key's binding file" : "this branch's binding file"; //$NON-NLS-1$ //$NON-NLS-2$
+        String under = legacyKey ? "under this key" : "to this branch"; //$NON-NLS-1$ //$NON-NLS-2$
         try
         {
+            Collection<InfobaseAssociationContext> contexts = assocManager.getAssociationContexts(project);
+            if (contexts != null)
+            {
+                for (InfobaseAssociationContext stored : contexts)
+                {
+                    if (stored == null || stored.getReference().isEmpty())
+                    {
+                        continue;
+                    }
+                    InfobaseAssociationContext referenced = stored.getReference().get();
+                    if (ctx.getContext().equals(stored.getContext()))
+                    {
+                        check.refusal = sharesAnotherBranchRefusal(applicationId, target, referenced, current);
+                        return check;
+                    }
+                    if (ctx.getContext().equals(referenced.getContext()))
+                    {
+                        check.lost.add("the binding of branch '" + referencingLabel(stored) //$NON-NLS-1$
+                            + "', which shares " + ownFile); //$NON-NLS-1$
+                    }
+                }
+            }
+            Set<UUID> known = new HashSet<>();
+            known.add(uuid);
+            for (InfobaseReference sibling : inContext)
+            {
+                if (!uuid.equals(sibling.getUuid()))
+                {
+                    check.lost.add("infobase '" + sibling.getName() + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                if (sibling.getUuid() != null)
+                {
+                    known.add(sibling.getUuid());
+                }
+            }
+            Path own = AssociationStoreFile.locate(project, ctx);
+            if (own == null)
+            {
+                check.ownProblem = ownFileProblem(applicationId, label, "the project has no EDT working location"); //$NON-NLS-1$
+            }
+            else if (!Files.isRegularFile(own))
+            {
+                check.ownProblem = ownFileProblem(applicationId, label,
+                    "its binding file is not where EDT keeps it (" + own + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+            }
+            else
+            {
+                check.ownFile = own;
+                for (String entry : AssociationStoreFile.entriesBesides(own, known))
+                {
+                    check.lost.add("an entry EDT does not show in " + ownFile + ": " + entry); //$NON-NLS-1$ //$NON-NLS-2$
+                    check.hiddenListed = true;
+                }
+            }
             for (IProject dependent : dependents.get())
             {
-                List<InfobaseReference> inDependent = boundInfobases(assocManager, dependent, legacy);
-                if (!inDependent.isEmpty())
+                checkDependent(check, assocManager, provider, dependent, ctx, legacyKey, under);
+                if (check.refusal != null)
                 {
-                    alsoHeld.add("the binding of extension project '" + dependent.getName() + "' under it (" //$NON-NLS-1$ //$NON-NLS-2$
-                        + String.join(", ", names(inDependent)) + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+                    return check;
                 }
             }
         }
-        catch (RuntimeException e)
+        catch (RuntimeException | IOException e)
         {
-            return DetachPlan.refused(readFailure(project, target.shortName(), e));
+            check.refusal = readFailure(project, label, e);
         }
-        String note = "Removed the binding stored under the legacy short key '" + target.shortName() //$NON-NLS-1$
-            + "' (written by an older version of this tool; EDT never read it as a branch " //$NON-NLS-1$
-            + "context). No binding existed under '" + target.fullRef() + "'."; //$NON-NLS-1$ //$NON-NLS-2$
-        if (!alsoHeld.isEmpty())
+        return check;
+    }
+
+    /** One dependent extension project's part of {@link #checkWholeFile}. */
+    private static void checkDependent(WholeFileCheck check, IInfobaseAssociationManager assocManager,
+        IInfobaseAssociationContextProvider provider, IProject dependent, InfobaseAssociationContext ctx,
+        boolean legacyKey, String under) throws IOException
+    {
+        List<InfobaseReference> inDependent = boundInfobases(assocManager, dependent, ctx);
+        Set<UUID> known = new HashSet<>();
+        for (InfobaseReference ib : inDependent)
         {
-            note += " EDT may remove such a key by deleting its whole binding file, so these other bindings " //$NON-NLS-1$
-                + "stored under it may be gone too (EDT never read them either): " + String.join("; ", alsoHeld) //$NON-NLS-1$ //$NON-NLS-2$
-                + "."; //$NON-NLS-1$
+            if (ib.getUuid() != null)
+            {
+                known.add(ib.getUuid());
+            }
         }
-        return DetachPlan.of(legacy, note);
+        Path file = AssociationStoreFile.locate(dependent, ctx);
+        List<String> hidden = file == null ? List.of() : AssociationStoreFile.entriesBesides(file, known);
+        InfobaseAssociationContext reference = referenceOf(assocManager, dependent, ctx);
+        if (inDependent.isEmpty() && hidden.isEmpty() && reference == null)
+        {
+            if (file != null)
+            {
+                check.emptyDependentFiles.put(file, dependent);
+            }
+            return;
+        }
+        if (!legacyKey)
+        {
+            BranchContexts.Current dependentCurrent = BranchContexts.current(provider, dependent);
+            if (!dependentCurrent.ok())
+            {
+                check.refusal = dependentCurrent.error();
+                return;
+            }
+            if (ctx.equals(dependentCurrent.context()))
+            {
+                return;
+            }
+        }
+        String extension = "extension project '" + dependent.getName() + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+        if (!inDependent.isEmpty())
+        {
+            check.lost.add("the binding of " + extension + " " + under + " (" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + String.join(", ", names(inDependent)) + ")"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (reference != null)
+        {
+            check.lost.add("the binding of " + extension + " " + under + ", which EDT keeps as a reference to " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + "branch '" + BranchContexts.displayName(reference) + "' (EDT would delete that branch's binding " //$NON-NLS-1$ //$NON-NLS-2$
+                + "file of the extension)"); //$NON-NLS-1$
+        }
+        for (String entry : hidden)
+        {
+            check.lost.add("an entry EDT does not show in the binding file of " + extension + " " + under + ": " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                + entry);
+            check.hiddenListed = true;
+        }
+        check.dependentLost = true;
+    }
+
+    /** The context {@code project} keeps {@code ctx} as a reference to, or {@code null} when it keeps none. */
+    private static InfobaseAssociationContext referenceOf(IInfobaseAssociationManager assocManager, IProject project,
+        InfobaseAssociationContext ctx)
+    {
+        Collection<InfobaseAssociationContext> contexts = assocManager.getAssociationContexts(project);
+        if (contexts != null)
+        {
+            for (InfobaseAssociationContext stored : contexts)
+            {
+                if (stored != null && stored.getReference().isPresent()
+                    && ctx.getContext().equals(stored.getContext()))
+                {
+                    return stored.getReference().get();
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * A stored branch reference of {@code project} that {@link #checkWholeFile} would have refused for
+     * {@code ctx} - {@code ctx} kept as a reference to another branch, or another branch kept as a reference to
+     * {@code ctx} - described for the re-check, or {@code null} when there is none. The plan refused on any, so
+     * one found by the re-check appeared after the plan.
+     */
+    private static String referenceChange(IInfobaseAssociationManager assocManager, IProject project,
+        InfobaseAssociationContext ctx)
+    {
+        Collection<InfobaseAssociationContext> contexts = assocManager.getAssociationContexts(project);
+        if (contexts != null)
+        {
+            for (InfobaseAssociationContext stored : contexts)
+            {
+                if (stored == null || stored.getReference().isEmpty())
+                {
+                    continue;
+                }
+                InfobaseAssociationContext referenced = stored.getReference().get();
+                if (ctx.getContext().equals(stored.getContext()))
+                {
+                    return "its binding is now kept as a reference to branch '" //$NON-NLS-1$
+                        + BranchContexts.displayName(referenced) + "'"; //$NON-NLS-1$
+                }
+                if (ctx.getContext().equals(referenced.getContext()))
+                {
+                    return "branch '" + referencingLabel(stored) //$NON-NLS-1$
+                        + "' now keeps its binding as a reference to this binding"; //$NON-NLS-1$
+                }
+            }
+        }
+        return null;
+    }
+
+    /** The refusal when the project's own binding file cannot be found or read where EDT keeps it. */
+    private static String ownFileProblem(String applicationId, String label, String reason)
+    {
+        return "Could not check what else a detach of application '" + applicationId + "' from '" + label //$NON-NLS-1$ //$NON-NLS-2$
+            + "' would delete: EDT shows the binding there, but " + reason + ". EDT removes it by deleting " //$NON-NLS-1$ //$NON-NLS-2$
+            + "that whole file, and what else the file holds cannot be shown, so the detach is refused. " //$NON-NLS-1$
+            + "Nothing was changed."; //$NON-NLS-1$
+    }
+
+    /** A detach whose plan no longer holds when it is re-checked right before EDT's write. */
+    private static String changedRefusal(String label, String what)
+    {
+        return "The bindings changed while this detach from '" + label + "' was being checked: " + what //$NON-NLS-1$ //$NON-NLS-2$
+            + ". EDT or another tool changed them in the meantime. Nothing was changed; check list_git_branches " //$NON-NLS-1$
+            + "and detach again."; //$NON-NLS-1$
+    }
+
+    /** The re-check of a detach from the branch EDT reads now: EDT must still read it. */
+    private static String checkoutUnchanged(IInfobaseAssociationContextProvider provider, IProject project,
+        BranchContexts.Target target, InfobaseAssociationContext readNow)
+    {
+        BranchContexts.Current now = BranchContexts.current(provider, project);
+        if (!now.ok())
+        {
+            return now.error();
+        }
+        if (!readNow.equals(now.context()))
+        {
+            return changedRefusal(target.fullRef(), "the branch EDT reads for this project changed from '" //$NON-NLS-1$
+                + BranchContexts.displayName(readNow) + "' to '" + BranchContexts.displayName(now.context()) + "'"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return null;
     }
 
     /** The refusal for a branch whose binding is a reference to another branch's binding (C5). */
@@ -613,12 +879,13 @@ public class SetBranchInfobaseTool implements IMcpTool
         InfobaseAssociationContext referenced, InfobaseAssociationContext current)
     {
         String referencedName = BranchContexts.displayName(referenced);
+        boolean readNow = current != null && referenced.getContext().equals(current.getContext());
         return "Branch '" + target.shortName() + "' has no binding file of its own: EDT keeps its binding as a " //$NON-NLS-1$ //$NON-NLS-2$
             + "reference to branch '" + referencedName + "' (EDT's source-branch infobase option), so detaching " //$NON-NLS-1$ //$NON-NLS-2$
             + "application '" + applicationId + "' here would change the binding of '" + referencedName //$NON-NLS-1$ //$NON-NLS-2$
             + "' and of every branch that shares it. Nothing was changed. Detach it from branch '" //$NON-NLS-1$
             + referencedName + "' instead" //$NON-NLS-1$
-            + (referenced.getContext().equals(current.getContext()) ? ", the binding EDT reads now." : "."); //$NON-NLS-1$ //$NON-NLS-2$
+            + (readNow ? ", the binding EDT reads now." : "."); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /** A referencing context's own name, shown like a branch: {@code refs/heads/X} as {@code X}. */
@@ -628,7 +895,7 @@ public class SetBranchInfobaseTool implements IMcpTool
         return raw.startsWith(BranchContexts.REFS_HEADS) ? raw.substring(BranchContexts.REFS_HEADS.length()) : raw;
     }
 
-    private static String readFailure(IProject project, String context, RuntimeException failure)
+    private static String readFailure(IProject project, String context, Exception failure)
     {
         Activator.logError("set_branch_infobase: reading the bindings of project '" + project.getName() //$NON-NLS-1$
             + "' for context '" + context + "' failed", failure); //$NON-NLS-1$ //$NON-NLS-2$
@@ -680,7 +947,102 @@ public class SetBranchInfobaseTool implements IMcpTool
         return names;
     }
 
-    /** The outcome of {@link #planDetach}: the context to dissociate in plus the answer's note, or a refusal. */
+    /** What {@link #checkWholeFile} found; the plan built from it re-checks what it relied on. */
+    private static final class WholeFileCheck
+    {
+        /** A refusal decided outright (a read failure, a referencing branch), or {@code null}. */
+        String refusal;
+
+        /** What the deletion would take besides the binding being removed. */
+        final List<String> lost = new ArrayList<>();
+
+        /** Whether a dependent extension project's binding is among {@link #lost}. */
+        boolean dependentLost;
+
+        /** Whether a persisted entry EDT does not show is among {@link #lost}. */
+        boolean hiddenListed;
+
+        /** Why the project's own file could not be checked, or {@code null}. */
+        String ownProblem;
+
+        /** The project's own file, checked to hold nothing but the binding being removed. */
+        Path ownFile;
+
+        /** Dependents' files EDT would delete, checked to hold nothing, with the project they belong to. */
+        final Map<Path, IProject> emptyDependentFiles = new LinkedHashMap<>();
+
+        /** The note explaining the entries EDT does not show, when any is listed. */
+        String hiddenEntriesNote()
+        {
+            if (!hiddenListed)
+            {
+                return ""; //$NON-NLS-1$
+            }
+            return " An entry EDT does not show is still a record in the file: an infobase entry is a UUID no " //$NON-NLS-1$
+                + "infobase registered in EDT has (EDT drops it when it reads the file, binds it again once a base " //$NON-NLS-1$
+                + "with that UUID is registered, and drops it for good whenever it rewrites the file), and any " //$NON-NLS-1$
+                + "other entry is a key EDT does not write."; //$NON-NLS-1$
+        }
+
+        /**
+         * Re-reads, right before EDT's write, what this check relied on: the project's own file must still
+         * hold nothing but {@code uuid}, no stored branch of the project may keep a reference to or from
+         * {@code ctx}, and each dependent's file must still hold nothing, with no reference of the dependent
+         * for {@code ctx}. The list of dependents and their current contexts are not read again (see
+         * {@link SetBranchInfobaseTool#BINDING_WRITES}).
+         *
+         * @return the refusal when that no longer holds, otherwise {@code null}
+         */
+        String recheck(IInfobaseAssociationManager assocManager, IProject project, InfobaseAssociationContext ctx,
+            String label, UUID uuid)
+        {
+            try
+            {
+                if (!Files.isRegularFile(ownFile))
+                {
+                    return changedRefusal(label, "its binding file is gone"); //$NON-NLS-1$
+                }
+                List<String> now = AssociationStoreFile.entriesBesides(ownFile, Set.of(uuid));
+                if (!now.isEmpty())
+                {
+                    return changedRefusal(label, "its binding file now also holds: " + String.join(", ", now)); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                String referenceNow = referenceChange(assocManager, project, ctx);
+                if (referenceNow != null)
+                {
+                    return changedRefusal(label, referenceNow);
+                }
+                for (Map.Entry<Path, IProject> dependentFile : emptyDependentFiles.entrySet())
+                {
+                    String extension = dependentFile.getValue().getName();
+                    List<String> dependentNow = AssociationStoreFile.entriesBesides(dependentFile.getKey(), Set.of());
+                    if (!dependentNow.isEmpty())
+                    {
+                        return changedRefusal(label, "the binding file of extension project '" //$NON-NLS-1$
+                            + extension + "' now holds: " + String.join(", ", dependentNow)); //$NON-NLS-1$ //$NON-NLS-2$
+                    }
+                    InfobaseAssociationContext dependentReference = referenceOf(assocManager, dependentFile.getValue(),
+                        ctx);
+                    if (dependentReference != null)
+                    {
+                        return changedRefusal(label, "extension project '" + extension //$NON-NLS-1$
+                            + "' now keeps its binding here as a reference to branch '" //$NON-NLS-1$
+                            + BranchContexts.displayName(dependentReference) + "'"); //$NON-NLS-1$
+                    }
+                }
+                return null;
+            }
+            catch (RuntimeException | IOException e)
+            {
+                return readFailure(project, label, e);
+            }
+        }
+    }
+
+    /**
+     * The outcome of {@link #planDetach}: the context to dissociate in, the answer's note and the re-check to
+     * run right before EDT's write - or a refusal.
+     */
     private static final class DetachPlan
     {
         private final InfobaseAssociationContext context;
@@ -689,21 +1051,24 @@ public class SetBranchInfobaseTool implements IMcpTool
 
         private final String refusal;
 
-        private DetachPlan(InfobaseAssociationContext context, String note, String refusal)
+        private final Supplier<String> recheck;
+
+        private DetachPlan(InfobaseAssociationContext context, String note, String refusal, Supplier<String> recheck)
         {
             this.context = context;
             this.note = note;
             this.refusal = refusal;
+            this.recheck = recheck;
         }
 
-        static DetachPlan of(InfobaseAssociationContext context, String note)
+        static DetachPlan of(InfobaseAssociationContext context, String note, Supplier<String> recheck)
         {
-            return new DetachPlan(context, note, null);
+            return new DetachPlan(context, note, null, recheck);
         }
 
         static DetachPlan refused(String refusal)
         {
-            return new DetachPlan(null, null, refusal);
+            return new DetachPlan(null, null, refusal, null);
         }
 
         InfobaseAssociationContext context()
@@ -719,6 +1084,17 @@ public class SetBranchInfobaseTool implements IMcpTool
         String refusal()
         {
             return refusal;
+        }
+
+        /**
+         * Runs the re-check, under the same lock as the plan and EDT's write, right before the write: what the
+         * plan relied on must still hold.
+         *
+         * @return the refusal when it no longer holds, otherwise {@code null}
+         */
+        String recheck()
+        {
+            return recheck == null ? null : recheck.get();
         }
     }
 
