@@ -43,6 +43,7 @@ import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
+import com.ditrix.edt.mcp.server.utils.git.GitCheckoutSupport;
 
 /**
  * Tests for {@link CreateGitBranchTool}.
@@ -385,5 +386,20 @@ public class CreateGitBranchToolTest
             checkout.join(10_000);
             attach.join(10_000);
         }
+    }
+
+    /**
+     * A checkout Job that outlived its bounded wait may still be finishing, and is recorded as a running branch
+     * change (#656): the warning must not claim the branch is not checked out, and names the detach it blocks.
+     */
+    @Test
+    public void aTimedOutCheckoutWarningSaysTheCheckoutMayStillBeFinishingAndBlocksADetach()
+    {
+        String warning = CreateGitBranchTool.timedOutCheckoutWarning("feature/x"); //$NON-NLS-1$
+        assertEquals("Checkout of the newly created branch 'feature/x' timed out after " //$NON-NLS-1$
+            + GitCheckoutSupport.CHECKOUT_TIMEOUT_SECONDS
+            + " seconds; the branch was created, and its checkout may still be finishing - a " //$NON-NLS-1$
+            + "set_branch_infobase detach of the repository's projects is refused until it ends.", warning); //$NON-NLS-1$
+        assertFalse(warning, warning.contains("is not checked out")); //$NON-NLS-1$
     }
 }

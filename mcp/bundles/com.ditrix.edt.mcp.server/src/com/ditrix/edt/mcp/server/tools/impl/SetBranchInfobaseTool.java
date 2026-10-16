@@ -288,7 +288,8 @@ public class SetBranchInfobaseTool implements IMcpTool
      * <p>
      * The whole change - plan, re-check, EDT's write and the read-back - runs under {@link BranchBindingLock}, the
      * lock this server's checkouts take too, and the plan is re-checked right before EDT's write
-     * ({@link DetachPlan#recheck()}).
+     * ({@link DetachPlan#recheck()}). A detach is refused while a branch change of this server that outlived its
+     * bounded wait is still running for the project or a dependent ({@link #runningBranchChange}).
      *
      * @param provider EDT's current-context provider (may be {@code null}: a detach that needs it refuses)
      * @param dependents the project's dependent extension projects; may throw, which refuses a detach
@@ -330,10 +331,20 @@ public class SetBranchInfobaseTool implements IMcpTool
 
         if (!attach)
         {
+            String running = runningBranchChange(project, dependents);
+            if (running != null)
+            {
+                return ToolResult.error(running).toJson();
+            }
             DetachPlan plan = planDetach(assocManager, provider, dependents, project, applicationId, target, ref);
             if (plan.refusal() != null)
             {
                 return ToolResult.error(plan.refusal()).toJson();
+            }
+            running = runningBranchChange(project, dependents);
+            if (running != null)
+            {
+                return ToolResult.error(running).toJson();
             }
             String changed = plan.recheck();
             if (changed != null)
@@ -382,6 +393,41 @@ public class SetBranchInfobaseTool implements IMcpTool
             ok.put(McpKeys.MESSAGE, note);
         }
         return ok.toJson();
+    }
+
+    /**
+     * The refusal of a detach while a branch change of this server is still running for the project or one of its
+     * dependent extension projects ({@link BranchBindingLock#awaitOrTrack}: a checkout Job, or the refresh after a
+     * {@code git} checkout, that outlived its bounded wait), or {@code null}. When it lands it changes the branch
+     * EDT reads, and with it what EDT's write deletes, so neither the plan nor the re-check could rely on what
+     * they read. Checked before the plan and again before the re-check. The second check cannot fire today: a change
+     * is recorded only under {@link BranchBindingLock}, which the detach holds across the plan and the re-check; it
+     * guards against a change recorded reentrantly from the planning thread (the lock is reentrant), which is what
+     * its pin exercises. The dependents are listed only while such
+     * a change is recorded; when they cannot be listed then, any recorded change refuses.
+     */
+    private static String runningBranchChange(IProject project, Supplier<Collection<IProject>> dependents)
+    {
+        if (!BranchBindingLock.anyInFlight())
+        {
+            return null;
+        }
+        List<String> names = new ArrayList<>();
+        names.add(project.getName());
+        try
+        {
+            for (IProject dependent : dependents.get())
+            {
+                names.add(dependent.getName());
+            }
+        }
+        catch (RuntimeException e) // NOSONAR fail closed: a dependent that cannot be listed cannot be ruled out
+        {
+            String running = BranchBindingLock.inFlightAmong(names);
+            return BranchBindingLock.inFlightRefusal(running);
+        }
+        String running = BranchBindingLock.inFlightAmong(names);
+        return running == null ? null : BranchBindingLock.inFlightRefusal(running);
     }
 
     /**

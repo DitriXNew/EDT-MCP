@@ -289,9 +289,7 @@ public class CreateGitBranchTool implements IMcpTool
         }
         if (outcome.timedOut())
         {
-            warnings.add(CHECKOUT_OF_NEW_BRANCH + branch + "' timed out after " //$NON-NLS-1$
-                + GitCheckoutSupport.CHECKOUT_TIMEOUT_SECONDS
-                + " seconds; the branch was created but is not checked out."); //$NON-NLS-1$
+            warnings.add(timedOutCheckoutWarning(branch));
             return false;
         }
         if (outcome.interrupted())
@@ -322,6 +320,21 @@ public class CreateGitBranchTool implements IMcpTool
         warnings.add(CHECKOUT_OF_NEW_BRANCH + branch + "' did not complete cleanly " //$NON-NLS-1$
             + "(status: " + status + "); the branch was created but is not checked out."); //$NON-NLS-1$ //$NON-NLS-2$
         return false;
+    }
+
+    /**
+     * The warning for a checkout of the new branch whose Job outlived its bounded wait
+     * ({@link GitCheckoutSupport#CHECKOUT_TIMEOUT_SECONDS}). The branch exists; the Job was asked to cancel but
+     * may still be finishing, and {@link GitCheckoutSupport} records it as a branch change still running until it
+     * ends, so meanwhile a {@code set_branch_infobase} detach of the repository's projects is refused (#656).
+     * Whether the branch ends up checked out is not known when the call returns, so the warning does not say.
+     */
+    static String timedOutCheckoutWarning(String branch)
+    {
+        return CHECKOUT_OF_NEW_BRANCH + branch + "' timed out after " //$NON-NLS-1$
+            + GitCheckoutSupport.CHECKOUT_TIMEOUT_SECONDS
+            + " seconds; the branch was created, and its checkout may still be finishing - a " //$NON-NLS-1$
+            + "set_branch_infobase detach of the repository's projects is refused until it ends."; //$NON-NLS-1$
     }
 
     /**

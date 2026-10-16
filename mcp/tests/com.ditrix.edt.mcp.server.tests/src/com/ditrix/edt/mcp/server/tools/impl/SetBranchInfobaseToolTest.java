@@ -54,6 +54,7 @@ import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAssociationSett
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.TemporaryDirectories;
+import com.ditrix.edt.mcp.server.utils.git.BlockingJob;
 import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
 
 /**
@@ -2134,5 +2135,172 @@ public class SetBranchInfobaseToolTest
         assertTrue("nothing is bound to the branch named 'refs/heads/x': " + result, //$NON-NLS-1$
             result.contains("\"success\":false")); //$NON-NLS-1$
         verify(manager, never()).dissociate(project, ref, branchX);
+    }
+
+    // ==================== #656 round 5: a branch change of this server still running refuses a detach ====================
+    //
+    // A checkout Job that outlived its bounded wait (or the refresh after a git checkout that outlived its own) is
+    // recorded as still running until it ends, instead of the lock being held across it. When it lands it changes the
+    // branch EDT reads, and with it what EDT's write deletes, so a detach for its project or a dependent refuses
+    // until it ends.
+
+    /** The detach of the base bound to the checked-out branch, next to a sibling base, of project {@code name}. */
+    private static IProject projectWithASiblingOnTheBranch(IInfobaseAssociationManager manager, String name,
+        InfobaseReference ref)
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn(name);
+        InfobaseReference sibling = infobase("SiblingBase"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref, sibling));
+        return project;
+    }
+
+    @Test(timeout = 60_000)
+    public void aDetachRefusesWhileACheckoutOfThisServerIsStillRunningForTheProjectAndGoesThroughOnceItEnds()
+        throws Exception
+    {
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        IProject project = projectWithASiblingOnTheBranch(manager, "Running656", ref); //$NON-NLS-1$
+        BlockingJob checkout = BlockingJob.running();
+        try
+        {
+            BlockingJob.record(checkout, List.of("Running656")); //$NON-NLS-1$
+
+            String refused = SetBranchInfobaseTool.applyResolved(manager, currentIs(BRANCH), Collections::emptyList,
+                project, SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+            assertTrue(refused, refused.contains("\"success\":false")); //$NON-NLS-1$
+            assertTrue("the refusal must name the project and the way out: " + refused, //$NON-NLS-1$
+                refused.contains("Did not detach: a branch change made by this server is still running for " //$NON-NLS-1$
+                    + "'Running656' - retry once it ends.")); //$NON-NLS-1$
+            verify(manager, never()).dissociate(any(), any(), any());
+        }
+        finally
+        {
+            checkout.finish();
+        }
+        BlockingJob.awaitNotInFlight("Running656"); //$NON-NLS-1$
+
+        String done = SetBranchInfobaseTool.applyResolved(manager, currentIs(BRANCH), Collections::emptyList, project,
+            SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue("once the checkout ended the detach goes through: " + done, //$NON-NLS-1$
+            done.contains("\"success\":true")); //$NON-NLS-1$
+        verify(manager).dissociate(project, ref, BRANCH);
+    }
+
+    @Test(timeout = 60_000)
+    public void aDetachRefusesWhileABranchChangeOfThisServerIsStillRunningForADependent() throws Exception
+    {
+        // The extension follows the checkout of the branch (it reads it too), so EDT would keep its file - but a
+        // branch change of its repository is still landing.
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        IProject project = projectWithASiblingOnTheBranch(manager, "Base656", ref); //$NON-NLS-1$
+        IProject extension = mock(IProject.class);
+        when(extension.getName()).thenReturn("Ext656"); //$NON-NLS-1$
+        InfobaseReference extBase = infobase("ExtBase"); //$NON-NLS-1$
+        when(manager.getAssociation(extension, BRANCH)).thenReturn(association(extBase));
+        BlockingJob refresh = BlockingJob.running();
+        try
+        {
+            BlockingJob.record(refresh, List.of("Ext656")); //$NON-NLS-1$
+
+            String result = SetBranchInfobaseTool.applyResolved(manager, currentIs(BRANCH), () -> List.of(extension),
+                project, SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+            assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
+            assertTrue("the refusal must name the dependent: " + result, //$NON-NLS-1$
+                result.contains("still running for 'Ext656' - retry once it ends")); //$NON-NLS-1$
+            verify(manager, never()).dissociate(any(), any(), any());
+        }
+        finally
+        {
+            refresh.finish();
+        }
+        BlockingJob.awaitNotInFlight("Ext656"); //$NON-NLS-1$
+    }
+
+    @Test(timeout = 60_000)
+    public void aBranchChangeStillRunningForAnotherProjectDoesNotRefuseTheDetach() throws Exception
+    {
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        IProject project = projectWithASiblingOnTheBranch(manager, "Quiet656", ref); //$NON-NLS-1$
+        BlockingJob elsewhere = BlockingJob.running();
+        try
+        {
+            BlockingJob.record(elsewhere, List.of("Elsewhere656")); //$NON-NLS-1$
+
+            String result = SetBranchInfobaseTool.applyResolved(manager, currentIs(BRANCH), Collections::emptyList,
+                project, SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+            assertTrue(result, result.contains("\"success\":true")); //$NON-NLS-1$
+            verify(manager).dissociate(project, ref, BRANCH);
+        }
+        finally
+        {
+            elsewhere.finish();
+        }
+        BlockingJob.awaitNotInFlight("Elsewhere656"); //$NON-NLS-1$
+    }
+
+    @Test(timeout = 60_000)
+    public void dependentsThatCannotBeListedWhileABranchChangeIsStillRunningRefuseTheDetach() throws Exception
+    {
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        IProject project = projectWithASiblingOnTheBranch(manager, "Unlisted656", ref); //$NON-NLS-1$
+        BlockingJob elsewhere = BlockingJob.running();
+        try
+        {
+            BlockingJob.record(elsewhere, List.of("Elsewhere656b")); //$NON-NLS-1$
+
+            String result = SetBranchInfobaseTool.applyResolved(manager, currentIs(BRANCH), () -> {
+                throw new IllegalStateException("dependents unavailable"); //$NON-NLS-1$
+            }, project, SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+            assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
+            assertTrue("a dependent that cannot be listed cannot be ruled out: " + result, //$NON-NLS-1$
+                result.contains("still running for a project this detach could not rule out")); //$NON-NLS-1$
+            verify(manager, never()).dissociate(any(), any(), any());
+        }
+        finally
+        {
+            elsewhere.finish();
+        }
+        BlockingJob.awaitNotInFlight("Elsewhere656b"); //$NON-NLS-1$
+    }
+
+    @Test(timeout = 60_000)
+    public void aBranchChangeRecordedWhileTheDetachIsPlannedRefusesItAtTheReCheck() throws Exception
+    {
+        // Recorded by the planning thread itself (the lock is reentrant), after the first look and before the
+        // re-check: the re-check looks again.
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        IProject project = projectWithASiblingOnTheBranch(manager, "Planned656", ref); //$NON-NLS-1$
+        BlockingJob late = BlockingJob.running();
+        IInfobaseAssociationContextProvider provider = mock(IInfobaseAssociationContextProvider.class);
+        when(provider.get(project)).thenAnswer(invocation -> {
+            BlockingJob.record(late, List.of("Planned656")); //$NON-NLS-1$
+            return BRANCH;
+        });
+        try
+        {
+            String result = SetBranchInfobaseTool.applyResolved(manager, provider, Collections::emptyList, project,
+                SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+            assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
+            assertTrue("the re-check must look for it again: " + result, //$NON-NLS-1$
+                result.contains("still running for 'Planned656' - retry once it ends")); //$NON-NLS-1$
+            verify(manager, never()).dissociate(any(), any(), any());
+        }
+        finally
+        {
+            late.finish();
+        }
+        BlockingJob.awaitNotInFlight("Planned656"); //$NON-NLS-1$
     }
 }

@@ -8,10 +8,12 @@ package com.ditrix.edt.mcp.server.utils.git;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -151,5 +153,96 @@ public class GitCheckoutSupportTest
             checkout.interrupt();
             binding.join(10_000);
         }
+    }
+
+    // ==================== #656 round 5: a checkout Job that outlives its wait stays recorded ====================
+
+    /**
+     * A checkout Job that outlives its bounded wait is asked to cancel, but cancellation is cooperative and the Job may
+     * go on running after the lock is released: it is recorded as still running for the projects it moves until it
+     * ends, so a detach for one of them refuses meanwhile instead of re-checking a branch that is about to change.
+     */
+    @Test(timeout = 60_000)
+    public void aCheckoutJobThatOutlivesItsWaitIsAskedToCancelAndRecordedUntilItEnds() throws Exception
+    {
+        BlockingJob job = BlockingJob.running();
+        CheckoutOutcome outcome;
+        try
+        {
+            assertTrue(BranchBindingLock.tryLock());
+            try
+            {
+                outcome = GitCheckoutSupport.awaitCheckout(job, 100, () -> List.of("CheckedOut")); //$NON-NLS-1$
+            }
+            finally
+            {
+                BranchBindingLock.unlock();
+            }
+            assertNotNull("the wait ran out", outcome); //$NON-NLS-1$
+            assertTrue(outcome.timedOut());
+            assertFalse(outcome.ranToCompletion());
+            assertEquals("the Job still running stays recorded after the lock is released", "CheckedOut", //$NON-NLS-1$ //$NON-NLS-2$
+                BranchBindingLock.inFlightAmong(List.of("CheckedOut"))); //$NON-NLS-1$
+        }
+        finally
+        {
+            job.finish();
+        }
+        assertTrue("the timed-out Job is asked to cancel", job.sawCancel()); //$NON-NLS-1$
+        BlockingJob.awaitNotInFlight("CheckedOut"); //$NON-NLS-1$
+    }
+
+    /** An interrupted wait leaves the checkout Job running, so it is recorded the same way until it ends. */
+    @Test(timeout = 60_000)
+    public void anInterruptedCheckoutWaitIsRecordedUntilTheJobEnds() throws Exception
+    {
+        BlockingJob job = BlockingJob.running();
+        CheckoutOutcome outcome;
+        try
+        {
+            Thread.currentThread().interrupt();
+            try
+            {
+                outcome = GitCheckoutSupport.awaitCheckout(job, 10_000, () -> List.of("InterruptedCheckout")); //$NON-NLS-1$
+                assertTrue("the interrupt flag is restored", Thread.currentThread().isInterrupted()); //$NON-NLS-1$
+            }
+            finally
+            {
+                Thread.interrupted();
+            }
+            assertNotNull(outcome);
+            assertTrue(outcome.interrupted());
+            assertEquals("InterruptedCheckout", //$NON-NLS-1$
+                BranchBindingLock.inFlightAmong(List.of("InterruptedCheckout"))); //$NON-NLS-1$
+        }
+        finally
+        {
+            job.finish();
+        }
+        BlockingJob.awaitNotInFlight("InterruptedCheckout"); //$NON-NLS-1$
+    }
+
+    /** A checkout Job that ends within its wait answers normally and leaves nothing recorded. */
+    @Test(timeout = 60_000)
+    public void aCheckoutJobThatEndsWithinItsWaitLeavesNothingRecorded() throws Exception
+    {
+        BlockingJob job = BlockingJob.running();
+        Thread finisher = new Thread(() -> {
+            try
+            {
+                Thread.sleep(100);
+                job.finish();
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+            }
+        });
+        finisher.start();
+        assertNull("the Job ended within the wait", //$NON-NLS-1$
+            GitCheckoutSupport.awaitCheckout(job, 10_000, () -> List.of("Finished"))); //$NON-NLS-1$
+        finisher.join(10_000);
+        assertNull(BranchBindingLock.inFlightAmong(List.of("Finished"))); //$NON-NLS-1$
+        assertFalse("a Job that ended in time is not cancelled", job.sawCancel()); //$NON-NLS-1$
     }
 }
