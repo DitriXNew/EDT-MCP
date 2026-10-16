@@ -54,8 +54,11 @@ import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
  * <p>Nor does the designer run it on an object an extension ADOPTED from its base configuration: the
  * property page of an adopted object edits the type through the extension's type extension (the
  * md.ui.extension type-extension model, in 2026.1 and 2026.2 alike), so the base-configuration resets
- * never apply to it. A type write to an adopted object stays the plain set it was before #700; what
- * that native write should do at all is an open question of its own (issues #709 / #710).</p>
+ * never apply to it - and EDT's {@code .mdo} writer drops a native type written on it. modify_metadata
+ * decides every type write of an adopted object before the transaction ({@link AdoptedPropertyRouter}): an
+ * adopted defined type's type goes to its type extension, an adopted event subscription's source is
+ * extended, every other type is refused. A type write that still reaches {@link #setType} with an adopted
+ * owner has bypassed that router, so it fails closed (issues #709 / #710).</p>
  */
 public final class TypeChangeDefaults
 {
@@ -63,8 +66,8 @@ public final class TypeChangeDefaults
     public enum Reset
     {
         /**
-         * Only the type was set: the type is unchanged, EDT's type change resets nothing on this owner,
-         * or the owner is adopted.
+         * Only the type was set: the type is unchanged, or EDT's type change resets nothing on this owner
+         * ({@link #resetFor} answers it for an adopted owner too, whose type {@link #setType} never writes).
          */
         NONE,
         /** EDT's resets ran on the owner's own type-dependent properties (a Constant or a BasicFeature). */
@@ -113,11 +116,19 @@ public final class TypeChangeDefaults
      * @throws IllegalStateException when the resets are due but EDT's editing-support service is not
      *             available; thrown inside the write boundary, it rolls the whole change back, as does
      *             anything the task throws (its status is {@code OK} by construction: the task returns
-     *             {@code Status.OK_STATUS} unconditionally in both versions)
+     *             {@code Status.OK_STATUS} unconditionally in both versions); and when {@code owner} is an
+     *             object an extension adopted, whose type is never written natively (see the class comment)
      */
     public static Reset setType(EObject owner, EStructuralFeature feature, TypeDescription newType,
         IBmTransaction tx)
     {
+        if (ExtensionServices.isAdopted(owner))
+        {
+            throw new IllegalStateException("The native type of adopted '" + ((MdObject)owner).getName() //$NON-NLS-1$
+                + "' was not written: EDT keeps the type of an adopted object in its " //$NON-NLS-1$
+                + "type extension, which modify_metadata writes or refuses before the transaction " //$NON-NLS-1$
+                + "(AdoptedPropertyRouter), and this write bypassed it - report it. Nothing was changed."); //$NON-NLS-1$
+        }
         Reset reset = resetFor(owner);
         if (reset == Reset.NONE || MetadataTypeBuilder.describesSameType(owner.eGet(feature), newType))
         {

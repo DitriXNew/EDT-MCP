@@ -204,6 +204,38 @@ public final class ExtensionOriginUtils
         }
     }
 
+    /**
+     * The name of the base project a dependent project declares in {@code DT-INF/PROJECT.PMF}
+     * ({@code Base-Project}) - what a message names while the runtime parent
+     * ({@link #resolveBaseProject(IProject)}) is not wired yet. Read once and not guarded like
+     * {@link #readDeclaredBaseProject(IProject)}: it only names a project, it decides nothing.
+     *
+     * @param project the workspace project (may be {@code null})
+     * @return the declared base project's name, or {@code null} when none can be read
+     */
+    public static String declaredBaseProjectName(IProject project)
+    {
+        if (project == null)
+        {
+            return null;
+        }
+        try
+        {
+            IFile manifestFile = project.getFile(ProjectManifest.DT_PROJECT_MANIFEST);
+            if (manifestFile == null || !manifestFile.exists())
+            {
+                return null;
+            }
+            Map<String, String> headers = parseManifest(manifestFile);
+            String base = headers == null ? null : headers.get(ProjectManifest.BASE_PROJECT);
+            return isBlank(base) ? null : base.trim();
+        }
+        catch (Exception e) // NOSONAR a name for a message only: an unreadable manifest names nothing
+        {
+            return null;
+        }
+    }
+
     /** One parse of the project manifest; {@code null} when it yields no headers. */
     private static Map<String, String> parseManifest(IFile manifestFile) throws Exception
     {

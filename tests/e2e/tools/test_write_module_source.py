@@ -1067,9 +1067,9 @@ def test_extension_root_session_module_gets_extended_state():
 
 
 def _remove_root_extension_block(mdo_rel):
-    """Remove the extension ROOT's own extension block from its .mdo on disk - the shape of a root made
-    outside EDT's new-extension wizard (#706) - keeping every other byte, line ends included. Returns
-    the removed block, so the caller can check what was in it."""
+    """Remove the extension ROOT's own extension block from its .mdo on disk - the shape of a root an
+    earlier create_project made from a new configuration (#706) - keeping every other byte, line ends
+    included. Returns the removed block, so the caller can check what was in it."""
     path = os.path.join(REPO_ROOT, *TESTS_PROJECT_REL.split("/"), *mdo_rel.split("/"))
     with open(path, encoding="utf-8", newline="") as f:
         text = f.read()
@@ -1095,11 +1095,14 @@ def _read_extension_bytes(rel):
 
 @e2e_test(tool="write_module_source", kind="write-metadata")
 def test_adopted_root_without_its_extension_block_answers_a_success_with_a_note():
-    """An extension root adopted with NO extension block in its .mdo - the shape of a root made outside
-    EDT's new-extension wizard (#706) - has no place for a module state. A write of its session module
-    is still a SUCCESS - the text is written - and says what it found: `moduleExtensionState:
-    noExtensionBlock` and a note that names the root and the missing block. The .mdo is left byte for
-    byte: no state is recorded and no block is created.
+    """An extension root adopted with NO extension block in its .mdo - the shape of a root an earlier
+    create_project made from a new configuration (#706) - has no place for a module state. A write of its
+    session module is still a SUCCESS - the text is written - and says what it found: `moduleExtensionState:
+    noExtensionBlock` and a note that names the root and the missing block, says that EDT's wizard and
+    create_project make roots with the block while an earlier create_project did not, and gives the way out -
+    recreating the extension, and no property state to set in EDT (#747 round 3: red on a jar without it at
+    those assertions). The .mdo is left byte for byte: no state is
+    recorded and no block is created.
 
     The block is removed on disk and brought into the model with clean_project, the deterministic
     re-import. That also proves live what the unit tests only mock: EDT's adopted-property service
@@ -1137,6 +1140,17 @@ def test_adopted_root_without_its_extension_block_answers_a_success_with_a_note(
                         "the note names the missing block and its .mdo")
         assert_contains(text, "the module state cannot be recorded", "the note says no state could be recorded")
         assert_contains(text, "new-extension wizard", "the note says which roots carry the block")
+        assert_contains(text, "and so does one that create_project creates",
+                        "the note says create_project's roots carry the block too (#747 round 3)")
+        assert_contains(text, "a root made by an earlier version of create_project",
+                        "the note names the roots that lack the block")
+        assert_contains(text, "recreate the extension with create_project", "the note gives the way out")
+        assert_not_contains(text, "default language",
+                            "no property state set in EDT is advised: on such a root a Checked default language is a "
+                            "critical error that stops EDT from updating an infobase")
+        assert_not_contains(text, "one of the root's properties",
+                            "not just any of the root's properties: 'Extended configuration object' gets a block "
+                            "of another class")
         _assert_no_removed_claim(text, ctx)
         assert_contains(read_fixture_file(TESTS_PROJECT_REL, "src/" + module), "tests_SessionProbe",
                         "the module text itself is on disk")

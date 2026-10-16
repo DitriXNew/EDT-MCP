@@ -38,6 +38,9 @@
         "fqn": {
           "type": "string"
         },
+        "message": {
+          "type": "string"
+        },
         "objectBelonging": {
           "type": "string"
         },
@@ -843,6 +846,9 @@
         },
         "codestyle": {
           "type": "object"
+        },
+        "compatibilityMode": {
+          "type": "string"
         },
         "externalObject": {
           "type": "string"

@@ -210,10 +210,12 @@ public class MetadataRenameService
                 "('Type.Object.Form.FormName') is not a rename target - only its elements are.").toJson(); //$NON-NLS-1$
         }
 
-        // NB: an ADOPTED object in a configuration extension CAN be renamed. Its link to the base
-        // object is held by UUID in a separate field (extendedConfigurationObject), not by name
-        // (keepMappingToExtendedConfigurationObjectsByIDs), so the EDT rename refactoring below keeps
-        // the adoption intact - exactly as the EDT UI rename does. (Do NOT refuse adopted objects.)
+        // NB: an ADOPTED object in a configuration extension CAN be renamed - exactly as the EDT UI rename
+        // allows. A copy adopted while its extension's root kept keepMappingToExtendedConfigurationObjectsByIDs
+        // on a platform above 8.3.14 holds its link to the base object by UUID in a separate field
+        // (extendedConfigurationObject), which the EDT rename refactoring below leaves intact. A copy adopted
+        // without it has no such link (EDT never adds one later), and renaming it breaks its mapping, as in the
+        // UI; adopt_metadata_object says which kind a copy is. (Do NOT refuse adopted objects.)
 
         BmModelResolver.Resolution modelResolution = BmModelResolver.resolveForRefactoring(project);
         return prepareMdClassRename(project, objectFqn, newName, targetObject, confirm,

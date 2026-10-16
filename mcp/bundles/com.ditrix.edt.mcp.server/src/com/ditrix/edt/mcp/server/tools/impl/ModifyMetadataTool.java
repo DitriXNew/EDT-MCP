@@ -81,6 +81,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.AdjustableBooleanSupport;
+import com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouter;
 import com.ditrix.edt.mcp.server.utils.AppearanceValueBuilder;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceAddress;
@@ -933,6 +934,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("Owner object is not a BM object").toJson(); //$NON-NLS-1$
         }
+        // The predefined items of an owner an extension adopted reach its .mdo only when the extension
+        // marks them; otherwise EDT's .mdo writer drops the whole list (issues #709 / #710).
+        String droppedPredefined = AdoptedPropertyRouter.refusalIfDropped(owner,
+            owner.eClass().getEStructuralFeature("predefined"), ref.ownerFqn(), ctx.project, //$NON-NLS-1$
+            resolvePlatformVersion(ctx));
+        if (droppedPredefined != null)
+        {
+            return droppedPredefined;
+        }
 
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         if (bmModelManager == null)
@@ -959,6 +969,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         final long ownerBmId = ((IBmObject)owner).bmGetId();
         final String itemName = ref.itemName;
+        final String ownerFqn = ref.ownerFqn();
         // Force-export must target the owner's CANONICAL FQN (its own bmGetFqn()), never the
         // caller's spelling (ownerResolved.fqn echoes the input) - a case/spelling variant that
         // still resolves would otherwise export a non-existent FQN and leave the change in memory.
@@ -974,7 +985,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     throw new RuntimeException("Owner object not found in transaction"); //$NON-NLS-1$
                 }
                 canonicalOwnerFqnHolder[0] = ((IBmObject)txOwner).bmGetFqn();
-                PredefinedWriter.WriteResult result = PredefinedWriter.modify(txOwner, itemName, props);
+                PredefinedWriter.WriteResult result = modifyPredefinedInWrite(txOwner, itemName, props, ownerFqn);
                 if (result.isError())
                 {
                     // A refusal: the message is OUR validation's, so mark it and keep the log quiet.
@@ -1077,6 +1088,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (args.hasTemplatePayload)
         {
             return templateOnlyForTemplateFqnError(normFqn, ERR_IS_A + subsystem.eClass().getName());
+        }
+        // EDT's adopter marks an adopted subsystem's content Extended and EDT's .mdo writer then keeps the list, so
+        // this refuses only a content state of None (issues #709 / #710).
+        String dropped = AdoptedPropertyRouter.refusalIfDropped(subsystem, membershipList(subsystem), normFqn,
+            ctx.project, resolvePlatformVersion(ctx));
+        if (dropped != null)
+        {
+            return dropped;
         }
         return modifySubsystemContent(ctx, normFqn, subsystem, args.properties, args.content,
             args.hasRolePayload);
@@ -1808,6 +1827,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private String dispatchContentPayload(ProjectContext ctx, String normFqn, MdObject target,
         List<JsonObject> properties, List<JsonObject> content)
     {
+        // The list of an object an extension adopted reaches its .mdo only when the extension marks it;
+        // otherwise EDT's .mdo writer drops it (issues #709 / #710).
+        String dropped = AdoptedPropertyRouter.refusalIfDropped(target, membershipList(target), normFqn,
+            ctx.project, resolvePlatformVersion(ctx));
+        if (dropped != null)
+        {
+            return dropped;
+        }
         if (target instanceof CommonAttribute)
         {
             return modifyCommonAttributeContent(ctx, normFqn, (CommonAttribute)target, properties,
@@ -1830,6 +1857,34 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + ". Use 'properties' for its generic properties, or address a CommonAttribute.<Name> " //$NON-NLS-1$
             + "(owners), ExchangePlan.<Name> (content objects), Catalog.<Name> (owners), " //$NON-NLS-1$
             + "Document.<Name> (register records) or Subsystem.<Name> (content objects).").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * The feature the membership {@code content} payload edits on {@code target}: a common attribute's or an
+     * exchange plan's content, a catalog's owners, a document's register records, a subsystem's content.
+     *
+     * @param target the resolved object
+     * @return the feature, or {@code null} for another kind
+     */
+    static EStructuralFeature membershipList(MdObject target)
+    {
+        if (target instanceof CommonAttribute)
+        {
+            return MdClassPackage.Literals.COMMON_ATTRIBUTE__CONTENT;
+        }
+        if (target instanceof ExchangePlan)
+        {
+            return MdClassPackage.Literals.EXCHANGE_PLAN__CONTENT;
+        }
+        if (target instanceof Catalog)
+        {
+            return MdClassPackage.Literals.CATALOG__OWNERS;
+        }
+        if (target instanceof Document)
+        {
+            return MdClassPackage.Literals.DOCUMENT__REGISTER_RECORDS;
+        }
+        return target instanceof Subsystem ? MdClassPackage.Literals.SUBSYSTEM__CONTENT : null;
     }
 
     /**
@@ -2421,10 +2476,28 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return prepErr;
         }
 
+        // A change of an object an extension ADOPTED goes where EDT keeps it - its extension block - or
+        // refuses the call, before the consent gate and the write (issues #709 / #710).
+        AdoptedPropertyRouter.Routing routing = routeAdopted(normFqn, ctx.project, ctx.scope, config, version,
+            target, changes, AdoptedPropertyRouter::route);
+        if (routing.isRefused())
+        {
+            return routing.refusal();
+        }
+        if (changes.isEmpty() && !routing.notes().isEmpty())
+        {
+            // Every change of the call leaves the object as it is: nothing to write, nothing to export -
+            // a finding, published as an empty writtenProjects (#408).
+            WriteScope.recordNothingQueued();
+            return buildModifiedResult(normFqn, List.of(), false, normReport, List.of(), null,
+                TypeChangeDefaults.Reset.NONE, routing.notes());
+        }
+
         // Ask the human before RETYPING an attribute (the destructive case): the preview is built from
         // the already-prepared changes, so a benign edit never prompts. On REJECT the tool returns the
         // error and mutates nothing; the gate itself is a no-op headless / when env or preference allows.
-        String consentErr = consentForTypeChanges(normFqn, changes);
+        // Then the base value a routed write of an adopted object was planned from is read again (#709/#710).
+        String consentErr = consentThenBaseCheck(normFqn, changes, routing);
         if (consentErr != null)
         {
             return consentErr;
@@ -2493,7 +2566,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 final String oldNamespace = (xdtoNamespaceChange && applyTo instanceof XDTOPackage)
                     ? ((XDTOPackage)applyTo).getNamespace() : null;
                 localizedReport.rememberPreState(applyTo, changes);
-                typeReset[0] = applyChanges(applyTo, changes, tx);
+                typeReset[0] = applyChanges(applyTo, changes, tx, normFqn);
                 localizedReport.collect(applyTo, changes, declaredCodes, config);
                 if (fqnGenerator != null && applyTo instanceof XDTOPackage)
                 {
@@ -2566,8 +2639,77 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
 
+        List<String> adoptedNotes = new ArrayList<>(routing.notes());
+        for (PreparedChange change : changes)
+        {
+            String note = change.routedNote();
+            if (note != null)
+            {
+                adoptedNotes.add(note);
+            }
+        }
         return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames,
-            localizedReport, typeReset[0]);
+            localizedReport, typeReset[0], adoptedNotes);
+    }
+
+    /**
+     * Routes the prepared batch of an object an extension ADOPTED (issues #709 / #710) and rewrites it in
+     * place: a defined type's {@code type} or an event subscription's {@code source} that EDT keeps in the
+     * extension block becomes the write of that block ({@link PreparedChange#typeExtension} /
+     * {@link PreparedChange#extendedSource}); a change that leaves the object as it is, or a type write a
+     * later one of the same call supersedes, is removed; a change EDT's {@code .mdo} writer would drop refuses
+     * the whole call - see {@link AdoptedPropertyRouter}. The batch of any other object comes back untouched.
+     * Package-visible: the headless tests pass a router over their own platform.
+     *
+     * @param normFqn the FQN the call addresses
+     * @param project the project
+     * @param scope its resolution root
+     * @param config its configuration
+     * @param version its runtime version, or {@code null}
+     * @param target the object the batch is written to
+     * @param changes the prepared batch, rewritten in place unless the call is refused
+     * @param router the router
+     * @return the routing; nothing may be written when it is refused
+     */
+    static AdoptedPropertyRouter.Routing routeAdopted(String normFqn, IProject project, MetadataScope scope, // NOSONAR the call's context is passed through to the router as is
+        Configuration config, Version version, MdObject target, List<PreparedChange> changes,
+        Function<AdoptedPropertyRouter.Request, AdoptedPropertyRouter.Routing> router)
+    {
+        List<AdoptedPropertyRouter.Change> requested = new ArrayList<>();
+        for (PreparedChange change : changes)
+        {
+            requested.add(new AdoptedPropertyRouter.Change(change.feature(), change.value(),
+                change.bindingFeature()));
+        }
+        AdoptedPropertyRouter.Routing routing = router.apply(
+            new AdoptedPropertyRouter.Request(target, normFqn, project, scope, config, version, requested));
+        if (routing.isRefused())
+        {
+            return routing;
+        }
+        List<PreparedChange> routed = new ArrayList<>();
+        for (int i = 0; i < changes.size(); i++)
+        {
+            AdoptedPropertyRouter.Decision decision = routing.decision(i);
+            switch (decision.kind())
+            {
+                case DROP:
+                    break;
+                case TYPE_EXTENSION:
+                    routed.add(PreparedChange.typeExtension(changes.get(i).feature(), decision.typePlan()));
+                    break;
+                case EXTENDED_SOURCE:
+                    routed.add(PreparedChange.extendedSource(changes.get(i).feature(), decision.sourcePlan()));
+                    break;
+                case PLAIN:
+                default:
+                    routed.add(changes.get(i));
+                    break;
+            }
+        }
+        changes.clear();
+        changes.addAll(routed);
+        return routing;
     }
 
     /**
@@ -2590,6 +2732,32 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     static TypeChangeDefaults.Reset applyChanges(EObject target, List<PreparedChange> changes,
         IBmTransaction tx)
     {
+        return applyChanges(target, changes, tx, null);
+    }
+
+    /**
+     * {@link #applyChanges(EObject, List, IBmTransaction)}, naming {@code fqn} in a refusal. Before anything is
+     * written, every change the adopted-object routing wrote as prepared is checked again on the object read
+     * inside the transaction ({@link AdoptedPropertyRouter#requireStillWritten}): an extension state set to
+     * None while the call waited would make EDT's {@code .mdo} writer drop the value, so the write refuses and
+     * rolls back instead of reporting a value the file never gets (#709 / #710).
+     *
+     * @param target the object the batch is written to, inside {@code tx}
+     * @param changes the prepared changes, in the caller's order
+     * @param tx the write transaction
+     * @param fqn the FQN the call addresses, for a refusal, or {@code null}
+     * @return what the type writes reset besides the type
+     */
+    static TypeChangeDefaults.Reset applyChanges(EObject target, List<PreparedChange> changes,
+        IBmTransaction tx, String fqn)
+    {
+        for (PreparedChange change : changes)
+        {
+            if (!change.isRoutedWrite())
+            {
+                AdoptedPropertyRouter.requireStillWritten(target, change.feature(), change.bindingFeature(), fqn);
+            }
+        }
         Map<EStructuralFeature, PreparedChange> lastTypeWrites = new LinkedHashMap<>();
         for (PreparedChange change : changes)
         {
@@ -2817,6 +2985,29 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * The predefined-item write inside its transaction: first checks again, on the owner read inside the
+     * transaction, that EDT's {@code .mdo} writer still keeps the owner's predefined items
+     * ({@link AdoptedPropertyRouter#requireStillWritten}). The guard before the consent gate of a retype judged
+     * it, and the extension state of 'predefined' can be set to None while the call waits there; written
+     * anyway, the item would not reach the file while the call reports it written (#709 / #710). A
+     * package-visible seam, so the check is pinned headless.
+     *
+     * @param txOwner the owner, read inside the write transaction
+     * @param itemName the predefined item's name
+     * @param props the parsed item properties
+     * @param ownerFqn the owner's FQN as the call addresses it, for a refusal
+     * @return the writer's result
+     * @throws IllegalStateException when the owner's predefined items would now be dropped (rolls back)
+     */
+    static PredefinedWriter.WriteResult modifyPredefinedInWrite(EObject txOwner, String itemName,
+        PredefinedWriter.ItemProps props, String ownerFqn)
+    {
+        AdoptedPropertyRouter.requireStillWritten(txOwner, txOwner.eClass().getEStructuralFeature("predefined"), //$NON-NLS-1$
+            null, ownerFqn);
+        return PredefinedWriter.modify(txOwner, itemName, props);
+    }
+
+    /**
      * The predefined-item counterpart of {@link #consentForTypeChanges}: a
      * {@code ChartOfCharacteristicTypes} predefined item's {@code valueType} is a real RETYPE (or a
      * clear), so it must pass the same destructive-consent gate an ordinary attribute retype does,
@@ -2867,30 +3058,78 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * gate's bounded wait (TIMEOUT — see {@link DestructiveConsentGate#consentDeniedMessage}) - the
      * caller returns it and mutates NOTHING - or {@code null} to proceed.</p>
      */
-    private static String consentForTypeChanges(String normFqn, List<PreparedChange> changes)
+    private String consentForTypeChanges(String normFqn, List<PreparedChange> changes)
+    {
+        ConsentPreview preview = typeChangePreview(normFqn, changes);
+        if (preview == null)
+        {
+            return null;
+        }
+        ConsentDecision consentDecision = consentRequester.request(NAME, preview);
+        if (consentDecision != ConsentDecision.ALLOW)
+        {
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
+        }
+        return null;
+    }
+
+    /**
+     * The last step before the write transaction of the generic path: the consent gate
+     * ({@link #consentForTypeChanges}), then - once the call may go on - the base value each routed write of an
+     * adopted object was planned from is read again ({@link AdoptedPropertyRouter.Routing#baseChangedRefusal}):
+     * the gate can hold the call, and the base configuration is another project, edited independently. In this
+     * order, so a denied call reads nothing and the base is read as late as it can be. Package-visible: a test
+     * pins the order and the refusal (issues #709 / #710).
+     *
+     * @param normFqn the FQN the call addresses
+     * @param changes the routed batch
+     * @param routing its routing
+     * @return a ready JSON error - the consent refusal, or a changed base - or {@code null} to write
+     */
+    String consentThenBaseCheck(String normFqn, List<PreparedChange> changes, AdoptedPropertyRouter.Routing routing)
+    {
+        String consentErr = consentForTypeChanges(normFqn, changes);
+        if (consentErr != null)
+        {
+            return consentErr;
+        }
+        return routing.baseChangedRefusal();
+    }
+
+    /**
+     * The consent preview of the type changes of a batch, or {@code null} when it has none. Package-visible:
+     * a test pins the wording of a routed write of an adopted object (issues #709 / #710).
+     */
+    static ConsentPreview typeChangePreview(String normFqn, List<PreparedChange> changes)
     {
         List<String> retyped = new ArrayList<>();
+        List<String> routedWarnings = new ArrayList<>();
         for (PreparedChange change : changes)
         {
             if (change.isTypeChange())
             {
                 retyped.add(change.featureName());
+                String warning = change.routedConsentWarning();
+                if (warning != null)
+                {
+                    routedWarnings.add(warning);
+                }
             }
         }
         if (retyped.isEmpty())
         {
             return null;
         }
-        ConsentPreview preview = new ConsentPreview(
-            "Change the data type of " + normFqn, //$NON-NLS-1$
-            "Retyping stored data can drop existing values on the next database update.", //$NON-NLS-1$
-            retyped.size(), retyped);
-        ConsentDecision consentDecision = DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
-        if (consentDecision != ConsentDecision.ALLOW)
-        {
-            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
-        }
-        return null;
+        // A routed write of an adopted object (issues #709 / #710) adds types or sources in the extension
+        // block: the preview says what it adds and removes - the retype warning would be untrue for a pure
+        // addition.
+        return routedWarnings.size() == retyped.size()
+            ? new ConsentPreview("Change adopted " + normFqn + " in the extension", //$NON-NLS-1$ //$NON-NLS-2$
+                String.join(" ", routedWarnings), retyped.size(), retyped) //$NON-NLS-1$
+            : new ConsentPreview(
+                "Change the data type of " + normFqn, //$NON-NLS-1$
+                "Retyping stored data can drop existing values on the next database update.", //$NON-NLS-1$
+                retyped.size(), retyped);
     }
 
     /**
@@ -3275,6 +3514,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         MdNameNormalizer.Report normReport, List<String> cascadedPackageNames,
         LocalizedWriteReport localizedReport, TypeChangeDefaults.Reset typeReset)
     {
+        return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames,
+            localizedReport, typeReset, List.of());
+    }
+
+    /**
+     * The full variant: also says, in the confirmation MESSAGE only, what the writes of an adopted object
+     * did in its extension block, or that they changed nothing (issues #709 / #710).
+     */
+    private static String buildModifiedResult(String normFqn, List<String> applied, boolean persisted, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        MdNameNormalizer.Report normReport, List<String> cascadedPackageNames,
+        LocalizedWriteReport localizedReport, TypeChangeDefaults.Reset typeReset, List<String> adoptedNotes)
+    {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
@@ -3286,7 +3537,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         normReport.addTo(result);
         return result.put(McpKeys.MESSAGE,
-            modifiedMessage(normFqn, applied, cascadedPackageNames, typeReset)).toJson();
+            modifiedMessage(normFqn, applied, cascadedPackageNames, typeReset, adoptedNotes)).toJson();
     }
 
     /**
@@ -3297,7 +3548,20 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     static String modifiedMessage(String normFqn, List<String> applied, List<String> cascadedPackageNames,
         TypeChangeDefaults.Reset typeReset)
     {
-        String message = MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return modifiedMessage(normFqn, applied, cascadedPackageNames, typeReset, List.of());
+    }
+
+    /**
+     * The confirmation MESSAGE with what the writes of an adopted object did in its extension block, or
+     * that they changed nothing (issues #709 / #710): a call whose every change leaves the object as it is
+     * says so instead of naming applied properties. Package-visible for tests.
+     */
+    static String modifiedMessage(String normFqn, List<String> applied, List<String> cascadedPackageNames,
+        TypeChangeDefaults.Reset typeReset, List<String> adoptedNotes)
+    {
+        String message = applied.isEmpty() && !adoptedNotes.isEmpty()
+            ? "Nothing was changed on " + normFqn //$NON-NLS-1$
+            : MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         if (!cascadedPackageNames.isEmpty())
         {
             message += "; namespace propagated to " + cascadedPackageNames.size() //$NON-NLS-1$
@@ -3312,6 +3576,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             message += "; the type change also reset the fill value of every editable object typed " //$NON-NLS-1$
                 + "with it, as EDT's designer does"; //$NON-NLS-1$
+        }
+        for (String note : adoptedNotes)
+        {
+            message += "; " + note; //$NON-NLS-1$
         }
         return message;
     }
@@ -7470,6 +7738,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         private enum Kind
         {
+            /** An adopted defined type's type, written to its type extension (#709); the value is the plan. */
+            TYPE_EXTENSION,
+            /** An adopted event subscription's source, extended (#710); the value is the plan. */
+            EXTENDED_SOURCE,
             SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE, MANY_ENUM, MCORE_VALUE_LIST, STYLE_VALUE,
             CONTAINED, ADJUSTABLE_BOOLEAN,
             /** A form attribute's {@code useAlways} checkboxes; the value is the list of plans. */
@@ -7570,6 +7842,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return new PreparedChange(feature, Kind.SCALAR, typeDescription, null, null, null, null, true);
         }
 
+        /**
+         * An adopted defined type's {@code type}, written to its type extension as the router planned it
+         * (issue #709). Still a type change: the batch applies its last one, and the consent gate asks.
+         */
+        static PreparedChange typeExtension(EStructuralFeature feature, AdoptedPropertyRouter.TypePlan plan)
+        {
+            return new PreparedChange(feature, Kind.TYPE_EXTENSION, plan, null, null, null, null, true);
+        }
+
+        /**
+         * An adopted event subscription's {@code source}, extended as the router planned it (issue #710).
+         * Still a type change: the batch applies its last one, and the consent gate asks.
+         */
+        static PreparedChange extendedSource(EStructuralFeature feature, AdoptedPropertyRouter.SourcePlan plan)
+        {
+            return new PreparedChange(feature, Kind.EXTENDED_SOURCE, plan, null, null, null, null, true);
+        }
+
         static PreparedChange localized(EStructuralFeature feature, String language, String value)
         {
             return new PreparedChange(feature, Kind.LOCALIZED, null, language, value, null, null, false);
@@ -7666,6 +7956,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return kind == Kind.USE_ALWAYS ? UseAlwaysSupport.PROPERTY : feature.getName();
         }
 
+        /**
+         * Whether this change is a write the adopted-object routing planned (a type extension, an extended
+         * source), which checks the object again itself; every other change is written as prepared.
+         */
+        boolean isRoutedWrite()
+        {
+            return kind == Kind.TYPE_EXTENSION || kind == Kind.EXTENDED_SOURCE;
+        }
+
         /** Whether this change retypes data (a {@code TYPE_DESCRIPTION} / form {@code valueType} set). */
         boolean isTypeChange()
         {
@@ -7681,6 +7980,41 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         boolean isLocalized()
         {
             return kind == Kind.LOCALIZED;
+        }
+
+        /** The second feature a style value writes - the style item's {@code type} - else {@code null}. */
+        EStructuralFeature bindingFeature()
+        {
+            return styleBinding == null ? null : styleBinding.typeFeature;
+        }
+
+        /**
+         * What a routed write of an adopted object did (issues #709 / #710), once it ran; {@code null} for
+         * any other change or before the write.
+         */
+        String routedNote()
+        {
+            AdoptedPropertyRouter.Outcome outcome = null;
+            if (kind == Kind.TYPE_EXTENSION)
+            {
+                outcome = ((AdoptedPropertyRouter.TypePlan)scalarValue).outcome();
+            }
+            else if (kind == Kind.EXTENDED_SOURCE)
+            {
+                outcome = ((AdoptedPropertyRouter.SourcePlan)scalarValue).outcome();
+            }
+            return outcome == null ? null : outcome.note();
+        }
+
+        /** The consent preview's warning of a routed write (issues #709 / #710), else {@code null}. */
+        String routedConsentWarning()
+        {
+            if (kind == Kind.TYPE_EXTENSION)
+            {
+                return ((AdoptedPropertyRouter.TypePlan)scalarValue).consentWarning();
+            }
+            return kind == Kind.EXTENDED_SOURCE ? ((AdoptedPropertyRouter.SourcePlan)scalarValue).consentWarning()
+                : null;
         }
 
         EStructuralFeature feature()
@@ -7707,6 +8041,20 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             switch (kind)
             {
+                case TYPE_EXTENSION:
+                {
+                    // The extension block, never the native type: EDT's .mdo writer keeps an adopted
+                    // defined type's type there (issue #709).
+                    AdoptedPropertyRouter.applyTypeExtension(target, (AdoptedPropertyRouter.TypePlan)scalarValue);
+                    return TypeChangeDefaults.Reset.NONE;
+                }
+                case EXTENDED_SOURCE:
+                {
+                    // The base sources plus the additions, and the state Extended - or back to None
+                    // (issue #710).
+                    AdoptedPropertyRouter.applySource(target, (AdoptedPropertyRouter.SourcePlan)scalarValue);
+                    return TypeChangeDefaults.Reset.NONE;
+                }
                 case LOCALIZED:
                 {
                     Object map = target.eGet(feature);

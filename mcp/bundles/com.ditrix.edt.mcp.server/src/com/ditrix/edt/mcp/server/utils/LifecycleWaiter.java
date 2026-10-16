@@ -9,9 +9,11 @@ package com.ditrix.edt.mcp.server.utils;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 
 import com._1c.g5.v8.dt.core.lifecycle.ProjectContext;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
+import com._1c.g5.v8.dt.core.platform.IWorkspaceOrchestrator;
 import com._1c.g5.v8.dt.lifecycle.ILifecycleContext;
 import com._1c.g5.v8.dt.lifecycle.IServiceContextLifecycleListener;
 import com._1c.g5.v8.dt.lifecycle.IServicesOrchestrator;
@@ -33,6 +35,9 @@ import com.ditrix.edt.mcp.server.Activator;
  */
 public final class LifecycleWaiter
 {
+    /** How often {@link #waitForProjectStarted(IDtProject, long)} asks again whether the project started. */
+    private static final long REPROBE_MS = 1_000L;
+
     private LifecycleWaiter()
     {
         // Utility class
@@ -67,9 +72,18 @@ public final class LifecycleWaiter
     }
     
     /**
-     * Waits for project context to reach STARTED state.
-     * Use this when the project is already in the process of starting.
-     * 
+     * Waits for project context to reach STARTED state - or reports at once that it already has.
+     * <p>
+     * A project manager's {@code create()} starts the new project's context synchronously, so by the time a
+     * caller begins to wait the STARTED event has usually fired already. A wait that only listened therefore
+     * ran out its whole timeout after every create (issue #706). The listener is registered FIRST and EDT is
+     * asked SECOND ({@link IWorkspaceOrchestrator#isStarted(IDtProject)}): a start that completes between
+     * the two is seen by one or the other. The question is asked again every second while waiting, which
+     * also covers an event that fired before the state it announces was readable.
+     * <p>
+     * Not for a RESTART: a project that is still started before it stops is reported started at once. Wait
+     * for a restart with {@link #prepareForRestart(IDtProject)}.
+     *
      * @param dtProject the DT project to wait for
      * @param timeoutMs timeout in milliseconds
      * @return true if STARTED state was reached, false if timeout occurred
@@ -89,7 +103,25 @@ public final class LifecycleWaiter
             return false;
         }
         
-        String projectName = dtProject.getName();
+        IWorkspaceOrchestrator workspaceOrchestrator = Activator.getDefault().getWorkspaceOrchestrator();
+        BooleanSupplier alreadyStarted =
+            () -> workspaceOrchestrator != null && workspaceOrchestrator.isStarted(dtProject);
+        return waitForProjectStarted(orchestrator, alreadyStarted, dtProject.getName(), timeoutMs, REPROBE_MS);
+    }
+
+    /**
+     * {@link #waitForProjectStarted(IDtProject, long)} with its collaborators given; package-visible for tests.
+     *
+     * @param orchestrator the orchestrator whose lifecycle events are listened to
+     * @param alreadyStarted asks whether the project's context is started now; a throw counts as "not yet"
+     * @param projectName the project
+     * @param timeoutMs timeout in milliseconds
+     * @param reprobeMs how often {@code alreadyStarted} is asked again while waiting
+     * @return true if STARTED state was reached, false if timeout occurred
+     */
+    static boolean waitForProjectStarted(IServicesOrchestrator orchestrator, BooleanSupplier alreadyStarted,
+        String projectName, long timeoutMs, long reprobeMs)
+    {
         Activator.logInfo("Waiting for project STARTED state: " + projectName); //$NON-NLS-1$
         
         CountDownLatch startedLatch = new CountDownLatch(1);
@@ -120,16 +152,35 @@ public final class LifecycleWaiter
         try
         {
             orchestrator.addListener(listener);
-            
-            boolean started = startedLatch.await(timeoutMs, TimeUnit.MILLISECONDS);
-            if (!started)
+
+            // Asked only now that the listener is registered - see waitForProjectStarted(IDtProject, long).
+            if (isStarted(alreadyStarted, projectName))
             {
-                Activator.logInfo("Timeout waiting for project STARTED: " + projectName); //$NON-NLS-1$
-                return false;
+                Activator.logInfo("Project already in STARTED state: " + projectName); //$NON-NLS-1$
+                return true;
             }
-            
-            Activator.logInfo("Project reached STARTED state: " + projectName); //$NON-NLS-1$
-            return true;
+
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+            while (true)
+            {
+                long remainingNanos = deadline - System.nanoTime();
+                if (remainingNanos <= 0)
+                {
+                    Activator.logInfo("Timeout waiting for project STARTED: " + projectName); //$NON-NLS-1$
+                    return false;
+                }
+                long sliceNanos = Math.min(remainingNanos, TimeUnit.MILLISECONDS.toNanos(Math.max(1L, reprobeMs)));
+                if (startedLatch.await(sliceNanos, TimeUnit.NANOSECONDS))
+                {
+                    Activator.logInfo("Project reached STARTED state: " + projectName); //$NON-NLS-1$
+                    return true;
+                }
+                if (isStarted(alreadyStarted, projectName))
+                {
+                    Activator.logInfo("Project found in STARTED state while waiting: " + projectName); //$NON-NLS-1$
+                    return true;
+                }
+            }
         }
         catch (InterruptedException e)
         {
@@ -150,6 +201,24 @@ public final class LifecycleWaiter
         }
     }
     
+    /**
+     * The probe's answer. A probe that throws has not seen the project started, so the wait goes on and the
+     * lifecycle event can still end it.
+     */
+    private static boolean isStarted(BooleanSupplier alreadyStarted, String projectName)
+    {
+        try
+        {
+            return alreadyStarted.getAsBoolean();
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logInfo("Could not ask whether " + projectName + " is started (" + e //$NON-NLS-1$ //$NON-NLS-2$
+                + "); waiting for its lifecycle event"); //$NON-NLS-1$
+            return false;
+        }
+    }
+
     /**
      * Helper class for waiting on project restart with pre-registered listener.
      * This allows registering the listener BEFORE triggering the operation

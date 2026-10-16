@@ -45,7 +45,6 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.metadata.mdclass.extension.type.MdPropertyState;
-import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
 
 /**
@@ -438,14 +437,7 @@ public final class AdoptedModuleState
         @Override
         public IMdAdoptedPropertyAccess access()
         {
-            try
-            {
-                return ServiceAccess.get(IMdAdoptedPropertyAccess.class);
-            }
-            catch (RuntimeException e) // NOSONAR a missing service is an answer (the step fails), not a crash
-            {
-                return null;
-            }
+            return ExtensionServices.adoptedPropertyAccess();
         }
 
         @Override
@@ -589,9 +581,36 @@ public final class AdoptedModuleState
     static LineOnDisk readBounded(BoundedRunner runner, String projectName, String jobName, long timeoutMs,
         Supplier<LineOnDisk> read)
     {
+        return readBounded(runner, projectName, jobName, timeoutMs, read, LineOnDisk.UNREADABLE);
+    }
+
+    /**
+     * The one bounded read of a project's files, whatever the read finds: {@link #readBounded(BoundedRunner, String,
+     * String, long, Supplier)} with the answer for a read that is no answer as a parameter. Every rule of that read
+     * holds here - the job, the deadline, only a read that COMPLETED in time is an answer, and the project's one claim
+     * ({@link BuildUtils#beginStateLineRead}), taken before a job is scheduled, released when the job ends, and
+     * lapsing three times the state-line step's budget after it was taken, whoever took it. Its second caller is
+     * ExtensionRootBuilder's look at a new extension's root file and the files beside it, on the same claim: both read
+     * files under the same project location, and a file system that does not answer one of them answers neither, so
+     * one claim per project is what keeps such reads from piling up one hung job each. Never throws an exception.
+     * Package-visible for tests.
+     *
+     * @param <T> what a read finds
+     * @param runner what runs the read under its deadline: BoundedJob in production
+     * @param projectName the project whose files are read: the key of the read's claim
+     * @param jobName the read's name in EDT's progress view
+     * @param timeoutMs what is left of the budget; nothing left - zero or less - means no read, and no claim
+     * @param read the read itself, unbounded; a {@code null} it returns is no answer either
+     * @param unreadable what to answer for a read that did not complete in time, was refused, threw or could not be
+     *     scheduled - and when nothing was left of the budget; may be {@code null}
+     * @return what the read found, or {@code unreadable}
+     */
+    static <T> T readBounded(BoundedRunner runner, String projectName, String jobName, long timeoutMs, // NOSONAR the read's bounds, its claim and its two answers, one each
+        Supplier<T> read, T unreadable)
+    {
         if (timeoutMs <= 0)
         {
-            return LineOnDisk.UNREADABLE;
+            return unreadable;
         }
         AtomicBoolean returned = BuildUtils.beginStateLineRead(projectName, EXPORT_DEADLINE_MS);
         String logKey = String.valueOf(projectName); // the set takes no null
@@ -604,11 +623,11 @@ public final class AdoptedModuleState
                 Activator.logInfo("A previous .mdo read for " + projectName //$NON-NLS-1$
                     + " has not returned yet; not starting another one"); //$NON-NLS-1$
             }
-            return LineOnDisk.UNREADABLE;
+            return unreadable;
         }
         // This read holds the claim now: the first read it refuses is said again.
         REFUSAL_LOGGED.remove(logKey);
-        AtomicReference<LineOnDisk> answer = new AtomicReference<>();
+        AtomicReference<T> answer = new AtomicReference<>();
         // The job's end - EDT's done notification, which comes also for a job that ends without running the read. It
         // only sets this claim's flag: it never blocks the thread EDT delivers the notification on.
         Runnable jobEnded = () -> returned.set(true);
@@ -632,7 +651,7 @@ public final class AdoptedModuleState
         {
             // No job was scheduled, so nothing is outstanding.
             returned.set(true);
-            return LineOnDisk.UNREADABLE;
+            return unreadable;
         }
         if (result.getOutcome() == BoundedJob.Outcome.TIMED_OUT_BEFORE_START)
         {
@@ -641,9 +660,9 @@ public final class AdoptedModuleState
             returned.set(true);
         }
         // A read is an answer only when it COMPLETED in time; one that published past the deadline is not.
-        LineOnDisk seen = answer.get();
+        T seen = answer.get();
         return result.getOutcome() == BoundedJob.Outcome.COMPLETED && result.getFailure() == null && seen != null
-            ? seen : LineOnDisk.UNREADABLE;
+            ? seen : unreadable;
     }
 
     private AdoptedModuleState()
@@ -1596,7 +1615,24 @@ public final class AdoptedModuleState
                 + "in the properties of the adopted object."; //$NON-NLS-1$
         }
 
-        /** No extension block: there is no state to record, and nothing was created to hold one. */
+        /**
+         * No extension block: there is no state to record, and nothing was created to hold one. For the extension's
+         * root it says which roots carry the block - EDT's own new-extension wizard's, and create_project's, which adopts
+         * the base's root the way that wizard does - and that a root an earlier create_project made from a new
+         * configuration has none (issue #706); then the one way out it can stand behind: recreating the extension.
+         * <p>
+         * No property state set in EDT is named, because on the roots this note is about every such route is a trap
+         * (2026.1.2 and 2026.2.1 bytecode, and EDT's own property-state models and validator run on such a root, #747
+         * review round 3). A Checked or Notify state of an attribute - the default run mode, for one - is set with the
+         * base's value copied in first, through {@code setValue}, which writes the state into the block there is: with
+         * none it throws, and no state is set. 'Extended configuration object' is declared for every adopted object, so
+         * a state set on it creates a bare MdObjectExtension block, which holds no module states. A state of the
+         * default language does create the root's ConfigurationExtension block ({@link
+         * IMdAdoptedPropertyAccess#setPropertyState} creates a missing block as an instance of the class that DECLARES
+         * the state), but such a root has no default language, and a Checked one that does not match the base's is a
+         * CRITICAL_DATA_INTEGRITY issue of EDT's extension validator, which stops EDT from updating an infobase until
+         * the state is set back.
+         */
         private String noBlockParagraph()
         {
             String missing = "This module belongs to " + ownerWithRole() + ": there is no extension block in " //$NON-NLS-1$ //$NON-NLS-2$
@@ -1604,7 +1640,10 @@ public final class AdoptedModuleState
             if (context.address.isConfiguration())
             {
                 return missing + " An extension root that EDT's own new-extension wizard creates carries that " //$NON-NLS-1$
-                    + "block."; //$NON-NLS-1$
+                    + "block, and so does one that create_project creates, as it adopts the base's root the way that " //$NON-NLS-1$
+                    + "wizard does; a root made by an earlier version of create_project - a new configuration, not the " //$NON-NLS-1$
+                    + "base's root adopted - has none. To record the state, recreate the extension with create_project " //$NON-NLS-1$
+                    + "and add its objects and code again, then " + RERUN + "."; //$NON-NLS-1$ //$NON-NLS-2$
             }
             return missing + " EDT writes that block whenever it adopts an object, so the .mdo was changed outside " //$NON-NLS-1$
                 + "EDT: to record the state, restore the block (for example from version control), then " + RERUN //$NON-NLS-1$
