@@ -8,10 +8,13 @@ package com.ditrix.edt.mcp.server.utils.git;
 
 import java.util.Optional;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Repository;
 
+import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationContextProvider;
 import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAssociationContext;
+import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 
 /**
@@ -315,6 +318,86 @@ public final class BranchContexts
             + "). EDT accepts a default only for an infobase that is also bound to the CHECKED-OUT branch: " //$NON-NLS-1$
             + "check this branch out (switch_git_branch) and call set_branch_infobase again with " //$NON-NLS-1$
             + "setDefault=true."; //$NON-NLS-1$
+    }
+
+    /**
+     * The context EDT reads a project's bindings from right now, or why it could not be determined.
+     * See {@link BranchContexts#current(IInfobaseAssociationContextProvider, IProject)}.
+     */
+    public static final class Current
+    {
+        private final InfobaseAssociationContext context;
+
+        private final String error;
+
+        private Current(InfobaseAssociationContext context, String error)
+        {
+            this.context = context;
+            this.error = error;
+        }
+
+        /** @return {@code true} when EDT answered with a context */
+        public boolean ok()
+        {
+            return context != null;
+        }
+
+        /** @return EDT's own context object, unchanged, or {@code null} when it could not be determined */
+        public InfobaseAssociationContext context()
+        {
+            return context;
+        }
+
+        /** @return the actionable refusal text, or {@code null} when determined */
+        public String error()
+        {
+            return error;
+        }
+    }
+
+    /**
+     * The context EDT reads the project's bindings from right now (#656): {@code provider.get(project)}, returned
+     * AS IS. That object is the checked-out branch's {@code refs/heads/<branch>} for a project EGit maps,
+     * the commit id while HEAD is detached, the referenced branch's context for a branch that shares
+     * another one's binding, and {@code empty()} otherwise. It is also the value EDT compares a
+     * dissociation's context with before it deletes that context's whole binding file, so a caller that
+     * needs "is this the current context" must compare with exactly this object.
+     * <p>
+     * There is deliberately no fallback. Deriving the context from the repository's HEAD would differ
+     * from EDT's for a branch that references another one's binding, and for a repository EGit does not
+     * know; falling back to {@code empty()} would name the project-level file, which is the wrong file
+     * on a git project. When EDT cannot answer, the caller is told so and changes nothing.
+     *
+     * @param provider EDT's context provider (may be {@code null} while platform services start)
+     * @param project the project (never {@code null})
+     * @return the current context, or an actionable refusal text; never {@code null}
+     */
+    public static Current current(IInfobaseAssociationContextProvider provider, IProject project)
+    {
+        if (provider == null)
+        {
+            return new Current(null, "IInfobaseAssociationContextProvider service is not available - EDT " //$NON-NLS-1$
+                + "platform services may still be starting. Nothing was changed; retry."); //$NON-NLS-1$
+        }
+        InfobaseAssociationContext context;
+        try
+        {
+            context = provider.get(project);
+        }
+        catch (RuntimeException e) // NOSONAR the provider wraps only IOException; of() and its preconditions throw too
+        {
+            Activator.logError("Could not determine the current infobase binding context of project '" //$NON-NLS-1$
+                + project.getName() + "'", e); //$NON-NLS-1$
+            return new Current(null, "EDT could not determine which binding context project '" + project.getName() //$NON-NLS-1$
+                + "' reads (its checked-out branch): " + PlatformFailures.describe(e) //$NON-NLS-1$
+                + ". Nothing was changed."); //$NON-NLS-1$
+        }
+        if (context == null)
+        {
+            return new Current(null, "EDT returned no binding context for project '" + project.getName() //$NON-NLS-1$
+                + "'. Nothing was changed; retry."); //$NON-NLS-1$
+        }
+        return new Current(context, null);
     }
 
     private static Resolution refused(String error)
