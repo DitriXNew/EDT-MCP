@@ -12,6 +12,10 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
 import org.eclipse.jgit.api.CheckoutResult;
 import org.junit.Test;
 
@@ -83,5 +87,69 @@ public class GitCheckoutSupportTest
         assertFalse(outcome.timedOut());
         assertFalse(outcome.interrupted());
         assertSame("the thrown exception must round-trip unchanged", boom, outcome.jobError()); //$NON-NLS-1$
+    }
+
+    /**
+     * A checkout takes {@link BranchBindingLock}, the lock {@code set_branch_infobase}'s binding changes hold (#656):
+     * while another thread holds it, the checkout waits instead of running. Interrupting the wait ends it before
+     * anything is built, so no checkout Job ever runs here (the repository is {@code null}: a checkout that did not
+     * wait would fail at once instead of still waiting).
+     */
+    @Test(timeout = 60_000)
+    public void aCheckoutWaitsWhileABindingChangeHoldsTheSharedLock() throws Exception
+    {
+        CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Thread binding = new Thread(() -> {
+            if (BranchBindingLock.tryLock())
+            {
+                try
+                {
+                    held.countDown();
+                    release.await(30, TimeUnit.SECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+                finally
+                {
+                    BranchBindingLock.unlock();
+                }
+            }
+        });
+        binding.start();
+        AtomicReference<Object> outcome = new AtomicReference<>();
+        Thread checkout = new Thread(() -> {
+            try
+            {
+                outcome.set(GitCheckoutSupport.checkout(null, null, "refs/heads/feature/x")); //$NON-NLS-1$
+            }
+            catch (RuntimeException e)
+            {
+                outcome.set(e);
+            }
+        });
+        try
+        {
+            assertTrue("the binding change must take the lock", held.await(10, TimeUnit.SECONDS)); //$NON-NLS-1$
+            checkout.start();
+            checkout.join(500);
+            assertTrue("the checkout must wait while a binding change holds the lock: " + outcome.get(), //$NON-NLS-1$
+                checkout.isAlive());
+            checkout.interrupt();
+            checkout.join(10_000);
+            assertFalse(checkout.isAlive());
+            assertTrue("an interrupted wait is reported as such: " + outcome.get(), //$NON-NLS-1$
+                outcome.get() instanceof CheckoutOutcome && ((CheckoutOutcome)outcome.get()).interrupted());
+            assertFalse(((CheckoutOutcome)outcome.get()).busy());
+            assertFalse(((CheckoutOutcome)outcome.get()).ranToCompletion());
+        }
+        finally
+        {
+            release.countDown();
+            checkout.interrupt();
+            binding.join(10_000);
+        }
     }
 }

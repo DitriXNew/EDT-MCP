@@ -24,6 +24,7 @@ import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
@@ -36,6 +37,7 @@ import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
+import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -341,6 +343,140 @@ public class GitToolProcessIntegrationTest
             log.contains("\\x01")); //$NON-NLS-1$
         assertFalse("the secret must not reach the caller: " + log, //$NON-NLS-1$
             log.contains("s3cr3t-token")); //$NON-NLS-1$
+    }
+
+    // ==================== #656: branch-changing subcommands share set_branch_infobase's lock ====================
+
+    /** Holds {@link BranchBindingLock} on another thread until {@code release} opens; returns once it is held. */
+    private static Thread holdTheBindingLock(CountDownLatch release) throws InterruptedException
+    {
+        CountDownLatch held = new CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            if (BranchBindingLock.tryLock())
+            {
+                try
+                {
+                    held.countDown();
+                    release.await(30, TimeUnit.SECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+                finally
+                {
+                    BranchBindingLock.unlock();
+                }
+            }
+        });
+        holder.start();
+        assertTrue("the holder must take the lock", held.await(10, TimeUnit.SECONDS)); //$NON-NLS-1$
+        return holder;
+    }
+
+    /**
+     * A switch changes the branch the repository has checked out, so it waits while a binding change of
+     * {@code set_branch_infobase} holds the shared lock, and runs once it is released.
+     */
+    @Test(timeout = 60_000)
+    public void testASwitchWaitsWhileABindingChangeHoldsTheSharedLock() throws Exception
+    {
+        CountDownLatch release = new CountDownLatch(1);
+        Thread holder = holdTheBindingLock(release);
+        AtomicReference<JsonObject> result = new AtomicReference<>();
+        Thread switching = new Thread(() -> {
+            try
+            {
+                result.set(run("switch -c lock-656")); //$NON-NLS-1$
+            }
+            catch (Exception e)
+            {
+                throw new IllegalStateException(e);
+            }
+        });
+        try
+        {
+            switching.start();
+            switching.join(500);
+            assertTrue("the switch must wait while a binding change holds the lock: " + result.get(), //$NON-NLS-1$
+                switching.isAlive());
+            release.countDown();
+            switching.join(30_000);
+            assertFalse("the switch must run once the lock is released", switching.isAlive()); //$NON-NLS-1$
+            assertTrue(String.valueOf(result.get()), result.get().get("success").getAsBoolean()); //$NON-NLS-1$
+            assertEquals("lock-656", gitOutput("rev-parse", "--abbrev-ref", "HEAD").trim()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        }
+        finally
+        {
+            release.countDown();
+            holder.join(10_000);
+            switching.join(10_000);
+        }
+    }
+
+    /**
+     * A {@code pull --rebase} (or a {@code pull} with {@code pull.rebase} configured) detaches HEAD while the rebase
+     * runs, so a pull changes the branch the repository has checked out like a switch does: it waits while a binding
+     * change of {@code set_branch_infobase} holds the shared lock, and runs once it is released.
+     */
+    @Test(timeout = 60_000)
+    public void testAPullWaitsWhileABindingChangeHoldsTheSharedLock() throws Exception
+    {
+        CountDownLatch release = new CountDownLatch(1);
+        Thread holder = holdTheBindingLock(release);
+        AtomicReference<JsonObject> result = new AtomicReference<>();
+        Thread pulling = new Thread(() -> {
+            try
+            {
+                result.set(run("pull --rebase")); //$NON-NLS-1$
+            }
+            catch (Exception e)
+            {
+                throw new IllegalStateException(e);
+            }
+        });
+        try
+        {
+            pulling.start();
+            pulling.join(500);
+            assertTrue("a pull must wait while a binding change holds the lock: " + result.get(), //$NON-NLS-1$
+                pulling.isAlive());
+            release.countDown();
+            pulling.join(30_000);
+            assertFalse("the pull must run once the lock is released", pulling.isAlive()); //$NON-NLS-1$
+            // The test repository has no upstream, so git itself answers (non-zero): the process ran.
+            assertTrue("git must have run the pull: " + result.get(), //$NON-NLS-1$
+                result.get() != null && result.get().has("exitCode")); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            holder.join(10_000);
+            pulling.join(10_000);
+        }
+    }
+
+    /** A read that changes no branch is not held up by the lock: the lock covers only what can move the branch. */
+    @Test(timeout = 60_000)
+    public void testAStatusDoesNotWaitForTheSharedLock() throws Exception
+    {
+        CountDownLatch release = new CountDownLatch(1);
+        Thread holder = holdTheBindingLock(release);
+        try
+        {
+            long started = System.nanoTime();
+            JsonObject status = run("status --short"); //$NON-NLS-1$
+            long tookMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+            assertTrue(String.valueOf(status), status.get("success").getAsBoolean()); //$NON-NLS-1$
+            // The holder keeps the lock for up to 30 s: a status that waited for it would take that long.
+            assertTrue("a status must not wait for the lock (took " + tookMillis + " ms)", //$NON-NLS-1$ //$NON-NLS-2$
+                tookMillis < 15_000);
+        }
+        finally
+        {
+            release.countDown();
+            holder.join(10_000);
+        }
     }
 
     /** Parses {@code command} through the production parser and runs it in the test repository. */

@@ -52,6 +52,7 @@ import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
+import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
 import com.ditrix.edt.mcp.server.utils.git.GitFailureLog;
 import com.ditrix.edt.mcp.server.utils.git.GitCommonDirectory;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
@@ -564,6 +565,16 @@ public class GitTool implements IMcpTool
     private static final Set<String> WORKTREE_CHANGING =
         Set.of("checkout", "switch", "pull", "merge", "restore", "rebase", "reset", "stash", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$ //$NON-NLS-7$ //$NON-NLS-8$
             "clean", "apply", "cherry-pick", "revert"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+
+    /**
+     * Subcommands that can change the branch a project's repository has checked out ({@code branch} through
+     * {@code -m}/{@code -M} on the checked-out branch; {@code pull} through {@code --rebase} or a configured
+     * {@code pull.rebase}, which detaches HEAD while the rebase runs and leaves it detached when it stops on a
+     * conflict): they run under {@link BranchBindingLock}, the lock {@code set_branch_infobase}'s binding changes
+     * take (#656), so none lands between a detach's re-check and EDT's write. The rest of
+     * {@link #ALLOWED_SUBCOMMANDS} moves no branch ({@code rebase} itself is not on it).
+     */
+    private static final Set<String> BRANCH_CHANGING = Set.of("checkout", "switch", "branch", "pull"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
     /**
      * A transport-helper remote ({@code <helper>::<address>}, e.g. {@code ext::sh -c ...} / {@code fd::})
@@ -3174,8 +3185,36 @@ public class GitTool implements IMcpTool
      * {@link #capture}, so what leaves here is credential-redacted and has its control bytes escaped
      * as {@code \xNN}. What that does and does not promise is stated at
      * {@link #escapeControlBytes}.
+     * <p>
+     * A subcommand that can change the checked-out branch ({@link #BRANCH_CHANGING}) runs under
+     * {@link BranchBindingLock}, taken here - after the consent prompt, never across it - and held for the bounded
+     * process only; one that waits {@link BranchBindingLock#WAIT_SECONDS} for it is not run.
      */
     String runGit(List<String> argv, File workTree)
+    {
+        if (argv.size() < 2 || !BRANCH_CHANGING.contains(argv.get(1)))
+        {
+            return runGitProcess(argv, workTree);
+        }
+        if (!BranchBindingLock.tryLock())
+        {
+            String safeCommand = redactCredentialUrls(String.join(" ", argv)); //$NON-NLS-1$
+            return ToolResult.error("'" + safeCommand + "' was not run: " + BranchBindingLock.busyReason() //$NON-NLS-1$ //$NON-NLS-2$
+                + ". Nothing was changed; retry.") //$NON-NLS-1$
+                .put(KEY_COMMAND, safeCommand).toJson();
+        }
+        try
+        {
+            return runGitProcess(argv, workTree);
+        }
+        finally
+        {
+            BranchBindingLock.unlock();
+        }
+    }
+
+    /** {@link #runGit}'s process, under {@link BranchBindingLock} when the subcommand needs it. */
+    private String runGitProcess(List<String> argv, File workTree)
     {
         ProcessBuilder builder = new ProcessBuilder(withNonInteractiveConfig(argv));
         builder.directory(workTree);

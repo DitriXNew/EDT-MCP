@@ -10,7 +10,7 @@ Each has its own actionable error, checked in this order:
 3. **The working tree must have no uncommitted changes** (`git status`: staged or unstaged modifications, additions, removals). **Untracked files alone do NOT block** a switch - only tracked-file changes do, matching plain `git checkout` semantics.
 
 ## What happens on success
-The checkout runs in a bounded background Job (up to 120 seconds) - never on the UI thread. On success the result is:
+The checkout runs in a bounded background Job (up to 120 seconds) - never on the UI thread. It runs under the lock `set_branch_infobase`'s binding changes take, so it never lands between a detach's check and EDT's write: while one is running the switch waits for it (up to 60 s; past that it is refused with nothing changed - retry). On success the result is:
 ```json
 { "success": true, "previousBranch": "main", "branch": "feature/x",
   "bindings": { "infobases": ["MyBase"], "defaultInfobase": "MyBase" } }

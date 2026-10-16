@@ -19,8 +19,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -45,6 +43,7 @@ import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.PlatformFailures;
 import com.ditrix.edt.mcp.server.utils.git.AssociationStoreFile;
+import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
 import com.ditrix.edt.mcp.server.utils.git.BranchContexts;
 import com.ditrix.edt.mcp.server.utils.git.GitRepositoryResolver;
 import com.e1c.g5.dt.applications.IApplication;
@@ -78,7 +77,7 @@ import com.e1c.g5.dt.applications.IApplicationManager;
  * a binding from a legacy short key the same way. A detach runs only when those deletions can take
  * nothing but the binding being removed - judged from EDT's read AND from the persisted files, since
  * EDT's read hides stale entries ({@link AssociationStoreFile}) - and this tool's binding changes
- * are serialized; see {@link #applyResolved}.
+ * and this server's checkouts are serialized ({@link BranchBindingLock}); see {@link #applyResolved}.
  */
 public class SetBranchInfobaseTool implements IMcpTool
 {
@@ -287,8 +286,9 @@ public class SetBranchInfobaseTool implements IMcpTool
      * not read the context now, and the detach runs only when those files hold nothing; otherwise it is
      * refused, naming what would be lost.
      * <p>
-     * The whole change - plan, re-check, EDT's write and the read-back - runs under {@link #BINDING_WRITES},
-     * and the plan is re-checked right before EDT's write ({@link DetachPlan#recheck()}).
+     * The whole change - plan, re-check, EDT's write and the read-back - runs under {@link BranchBindingLock}, the
+     * lock this server's checkouts take too, and the plan is re-checked right before EDT's write
+     * ({@link DetachPlan#recheck()}).
      *
      * @param provider EDT's current-context provider (may be {@code null}: a detach that needs it refuses)
      * @param dependents the project's dependent extension projects; may throw, which refuses a detach
@@ -303,10 +303,10 @@ public class SetBranchInfobaseTool implements IMcpTool
         {
             return ToolResult.error(resolution.error()).toJson();
         }
-        if (!lockBindingWrites())
+        if (!BranchBindingLock.tryLock())
         {
-            return ToolResult.error("Another set_branch_infobase call is still changing infobase bindings (waited " //$NON-NLS-1$
-                + BINDING_WRITE_WAIT_SECONDS + " s). Nothing was changed; retry.").toJson(); //$NON-NLS-1$
+            return ToolResult.error("Did not change the binding: " + BranchBindingLock.busyReason() //$NON-NLS-1$
+                + ". Nothing was changed; retry.").toJson(); //$NON-NLS-1$
         }
         try
         {
@@ -315,45 +315,11 @@ public class SetBranchInfobaseTool implements IMcpTool
         }
         finally
         {
-            BINDING_WRITES.unlock();
+            BranchBindingLock.unlock();
         }
     }
 
-    /** How long a call waits for another call's binding change before it refuses. */
-    static final long BINDING_WRITE_WAIT_SECONDS = 60;
-
-    /**
-     * Serializes this tool's own binding changes (#656): an attach or a detach - its plan, the re-check,
-     * EDT's write and the read-back - runs under this one lock, so two calls of this tool never interleave
-     * (MCP calls run concurrently). It is one lock for the whole tool, not one per project: a detach also
-     * deletes binding files of the project's dependent extension projects, and a per-project lock would
-     * leave those open to an attach to such a project.
-     * <p>
-     * What it cannot cover: EDT's own UI, a checkout ({@code switch_git_branch} or EDT's), and association writes
-     * of other tools ({@code create_infobase}, {@code delete_infobase}, {@code create_git_branch}) - none of them
-     * takes this lock, and no lock is possible across EDT's checkout. For those the re-check right before EDT's
-     * write ({@link DetachPlan#recheck()}) reads again everything the plan relied on - the binding files, the
-     * stored branch references, the list of dependent extension projects, the current context of each dependent
-     * EDT spares and, on a detach from the checked-out branch, of the project itself - and leaves only the window
-     * between that re-check and EDT's own write
-     * (milliseconds).
-     */
-    private static final ReentrantLock BINDING_WRITES = new ReentrantLock(true);
-
-    private static boolean lockBindingWrites()
-    {
-        try
-        {
-            return BINDING_WRITES.tryLock(BINDING_WRITE_WAIT_SECONDS, TimeUnit.SECONDS);
-        }
-        catch (InterruptedException e)
-        {
-            Thread.currentThread().interrupt();
-            return false;
-        }
-    }
-
-    /** {@link #applyResolved} under {@link #BINDING_WRITES}. */
+    /** {@link #applyResolved} under {@link BranchBindingLock}. */
     private static String applyLocked(IInfobaseAssociationManager assocManager,
         IInfobaseAssociationContextProvider provider, Supplier<Collection<IProject>> dependents, IProject project,
         String branch, String applicationId, InfobaseReference ref, boolean attach, boolean setDefault,
@@ -467,7 +433,7 @@ public class SetBranchInfobaseTool implements IMcpTool
      * (EDT logs none), so an unread fact cannot be reported later.</li>
      * </ul>
      * What the plan relied on is re-checked right before EDT's write ({@link DetachPlan#recheck()}); the
-     * window that remains is named at {@link #BINDING_WRITES}.
+     * window that remains is named at {@link BranchBindingLock}.
      */
     private static DetachPlan planDetach(IInfobaseAssociationManager assocManager,
         IInfobaseAssociationContextProvider provider, Supplier<Collection<IProject>> dependents, IProject project,
@@ -565,9 +531,9 @@ public class SetBranchInfobaseTool implements IMcpTool
      * project's file without the binding, but it still deletes the same-named file of each dependent extension
      * project whose own current context differs (one in another repository, or one EDT sees no repository for),
      * so those files are checked as every whole-file deletion is ({@link #checkDependents}). The re-check right
-     * before EDT's write requires that EDT still reads this branch for the project - after a checkout the write
-     * would delete this project's whole file - and re-checks the dependents
-     * ({@link WholeFileCheck#recheckDependents}).
+     * before EDT's write re-checks the dependents ({@link WholeFileCheck#recheckDependents}) and then, as its last
+     * read, requires that EDT still reads this branch for the project - after a checkout the write would delete
+     * this project's whole file.
      */
     private static DetachPlan planCurrentBranchDetach(IInfobaseAssociationManager assocManager,
         IInfobaseAssociationContextProvider provider, Supplier<Collection<IProject>> dependents, IProject project,
@@ -598,9 +564,10 @@ public class SetBranchInfobaseTool implements IMcpTool
                 + check.hiddenEntriesNote());
         }
         return DetachPlan.of(ctx, null, () -> {
-            String moved = checkoutUnchanged(provider, project, target, readNow);
-            return moved != null ? moved
-                : check.recheckDependents(assocManager, provider, dependents, project, ctx, target.fullRef());
+            String dependentsChanged = check.recheckDependents(assocManager, provider, dependents, project, ctx,
+                target.fullRef());
+            return dependentsChanged != null ? dependentsChanged
+                : checkoutUnchanged(provider, project, target, readNow);
         });
     }
 
@@ -783,6 +750,7 @@ public class SetBranchInfobaseTool implements IMcpTool
         IInfobaseAssociationContextProvider provider, Supplier<Collection<IProject>> dependents,
         InfobaseAssociationContext ctx, boolean legacyKey, String under) throws IOException
     {
+        check.legacyKey = legacyKey;
         for (IProject dependent : dependents.get())
         {
             check.plannedDependents.add(dependent);
@@ -1042,6 +1010,9 @@ public class SetBranchInfobaseTool implements IMcpTool
         /** Every dependent extension project the plan checked. */
         final List<IProject> plannedDependents = new ArrayList<>();
 
+        /** Whether the context is a legacy short key, which is never anyone's current context. */
+        boolean legacyKey;
+
         /**
          * Dependents whose file holds something but EDT keeps it because they read the context now: they must
          * still read it right before the write.
@@ -1062,10 +1033,10 @@ public class SetBranchInfobaseTool implements IMcpTool
         }
 
         /**
-         * Re-reads, right before EDT's write of a whole-file deletion, what this check relied on: the project's
-         * own file must still hold nothing but {@code uuid}, no stored branch of the project may keep a
-         * reference to or from {@code ctx}, and the dependents must still hold
-         * ({@link #recheckDependents}).
+         * Re-reads, right before EDT's write of a whole-file deletion, what this check relied on: no stored branch
+         * of the project may keep a reference to or from {@code ctx}, the dependents must still hold
+         * ({@link #recheckDependents}), and - the last read, of the file the write deletes - the project's own
+         * file must still hold nothing but {@code uuid}.
          *
          * @return the refusal when that no longer holds, otherwise {@code null}
          */
@@ -1073,6 +1044,23 @@ public class SetBranchInfobaseTool implements IMcpTool
             Supplier<Collection<IProject>> dependents, IProject project, InfobaseAssociationContext ctx, String label,
             UUID uuid)
         {
+            try
+            {
+                String referenceNow = referenceChange(assocManager, project, ctx);
+                if (referenceNow != null)
+                {
+                    return changedRefusal(label, referenceNow);
+                }
+            }
+            catch (RuntimeException e)
+            {
+                return readFailure(project, label, e);
+            }
+            String dependentsChanged = recheckDependents(assocManager, provider, dependents, project, ctx, label);
+            if (dependentsChanged != null)
+            {
+                return dependentsChanged;
+            }
             try
             {
                 if (!Files.isRegularFile(ownFile))
@@ -1084,25 +1072,28 @@ public class SetBranchInfobaseTool implements IMcpTool
                 {
                     return changedRefusal(label, "its binding file now also holds: " + String.join(", ", now)); //$NON-NLS-1$ //$NON-NLS-2$
                 }
-                String referenceNow = referenceChange(assocManager, project, ctx);
-                if (referenceNow != null)
-                {
-                    return changedRefusal(label, referenceNow);
-                }
             }
             catch (RuntimeException | IOException e)
             {
                 return readFailure(project, label, e);
             }
-            return recheckDependents(assocManager, provider, dependents, project, ctx, label);
+            return null;
         }
 
         /**
          * Re-reads, right before EDT's write, what the dependents' part of this check relied on
-         * ({@link SetBranchInfobaseTool#checkDependents}): no dependent extension project the plan did not
-         * check; each dependent file found empty must still hold nothing, with no reference of the dependent for
-         * {@code ctx}; and each dependent spared because it read {@code ctx} must still read it - a checkout of
-         * the extension in between ({@code switch_git_branch}, EDT's UI) would make EDT delete its file.
+         * ({@link SetBranchInfobaseTool#checkDependents}), in this order:
+         * <ol>
+         * <li>no dependent extension project the plan did not check;</li>
+         * <li>the branch each dependent reads now - the slow part, a question to EDT per project, so it comes before
+         * the files. EDT keeps the file of a dependent that reads {@code ctx}, whatever it holds; a dependent the
+         * plan spared because it read {@code ctx} must still read it - a checkout of the extension in between would
+         * make EDT delete its file. A legacy key is never anyone's current context, so none is read for it;</li>
+         * <li>then the file of each dependent EDT would delete whose file the plan found empty: it must still hold
+         * nothing, with no reference of the dependent for {@code ctx}. Its branch is not needed for that - an empty
+         * file loses nothing whichever branch the extension reads - so one EDT cannot name is judged by its
+         * file.</li>
+         * </ol>
          *
          * @return the refusal when that no longer holds, otherwise {@code null}
          */
@@ -1120,8 +1111,33 @@ public class SetBranchInfobaseTool implements IMcpTool
                             + "' now depends on this project"); //$NON-NLS-1$
                     }
                 }
+                Set<IProject> readingCtx = new HashSet<>();
+                for (IProject dependent : plannedDependents)
+                {
+                    boolean spared = currentDependents.contains(dependent);
+                    if (legacyKey || !spared && !emptyDependentFiles.containsValue(dependent))
+                    {
+                        continue;
+                    }
+                    BranchContexts.Current now = BranchContexts.current(provider, dependent);
+                    if (now.ok() && ctx.equals(now.context()))
+                    {
+                        readingCtx.add(dependent);
+                    }
+                    else if (spared)
+                    {
+                        return !now.ok() ? now.error()
+                            : changedRefusal(label, "extension project '" + dependent.getName() //$NON-NLS-1$
+                                + "' no longer reads this branch (it reads '" + BranchContexts.displayName(now.context()) //$NON-NLS-1$
+                                + "' now), so EDT would delete the binding it keeps for this branch"); //$NON-NLS-1$
+                    }
+                }
                 for (Map.Entry<Path, IProject> dependentFile : emptyDependentFiles.entrySet())
                 {
+                    if (readingCtx.contains(dependentFile.getValue()))
+                    {
+                        continue;
+                    }
                     String extension = dependentFile.getValue().getName();
                     List<String> dependentNow = AssociationStoreFile.entriesBesides(dependentFile.getKey(), Set.of());
                     if (!dependentNow.isEmpty())
@@ -1136,20 +1152,6 @@ public class SetBranchInfobaseTool implements IMcpTool
                         return changedRefusal(label, "extension project '" + extension //$NON-NLS-1$
                             + "' now keeps its binding here as a reference to branch '" //$NON-NLS-1$
                             + BranchContexts.displayName(dependentReference) + "'"); //$NON-NLS-1$
-                    }
-                }
-                for (IProject dependent : currentDependents)
-                {
-                    BranchContexts.Current now = BranchContexts.current(provider, dependent);
-                    if (!now.ok())
-                    {
-                        return now.error();
-                    }
-                    if (!ctx.equals(now.context()))
-                    {
-                        return changedRefusal(label, "extension project '" + dependent.getName() //$NON-NLS-1$
-                            + "' no longer reads this branch (it reads '" + BranchContexts.displayName(now.context()) //$NON-NLS-1$
-                            + "' now), so EDT would delete the binding it keeps for this branch"); //$NON-NLS-1$
                     }
                 }
                 return null;

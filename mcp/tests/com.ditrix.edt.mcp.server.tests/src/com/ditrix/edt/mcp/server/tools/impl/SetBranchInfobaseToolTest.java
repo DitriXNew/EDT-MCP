@@ -37,6 +37,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -53,6 +54,7 @@ import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAssociationSett
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.TemporaryDirectories;
+import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
 
 /**
  * Tests for {@link SetBranchInfobaseTool}.
@@ -1286,6 +1288,40 @@ public class SetBranchInfobaseToolTest
         verify(manager).dissociate(project, ref, BRANCH);
     }
 
+    @Test(timeout = 60_000)
+    public void anAttachWaitsWhileACheckoutHoldsTheSharedLock() throws Exception
+    {
+        // switch_git_branch, create_git_branch's checkout and git's checkout/switch/branch hold the same lock as this
+        // tool's binding changes: a binding change waits for a checkout, as it waits for another binding change.
+        CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Thread checkout = new Thread(() -> {
+            if (BranchBindingLock.tryLock())
+            {
+                try
+                {
+                    held.countDown();
+                    awaitQuietly(release);
+                }
+                finally
+                {
+                    BranchBindingLock.unlock();
+                }
+            }
+        });
+        checkout.start();
+        try
+        {
+            assertTrue("the checkout must take the lock", held.await(10, TimeUnit.SECONDS)); //$NON-NLS-1$
+            assertAnAttachWaitsUntil(release);
+        }
+        finally
+        {
+            release.countDown();
+            checkout.join(10_000);
+        }
+    }
+
     @Test
     public void aBindingFileThatGainsAnEntryWhileTheDetachIsCheckedRefusesIt() throws IOException
     {
@@ -1719,6 +1755,193 @@ public class SetBranchInfobaseToolTest
         assertTrue("the re-check must name the new dependent: " + result, //$NON-NLS-1$
             result.contains("The bindings changed while this detach from '" + FULL + "' was being checked: " //$NON-NLS-1$ //$NON-NLS-2$
                 + "extension project 'Ext' now depends on this project")); //$NON-NLS-1$
+        verify(manager, never()).dissociate(any(), any(), any());
+    }
+
+    // ==================== #656: the order of the re-check ====================
+    //
+    // The re-check reads every dependent's current context first - the slow part, a question to EDT per project -
+    // then each file EDT would delete, and on a detach from the checked-out branch the branch the project reads
+    // now, last: what was read earlier has the longest time to change before EDT's write.
+
+    /** A dependent extension project named {@code name} with base {@code baseName} bound under the branch. */
+    private static IProject boundDependent(IInfobaseAssociationManager manager, String name, String baseName)
+    {
+        IProject dependent = mock(IProject.class);
+        when(dependent.getName()).thenReturn(name);
+        InfobaseReference base = infobase(baseName);
+        when(manager.getAssociation(dependent, BRANCH)).thenReturn(association(base));
+        return dependent;
+    }
+
+    /** A dependent extension project named {@code name} whose file under the branch holds only EDT's header. */
+    private Path emptyDependentFile(IProject dependent, String name) throws IOException
+    {
+        when(dependent.getName()).thenReturn(name);
+        return bindingFile(storeOf(dependent), BRANCH, "#Infobase association data of the project"); //$NON-NLS-1$
+    }
+
+    @Test
+    public void anEmptyDependentsFileFilledWhileAnotherDependentsBranchIsReadRefusesTheDetach() throws IOException
+    {
+        // 'Empty' reads 'master', so EDT deletes its file under the branch; the file was empty at the plan. The
+        // re-check then asks EDT which branch 'Spared' reads, and an attach fills Empty's file meanwhile: the file
+        // must be read after that question, not before it.
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+        onlyBinding(project, BRANCH, ref);
+        IProject empty = mock(IProject.class);
+        Path emptyFile = emptyDependentFile(empty, "Empty"); //$NON-NLS-1$
+        IProject spared = boundDependent(manager, "Spared", "SparedBase"); //$NON-NLS-1$ //$NON-NLS-2$
+        IInfobaseAssociationContextProvider provider = currentIs(CHECKED_OUT);
+        when(provider.get(spared)).thenReturn(BRANCH).thenAnswer(invocation -> {
+            Files.write(emptyFile, Arrays.asList("Infobases=" + STALE), StandardCharsets.ISO_8859_1); //$NON-NLS-1$
+            return BRANCH;
+        });
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, provider, () -> List.of(empty, spared),
+            project, SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("the re-check must see the entry written meanwhile: " + result, //$NON-NLS-1$
+            result.contains("The bindings changed while this detach from '" + FULL + "' was being checked: the " //$NON-NLS-1$ //$NON-NLS-2$
+                + "binding file of extension project 'Empty' now holds: infobase entry " + STALE)); //$NON-NLS-1$
+        verify(manager, never()).dissociate(any(), any(), any());
+    }
+
+    @Test
+    public void anEmptyDependentsFileFilledWhileAnotherDependentsBranchIsReadRefusesACheckedOutBranchDetach()
+        throws IOException
+    {
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+        IProject empty = mock(IProject.class);
+        Path emptyFile = emptyDependentFile(empty, "Empty"); //$NON-NLS-1$
+        IProject spared = boundDependent(manager, "Spared", "SparedBase"); //$NON-NLS-1$ //$NON-NLS-2$
+        IInfobaseAssociationContextProvider provider = projectReadsTheBranch(project);
+        when(provider.get(spared)).thenReturn(BRANCH).thenAnswer(invocation -> {
+            Files.write(emptyFile, Arrays.asList("Infobases=" + STALE), StandardCharsets.ISO_8859_1); //$NON-NLS-1$
+            return BRANCH;
+        });
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, provider, () -> List.of(empty, spared),
+            project, SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("the re-check must see the entry written meanwhile: " + result, //$NON-NLS-1$
+            result.contains("The bindings changed while this detach from '" + FULL + "' was being checked: the " //$NON-NLS-1$ //$NON-NLS-2$
+                + "binding file of extension project 'Empty' now holds: infobase entry " + STALE)); //$NON-NLS-1$
+        verify(manager, never()).dissociate(any(), any(), any());
+    }
+
+    @Test
+    public void anEmptyDependentThatReadsTheBranchAtTheReCheckKeepsItsFileSoTheDetachGoesThrough() throws IOException
+    {
+        // The plan did not need Empty's branch: its file held nothing. The re-check asks for it, and Empty reads the
+        // branch now - EDT keeps its file whatever it holds, so an entry written meanwhile loses nothing, exactly as
+        // for a dependent the plan spared.
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+        onlyBinding(project, BRANCH, ref);
+        IProject empty = mock(IProject.class);
+        Path emptyFile = emptyDependentFile(empty, "Empty"); //$NON-NLS-1$
+        IProject spared = boundDependent(manager, "Spared", "SparedBase"); //$NON-NLS-1$ //$NON-NLS-2$
+        IInfobaseAssociationContextProvider provider = currentIs(CHECKED_OUT);
+        when(provider.get(empty)).thenReturn(BRANCH);
+        when(provider.get(spared)).thenReturn(BRANCH).thenAnswer(invocation -> {
+            Files.write(emptyFile, Arrays.asList("Infobases=" + STALE), StandardCharsets.ISO_8859_1); //$NON-NLS-1$
+            return BRANCH;
+        });
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, provider, () -> List.of(empty, spared),
+            project, SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":true")); //$NON-NLS-1$
+        verify(manager).dissociate(project, ref, BRANCH);
+        verify(provider).get(empty);
+    }
+
+    @Test
+    public void anEmptyDependentWhoseBranchCannotBeReadAtTheReCheckIsJudgedByItsFile() throws IOException
+    {
+        // The file must hold nothing whichever branch the extension reads, so an unreadable branch does not refuse.
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+        onlyBinding(project, BRANCH, ref);
+        IProject empty = mock(IProject.class);
+        emptyDependentFile(empty, "Empty"); //$NON-NLS-1$
+        IInfobaseAssociationContextProvider provider = currentIs(CHECKED_OUT);
+        when(provider.get(empty)).thenThrow(new InfobaseAssociationException("no context")); //$NON-NLS-1$
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, provider, () -> List.of(empty), project,
+            SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":true")); //$NON-NLS-1$
+        verify(manager).dissociate(project, ref, BRANCH);
+    }
+
+    @Test
+    public void theProjectsOwnFileFilledWhileADependentsBranchIsReadRefusesTheDetach() throws IOException
+    {
+        // EDT deletes the project's whole file under a branch that is not checked out. An entry written into it while
+        // the re-check asks EDT about a dependent must still stop the deletion: the file the write deletes is read
+        // last.
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+        Path own = onlyBinding(project, BRANCH, ref);
+        IProject spared = boundDependent(manager, "Spared", "SparedBase"); //$NON-NLS-1$ //$NON-NLS-2$
+        IInfobaseAssociationContextProvider provider = currentIs(CHECKED_OUT);
+        when(provider.get(spared)).thenReturn(BRANCH).thenAnswer(invocation -> {
+            Files.write(own, Arrays.asList(infobasesLine(ref) + ";" + STALE), StandardCharsets.ISO_8859_1); //$NON-NLS-1$
+            return BRANCH;
+        });
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, provider, () -> List.of(spared), project,
+            SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("the re-check must see the entry written meanwhile: " + result, //$NON-NLS-1$
+            result.contains("The bindings changed while this detach from '" + FULL + "' was being checked: its " //$NON-NLS-1$ //$NON-NLS-2$
+                + "binding file now also holds: infobase entry " + STALE)); //$NON-NLS-1$
+        verify(manager, never()).dissociate(any(), any(), any());
+    }
+
+    @Test
+    public void aCheckoutOfTheProjectWhileTheDependentsAreReCheckedRefusesACheckedOutBranchDetach()
+    {
+        // From the branch EDT reads, EDT rewrites the project's file; once another branch is checked out it deletes
+        // it whole, sibling and all. The checkout lands while the re-check asks EDT about a dependent, so the
+        // project's own branch must be read after the dependents, as the last read before EDT's write.
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        InfobaseReference sibling = infobase("SiblingBase"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref, sibling));
+        IProject spared = boundDependent(manager, "Spared", "SparedBase"); //$NON-NLS-1$ //$NON-NLS-2$
+        AtomicReference<InfobaseAssociationContext> projectReads = new AtomicReference<>(BRANCH);
+        IInfobaseAssociationContextProvider provider = mock(IInfobaseAssociationContextProvider.class);
+        when(provider.get(project)).thenAnswer(invocation -> projectReads.get());
+        when(provider.get(spared)).thenReturn(BRANCH).thenAnswer(invocation -> {
+            projectReads.set(CHECKED_OUT);
+            return BRANCH;
+        });
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, provider, () -> List.of(spared), project,
+            SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("the re-check must name the checkout: " + result, //$NON-NLS-1$
+            result.contains("the branch EDT reads for this project changed from '" + SHORT + "' to 'master'")); //$NON-NLS-1$ //$NON-NLS-2$
         verify(manager, never()).dissociate(any(), any(), any());
     }
 

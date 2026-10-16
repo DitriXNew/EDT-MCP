@@ -14,6 +14,7 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -26,6 +27,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.eclipse.core.resources.IProject;
 import org.junit.Test;
@@ -39,6 +42,7 @@ import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAssociationSett
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
+import com.ditrix.edt.mcp.server.utils.git.BranchBindingLock;
 
 /**
  * Tests for {@link CreateGitBranchTool}.
@@ -324,5 +328,62 @@ public class CreateGitBranchToolTest
             warnings.get(0).contains("switch_git_branch")); //$NON-NLS-1$
         assertFalse("nor the refusal's explanation: " + warnings, warnings.get(0).contains("CHECKED-OUT")); //$NON-NLS-1$ //$NON-NLS-2$
         assertTrue(ok.toJson(), ok.toJson().contains("\"bound\"")); //$NON-NLS-1$
+    }
+
+    @Test(timeout = 60_000)
+    public void theAttachAtCreationWaitsWhileACheckoutHoldsTheSharedLock() throws Exception
+    {
+        // The attach is a binding write: it takes the lock set_branch_infobase's binding changes and this server's
+        // checkouts take (#656), so it cannot land inside a detach's re-check.
+        CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Thread checkout = new Thread(() -> {
+            if (BranchBindingLock.tryLock())
+            {
+                try
+                {
+                    held.countDown();
+                    release.await(30, TimeUnit.SECONDS);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                }
+                finally
+                {
+                    BranchBindingLock.unlock();
+                }
+            }
+        });
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        CountDownLatch attached = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            attached.countDown();
+            return null;
+        }).when(manager).associate(any(), any(), any());
+        List<String> warnings = new ArrayList<>();
+        Thread attach = new Thread(() -> CreateGitBranchTool.bindResolved(manager, project, SHORT, FULL, "app1", //$NON-NLS-1$
+            ref, false, ToolResult.success(), warnings));
+        checkout.start();
+        try
+        {
+            assertTrue("the checkout must take the lock", held.await(10, TimeUnit.SECONDS)); //$NON-NLS-1$
+            attach.start();
+            assertFalse("the attach must wait while a checkout holds the lock", //$NON-NLS-1$
+                attached.await(500, TimeUnit.MILLISECONDS));
+            release.countDown();
+            assertTrue("the attach must go on once the checkout is done", //$NON-NLS-1$
+                attached.await(10, TimeUnit.SECONDS));
+            attach.join(10_000);
+            assertTrue("no warning expected: " + warnings, warnings.isEmpty()); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            checkout.join(10_000);
+            attach.join(10_000);
+        }
     }
 }

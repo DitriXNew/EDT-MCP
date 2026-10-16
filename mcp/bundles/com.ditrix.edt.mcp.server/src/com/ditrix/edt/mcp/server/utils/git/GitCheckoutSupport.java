@@ -36,6 +36,10 @@ import com.ditrix.edt.mcp.server.utils.McpJobs;
  * that was simply never checked out), only the Job/refresh mechanics are shared
  * here.
  * <p>
+ * The checkout runs under {@link BranchBindingLock}, the lock {@code set_branch_infobase}'s binding changes take
+ * (#656), so no checkout of this server lands between a detach's re-check and EDT's write; a call that waits
+ * {@link BranchBindingLock#WAIT_SECONDS} for it checks nothing out ({@link CheckoutOutcome#busy()}).
+ * <p>
  * Never touches the UI thread; bounded by {@link #CHECKOUT_TIMEOUT_SECONDS}
  * (mirrors {@code CreateInfobaseTool}'s Job pattern). The unconditional
  * post-checkout refresh exists because on the {@link GitRepositoryResolver}
@@ -67,7 +71,9 @@ public final class GitCheckoutSupport
      * {@link #CHECKOUT_TIMEOUT_SECONDS} and was cancelled;</li>
      * <li>{@link #interrupted()} - the waiting thread was interrupted (the interrupt
      * flag has already been restored on it);</li>
-     * <li>{@link #jobError()} - the checkout itself threw a {@link CoreException}.</li>
+     * <li>{@link #jobError()} - the checkout itself threw a {@link CoreException};</li>
+     * <li>{@link #busy()} - another infobase-binding change or checkout held
+     * {@link BranchBindingLock} for the whole wait, so nothing was checked out.</li>
      * </ul>
      */
     public static final class CheckoutOutcome
@@ -82,14 +88,17 @@ public final class GitCheckoutSupport
 
         private final Exception jobError;
 
+        private final boolean busy;
+
         private CheckoutOutcome(CheckoutResult result, String refreshWarning, boolean timedOut,
-            boolean interrupted, Exception jobError)
+            boolean interrupted, Exception jobError, boolean busy)
         {
             this.result = result;
             this.refreshWarning = refreshWarning;
             this.timedOut = timedOut;
             this.interrupted = interrupted;
             this.jobError = jobError;
+            this.busy = busy;
         }
 
         /**
@@ -101,7 +110,7 @@ public final class GitCheckoutSupport
         static CheckoutOutcome forTest(CheckoutResult result, String refreshWarning, boolean timedOut,
             boolean interrupted, Exception jobError)
         {
-            return new CheckoutOutcome(result, refreshWarning, timedOut, interrupted, jobError);
+            return new CheckoutOutcome(result, refreshWarning, timedOut, interrupted, jobError, false);
         }
 
         /**
@@ -110,7 +119,7 @@ public final class GitCheckoutSupport
          */
         public boolean ranToCompletion()
         {
-            return !timedOut && !interrupted && jobError == null;
+            return !timedOut && !interrupted && jobError == null && !busy;
         }
 
         /** @return JGit's checkout result, or {@code null} unless {@link #ranToCompletion()}. */
@@ -145,6 +154,16 @@ public final class GitCheckoutSupport
         {
             return jobError;
         }
+
+        /**
+         * @return {@code true} if another infobase-binding change or checkout held {@link BranchBindingLock} for
+         *         the whole {@link BranchBindingLock#WAIT_SECONDS}: nothing was checked out
+         *         ({@link BranchBindingLock#busyReason()} words it)
+         */
+        public boolean busy()
+        {
+            return busy;
+        }
     }
 
     /**
@@ -157,12 +176,35 @@ public final class GitCheckoutSupport
      * {@link CheckoutOutcome#refreshWarning()} rather than failing the
      * already-successful checkout.
      *
+     * <p>
+     * Runs under {@link BranchBindingLock} (see the class javadoc), taken before anything is built and released
+     * when the join returns: a Job that outlived {@link #CHECKOUT_TIMEOUT_SECONDS} and was cancelled may still be
+     * finishing after that, outside the lock.
+     *
      * @param project the project to refresh after a successful checkout
      * @param repo the repository to check out in
      * @param fullRef the full ref to check out (e.g. {@code refs/heads/feature/x})
      * @return the bounded outcome (never {@code null})
      */
     public static CheckoutOutcome checkout(IProject project, Repository repo, String fullRef)
+    {
+        if (!BranchBindingLock.tryLock())
+        {
+            boolean interrupted = Thread.currentThread().isInterrupted();
+            return new CheckoutOutcome(null, null, false, interrupted, null, !interrupted);
+        }
+        try
+        {
+            return checkoutLocked(project, repo, fullRef);
+        }
+        finally
+        {
+            BranchBindingLock.unlock();
+        }
+    }
+
+    /** {@link #checkout} under {@link BranchBindingLock}. */
+    private static CheckoutOutcome checkoutLocked(IProject project, Repository repo, String fullRef)
     {
         BranchOperation op = new BranchOperation(repo, fullRef);
         AtomicReference<Exception> jobError = new AtomicReference<>();
@@ -205,20 +247,20 @@ public final class GitCheckoutSupport
             if (!finished)
             {
                 checkoutJob.cancel();
-                return new CheckoutOutcome(null, null, true, false, null);
+                return new CheckoutOutcome(null, null, true, false, null, false);
             }
         }
         catch (InterruptedException e)
         {
             Thread.currentThread().interrupt();
-            return new CheckoutOutcome(null, null, false, true, null);
+            return new CheckoutOutcome(null, null, false, true, null, false);
         }
 
         if (jobError.get() != null)
         {
-            return new CheckoutOutcome(null, null, false, false, jobError.get());
+            return new CheckoutOutcome(null, null, false, false, jobError.get(), false);
         }
-        return new CheckoutOutcome(op.getResult(repo), refreshWarning.get(), false, false, null);
+        return new CheckoutOutcome(op.getResult(repo), refreshWarning.get(), false, false, null, false);
     }
 
     /**
