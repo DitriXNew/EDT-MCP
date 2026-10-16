@@ -18,6 +18,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -647,7 +648,8 @@ public class SetBranchInfobaseToolTest
     public void aRefusalThatListsADependentNamesWhatTheCheckoutDoesNotSave()
     {
         // After the checkout EDT still deletes the same-named file of a dependent whose current context does
-        // not follow it (another repository), so "removes only this binding" would be false advice here.
+        // not follow it (another repository), so "removes only this binding" would be false advice here - and
+        // that detach is refused too, so the advice must not promise it goes through.
         IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
         IProject project = mock(IProject.class);
         IProject extension = mock(IProject.class);
@@ -663,11 +665,13 @@ public class SetBranchInfobaseToolTest
         assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
         assertTrue("the remedy must name the dependent residual: " + result, //$NON-NLS-1$
             result.contains("Check the branch out (switch_git_branch '" + SHORT + "') and detach again: from the " //$NON-NLS-1$ //$NON-NLS-2$
-                + "checked-out branch EDT keeps this project's other bindings, but a dependent extension project " //$NON-NLS-1$
-                + "listed above that does not follow the checkout (one in another repository) still loses its " //$NON-NLS-1$
-                + "binding to this branch.")); //$NON-NLS-1$
+                + "checked-out branch EDT keeps this project's other bindings, but it still deletes the binding file " //$NON-NLS-1$
+                + "of a dependent extension project listed above that does not follow the checkout (one in another " //$NON-NLS-1$
+                + "repository), so that detach is refused as well unless the extension reads this branch too.")); //$NON-NLS-1$
         assertFalse("no 'only this binding' claim when a dependent is listed: " + result, //$NON-NLS-1$
             result.contains("removes only this binding")); //$NON-NLS-1$
+        assertFalse("no claim that the detach from the checked-out branch loses the dependent's binding: " + result, //$NON-NLS-1$
+            result.contains("still loses its binding")); //$NON-NLS-1$
         verify(manager, never()).dissociate(any(), any(), any());
     }
 
@@ -1096,7 +1100,7 @@ public class SetBranchInfobaseToolTest
             result.contains("an entry EDT does not show in the binding file of extension project 'Ext' to this " //$NON-NLS-1$
                 + "branch: infobase entry " + STALE)); //$NON-NLS-1$
         assertTrue("a dependent entry gets the dependent remedy: " + result, //$NON-NLS-1$
-            result.contains("still loses its binding to this branch.")); //$NON-NLS-1$
+            result.contains("so that detach is refused as well unless the extension reads this branch too.")); //$NON-NLS-1$
         verify(manager, never()).dissociate(any(), any(), any());
     }
 
@@ -1423,6 +1427,298 @@ public class SetBranchInfobaseToolTest
         assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
         assertTrue("the re-check must name the checkout: " + result, //$NON-NLS-1$
             result.contains("the branch EDT reads for this project changed from '" + SHORT + "' to 'master'")); //$NON-NLS-1$ //$NON-NLS-2$
+        verify(manager, never()).dissociate(any(), any(), any());
+    }
+
+    // ==================== #656: dependents on every detach, and the dependents EDT spares ====================
+    //
+    // EDT's handler runs for the project AND each dependent extension project, and deletes the same-named file of
+    // each one whose OWN current context differs from the one dissociated in - on a detach from the checked-out
+    // branch too. A dependent it spares because it reads that context is spared only while it still reads it.
+
+    /** A provider under which {@code project} has the branch under test checked out and everything else 'master'. */
+    private static IInfobaseAssociationContextProvider projectReadsTheBranch(IProject project)
+    {
+        IInfobaseAssociationContextProvider provider = currentIs(CHECKED_OUT);
+        when(provider.get(project)).thenReturn(BRANCH);
+        return provider;
+    }
+
+    @Test
+    public void aDetachFromTheCheckedOutBranchThatWouldDeleteADependentsBindingIsRefusedNamingIt()
+    {
+        // The extension lives in another repository: it reads 'master', not the branch detached from.
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        IProject extension = mock(IProject.class);
+        when(extension.getName()).thenReturn("Ext"); //$NON-NLS-1$
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+        InfobaseReference extBase = infobase("ExtBase"); //$NON-NLS-1$
+        when(manager.getAssociation(extension, BRANCH)).thenReturn(association(extBase));
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, projectReadsTheBranch(project),
+            () -> List.of(extension), project, SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("the refusal must say why: " + result, //$NON-NLS-1$
+            result.contains("Branch '" + SHORT + "' is the branch EDT reads now, so EDT keeps this project's other " //$NON-NLS-1$ //$NON-NLS-2$
+                + "bindings to it, but it deletes the same-named binding file of each dependent extension project " //$NON-NLS-1$
+                + "that does not read this branch now")); //$NON-NLS-1$
+        assertTrue("the refusal must name the extension and its base: " + result, //$NON-NLS-1$
+            result.contains("would also remove: the binding of extension project 'Ext' to this branch (ExtBase).")); //$NON-NLS-1$
+        assertTrue("the refusal must say when EDT keeps the file: " + result, //$NON-NLS-1$
+            result.contains("Nothing was changed. EDT keeps such a file only while the extension project reads this " //$NON-NLS-1$
+                + "same branch (the branch checked out in its own repository).")); //$NON-NLS-1$
+        verify(manager, never()).dissociate(any(), any(), any());
+    }
+
+    @Test
+    public void aStaleEntryInADependentsFileRefusesADetachFromTheCheckedOutBranch() throws IOException
+    {
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        IProject extension = mock(IProject.class);
+        when(extension.getName()).thenReturn("Ext"); //$NON-NLS-1$
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+        bindingFile(storeOf(extension), BRANCH, "Infobases=" + STALE); //$NON-NLS-1$
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, projectReadsTheBranch(project),
+            () -> List.of(extension), project, SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("the refusal must name the extension's entry: " + result, //$NON-NLS-1$
+            result.contains("an entry EDT does not show in the binding file of extension project 'Ext' to this " //$NON-NLS-1$
+                + "branch: infobase entry " + STALE)); //$NON-NLS-1$
+        assertTrue("the refusal must explain the hidden entry: " + result, //$NON-NLS-1$
+            result.contains("An entry EDT does not show is still a record in the file")); //$NON-NLS-1$
+        verify(manager, never()).dissociate(any(), any(), any());
+    }
+
+    @Test
+    public void aDependentThatReadsTheCheckedOutBranchTooKeepsItsFileSoTheDetachGoesThrough()
+    {
+        // The extension is in the same repository: it follows the checkout and EDT keeps its file.
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        IProject extension = mock(IProject.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+        InfobaseReference extBase = infobase("ExtBase"); //$NON-NLS-1$
+        when(manager.getAssociation(extension, BRANCH)).thenReturn(association(extBase));
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, currentIs(BRANCH), () -> List.of(extension),
+            project, SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":true")); //$NON-NLS-1$
+        verify(manager).dissociate(project, ref, BRANCH);
+        assertFalse("a detach in the checked-out branch needs no note: " + result, //$NON-NLS-1$
+            result.contains("\"message\"")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void aDependentThatReadsAnotherBranchWithNoFileUnderThisOneLetsACheckedOutBranchDetachGoThrough()
+        throws IOException
+    {
+        // The extension reads 'master', so EDT would delete its file under the branch - but it has none there:
+        // nothing would be lost, so a detach from the checked-out branch is not refused for it.
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        IProject extension = mock(IProject.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+        storeOf(extension);
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, projectReadsTheBranch(project),
+            () -> List.of(extension), project, SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":true")); //$NON-NLS-1$
+        verify(manager).dissociate(project, ref, BRANCH);
+    }
+
+    @Test
+    public void aDependentThatReadsAnotherBranchWithAnEmptyFileUnderThisOneLetsACheckedOutBranchDetachGoThrough()
+        throws IOException
+    {
+        // EDT deletes the extension's file under the branch, but the file holds only EDT's header comment.
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        IProject extension = mock(IProject.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+        bindingFile(storeOf(extension), BRANCH, "#Infobase association data of the project"); //$NON-NLS-1$
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, projectReadsTheBranch(project),
+            () -> List.of(extension), project, SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":true")); //$NON-NLS-1$
+        verify(manager).dissociate(project, ref, BRANCH);
+    }
+
+    @Test
+    public void aDependentWhoseCurrentContextCannotBeReadRefusesADetachFromTheCheckedOutBranch()
+    {
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        IProject extension = mock(IProject.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+        InfobaseReference extBase = infobase("ExtBase"); //$NON-NLS-1$
+        when(manager.getAssociation(extension, BRANCH)).thenReturn(association(extBase));
+        IInfobaseAssociationContextProvider provider = projectReadsTheBranch(project);
+        when(provider.get(extension)).thenThrow(new InfobaseAssociationException("no context")); //$NON-NLS-1$
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, provider, () -> List.of(extension), project,
+            SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue(result, result.contains("no context")); //$NON-NLS-1$
+        verify(manager, never()).dissociate(any(), any(), any());
+    }
+
+    @Test
+    public void dependentsThatCannotBeListedRefuseADetachFromTheCheckedOutBranch()
+    {
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, currentIs(BRANCH), () -> {
+            throw new IllegalStateException("IV8ProjectManager service is not available"); //$NON-NLS-1$
+        }, project, SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue(result, result.contains("IV8ProjectManager service is not available")); //$NON-NLS-1$
+        assertTrue(result, result.contains("Nothing was changed.")); //$NON-NLS-1$
+        verify(manager, never()).dissociate(any(), any(), any());
+    }
+
+    @Test
+    public void aDependentsFileThatGainsAnEntryWhileACheckedOutBranchDetachIsCheckedRefusesIt() throws IOException
+    {
+        // The dependent's file was empty when the plan read it; the second dependent's store lookup, which comes
+        // after, writes an entry into it. The re-check before EDT's write must see it.
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        IProject extension = mock(IProject.class);
+        IProject later = mock(IProject.class);
+        when(extension.getName()).thenReturn("Ext"); //$NON-NLS-1$
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+        Path extensionStore = storeOf(extension);
+        when(later.getWorkingLocation(STORE_BUNDLE)).thenAnswer(invocation -> {
+            bindingFile(extensionStore, BRANCH, "Infobases=" + STALE); //$NON-NLS-1$
+            return null;
+        });
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, projectReadsTheBranch(project),
+            () -> List.of(extension, later), project, SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("the re-check must name the dependent's new entry: " + result, //$NON-NLS-1$
+            result.contains("The bindings changed while this detach from '" + FULL + "' was being checked: the " //$NON-NLS-1$ //$NON-NLS-2$
+                + "binding file of extension project 'Ext' now holds: infobase entry " + STALE)); //$NON-NLS-1$
+        verify(manager, never()).dissociate(any(), any(), any());
+    }
+
+    @Test
+    public void aDependentThatChecksOutAnotherBranchWhileTheDetachIsCheckedRefusesIt() throws IOException
+    {
+        // EDT spares the extension's non-empty file because the extension reads this branch at plan time; a
+        // checkout of the extension (switch_git_branch, EDT's UI - neither takes this tool's lock) before EDT's
+        // write would make EDT delete it.
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        IProject extension = mock(IProject.class);
+        when(extension.getName()).thenReturn("Ext"); //$NON-NLS-1$
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+        onlyBinding(project, BRANCH, ref);
+        InfobaseReference extBase = infobase("ExtBase"); //$NON-NLS-1$
+        when(manager.getAssociation(extension, BRANCH)).thenReturn(association(extBase));
+        IInfobaseAssociationContextProvider provider = currentIs(CHECKED_OUT);
+        when(provider.get(extension)).thenReturn(BRANCH, CHECKED_OUT);
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, provider, () -> List.of(extension), project,
+            SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("the re-check must name the extension's checkout: " + result, //$NON-NLS-1$
+            result.contains("The bindings changed while this detach from '" + FULL + "' was being checked: " //$NON-NLS-1$ //$NON-NLS-2$
+                + "extension project 'Ext' no longer reads this branch (it reads 'master' now), so EDT would delete " //$NON-NLS-1$
+                + "the binding it keeps for this branch")); //$NON-NLS-1$
+        verify(manager, never()).dissociate(any(), any(), any());
+    }
+
+    @Test
+    public void aDependentThatChecksOutAnotherBranchWhileACheckedOutBranchDetachIsCheckedRefusesIt()
+    {
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        IProject extension = mock(IProject.class);
+        when(extension.getName()).thenReturn("Ext"); //$NON-NLS-1$
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+        InfobaseReference extBase = infobase("ExtBase"); //$NON-NLS-1$
+        when(manager.getAssociation(extension, BRANCH)).thenReturn(association(extBase));
+        IInfobaseAssociationContextProvider provider = projectReadsTheBranch(project);
+        when(provider.get(extension)).thenReturn(BRANCH, CHECKED_OUT);
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, provider, () -> List.of(extension), project,
+            SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("the re-check must name the extension's checkout: " + result, //$NON-NLS-1$
+            result.contains("The bindings changed while this detach from '" + FULL + "' was being checked: " //$NON-NLS-1$ //$NON-NLS-2$
+                + "extension project 'Ext' no longer reads this branch (it reads 'master' now)")); //$NON-NLS-1$
+        verify(manager, never()).dissociate(any(), any(), any());
+    }
+
+    @Test
+    public void aDependentThatStillReadsTheBranchAtTheReCheckLetsTheDetachGoThrough()
+    {
+        // The re-check reads the extension's context again and finds it unchanged: no refusal.
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        IProject extension = mock(IProject.class);
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+        InfobaseReference extBase = infobase("ExtBase"); //$NON-NLS-1$
+        when(manager.getAssociation(extension, BRANCH)).thenReturn(association(extBase));
+        IInfobaseAssociationContextProvider provider = projectReadsTheBranch(project);
+        when(provider.get(extension)).thenReturn(BRANCH);
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, provider, () -> List.of(extension), project,
+            SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":true")); //$NON-NLS-1$
+        verify(manager).dissociate(project, ref, BRANCH);
+        verify(provider, times(2)).get(extension);
+    }
+
+    @Test
+    public void anExtensionThatAppearsWhileTheDetachIsCheckedRefusesIt() throws IOException
+    {
+        // The plan checked no dependent; one listed by the re-check was never checked, and EDT may delete its file.
+        IInfobaseAssociationManager manager = mock(IInfobaseAssociationManager.class);
+        IProject project = mock(IProject.class);
+        IProject extension = mock(IProject.class);
+        when(extension.getName()).thenReturn("Ext"); //$NON-NLS-1$
+        InfobaseReference ref = infobase("Base1"); //$NON-NLS-1$
+        when(manager.getAssociation(project, BRANCH)).thenReturn(association(ref));
+        onlyBinding(project, BRANCH, ref);
+        int[] listed = {0};
+        Supplier<Collection<IProject>> growing = () -> listed[0]++ == 0 ? List.of() : List.of(extension);
+
+        String result = SetBranchInfobaseTool.applyResolved(manager, currentIs(CHECKED_OUT), growing, project,
+            SHORT, "app1", ref, false, false); //$NON-NLS-1$
+
+        assertTrue(result, result.contains("\"success\":false")); //$NON-NLS-1$
+        assertTrue("the re-check must name the new dependent: " + result, //$NON-NLS-1$
+            result.contains("The bindings changed while this detach from '" + FULL + "' was being checked: " //$NON-NLS-1$ //$NON-NLS-2$
+                + "extension project 'Ext' now depends on this project")); //$NON-NLS-1$
         verify(manager, never()).dissociate(any(), any(), any());
     }
 
