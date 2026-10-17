@@ -23,8 +23,11 @@ import java.util.Properties;
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.resources.IWorkspace;
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.ICoreRunnable;
 import org.eclipse.core.runtime.Platform;
+import org.eclipse.core.runtime.jobs.MultiRule;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EEnumLiteral;
 import org.eclipse.emf.ecore.EObject;
@@ -203,12 +206,21 @@ public final class TemplateContentSupport
 
     private static void requireEmpty(BasicTemplate template, IFile file, IDtProject project)
     {
+        if (project == null && template.getTemplate() instanceof SpreadsheetDocument)
+        {
+            throw Refusals.state("Project services are not available yet; retry after the project is ready."); //$NON-NLS-1$
+        }
         if (hasContent(template, file, project))
         {
-            throw Refusals.argument("Cannot change templateType: template '" + template.getName() //$NON-NLS-1$
-                + "' already has content. Keep its type, or use create_metadata to create a separate " //$NON-NLS-1$
-                + "TextDocument or SpreadsheetDocument template."); //$NON-NLS-1$
+            throw contentRefusal(template);
         }
+    }
+
+    private static IllegalArgumentException contentRefusal(BasicTemplate template)
+    {
+        return Refusals.argument("Cannot change templateType: template '" + template.getName() //$NON-NLS-1$
+            + "' already has content. Keep its type, or use create_metadata to create a separate " //$NON-NLS-1$
+            + "TextDocument or SpreadsheetDocument template."); //$NON-NLS-1$
     }
 
     /** Conservative for other content models; spreadsheet creation defaults are not authored content. */
@@ -324,8 +336,36 @@ public final class TemplateContentSupport
         {
             return refusal;
         }
-        String current = readText(file);
         String expected = spec.has(EXPECTED_HASH) ? spec.get(EXPECTED_HASH).getAsString() : null;
+        refusal = expectedHashError(file, expected);
+        if (refusal != null)
+        {
+            return refusal;
+        }
+        String[] lateError = new String[1];
+        try
+        {
+            IWorkspace workspace = file.getWorkspace();
+            // Already inside the BM write lambda: setContents acquires this same file rule there,
+            // so holding it across the final check and write adds no new lock class.
+            ICoreRunnable operation = monitor -> {
+                lateError[0] = expectedHashError(file, expected);
+                if (lateError[0] == null)
+                {
+                    lateError[0] = writeTextContents(file, spec.get(TEXT).getAsString(), context);
+                }
+            };
+            workspace.run(operation, workspace.getRuleFactory().modifyRule(file), IWorkspace.AVOID_UPDATE, null);
+            return lateError[0];
+        }
+        catch (CoreException error)
+        {
+            throw textWriteFailure(error);
+        }
+    }
+
+    private static String expectedHashError(IFile file, String expected)
+    {
         if (expected != null && !expected.isEmpty())
         {
             if (file == null || !file.exists())
@@ -334,6 +374,7 @@ public final class TemplateContentSupport
                     + "To create its content omit expectedHash; otherwise re-check with get_metadata_details.") //$NON-NLS-1$
                     .toJson();
             }
+            String current = readText(file);
             if (!ContentHash.matches(current, expected))
             {
                 return ToolResult.error("expectedHash does not match the current template text; nothing was " //$NON-NLS-1$
@@ -341,15 +382,19 @@ public final class TemplateContentSupport
                     + ". Read get_metadata_details again and retry with that contentHash.").toJson(); //$NON-NLS-1$
             }
         }
+        return null;
+    }
+
+    private static String writeTextContents(IFile file, String text, Context context)
+    {
         try
         {
             boolean exists = file.exists();
             byte[] old = exists ? bytes(file) : new byte[0];
             boolean bom = old.length >= 3 && (old[0] & 0xFF) == 0xEF && (old[1] & 0xFF) == 0xBB
                 && (old[2] & 0xFF) == 0xBF;
-            Charset charset = bom || !exists ? StandardCharsets.UTF_8
+            Charset charset = bom ? StandardCharsets.UTF_8
                 : Charset.forName(file.getCharset());
-            String text = spec.get(TEXT).getAsString();
             final byte[] encoded;
             try
             {
@@ -376,8 +421,13 @@ public final class TemplateContentSupport
         }
         catch (CoreException | IOException error)
         {
-            throw new IllegalStateException("Cannot write Template.txt; refresh the project and retry: " + error.getMessage(), error); //$NON-NLS-1$
+            throw textWriteFailure(error);
         }
+    }
+
+    private static IllegalStateException textWriteFailure(Exception error)
+    {
+        return new IllegalStateException("Cannot write Template.txt; refresh the project and retry: " + error.getMessage(), error); //$NON-NLS-1$
     }
 
     /** Preserve actual line separators and the final newline, reusing the module file decoder. */
@@ -533,14 +583,29 @@ public final class TemplateContentSupport
             {
                 beforeWrite(newFile);
             }
+            // The model is retyped first: deleting an attached spreadsheet's Template.mxlx before the
+            // content is detached turns it into an unresolved proxy, which the guard reads as content.
             String fqn = TemplateContentSupport.retype(template, type, tx, dtProject,
                 activator.getTopObjectFqnGenerator(), oldType == TemplateType.TEXT_DOCUMENT ? oldFile : newFile);
             try
             {
                 if (oldFile.exists() && !oldFile.equals(newFile))
                 {
-                    beforeWrite(oldFile);
-                    oldFile.delete(IResource.KEEP_HISTORY, null);
+                    IWorkspace workspace = oldFile.getWorkspace();
+                    var rules = workspace.getRuleFactory();
+                    ICoreRunnable operation = monitor -> {
+                        // An editor may have saved text since the early guard. The final check and the
+                        // delete hold both file rules; a refusal here escapes the BM write lambda, so the
+                        // transaction rolls the retype back and nothing is deleted.
+                        if (oldType == TemplateType.TEXT_DOCUMENT && !readText(oldFile).isEmpty())
+                        {
+                            throw contentRefusal(template);
+                        }
+                        beforeWrite(oldFile);
+                        oldFile.delete(IResource.KEEP_HISTORY, null);
+                    };
+                    workspace.run(operation, MultiRule.combine(rules.modifyRule(oldFile), rules.deleteRule(oldFile)),
+                        IWorkspace.AVOID_UPDATE, null);
                 }
             }
             catch (CoreException error)

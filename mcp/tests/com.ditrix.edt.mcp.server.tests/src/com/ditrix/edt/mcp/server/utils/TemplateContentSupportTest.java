@@ -19,17 +19,30 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.IProject;
+import org.eclipse.core.resources.IResourceRuleFactory;
+import org.eclipse.core.resources.IWorkspace;
+import org.eclipse.core.runtime.ICoreRunnable;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.Path;
+import org.eclipse.core.runtime.jobs.ISchedulingRule;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.InternalEObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.Test;
 
+import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
+import com._1c.g5.v8.bm.integration.AbstractBmTask;
+import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.dt.core.filesystem.IProjectFileSystemSupport;
+import com._1c.g5.v8.dt.core.filesystem.IProjectFileSystemSupportProvider;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
+import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
+import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.md.MdPlugin;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
@@ -37,6 +50,8 @@ import com._1c.g5.v8.dt.moxel.MoxelCorePlugin;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
 import com._1c.g5.v8.dt.moxel.sheet.SheetFactory;
 import com._1c.g5.v8.dt.platform.version.Version;
+import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.tools.impl.ModifyMetadataTool;
 import com.google.inject.Injector;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -149,8 +164,7 @@ public class TemplateContentSupportTest
     {
         BasicTemplate template = spreadsheet();
         assertFalse(TemplateContentSupport.hasContent(template, null));
-        initialize("retype", template, TemplateType.TEXT_DOCUMENT, new MemoryFile(null));
-        assertSame(TemplateType.TEXT_DOCUMENT, template.getTemplateType());
+        assertEmptyWizardRetype(TemplateType.TEXT_DOCUMENT);
     }
 
     @Test public void testSpreadsheetPrintSettingCountsAsContentAndRetypeKeepsModel() throws Exception
@@ -225,19 +239,91 @@ public class TemplateContentSupportTest
 
     @Test public void testRetypeEmptySpreadsheetToTextAllowed() throws Exception
     {
-        BasicTemplate template = spreadsheet();
-        MemoryFile file = new MemoryFile(null);
-        initialize("retype", template, TemplateType.TEXT_DOCUMENT, file);
-        assertSame(TemplateType.TEXT_DOCUMENT, template.getTemplateType());
-        assertArrayEquals(new byte[0], file.bytes.get());
+        assertEmptyWizardRetype(TemplateType.TEXT_DOCUMENT);
     }
 
     @Test public void testRetypeEmptySpreadsheetToDcsLeavesTheSchemaToTheDcsTool() throws Exception
     {
-        BasicTemplate template = spreadsheet();
-        initialize("retype", template, TemplateType.DATA_COMPOSITION_SCHEMA, new MemoryFile(null));
-        assertSame(TemplateType.DATA_COMPOSITION_SCHEMA, template.getTemplateType());
-        assertNull(template.getTemplate());
+        assertEmptyWizardRetype(TemplateType.DATA_COMPOSITION_SCHEMA);
+    }
+
+    @Test public void testRetypeWizardSpreadsheetWithoutProjectRequestsRetry() throws Exception
+    {
+        try (AutoCloseable wizard = wizardServices())
+        {
+            BasicTemplate template = template(TemplateType.SPREADSHEET_DOCUMENT);
+            template.setTemplate(SheetFactory.createInteractiveSpreadsheetDocument(mock(IDtProject.class)));
+            EObject content = template.getTemplate();
+            IBmTransaction tx = mock(IBmTransaction.class);
+            try
+            {
+                call("retype", INIT, template, TemplateType.DATA_COMPOSITION_SCHEMA, tx, null, null, null);
+                fail("Retype without project services must ask the caller to retry");
+            }
+            catch (RuntimeException expected)
+            {
+                assertProjectRetry(expected);
+            }
+            assertSame(TemplateType.SPREADSHEET_DOCUMENT, template.getTemplateType());
+            assertSame(content, template.getTemplate());
+            verifyZeroInteractions(tx);
+        }
+    }
+
+    @Test public void testRetypeWithoutProjectManagerRequestsRetry() throws Exception
+    {
+        assertContextProjectRetry(false);
+    }
+
+    @Test public void testRetypeWithUnreadyProjectRequestsRetry() throws Exception
+    {
+        assertContextProjectRetry(true);
+    }
+
+    @Test public void testConcurrentSaveBeforeRetypeDeleteRefusesAndKeepsFile() throws Exception
+    {
+        MemoryFile oldFile = new MemoryFile("");
+        MemoryFile newFile = new MemoryFile(null);
+        oldFile.pendingSave = "concurrent editor text".getBytes(StandardCharsets.UTF_8);
+        BasicTemplate template = template(TemplateType.TEXT_DOCUMENT);
+        IBmTransaction tx = mock(IBmTransaction.class);
+        try (TemplateServices services = new TemplateServices(oldFile, newFile);
+            TemplateContentSupport.Context context = new TemplateContentSupport.Context(services.project))
+        {
+            try
+            {
+                context.retype(template, TemplateType.DATA_COMPOSITION_SCHEMA, tx);
+                context.commit();
+                fail("A save between the empty check and delete must prevent retyping");
+            }
+            catch (IllegalArgumentException expected)
+            {
+                assertTrue(expected.getMessage(), expected.getMessage().contains("already has content"));
+                assertTrue(expected.getMessage(), expected.getMessage().contains("create_metadata"));
+            }
+            // The in-memory retype is undone by the BM transaction in production: the refusal escapes
+            // the write lambda. Here only the file side is observable.
+        }
+        assertArrayEquals("concurrent editor text".getBytes(StandardCharsets.UTF_8), oldFile.bytes.get());
+        assertNull(newFile.bytes.get());
+        verify(oldFile.file, never()).delete(anyInt(), any());
+        verify(oldFile.file, never()).setContents(any(InputStream.class), anyInt(), any());
+    }
+
+    @Test public void testEmptyTextRetypeChecksAndDeletesUnderBothFileRules() throws Exception
+    {
+        MemoryFile oldFile = new MemoryFile("");
+        try (TemplateServices services = new TemplateServices(oldFile, new MemoryFile(null));
+            TemplateContentSupport.Context context = new TemplateContentSupport.Context(services.project))
+        {
+            BasicTemplate template = template(TemplateType.TEXT_DOCUMENT);
+            context.retype(template, TemplateType.DATA_COMPOSITION_SCHEMA, mock(IBmTransaction.class));
+            context.commit();
+            assertSame(TemplateType.DATA_COMPOSITION_SCHEMA, template.getTemplateType());
+        }
+        assertNull(oldFile.bytes.get());
+        assertTrue("Final emptiness check must hold the file's modify rule", oldFile.protectedReads > 0);
+        assertTrue("Deletion must hold both modify and delete rules", oldFile.deletedUnderBothRules);
     }
 
     @Test public void testRetypeSpreadsheetWithCellToDcsRefused() throws Exception
@@ -308,9 +394,64 @@ public class TemplateContentSupportTest
         assertEncodingRefused(file, "private text \u6F22");
     }
 
+    @Test public void testNewTextUsesInheritedCharsetAndReadHashMatchesReturnedHash() throws Exception
+    {
+        Charset charset = Charset.forName("windows-1251");
+        MemoryFile file = new MemoryFile(null, charset);
+        String text = "\u041f\u0440\u0438\u0432\u0435\u0442\r\n";
+        BasicTemplate template = mock(BasicTemplate.class, withSettings().extraInterfaces(IBmObject.class));
+        when(template.getTemplateType()).thenReturn(TemplateType.TEXT_DOCUMENT);
+        when(template.getName()).thenReturn("Contract730");
+        IBmObject bm = (IBmObject)template;
+        doReturn(true).when(bm).bmIsTop();
+        doReturn("CommonTemplate.Contract730").when(bm).bmGetFqn();
+        IBmTransaction tx = mock(IBmTransaction.class);
+        when(tx.getObjectById(anyLong())).thenReturn(bm);
+        try (TemplateServices services = new TemplateServices(file, new MemoryFile(null)))
+        {
+            when(services.model.execute(any())).thenAnswer(invocation ->
+                ((AbstractBmTask<?>)invocation.getArgument(0)).execute(tx, null));
+            Class<?> contextType = Class.forName(
+                "com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool$ProjectContext");
+            var constructor = contextType.getDeclaredConstructor();
+            constructor.setAccessible(true);
+            Object context = constructor.newInstance();
+            Field project = contextType.getField("project");
+            project.setAccessible(true);
+            project.set(context, services.project);
+            var write = ModifyMetadataTool.class.getDeclaredMethod("modifyTextTemplateContent", contextType,
+                String.class, BasicTemplate.class, JsonObject.class);
+            write.setAccessible(true);
+            JsonObject spec = new JsonObject();
+            spec.addProperty("text", text);
+            JsonObject result = JsonParser.parseString((String)write.invoke(new ModifyMetadataTool(), context,
+                "CommonTemplate.Contract730", template, spec)).getAsJsonObject();
+            assertTrue(result.toString(), result.get("success").getAsBoolean());
+            String returnedHash = result.getAsJsonObject("template").get("contentHash").getAsString();
+            assertEquals(text, new String(file.bytes.get(), charset));
+            assertEquals(text, TemplateContentSupport.readText(file.file));
+            assertEquals(returnedHash, ContentHash.of(TemplateContentSupport.readText(file.file)));
+        }
+        assertArrayEquals(text.getBytes(charset), file.bytes.get());
+        verify(file.file, never()).setCharset(anyString(), any());
+    }
+
+    @Test public void testNewTextUnrepresentableInInheritedCharsetRefusesBeforeCreate() throws Exception
+    {
+        assertEncodingRefused(new MemoryFile(null, Charset.forName("windows-1251")), "private text \u6F22");
+    }
+
+    @Test public void testNewDefaultUtf8TextHasNoBom() throws Exception
+    {
+        MemoryFile file = new MemoryFile(null);
+        String text = "\u041f\u0440\u0438\u0432\u0435\u0442\n";
+        assertNull(write(template(TemplateType.TEXT_DOCUMENT), file, text, null));
+        assertArrayEquals(text.getBytes(StandardCharsets.UTF_8), file.bytes.get());
+    }
+
     private static void assertEncodingRefused(MemoryFile file, String text) throws Exception
     {
-        byte[] original = file.bytes.get().clone();
+        byte[] original = file.bytes.get() == null ? null : file.bytes.get().clone();
         Class<?> type = Class.forName("com.ditrix.edt.mcp.server.utils.TemplateContentSupport$Context");
         JsonObject spec = new JsonObject();
         spec.addProperty("text", text);
@@ -350,6 +491,37 @@ public class TemplateContentSupportTest
         assertTrue(error, error.contains(ContentHash.of("current\n")));
         assertTrue(error, error.contains("get_metadata_details"));
         assertArrayEquals("current\n".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+    }
+
+    @Test public void testConcurrentSaveBeforeTextWriteRefusesAndPreservesBytes() throws Exception
+    {
+        MemoryFile file = new MemoryFile("original\n");
+        file.pendingSave = "concurrent editor text\n".getBytes(StandardCharsets.UTF_8);
+        try (TemplateContentSupport.Context context = new TemplateContentSupport.Context(null))
+        {
+            JsonObject spec = new JsonObject();
+            spec.addProperty("text", "lost update\n");
+            spec.addProperty("expectedHash", ContentHash.of("original\n"));
+            String error = TemplateContentSupport.writeText(template(TemplateType.TEXT_DOCUMENT), file.file,
+                spec, context);
+            assertNotNull("A save after the early hash check must refuse the write", error);
+            assertFalse(error, JsonParser.parseString(error).getAsJsonObject().get("success").getAsBoolean());
+            assertTrue(error, error.contains(ContentHash.of("concurrent editor text\n")));
+            assertTrue(error, error.contains("get_metadata_details"));
+        }
+        // Closing an uncommitted context must not restore over the concurrent save after refusal.
+        assertArrayEquals("concurrent editor text\n".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+        verify(file.file, never()).setContents(any(InputStream.class), anyInt(), any());
+        verify(file.file, never()).create(any(InputStream.class), anyBoolean(), any(IProgressMonitor.class));
+    }
+
+    @Test public void testFinalTextHashReadAndWriteHoldTheSameModifyRule() throws Exception
+    {
+        MemoryFile file = new MemoryFile("original");
+        assertNull(write(template(TemplateType.TEXT_DOCUMENT), file, "new", ContentHash.of("original")));
+        assertTrue("The final hash read must hold the file's modify rule", file.protectedReads > 0);
+        assertTrue("The write must keep that modify rule", file.modifiedUnderRule);
+        assertArrayEquals("new".getBytes(StandardCharsets.UTF_8), file.bytes.get());
     }
 
     @Test public void testExpectedHashOnMissingFileRefused() throws Exception
@@ -517,7 +689,72 @@ public class TemplateContentSupportTest
     {
         ITopObjectFqnGenerator names = mock(ITopObjectFqnGenerator.class);
         when(names.generateExternalPropertyFqn(any(), any())).thenReturn("Template.Contract.Content");
-        call(method, INIT, template, type, mock(IBmTransaction.class), null, names, file.file);
+        if (method.equals("retype") && template.getTemplate() instanceof SpreadsheetDocument)
+        {
+            try (AutoCloseable services = wizardServices())
+            {
+                call(method, INIT, template, type, mock(IBmTransaction.class), mock(IDtProject.class), names, file.file);
+            }
+        }
+        else
+        {
+            call(method, INIT, template, type, mock(IBmTransaction.class), null, names, file.file);
+        }
+    }
+
+    private static void assertEmptyWizardRetype(TemplateType type) throws Exception
+    {
+        try (AutoCloseable services = wizardServices())
+        {
+            IDtProject project = mock(IDtProject.class);
+            BasicTemplate template = template(TemplateType.SPREADSHEET_DOCUMENT);
+            template.setTemplate(SheetFactory.createInteractiveSpreadsheetDocument(project));
+            MemoryFile file = new MemoryFile(null);
+            call("retype", INIT, template, type, mock(IBmTransaction.class), project, null, file.file);
+            assertSame(type, template.getTemplateType());
+            if (type == TemplateType.TEXT_DOCUMENT) { assertArrayEquals(new byte[0], file.bytes.get()); }
+            else { assertNull(template.getTemplate()); }
+        }
+    }
+
+    private static void assertContextProjectRetry(boolean hasManager) throws Exception
+    {
+        MemoryFile oldFile = new MemoryFile("unchanged spreadsheet sidecar");
+        MemoryFile newFile = new MemoryFile(null);
+        try (AutoCloseable wizard = wizardServices();
+            TemplateServices services = new TemplateServices(newFile, oldFile);
+            TemplateContentSupport.Context context = new TemplateContentSupport.Context(services.project))
+        {
+            if (!hasManager) { when(services.activator.getDtProjectManager()).thenReturn(null); }
+            BasicTemplate template = template(TemplateType.SPREADSHEET_DOCUMENT);
+            template.setTemplate(SheetFactory.createInteractiveSpreadsheetDocument(mock(IDtProject.class)));
+            EObject content = template.getTemplate();
+            IBmTransaction tx = mock(IBmTransaction.class);
+            try
+            {
+                context.retype(template, TemplateType.TEXT_DOCUMENT, tx);
+                fail("Missing project services must ask the caller to retry");
+            }
+            catch (RuntimeException expected)
+            {
+                assertProjectRetry(expected);
+            }
+            assertSame(TemplateType.SPREADSHEET_DOCUMENT, template.getTemplateType());
+            assertSame(content, template.getTemplate());
+            verifyZeroInteractions(tx);
+        }
+        assertArrayEquals("unchanged spreadsheet sidecar".getBytes(StandardCharsets.UTF_8), oldFile.bytes.get());
+        assertNull(newFile.bytes.get());
+    }
+
+    private static void assertProjectRetry(RuntimeException error)
+    {
+        assertTrue("Must report unavailable services instead of authored content: " + error,
+            error instanceof IllegalStateException);
+        String message = error.getMessage().toLowerCase(java.util.Locale.ROOT);
+        assertTrue(message, message.contains("project services") && message.contains("not available yet"));
+        assertTrue(message, message.contains("retry") && message.contains("project is ready"));
+        assertFalse(message, message.contains("already has content"));
     }
 
     private static void assertRetypeRefused(BasicTemplate template, TemplateType type, MemoryFile file)
@@ -575,10 +812,60 @@ public class TemplateContentSupportTest
         }
     }
 
+    /** Resolve the real Context and tool paths without a running EDT or filesystem preferences. */
+    private static final class TemplateServices implements AutoCloseable
+    {
+        final IProject project = mock(IProject.class);
+        final Activator activator = mock(Activator.class);
+        final IBmModel model = mock(IBmModel.class);
+        private final Field metadataPlugin = MdPlugin.class.getDeclaredField("plugin");
+        private final Field serverPlugin = Activator.class.getDeclaredField("plugin");
+        private final Object previousMetadata;
+        private final Object previousServer;
+
+        TemplateServices(MemoryFile text, MemoryFile other) throws Exception
+        {
+            MdPlugin plugin = mock(MdPlugin.class);
+            Injector injector = mock(Injector.class);
+            IProjectFileSystemSupportProvider provider = mock(IProjectFileSystemSupportProvider.class);
+            IProjectFileSystemSupport filesystem = mock(IProjectFileSystemSupport.class);
+            when(plugin.getInjector()).thenReturn(injector);
+            when(injector.getInstance(IProjectFileSystemSupportProvider.class)).thenReturn(provider);
+            when(provider.getProjectFileSystemSupport(project)).thenReturn(filesystem);
+            when(filesystem.getFile(any(), any())).thenAnswer(invocation ->
+                ((BasicTemplate)invocation.getArgument(0)).getTemplateType() == TemplateType.TEXT_DOCUMENT
+                    ? text.file : other.file);
+            when(activator.getDtProjectManager()).thenReturn(mock(IDtProjectManager.class));
+            IBmModelManager models = mock(IBmModelManager.class);
+            when(activator.getBmModelManager()).thenReturn(models);
+            when(models.getModel(project)).thenReturn(model);
+            metadataPlugin.setAccessible(true);
+            serverPlugin.setAccessible(true);
+            previousMetadata = metadataPlugin.get(null);
+            previousServer = serverPlugin.get(null);
+            metadataPlugin.set(null, plugin);
+            serverPlugin.set(null, activator);
+        }
+
+        @Override public void close() throws Exception
+        {
+            serverPlugin.set(null, previousServer);
+            metadataPlugin.set(null, previousMetadata);
+        }
+    }
+
     private static final class MemoryFile
     {
         final IFile file = mock(IFile.class);
         final AtomicReference<byte[]> bytes = new AtomicReference<>();
+        final IWorkspace workspace = mock(IWorkspace.class);
+        final ISchedulingRule modifyRule = mock(ISchedulingRule.class);
+        final ISchedulingRule deleteRule = mock(ISchedulingRule.class);
+        ISchedulingRule activeRule;
+        byte[] pendingSave;
+        int protectedReads;
+        boolean modifiedUnderRule;
+        boolean deletedUnderBothRules;
 
         MemoryFile(String text) throws Exception
         {
@@ -589,11 +876,30 @@ public class TemplateContentSupportTest
         {
             bytes.set(text == null ? null : text.getBytes(charset));
             when(file.exists()).thenAnswer(i -> bytes.get() != null);
-            when(file.getContents()).thenAnswer(i -> new ByteArrayInputStream(bytes.get()));
+            when(file.getContents()).thenAnswer(i -> {
+                if (holds(modifyRule)) { protectedReads++; }
+                return new ByteArrayInputStream(bytes.get());
+            });
             when(file.getCharset()).thenReturn(charset.name());
             when(file.getFullPath()).thenReturn(new Path(
                 "/Test/src/DataProcessors/Owner/Templates/Contract/Template.txt"));
+            when(file.getWorkspace()).thenReturn(workspace);
+            IResourceRuleFactory rules = mock(IResourceRuleFactory.class);
+            when(workspace.getRuleFactory()).thenReturn(rules);
+            when(rules.modifyRule(file)).thenReturn(modifyRule);
+            when(rules.deleteRule(file)).thenReturn(deleteRule);
+            when(modifyRule.contains(any())).thenAnswer(i -> i.getArgument(0) == modifyRule);
+            when(deleteRule.contains(any())).thenAnswer(i -> i.getArgument(0) == deleteRule);
             doAnswer(i -> {
+                saveBeforeOperation();
+                activeRule = i.getArgument(1);
+                try { ((ICoreRunnable)i.getArgument(0)).run(i.getArgument(3)); }
+                finally { activeRule = null; }
+                return null;
+            }).when(workspace).run(any(ICoreRunnable.class), any(ISchedulingRule.class), anyInt(), any());
+            doAnswer(i -> {
+                if (activeRule == null) { saveBeforeOperation(); }
+                modifiedUnderRule = holds(modifyRule);
                 bytes.set(((InputStream)i.getArgument(0)).readAllBytes());
                 return null;
             }).when(file).setContents(any(InputStream.class), anyInt(), any());
@@ -601,6 +907,27 @@ public class TemplateContentSupportTest
                 bytes.set(((InputStream)i.getArgument(0)).readAllBytes());
                 return null;
             }).when(file).create(any(InputStream.class), anyBoolean(), any(IProgressMonitor.class));
+            doAnswer(i -> {
+                if (activeRule == null) { saveBeforeOperation(); }
+                deletedUnderBothRules = holds(modifyRule) && holds(deleteRule);
+                bytes.set(null);
+                return null;
+            }).when(file).delete(anyInt(), any());
+        }
+
+        private boolean holds(ISchedulingRule rule)
+        {
+            return activeRule != null && activeRule.contains(rule);
+        }
+
+        /** A queued editor save wins just before the next workspace mutation acquires its rule. */
+        private void saveBeforeOperation()
+        {
+            if (pendingSave != null)
+            {
+                bytes.set(pendingSave);
+                pendingSave = null;
+            }
         }
     }
 }
