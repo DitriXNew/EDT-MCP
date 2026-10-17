@@ -919,6 +919,25 @@ public class DeleteInfobaseToolTest
         assertNull("a completed deletion has no keep reason", keptOf(deleted)); //$NON-NLS-1$
     }
 
+    @Test
+    public void testOnlyConclusiveNameAbsenceAllowsLauncherCleanup() throws Exception
+    {
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        when(manager.getApplications(project)).thenReturn(java.util.Collections.emptyList());
+        assertTrue(DeleteInfobaseTool.resolveTargetApplication(manager, project,
+            "Project", null, "orphan", 1000L).nameAbsent); //$NON-NLS-1$ //$NON-NLS-2$
+        when(manager.getApplications(project)).thenReturn(null);
+        assertFalse(DeleteInfobaseTool.resolveTargetApplication(manager, project,
+            "Project", null, "orphan", 1000L).nameAbsent); //$NON-NLS-1$ //$NON-NLS-2$
+        when(manager.getApplications(project)).thenThrow(new com.e1c.g5.dt.applications.ApplicationException("unreadable")); //$NON-NLS-1$
+        assertFalse(DeleteInfobaseTool.resolveTargetApplication(manager, project,
+            "Project", null, "orphan", 1000L).nameAbsent); //$NON-NLS-1$ //$NON-NLS-2$
+        when(manager.getApplication(project, "  ")).thenReturn(java.util.Optional.empty()); //$NON-NLS-1$
+        assertFalse(DeleteInfobaseTool.resolveTargetApplication(manager, project,
+            "Project", "  ", "orphan", 1000L).nameAbsent); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
     private static IApplication app(String id)
     {
         IApplication application = mock(IApplication.class);

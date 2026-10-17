@@ -29,7 +29,7 @@ import org.osgi.framework.ServiceReference;
 import com._1c.g5.v8.dt.common.Pair;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager;
-import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAssociationSettings;
+import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAssociationContext;
 import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseReferences;
 import com._1c.g5.v8.dt.platform.services.core.operations.IInfobaseCreationOperation;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
@@ -43,9 +43,13 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
 import com.ditrix.edt.mcp.server.utils.BoundedJob;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
+import com.ditrix.edt.mcp.server.utils.InfobaseTarget;
+import com.ditrix.edt.mcp.server.utils.InfobaseReferenceFactory;
+import com.ditrix.edt.mcp.server.utils.InfobaseRegistration;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.ProjectStateChecker;
+import com.ditrix.edt.mcp.server.utils.ServerInfobaseTarget;
 import com.ditrix.edt.mcp.server.utils.StandaloneServerSupport;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.ApplicationUpdateState;
@@ -55,6 +59,7 @@ import com.e1c.g5.dt.applications.IApplicationType;
 import com.e1c.g5.dt.applications.infobases.IInfobaseApplication;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 /**
  * Creates a new FILE infobase (1C:Enterprise database) and binds it to a configuration
@@ -80,8 +85,8 @@ import com.google.gson.JsonObject;
  * is submitted — if no 1C platform runtime is registered the tool fails immediately with an
  * actionable message instead of hanging.
  *
- * <p><strong>Scope: FILE infobases only.</strong> SERVER and WEB infobases require additional
- * DBMS / cluster parameters and are rejected with a clear "not yet supported" message.
+ * <p>Creates file infobases or registers existing file/cluster infobases. Cluster registration
+ * uses EDT's typed server reference; EDT may connect while associating when a runtime is installed.
  */
 public class CreateInfobaseTool implements IMcpTool
 {
@@ -125,6 +130,9 @@ public class CreateInfobaseTool implements IMcpTool
 
     /** Input/output key: absolute path to the infobase directory. */
     private static final String KEY_INFOBASE_FILE = "infobaseFile"; //$NON-NLS-1$
+
+    private static final String KEY_INFOBASE_SERVER = "infobaseServer"; //$NON-NLS-1$
+    private static final String KEY_INFOBASE_REF = "infobaseRef"; //$NON-NLS-1$
 
     /** Input/output key: display name of the infobase. */
     private static final String KEY_INFOBASE_NAME = "infobaseName"; //$NON-NLS-1$
@@ -212,8 +220,9 @@ public class CreateInfobaseTool implements IMcpTool
     @Override
     public String getDescription()
     {
-        return "Prepare an infobase for an EDT project by creating a database or registering an existing " //$NON-NLS-1$
-            + "one. Passing user/password/access STORES those credentials in EDT's infobase settings - " //$NON-NLS-1$
+        return "Create a file infobase or register an existing file/cluster infobase and bind it to an EDT project. " //$NON-NLS-1$
+            + "EDT may open a Designer connection during binding when a runtime is installed. " //$NON-NLS-1$
+            + "Passing user/password/access STORES those credentials in EDT's infobase settings - " //$NON-NLS-1$
             + "the secret PERSISTS beyond this call and is reused by later connections. Parameters and " //$NON-NLS-1$
             + "examples: get_tool_guide('create_infobase')."; //$NON-NLS-1$
     }
@@ -226,14 +235,20 @@ public class CreateInfobaseTool implements IMcpTool
                 "EDT configuration project to bind the new infobase to (required).", true) //$NON-NLS-1$
             .enumProperty("mode", //$NON-NLS-1$
                 "'create' (default) = make a new file infobase at infobaseFile (launches the 1C " //$NON-NLS-1$
-                + "platform); 'register' = add an EXISTING infobase already present at infobaseFile " //$NON-NLS-1$
+                + "platform); 'register' = add an EXISTING infobase at infobaseFile or " //$NON-NLS-1$
+                + "infobaseServer + infobaseRef " //$NON-NLS-1$
                 + "(no platform launch). With applicationKind='standaloneServer', mode='register' " //$NON-NLS-1$
                 + "wraps an EXISTING file infobase (a 1Cv8.1CD must be present) with a standalone " //$NON-NLS-1$
                 + "server instead of creating a new one.", //$NON-NLS-1$
                 "create", "register") //$NON-NLS-1$ //$NON-NLS-2$
             .stringProperty(KEY_INFOBASE_FILE,
-                "Absolute path to the infobase directory. FILE infobases only - server/web are rejected.", //$NON-NLS-1$
-                true)
+                "Absolute file-infobase directory. Required unless infobaseServer + infobaseRef are given.") //$NON-NLS-1$
+            .stringProperty(KEY_INFOBASE_SERVER,
+                "Existing cluster address, e.g. localhost:1541. Requires infobaseRef and mode='register'; " //$NON-NLS-1$
+                + "mutually exclusive with infobaseFile. Does not create a server database.") //$NON-NLS-1$
+            .stringProperty(KEY_INFOBASE_REF,
+                "Existing infobase name on infobaseServer. Server registration requires " //$NON-NLS-1$
+                + "applicationKind='infobase'; web URLs and connection strings are not accepted.") //$NON-NLS-1$
             .stringProperty(KEY_INFOBASE_NAME,
                 "Display name for the new infobase. If omitted, a name is auto-generated by EDT.") //$NON-NLS-1$
             .stringProperty("platform", //$NON-NLS-1$
@@ -243,7 +258,7 @@ public class CreateInfobaseTool implements IMcpTool
                 "Set the new infobase as the default application for the project after creation " //$NON-NLS-1$
                 + "(default false).") //$NON-NLS-1$
             .enumProperty(KEY_APPLICATION_KIND,
-                "'infobase' (default) = a plain file infobase via the configurator; " //$NON-NLS-1$
+                "'infobase' (default) = a file infobase or existing cluster infobase; " //$NON-NLS-1$
                 + "'standaloneServer' = an autonomous (standalone) server that creates and serves a " //$NON-NLS-1$
                 + "new file infobase and exposes a web URL for HTTP testing (requires a registered 1C " //$NON-NLS-1$
                 + "standalone-server runtime, platform >= 8.3.23). With mode='register' the server " //$NON-NLS-1$
@@ -282,6 +297,8 @@ public class CreateInfobaseTool implements IMcpTool
                 "'infobase' or 'standaloneServer' — the kind of application created.") //$NON-NLS-1$
             .stringProperty(McpKeys.PROJECT, "Name of the configuration project.") //$NON-NLS-1$
             .stringProperty(KEY_INFOBASE_FILE, "Path of the created infobase directory.") //$NON-NLS-1$
+            .stringProperty(KEY_INFOBASE_SERVER, "Registered cluster address; server infobases only.") //$NON-NLS-1$
+            .stringProperty(KEY_INFOBASE_REF, "Registered cluster infobase name; server infobases only.") //$NON-NLS-1$
             .stringProperty(KEY_INFOBASE_NAME, "Display name of the created infobase.") //$NON-NLS-1$
             .stringProperty("webUrl", //$NON-NLS-1$
                 "applicationKind='standaloneServer' only: the infobase web URL for HTTP testing. " //$NON-NLS-1$
@@ -344,10 +361,18 @@ public class CreateInfobaseTool implements IMcpTool
         {
             return err;
         }
-        String errFile = JsonUtils.requireArgument(params, KEY_INFOBASE_FILE);
-        if (errFile != null)
+        String infobaseServer = JsonUtils.extractStringArgument(params, KEY_INFOBASE_SERVER);
+        String infobaseRef = JsonUtils.extractStringArgument(params, KEY_INFOBASE_REF);
+        boolean serverTarget = ServerInfobaseTarget.specified(infobaseServer)
+            || ServerInfobaseTarget.specified(infobaseRef);
+        if (!serverTarget)
         {
-            return errFile;
+            String errFile = JsonUtils.requireArgument(params, KEY_INFOBASE_FILE,
+                " (or infobaseServer + infobaseRef with mode='register' for an existing cluster infobase)"); //$NON-NLS-1$
+            if (errFile != null)
+            {
+                return errFile;
+            }
         }
 
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
@@ -386,6 +411,24 @@ public class CreateInfobaseTool implements IMcpTool
             return mode.error;
         }
         boolean register = mode.value;
+
+        String targetError = ServerInfobaseTarget.validationError(infobaseServer, infobaseRef,
+            infobaseFileStr, register, standaloneServer);
+        if (targetError != null)
+        {
+            return ToolResult.error(targetError).toJson();
+        }
+        if (serverTarget)
+        {
+            String building = ProjectStateChecker.buildingErrorOrNull(projectName);
+            if (building != null)
+            {
+                return ToolResult.error(building).toJson();
+            }
+            return prepareInfobase(projectName,
+                new InfobaseTarget(null, new ServerInfobaseTarget(infobaseServer, infobaseRef)),
+                infobaseName, null, setDefault, true, credentials);
+        }
 
         // Credentials (#194) always apply to a FILE infobase's access settings. A newly created
         // standalone server (mode='create') has no existing infobase reference to store them
@@ -447,7 +490,7 @@ public class CreateInfobaseTool implements IMcpTool
                 setDefault, register, credentials);
         }
 
-        return createInfobase(projectName, infobaseDir, infobaseName, platform, setDefault, register,
+        return prepareInfobase(projectName, new InfobaseTarget(infobaseDir, null), infobaseName, platform, setDefault, register,
             credentials);
     }
 
@@ -543,64 +586,81 @@ public class CreateInfobaseTool implements IMcpTool
         }
     }
 
-    private String createInfobase(String projectName, Path infobaseDir,
+    private String prepareInfobase(String projectName, InfobaseTarget target,
             String infobaseName, String platform, boolean setDefault, boolean register,
             Credentials credentials)
     {
-        // --- 1-2. Resolve project + services ---
         CreateContext context = resolveCreateContext(projectName);
         if (context.error != null)
         {
             return context.error;
         }
-        IProject project = context.project;
-        IApplicationManager appManager = context.appManager;
-        IInfobaseManager ibManager = context.ibManager;
-        IInfobaseAssociationManager assocManager = context.assocManager;
-
-        // --- 3. Auto-generate infobase name if omitted ---
-        if (infobaseName == null || infobaseName.isEmpty())
+        InfobaseAssociationContext associationContext;
+        try
         {
-            infobaseName = generateDefaultInfobaseName(ibManager, projectName);
+            associationContext = InfobaseRegistration.currentContext(context.project);
         }
-
-        // --- 4. Prepare the directory ---
-        String prepareError = prepareInfobaseDirectory(infobaseDir, register);
-        if (prepareError != null)
+        catch (Exception e)
         {
-            return prepareError;
+            return ToolResult.error("Could not resolve the project's current infobase context: " //$NON-NLS-1$
+                + e.getClass().getSimpleName() + ". Ensure EDT platform-services are running.").toJson(); //$NON-NLS-1$
         }
+        return prepareInfobase(context, associationContext, projectName, target, infobaseName,
+            platform, setDefault, register, credentials);
+    }
 
-        // --- 5. Build the FILE infobase reference ---
-        InfobaseReference ibRef = buildInfobaseReference(infobaseDir, infobaseName);
-
-        // --- 6. Create the database (create) or register the existing one (register) ---
+    /** Common pipeline after read-only context resolution; kept separate for regression tests. */
+    String prepareInfobase(CreateContext context, InfobaseAssociationContext associationContext,
+            String projectName, InfobaseTarget target, String infobaseName, String platform,
+            boolean setDefault, boolean register, Credentials credentials)
+    {
+        if (infobaseName == null || infobaseName.isBlank())
+        {
+            infobaseName = generateDefaultInfobaseName(context.ibManager, projectName);
+        }
+        if (target.file() != null)
+        {
+            String prepareError = prepareInfobaseDirectory(target.file(), register);
+            if (prepareError != null)
+            {
+                return prepareError;
+            }
+        }
+        InfobaseReference reference = target.reference(infobaseName);
         String databaseError = register
-            ? registerExistingInfobase(ibManager, ibRef, infobaseDir)
-            : createNewInfobase(ibRef, platform, infobaseName, infobaseDir);
+            ? registerExistingInfobase(context.ibManager, reference, target.location())
+            : createNewInfobase(reference, platform, infobaseName, target.file());
         if (databaseError != null)
         {
             return databaseError;
         }
-
-        // --- 7. Associate with the project ---
-        String associateError =
-            associateInfobase(assocManager, project, ibRef, infobaseDir, projectName, register);
-        if (associateError != null)
+        // EDT's association listener can open a Designer session: persist access settings first.
+        CredentialStoreReport credentialStore = storeCredentialsIfRequested(reference, credentials, register);
+        String error = associateInfobase(context.assocManager, context.project, reference,
+            target.location(), projectName, register, associationContext);
+        ResultContext resultContext = new ResultContext(projectName, target.file(), infobaseName,
+            context.appManager, context.project, target.server());
+        String result = error == null
+            ? buildSuccessResult(resultContext, reference, setDefault, register, credentialStore) : error;
+        JsonObject json = JsonParser.parseString(result).getAsJsonObject();
+        if (register && !json.get("success").getAsBoolean()) //$NON-NLS-1$
         {
-            return associateError;
+            InfobaseRegistration.Rollback rollback = InfobaseRegistration.rollback(
+                context.assocManager, context.ibManager, context.project, reference,
+                associationContext, credentials.any() ? InfobaseAccessSupport::clearCredentials : null);
+            String message = json.get("error").getAsString() + " " + rollback.message(); //$NON-NLS-1$ //$NON-NLS-2$
+            ToolResult failed = ToolResult.error(message);
+            for (var entry : json.entrySet())
+            {
+                if (!entry.getKey().equals("error") && !entry.getKey().equals("message")) //$NON-NLS-1$ //$NON-NLS-2$
+                {
+                    failed.put(entry.getKey(), entry.getValue());
+                }
+            }
+            resultContext.putLocation(failed);
+            return rollback.put(failed).toJson();
         }
-
-        // --- 8. Optionally store infobase connection credentials (#194) ---
-        CredentialStoreReport credentialStore =
-            storeCredentialsIfRequested(ibRef, credentials, register);
-
-        // --- 9. Read back, apply setDefault to what the read-back FOUND, and return ---
-        // setDefault is applied AFTER the read-back on purpose (issue #412): it used to run its own
-        // one-shot lookup BEFORE the bounded re-poll, so it could report "could not be set as default"
-        // for an application the re-poll then found. One observation feeds one report.
-        ResultContext rc = new ResultContext(projectName, infobaseDir, infobaseName, appManager, project);
-        return buildSuccessResult(rc, ibRef, setDefault, register, credentialStore);
+        return result;
     }
 
     /**
@@ -617,7 +677,7 @@ public class CreateInfobaseTool implements IMcpTool
      *            {@code false} for mode='create' (a brand-new empty base with no users yet)
      * @return the note and verification, or {@code null} when no credentials were requested
      */
-    private static CredentialStoreReport storeCredentialsIfRequested(InfobaseReference ibRef,
+    CredentialStoreReport storeCredentialsIfRequested(InfobaseReference ibRef,
             Credentials credentials,
             boolean register)
     {
@@ -816,18 +876,22 @@ public class CreateInfobaseTool implements IMcpTool
      * tool-result JSON on the SAME failure case the inline code produced, else {@code null}.
      */
     private static String registerExistingInfobase(IInfobaseManager ibManager, InfobaseReference ibRef,
-            Path infobaseDir)
+            String infobaseDir)
     {
         try
         {
-            ibManager.add(ibRef, null);
+            String duplicate = InfobaseRegistration.add(ibManager, ibRef);
+            if (duplicate != null)
+            {
+                return ToolResult.error(duplicate).toJson();
+            }
         }
         catch (Exception e)
         {
             Activator.logError("create_infobase: register failed for " + infobaseDir, e); //$NON-NLS-1$
             return ToolResult.error("Could not register the infobase at '" + infobaseDir //$NON-NLS-1$
                 + "': " + e.getMessage() //$NON-NLS-1$
-                + ". Ensure it is a valid file infobase that is not already registered.").toJson(); //$NON-NLS-1$
+                + ". Check EDT launcher-list write permissions and retry.").toJson(); //$NON-NLS-1$
         }
         Activator.logInfo("create_infobase: registered existing infobase at " + infobaseDir); //$NON-NLS-1$
         return null;
@@ -941,11 +1005,12 @@ public class CreateInfobaseTool implements IMcpTool
      * more than that here.
      */
     private static String associateInfobase(IInfobaseAssociationManager assocManager, IProject project,
-            InfobaseReference ibRef, Path infobaseDir, String projectName, boolean register)
+            InfobaseReference ibRef, String infobaseDir, String projectName, boolean register,
+            InfobaseAssociationContext associationContext)
     {
         try
         {
-            assocManager.associate(project, ibRef, InfobaseAssociationSettings.notSynchronized());
+            InfobaseRegistration.associate(assocManager, project, ibRef, associationContext);
         }
         catch (Exception e)
         {
@@ -1094,8 +1159,7 @@ public class CreateInfobaseTool implements IMcpTool
     {
         InfobaseReference ibRef =
             InfobaseReferences.newFileInfobaseReference(infobaseDir.toAbsolutePath().toString());
-        ibRef.setName(infobaseName);
-        ibRef.setUuid(java.util.UUID.randomUUID());
+        InfobaseReferenceFactory.named(ibRef, infobaseName);
         return ibRef;
     }
 
@@ -1124,7 +1188,7 @@ public class CreateInfobaseTool implements IMcpTool
      * When {@code error} is non-null it carries a ready tool-result JSON and the other fields are unset;
      * otherwise {@code error} is {@code null} and the fields are populated.
      */
-    private static final class CreateContext
+    static final class CreateContext
     {
         final String error;
         final IProject project;
@@ -1216,8 +1280,7 @@ public class CreateInfobaseTool implements IMcpTool
         // --- 5. Build the FILE infobase reference for the new IB ---
         InfobaseReference ibRef =
             InfobaseReferences.newFileInfobaseReference(infobaseDir.toAbsolutePath().toString());
-        ibRef.setName(infobaseName);
-        ibRef.setUuid(java.util.UUID.randomUUID());
+        InfobaseReferenceFactory.named(ibRef, infobaseName);
 
         // --- 6. Defaults for the standalone-server-specific arguments ---
         // EDT does NOT honour a requested port for a FILE-backed standalone server (the FILE branch of
@@ -2334,15 +2397,41 @@ public class CreateInfobaseTool implements IMcpTool
         final String infobaseName;
         final IApplicationManager appManager;
         final IProject project;
+        final ServerInfobaseTarget serverTarget;
 
         ResultContext(String projectName, Path infobaseDir, String infobaseName,
                 IApplicationManager appManager, IProject project)
+        {
+            this(projectName, infobaseDir, infobaseName, appManager, project, null);
+        }
+
+        ResultContext(String projectName, Path infobaseDir, String infobaseName,
+                IApplicationManager appManager, IProject project, ServerInfobaseTarget serverTarget)
         {
             this.projectName = projectName;
             this.infobaseDir = infobaseDir;
             this.infobaseName = infobaseName;
             this.appManager = appManager;
             this.project = project;
+            this.serverTarget = serverTarget;
+        }
+
+        String location()
+        {
+            return serverTarget == null ? infobaseDir.toAbsolutePath().toString() : serverTarget.presentation();
+        }
+
+        void putLocation(ToolResult result)
+        {
+            if (serverTarget == null)
+            {
+                result.put(KEY_INFOBASE_FILE, infobaseDir.toAbsolutePath().toString());
+            }
+            else
+            {
+                result.put(KEY_INFOBASE_SERVER, serverTarget.server())
+                    .put(KEY_INFOBASE_REF, serverTarget.infobase());
+            }
         }
     }
 
@@ -2600,7 +2689,7 @@ public class CreateInfobaseTool implements IMcpTool
             credentialStore == null ? null : credentialStore.note);
         String verb = register ? ACTION_REGISTERED : ACTION_CREATED;
         String subject = "Infobase '" + rc.infobaseName + "' " + verb + " at '" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            + rc.infobaseDir.toAbsolutePath() + "'"; //$NON-NLS-1$
+            + rc.location() + "'"; //$NON-NLS-1$
 
         if (readBack.outcome == BindingOutcome.NOT_BOUND)
         {
@@ -2613,8 +2702,8 @@ public class CreateInfobaseTool implements IMcpTool
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, verb)
             .put(McpKeys.PROJECT, rc.projectName)
-            .put(KEY_INFOBASE_FILE, rc.infobaseDir.toAbsolutePath().toString())
             .put(KEY_INFOBASE_NAME, rc.infobaseName);
+        rc.putLocation(result);
         putApplications(result, readBack);
         putCredentialVerification(result, credentialStore);
 
@@ -2795,9 +2884,9 @@ public class CreateInfobaseTool implements IMcpTool
         ToolResult result = ToolResult.error(errorText)
             .put(McpKeys.ACTION, verb)
             .put(McpKeys.PROJECT, rc.projectName)
-            .put(KEY_INFOBASE_FILE, rc.infobaseDir.toAbsolutePath().toString())
             .put(KEY_INFOBASE_NAME, rc.infobaseName)
             .put(KEY_BOUND_TO_PROJECT, false);
+        rc.putLocation(result);
         putApplications(result, readBack);
         return result;
     }
@@ -3051,27 +3140,20 @@ public class CreateInfobaseTool implements IMcpTool
     }
 
     /**
-     * Checks whether two infobase references point to the same FILE infobase by
-     * comparing their connection-string file path. A miss is what makes the read-back report
+     * Checks whether two references identify the same registered infobase by UUID. A miss is what makes the read-back report
      * NOT_BOUND (it no longer merely skips the applicationId echo), so a comparison that could not be
-     * made - an absent or unreadable connection string, or a failure while reading one - returns
+     * made - an absent or unreadable UUID, or a failure while reading one - returns
      * {@link MatchResult#UNDECIDABLE} rather than a confident "different".
      */
     private static MatchResult matchesRef(InfobaseReference a, InfobaseReference b)
     {
         try
         {
-            if (a.getConnectionString() == null || b.getConnectionString() == null)
+            if (a.getUuid() == null || b.getUuid() == null)
             {
                 return MatchResult.UNDECIDABLE;
             }
-            String ca = a.getConnectionString().asConnectionString();
-            String cb = b.getConnectionString().asConnectionString();
-            if (ca == null || cb == null)
-            {
-                return MatchResult.UNDECIDABLE;
-            }
-            return ca.equalsIgnoreCase(cb) ? MatchResult.MATCH : MatchResult.NO_MATCH;
+            return a.getUuid().equals(b.getUuid()) ? MatchResult.MATCH : MatchResult.NO_MATCH;
         }
         catch (Exception e)
         {
