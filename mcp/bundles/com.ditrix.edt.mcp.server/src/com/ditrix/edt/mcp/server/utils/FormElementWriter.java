@@ -22,6 +22,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EList;
@@ -45,18 +46,28 @@ import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
+import com._1c.g5.v8.dt.form.model.AbstractDataPath;
+import com._1c.g5.v8.dt.form.model.DataPath;
+import com._1c.g5.v8.dt.form.model.Form;
+import com._1c.g5.v8.dt.form.model.FormFactory;
+import com._1c.g5.v8.dt.form.model.PropertyInfo;
 import com._1c.g5.v8.dt.form.service.FormIdentifierService;
+import com._1c.g5.v8.dt.form.service.datasourceinfo.IDataSourceInfoAssociationService;
+import com._1c.g5.v8.dt.form.util.PropertyInfoUtil;
 import com._1c.g5.v8.dt.mcore.McoreFactory;
 import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
 import com._1c.g5.v8.dt.mcore.util.McoreUtil;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
+import com._1c.g5.v8.dt.metadata.mdclass.BasicTabularSection;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.ScriptVariant;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
+import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
@@ -65,8 +76,8 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
  * Shared writer for the editable FORM CONTENT model ({@code com._1c.g5.v8.dt.form.model.Form}, a
  * separate top object reached from a {@code BasicForm} mdo via {@code getForm()}).
  *
- * <p>The whole form package is touched REFLECTIVELY (by feature / classifier name) so this bundle
- * needs no compile-time dependency on the form model. Form-MEMBER editing (adding a form attribute,
+ * <p>Form elements are constructed reflectively (by feature / classifier name); nested platform
+ * paths are validated through EDT's typed data-tree service. Form-MEMBER editing (adding a form attribute,
  * command or visual item, binding event handlers, moving items) resolves everything on the editable
  * form instance's own EPackage; form-OBJECT creation ({@link #createForm}) resolves the form
  * EPackage from the global EMF package registry by its nsURI ({@code http://g5.1c.ru/v8/dt/form} -
@@ -82,6 +93,10 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
  */
 public final class FormElementWriter
 {
+    /** Same service-access pattern as UseAlwaysSupport; replaceable only by headless tests. */
+    static Supplier<IDataSourceInfoAssociationService> dataSourcesSource =
+        () -> ServiceAccess.get(IDataSourceInfoAssociationService.class);
+
     // Form-model feature names (reflective).
     private static final String FEATURE_ITEMS = "items"; //$NON-NLS-1$
     private static final String FEATURE_ATTRIBUTES = "attributes"; //$NON-NLS-1$
@@ -2453,6 +2468,8 @@ public final class FormElementWriter
         COLLECTION_ATTRIBUTE,
         /** A dynamic-list attribute: EDT auto-fills the query fields, the model knows no columns. */
         DYNAMIC_LIST_ATTRIBUTE,
+        /** A platform collection resolved by EDT, with explicitly authored field columns. */
+        PLATFORM_COLLECTION,
         /** A form attribute that is neither - it has no rows, so no table can bind to it. */
         SCALAR_ATTRIBUTE,
         /** A bare name that is no form attribute at all. */
@@ -2468,8 +2485,8 @@ public final class FormElementWriter
 
     /**
      * Classifies a table's {@code dataPath} by the NATURE of what it names - not by a chain of
-     * refusals. A dotted path addresses metadata (a tabular section); a bare name addresses a form
-     * attribute, and then the attribute's own shape decides.
+     * refusals. A dotted path addresses metadata or a platform row source; a bare name addresses
+     * a form attribute, and then the attribute's own shape decides.
      *
      * @param formModel the tx-bound form model
      * @param dataPath the table's data path
@@ -2480,19 +2497,9 @@ public final class FormElementWriter
         int dot = dataPath.indexOf('.');
         if (dot > 0)
         {
-            // A dotted path is the tabular-section shape: the head is an OBJECT-typed form attribute
-            // and the tail names a section of that object type, which lives outside this model. The
-            // head does NOT have to be the main attribute - a form can carry a second object-typed
-            // attribute and bind a table to its sections, so keying this on isMainAttribute() would
-            // refuse a legitimate 'BackupOrder.Goods'.
-            //
-            // What IS decidable here is the opposite: an attribute whose own value already holds rows
-            // (a collection, a dynamic list) has no nested row source at all - its sub-names are
-            // columns and query fields - so a dotted path through it addresses something a table
-            // cannot bind to. A head of UNKNOWN type is left alone deliberately: telling an
-            // unidentified type from "DocumentObject.SalesOrder" needs the metadata this writer does
-            // not see, and guessing would refuse working forms. Recorded as a gap rather than closed
-            // by a heuristic.
+            // A collection/list head's sub-names are columns, not row sources. Other non-main
+            // heads are decided by EDT's data tree in planDataPath: a metadata tabular section
+            // keeps its original binding, while a platform collection has no generated columns.
             EObject head = findByName(referenceList(formModel, FEATURE_ATTRIBUTES),
                 dataPath.substring(0, dot));
             if (head != null && (hasCollectionValueType(head) || isDynamicListAttribute(head)
@@ -2500,7 +2507,8 @@ public final class FormElementWriter
             {
                 return TableBinding.NESTED_IN_ATTRIBUTE;
             }
-            return TableBinding.TABULAR_SECTION;
+            return head != null && !isMainAttribute(head) ? TableBinding.PLATFORM_COLLECTION
+                : TableBinding.TABULAR_SECTION;
         }
         EObject attribute = findByName(referenceList(formModel, FEATURE_ATTRIBUTES), dataPath);
         if (attribute == null)
@@ -4078,16 +4086,173 @@ public final class FormElementWriter
         return sb.toString();
     }
 
-    /** A FormField bound to a form attribute via its dataPath (a generic InputField the user can refine). */
-    private static String createField(EObject formModel, String name, String parentName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
-        String attrName, String titleLanguage, String title, boolean russianAutoNames,
-        String[] createdKind)
+    /** A validated path, containing no live data-tree object or cross-transaction model reference. */
+    public static final class DataPathPlan
     {
-        if (attrName == null || attrName.isEmpty())
+        private final String path;
+        private final TableBinding tableBinding;
+        private final String error;
+
+        private DataPathPlan(String path, TableBinding tableBinding, String error)
         {
-            return "A form field needs a 'dataPath' property naming the form attribute it shows " //$NON-NLS-1$
-                + "(e.g. {name:'dataPath', value:'Price'})."; //$NON-NLS-1$
+            this.path = path;
+            this.tableBinding = tableBinding;
+            this.error = error;
         }
+
+        /** @return an actionable refusal, or null when the path can be applied */
+        public String error()
+        {
+            return error;
+        }
+    }
+
+    /** The one binding predicate for create and modify; legacy collection/list/object rules stay here. */
+    private static DataPathPlan planDataPath(EObject formModel, Kind kind, String path)
+    {
+        if (path == null || path.isBlank())
+        {
+            return new DataPathPlan(path, null, kind == Kind.TABLE
+                ? "A table needs a 'dataPath' property naming its row source (e.g. 'Object.Goods')." //$NON-NLS-1$
+                : "A form field needs a 'dataPath' property naming the form attribute it shows " //$NON-NLS-1$
+                    + "(e.g. {name:'dataPath', value:'Price'})."); //$NON-NLS-1$
+        }
+        List<String> segments = Arrays.asList(path.split("\\.", -1)); //$NON-NLS-1$
+        if (segments.stream().anyMatch(String::isBlank))
+        {
+            return new DataPathPlan(path, null, "dataPath '" + path //$NON-NLS-1$
+                + "' has an empty segment. Supply a dot-separated path from a form attribute."); //$NON-NLS-1$
+        }
+        TableBinding binding = kind == Kind.TABLE ? tableBindingOf(formModel, path) : null;
+        String error = kind == Kind.TABLE ? tableBindingError(binding, path) : fieldDataPathError(formModel, path);
+        if (error != null)
+        {
+            return new DataPathPlan(path, binding, error);
+        }
+        EObject head = findByName(referenceList(formModel, FEATURE_ATTRIBUTES), segments.get(0));
+        boolean platformPath = segments.size() > 1 && head != null && !hasCollectionValueType(head)
+            && !isDynamicListAttribute(head) && !isMainAttribute(head);
+        if (!platformPath)
+        {
+            return new DataPathPlan(path, binding, null);
+        }
+        if (!(formModel instanceof Form))
+        {
+            return new DataPathPlan(path, binding, "Cannot resolve dataPath '" + path //$NON-NLS-1$
+                + "': EDT's form model is not ready. A nested path outside a dynamic list, collection " //$NON-NLS-1$
+                + "or main object attribute needs EDT's data tree; retry when the model is ready."); //$NON-NLS-1$
+        }
+        return platformDataPath((Form)formModel, kind, path, segments);
+    }
+
+    private static DataPathPlan platformDataPath(Form form, Kind kind, String path, List<String> segments)
+    {
+        try
+        {
+            IDataSourceInfoAssociationService dataSources = dataSourcesSource.get();
+            if (dataSources == null)
+            {
+                throw new IllegalStateException("service unavailable"); //$NON-NLS-1$
+            }
+            DataPath query = FormFactory.eINSTANCE.createDataPath();
+            query.getSegments().addAll(segments);
+            PropertyInfo info = dataSources.findPropertyInfo(form, query);
+            if (info == null)
+            {
+                DataPath prefix = FormFactory.eINSTANCE.createDataPath();
+                for (String segment : segments)
+                {
+                    prefix.getSegments().add(segment);
+                    if (dataSources.findPropertyInfo(form, prefix) == null)
+                    {
+                        return new DataPathPlan(path, null, "dataPath '" + path //$NON-NLS-1$
+                            + "' does not resolve in EDT's data tree; first unresolved segment '" //$NON-NLS-1$
+                            + segment + "'. Choose a path offered by EDT for this form attribute."); //$NON-NLS-1$
+                    }
+                }
+                throw new IllegalStateException("the data tree changed while resolving the path"); //$NON-NLS-1$
+            }
+            if (kind == Kind.TABLE && !PropertyInfoUtil.isTable(info))
+            {
+                return new DataPathPlan(path, null, "dataPath '" + path //$NON-NLS-1$
+                    + "' resolves in EDT, but is not a table row source. Bind the table to a collection " //$NON-NLS-1$
+                    + "and add its properties as Fields under that table."); //$NON-NLS-1$
+            }
+            AbstractDataPath english = info.getDataPath(ScriptVariant.ENGLISH);
+            if (english == null || english.getSegments().size() != segments.size())
+            {
+                throw new IllegalStateException("EDT did not provide the path's English segments"); //$NON-NLS-1$
+            }
+            List<String> canonical = new ArrayList<>(english.getSegments());
+            // PropertyInfo builds names without runtime row indices; keep each requested suffix.
+            for (int i = 0; i < segments.size(); i++)
+            {
+                int bracket = segments.get(i).indexOf('[');
+                if (bracket >= 0)
+                {
+                    canonical.set(i, canonical.get(i) + segments.get(i).substring(bracket));
+                }
+            }
+            TableBinding binding = kind == Kind.TABLE
+                ? (info.getSource() instanceof BasicTabularSection ? TableBinding.TABULAR_SECTION
+                    : TableBinding.PLATFORM_COLLECTION) : null;
+            return new DataPathPlan(String.join(".", canonical), binding, null); //$NON-NLS-1$
+        }
+        catch (RuntimeException e)
+        {
+            throw modelLacks("Cannot resolve dataPath '" + path //$NON-NLS-1$
+                + "': EDT's IDataSourceInfoAssociationService or form data tree is not ready. " //$NON-NLS-1$
+                + "Retry when the form model and service are ready. " + e.getMessage()); //$NON-NLS-1$
+        }
+    }
+
+    /** Validate a Field/Table rebind inside the same transaction that will apply it. */
+    public static DataPathPlan planDataPathChange(EObject formModel, EObject item, String path)
+    {
+        Kind kind = addressableKind(item);
+        if (kind != Kind.FIELD && kind != Kind.TABLE)
+        {
+            return new DataPathPlan(path, null, "'dataPath' is assignable only on a Field/Table FQN. " //$NON-NLS-1$
+                + "Use get_metadata_details to find the field or table to rebind."); //$NON-NLS-1$
+        }
+        DataPathPlan plan = planDataPath(formModel, kind, path);
+        if (plan.error != null || kind != Kind.TABLE
+            || sameDataPath(singleReference(item, "dataPath"), Arrays.asList(plan.path.split("\\.")))) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            return plan;
+        }
+        if (!referenceList(item, FEATURE_ITEMS).isEmpty())
+        {
+            return new DataPathPlan(path, null, "Table '" + FormStructureReader.nameOf(item) //$NON-NLS-1$
+                + "' has existing columns/items. Remove them with delete_metadata first, then set " //$NON-NLS-1$
+                + "its dataPath; each old column would otherwise keep its previous binding."); //$NON-NLS-1$
+        }
+        if (singleReference(item, FEATURE_EXT_INFO) != null)
+        {
+            return new DataPathPlan(path, null, "Table '" + FormStructureReader.nameOf(item) //$NON-NLS-1$
+                + "' has binding-specific extInfo. Delete it with delete_metadata and recreate it " //$NON-NLS-1$
+                + "with create_metadata using the new dataPath so its binding configuration is rebuilt."); //$NON-NLS-1$
+        }
+        return plan;
+    }
+
+    /** Apply a plan in the write transaction; preserve dynamic-list UseAlways registration. */
+    public static void applyDataPathChange(EObject formModel, EObject item, DataPathPlan plan)
+    {
+        if (plan.error != null)
+        {
+            throw new IllegalArgumentException(plan.error);
+        }
+        buildDataPath(formModel, item, plan.path);
+        if (addressableKind(item) == Kind.TABLE)
+        {
+            syncTableExtInfo(formModel, item);
+        }
+    }
+
+    /** Form-local field rules, shared by the binding planner and therefore by create and modify. */
+    private static String fieldDataPathError(EObject formModel, String attrName)
+    {
         // The field binds to a form attribute by name. A DOTTED path binds to a SUB-attribute of the
         // head form attribute, and WHICH head it is decides what the tail may name:
         //   - a COLLECTION attribute (ValueTable / ValueTree, e.g. "Rows.Price"): the tail must name // NOSONAR explanatory prose, not commented-out code
@@ -4147,16 +4312,21 @@ public final class FormElementWriter
                         + ".Column." + columnName + "', then bind the field to it."; //$NON-NLS-1$ //$NON-NLS-2$
                 }
             }
-            else if (!isDynamicListAttribute(boundAttribute) && !isMainAttribute(boundAttribute))
-            {
-                return "'" + attrName + "' is a nested data path, but '" + headAttr + "' is neither a " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                    + "dynamic list, nor a collection attribute, nor the form's main object attribute. " //$NON-NLS-1$
-                    + "A field binds to a form attribute by name (e.g. 'Price'); a dotted path is for a " //$NON-NLS-1$
-                    + "dynamic-list column (e.g. 'List.Number', where the list has a custom query), for " //$NON-NLS-1$
-                    + "a ValueTable / ValueTree attribute's column (e.g. 'Rows.Price'), or for an " //$NON-NLS-1$
-                    + "object sub-attribute (e.g. 'Object.Number')."; //$NON-NLS-1$
-            }
         }
+        return null;
+    }
+
+    /** A FormField bound to a form attribute via its dataPath (a generic InputField the user can refine). */
+    private static String createField(EObject formModel, String name, String parentName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        String attrName, String titleLanguage, String title, boolean russianAutoNames,
+        String[] createdKind)
+    {
+        DataPathPlan pathPlan = planDataPath(formModel, Kind.FIELD, attrName);
+        if (pathPlan.error != null)
+        {
+            return pathPlan.error;
+        }
+        attrName = pathPlan.path;
         if (findItem(formModel, name) != null)
         {
             return ERR_ITEM_EXISTS + name;
@@ -4226,19 +4396,13 @@ public final class FormElementWriter
         List<String> columnAttributeNames, String titleLanguage, String title, boolean russianAutoNames,
         String[] createdKind)
     {
-        if (dataPath == null || dataPath.isEmpty())
+        DataPathPlan pathPlan = planDataPath(formModel, Kind.TABLE, dataPath);
+        if (pathPlan.error != null)
         {
-            return "A table needs a 'dataPath' property naming the tabular section it shows " //$NON-NLS-1$
-                + "(e.g. {name:'dataPath', value:'Object.Goods'})."; //$NON-NLS-1$
+            return pathPlan.error;
         }
-        // Classify the binding FIRST and refuse an unbuildable one before anything is created, so a
-        // refused table leaves nothing behind (issue #295 review).
-        TableBinding binding = tableBindingOf(formModel, dataPath);
-        String bindingErr = tableBindingError(binding, dataPath);
-        if (bindingErr != null)
-        {
-            return bindingErr;
-        }
+        dataPath = pathPlan.path;
+        TableBinding binding = pathPlan.tableBinding;
         if (findItem(formModel, name) != null)
         {
             return ERR_ITEM_EXISTS + name;
@@ -4303,6 +4467,9 @@ public final class FormElementWriter
                             dataPath + "." + columnName, russianAutoNames); //$NON-NLS-1$
                     }
                 }
+                break;
+            case PLATFORM_COLLECTION:
+                // EDT owns these columns; the caller adds each desired one as a Field under the table.
                 break;
             case DYNAMIC_LIST_ATTRIBUTE:
                 // A dynamic list's columns are its QUERY fields, which EDT auto-fills - the form model
