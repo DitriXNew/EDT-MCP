@@ -4243,7 +4243,11 @@ public final class FormElementWriter
         {
             throw new IllegalArgumentException(plan.error);
         }
+        List<String> previous = new ArrayList<>(segmentsOf(singleReference(item, "dataPath"))); //$NON-NLS-1$
         buildDataPath(formModel, item, plan.path);
+        // Same pruning as removeFormMember: the old path's UseAlways registration goes once no
+        // authored item is bound to it any more.
+        removeUnusedDynamicListUseAlwaysPath(formModel, previous);
         if (addressableKind(item) == Kind.TABLE)
         {
             syncTableExtInfo(formModel, item);

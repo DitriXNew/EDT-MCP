@@ -199,6 +199,37 @@ public class ModifyMetadataToolDataPathTest
     }
 
     @Test
+    public void testDynamicListFieldRebindingDropsTheOldUnusedUseAlwaysRegistration()
+    {
+        Form form = form();
+        var list = ComposerDataTreeFake.attribute(form, "List", "DynamicList");
+        list.setExtInfo(FormFactory.eINSTANCE.createDynamicListExtInfo());
+        FormField field = field(form, "Value", "K");
+        FormField other = field(form, "Other", "K");
+        List<ModifyMetadataTool.HolderChange> changes = new ArrayList<>();
+        assertNull(verdict(field, List.of(path("List.Ref")), changes));
+        changes.get(0).change().applyTo(field, null);
+        changes.clear();
+        assertNull(verdict(other, List.of(path("List.Ref")), changes));
+        changes.get(0).change().applyTo(other, null);
+        changes.clear();
+        assertEquals(1, list.getNotDefaultUseAlwaysAttributes().size());
+
+        // Another field still shows List.Ref, so its registration stays.
+        assertNull(verdict(field, List.of(path("List.Description")), changes));
+        changes.get(0).change().applyTo(field, null);
+        changes.clear();
+        assertEquals(List.of(List.of("List", "Ref"), List.of("List", "Description")),
+            list.getNotDefaultUseAlwaysAttributes().stream().map(p -> List.copyOf(p.getSegments())).toList());
+
+        // The last field leaves List.Ref: nothing shows it any more, so it is no longer UseAlways.
+        assertNull(verdict(other, List.of(path("List.Description")), changes));
+        changes.get(0).change().applyTo(other, null);
+        assertEquals(List.of(List.of("List", "Description")),
+            list.getNotDefaultUseAlwaysAttributes().stream().map(p -> List.copyOf(p.getSegments())).toList());
+    }
+
+    @Test
     public void testEmptyAndNonStringDataPathValuesAreRefused()
     {
         FormField field = field(form(), "Value", "K");
