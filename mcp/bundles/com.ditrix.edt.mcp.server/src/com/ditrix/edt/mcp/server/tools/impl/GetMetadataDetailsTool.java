@@ -38,6 +38,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.PredefinedItem;
 import com._1c.g5.v8.dt.metadata.mdclass.Role;
 import com._1c.g5.v8.dt.metadata.mdclass.ScheduledJob;
+import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com._1c.g5.v8.dt.xdto.model.Package;
 import com.ditrix.edt.mcp.server.Activator;
@@ -68,6 +69,7 @@ import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.RoleRightsReader;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
+import com.ditrix.edt.mcp.server.utils.TemplateContentSupport;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.XdtoStructureReader;
 
@@ -341,6 +343,14 @@ public class GetMetadataDetailsTool implements IMcpTool
                 return;
             }
             sb.append(formStructure);
+            sb.append(SECTION_SEPARATOR);
+            return;
+        }
+
+        String textTemplate = renderTemplateTextIfApplicable(ctx.project, ctx.scope, ctx.bmModel, fqn);
+        if (textTemplate != null)
+        {
+            sb.append(textTemplate);
             sb.append(SECTION_SEPARATOR);
             return;
         }
@@ -1268,6 +1278,34 @@ public class GetMetadataDetailsTool implements IMcpTool
                 return null;
             }
             return FormStructureReader.render(normalized, formModel, language);
+        });
+    }
+
+    /** Read the file-backed text under a BM boundary, without changing the model or the file. */
+    private static String renderTemplateTextIfApplicable(IProject project, MetadataScope scope,
+        IBmModel bmModel, String fqn)
+    {
+        if (bmModel == null)
+        {
+            return null;
+        }
+        MetadataNodeResolver.MetadataNode node = MetadataNodeResolver.resolveExisting(scope, fqn);
+        if (node == null || !(node.object instanceof BasicTemplate) || !(node.object instanceof IBmObject))
+        {
+            return null;
+        }
+        long templateId = ((IBmObject)node.object).bmGetId();
+        return BmTransactions.executeAndRollback(bmModel, "GetMetadataDetailsTextTemplate", (tx, monitor) ->
+        {
+            Object object = tx.getObjectById(templateId);
+            if (!(object instanceof BasicTemplate)
+                || ((BasicTemplate)object).getTemplateType() != TemplateType.TEXT_DOCUMENT)
+            {
+                return null;
+            }
+            BasicTemplate template = (BasicTemplate)object;
+            String text = TemplateContentSupport.readText(TemplateContentSupport.contentFile(project, template));
+            return TemplateContentSupport.renderText(MetadataTypeUtils.normalizeFqn(fqn), text);
         });
     }
 
