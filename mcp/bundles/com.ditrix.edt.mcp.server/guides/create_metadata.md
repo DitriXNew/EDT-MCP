@@ -51,6 +51,12 @@ An account chart nests accounts through an account HIERARCHY. There is NO folder
 
 `ChartOfCalculationTypes` / `ChartOfAccounts` predefined items are addressed and created by the same `...Predefined.<Item>` grammar as a Catalog item; only the property set above differs.
 
+
+### Platform collection data paths
+A Field may bind to a nested platform property when EDT's own form data tree resolves it, including `K.Settings.Filter.Use`, `.LeftValue`, `.ComparisonType`, `.RightValue`, `.Presentation`, `.ViewMode`, `K.Settings.Order.Field`, `K.Settings.Selection.Field`, and `K.Settings.ConditionalAppearance[0].Filter.Use` for a `DataCompositionSettingsComposer` attribute `K`. English and Russian platform segment names are accepted when EDT resolves them; new platform paths are stored with English segments and keep their requested `[0]` suffixes. The attribute's programmatic Name is preserved.
+
+A Table on a resolved platform collection such as `K.Settings.Filter` starts without columns: there is no LineNumber property. Add each desired column as a Field with `properties:[{name:'parent', value:'Filter'}, {name:'dataPath', value:'K.Settings.Filter.Use'}]`. Existing tabular-section, dynamic-list and ValueTable/ValueTree bindings keep their column rules. An unresolved path is refused with its first unresolved segment; an unavailable data-tree service is a readiness error, so retry when EDT's model is ready.
+
 ## Parameter details
 - `projectName` (required) - EDT project name.
 - `fqn` (required) - full-name FQN of the node to create.

@@ -4847,8 +4847,20 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
         }
         List<HolderChange> changes = new ArrayList<>();
+        boolean dataPathSeen = false;
         for (JsonObject prop : properties)
         {
+            if ("dataPath".equalsIgnoreCase(asString(prop.get("name")))) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                if (dataPathSeen)
+                {
+                    throw new FormValidationException(ToolResult.error(
+                        "Set 'dataPath' only once per modify_metadata call. An intermediate table binding " //$NON-NLS-1$
+                            + "can introduce binding-specific configuration; pass the final path in one property.") //$NON-NLS-1$
+                        .toJson());
+                }
+                dataPathSeen = true;
+            }
             String guard = guardFormProperty(prop);
             if (guard != null)
             {
@@ -5241,6 +5253,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private HolderChange prepareFormMemberChange(MetadataScope scope, Version version, EObject member,
         JsonObject prop, MdNameNormalizer.Report normReport)
     {
+        if ("dataPath".equalsIgnoreCase(asString(prop.get("name")))) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            JsonElement value = prop.get(KEY_VALUE);
+            if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString())
+            {
+                throw new FormValidationException(ToolResult.error(
+                    "'dataPath' takes a non-empty string naming a form attribute or its field/collection path.") //$NON-NLS-1$
+                    .toJson());
+            }
+            FormElementWriter.DataPathPlan plan =
+                FormElementWriter.planDataPathChange(formOf(member), member, value.getAsString());
+            if (plan.error() != null)
+            {
+                throw new FormValidationException(ToolResult.error(plan.error()).toJson());
+            }
+            return new HolderChange(false, PreparedChange.formDataPath(
+                member.eClass().getEStructuralFeature("dataPath"), plan)); //$NON-NLS-1$
+        }
         JsonObject normProp = normalizeFormProperty(member, prop);
         // The three retype guards below are about DATA BINDING - columns hanging off the member,
         // tables and fields bound to its data path. They identify their subject by NAME, and a
@@ -5381,6 +5411,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return FormElementWriter.dynamicListTypeUnavailableError(version);
     }
 
+    /** The implemented structural rebind route; tables must first release their old columns. */
+    private static final String FORM_DATA_PATH_REBIND_ADVICE =
+        "modify_metadata on each Field/Table FQN with properties:[{name:'dataPath', value:'<valid path>'}] " //$NON-NLS-1$
+            + "(for a table, remove its columns first)"; //$NON-NLS-1$
+
     /**
      * Refuses a form-attribute retype that would strand its COLUMNS. Retyping a collection attribute
      * to a non-collection leaves its {@code FormAttributeColumn} children hanging off something that
@@ -5423,8 +5458,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Form attribute '" + FormStructureReader.nameOf(member) //$NON-NLS-1$
                 + "' is the row source of " + rowConsumers.size() + " table(s) (" //$NON-NLS-1$ //$NON-NLS-2$
                 + String.join(", ", rowConsumers) + "), which a non-collection type cannot be. Delete " //$NON-NLS-1$ //$NON-NLS-2$
-                + "them with delete_metadata (or re-point them with modify_metadata 'dataPath') " //$NON-NLS-1$
-                + "first, or keep a collection type (ValueTable / ValueTree).").toJson(); //$NON-NLS-1$
+                + "them with delete_metadata, or use " + FORM_DATA_PATH_REBIND_ADVICE //$NON-NLS-1$
+                + " first, or keep a collection type (ValueTable / ValueTree).").toJson(); //$NON-NLS-1$
         }
         // ...and the same for items bound BELOW it - but ONLY when the requested type is terminal: a
         // field on 'Rows.Price' survives the retype and keeps pointing at a name a String does not
@@ -5443,7 +5478,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Retyping '" + FormStructureReader.nameOf(member) //$NON-NLS-1$
                 + "' would leave " + below.size() + " form item(s) (" + String.join(", ", below) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + ") bound below it to a name the new type does not have. Delete them with " //$NON-NLS-1$
-                + "delete_metadata, or re-point them (modify_metadata with 'dataPath') first.") //$NON-NLS-1$
+                + "delete_metadata, or use " + FORM_DATA_PATH_REBIND_ADVICE + " first.") //$NON-NLS-1$ //$NON-NLS-2$
                 .toJson();
         }
         return null;
@@ -5565,7 +5600,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "collection would leave " + bound.size() + " form item(s) (" //$NON-NLS-1$ //$NON-NLS-2$
             + String.join(", ", bound) + ") bound to a name the collection does not own: under a " //$NON-NLS-1$ //$NON-NLS-2$
             + "ValueTable / ValueTree a dotted data path addresses a COLUMN. Delete those items with " //$NON-NLS-1$
-            + "delete_metadata, or re-point them (modify_metadata with 'dataPath') first.").toJson(); //$NON-NLS-1$
+            + "delete_metadata, or use " + FORM_DATA_PATH_REBIND_ADVICE + " first.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
@@ -7796,6 +7831,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             CONTAINED, ADJUSTABLE_BOOLEAN,
             /** A form attribute's {@code useAlways} checkboxes; the value is the list of plans. */
             USE_ALWAYS,
+            /** A Field/Table dataPath validated by the same planner as creation (#728). */
+            FORM_DATA_PATH,
             /** A field list (issue #740); the value is the list of field ids. */
             FIELD_LIST
         }
@@ -7863,6 +7900,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         static PreparedChange adjustableBoolean(EStructuralFeature feature, AdjustableBooleanEdit edit)
         {
             return new PreparedChange(feature, Kind.ADJUSTABLE_BOOLEAN, edit, null, null, null, null, false);
+        }
+
+        /** A form item's contained data path, planned without changing the model. */
+        static PreparedChange formDataPath(EStructuralFeature feature, FormElementWriter.DataPathPlan plan)
+        {
+            return new PreparedChange(feature, Kind.FORM_DATA_PATH, plan, null, null, null, null, false);
         }
 
         /** A form attribute's {@code useAlways} change: the validated per-path plans (#661). */
@@ -8223,6 +8266,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         }
                         AdjustableBooleanSupport.applyRoleEdits((AdjustableBoolean)flag, edit.rolesIn(tx));
                     }
+                    return TypeChangeDefaults.Reset.NONE;
+                }
+                case FORM_DATA_PATH:
+                {
+                    FormElementWriter.applyDataPathChange(formOf(target), target,
+                        (FormElementWriter.DataPathPlan)scalarValue);
                     return TypeChangeDefaults.Reset.NONE;
                 }
                 case USE_ALWAYS:
