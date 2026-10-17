@@ -112,6 +112,22 @@ public final class TemplateContentSupport
             + ". Create a template with one of these types using create_metadata.").toJson(); //$NON-NLS-1$
     }
 
+    /**
+     * An actionable refusal for a retype target, or null. A DataCompositionSchema is accepted here (but
+     * not at creation): the retype leaves the content empty and the dcs tool materializes the schema on
+     * its first write, as it does for any template declared as a DCS.
+     */
+    public static String unsupportedRetypeError(TemplateType type, String supplied)
+    {
+        if (type == TemplateType.DATA_COMPOSITION_SCHEMA || type == TemplateType.TEXT_DOCUMENT
+            || type == TemplateType.SPREADSHEET_DOCUMENT)
+        {
+            return null;
+        }
+        return ToolResult.error("Unsupported templateType '" + supplied + "'. Supported: " + SUPPORTED //$NON-NLS-1$ //$NON-NLS-2$
+            + ", DataCompositionSchema (an empty template only; author it with the dcs tool).").toJson(); //$NON-NLS-1$
+    }
+
     /** Reproduce the type's new-wizard content; the supplied file is EDT's external-property path. */
     public static String initialize(BasicTemplate template, TemplateType type, IBmTransaction tx,
         IDtProject project, ITopObjectFqnGenerator names, IFile file)
@@ -164,13 +180,19 @@ public final class TemplateContentSupport
         {
             return null;
         }
-        String refusal = unsupportedTypeError(type, String.valueOf(type));
+        String refusal = unsupportedRetypeError(type, String.valueOf(type));
         if (refusal != null)
         {
             throw Refusals.argument(refusal);
         }
         requireEmpty(template, textFile);
         detachContent(template, tx);
+        if (type == TemplateType.DATA_COMPOSITION_SCHEMA)
+        {
+            // Left empty on purpose: the dcs tool creates and attaches the schema on its first write.
+            template.setTemplateType(type);
+            return null;
+        }
         return initialize(template, type, tx, project, names, textFile);
     }
 
@@ -456,7 +478,7 @@ public final class TemplateContentSupport
             {
                 return null;
             }
-            String refusal = unsupportedTypeError(type, String.valueOf(type));
+            String refusal = unsupportedRetypeError(type, String.valueOf(type));
             if (refusal != null)
             {
                 throw Refusals.argument(refusal);

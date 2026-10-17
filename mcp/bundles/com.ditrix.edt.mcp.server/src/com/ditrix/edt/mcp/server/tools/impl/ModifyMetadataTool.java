@@ -6463,7 +6463,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     && info.feature == MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE_TYPE)
                 {
                     TemplateType type = TemplateContentSupport.resolveType(value);
-                    String typeError = TemplateContentSupport.unsupportedTypeError(type, value);
+                    String typeError = TemplateContentSupport.unsupportedRetypeError(type, value);
                     if (typeError != null && (type == null || type != ((BasicTemplate)target).getTemplateType()))
                     {
                         return typeError;

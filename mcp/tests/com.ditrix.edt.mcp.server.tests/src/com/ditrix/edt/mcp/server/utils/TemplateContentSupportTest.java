@@ -141,6 +141,42 @@ public class TemplateContentSupportTest
         assertArrayEquals(new byte[0], file.bytes.get());
     }
 
+    @Test public void testRetypeEmptySpreadsheetToDcsLeavesTheSchemaToTheDcsTool() throws Exception
+    {
+        BasicTemplate template = spreadsheet();
+        initialize("retype", template, TemplateType.DATA_COMPOSITION_SCHEMA, new MemoryFile(null));
+        assertSame(TemplateType.DATA_COMPOSITION_SCHEMA, template.getTemplateType());
+        assertNull(template.getTemplate());
+    }
+
+    @Test public void testRetypeSpreadsheetWithCellToDcsRefused() throws Exception
+    {
+        BasicTemplate template = spreadsheet();
+        SpreadsheetTemplateWriter.apply((SpreadsheetDocument)template.getTemplate(),
+            json("{'cells':[{'row':0,'col':0,'text':'keep'}]}"));
+        assertRetypeRefused(template, TemplateType.DATA_COMPOSITION_SCHEMA, new MemoryFile(null));
+    }
+
+    @Test public void testRetypeToAnotherContentTypeStillRefused() throws Exception
+    {
+        BasicTemplate template = spreadsheet();
+        EObject before = template.getTemplate();
+        try
+        {
+            initialize("retype", template, TemplateType.BINARY_DATA, new MemoryFile(null));
+            fail("BinaryData has no supported content model");
+        }
+        catch (IllegalArgumentException expected)
+        {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("Unsupported templateType"));
+            assertTrue(expected.getMessage(), expected.getMessage().contains("DataCompositionSchema"));
+        }
+        assertSame(TemplateType.SPREADSHEET_DOCUMENT, template.getTemplateType());
+        assertSame(before, template.getTemplate());
+        assertNull(TemplateContentSupport.unsupportedRetypeError(TemplateType.DATA_COMPOSITION_SCHEMA, "x"));
+        assertNotNull(TemplateContentSupport.unsupportedTypeError(TemplateType.DATA_COMPOSITION_SCHEMA, "x"));
+    }
+
     @Test public void testSameTypeWithContentIsNoOp() throws Exception
     {
         BasicTemplate template = spreadsheet();
