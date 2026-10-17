@@ -7,20 +7,28 @@
 package com.ditrix.edt.mcp.server.tools.impl;
 
 import static org.junit.Assert.*;
-import static org.mockito.Mockito.mock;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.List;
 
+import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.ecore.EReference;
 import org.junit.Test;
 
+import com._1c.g5.v8.bm.core.IBmObject;
+import com._1c.g5.v8.bm.integration.IBmModel;
+import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.DataProcessor;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.platform.version.Version;
+import com.ditrix.edt.mcp.server.Activator;
+import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.google.gson.JsonObject;
 
@@ -91,6 +99,76 @@ public class CreateMetadataTextTemplateTest
         assertTrue(description, description.contains("TextDocument"));
         assertTrue(description, description.contains("expectedHash"));
         assertTrue(description, description.contains("get_metadata_details"));
+    }
+
+    @Test public void testTextWriteReachesBmBoundaryWithoutFqnGenerator() throws Exception
+    {
+        assertGeneratorRequirement(TemplateType.TEXT_DOCUMENT, false);
+    }
+
+    @Test public void testSpreadsheetWriteStillRequiresFqnGenerator() throws Exception
+    {
+        assertGeneratorRequirement(TemplateType.SPREADSHEET_DOCUMENT, true);
+    }
+
+    private static void assertGeneratorRequirement(TemplateType type, boolean required) throws Exception
+    {
+        IProject project = mock(IProject.class);
+        Activator activator = mock(Activator.class);
+        IBmModelManager manager = mock(IBmModelManager.class);
+        IBmModel model = mock(IBmModel.class);
+        when(activator.getBmModelManager()).thenReturn(manager);
+        when(manager.getModel(project)).thenReturn(model);
+        BasicTemplate template = mock(BasicTemplate.class, withSettings().extraInterfaces(IBmObject.class));
+        when(template.getTemplateType()).thenReturn(type);
+        IBmObject bm = (IBmObject)template;
+        when(bm.bmIsTop()).thenReturn(true);
+        when(bm.bmGetFqn()).thenReturn("CommonTemplate.Contract730");
+
+        // Stop at the real BM boundary: this unit test needs no file service or running EDT.
+        String boundary = ToolResult.error("Reached text BM boundary without a generator").toJson();
+        var exception = Class.forName(ModifyMetadataTool.class.getName() + "$TemplateWriteException")
+            .getDeclaredConstructor(String.class);
+        exception.setAccessible(true);
+        doThrow((RuntimeException)exception.newInstance(boundary)).when(model).execute(any());
+
+        Class<?> contextType = Class.forName(
+            "com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool$ProjectContext");
+        var constructor = contextType.getDeclaredConstructor();
+        constructor.setAccessible(true);
+        Object context = constructor.newInstance();
+        Field projectField = contextType.getField("project");
+        projectField.setAccessible(true);
+        projectField.set(context, project);
+        Method write = ModifyMetadataTool.class.getDeclaredMethod("modifyTemplateContent", contextType,
+            String.class, BasicTemplate.class, List.class, List.class, boolean.class, JsonObject.class);
+        write.setAccessible(true);
+        JsonObject spec = new JsonObject();
+        if (required) { spec.add("cells", new com.google.gson.JsonArray()); }
+        else { spec.addProperty("text", "new text"); }
+        Field plugin = Activator.class.getDeclaredField("plugin");
+        plugin.setAccessible(true);
+        Object previous = plugin.get(null);
+        try
+        {
+            plugin.set(null, activator);
+            String result = (String)write.invoke(new ModifyMetadataTool(), context,
+                "CommonTemplate.Contract730", template, List.of(), List.of(), false, spec);
+            if (required)
+            {
+                assertTrue(result, result.contains("ITopObjectFqnGenerator"));
+                verify(model, never()).execute(any());
+            }
+            else
+            {
+                assertEquals("Text writes must reach their BM boundary with a missing generator", boundary, result);
+                verify(model).execute(any());
+            }
+        }
+        finally
+        {
+            plugin.set(null, previous);
+        }
     }
 
     private static void assertCreatedType(String value, TemplateType expected) throws Exception

@@ -1952,7 +1952,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return nonSpreadsheetError;
         }
 
-        TemplateWriteContext writeCtx = resolveTemplateWriteContext(ctx, template, normFqn);
+        TemplateWriteContext writeCtx = resolveTemplateWriteContext(ctx, template, normFqn, true);
         if (writeCtx.error != null)
         {
             return writeCtx.error;
@@ -2000,7 +2000,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private String modifyTextTemplateContent(ProjectContext ctx, String normFqn, BasicTemplate template,
         JsonObject templateSpec)
     {
-        TemplateWriteContext writeCtx = resolveTemplateWriteContext(ctx, template, normFqn);
+        TemplateWriteContext writeCtx = resolveTemplateWriteContext(ctx, template, normFqn, false);
         if (writeCtx.error != null)
         {
             return writeCtx.error;
@@ -2069,7 +2069,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * Everything the template-content write boundary needs (built by
      * {@link #resolveTemplateWriteContext}): the template's BM id for the in-tx re-fetch, the TOP
      * object's canonical FQN to force-export, the BM model, the (nullable) {@link IDtProject}
-     * driving the canonical languageSettings block, and the external-property FQN generator. When
+     * driving the canonical languageSettings block, and the external-property FQN generator (only
+     * required for spreadsheet content). When
      * {@link #error} is non-null (a ready JSON error), the other fields must not be used.
      */
     private static final class TemplateWriteContext
@@ -2095,13 +2096,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /**
      * Resolves everything the template-content write needs up front: the template's BM id, the TOP
      * object's canonical FQN to force-export, the project's BM model, the (nullable)
-     * {@link IDtProject} and the external-property FQN generator. Returns a
+     * {@link IDtProject} and, when {@code attachSpreadsheet} is true, the external-property FQN
+     * generator needed to attach spreadsheet content. Returns a
      * {@link TemplateWriteContext} whose non-null {@code error} (a ready JSON error) reports a
      * missing service / unresolvable export target. Extracted verbatim from
      * {@link #modifyTemplateContent}.
      */
     private static TemplateWriteContext resolveTemplateWriteContext(ProjectContext ctx,
-        BasicTemplate template, String normFqn)
+        BasicTemplate template, String normFqn, boolean attachSpreadsheet)
     {
         TemplateWriteContext writeCtx = new TemplateWriteContext();
 
@@ -2161,11 +2163,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // under its generated external-property FQN (the same machinery FormElementWriter uses for a form's
         // content), else committing the write fails with "Failed to persist reference value". Carried on
         // the write context captured by the write lambda.
-        writeCtx.fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
-        if (writeCtx.fqnGenerator == null)
+        if (attachSpreadsheet)
         {
-            writeCtx.error = ToolResult.error("ITopObjectFqnGenerator not available").toJson(); //$NON-NLS-1$
-            return writeCtx;
+            writeCtx.fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
+            if (writeCtx.fqnGenerator == null)
+            {
+                writeCtx.error = ToolResult.error("ITopObjectFqnGenerator not available").toJson(); //$NON-NLS-1$
+                return writeCtx;
+            }
         }
         return writeCtx;
     }

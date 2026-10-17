@@ -12,7 +12,9 @@ import static org.mockito.Mockito.*;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -21,16 +23,21 @@ import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.InternalEObject;
+import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.Test;
 
 import com._1c.g5.v8.bm.core.IBmTransaction;
 import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IDtProject;
+import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
+import com._1c.g5.v8.dt.moxel.MoxelCorePlugin;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
 import com._1c.g5.v8.dt.moxel.sheet.SheetFactory;
+import com._1c.g5.v8.dt.platform.version.Version;
+import com.google.inject.Injector;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -95,6 +102,90 @@ public class TemplateContentSupportTest
         SpreadsheetTemplateWriter.apply((SpreadsheetDocument)template.getTemplate(),
             json("{'areas':[{'name':'Keep','fromRow':0,'fromCol':0,'toRow':1,'toCol':1}]}"));
         assertRetypeRefused(template, TemplateType.TEXT_DOCUMENT, new MemoryFile(null));
+    }
+
+    @Test public void testFreshInteractiveSpreadsheetMatchesWizardBaselineAndCanRetype() throws Exception
+    {
+        try (AutoCloseable services = wizardServices())
+        {
+            IDtProject project = mock(IDtProject.class);
+            BasicTemplate template = template(TemplateType.SPREADSHEET_DOCUMENT);
+            template.setTemplate(SheetFactory.createInteractiveSpreadsheetDocument(project));
+            call("retype", INIT, template, TemplateType.DATA_COMPOSITION_SCHEMA,
+                mock(IBmTransaction.class), project, null, null);
+            assertSame(TemplateType.DATA_COMPOSITION_SCHEMA, template.getTemplateType());
+            assertNull(template.getTemplate());
+        }
+    }
+
+    @Test public void testInteractiveSpreadsheetPrintSettingRefusesRetypeWithoutModelChange() throws Exception
+    {
+        try (AutoCloseable services = wizardServices())
+        {
+            IDtProject project = mock(IDtProject.class);
+            BasicTemplate template = template(TemplateType.SPREADSHEET_DOCUMENT);
+            SpreadsheetDocument document = SheetFactory.createInteractiveSpreadsheetDocument(project);
+            template.setTemplate(document);
+            document.getPrintSettings().setTopMargin(document.getPrintSettings().getTopMargin() + 1000);
+            EObject before = EcoreUtil.copy(document);
+            IBmTransaction tx = mock(IBmTransaction.class);
+            try
+            {
+                call("retype", INIT, template, TemplateType.DATA_COMPOSITION_SCHEMA, tx, project, null, null);
+                fail("Changed wizard document print settings must prevent retyping");
+            }
+            catch (IllegalArgumentException expected)
+            {
+                assertTrue(expected.getMessage(), expected.getMessage().contains("content"));
+            }
+            assertSame(TemplateType.SPREADSHEET_DOCUMENT, template.getTemplateType());
+            assertSame(document, template.getTemplate());
+            assertTrue(EcoreUtil.equals(before, document));
+            verifyZeroInteractions(tx);
+        }
+    }
+
+    @Test public void testFreshSpreadsheetBaselineIsEmptyAndCanRetype() throws Exception
+    {
+        BasicTemplate template = spreadsheet();
+        assertFalse(TemplateContentSupport.hasContent(template, null));
+        initialize("retype", template, TemplateType.TEXT_DOCUMENT, new MemoryFile(null));
+        assertSame(TemplateType.TEXT_DOCUMENT, template.getTemplateType());
+    }
+
+    @Test public void testSpreadsheetPrintSettingCountsAsContentAndRetypeKeepsModel() throws Exception
+    {
+        BasicTemplate template = spreadsheet();
+        SpreadsheetDocument document = (SpreadsheetDocument)template.getTemplate();
+        document.getPrintSettings().setTopMargin(2000);
+        EObject before = EcoreUtil.copy(document);
+        assertTrue("A changed document print setting is authored content",
+            TemplateContentSupport.hasContent(template, null));
+        assertRetypeRefused(template, TemplateType.TEXT_DOCUMENT, new MemoryFile(null));
+        assertTrue("Refused retype must leave all spreadsheet state unchanged", EcoreUtil.equals(before, document));
+        assertEquals(2000, document.getPrintSettings().getTopMargin());
+    }
+
+    @Test public void testSpreadsheetViewSettingCountsAsContentAndRetypeKeepsModel() throws Exception
+    {
+        BasicTemplate template = spreadsheet();
+        SpreadsheetDocument document = (SpreadsheetDocument)template.getTemplate();
+        document.getViewSettings().setShowGrid(false);
+        EObject before = EcoreUtil.copy(document);
+        assertTrue(TemplateContentSupport.hasContent(template, null));
+        assertRetypeRefused(template, TemplateType.DATA_COMPOSITION_SCHEMA, new MemoryFile(null));
+        assertTrue(EcoreUtil.equals(before, document));
+    }
+
+    @Test public void testSpreadsheetDefaultFormatCountsAsContentAndRetypeKeepsModel() throws Exception
+    {
+        BasicTemplate template = spreadsheet();
+        SpreadsheetDocument document = (SpreadsheetDocument)template.getTemplate();
+        document.getFormats().get(document.getDefaultFormatIndex()).setWidth(144);
+        EObject before = EcoreUtil.copy(document);
+        assertTrue(TemplateContentSupport.hasContent(template, null));
+        assertRetypeRefused(template, TemplateType.TEXT_DOCUMENT, new MemoryFile(null));
+        assertTrue(EcoreUtil.equals(before, document));
     }
 
     @Test public void testRetypeOtherContentRefused() throws Exception
@@ -193,6 +284,54 @@ public class TemplateContentSupportTest
         String text = "{\n  \"value\": \"\u041f\u0440\u0438\u0432\u0435\u0442\"\n}\n";
         assertNull(write(template(TemplateType.TEXT_DOCUMENT), file, text, null));
         assertArrayEquals(text.getBytes(StandardCharsets.UTF_8), file.bytes.get());
+    }
+
+    @Test public void testUnrepresentableTextRefusedBeforeJournalAndRepresentableTextWrites() throws Exception
+    {
+        Charset charset = Charset.forName("windows-1251");
+        MemoryFile file = new MemoryFile("original", charset);
+        assertEncodingRefused(file, "private text \u6F22");
+        String text = "\u041f\u0440\u0438\u0432\u0435\u0442\r\n";
+        assertNull(write(template(TemplateType.TEXT_DOCUMENT), file, text, null));
+        assertArrayEquals(text.getBytes(charset), file.bytes.get());
+        assertEquals(text, TemplateContentSupport.readText(file.file));
+    }
+
+    @Test public void testMalformedTextRefusedBeforeJournal() throws Exception
+    {
+        assertEncodingRefused(new MemoryFile("original"), "private text \uD800");
+    }
+
+    @Test public void testEmptyExistingTextFileKeepsItsDeclaredCharset() throws Exception
+    {
+        MemoryFile file = new MemoryFile("", Charset.forName("windows-1251"));
+        assertEncodingRefused(file, "private text \u6F22");
+    }
+
+    private static void assertEncodingRefused(MemoryFile file, String text) throws Exception
+    {
+        byte[] original = file.bytes.get().clone();
+        Class<?> type = Class.forName("com.ditrix.edt.mcp.server.utils.TemplateContentSupport$Context");
+        JsonObject spec = new JsonObject();
+        spec.addProperty("text", text);
+        try (AutoCloseable context = (AutoCloseable)type.getConstructor(org.eclipse.core.resources.IProject.class)
+            .newInstance(new Object[] {null}))
+        {
+            String error = (String)call("writeText",
+                new Class<?>[] {BasicTemplate.class, IFile.class, JsonObject.class, type},
+                template(TemplateType.TEXT_DOCUMENT), file.file, spec, context);
+            assertNotNull("Unencodable text must be refused", error);
+            assertFalse(error, JsonParser.parseString(error).getAsJsonObject().get("success").getAsBoolean());
+            assertTrue(error, error.contains(file.file.getCharset()));
+            assertTrue(error, error.contains("cannot represent"));
+            assertFalse(error, error.contains("private text"));
+            assertArrayEquals(original, file.bytes.get());
+            // A refusal must not enlist the file and later restore over a concurrent edit.
+            file.bytes.set("external edit".getBytes(Charset.forName(file.file.getCharset())));
+        }
+        verify(file.file, never()).setContents(any(InputStream.class), anyInt(), any());
+        verify(file.file, never()).create(any(InputStream.class), anyBoolean(), any(IProgressMonitor.class));
+        assertArrayEquals("external edit".getBytes(Charset.forName(file.file.getCharset())), file.bytes.get());
     }
 
     @Test public void testExpectedHashMatchesModuleHelperIncludingQuotesCaseAndCrLf() throws Exception
@@ -334,6 +473,29 @@ public class TemplateContentSupportTest
         assertArrayEquals("current".getBytes(StandardCharsets.UTF_8), file.bytes.get());
     }
 
+    /** Supply factory services locally; the real factory still creates every model feature. */
+    private static AutoCloseable wizardServices() throws Exception
+    {
+        Injector injector = mock(Injector.class);
+        when(injector.getInstance(any(Class.class))).thenAnswer(invocation -> {
+            Class<?> type = invocation.getArgument(0);
+            if (type == IV8ProjectManager.class) { return mock(IV8ProjectManager.class); }
+            if (type.getName().equals("com.e1c.g5.dt.core.api.platform.IDtProjectRuntimeVersionManager"))
+            {
+                return mock(type, call -> call.getMethod().getName().equals("getRuntimeVersion")
+                    ? Version.LATEST : RETURNS_DEFAULTS.answer(call));
+            }
+            throw new AssertionError("Unexpected wizard service: " + type.getName());
+        });
+        MoxelCorePlugin plugin = mock(MoxelCorePlugin.class);
+        when(plugin.getInjector()).thenReturn(injector);
+        Field instance = MoxelCorePlugin.class.getDeclaredField("instance");
+        instance.setAccessible(true);
+        Object previous = instance.get(null);
+        instance.set(null, plugin);
+        return () -> instance.set(null, previous);
+    }
+
     private static String render(String text) throws Exception
     {
         return (String)call("renderText", new Class<?>[] {String.class, String.class},
@@ -420,10 +582,15 @@ public class TemplateContentSupportTest
 
         MemoryFile(String text) throws Exception
         {
-            bytes.set(text == null ? null : text.getBytes(StandardCharsets.UTF_8));
+            this(text, StandardCharsets.UTF_8);
+        }
+
+        MemoryFile(String text, Charset charset) throws Exception
+        {
+            bytes.set(text == null ? null : text.getBytes(charset));
             when(file.exists()).thenAnswer(i -> bytes.get() != null);
             when(file.getContents()).thenAnswer(i -> new ByteArrayInputStream(bytes.get()));
-            when(file.getCharset()).thenReturn("UTF-8");
+            when(file.getCharset()).thenReturn(charset.name());
             when(file.getFullPath()).thenReturn(new Path(
                 "/Test/src/DataProcessors/Owner/Templates/Contract/Template.txt"));
             doAnswer(i -> {

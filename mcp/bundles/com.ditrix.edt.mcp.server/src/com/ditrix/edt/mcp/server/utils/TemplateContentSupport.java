@@ -8,7 +8,11 @@ package com.ditrix.edt.mcp.server.utils;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -26,6 +30,7 @@ import org.eclipse.emf.ecore.EEnumLiteral;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.InternalEObject;
+import org.eclipse.emf.ecore.util.EcoreUtil;
 
 import com._1c.g5.v8.bm.core.IBmObject;
 import com._1c.g5.v8.bm.core.IBmTransaction;
@@ -185,7 +190,7 @@ public final class TemplateContentSupport
         {
             throw Refusals.argument(refusal);
         }
-        requireEmpty(template, textFile);
+        requireEmpty(template, textFile, project);
         detachContent(template, tx);
         if (type == TemplateType.DATA_COMPOSITION_SCHEMA)
         {
@@ -196,9 +201,9 @@ public final class TemplateContentSupport
         return initialize(template, type, tx, project, names, textFile);
     }
 
-    private static void requireEmpty(BasicTemplate template, IFile file)
+    private static void requireEmpty(BasicTemplate template, IFile file, IDtProject project)
     {
-        if (hasContent(template, file))
+        if (hasContent(template, file, project))
         {
             throw Refusals.argument("Cannot change templateType: template '" + template.getName() //$NON-NLS-1$
                 + "' already has content. Keep its type, or use create_metadata to create a separate " //$NON-NLS-1$
@@ -208,6 +213,11 @@ public final class TemplateContentSupport
 
     /** Conservative for other content models; spreadsheet creation defaults are not authored content. */
     public static boolean hasContent(BasicTemplate template, IFile textFile)
+    {
+        return hasContent(template, textFile, null);
+    }
+
+    private static boolean hasContent(BasicTemplate template, IFile textFile, IDtProject project)
     {
         if (template.getTemplateType() == TemplateType.TEXT_DOCUMENT && !readText(textFile).isEmpty())
         {
@@ -225,11 +235,12 @@ public final class TemplateContentSupport
         }
         if (content instanceof SpreadsheetDocument)
         {
-            SpreadsheetDocument doc = (SpreadsheetDocument)content;
-            return !doc.getRows().isEmpty() || !doc.getNamedItems().isEmpty() || !doc.getMerges().isEmpty()
-                || !doc.getDrawings().isEmpty() || !doc.getPictures().isEmpty()
-                || !doc.getDrawingDataSources().isEmpty() || doc.getHeight() > 0
-                || doc.getColumns() != null && !doc.getColumns().eContents().isEmpty();
+            // Compare the whole model, including print/view settings and format tables. Without a
+            // project only the simpler creation baseline can be proven empty; any extra state refuses.
+            SpreadsheetDocument baseline = project == null ? SheetFactory.createSpreadsheetDocument()
+                : SheetFactory.createInteractiveSpreadsheetDocument(project);
+            baseline.setTemplateMode(true);
+            return !EcoreUtil.equals(content, baseline);
         }
         if (content.eIsProxy())
         {
@@ -332,13 +343,29 @@ public final class TemplateContentSupport
         }
         try
         {
-            byte[] old = file.exists() ? bytes(file) : new byte[0];
+            boolean exists = file.exists();
+            byte[] old = exists ? bytes(file) : new byte[0];
             boolean bom = old.length >= 3 && (old[0] & 0xFF) == 0xEF && (old[1] & 0xFF) == 0xBB
                 && (old[2] & 0xFF) == 0xBF;
-            Charset charset = bom || old.length == 0 ? StandardCharsets.UTF_8
+            Charset charset = bom || !exists ? StandardCharsets.UTF_8
                 : Charset.forName(file.getCharset());
             String text = spec.get(TEXT).getAsString();
-            byte[] encoded = (bom ? "\uFEFF" + text : text).getBytes(charset); //$NON-NLS-1$
+            final byte[] encoded;
+            try
+            {
+                ByteBuffer buffer = charset.newEncoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .encode(CharBuffer.wrap(bom ? "\uFEFF" + text : text)); //$NON-NLS-1$
+                encoded = new byte[buffer.remaining()];
+                buffer.get(encoded);
+            }
+            catch (CharacterCodingException error)
+            {
+                return ToolResult.error("Cannot write Template.txt with file charset '" + charset.name() //$NON-NLS-1$
+                    + "': the text contains characters it cannot represent. Use text representable in this " //$NON-NLS-1$
+                    + "charset, or change the file encoding in EDT and retry.").toJson(); //$NON-NLS-1$
+            }
             if (context != null)
             {
                 context.beforeWrite(file);
@@ -497,15 +524,15 @@ public final class TemplateContentSupport
             {
                 template.setTemplateType(oldType);
             }
+            var activator = Activator.getDefault();
+            var manager = activator.getDtProjectManager();
+            IDtProject dtProject = manager == null ? null : manager.getDtProject(project);
             // The shared retype guard runs before any file change is enlisted.
-            requireEmpty(template, oldFile);
+            requireEmpty(template, oldFile, dtProject);
             if (type == TemplateType.TEXT_DOCUMENT && !newFile.exists())
             {
                 beforeWrite(newFile);
             }
-            var activator = Activator.getDefault();
-            var manager = activator.getDtProjectManager();
-            IDtProject dtProject = manager == null ? null : manager.getDtProject(project);
             String fqn = TemplateContentSupport.retype(template, type, tx, dtProject,
                 activator.getTopObjectFqnGenerator(), oldType == TemplateType.TEXT_DOCUMENT ? oldFile : newFile);
             try
