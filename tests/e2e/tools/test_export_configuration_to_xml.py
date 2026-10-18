@@ -39,9 +39,9 @@ WHAT THE TOOL DOES (from ExportConfigurationToXmlTool.java):
       - CLI API plugin com._1c.g5.v8.dt.cli.api absent (Activator returns null) =>
             "IExportConfigurationFilesApi is not available. Required EDT plugin
              com._1c.g5.v8.dt.cli.api is not installed."
-      - unknown/closed project => refused BEFORE the CLI API and before outputPath
-        is created: "Project not found: <name>. Use list_projects ..." /
-        "Project is closed: <name>" (#683)
+      - unknown project => refused BEFORE the CLI API and before outputPath is
+        created: "Project not found: <name>. Use list_projects ..." (#683); a
+        closed project is not refused - the CLI API opens it itself
       - exportProject throws => "Export failed: <cause message>"
       - signature drift => "CLI API mismatch: <msg>"
 

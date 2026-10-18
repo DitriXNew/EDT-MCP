@@ -99,17 +99,14 @@ public class ExportConfigurationToXmlTool implements IMcpTool
             }
 
             // Resolve the project before the CLI API and before creating outputPath: an
-            // unknown or closed name is a caller mistake, so it gets the standard
-            // value-naming error instead of a CliApiException that CliReflectionErrors
-            // logs at ERROR with a stack (#683), and no empty directory is left behind.
-            ProjectContext ctx = ProjectContext.of(projectName);
-            if (!ctx.exists())
+            // unknown name is a caller mistake, so it gets the standard value-naming error
+            // instead of a CliApiException that CliReflectionErrors logs at ERROR with a
+            // stack (#683), and no empty directory is left behind. This is the same lookup
+            // the API does (IWorkspaceRoot.getProject(name).exists()). A closed project is
+            // NOT refused: the API opens it itself (IWorkspaceSupport.setUpProject).
+            if (!ProjectContext.of(projectName).exists())
             {
                 return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
-            }
-            if (!ctx.isOpen())
-            {
-                return ToolResult.error("Project is closed: " + projectName).toJson(); //$NON-NLS-1$
             }
             Files.createDirectories(outputPath);
 
