@@ -1293,7 +1293,7 @@ public final class MetadataPropertyIntrospector
             // attributes is loaded: the name is null and the category its default literal, which is
             // another group's. The platform keys each group by name in the proxy URI's fragment
             // (StdCommandGroupLoader appends "/" + name), so that is where its name is read.
-            return platformNameFromProxyUri(((InternalEObject)value).eProxyURI());
+            return standardCommandGroupNameFromProxyUri(((InternalEObject)value).eProxyURI());
         }
         if (value instanceof NamedElement)
         {
@@ -1608,7 +1608,7 @@ public final class MetadataPropertyIntrospector
         {
             // StdPicturesLoader creates proxy URIs with uri.appendFragment("/" + name), so this
             // fragment is the authoritative name when resolution is unavailable.
-            name = platformNameFromProxyUri(proxyUri);
+            name = platformPictureNameFromProxyUri(proxyUri);
         }
         if (name == null)
         {
@@ -1646,10 +1646,29 @@ public final class MetadataPropertyIntrospector
     }
 
     /**
-     * The name a platform catalogue proxy carries in its URI fragment: the platform loaders
-     * (pictures, standard command groups) build each proxy with {@code appendFragment("/" + name)}.
+     * The name of a platform standard command group, read off its proxy URI - but only a URI of the
+     * platform's own catalogue. The versioned {@code CommandGroupProvider} roots it at
+     * {@code v8:/CommandGroup/Std/<version>} and {@code StdCommandGroupLoader} appends
+     * {@code "/" + name}; a fragment of any other URI (a BM object path, another catalogue's key) is
+     * not a group name and is not offered as one.
      */
-    private static String platformNameFromProxyUri(URI proxyUri)
+    private static String standardCommandGroupNameFromProxyUri(URI proxyUri)
+    {
+        if (proxyUri == null || !"v8".equals(proxyUri.scheme()) || proxyUri.segmentCount() < 2 //$NON-NLS-1$
+            || !"CommandGroup".equals(proxyUri.segment(0)) || !"Std".equals(proxyUri.segment(1))) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            return null;
+        }
+        String fragment = proxyUri.fragment();
+        if (fragment == null || !fragment.startsWith("/")) //$NON-NLS-1$
+        {
+            return null;
+        }
+        String name = fragment.substring(1);
+        return name.isEmpty() || name.indexOf('/') >= 0 ? null : name;
+    }
+
+    private static String platformPictureNameFromProxyUri(URI proxyUri)
     {
         if (proxyUri == null)
         {

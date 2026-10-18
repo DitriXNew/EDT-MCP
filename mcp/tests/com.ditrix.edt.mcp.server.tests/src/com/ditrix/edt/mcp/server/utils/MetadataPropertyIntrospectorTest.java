@@ -1122,7 +1122,7 @@ public class MetadataPropertyIntrospectorTest
     public void testCommandGroupLabelOfAnUnresolvedStandardGroupIsTheNameInItsUri()
     {
         StandardCommandGroup proxy = standardGroupProxy(
-            URI.createURI("platform:/plugin/x/commandGroups.xml").appendFragment("/ActionsPanelTools")); //$NON-NLS-1$ //$NON-NLS-2$
+            URI.createURI("v8:/CommandGroup/Std/v8.3.15").appendFragment("/ActionsPanelTools")); //$NON-NLS-1$ //$NON-NLS-2$
         assertNull("precondition: a proxy carries no loaded name", proxy.getName()); //$NON-NLS-1$
 
         assertEquals("ActionsPanelTools", MetadataPropertyIntrospector.commandGroupLabel(proxy)); //$NON-NLS-1$
@@ -1133,7 +1133,7 @@ public class MetadataPropertyIntrospectorTest
     {
         DataProcessorCommand command = MdClassFactory.eINSTANCE.createDataProcessorCommand();
         command.setGroup(standardGroupProxy(
-            URI.createURI("platform:/plugin/x/commandGroups.xml").appendFragment("/ActionsPanelTools"))); //$NON-NLS-1$ //$NON-NLS-2$
+            URI.createURI("v8:/CommandGroup/Std/v8.3.15").appendFragment("/ActionsPanelTools"))); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertEquals("ActionsPanelTools", //$NON-NLS-1$
             MetadataPropertyIntrospector.find(command, "group").currentValue); //$NON-NLS-1$
@@ -1142,10 +1142,27 @@ public class MetadataPropertyIntrospectorTest
     @Test
     public void testAnUnresolvedStandardGroupWithoutANameIsItsUriNotACategory()
     {
-        URI uri = URI.createURI("platform:/plugin/x/commandGroups.xml"); //$NON-NLS-1$
+        URI uri = URI.createURI("v8:/CommandGroup/Std/v8.3.15"); //$NON-NLS-1$
         String label = MetadataPropertyIntrospector.commandGroupLabel(standardGroupProxy(uri));
 
         assertEquals("a proxy that names no group says what it points at", uri.toString(), label); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAFragmentOutsideTheStandardGroupCatalogueIsNotAGroupName()
+    {
+        // Only the platform's own catalogue keys a group by name; any other fragment - a BM object
+        // path, another catalogue's key - is printed as the URI, never offered as a bare group name.
+        URI[] foreign = {
+            URI.createURI("bm://TestConfiguration/CommandGroup.Sales").appendFragment("/ActionsPanelTools"), //$NON-NLS-1$ //$NON-NLS-2$
+            URI.createURI("v8:/Pictures/Std/v8.3.15").appendFragment("/ActionsPanelTools"), //$NON-NLS-1$ //$NON-NLS-2$
+            URI.createURI("v8:/CommandGroup/Std/v8.3.15").appendFragment("//@groups.3"), //$NON-NLS-1$ //$NON-NLS-2$
+        };
+        for (URI uri : foreign)
+        {
+            String label = MetadataPropertyIntrospector.commandGroupLabel(standardGroupProxy(uri));
+            assertEquals("not a standard group name: " + uri, uri.toString(), label); //$NON-NLS-1$
+        }
     }
 
     @Test

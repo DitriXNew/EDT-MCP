@@ -322,7 +322,7 @@ public class UniversalMetadataFormatterTest
         // literal, so only the URI fragment (the loader's "/" + name) says which group it is.
         StandardCommandGroup proxy = McoreFactory.eINSTANCE.createStandardCommandGroup();
         ((org.eclipse.emf.ecore.InternalEObject)proxy).eSetProxyURI(org.eclipse.emf.common.util.URI
-            .createURI("platform:/plugin/x/commandGroups.xml").appendFragment("/ActionsPanelTools")); //$NON-NLS-1$ //$NON-NLS-2$
+            .createURI("v8:/CommandGroup/Std/v8.3.15").appendFragment("/ActionsPanelTools")); //$NON-NLS-1$ //$NON-NLS-2$
 
         for (boolean full : new boolean[] { false, true })
         {
