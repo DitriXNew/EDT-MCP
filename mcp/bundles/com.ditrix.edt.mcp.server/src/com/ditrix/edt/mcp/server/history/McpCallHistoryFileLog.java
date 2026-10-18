@@ -83,8 +83,14 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
     /** Single background thread that owns all disk I/O for this sink. */
     private final ExecutorService writer;
 
+    /** Orders admission and drain scheduling before the final writer cleanup task. */
+    private final Object lifecycleLock = new Object();
+
     /** Set once when the first overflow drop happens, to log the warning only once. */
     private final AtomicBoolean overflowWarned = new AtomicBoolean(false);
+
+    /** Repeated close calls must not repeat the stalled-disk warning. */
+    private final AtomicBoolean closeTimeoutWarned = new AtomicBoolean(false);
 
     /**
      * Coalesces drain scheduling: at most ONE drain task is queued on the executor at a
@@ -105,13 +111,11 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
     /** Set by {@link #close()}: no further records are accepted. */
     private volatile boolean closed;
 
-    /**
-     * The lazily-opened writer. Confined to the background thread while running;
-     * read/closed by {@link #close()} only after the executor has terminated, so a
-     * happens-before edge covers the cross-thread hand-off. {@code volatile} for
-     * belt-and-braces visibility.
-     */
-    private volatile BufferedWriter out;
+    /** The lazily-opened writer, accessed and closed only by the background executor. */
+    private BufferedWriter out;
+
+    /** Assigned before listener publication under ACTIVE_LOCK, then owned by the writer thread. */
+    private McpCallHistoryFileLog predecessor;
 
     /**
      * Creates a sink writing to {@code logFile}. Package-private: production code
@@ -122,9 +126,9 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
      */
     McpCallHistoryFileLog(Path logFile)
     {
-        this.logFile = logFile;
+        this.logFile = logFile.toAbsolutePath().normalize();
         this.queue = new ArrayBlockingQueue<>(DEFAULT_CAPACITY);
-        this.writer = Executors.newSingleThreadExecutor(McpCallHistoryFileLog::newWriterThread);
+        this.writer = Executors.newSingleThreadExecutor(this::newWriterThread);
     }
 
     /**
@@ -140,6 +144,13 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
      * Guarded by {@link #ACTIVE_LOCK}.
      */
     private static McpCallHistoryFileLog active;
+
+    /**
+     * Latest retired sink for each normalized file, retained until its executor terminates.
+     * A successor keeps the predecessor link even if it closes without writing any records.
+     * Guarded by {@link #ACTIVE_LOCK}; no termination wait or disk I/O holds this lock.
+     */
+    private static final Map<Path, McpCallHistoryFileLog> CLOSING = new LinkedHashMap<>();
 
     /**
      * (Re)builds the file-log sink from the current {@link HistoryConfig} preferences
@@ -194,9 +205,10 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
      * When the target does change, the old sink is unregistered <b>before</b> the new one
      * is registered (a single-registration handoff, so no record is ever delivered to two
      * sinks at once), then the old sink is {@link #close() closed} to flush its pending
-     * lines. Because the targets differ, the old sink's flush and the new sink's writes go
-     * to different files and cannot interleave. The lock is held only for the field swap;
-     * the (potentially blocking) {@code close()} runs outside it.
+     * lines. A return to a file whose earlier sink is still closing links the new sink
+     * to that predecessor under the same lock. Its writer thread waits for predecessor
+     * termination before opening the file; the preference thread does not wait for that
+     * handoff. The bounded {@code close()} runs outside the lock.
      *
      * @param next the new sink to install, or {@code null} to leave the file log off
      */
@@ -204,22 +216,35 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
     {
         McpCallHistory history = McpCallHistory.getInstance();
         McpCallHistoryFileLog previous;
+        boolean unchanged;
         synchronized (ACTIVE_LOCK)
         {
             Path currentFile = active == null ? null : active.logFile;
             Path nextFile = next == null ? null : next.logFile;
-            if (Objects.equals(currentFile, nextFile))
+            unchanged = Objects.equals(currentFile, nextFile);
+            previous = active;
+            if (!unchanged)
             {
-                // Unchanged target: keep the running sink; drop the unused duplicate (its
-                // executor thread is released — the file was never opened for it).
+                if (previous != null)
+                {
+                    CLOSING.put(previous.logFile, previous);
+                }
                 if (next != null)
                 {
-                    next.close();
+                    next.predecessor = CLOSING.get(next.logFile);
                 }
-                return;
+                active = next;
             }
-            previous = active;
-            active = next;
+        }
+        if (unchanged)
+        {
+            // The duplicate never opens the file. Close outside ACTIVE_LOCK as its
+            // writer thread also uses that lock to remove a terminated registry entry.
+            if (next != null)
+            {
+                next.close();
+            }
+            return;
         }
         if (previous != null)
         {
@@ -338,21 +363,24 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
      */
     void enqueue(String line)
     {
-        if (line == null || failed || closed)
+        synchronized (lifecycleLock)
         {
-            return;
-        }
-        if (!queue.offer(line))
-        {
-            dropped.incrementAndGet();
-            if (overflowWarned.compareAndSet(false, true))
+            if (line == null || failed || closed)
             {
-                Activator.logWarning(
-                    "MCP call history file log queue is full; dropping records (disk writer cannot keep up)"); //$NON-NLS-1$
+                return;
             }
-            return;
+            if (!queue.offer(line))
+            {
+                dropped.incrementAndGet();
+                if (overflowWarned.compareAndSet(false, true))
+                {
+                    Activator.logWarning(
+                        "MCP call history file log queue is full; dropping records (disk writer cannot keep up)"); //$NON-NLS-1$
+                }
+                return;
+            }
+            scheduleDrain();
         }
-        scheduleDrain();
     }
 
     /**
@@ -363,17 +391,19 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
      */
     private void scheduleDrain()
     {
-        if (drainScheduled.compareAndSet(false, true))
+        synchronized (lifecycleLock)
         {
-            try
+            if (!closed && drainScheduled.compareAndSet(false, true))
             {
-                writer.execute(this::drain);
-            }
-            catch (RejectedExecutionException e)
-            {
-                // The executor is shutting down. Clear the flag we just set; the line stays
-                // queued and is flushed by close()'s residual drain. Never propagate.
-                drainScheduled.set(false);
+                try
+                {
+                    writer.execute(this::drain);
+                }
+                catch (RejectedExecutionException e)
+                {
+                    // Leave the line queued for the final cleanup task. Never propagate.
+                    drainScheduled.set(false);
+                }
             }
         }
     }
@@ -434,6 +464,7 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
         {
             return;
         }
+        awaitPredecessor();
         Path parent = logFile.getParent();
         if (parent != null)
         {
@@ -449,41 +480,91 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
         }
     }
 
+    /** Waits only on this sink's writer thread, before any access to a predecessor's file. */
+    private void awaitPredecessor()
+    {
+        McpCallHistoryFileLog previous = predecessor;
+        if (previous == null)
+        {
+            return;
+        }
+        boolean interrupted = false;
+        while (!previous.writer.isTerminated())
+        {
+            try
+            {
+                if (previous.writer.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS))
+                {
+                    break;
+                }
+            }
+            catch (InterruptedException e)
+            {
+                // Interruption cannot make it safe to open a file still owned by the
+                // predecessor. Finish the handoff, then preserve the interrupt status.
+                interrupted = true;
+            }
+        }
+        predecessor = null;
+        if (interrupted)
+        {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     /**
-     * Stops the sink and flushes any pending records. Shuts the background writer
-     * down, waits briefly for it to drain, then closes the file. Idempotent and
-     * safe to call from any thread.
+     * Stops admission and queues the final flush and close after all accepted drains.
+     * Waits at most five seconds, or less if interrupted. Cleanup then stays with the
+     * daemon writer thread: pending lines and its buffered output may be lost if EDT
+     * exits while disk I/O is still stalled. A timeout is logged once with the file path.
+     * Idempotent and safe to call from any thread.
      */
     @Override
     public void close()
     {
-        closed = true;
-        writer.shutdown();
+        synchronized (lifecycleLock)
+        {
+            if (!closed)
+            {
+                closed = true;
+                writer.execute(() -> {
+                    try
+                    {
+                        // Even an empty successor must retain the predecessor's place
+                        // in the chain until that executor has terminated.
+                        awaitPredecessor();
+                        drainResidual();
+                    }
+                    finally
+                    {
+                        closeWriterQuietly();
+                    }
+                });
+                writer.shutdown();
+            }
+        }
         try
         {
             if (!writer.awaitTermination(5, TimeUnit.SECONDS))
             {
-                writer.shutdownNow();
+                if (closeTimeoutWarned.compareAndSet(false, true))
+                {
+                    Activator.logWarning("Timed out after 5 seconds closing the MCP call history file log: " //$NON-NLS-1$
+                        + logFile + ". Pending call-history lines may be lost if EDT exits while the disk write " //$NON-NLS-1$
+                        + "is still stalled; check the log file and disk."); //$NON-NLS-1$
+                }
             }
         }
         catch (InterruptedException e)
         {
             Thread.currentThread().interrupt();
-            writer.shutdownNow();
         }
-        // The writer thread has now terminated (or been cancelled), so no drain runs
-        // concurrently. Flush any line left in the queue by a race between enqueue and
-        // shutdown (offer succeeded, then execute was rejected) — otherwise close()'s
-        // documented "flush pending lines" promise would silently drop it.
-        drainResidual();
-        closeWriterQuietly();
     }
 
     /**
-     * Final synchronous flush of any lines still queued after the executor has
-     * terminated. Runs on the closing thread with no concurrent writer, so it may
-     * touch {@link #out} directly. Best-effort: a failure here is logged, not thrown
-     * (the sink is closing anyway).
+     * Final flush of any lines still queued, on the writer executor after its drains.
+     * Admission has stopped, so no later record can be stranded behind this task.
+     * Best-effort: a failure here is logged, not thrown (the sink is closing anyway).
      */
     private void drainResidual()
     {
@@ -525,9 +606,26 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
         }
     }
 
-    private static Thread newWriterThread(Runnable r)
+    private Thread newWriterThread(Runnable r)
     {
-        Thread t = new Thread(r, "mcp-call-history-file-log"); //$NON-NLS-1$
+        Thread t = new Thread(() -> {
+            try
+            {
+                r.run();
+            }
+            finally
+            {
+                synchronized (ACTIVE_LOCK)
+                {
+                    // The final disk cleanup task runs before executor termination.
+                    // Remove the entry only after the executor's worker has returned.
+                    if (writer.isTerminated())
+                    {
+                        CLOSING.remove(logFile, this);
+                    }
+                }
+            }
+        }, "mcp-call-history-file-log"); //$NON-NLS-1$
         t.setDaemon(true);
         return t;
     }

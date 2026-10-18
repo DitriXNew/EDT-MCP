@@ -27,6 +27,11 @@ public class GroupRenameRefactoringContributor extends AbstractObjectRenameRefac
     protected boolean hasAssociation(IProject project, String fqn) {
         IGroupService groupService = Activator.getGroupServiceStatic();
 
+        // The optional group service is absent in headless mode and during shutdown.
+        if (groupService == null) {
+            return false;
+        }
+
         // Check if this object is in any group
         Group group = groupService.findGroupForObject(project, fqn);
         return group != null;
@@ -34,7 +39,8 @@ public class GroupRenameRefactoringContributor extends AbstractObjectRenameRefac
 
     @Override
     protected boolean performRename(IProject project, String oldFqn, String newFqn) {
-        return Activator.getGroupServiceStatic().renameObject(project, oldFqn, newFqn);
+        IGroupService groupService = Activator.getGroupServiceStatic();
+        return groupService != null && groupService.renameObject(project, oldFqn, newFqn);
     }
 
     @Override
