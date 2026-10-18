@@ -16,6 +16,7 @@ import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -245,6 +246,9 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     /** Resolves the attribute deleter; answers {@code null} when the platform service is unavailable. */
     private Supplier<FormAttributeDeleter> formAttributeDeleters = DeleteMetadataTool::platformFormAttributeDeleter;
 
+    /** Removes a form's resource folder, given the project name and the project-relative folder path. */
+    private BiFunction<String, String, ResourceCleanup> formFolderRemover = DeleteMetadataTool::removeProjectFolder;
+
     /** Production instance: consent goes to the real gate. */
     public DeleteMetadataTool()
     {
@@ -313,6 +317,18 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     DeleteMetadataTool withFormAttributeDeleters(Supplier<FormAttributeDeleter> deleters)
     {
         this.formAttributeDeleters = deleters;
+        return this;
+    }
+
+    /**
+     * Test seam: replaces the workspace removal of a deleted form's resource folder.
+     *
+     * @param remover answers the cleanup outcome for (project name, project-relative folder path)
+     * @return this tool
+     */
+    DeleteMetadataTool withFormFolderRemover(BiFunction<String, String, ResourceCleanup> remover)
+    {
+        this.formFolderRemover = remover;
         return this;
     }
 
@@ -2416,6 +2432,12 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     private static final String FORM_CHECK_ATTRIBUTE = "attribute"; //$NON-NLS-1$
     private static final String FORM_CHECK_COLUMN = "column"; //$NON-NLS-1$
 
+    /**
+     * Internal result member: the project-relative resource folder of a deleted form, removed off the
+     * UI thread by {@link #awaitDiskExport}; always stripped there.
+     */
+    static final String KEY_FORM_FOLDER = "formFolderToRemove"; //$NON-NLS-1$
+
     /** Preview item key: true when EDT's export of the confirmed delete removes the detached object's {@code file}. */
     private static final String KEY_DELETED_FROM_DISK = "deletedFromDisk"; //$NON-NLS-1$
 
@@ -3277,18 +3299,27 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
         // Remove it physically through the workspace API (best-effort: never fail the delete the model
         // already committed). Only this EXACT form folder is removed, never the parent Forms/ (siblings)
         // or the owner folder. The path is built from the RESOLVED names captured above.
-        ResourceCleanup folderCleanup =
-            deleteFormResourceFolder(project, ref.ownerType, ownerNameOnDisk, formNameOnDisk);
+        //
+        // NOT here: this runs on the UI thread, inside the syncExec a job worker posted, and the workbench
+        // lets such a runnable be granted the workspace lock on that worker's behalf and run other threads'
+        // pending syncExecs while it waits. A workspace delete started there was caught with another
+        // operation ending under it ("Illegal attempt to modify an immutable tree" mid-DeleteVisitor). The
+        // folder path travels to awaitDiskExport instead, which removes it on the calling thread.
+        String folderRel = formResourceFolderPathOrLog(ref.ownerType, ownerNameOnDisk, formNameOnDisk);
 
-        return ToolResult.success()
+        ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_EXECUTED)
             .put("fqn", normFqn) //$NON-NLS-1$
             .put(McpKeys.MESSAGE, "Deleted form '" + ref.formName + "' from " + ref.ownerFqn() //$NON-NLS-1$ //$NON-NLS-2$
                 + (persisted ? " and persisted to disk." //$NON-NLS-1$
                     : " (in-memory only; on-disk write did not complete - re-check before relying on " //$NON-NLS-1$
                         + "it).") //$NON-NLS-1$
-                + folderCleanupMessage(folderCleanup))
-            .toJson();
+                + (folderRel == null ? folderCleanupMessage(ResourceCleanup.FAILED) : "")); //$NON-NLS-1$
+        if (folderRel != null)
+        {
+            result.put(KEY_FORM_FOLDER, folderRel);
+        }
+        return result.toJson();
     }
 
     /**
@@ -3987,26 +4018,22 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Physically removes an owned form's resource folder
-     * ({@code src/<TypeDir>/<Owner>/Forms/<FormName>/}, containing {@code Form.form} and any sub-files)
-     * through the Eclipse workspace API so the workspace stays in sync. The path is built from the
-     * RESOLVED owner / form names (the names the model actually carries), NOT the user-typed FQN
-     * segments: the model lookup is case-insensitive while the workspace path is case-sensitive, so a
-     * case-variant FQN would otherwise miss the real folder and leave the orphan behind. Best-effort: a
-     * delete failure is logged but never propagated - the BM-model delete already committed, so the
-     * orphan-folder cleanup must not turn a successful delete into an error. A folder that does not
-     * exist is reported as {@link ResourceCleanup#NOT_FOUND}, never claimed as removed. Only the EXACT
-     * {@code Forms/<FormName>} folder is targeted, never the parent {@code Forms/} directory (which may
-     * hold sibling forms) or the owner folder.
+     * The project-relative resource folder of a deleted owned form
+     * ({@code src/<TypeDir>/<Owner>/Forms/<FormName>/}, containing {@code Form.form} and any sub-files),
+     * built from the RESOLVED owner / form names (the names the model actually carries), NOT the
+     * user-typed FQN segments: the model lookup is case-insensitive while the workspace path is
+     * case-sensitive, so a case-variant FQN would otherwise miss the real folder and leave the orphan
+     * behind. Only the EXACT {@code Forms/<FormName>} folder is ever targeted, never the parent
+     * {@code Forms/} directory (which may hold sibling forms) or the owner folder. An unresolvable path
+     * is logged, and the folder is then left in place.
      *
-     * @param project the owning workspace project
      * @param ownerType the owner metadata TYPE token (English or Russian, as supplied)
      * @param resolvedOwnerName the owner object Name AS RESOLVED on the model
      * @param resolvedFormName the form Name AS RESOLVED on the model
-     * @return the cleanup outcome (removed / not found on disk / failed)
+     * @return the folder path, or {@code null} when it cannot be resolved
      */
-    private static ResourceCleanup deleteFormResourceFolder(IProject project, String ownerType,
-        String resolvedOwnerName, String resolvedFormName)
+    private static String formResourceFolderPathOrLog(String ownerType, String resolvedOwnerName,
+        String resolvedFormName)
     {
         String folderRel = formResourceFolderPath(ownerType, resolvedOwnerName, resolvedFormName);
         if (folderRel == null)
@@ -4014,9 +4041,89 @@ public class DeleteMetadataTool extends AbstractMetadataWriteTool
             Activator.logError("Could not resolve the form resource folder for " + ownerType + "." //$NON-NLS-1$ //$NON-NLS-2$
                 + resolvedOwnerName + ".Form." + resolvedFormName + "; leaving any on-disk Forms/" //$NON-NLS-1$ //$NON-NLS-2$
                 + resolvedFormName + " folder in place.", null); //$NON-NLS-1$
+        }
+        return folderRel;
+    }
+
+    /**
+     * Physically removes a project-relative folder through the Eclipse workspace API, so the workspace
+     * stays in sync. Best-effort, like {@link #removeResource}: the BM-model delete already committed,
+     * so a failure here never turns the delete into an error.
+     *
+     * @param projectName the owning project
+     * @param folderRel the project-relative folder path
+     * @return the cleanup outcome (removed / not found on disk / failed)
+     */
+    private static ResourceCleanup removeProjectFolder(String projectName, String folderRel)
+    {
+        // Fully qualified: the inherited AbstractMetadataWriteTool.ProjectContext shadows the utils one.
+        com.ditrix.edt.mcp.server.utils.ProjectContext context =
+            com.ditrix.edt.mcp.server.utils.ProjectContext.of(projectName);
+        if (!context.exists())
+        {
+            Activator.logError("Could not resolve project '" + projectName + "' to remove the form folder " //$NON-NLS-1$ //$NON-NLS-2$
+                + folderRel + " (the model delete already succeeded; remove it manually if it persists).", //$NON-NLS-1$
+                null);
             return ResourceCleanup.FAILED;
         }
-        return removeResource(project.getFolder(new Path(folderRel)));
+        return removeResource(context.project().getFolder(new Path(folderRel)));
+    }
+
+    /**
+     * Removes the resource folder a form delete left for this thread to remove (see
+     * {@link #performFormObjectDelete}), and states the outcome in the result's message. Any other
+     * result - an error, another kind of delete - is returned unchanged, byte for byte.
+     *
+     * @param projectName the project the delete ran in
+     * @param result the tool's own result
+     * @param remover removes (project name, project-relative folder) and answers the outcome
+     * @return the result without the internal folder member, its message completed
+     */
+    static String removeDeferredFormFolder(String projectName, String result,
+        BiFunction<String, String, ResourceCleanup> remover)
+    {
+        if (result == null || !result.contains(KEY_FORM_FOLDER))
+        {
+            return result;
+        }
+        JsonObject object;
+        try
+        {
+            object = JsonParser.parseString(result).getAsJsonObject();
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError("delete_metadata: could not read the form-delete result to remove its " //$NON-NLS-1$
+                + "resource folder", e); //$NON-NLS-1$
+            return result;
+        }
+        JsonElement folder = object.remove(KEY_FORM_FOLDER);
+        if (folder == null)
+        {
+            return result;
+        }
+        ResourceCleanup cleanup = folder.isJsonPrimitive()
+            ? remover.apply(projectName, folder.getAsString()) : ResourceCleanup.FAILED;
+        String message = resultString(object, McpKeys.MESSAGE);
+        object.addProperty(McpKeys.MESSAGE, (message == null ? "" : message) + folderCleanupMessage(cleanup)); //$NON-NLS-1$
+        return GsonProvider.toJson(object);
+    }
+
+    /**
+     * Removes a deleted form's resource folder here, on the calling thread, before the export barrier.
+     * <p>
+     * Off the UI thread on purpose (see {@link #performFormObjectDelete}): here the workspace operation
+     * takes its rule and lock like any other job, so nothing can be granted or run in the middle of it.
+     * Before the barrier rather than in {@link #refreshAfterExportAwait}, because a barrier that refuses
+     * on a still-pending export returns without that step, and the folder would then stay behind.
+     */
+    @Override
+    protected String awaitDiskExport(Map<String, String> params, String result, WriteScope scope)
+    {
+        return super.awaitDiskExport(params,
+            removeDeferredFormFolder(JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME), result,
+                formFolderRemover),
+            scope);
     }
 
     /**
