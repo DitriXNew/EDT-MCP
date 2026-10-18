@@ -479,6 +479,23 @@ def _assert_assignable_current(fqn, prop, kind, expected):
     assert cells[2] == expected, "%s current value must be exactly %r, got: %r" % (prop, expected, row)
 
 
+def _assert_allowed_shapes_in_code(fqn, prop, shape):
+    """The Allowed cell of a COLOR / FONT row names the `shape` form as inline code, and keeps every
+    `<` inside a code span: a Markdown renderer drops a bare <Name> as an HTML tag."""
+    row = _assignable_row(fqn, prop)
+    assert row is not None, "%s must be listed by assignable:true" % prop
+    cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
+    allowed = cells[3] if len(cells) >= 4 else ""
+    assert "`%s`" % shape in allowed, "%s's Allowed cell must name %s as inline code: %r" % (prop, shape, row)
+    in_code = False
+    for c in allowed:
+        if c == "`":
+            in_code = not in_code
+        else:
+            assert c != "<" or in_code, "%s's Allowed cell has a '<' outside inline code: %r" % (prop, row)
+    assert not in_code, "%s's Allowed cell leaves a code span open: %r" % (prop, row)
+
+
 def _set_field_props(props, ctx):
     r = call("modify_metadata", {"projectName": PROJECT, "fqn": _FIELD_FQN, "properties": props})
     assert_ok(r, ctx)
@@ -517,6 +534,8 @@ def test_form_field_color_and_font_on_ext_info_take_rgb_and_absolute_font():
         "the absolute font must land on the extInfo: %r" % (_appearance_shape(ext, "font"),)
     _assert_assignable_current(_FIELD_FQN, "textColor", "COLOR", "RGB(255, 128, 64)")
     _assert_assignable_current(_FIELD_FQN, "font", "FONT", "face='Arial', height=12, bold")
+    _assert_allowed_shapes_in_code(_FIELD_FQN, "textColor", "{color:'Style.<Name>'}")
+    _assert_allowed_shapes_in_code(_FIELD_FQN, "font", "{font:{style:'<Name>', <overrides>?}}")
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")

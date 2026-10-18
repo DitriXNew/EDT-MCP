@@ -73,13 +73,16 @@ public final class AppearanceValueBuilder
     /** The wrapper member of a font value. */
     public static final String FONT = "font"; //$NON-NLS-1$
 
-    /** The accepted colour shapes in one line, for the assignable listing. */
-    public static final String COLOR_SHAPES = "{color:{red,green,blue}} / {color:'auto'} / " //$NON-NLS-1$
-        + "{color:'Style.<Name>'} (or Palette., Web., Windows.)"; //$NON-NLS-1$
+    /**
+     * The accepted colour shapes in one line, for the assignable listing. Each form is inline code: the
+     * listing is a Markdown table, and a renderer would drop a bare {@code <Name>} as an HTML tag.
+     */
+    public static final String COLOR_SHAPES = "`{color:{red,green,blue}}` / `{color:'auto'}` / " //$NON-NLS-1$
+        + "`{color:'Style.<Name>'}` (or `Palette.`, `Web.`, `Windows.`)"; //$NON-NLS-1$
 
-    /** The accepted font shapes in one line, for the assignable listing. */
-    public static final String FONT_SHAPES = "{font:{faceName?,height?,bold?,italic?,underline?," //$NON-NLS-1$
-        + "strikeout?,scale?}} / {font:'auto'} / {font:{style:'<Name>', <overrides>?}} (or system:)"; //$NON-NLS-1$
+    /** The accepted font shapes in one line, for the assignable listing; inline code as {@link #COLOR_SHAPES}. */
+    public static final String FONT_SHAPES = "`{font:{faceName?,height?,bold?,italic?,underline?," //$NON-NLS-1$
+        + "strikeout?,scale?}}` / `{font:'auto'}` / `{font:{style:'<Name>', <overrides>?}}` (or `system:`)"; //$NON-NLS-1$
 
     private static final String AUTO = "auto"; //$NON-NLS-1$
 
