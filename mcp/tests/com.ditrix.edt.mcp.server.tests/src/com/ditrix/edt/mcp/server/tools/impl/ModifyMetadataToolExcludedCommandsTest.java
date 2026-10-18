@@ -152,6 +152,25 @@ public class ModifyMetadataToolExcludedCommandsTest
     }
 
     @Test
+    public void testAFailedRevalidationIsAMarkedRefusalNotAnInternalError()
+    {
+        fixture.seed("Add");
+        var changes = prepare("[\"Copy\"]");
+        fixture.offered().remove(1);
+        try
+        {
+            changes.get(0).change().applyTo(fixture.target, null);
+            fail("a stale validated name must be refused on the write target");
+        }
+        catch (IllegalStateException e)
+        {
+            assertTrue("logged as a refusal, not an ERROR with a stack",
+                e instanceof com.ditrix.edt.mcp.server.utils.Refusals.Marker);
+        }
+        assertEquals(List.of("Add"), fixture.storedNames());
+    }
+
+    @Test
     public void testApplyRefusesACommandNoLongerOfferedBeforeChangingTheList()
     {
         fixture.seed("Add");

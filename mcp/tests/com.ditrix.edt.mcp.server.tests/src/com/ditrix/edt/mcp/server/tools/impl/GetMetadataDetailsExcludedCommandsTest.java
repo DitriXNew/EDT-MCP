@@ -75,6 +75,19 @@ public class GetMetadataDetailsExcludedCommandsTest
     }
 
     @Test
+    public void testACommandLookupThatThrowsStillListsThePropertyWithNothingAllowed()
+    {
+        org.mockito.Mockito.when(fixture.target.eGet(fixture.commands))
+            .thenThrow(new IllegalStateException("commands not computed yet"));
+        var property = MetadataPropertyIntrospector.find(fixture.target, "excludedCommands");
+        assertNotNull(property);
+        assertTrue(property.allowedValues.isEmpty());
+        String markdown = GetMetadataDetailsTool.formatAssignable("Catalog.Goods.Form.ItemForm.Table.Rows",
+            fixture.target);
+        assertTrue(markdown, markdown.contains("| excludedCommands |"));
+    }
+
+    @Test
     public void testAnotherPackagesLookalikeFeatureStaysUnassignable()
     {
         fixture.formPackage.setNsURI("https://example.invalid/other-model");

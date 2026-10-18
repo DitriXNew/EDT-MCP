@@ -69,7 +69,15 @@ public final class ExcludedCommandsSupport
     /** Canonical English names supplied by this source's inferred command list, in platform order. */
     public static List<String> allowedValues(EObject source)
     {
-        return namesOf(source).stream().map(CommandName::english).toList();
+        try
+        {
+            return namesOf(source).stream().map(CommandName::english).toList();
+        }
+        catch (RuntimeException e)
+        {
+            // Not computed yet: the property is still listed, with nothing allowed (as plan() refuses).
+            return List.of();
+        }
     }
 
     /**
@@ -253,13 +261,13 @@ public final class ExcludedCommandsSupport
             Plan checked = plan(source, requested);
             if (error != null || checked.error() != null)
             {
-                throw new IllegalStateException(error != null ? error : checked.error());
+                throw Refusals.state(error != null ? error : checked.error());
             }
             URI ownerUri = source instanceof IBmObject bm ? bm.bmGetUri() : null;
             if (!isFeature(feature) || ownerUri == null || !BmUriUtil.isBmUri(ownerUri)
                 || BmUriUtil.isUnreferenceableObjectFragment(ownerUri.fragment()))
             {
-                throw new IllegalStateException("'excludedCommands' needs a command source attached to BM. " //$NON-NLS-1$
+                throw Refusals.state("'excludedCommands' needs a command source attached to BM. " //$NON-NLS-1$
                     + "Wait for the project to be ready and retry."); //$NON-NLS-1$
             }
             String path = BmUriUtil.isTopObjectUri(ownerUri) ? "" : BmUriUtil.extractContainmentPath(ownerUri); //$NON-NLS-1$
