@@ -151,3 +151,20 @@ def test_excluded_commands_invalid_shapes_and_duplicates_leave_disk_unchanged():
             error = assert_error(result, "invalid exclusions %r" % (value,))
             assert_error_quality(error, names=["excludedCommands"],
                                  suggests=["once"] if value == ["Copy", "copy"] else ["JSON array"])
+
+
+@e2e_test(tool="modify_metadata", kind="write-metadata")
+def test_excluded_commands_batched_with_a_source_change_is_a_structured_refusal():
+    with _table("Batch") as (table, path):
+        _expect(table, path, ["Copy"], ["Copy"])
+        before = tree_snapshot()
+        result = call("modify_metadata", {
+            "projectName": PROJECT, "fqn": table,
+            "properties": [{"name": "excludedCommands", "value": ["Add"]},
+                           {"name": "changeRowSet", "value": False}],
+        })
+        assert_tree_unchanged(before, "a refused batch must not change any file")
+        _assert_disk(path, ["Copy"])
+        _assert_model(table, ["Copy"])
+        error = assert_error(result, "excludedCommands batched with changeRowSet")
+        assert_error_quality(error, names=["changeRowSet", "excludedCommands"], suggests=["separate"])

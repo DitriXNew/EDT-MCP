@@ -73,17 +73,7 @@ A property with no state in the extension block is written to the extension's `.
 
 ## Excluding a form table's standard commands
 
-Set `excludedCommands` on a table FQN such as `Catalog.Products.Form.ItemForm.Table.Rows` using a JSON array of standard command names:
-
-```json
-{"projectName":"MyProject","fqn":"Catalog.Products.Form.ItemForm.Table.Rows","properties":[{"name":"excludedCommands","value":["Copy"]}]}
-```
-
-The array replaces the whole exclusion set; `[]` clears it. Every name must be offered in that item's inferred standard `commands`. Read `get_metadata_details` with `assignable:true` on the same FQN to discover the allowed names and current set. English and Russian command names from the platform are accepted, case-insensitively; the stored names, read-back values, and success response's `excludedCommands` array use canonical English. Duplicate commands, including English/Russian aliases for the same command, are refused; give each command once. Unknown names are refused with the bad value and up to 25 allowed names, followed by the remaining count. No property in the batch is written when validation fails.
-
-Create the form attribute first, set its `valueType` (for example `ValueTable`) with `modify_metadata`, then create the table with `dataPath` pointing at it. After the project is ready, set `excludedCommands`. Set `dataPath`, an item's `type`, or other settings EDT uses to infer commands (`changeRowSet`, choice/selection modes, search/view locations, `allowFormCustomize`) in a separate call and let EDT recompute commands before setting exclusions. When commands are empty or not computed, the write is refused with a retry instruction, including for `[]`.
-
-The same property is available on other addressable form standard-command sources, including the form content root and fields, using each source's own allowed commands. The write exports `Form.form`, where EDT stores one `<excludedCommands>Name</excludedCommands>` element per command.
+`excludedCommands` (a table, field or form root) takes a JSON array of standard command names, e.g. `["Copy"]`: it replaces the whole set, `[]` clears it. Use English or Russian names from the item's inferred commands (`get_metadata_details` with `assignable:true`); the response echoes English. Change `dataPath` / `type` / `changeRowSet` in a separate, earlier call.
 
 ## Setting an object reference
 A reference property to another metadata object is set by FQN: a SINGLE reference (e.g. `chartOfAccounts` on an AccountingRegister, or a command's `group`) takes `value:'Type.Name'`; a LIST reference (e.g. a Subsystem's `content`) takes `value:['Type.Name', ...]` and REPLACES the whole list (an empty array `[]` clears it). Most targets are a top-level object whose type matches; get_metadata_details(assignable:true) shows the allowed target type. Two kinds of reference are member-addressed rather than top-level:

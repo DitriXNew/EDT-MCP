@@ -494,6 +494,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     + "skipped where the export state cannot be observed") //$NON-NLS-1$
             .stringArrayProperty("normalized", //$NON-NLS-1$
                 "Properties whose value was rewritten by the 'ё'->'е' normalization (when any)") //$NON-NLS-1$
+            .stringArrayProperty(ExcludedCommandsSupport.PROPERTY,
+                "For an excludedCommands write: the stored exclusion set as canonical English names") //$NON-NLS-1$
             .stringProperty("destination", //$NON-NLS-1$
                 "Where a moved form item ended up (when 'parent'/'position' moved a form item), e.g. " //$NON-NLS-1$
                 + "\"group 'Main' at index 1\"") //$NON-NLS-1$
@@ -4839,9 +4841,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // Reject a classifier `type` change batched with a nested-extInfo layout prop BEFORE building any
         // change: the extInfo props are validated against the pre-change type's extInfo EClass, so
         // applying both in one tx is order-dependent and unsafe (see formTypeExtInfoComboError).
-        String comboErr = ExcludedCommandsSupport.isFeature(
+        String excludedBatchErr = ExcludedCommandsSupport.isFeature(
             member.eClass().getEStructuralFeature(ExcludedCommandsSupport.PROPERTY))
                 ? ExcludedCommandsSupport.batchError(properties) : null;
+        String comboErr = excludedBatchErr == null ? null : ToolResult.error(excludedBatchErr).toJson();
         if (comboErr == null)
         {
             comboErr = formTypeExtInfoComboError(member, properties);

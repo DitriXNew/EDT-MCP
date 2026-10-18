@@ -238,6 +238,8 @@ public class ModifyMetadataToolExcludedCommandsTest
             List<ModifyMetadataTool.HolderChange> changes = new ArrayList<>();
             String error = verdict(List.of(property("[\"Copy\"]"), sourceChange), changes);
             assertNotNull(error);
+            JsonObject parsed = JsonParser.parseString(error).getAsJsonObject();
+            assertTrue(error, !parsed.get("success").getAsBoolean() && parsed.has("error"));
             assertTrue(error, error.contains("separate modify_metadata calls"));
             assertTrue(error, error.contains(name));
             assertTrue(changes.isEmpty());
