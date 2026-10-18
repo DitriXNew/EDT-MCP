@@ -26,7 +26,9 @@ import org.eclipse.core.runtime.ICoreRunnable;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.Path;
 import org.eclipse.core.runtime.jobs.ISchedulingRule;
+import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EcoreFactory;
 import org.eclipse.emf.ecore.InternalEObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.junit.Test;
@@ -89,6 +91,71 @@ public class TemplateContentSupportTest
         assertTrue(doc.isTemplateMode());
         assertFalse(doc.getFormats().isEmpty());
         assertEquals(0, doc.getDefaultFormatIndex());
+    }
+
+    @Test public void testSpreadsheetWriteMaterializesLegacyProxyPlaceholder() throws Exception
+    {
+        EObject placeholder = EcoreFactory.eINSTANCE.createEObject();
+        ((InternalEObject)placeholder).eSetProxyURI(URI.createURI("unresolved:/legacy/Template.mxlx"));
+        assertSpreadsheetPlaceholderWrites(placeholder);
+    }
+
+    @Test public void testSpreadsheetWriteMaterializesBareEObjectPlaceholder() throws Exception
+    {
+        assertSpreadsheetPlaceholderWrites(EcoreFactory.eINSTANCE.createEObject());
+    }
+
+    @Test public void testSpreadsheetWriteRefusesForeignContentWithUnsetFeatures() throws Exception
+    {
+        assertSpreadsheetForeignContentRefused(MdClassFactory.eINSTANCE.createCatalog());
+    }
+
+    @Test public void testSpreadsheetWriteRefusesFileBackedTextProxy() throws Exception
+    {
+        MemoryFile file = new MemoryFile("keep text");
+        BasicTemplate template = template(TemplateType.TEXT_DOCUMENT);
+        initialize("initialize", template, TemplateType.TEXT_DOCUMENT, file);
+        assertSpreadsheetForeignContentRefused(template.getTemplate());
+    }
+
+    @Test public void testTextWriteRefusesPopulatedSpreadsheetWithoutChangingFilesOrReference() throws Exception
+    {
+        BasicTemplate template = spreadsheet();
+        SpreadsheetTemplateWriter.apply((SpreadsheetDocument)template.getTemplate(),
+            json("{'cells':[{'row':0,'col':0,'text':'keep spreadsheet'}]}"));
+        assertTextForeignContentRefused(template);
+    }
+
+    @Test public void testTextWriteRefusesEmptySpreadsheetContent() throws Exception
+    {
+        assertTextForeignContentRefused(spreadsheet());
+    }
+
+    @Test public void testTextWriteMaterializesLegacyProxyPlaceholder() throws Exception
+    {
+        BasicTemplate template = template(TemplateType.TEXT_DOCUMENT);
+        EObject placeholder = EcoreFactory.eINSTANCE.createEObject();
+        ((InternalEObject)placeholder).eSetProxyURI(URI.createURI("unresolved:/legacy/Template.txt"));
+        template.setTemplate(placeholder);
+        MemoryFile file = new MemoryFile(null);
+        JsonObject result = invokeTemplateWrite(template, json("{'text':'new text'}"),
+            file, new MemoryFile(null), mock(IBmTransaction.class));
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertArrayEquals("new text".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+        assertEquals("FileAwareTextDocument", template.getTemplate().eClass().getName());
+        assertTrue(template.getTemplate().eIsProxy());
+    }
+
+    @Test public void testTextWriteAcceptsExistingFileBackedTextProxy() throws Exception
+    {
+        BasicTemplate template = template(TemplateType.TEXT_DOCUMENT);
+        MemoryFile file = new MemoryFile("old text");
+        initialize("initialize", template, TemplateType.TEXT_DOCUMENT, file);
+        JsonObject result = invokeTemplateWrite(template, json("{'text':'new text'}"),
+            file, new MemoryFile(null), mock(IBmTransaction.class));
+        assertTrue(result.toString(), result.get("success").getAsBoolean());
+        assertArrayEquals("new text".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+        assertEquals("FileAwareTextDocument", template.getTemplate().eClass().getName());
     }
 
     @Test public void testRetypeTextWithContentRefusedWithoutChangingBytes() throws Exception
@@ -524,13 +591,62 @@ public class TemplateContentSupportTest
         assertArrayEquals("new".getBytes(StandardCharsets.UTF_8), file.bytes.get());
     }
 
-    @Test public void testExpectedHashOnMissingFileRefused() throws Exception
+    @Test public void testExpectedHashOfEmptyTextOnMissingFileWrites() throws Exception
     {
         MemoryFile file = new MemoryFile(null);
-        String error = write(template(TemplateType.TEXT_DOCUMENT), file, "new", ContentHash.of(""));
-        assertNotNull(error);
-        assertTrue(error, error.contains("omit expectedHash"));
+        assertEquals("", TemplateContentSupport.readText(file.file));
+        assertNull(write(template(TemplateType.TEXT_DOCUMENT), file, "new", ContentHash.of("")));
+        assertArrayEquals("new".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+        assertTrue("Creation and write must hold the file's modify rule", file.modifiedUnderRule);
+    }
+
+    @Test public void testOtherExpectedHashOnMissingFileRefusesWithEmptyCurrentHash() throws Exception
+    {
+        MemoryFile file = new MemoryFile(null);
+        String error = write(template(TemplateType.TEXT_DOCUMENT), file, "new", ContentHash.of("old"));
+        assertEmptyCurrentHashRefusal(error);
         assertNull(file.bytes.get());
+        verify(file.file, never()).create(any(InputStream.class), anyBoolean(), any(IProgressMonitor.class));
+        verify(file.file, never()).setContents(any(InputStream.class), anyInt(), any());
+        verifyZeroInteractions(file.workspace);
+    }
+
+    @Test public void testConcurrentCreationRefusesEmptyExpectedHashAndPreservesBytes() throws Exception
+    {
+        MemoryFile file = new MemoryFile(null);
+        file.pendingSave = "concurrent creation".getBytes(StandardCharsets.UTF_8);
+        try (TemplateContentSupport.Context context = new TemplateContentSupport.Context(null))
+        {
+            JsonObject spec = json("{'text':'lost update'}");
+            spec.addProperty("expectedHash", ContentHash.of(""));
+            String error = TemplateContentSupport.writeText(template(TemplateType.TEXT_DOCUMENT),
+                file.file, spec, context);
+            assertNotNull("The final check must detect a file created after the early check", error);
+            assertTrue(error, error.contains(ContentHash.of("concurrent creation")));
+        }
+        assertArrayEquals("concurrent creation".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+        verify(file.file, never()).create(any(InputStream.class), anyBoolean(), any(IProgressMonitor.class));
+        verify(file.file, never()).setContents(any(InputStream.class), anyInt(), any());
+    }
+
+    @Test public void testFileDeletedBeforeFinalHashCheckAcceptsEmptyExpectedHash() throws Exception
+    {
+        MemoryFile file = new MemoryFile("");
+        file.pendingDelete = true;
+        assertNull(write(template(TemplateType.TEXT_DOCUMENT), file, "new", ContentHash.of("")));
+        assertArrayEquals("new".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+        assertTrue("Final check and recreated content must hold the modify rule", file.modifiedUnderRule);
+    }
+
+    @Test public void testFileDeletedBeforeFinalHashCheckRefusesWithEmptyCurrentHash() throws Exception
+    {
+        MemoryFile file = new MemoryFile("old");
+        file.pendingDelete = true;
+        String error = write(template(TemplateType.TEXT_DOCUMENT), file, "lost", ContentHash.of("old"));
+        assertEmptyCurrentHashRefusal(error);
+        assertNull(file.bytes.get());
+        verify(file.file, never()).create(any(InputStream.class), anyBoolean(), any(IProgressMonitor.class));
+        verify(file.file, never()).setContents(any(InputStream.class), anyInt(), any());
     }
 
     @Test public void testEmptyExpectedHashDisablesGuard() throws Exception
@@ -643,6 +759,146 @@ public class TemplateContentSupportTest
         }
         verify(file.file, never()).setContents(any(InputStream.class), anyInt(), any());
         assertArrayEquals("current".getBytes(StandardCharsets.UTF_8), file.bytes.get());
+    }
+
+    private static void assertSpreadsheetPlaceholderWrites(EObject placeholder) throws Exception
+    {
+        BasicTemplate template = template(TemplateType.SPREADSHEET_DOCUMENT);
+        template.setTemplate(placeholder);
+        IBmTransaction tx = mock(IBmTransaction.class);
+        final SpreadsheetDocument document;
+        try
+        {
+            document = resolveSpreadsheet(template, tx);
+        }
+        catch (RuntimeException refusal)
+        {
+            throw new AssertionError("A legacy placeholder must be materialized: " + refusal.getMessage(), refusal);
+        }
+        SpreadsheetTemplateWriter.Result result = SpreadsheetTemplateWriter.apply(document,
+            json("{'cells':[{'row':0,'col':0,'text':'legacy cell'}]}"));
+        assertFalse(result.error, result.hasError());
+        assertEquals(1, result.cells);
+        assertSame(document, template.getTemplate());
+        assertTrue(document.isTemplateMode());
+        assertEquals("legacy cell", document.getRows().get(Integer.valueOf(0))
+            .getCells().get(Integer.valueOf(0)).getText().getContent().get("#"));
+        verify(tx).attachTopObject((IBmObject)document, "CommonTemplate.Contract730.Content");
+    }
+
+    private static void assertSpreadsheetForeignContentRefused(EObject content) throws Exception
+    {
+        BasicTemplate template = template(TemplateType.SPREADSHEET_DOCUMENT);
+        template.setTemplate(content);
+        IBmTransaction tx = mock(IBmTransaction.class);
+        try
+        {
+            resolveSpreadsheet(template, tx);
+            fail("Real foreign content must be refused before replacement");
+        }
+        catch (RuntimeException expected)
+        {
+            String error = expected.getMessage();
+            assertFalse(error, JsonParser.parseString(error).getAsJsonObject().get("success").getAsBoolean());
+            assertTrue(error, error.contains("has incompatible content"));
+            assertTrue(error, error.contains("SpreadsheetDocument"));
+            assertTrue(error, error.contains("create_metadata"));
+        }
+        assertSame(content, template.getTemplate());
+        verify(tx, never()).attachTopObject(any(), anyString());
+    }
+
+    /** Exercise the tool's resolver and the real writer without simulating BM export internals. */
+    private static SpreadsheetDocument resolveSpreadsheet(BasicTemplate template, IBmTransaction tx) throws Exception
+    {
+        ITopObjectFqnGenerator names = mock(ITopObjectFqnGenerator.class);
+        when(names.generateExternalPropertyFqn(any(), any())).thenReturn("CommonTemplate.Contract730.Content");
+        var resolve = ModifyMetadataTool.class.getDeclaredMethod("resolveSpreadsheetContent",
+            BasicTemplate.class, IBmTransaction.class, IDtProject.class, ITopObjectFqnGenerator.class, String.class);
+        resolve.setAccessible(true);
+        try
+        {
+            return (SpreadsheetDocument)resolve.invoke(null, template, tx, null, names, "CommonTemplate.Contract730");
+        }
+        catch (InvocationTargetException error)
+        {
+            if (error.getCause() instanceof Exception) { throw (Exception)error.getCause(); }
+            throw error;
+        }
+    }
+
+    private static void assertTextForeignContentRefused(BasicTemplate template) throws Exception
+    {
+        EObject content = template.getTemplate();
+        EObject before = EcoreUtil.copy(content);
+        template.setTemplateType(TemplateType.TEXT_DOCUMENT);
+        MemoryFile text = new MemoryFile("keep text sidecar");
+        MemoryFile spreadsheet = new MemoryFile("keep spreadsheet sidecar");
+        IBmTransaction tx = mock(IBmTransaction.class);
+        JsonObject result = invokeTemplateWrite(template, json("{'text':'lost update'}"),
+            text, spreadsheet, tx);
+        assertFalse(result.toString(), result.get("success").getAsBoolean());
+        assertTrue(result.toString(), result.toString().contains("has incompatible content"));
+        assertTrue(result.toString(),
+            result.toString().contains("Create a separate TextDocument template with create_metadata"));
+        assertSame(content, template.getTemplate());
+        assertTrue(EcoreUtil.equals(before, content));
+        assertSame(TemplateType.TEXT_DOCUMENT, template.getTemplateType());
+        assertArrayEquals("keep text sidecar".getBytes(StandardCharsets.UTF_8), text.bytes.get());
+        assertArrayEquals("keep spreadsheet sidecar".getBytes(StandardCharsets.UTF_8), spreadsheet.bytes.get());
+        for (MemoryFile file : new MemoryFile[] {text, spreadsheet})
+        {
+            verify(file.file, never()).create(any(InputStream.class), anyBoolean(), any(IProgressMonitor.class));
+            verify(file.file, never()).setContents(any(InputStream.class), anyInt(), any());
+            verify(file.file, never()).delete(anyInt(), any());
+        }
+        verify(tx, never()).attachTopObject(any(), anyString());
+        verify(tx, never()).detachTopObject(any());
+    }
+
+    /** Dispatch with a fresh transaction object, so the guard must inspect current content. */
+    private static JsonObject invokeTemplateWrite(BasicTemplate current, JsonObject spec,
+        MemoryFile text, MemoryFile other, IBmTransaction tx) throws Exception
+    {
+        BasicTemplate outer = mock(BasicTemplate.class, withSettings().extraInterfaces(IBmObject.class));
+        when(outer.getTemplateType()).thenReturn(current.getTemplateType());
+        IBmObject bm = (IBmObject)outer;
+        doReturn(true).when(bm).bmIsTop();
+        doReturn(730L).when(bm).bmGetId();
+        doReturn("CommonTemplate.Contract730").when(bm).bmGetFqn();
+        when(tx.getObjectById(730L)).thenReturn((IBmObject)current);
+        try (TemplateServices services = new TemplateServices(text, other))
+        {
+            ITopObjectFqnGenerator names = mock(ITopObjectFqnGenerator.class);
+            when(names.generateExternalPropertyFqn(any(), any())).thenReturn("CommonTemplate.Contract730.Content");
+            when(services.activator.getTopObjectFqnGenerator()).thenReturn(names);
+            when(services.model.execute(any())).thenAnswer(invocation ->
+                ((AbstractBmTask<?>)invocation.getArgument(0)).execute(tx, null));
+            Class<?> contextType = Class.forName(
+                "com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool$ProjectContext");
+            var constructor = contextType.getDeclaredConstructor();
+            constructor.setAccessible(true);
+            Object context = constructor.newInstance();
+            Field project = contextType.getField("project");
+            project.setAccessible(true);
+            project.set(context, services.project);
+            var write = ModifyMetadataTool.class.getDeclaredMethod("modifyTemplateContent", contextType,
+                String.class, BasicTemplate.class, java.util.List.class, java.util.List.class,
+                boolean.class, JsonObject.class);
+            write.setAccessible(true);
+            return JsonParser.parseString((String)write.invoke(new ModifyMetadataTool(), context,
+                "CommonTemplate.Contract730", outer, java.util.Collections.emptyList(),
+                java.util.Collections.emptyList(), false, spec)).getAsJsonObject();
+        }
+    }
+
+    private static void assertEmptyCurrentHashRefusal(String error)
+    {
+        assertNotNull("A non-empty prior text hash must not match a missing file", error);
+        assertFalse(error, JsonParser.parseString(error).getAsJsonObject().get("success").getAsBoolean());
+        assertTrue(error, error.contains("expectedHash does not match"));
+        assertTrue(error, error.contains("Current contentHash: " + ContentHash.of("")));
+        assertTrue(error, error.contains("get_metadata_details"));
     }
 
     /** Supply factory services locally; the real factory still creates every model feature. */
@@ -863,6 +1119,7 @@ public class TemplateContentSupportTest
         final ISchedulingRule deleteRule = mock(ISchedulingRule.class);
         ISchedulingRule activeRule;
         byte[] pendingSave;
+        boolean pendingDelete;
         int protectedReads;
         boolean modifiedUnderRule;
         boolean deletedUnderBothRules;
@@ -923,6 +1180,11 @@ public class TemplateContentSupportTest
         /** A queued editor save wins just before the next workspace mutation acquires its rule. */
         private void saveBeforeOperation()
         {
+            if (pendingDelete)
+            {
+                bytes.set(null);
+                pendingDelete = false;
+            }
             if (pendingSave != null)
             {
                 bytes.set(pendingSave);

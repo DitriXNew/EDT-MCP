@@ -73,6 +73,7 @@ import com._1c.g5.v8.dt.xdto.model.Package;
 import com._1c.g5.v8.dt.xdto.model.Property;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
+import com._1c.g5.v8.dt.textdocument.model.FileAwareTextDocument;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -2022,6 +2023,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 {
                     throw new TemplateWriteException(error);
                 }
+                EObject currentContent = current.getTemplate();
+                if (!(currentContent instanceof FileAwareTextDocument)
+                    && !TemplateContentSupport.isPlaceholder(currentContent))
+                {
+                    throw new TemplateWriteException(ToolResult.error("Template '" + normFqn //$NON-NLS-1$
+                        + "' has incompatible content. Create a separate TextDocument template with create_metadata.") //$NON-NLS-1$
+                        .toJson());
+                }
                 IFile file = TemplateContentSupport.contentFile(ctx.project, current);
                 error = TemplateContentSupport.writeText(current, file, templateSpec, files);
                 if (error != null)
@@ -2265,7 +2274,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Reuses spreadsheet content or initializes an empty placeholder through EDT's creation helper.
-     * Incompatible non-empty content is refused. Must run inside the BM write boundary.
+     * Real foreign content is refused. Must run inside the BM write boundary.
      */
     private static SpreadsheetDocument resolveSpreadsheetContent(BasicTemplate txTemplate, IBmTransaction tx,
         IDtProject dtProject, ITopObjectFqnGenerator fqnGenerator, String normFqn)
@@ -2275,7 +2284,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return (SpreadsheetDocument)contentObj;
         }
-        if (TemplateContentSupport.hasContent(txTemplate, null))
+        if (!TemplateContentSupport.isPlaceholder(contentObj))
         {
             throw new TemplateWriteException(ToolResult.error("Template '" + normFqn
                 + "' has incompatible content. Create a separate SpreadsheetDocument template with create_metadata.")

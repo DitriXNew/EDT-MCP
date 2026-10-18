@@ -31,6 +31,7 @@ import org.eclipse.core.runtime.jobs.MultiRule;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EEnumLiteral;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EcorePackage;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.InternalEObject;
 import org.eclipse.emf.ecore.util.EcoreUtil;
@@ -223,6 +224,13 @@ public final class TemplateContentSupport
             + "TextDocument or SpreadsheetDocument template."); //$NON-NLS-1$
     }
 
+    /** A legacy empty external-property reference, never a file-backed text document. */
+    public static boolean isPlaceholder(EObject content)
+    {
+        return content == null || !(content instanceof FileAwareTextDocument)
+            && (content.eIsProxy() || content.eClass() == EcorePackage.Literals.EOBJECT);
+    }
+
     /** Conservative for other content models; spreadsheet creation defaults are not authored content. */
     public static boolean hasContent(BasicTemplate template, IFile textFile)
     {
@@ -368,12 +376,6 @@ public final class TemplateContentSupport
     {
         if (expected != null && !expected.isEmpty())
         {
-            if (file == null || !file.exists())
-            {
-                return ToolResult.error("expectedHash was provided but Template.txt does not exist yet. " //$NON-NLS-1$
-                    + "To create its content omit expectedHash; otherwise re-check with get_metadata_details.") //$NON-NLS-1$
-                    .toJson();
-            }
             String current = readText(file);
             if (!ContentHash.matches(current, expected))
             {
