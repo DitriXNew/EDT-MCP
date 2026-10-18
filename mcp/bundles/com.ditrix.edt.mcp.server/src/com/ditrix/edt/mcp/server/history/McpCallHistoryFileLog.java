@@ -83,6 +83,9 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
     /** Single background thread that owns all disk I/O for this sink. */
     private final ExecutorService writer;
 
+    /** Orders admission and drain scheduling before the final writer cleanup task. */
+    private final Object lifecycleLock = new Object();
+
     /** Set once when the first overflow drop happens, to log the warning only once. */
     private final AtomicBoolean overflowWarned = new AtomicBoolean(false);
 
@@ -105,13 +108,8 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
     /** Set by {@link #close()}: no further records are accepted. */
     private volatile boolean closed;
 
-    /**
-     * The lazily-opened writer. Confined to the background thread while running;
-     * read/closed by {@link #close()} only after the executor has terminated, so a
-     * happens-before edge covers the cross-thread hand-off. {@code volatile} for
-     * belt-and-braces visibility.
-     */
-    private volatile BufferedWriter out;
+    /** The lazily-opened writer, accessed and closed only by the background executor. */
+    private BufferedWriter out;
 
     /**
      * Creates a sink writing to {@code logFile}. Package-private: production code
@@ -338,21 +336,24 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
      */
     void enqueue(String line)
     {
-        if (line == null || failed || closed)
+        synchronized (lifecycleLock)
         {
-            return;
-        }
-        if (!queue.offer(line))
-        {
-            dropped.incrementAndGet();
-            if (overflowWarned.compareAndSet(false, true))
+            if (line == null || failed || closed)
             {
-                Activator.logWarning(
-                    "MCP call history file log queue is full; dropping records (disk writer cannot keep up)"); //$NON-NLS-1$
+                return;
             }
-            return;
+            if (!queue.offer(line))
+            {
+                dropped.incrementAndGet();
+                if (overflowWarned.compareAndSet(false, true))
+                {
+                    Activator.logWarning(
+                        "MCP call history file log queue is full; dropping records (disk writer cannot keep up)"); //$NON-NLS-1$
+                }
+                return;
+            }
+            scheduleDrain();
         }
-        scheduleDrain();
     }
 
     /**
@@ -363,17 +364,19 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
      */
     private void scheduleDrain()
     {
-        if (drainScheduled.compareAndSet(false, true))
+        synchronized (lifecycleLock)
         {
-            try
+            if (!closed && drainScheduled.compareAndSet(false, true))
             {
-                writer.execute(this::drain);
-            }
-            catch (RejectedExecutionException e)
-            {
-                // The executor is shutting down. Clear the flag we just set; the line stays
-                // queued and is flushed by close()'s residual drain. Never propagate.
-                drainScheduled.set(false);
+                try
+                {
+                    writer.execute(this::drain);
+                }
+                catch (RejectedExecutionException e)
+                {
+                    // Leave the line queued for the final cleanup task. Never propagate.
+                    drainScheduled.set(false);
+                }
             }
         }
     }
@@ -450,40 +453,44 @@ public final class McpCallHistoryFileLog implements McpCallHistory.HistoryListen
     }
 
     /**
-     * Stops the sink and flushes any pending records. Shuts the background writer
-     * down, waits briefly for it to drain, then closes the file. Idempotent and
-     * safe to call from any thread.
+     * Stops admission and queues the final flush and close after all accepted drains.
+     * Waits briefly; on timeout or interruption cleanup stays with the writer thread,
+     * since neither cancellation nor shutdown proves that an I/O call has returned.
+     * Idempotent and safe to call from any thread.
      */
     @Override
     public void close()
     {
-        closed = true;
-        writer.shutdown();
+        synchronized (lifecycleLock)
+        {
+            if (!closed)
+            {
+                closed = true;
+                writer.execute(() -> {
+                    drainResidual();
+                    closeWriterQuietly();
+                });
+                writer.shutdown();
+            }
+        }
         try
         {
             if (!writer.awaitTermination(5, TimeUnit.SECONDS))
             {
-                writer.shutdownNow();
+                // Cleanup remains queued behind any I/O still running on the daemon thread.
+                return;
             }
         }
         catch (InterruptedException e)
         {
             Thread.currentThread().interrupt();
-            writer.shutdownNow();
         }
-        // The writer thread has now terminated (or been cancelled), so no drain runs
-        // concurrently. Flush any line left in the queue by a race between enqueue and
-        // shutdown (offer succeeded, then execute was rejected) — otherwise close()'s
-        // documented "flush pending lines" promise would silently drop it.
-        drainResidual();
-        closeWriterQuietly();
     }
 
     /**
-     * Final synchronous flush of any lines still queued after the executor has
-     * terminated. Runs on the closing thread with no concurrent writer, so it may
-     * touch {@link #out} directly. Best-effort: a failure here is logged, not thrown
-     * (the sink is closing anyway).
+     * Final flush of any lines still queued, on the writer executor after its drains.
+     * Admission has stopped, so no later record can be stranded behind this task.
+     * Best-effort: a failure here is logged, not thrown (the sink is closing anyway).
      */
     private void drainResidual()
     {

@@ -128,8 +128,9 @@ public final class BslModuleUtils
      * add a second declaration of the same name. Refused by name instead of guessed at.
      * </p>
      */
+    // A declaration cannot start with ampersand, so a complete pragma never needs to be given back.
     private static final Pattern PRAGMA_ON_DECLARATION_LINE_PATTERN = Pattern.compile(
-        "^\\s*(?:&[\\p{L}\\p{N}_]+(?:\\([^)]*\\))?\\s+)+"
+        "^\\s*(?:&[\\p{L}\\p{N}_]+(?:\\([^)]*\\))?\\s+)++"
             + "(?:\u0410\u0441\u0438\u043D\u0445\\s+|Async\\s+)?(?:\u041F\u0440\u043E\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043D\u043A\u0446\u0438\u044F|Procedure|Function)"
             + "(?![\\p{L}\\p{N}_])", //$NON-NLS-1$
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
