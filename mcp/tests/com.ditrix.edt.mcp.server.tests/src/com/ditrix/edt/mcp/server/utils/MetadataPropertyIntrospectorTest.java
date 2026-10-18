@@ -1107,6 +1107,47 @@ public class MetadataPropertyIntrospectorTest
             MetadataPropertyIntrospector.commandGroupLabel(group));
     }
 
+    /**
+     * The platform's unresolved proxy for a standard group, URI shaped as StdCommandGroupLoader
+     * builds it ({@code appendFragment("/" + name)}); none of its attributes is loaded.
+     */
+    private static StandardCommandGroup standardGroupProxy(URI uri)
+    {
+        StandardCommandGroup proxy = McoreFactory.eINSTANCE.createStandardCommandGroup();
+        ((InternalEObject)proxy).eSetProxyURI(uri);
+        return proxy;
+    }
+
+    @Test
+    public void testCommandGroupLabelOfAnUnresolvedStandardGroupIsTheNameInItsUri()
+    {
+        StandardCommandGroup proxy = standardGroupProxy(
+            URI.createURI("platform:/plugin/x/commandGroups.xml").appendFragment("/ActionsPanelTools")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertNull("precondition: a proxy carries no loaded name", proxy.getName()); //$NON-NLS-1$
+
+        assertEquals("ActionsPanelTools", MetadataPropertyIntrospector.commandGroupLabel(proxy)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnresolvedStandardGroupIsReadBackByNameNotByItsDefaultCategory()
+    {
+        DataProcessorCommand command = MdClassFactory.eINSTANCE.createDataProcessorCommand();
+        command.setGroup(standardGroupProxy(
+            URI.createURI("platform:/plugin/x/commandGroups.xml").appendFragment("/ActionsPanelTools"))); //$NON-NLS-1$ //$NON-NLS-2$
+
+        assertEquals("ActionsPanelTools", //$NON-NLS-1$
+            MetadataPropertyIntrospector.find(command, "group").currentValue); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnUnresolvedStandardGroupWithoutANameIsItsUriNotACategory()
+    {
+        URI uri = URI.createURI("platform:/plugin/x/commandGroups.xml"); //$NON-NLS-1$
+        String label = MetadataPropertyIntrospector.commandGroupLabel(standardGroupProxy(uri));
+
+        assertEquals("a proxy that names no group says what it points at", uri.toString(), label); //$NON-NLS-1$
+    }
+
     @Test
     public void testCommandGroupLabelOfNothingIsNull()
     {

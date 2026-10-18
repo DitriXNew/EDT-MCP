@@ -316,6 +316,23 @@ public class UniversalMetadataFormatterTest
     }
 
     @Test
+    public void testCommandsTablePrintsAnUnresolvedStandardGroupByTheNameInItsUri()
+    {
+        // modify_metadata writes the platform's unresolved proxy; its category is the default
+        // literal, so only the URI fragment (the loader's "/" + name) says which group it is.
+        StandardCommandGroup proxy = McoreFactory.eINSTANCE.createStandardCommandGroup();
+        ((org.eclipse.emf.ecore.InternalEObject)proxy).eSetProxyURI(org.eclipse.emf.common.util.URI
+            .createURI("platform:/plugin/x/commandGroups.xml").appendFragment("/ActionsPanelTools")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        for (boolean full : new boolean[] { false, true })
+        {
+            String md = f.format(catalogWithCommandIn(proxy), full, EN);
+            assertTrue("full=" + full + ":\n" + md, //$NON-NLS-1$ //$NON-NLS-2$
+                md.contains("| Refill | Refill | ActionsPanelTools |")); //$NON-NLS-1$
+        }
+    }
+
+    @Test
     public void testCommandsTablePrintsTheCategoryOfANamelessStandardGroup()
     {
         String md = f.format(catalogWithCommandIn(

@@ -1287,6 +1287,14 @@ public final class MetadataPropertyIntrospector
         {
             return ((MdObject)value).getName();
         }
+        if (value instanceof StandardCommandGroup && ((EObject)value).eIsProxy())
+        {
+            // The platform's unresolved proxy - what modify_metadata writes (issue #508). None of its
+            // attributes is loaded: the name is null and the category its default literal, which is
+            // another group's. The platform keys each group by name in the proxy URI's fragment
+            // (StdCommandGroupLoader appends "/" + name), so that is where its name is read.
+            return platformNameFromProxyUri(((InternalEObject)value).eProxyURI());
+        }
         if (value instanceof NamedElement)
         {
             String name = ((NamedElement)value).getName();
@@ -1314,6 +1322,9 @@ public final class MetadataPropertyIntrospector
      * configuration group's {@code objectBelonging} ({@code Native}) and a standard group's
      * {@code category}, which every group of one panel shares.</p>
      *
+     * <p>An unresolved proxy whose URI names no group is printed as that URI: its attributes are
+     * not loaded, so the generic rendering would print a default category as if it were real.</p>
+     *
      * @param group the group, may be {@code null}
      * @return the label, or {@code null} when the platform gives the group no name or category
      */
@@ -1324,6 +1335,10 @@ public final class MetadataPropertyIntrospector
             return null;
         }
         String name = referenceTargetName(group);
+        if (name == null && group.eIsProxy())
+        {
+            return String.valueOf(((InternalEObject)group).eProxyURI());
+        }
         return group instanceof MdObject && name != null ? qualifiedName(group, name) : name;
     }
 
@@ -1593,7 +1608,7 @@ public final class MetadataPropertyIntrospector
         {
             // StdPicturesLoader creates proxy URIs with uri.appendFragment("/" + name), so this
             // fragment is the authoritative name when resolution is unavailable.
-            name = platformPictureNameFromProxyUri(proxyUri);
+            name = platformNameFromProxyUri(proxyUri);
         }
         if (name == null)
         {
@@ -1630,7 +1645,11 @@ public final class MetadataPropertyIntrospector
             : "Unresolved CommonPicture reference: " + proxyUri; //$NON-NLS-1$
     }
 
-    private static String platformPictureNameFromProxyUri(URI proxyUri)
+    /**
+     * The name a platform catalogue proxy carries in its URI fragment: the platform loaders
+     * (pictures, standard command groups) build each proxy with {@code appendFragment("/" + name)}.
+     */
+    private static String platformNameFromProxyUri(URI proxyUri)
     {
         if (proxyUri == null)
         {
