@@ -18,6 +18,7 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
@@ -67,12 +68,12 @@ import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
-import com._1c.g5.v8.dt.moxel.sheet.SheetFactory;
 import com._1c.g5.v8.dt.xdto.model.ObjectType;
 import com._1c.g5.v8.dt.xdto.model.Package;
 import com._1c.g5.v8.dt.xdto.model.Property;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
+import com._1c.g5.v8.dt.textdocument.model.FileAwareTextDocument;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -117,6 +118,8 @@ import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
+import com.ditrix.edt.mcp.server.utils.TemplateContentSupport;
+import com.ditrix.edt.mcp.server.utils.ContentHash;
 import com.ditrix.edt.mcp.server.utils.TypeChangeDefaults;
 import com.ditrix.edt.mcp.server.utils.UseAlwaysSupport;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
@@ -402,7 +405,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "on the same FQN lists the section's commands and groups. Cannot be combined with other " //$NON-NLS-1$
                 + "payloads.") //$NON-NLS-1$
             .objectProperty(KEY_TEMPLATE,
-                "SpreadsheetDocument (print form / макет) TEMPLATE FQN only: the spreadsheet content to " //$NON-NLS-1$
+                "TEMPLATE FQN only: TextDocument takes {text, expectedHash?}; read text and contentHash " //$NON-NLS-1$
+                + "with get_metadata_details before a guarded write. SpreadsheetDocument takes the content to " //$NON-NLS-1$
                 + "author, instead of 'properties'. An object with any of: 'cells' [{row, col (both " //$NON-NLS-1$
                 + "0-based, required), text? OR parameter? (a print-time parameter name), bold?, " //$NON-NLS-1$
                 + "fontSize?, hAlign? ('Left'/'Center'/'Right'/'Auto'/'Width'), vAlign? " //$NON-NLS-1$
@@ -419,7 +423,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "inheritance and null counts as omitted; bold:false alone and wrap:false are the same as " //$NON-NLS-1$
                 + "omitting them. " //$NON-NLS-1$
                 + "Setting a cell overwrites that (row, col); the rest of the content is kept. Valid " //$NON-NLS-1$
-                + "only for a SpreadsheetDocument template FQN; cannot be combined with 'properties' / " //$NON-NLS-1$
+                + "only for the matching template type; cannot be combined with 'properties' / " //$NON-NLS-1$
                 + "'content' / a Role payload.") //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$
                 "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in localized-string values (synonym / " //$NON-NLS-1$
@@ -472,7 +476,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "Catalog owners / Document register records / Subsystem content change (a plain " //$NON-NLS-1$
                 + "reference list, no per-entry flag) reports {added, removed}") //$NON-NLS-1$
             .objectProperty(KEY_TEMPLATE, "For a template content change: the applied counts object " //$NON-NLS-1$
-                + "{cells, merges, areas, columnWidths, rowHeights}") //$NON-NLS-1$
+                + "{cells, merges, areas, columnWidths, rowHeights}, or {contentHash} for text") //$NON-NLS-1$
             .objectProperty(KEY_COMMANDS, "For a command-interface change: how many commands changed " //$NON-NLS-1$
                 + "visibility / group, and how many groups got an explicit order {visibility, placement, " //$NON-NLS-1$
                 + "order}") //$NON-NLS-1$
@@ -1917,30 +1921,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Populates a SpreadsheetDocument (.mxlx) template's content (the {@code template} payload) via
-     * {@link SpreadsheetTemplateWriter}: writes cells (text / print-time parameter + formatting), merged
-     * ranges, named areas and column / row sizes into the template's content SpreadsheetDocument. A
-     * template's content is authored through this dedicated surface, not the generic property bag, so
-     * mixing the template payload with a generic {@code properties} change, a membership {@code content}
-     * payload or a Role payload in the same call is refused (the same policy the Role rights / membership
-     * content branches enforce, so a sibling payload is never silently dropped while the tool reports
-     * success). Only a SpreadsheetDocument-typed template can be authored; a text / binary-data / DCS
-     * template is refused.
-     *
-     * <p>The write runs inside ONE {@link BmTransactions#write write} transaction on the template
-     * re-fetched by its BM id (the BM gotcha: capture {@code bmGetId()} up front, re-fetch inside the tx -
-     * a top object's {@code eContainer()} does not reliably climb); the content SpreadsheetDocument is
-     * created via {@link SheetFactory} as a CANONICAL document (templateMode + languageSettings + the
-     * platform's default format band, matching a designer template) when the template is still empty. A
-     * payload validation failure
-     * throws a {@link TemplateWriteException} carrying a ready JSON error BEFORE the commit, so the tx
-     * rolls back with no partial mutation. After the commit the TOP object's canonical FQN
-     * ({@code bmGetFqn()} - the template itself when it is a top object, else its OWNER via
-     * {@code bmGetTopObject()} for an object-owned template inline in the owner's .mdo - the #239
-     * canonical-FQN lesson) is force-exported so the sibling {@code .mxlx} content resource drains to disk;
-     * should EDT model that content as a DISTINCT top BM object, its own FQN is exported alongside
-     * (mirroring the way {@link #modifyRoleRights} also exports the separate {@code Rights.rights}
-     * sub-resource), so the authored cells are never left in-memory only.</p>
+     * Authors TextDocument file text or SpreadsheetDocument cells through the template payload.
+     * Rejects mixed payloads and type mismatches before writing, then rechecks the model in the
+     * BM write transaction. Spreadsheet content has its own export FQN; file-backed text uses the
+     * shared initializer and a file journal so a failed BM transaction restores its original bytes.
      */
     private String modifyTemplateContent(ProjectContext ctx, String normFqn, BasicTemplate template,
         List<JsonObject> properties, List<JsonObject> content, boolean hasRolePayload,
@@ -1952,15 +1936,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return mixError;
         }
 
-        // Only a SpreadsheetDocument template carries spreadsheet content; a text / binary-data / DCS /
-        // graphical template cannot host cells. Rejected up front (fail fast, no transaction).
+        String payloadError = TemplateContentSupport.payloadError(template, templateSpec, normFqn);
+        if (payloadError != null)
+        {
+            return payloadError;
+        }
+        if (template.getTemplateType() == TemplateType.TEXT_DOCUMENT)
+        {
+            return modifyTextTemplateContent(ctx, normFqn, template, templateSpec);
+        }
+
+        // Spreadsheet payloads retain their existing type guard.
         String nonSpreadsheetError = nonSpreadsheetTemplateError(template, normFqn);
         if (nonSpreadsheetError != null)
         {
             return nonSpreadsheetError;
         }
 
-        TemplateWriteContext writeCtx = resolveTemplateWriteContext(ctx, template, normFqn);
+        TemplateWriteContext writeCtx = resolveTemplateWriteContext(ctx, template, normFqn, true);
         if (writeCtx.error != null)
         {
             return writeCtx.error;
@@ -2004,11 +1997,89 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return buildTemplateResult(normFqn, result, persisted);
     }
 
+    /** Write the file-backed text in the same BM boundary used for spreadsheet content. */
+    private String modifyTextTemplateContent(ProjectContext ctx, String normFqn, BasicTemplate template,
+        JsonObject templateSpec)
+    {
+        TemplateWriteContext writeCtx = resolveTemplateWriteContext(ctx, template, normFqn, false);
+        if (writeCtx.error != null)
+        {
+            return writeCtx.error;
+        }
+        final String hash;
+        try (TemplateContentSupport.Context files = new TemplateContentSupport.Context(ctx.project))
+        {
+            hash = BmTransactions.write(writeCtx.bmModel, "ModifyTextTemplateContent", (tx, monitor) ->
+            {
+                Object object = tx.getObjectById(writeCtx.templateBmId);
+                if (!(object instanceof BasicTemplate))
+                {
+                    throw new TemplateWriteException(ToolResult.error("Template '" + normFqn
+                        + "' no longer exists; re-read get_metadata_details.").toJson());
+                }
+                BasicTemplate current = (BasicTemplate)object;
+                String error = TemplateContentSupport.payloadError(current, templateSpec, normFqn);
+                if (error != null)
+                {
+                    throw new TemplateWriteException(error);
+                }
+                EObject currentContent = current.getTemplate();
+                if (!(currentContent instanceof FileAwareTextDocument)
+                    && !TemplateContentSupport.isPlaceholder(currentContent))
+                {
+                    throw new TemplateWriteException(ToolResult.error("Template '" + normFqn //$NON-NLS-1$
+                        + "' has incompatible content. Create a separate TextDocument template with create_metadata.") //$NON-NLS-1$
+                        .toJson());
+                }
+                IFile file = TemplateContentSupport.contentFile(ctx.project, current);
+                error = TemplateContentSupport.writeText(current, file, templateSpec, files);
+                if (error != null)
+                {
+                    throw new TemplateWriteException(error);
+                }
+                TemplateContentSupport.initialize(current, TemplateType.TEXT_DOCUMENT, tx,
+                    writeCtx.dtProject, writeCtx.fqnGenerator, file);
+                return ContentHash.of(templateSpec.get("text").getAsString());
+            });
+            files.commit();
+        }
+        catch (TemplateWriteException error)
+        {
+            return error.getErrorJson();
+        }
+        catch (Exception error)
+        {
+            Refusals.log("Error modifying text template", error);
+            return ToolResult.error("Failed to modify template text: " + unwrapCauseMessage(error)).toJson();
+        }
+        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, writeCtx.exportFqn);
+        JsonObject applied = new JsonObject();
+        applied.addProperty("contentHash", hash);
+        return ToolResult.success().put(McpKeys.ACTION, VAL_MODIFIED).put("fqn", normFqn)
+            .put(KEY_TEMPLATE, applied).put(KEY_PERSISTED, persisted)
+            .put(McpKeys.MESSAGE, "Modified text template " + normFqn).toJson();
+    }
+
+    /** The final templateType in a property batch, or null when it does not change this property. */
+    private static TemplateType requestedTemplateType(List<PreparedChange> changes)
+    {
+        TemplateType result = null;
+        for (PreparedChange change : changes)
+        {
+            if (change.feature() == MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE_TYPE)
+            {
+                result = (TemplateType)change.scalarValue;
+            }
+        }
+        return result;
+    }
+
     /**
      * Everything the template-content write boundary needs (built by
      * {@link #resolveTemplateWriteContext}): the template's BM id for the in-tx re-fetch, the TOP
      * object's canonical FQN to force-export, the BM model, the (nullable) {@link IDtProject}
-     * driving the canonical languageSettings block, and the external-property FQN generator. When
+     * driving the canonical languageSettings block, and the external-property FQN generator (only
+     * required for spreadsheet content). When
      * {@link #error} is non-null (a ready JSON error), the other fields must not be used.
      */
     private static final class TemplateWriteContext
@@ -2034,13 +2105,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /**
      * Resolves everything the template-content write needs up front: the template's BM id, the TOP
      * object's canonical FQN to force-export, the project's BM model, the (nullable)
-     * {@link IDtProject} and the external-property FQN generator. Returns a
+     * {@link IDtProject} and, when {@code attachSpreadsheet} is true, the external-property FQN
+     * generator needed to attach spreadsheet content. Returns a
      * {@link TemplateWriteContext} whose non-null {@code error} (a ready JSON error) reports a
      * missing service / unresolvable export target. Extracted verbatim from
      * {@link #modifyTemplateContent}.
      */
     private static TemplateWriteContext resolveTemplateWriteContext(ProjectContext ctx,
-        BasicTemplate template, String normFqn)
+        BasicTemplate template, String normFqn, boolean attachSpreadsheet)
     {
         TemplateWriteContext writeCtx = new TemplateWriteContext();
 
@@ -2100,11 +2172,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // under its generated external-property FQN (the same machinery FormElementWriter uses for a form's
         // content), else committing the write fails with "Failed to persist reference value". Carried on
         // the write context captured by the write lambda.
-        writeCtx.fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
-        if (writeCtx.fqnGenerator == null)
+        if (attachSpreadsheet)
         {
-            writeCtx.error = ToolResult.error("ITopObjectFqnGenerator not available").toJson(); //$NON-NLS-1$
-            return writeCtx;
+            writeCtx.fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
+            if (writeCtx.fqnGenerator == null)
+            {
+                writeCtx.error = ToolResult.error("ITopObjectFqnGenerator not available").toJson(); //$NON-NLS-1$
+                return writeCtx;
+            }
         }
         return writeCtx;
     }
@@ -2128,6 +2203,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "resolved inside the transaction.").toJson());
         }
         BasicTemplate txTemplate = (BasicTemplate)inTx;
+        String payloadError = TemplateContentSupport.payloadError(txTemplate, templateSpec, normFqn);
+        if (payloadError == null)
+        {
+            payloadError = nonSpreadsheetTemplateError(txTemplate, normFqn);
+        }
+        if (payloadError != null)
+        {
+            throw new TemplateWriteException(payloadError);
+        }
         SpreadsheetDocument doc =
             resolveSpreadsheetContent(txTemplate, tx, writeCtx.dtProject, writeCtx.fqnGenerator, normFqn);
         // The content doc is now an attached BM top object (pre-existing on disk, or freshly
@@ -2189,30 +2273,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Resolves the {@link SpreadsheetDocument} content of an in-transaction template, creating an empty
-     * CANONICAL one when the template has none usable yet. This "no content" branch is the PRIMARY path,
-     * not an edge case: {@code BasicTemplate.template} is a transient {@code @ExternalProperty} reference
-     * whose content lives in the separate, lazily-loaded {@code .mxlx}, so a template freshly made by
-     * {@code create_metadata} ({@code fillDefaultReferences} does not materialize a transient external ref)
-     * has NO usable content - either {@code getTemplate() == null} OR, on some EDT builds, a non-null
-     * PLACEHOLDER {@code EObject} that is not yet a {@link SpreadsheetDocument}. Both are treated as empty
-     * (the declared {@code templateType} is already verified {@code == SPREADSHEET_DOCUMENT} up front, so a
-     * non-spreadsheet content here is a placeholder to replace, never a real other-typed template). The
-     * empty content is therefore built with the platform
-     * factory {@link SheetFactory#createSpreadsheetDocument()} - NOT a raw
-     * {@code MoxelFactory.createSpreadsheetDocument()} - which seeds the print / view settings, the
-     * shared format band (a neutral format at index 0, so {@code SpreadsheetTemplateWriter.ensureBaseFormat}
-     * then no-ops on the non-empty pool) and {@code setDefaultFormatIndex(0)}; on top of that a print
-     * form (макет) is marked {@link SpreadsheetDocument#setTemplateMode(boolean) templateMode=true} and
-     * given the required {@code <languageSettings>} block (project-aware via
-     * {@link SheetFactory#createLanguageSettings} when the {@code dtProject} resolves), so the authored
-     * {@code .mxlx} matches a designer-created template rather than a non-canonical
-     * {@code templateMode=false} / no-{@code languageSettings} document.
-     *
-     * <p>A non-{@link SpreadsheetDocument} content is treated as an empty/placeholder and REPLACED with a
-     * fresh canonical document (it is not a genuine other-typed template - the up-front
-     * {@code templateType} guard already rejected those before the tx). MUST run inside the write
-     * boundary.</p>
+     * Reuses spreadsheet content or initializes an empty placeholder through EDT's creation helper.
+     * Real foreign content is refused. Must run inside the BM write boundary.
      */
     private static SpreadsheetDocument resolveSpreadsheetContent(BasicTemplate txTemplate, IBmTransaction tx,
         IDtProject dtProject, ITopObjectFqnGenerator fqnGenerator, String normFqn)
@@ -2222,36 +2284,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return (SpreadsheetDocument)contentObj;
         }
-        // No usable content yet - materialize a fresh canonical SpreadsheetDocument. This covers BOTH a null
-        // ref AND a non-null, non-SpreadsheetDocument PLACEHOLDER: a template freshly made by create_metadata
-        // does not always report getTemplate()==null - on some EDT builds the transient @ExternalProperty ref
-        // resolves to a placeholder EObject (not null), so keying only off null would wrongly reject a
-        // brand-new empty template ("its content is EObject"). The declared templateType is already verified
-        // == SPREADSHEET_DOCUMENT up front (nonSpreadsheetTemplateError), so any content that is not a real
-        // SpreadsheetDocument is an empty/placeholder to replace, never a genuine non-spreadsheet template.
-        // Built with the platform SheetFactory (seeds print/view settings, the neutral format band at index
-        // 0, setDefaultFormatIndex(0)); a print form is templateMode=true with the project-aware
-        // <languageSettings>, so the authored .mxlx matches a designer-created template.
-        SpreadsheetDocument doc = SheetFactory.createSpreadsheetDocument();
-        doc.setTemplateMode(true);
-        if (dtProject != null)
+        if (!TemplateContentSupport.isPlaceholder(contentObj))
         {
-            doc.setLanguageSettings(SheetFactory.createLanguageSettings(dtProject));
+            throw new TemplateWriteException(ToolResult.error("Template '" + normFqn
+                + "' has incompatible content. Create a separate SpreadsheetDocument template with create_metadata.")
+                .toJson());
         }
-        txTemplate.setTemplate(doc);
-        // The content is a transient @ExternalProperty (a separate .mxlx resource, NOT an inline BM ref), so
-        // the freshly-created doc must be ATTACHED as a BM top object under its canonical external-property
-        // FQN - else committing the write fails with "Failed to persist reference value". Mirrors
-        // FormElementWriter's content-form attach (generateExternalPropertyFqn + attachTopObject).
-        String contentFqn = fqnGenerator.generateExternalPropertyFqn(txTemplate,
-            MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE);
-        if (contentFqn == null || contentFqn.isEmpty())
-        {
-            throw new TemplateWriteException(ToolResult.error("Could not generate the content resource FQN " //$NON-NLS-1$
-                + "for template '" + normFqn + "'; report it with the template FQN.").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        tx.attachTopObject((IBmObject)doc, contentFqn);
-        return doc;
+        TemplateContentSupport.initialize(txTemplate, TemplateType.SPREADSHEET_DOCUMENT,
+            tx, dtProject, fqnGenerator, null);
+        return (SpreadsheetDocument)txTemplate.getTemplate();
     }
 
     /**
@@ -2388,13 +2429,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /**
      * The actionable error for a present-but-malformed {@code template} argument (unparseable JSON, or a
      * string / number / array rather than an object): the {@code template} payload authors a
-     * SpreadsheetDocument template's content, so it must be a JSON object.
+     * TextDocument or SpreadsheetDocument template's content, so it must be a JSON object.
      */
     private static String malformedTemplateError()
     {
         return ToolResult.error("'template' must be a JSON object, e.g. " //$NON-NLS-1$
             + "{cells:[{row:0,col:0,text:'Total'}]}. It authors a SpreadsheetDocument template's cells / " //$NON-NLS-1$
-            + "merges / areas / column & row sizes on a template FQN.").toJson(); //$NON-NLS-1$
+            + "merges / areas / column & row sizes on a template FQN. For a TextDocument use " //$NON-NLS-1$
+            + "{text:'...'} with optional expectedHash from get_metadata_details.").toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -2555,8 +2597,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         final List<String> cascadedExportFqns = new ArrayList<>();
         // What a type write reset besides the type (issue #700), for the confirmation message.
         final TypeChangeDefaults.Reset[] typeReset = { TypeChangeDefaults.Reset.NONE };
+        final TemplateType requestedTemplateType = requestedTemplateType(changes);
 
-        try
+        try (TemplateContentSupport.Context templates = new TemplateContentSupport.Context(ctx.project))
         {
             BmTransactions.<Void>write(bmModel, "ModifyMetadata", (tx, pm) -> //$NON-NLS-1$
             {
@@ -2566,6 +2609,12 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 final String oldNamespace = (xdtoNamespaceChange && applyTo instanceof XDTOPackage)
                     ? ((XDTOPackage)applyTo).getNamespace() : null;
                 localizedReport.rememberPreState(applyTo, changes);
+                if (applyTo instanceof BasicTemplate && requestedTemplateType != null)
+                {
+                    AdoptedPropertyRouter.requireStillWritten(applyTo,
+                        MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE_TYPE, null, normFqn);
+                    contentFqnHolder[0] = templates.retype((BasicTemplate)applyTo, requestedTemplateType, tx);
+                }
                 typeReset[0] = applyChanges(applyTo, changes, tx, normFqn);
                 localizedReport.collect(applyTo, changes, declaredCodes, config);
                 if (fqnGenerator != null && applyTo instanceof XDTOPackage)
@@ -2611,6 +2660,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 }
                 return null;
             });
+            templates.commit();
         }
         catch (Exception e)
         {
@@ -2777,7 +2827,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         for (PreparedChange change : changes)
         {
-            if (!change.isTypeChange())
+            // The complete batch was checked above; templateType was initialized by the caller.
+            if (!change.isTypeChange()
+                && change.feature() != MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE_TYPE)
             {
                 change.applyTo(target, tx);
             }
@@ -6421,6 +6473,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case LOCALIZED_STRING:
                 return prepareLocalized(ctx, name, value, prop, info, out, normReport);
             case ENUM:
+                if (target instanceof BasicTemplate
+                    && info.feature == MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE_TYPE)
+                {
+                    TemplateType type = TemplateContentSupport.resolveType(value);
+                    String typeError = TemplateContentSupport.unsupportedRetypeError(type, value);
+                    if (typeError != null && (type == null || type != ((BasicTemplate)target).getTemplateType()))
+                    {
+                        return typeError;
+                    }
+                    out.add(PreparedChange.scalar(info.feature, type));
+                    return null;
+                }
                 return prepareEnum(name, value, info, out);
             case MANY_ENUM:
                 return prepareManyEnum(name, prop, info, out);

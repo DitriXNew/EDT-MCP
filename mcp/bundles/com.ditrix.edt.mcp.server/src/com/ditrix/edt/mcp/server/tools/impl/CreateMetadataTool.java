@@ -74,6 +74,7 @@ import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
+import com.ditrix.edt.mcp.server.utils.TemplateContentSupport;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
@@ -204,7 +205,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .objectArrayProperty("properties", //$NON-NLS-1$
                 "Optional properties to apply at creation, as [{name, value, language?}]. For most " //$NON-NLS-1$
                 + "kinds this applies 'synonym' (with optional 'language' code) and 'comment'; other " //$NON-NLS-1$
-                + "property names are rejected (set them via modify_metadata). A FORM CONTENT member " //$NON-NLS-1$
+                + "property names are rejected (set them via modify_metadata). Templates also accept " //$NON-NLS-1$
+                + "'templateType': TextDocument or SpreadsheetDocument (English or Russian). A FORM CONTENT member " //$NON-NLS-1$
                 + "('...Form.<F>.<Kind>.<Name>') takes a DIFFERENT vocabulary: 'title' (with optional " //$NON-NLS-1$
                 + "'language'), 'parent' (the group to nest a visual item under), 'dataPath' / " //$NON-NLS-1$
                 + "'attribute' (the bound attribute of a Field / Table), 'command' (a Button's " //$NON-NLS-1$
@@ -486,6 +488,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "get_tool_guide('create_metadata') for the full list). The parent must already " //$NON-NLS-1$
                 + "exist; use get_metadata_objects to check." + ctx.scope.addressingHint(normFqn))
                 .toJson();
+        }
+        EClass createClass = target.topLevel
+            ? resolveCollectionElementType(config, target.configFeatureName) : target.elementType;
+        if (props.templateType != null
+            && (createClass == null || !MdClassPackage.Literals.BASIC_TEMPLATE.isSuperTypeOf(createClass)))
+        {
+            return ToolResult.error("templateType applies only to a CommonTemplate or an owned Template; " //$NON-NLS-1$
+                + "use create_metadata with a template FQN.").toJson(); //$NON-NLS-1$
         }
         if (!isValidIdentifier(target.childName))
         {
@@ -1137,8 +1147,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String[] xdtoContentFqnHolder = { null };
         final String[] formContentFqnHolder = { null };
         final String[] rightsFqnHolder = { null };
+        final String[] templateContentFqnHolder = { null };
         final EClass createdKind;
-        try
+        try (TemplateContentSupport.Context templates = new TemplateContentSupport.Context(req.project))
         {
             createdKind = BmTransactions.<EClass>write(bm.bmModel, "CreateMetadataObject", (tx, pm) -> //$NON-NLS-1$
             {
@@ -1174,6 +1185,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                         (BasicForm)newObject, formFactory, fqnGenerator, version, russianAutoNames);
                 }
                 factory.fillDefaultReferences(newObject);
+                if (newObject instanceof BasicTemplate)
+                {
+                    templateContentFqnHolder[0] = templates.initialize((BasicTemplate)newObject,
+                        req.props.templateType == null ? TemplateType.SPREADSHEET_DOCUMENT : req.props.templateType, tx);
+                }
                 if (formContentFqnHolder[0] != null)
                 {
                     FormElementWriter.enforceContentFormCommandBarId((BasicForm)newObject);
@@ -1207,6 +1223,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 }
                 return newObject.eClass();
             });
+            templates.commit();
         }
         catch (RoleRightsWriter.RoleWriteException e)
         {
@@ -1233,6 +1250,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         if (xdtoContentFqn != null && !exportFqns.contains(xdtoContentFqn))
         {
             exportFqns.add(xdtoContentFqn);
+        }
+        if (templateContentFqnHolder[0] != null)
+        {
+            exportFqns.add(templateContentFqnHolder[0]);
         }
         boolean persisted = BmTransactions.forceExportToDisk(req.project, exportFqns);
         return success(new SuccessInfo(req.normFqn, createdKind, name, persisted, req.props,
@@ -1646,7 +1667,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final Version version = bm.version;
 
         final EClass createdKind;
-        try
+        final String[] templateContentFqn = { null };
+        try (TemplateContentSupport.Context templates = new TemplateContentSupport.Context(project))
         {
             createdKind = BmTransactions.<EClass>write(bm.bmModel, "CreateMetadataMember", (tx, pm) -> //$NON-NLS-1$
             {
@@ -1655,8 +1677,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     new MemberChildSpec(factory, elementType, owner, version, name, props,
                         synonymLanguage, feature);
                 MdObject child = createMemberChild(spec);
+                if (child instanceof BasicTemplate)
+                {
+                    templateContentFqn[0] = templates.initialize((BasicTemplate)child,
+                        props.templateType == null ? TemplateType.SPREADSHEET_DOCUMENT : props.templateType, tx);
+                }
                 return child.eClass();
             });
+            templates.commit();
         }
         catch (Exception e)
         {
@@ -1664,7 +1692,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to create member: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
-        boolean persisted = BmTransactions.forceExportToDisk(project, topFqn);
+        boolean persisted = BmTransactions.forceExportToDisk(project, templateContentFqn[0] == null
+            ? List.of(topFqn) : List.of(topFqn, templateContentFqn[0]));
         return success(new SuccessInfo(normFqn, createdKind, name, persisted, props, synonymLanguage,
             localesMissing, localeUnused, null, normReport));
     }
@@ -3190,6 +3219,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         String synonym;
         String language;
         String comment;
+        TemplateType templateType;
     }
 
     /**
@@ -3216,9 +3246,17 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 case "comment": //$NON-NLS-1$
                     out.comment = normReport.apply("comment", value); //$NON-NLS-1$
                     break;
+                case "templatetype": //$NON-NLS-1$
+                    out.templateType = TemplateContentSupport.resolveType(value);
+                    String typeError = TemplateContentSupport.unsupportedTypeError(out.templateType, value);
+                    if (typeError != null)
+                    {
+                        return typeError;
+                    }
+                    break;
                 default:
                     return ToolResult.error(ERR_PROPERTY_PREFIX + name + "' is not supported yet in " //$NON-NLS-1$
-                        + "create_metadata. This version applies only: synonym, comment. Set other " //$NON-NLS-1$
+                        + "create_metadata. This version applies synonym, comment, and templateType on templates. Set other " //$NON-NLS-1$
                         + "properties (including type) via modify_metadata.").toJson(); //$NON-NLS-1$
             }
         }
@@ -3233,6 +3271,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     /** Applies the synonym (keyed by language CODE) and comment to a freshly created node. */
     private static void applyScalarProps(MdObject obj, Props props, String synonymLanguage)
     {
+        if (props.templateType != null)
+        {
+            if (!(obj instanceof BasicTemplate))
+            {
+                throw new IllegalArgumentException("templateType applies only to a CommonTemplate or " //$NON-NLS-1$
+                    + "an owned Template; use create_metadata with a template FQN."); //$NON-NLS-1$
+            }
+            ((BasicTemplate)obj).setTemplateType(props.templateType);
+        }
         if (props.synonym != null && !props.synonym.isEmpty() && synonymLanguage != null)
         {
             obj.getSynonym().put(synonymLanguage, props.synonym);
