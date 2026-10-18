@@ -262,6 +262,225 @@ public class InfobaseAccessSupportTest
     }
 
     @Test
+    public void timedOutClearCannotWriteAfterItsGuardStopsWaiting() throws Exception
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        IInfobaseAccessManager manager = mock(IInfobaseAccessManager.class);
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        try
+        {
+            try
+            {
+                InfobaseAccessSupport.clearCredentials(ref, write -> {
+                    started.countDown();
+                    try
+                    {
+                        while (release.getCount() != 0)
+                        {
+                            try
+                            {
+                                if (!release.await(HANDOFF_WAIT_MS, TimeUnit.MILLISECONDS))
+                                {
+                                    throw new IllegalStateException("test guard was not released"); //$NON-NLS-1$
+                                }
+                            }
+                            catch (InterruptedException ignored)
+                            {
+                                // Model a native/monitor wait which outlives cooperative cancellation.
+                            }
+                        }
+                        write.run(ref);
+                    }
+                    finally
+                    {
+                        finished.countDown();
+                    }
+                }, () -> manager, 1_000L);
+                org.junit.Assert.fail("the waiting clear must time out"); //$NON-NLS-1$
+            }
+            catch (IllegalStateException expected)
+            {
+                assertTrue(expected.getMessage().contains("TIMED_OUT")); //$NON-NLS-1$
+            }
+            assertEquals("worker must have entered the guard", 0, started.getCount()); //$NON-NLS-1$
+            release.countDown();
+            assertTrue(finished.await(HANDOFF_WAIT_MS, TimeUnit.MILLISECONDS));
+            verify(manager, never()).updateSettings(any(), any());
+        }
+        finally
+        {
+            release.countDown();
+            finished.await(HANDOFF_WAIT_MS, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    @Test
+    public void aGuardWhichDoesNotPerformTheClearCannotReportSuccess() throws Exception
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        IInfobaseAccessManager manager = mock(IInfobaseAccessManager.class);
+        try
+        {
+            InfobaseAccessSupport.clearCredentials(ref, write -> { }, () -> manager, 5_000L);
+            org.junit.Assert.fail("completion without a settings write must not report cleanup success"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            assertTrue(expected.getMessage().contains("did not complete")); //$NON-NLS-1$
+        }
+        verify(manager, never()).updateSettings(any(), any());
+    }
+
+    @Test
+    public void atomicAdmissionDistinguishesAnInFlightNativeWriteFromAnUnstartedOne() throws Exception
+    {
+        var ref = new ServerInfobaseTarget("host", "pending").reference("pending"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        var manager = mock(IInfobaseAccessManager.class);
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var finished = new java.util.concurrent.CountDownLatch(1);
+        doAnswer(call -> {
+            entered.countDown();
+            assertTrue(release.await(20, java.util.concurrent.TimeUnit.SECONDS));
+            return null;
+        }).when(manager).updateSettings(any(), any());
+        var outcome = InfobaseAccessSupport.runBoundedCredentialStore("pending native write", 1_000L, //$NON-NLS-1$
+            (publish, committed, allowed) -> {
+                try
+                {
+                    publish.accept(InfobaseAccessSupport.storeCredentials(ref, "Admin", "secret", //$NON-NLS-1$ //$NON-NLS-2$
+                        InfobaseAccess.INFOBASE, manager, committed, allowed));
+                }
+                finally
+                {
+                    finished.countDown();
+                }
+            });
+        try
+        {
+            assertEquals(0, entered.getCount());
+            assertFalse(outcome.boundedResult().isSuccess());
+            assertTrue("admission won, so native SDK work may still complete", outcome.writeInProgress()); //$NON-NLS-1$
+            assertFalse(outcome.writeCommitted());
+            assertNull(outcome.publishedResult());
+            verify(manager, org.mockito.Mockito.times(1)).updateSettings(any(), any());
+        }
+        finally
+        {
+            release.countDown();
+            assertTrue(finished.await(20, java.util.concurrent.TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void sdkReturnBeforeCommitPublicationStillKeepsTheWritePermitPending() throws Exception
+    {
+        var ref = new ServerInfobaseTarget("host", "commit-gap").reference("commit-gap"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        var manager = mock(IInfobaseAccessManager.class);
+        var sdkReturned = new CountDownLatch(1);
+        var releaseCommit = new CountDownLatch(1);
+        var finished = new CountDownLatch(1);
+        var outcome = InfobaseAccessSupport.runBoundedCredentialStore("commit publication gap", 1_000L, //$NON-NLS-1$
+            (publish, committed, allowed) -> {
+                try
+                {
+                    publish.accept(InfobaseAccessSupport.storeCredentials(ref, "Admin", "secret", //$NON-NLS-1$ //$NON-NLS-2$
+                        InfobaseAccess.INFOBASE, manager, () -> {
+                            sdkReturned.countDown();
+                            try
+                            {
+                                assertTrue(releaseCommit.await(20, TimeUnit.SECONDS));
+                            }
+                            catch (InterruptedException failure)
+                            {
+                                throw new AssertionError(failure);
+                            }
+                            committed.run();
+                        }, allowed));
+                }
+                finally
+                {
+                    finished.countDown();
+                }
+            });
+        try
+        {
+            assertEquals(0, sdkReturned.getCount());
+            verify(manager).updateSettings(any(), any());
+            assertTrue("the permit must survive until commit publication", outcome.writeInProgress()); //$NON-NLS-1$
+            assertFalse(outcome.writeCommitted());
+        }
+        finally
+        {
+            releaseCommit.countDown();
+            assertTrue(finished.await(20, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void externalJobCancellationClosesAdmissionBeforeTheWorkerContinues() throws Exception
+    {
+        var ref = new ServerInfobaseTarget("host", "cancel").reference("cancel"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        var manager = mock(IInfobaseAccessManager.class);
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var workerJob = new AtomicReference<org.eclipse.core.runtime.jobs.Job>();
+        var control = new AtomicReference<CredentialWriteControl>();
+        var result = new AtomicReference<InfobaseAccessSupport.BoundedStoreResult<StoreResult>>();
+        var caller = new Thread(() -> result.set(InfobaseAccessSupport.runBoundedCredentialStore(
+            "external cancel", 20_000L, (publish, committed, allowed) -> { //$NON-NLS-1$
+                control.set(allowed);
+                workerJob.set(org.eclipse.core.runtime.jobs.Job.getJobManager().currentJob());
+                assertTrue(allowed.getAsBoolean());
+                entered.countDown();
+                assertTrue(release.await(20, TimeUnit.SECONDS));
+                publish.accept(InfobaseAccessSupport.storeCredentials(ref, "Admin", "secret", //$NON-NLS-1$ //$NON-NLS-2$
+                    InfobaseAccess.INFOBASE, manager, committed, allowed));
+            })));
+        caller.start();
+        try
+        {
+            assertTrue(entered.await(20, TimeUnit.SECONDS));
+            workerJob.get().cancel();
+            assertFalse("external Job.cancel must close the same admission gate", control.get().getAsBoolean()); //$NON-NLS-1$
+        }
+        finally
+        {
+            release.countDown();
+            caller.join(20_000L);
+        }
+        assertFalse(caller.isAlive());
+        assertNotNull(result.get());
+        assertFalse(result.get().writeCommitted());
+        assertFalse(result.get().writeInProgress());
+        verify(manager, never()).updateSettings(any(), any());
+    }
+
+    @Test
+    public void permissionReadsDoNotConsumePermitsAndEachMutationNeedsNewAdmission()
+    {
+        var control = new CredentialWriteControl();
+        assertTrue(control.getAsBoolean());
+        assertTrue(control.getAsBoolean());
+        try (var first = control.tryBeginWrite())
+        {
+            assertNotNull(first);
+            assertTrue(control.writeInProgress());
+        }
+        try (var second = control.tryBeginWrite())
+        {
+            assertNotNull(second);
+            assertTrue(control.writeInProgress());
+            control.close();
+            assertNull(control.tryBeginWrite());
+            assertTrue("closing must not forget an admitted write", control.writeInProgress()); //$NON-NLS-1$
+        }
+        assertFalse(control.writeInProgress());
+    }
+
+    @Test
     public void cancelledBoundedStoreSkipsUpdateSettingsAtTheWriteBoundary() throws Exception
     {
         InfobaseReference ref = mock(InfobaseReference.class);
@@ -269,8 +488,11 @@ public class InfobaseAccessSupportTest
         AtomicBoolean writeCommitted = new AtomicBoolean();
         String password = "must-not-be-written"; //$NON-NLS-1$
 
+        var closed = new CredentialWriteControl();
+        assertTrue("a prior permission observation cannot authorize a later write", closed.getAsBoolean()); //$NON-NLS-1$
+        closed.close();
         StoreResult result = InfobaseAccessSupport.storeCredentials(ref, "Admin", password, //$NON-NLS-1$
-            InfobaseAccess.INFOBASE, manager, () -> writeCommitted.set(true), () -> false);
+            InfobaseAccess.INFOBASE, manager, () -> writeCommitted.set(true), closed);
 
         verify(manager, never()).updateSettings(any(InfobaseReference.class),
             any(InfobaseAccessSettings.class));

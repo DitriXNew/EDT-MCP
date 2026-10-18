@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -25,6 +26,7 @@ import org.eclipse.core.runtime.jobs.Job;
 import com._1c.g5.v8.dt.common.FileUtil;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager;
 import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager;
+import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAssociationContext;
 import com._1c.g5.v8.dt.platform.services.model.FileConnectionString;
 import com._1c.g5.v8.dt.platform.services.model.IConnectionString;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
@@ -35,6 +37,8 @@ import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.ApplicationSupport;
+import com.ditrix.edt.mcp.server.utils.InfobaseRegistration;
+import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
@@ -109,6 +113,7 @@ public class DeleteInfobaseTool implements IMcpTool
 
     /** Output key: whether the EDT registry entry was (or would be) removed. */
     private static final String KEY_DELETE_REGISTRATION = "deleteRegistration"; //$NON-NLS-1$
+    private static final String KEY_REGISTRATION_ID = "registrationId"; //$NON-NLS-1$
 
     /** Infobase application type ID. */
     private static final String INFOBASE_APP_TYPE = "com.e1c.g5.dt.applications.type.infobase"; //$NON-NLS-1$
@@ -168,6 +173,10 @@ public class DeleteInfobaseTool implements IMcpTool
             .stringProperty(KEY_INFOBASE_NAME,
                 "Display name of the infobase to remove. Either applicationId or infobaseName " //$NON-NLS-1$
                 + "is required.") //$NON-NLS-1$
+            .stringProperty(KEY_REGISTRATION_ID,
+                "Explicit GLOBAL launcher-entry UUID returned by create_infobase. Requires exact infobaseName, " //$NON-NLS-1$
+                + "deleteRegistration=true, deleteDatabaseFiles=false and no applicationId. Clears credentials " //$NON-NLS-1$
+                + "before removal; never selects a registration by name alone. Repeat this same UUID on confirm.") //$NON-NLS-1$
             .booleanProperty(KEY_DELETE_REGISTRATION,
                 "true = also deregister the infobase from the global EDT infobases list " //$NON-NLS-1$
                 + "(equivalent to 'Delete' in the Infobases view); default true.") //$NON-NLS-1$
@@ -194,6 +203,7 @@ public class DeleteInfobaseTool implements IMcpTool
                 + "deletions only).") //$NON-NLS-1$
             .stringProperty(McpKeys.PROJECT, "Name of the configuration project.") //$NON-NLS-1$
             .stringProperty(McpKeys.APPLICATION_ID, "Application ID that was removed.") //$NON-NLS-1$
+            .stringProperty(KEY_REGISTRATION_ID, "Exact global launcher UUID selected for preview/removal.") //$NON-NLS-1$
             .stringProperty(KEY_INFOBASE_NAME, "Display name of the removed infobase.") //$NON-NLS-1$
             .booleanProperty(KEY_DELETE_REGISTRATION,
                 "Whether the EDT registry entry was (or would be) removed: the global infobases-list " //$NON-NLS-1$
@@ -249,6 +259,7 @@ public class DeleteInfobaseTool implements IMcpTool
         String projectName = JsonUtils.extractStringArgument(params, McpKeys.PROJECT_NAME);
         String applicationId = JsonUtils.extractStringArgument(params, McpKeys.APPLICATION_ID);
         String infobaseName = JsonUtils.extractStringArgument(params, KEY_INFOBASE_NAME);
+        String registrationId = JsonUtils.extractStringArgument(params, KEY_REGISTRATION_ID);
         boolean deleteRegistration =
             JsonUtils.extractBooleanArgument(params, KEY_DELETE_REGISTRATION, true);
         boolean deleteDatabaseFiles =
@@ -257,6 +268,12 @@ public class DeleteInfobaseTool implements IMcpTool
 
         boolean hasId = applicationId != null && !applicationId.isEmpty();
         boolean hasName = infobaseName != null && !infobaseName.isEmpty();
+        String registrationError = registrationArgumentError(registrationId, applicationId, infobaseName,
+            deleteRegistration, deleteDatabaseFiles);
+        if (registrationError != null)
+        {
+            return ToolResult.error(registrationError).toJson();
+        }
         if (!hasId && !hasName)
         {
             return ToolResult.error("Either applicationId (from get_applications) or " //$NON-NLS-1$
@@ -270,12 +287,39 @@ public class DeleteInfobaseTool implements IMcpTool
             return ToolResult.error(building).toJson();
         }
 
-        return deleteInfobase(projectName, applicationId, infobaseName, deleteRegistration,
+        return deleteInfobase(projectName, applicationId, infobaseName, registrationId, deleteRegistration,
             deleteDatabaseFiles, confirm);
     }
 
+    static String registrationArgumentError(String registrationId, String applicationId, String name,
+            boolean deleteRegistration, boolean deleteDatabaseFiles)
+    {
+        if (registrationId == null || registrationId.isEmpty())
+        {
+            return null;
+        }
+        if ((applicationId != null && !applicationId.isEmpty()) || name == null || name.isBlank()
+            || !deleteRegistration || deleteDatabaseFiles)
+        {
+            return "registrationId requires exact infobaseName, deleteRegistration=true, " //$NON-NLS-1$
+                + "deleteDatabaseFiles=false and no applicationId. Use get_applications for project applications."; //$NON-NLS-1$
+        }
+        try
+        {
+            if (UUID.fromString(registrationId).toString().equalsIgnoreCase(registrationId))
+            {
+                return null;
+            }
+        }
+        catch (IllegalArgumentException e)
+        {
+            // Do not echo arbitrary text supplied in a UUID field.
+        }
+        return "Invalid registrationId; use the full UUID returned by create_infobase or its rollback result."; //$NON-NLS-1$
+    }
+
     private String deleteInfobase(String projectName, String applicationId, String infobaseName,
-            boolean deleteRegistration, boolean deleteDatabaseFiles, boolean confirm)
+            String registrationId, boolean deleteRegistration, boolean deleteDatabaseFiles, boolean confirm)
     {
         // --- Resolve project + services ---
         DeleteContext context = resolveContext(projectName);
@@ -283,10 +327,39 @@ public class DeleteInfobaseTool implements IMcpTool
         {
             return context.error;
         }
+        return deleteInfobase(context, projectName, applicationId, infobaseName, registrationId,
+            deleteRegistration, deleteDatabaseFiles, confirm,
+            () -> InfobaseRegistration.currentContext(context.project));
+    }
+
+    String deleteInfobase(DeleteContext context, String projectName, String applicationId,
+            String infobaseName, String registrationId, boolean deleteRegistration,
+            boolean deleteDatabaseFiles, boolean confirm,
+            Supplier<InfobaseAssociationContext> currentContext)
+    {
         IProject project = context.project;
         IApplicationManager appManager = context.appManager;
         IInfobaseAssociationManager assocManager = context.assocManager;
         IInfobaseManager ibManager = context.ibManager;
+        InfobaseAssociationContext capturedContext;
+        try
+        {
+            capturedContext = currentContext.get();
+        }
+        catch (Exception unavailable)
+        {
+            capturedContext = null;
+        }
+        final InfobaseAssociationContext associationContext = capturedContext;
+        if (registrationId != null && !registrationId.isEmpty())
+        {
+            if (associationContext == null)
+            {
+                return unavailableContextError();
+            }
+            return deleteRegistration(projectName, infobaseName, UUID.fromString(registrationId), ibManager,
+                project, associationContext, confirm);
+        }
 
         // --- Find the target application ---
         TargetApplication target =
@@ -304,6 +377,11 @@ public class DeleteInfobaseTool implements IMcpTool
         {
             return deleteStandaloneServer(projectName, project, appManager, targetApp,
                 deleteRegistration, deleteDatabaseFiles, confirm);
+        }
+
+        if (associationContext == null)
+        {
+            return unavailableContextError();
         }
 
         // Resolve the file-infobase target (cast-check, on-disk directory, shared-files guard) -
@@ -325,17 +403,109 @@ public class DeleteInfobaseTool implements IMcpTool
 
         // Destructive-operation consent gate: the LAST check before the infobase is dissociated /
         // deregistered / its files removed. On REJECT nothing is mutated.
-        String declined = checkDestructiveConsent(ibPlan.resolvedName, "This dissociates infobase '" //$NON-NLS-1$
+        return afterConsent(associationContext, currentContext,
+            () -> checkDestructiveConsent(ibPlan.resolvedName, "This dissociates infobase '" //$NON-NLS-1$
             + ibPlan.resolvedName + MSG_FROM_PROJECT + projectName + "'" //$NON-NLS-1$
             + (deleteRegistration ? " and deregisters it from the EDT infobases list" : "") //$NON-NLS-1$ //$NON-NLS-2$
-            + (deleteDatabaseFiles ? CONSENT_DELETE_FILES_SUFFIX : ".")); //$NON-NLS-1$
+                + (deleteDatabaseFiles ? CONSENT_DELETE_FILES_SUFFIX : ".")), //$NON-NLS-1$
+            () -> performFileInfobaseDeletion(projectName, project, assocManager, ibManager,
+                deleteDatabaseFiles, ibPlan, associationContext));
+    }
+
+    private static String unavailableContextError()
+    {
+        return ToolResult.error("Could not capture the current infobase context; retry get_applications. Nothing was deleted.").toJson(); //$NON-NLS-1$
+    }
+
+    /** The UUID is an explicit global target, not an application ID or a project-ownership claim. */
+    private String deleteRegistration(String projectName, String name, UUID registrationId,
+            IInfobaseManager manager, IProject project, InfobaseAssociationContext context, boolean confirm)
+    {
+        if (manager == null)
+        {
+            return ToolResult.error("IInfobaseManager is unavailable; inspect the EDT launcher list. Nothing was deleted.").toJson(); //$NON-NLS-1$
+        }
+        try
+        {
+            InfobaseReference reference = InfobaseRegistration.findCleanupRegistration(manager, registrationId, name);
+            InfobaseReference captured = org.eclipse.emf.ecore.util.EcoreUtil.copy(reference);
+            if (!confirm)
+            {
+                return registrationResult(projectName, name, registrationId, false).toJson();
+            }
+            return afterConsent(context, () -> InfobaseRegistration.currentContext(project),
+                () -> checkDestructiveConsent(name, "This clears credentials and removes the exact GLOBAL launcher registration " //$NON-NLS-1$
+                    + registrationId + "; the database files are untouched."), //$NON-NLS-1$
+                () -> {
+                    try
+                    {
+                        InfobaseRegistration.cleanupRegistration(manager, captured,
+                            InfobaseAccessSupport::clearCredentials, () -> {
+                                if (!contextMatches(context, () -> InfobaseRegistration.currentContext(project)))
+                                {
+                                    throw new IllegalStateException("The project's infobase context changed; request a new preview."); //$NON-NLS-1$
+                                }
+                            });
+                        return registrationResult(projectName, name, registrationId, true).toJson();
+                    }
+                    catch (Exception e)
+                    {
+                        return ToolResult.error("Registration cleanup was not completed: " + e.getClass().getSimpleName() //$NON-NLS-1$
+                            + ". Inspect the launcher entry and secure storage, then retry the same registrationId; " //$NON-NLS-1$
+                            + "no replacement entry is selected.").put(KEY_REGISTRATION_ID, registrationId.toString()).toJson(); //$NON-NLS-1$
+                    }
+                });
+        }
+        catch (Exception e)
+        {
+            return ToolResult.error("Could not resolve registrationId and infobaseName: " + e.getMessage() //$NON-NLS-1$
+                + " Use the UUID returned by create_infobase; nothing was deleted.") //$NON-NLS-1$
+                .put(KEY_REGISTRATION_ID, registrationId.toString()).toJson();
+        }
+    }
+
+    static ToolResult registrationResult(String project, String name, UUID registrationId, boolean deleted)
+    {
+        ToolResult result = ToolResult.success().put(McpKeys.ACTION, deleted ? VAL_DELETED : "preview") //$NON-NLS-1$
+            .put(McpKeys.PROJECT, project).put(KEY_INFOBASE_NAME, name)
+            .put(KEY_REGISTRATION_ID, registrationId.toString()).put(KEY_DELETE_REGISTRATION, true)
+            .put(KEY_DATABASE_FILES_DELETED, false).put(KEY_DATABASE_FILES_KEPT, KEPT_NOT_REQUESTED)
+            .put(McpKeys.MESSAGE, deleted ? "The exact global launcher entry and its credentials were removed; database files were kept." //$NON-NLS-1$
+                : "Preview: clear credentials and remove this exact global launcher UUID; database files will be kept. Repeat registrationId and infobaseName with confirm=true."); //$NON-NLS-1$
+        return deleted ? result : result.put(KEY_CONFIRMATION_REQUIRED, true);
+    }
+
+    static String afterConsent(InfobaseAssociationContext expected, Supplier<InfobaseAssociationContext> current,
+            Supplier<String> consent, Supplier<String> mutation)
+    {
+        if (!contextMatches(expected, current))
+        {
+            return changedContextError();
+        }
+        String declined = consent.get();
         if (declined != null)
         {
             return declined;
         }
+        return contextMatches(expected, current) ? mutation.get() : changedContextError();
+    }
 
-        return performFileInfobaseDeletion(projectName, project, assocManager, ibManager,
-            deleteDatabaseFiles, ibPlan);
+    private static boolean contextMatches(InfobaseAssociationContext expected,
+            Supplier<InfobaseAssociationContext> current)
+    {
+        try
+        {
+            return expected.equals(current.get());
+        }
+        catch (Exception e)
+        {
+            return false;
+        }
+    }
+
+    private static String changedContextError()
+    {
+        return ToolResult.error("The project's infobase context changed; retry get_applications and request a new preview. Nothing was deleted.").toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -382,7 +552,7 @@ public class DeleteInfobaseTool implements IMcpTool
      */
     private String performFileInfobaseDeletion(String projectName, IProject project,
             IInfobaseAssociationManager assocManager, IInfobaseManager ibManager,
-            boolean deleteDatabaseFiles, FileDeletionPlan plan)
+            boolean deleteDatabaseFiles, FileDeletionPlan plan, InfobaseAssociationContext associationContext)
     {
         final InfobaseReference ibRef = plan.ibRef;
         final IbIdentity id = new IbIdentity(projectName, plan.resolvedId, plan.resolvedName);
@@ -396,8 +566,7 @@ public class DeleteInfobaseTool implements IMcpTool
         // Step 1: dissociate from the project (removes the infobase Application).
         try
         {
-            assocManager.dissociate(project, ibRef,
-                com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAssociationContext.empty());
+            assocManager.dissociate(project, ibRef, associationContext);
         }
         catch (Exception e)
         {
@@ -408,8 +577,14 @@ public class DeleteInfobaseTool implements IMcpTool
 
         // Step 2: optionally deregister from the global EDT infobases list. A non-null result is the
         // partial-failure JSON returned as-is (the database files are then KEPT); null = continue.
-        String deregisterFailed = deregisterFileInfobase(ibManager, ibRef, id,
-            new DbFileOutcome(deleteDatabaseFiles, dbDir, false, dbShared), plan.deleteRegistration);
+        String deregisterFailed = deregisterFileInfobase(ibManager, plan.registrationSnapshot, id,
+            new DbFileOutcome(deleteDatabaseFiles, dbDir, false, dbShared), plan.deleteRegistration,
+            () -> {
+                if (!contextMatches(associationContext, () -> InfobaseRegistration.currentContext(project)))
+                {
+                    throw new IllegalStateException("The project's infobase context changed; request a new preview."); //$NON-NLS-1$
+                }
+            });
         if (deregisterFailed != null)
         {
             return deregisterFailed;
@@ -432,19 +607,11 @@ public class DeleteInfobaseTool implements IMcpTool
     }
 
     /**
-     * Step 2 of the file-infobase deletion: optionally deregister the infobase from the global EDT
-     * infobases list. The {@code ibManager.delete} destructive call stays INLINE here under the same
-     * {@code deleteRegistration && ibRef != null} guard. A missing {@code IInfobaseManager} is logged
-     * and treated as non-fatal (the dissociation already succeeded). Returns the partial-failure JSON
-     * (which the caller returns as-is — the database files are then KEPT) when the delete throws, or
-     * {@code null} to continue.
-     *
-     * <p>Takes the whole {@link DbFileOutcome} rather than the {@code deleteDatabaseFiles} flag
-     * alone: the shared-database check has already run by this point, and the partial-failure
-     * payload must report what it MEASURED rather than overwrite it with its own branch.
+     * Clear credentials and verify launcher removal before permitting database-file deletion.
+     * Failures retain a retry handle and preserve the previously measured shared-file outcome.
      */
-    private String deregisterFileInfobase(IInfobaseManager ibManager, InfobaseReference ibRef,
-            IbIdentity id, DbFileOutcome db, boolean deleteRegistration)
+    String deregisterFileInfobase(IInfobaseManager ibManager, InfobaseReference ibRef,
+            IbIdentity id, DbFileOutcome db, boolean deleteRegistration, Runnable contextGuard)
     {
         if (deleteRegistration && ibRef != null)
         {
@@ -452,26 +619,35 @@ public class DeleteInfobaseTool implements IMcpTool
             {
                 Activator.logError("delete_infobase: IInfobaseManager not available; " //$NON-NLS-1$
                     + "infobase was dissociated but NOT deregistered from the list", null); //$NON-NLS-1$
-                // Non-fatal: the dissociation succeeded.
+                return buildDeregisterFailedResult(id, db,
+                    new IllegalStateException("IInfobaseManager unavailable"), ibRef); //$NON-NLS-1$
             }
             else
             {
                 try
                 {
-                    ibManager.delete(ibRef);
+                    InfobaseRegistration.cleanupRegistration(ibManager, ibRef, this::clearRegistrationCredentials,
+                        contextGuard);
                 }
                 catch (Exception e)
                 {
-                    Activator.logError("delete_infobase: IInfobaseManager.delete failed " //$NON-NLS-1$
-                        + "(non-fatal — dissociation already succeeded)", e); //$NON-NLS-1$
+                    Activator.logWarning("delete_infobase: registration cleanup failed after dissociation: " //$NON-NLS-1$
+                        + e.getClass().getSimpleName());
                     // Non-fatal: return success but note the partial deletion. We deliberately do NOT
                     // delete the database files here even if requested — deregistration failed, so the
                     // safe choice is to leave the data and say so explicitly (schema-consistent).
-                    return buildDeregisterFailedResult(id, db, e);
+                    return buildDeregisterFailedResult(id, db, e, ibRef);
                 }
             }
         }
         return null;
+    }
+
+    /** Native bounded cleanup; overridden only by tests that provide a controlled access manager. */
+    protected void clearRegistrationCredentials(InfobaseReference reference,
+            InfobaseAccessSupport.CredentialWriteGuard guard) throws Exception
+    {
+        InfobaseAccessSupport.clearCredentials(reference, guard);
     }
 
     /**
@@ -600,6 +776,11 @@ public class DeleteInfobaseTool implements IMcpTool
         try
         {
             List<IApplication> apps = listRead.valueOrRethrow();
+            if (apps == null)
+            {
+                return TargetApplication.failed(ToolResult.error(
+                    "EDT returned no application list; retry get_applications before deleting. Nothing was deleted.").toJson()); //$NON-NLS-1$
+            }
             if (apps != null)
             {
                 for (IApplication app : apps)
@@ -622,7 +803,7 @@ public class DeleteInfobaseTool implements IMcpTool
         }
         if (targetApp == null)
         {
-            return TargetApplication.failed(ToolResult.error("Infobase with name '" + infobaseName //$NON-NLS-1$
+            return TargetApplication.absent(ToolResult.error("Infobase with name '" + infobaseName //$NON-NLS-1$
                 + "' not found in project '" + projectName //$NON-NLS-1$
                 + "'. Use get_applications to list available infobases.").toJson()); //$NON-NLS-1$
         }
@@ -809,9 +990,15 @@ public class DeleteInfobaseTool implements IMcpTool
      */
     static String buildDeregisterFailedResult(IbIdentity id, DbFileOutcome db, Exception e)
     {
+        return buildDeregisterFailedResult(id, db, e, null);
+    }
+
+    private static String buildDeregisterFailedResult(IbIdentity id, DbFileOutcome db, Exception e,
+            InfobaseReference registration)
+    {
         String measured = prospectiveDatabaseFilesKept(db.deleteDatabaseFiles, db.dbDir, db.dbShared);
         boolean deregistrationIsTheReason = measured == null;
-        return ToolResult.success()
+        ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_DELETED)
             .put(McpKeys.PROJECT, id.projectName)
             .put(McpKeys.APPLICATION_ID, id.resolvedId)
@@ -823,10 +1010,15 @@ public class DeleteInfobaseTool implements IMcpTool
             .put(McpKeys.MESSAGE, "Infobase '" + id.resolvedName //$NON-NLS-1$
                 + "' was dissociated from project '" + id.projectName //$NON-NLS-1$
                 + "' but could not be deregistered from the EDT list: " //$NON-NLS-1$
-                + e.getMessage()
-                + ". You can remove it manually from the Infobases view in EDT." //$NON-NLS-1$
-                + deregisterFailedDatabaseNote(db, deregistrationIsTheReason))
-            .toJson();
+                + e.getClass().getSimpleName()
+                + ". Inspect the launcher and secure storage, then retry delete_infobase with registrationId and exact infobaseName; database files were kept." //$NON-NLS-1$
+                + deregisterFailedDatabaseNote(db, deregistrationIsTheReason));
+        if (registration != null)
+        {
+            result.put(KEY_REGISTRATION_ID, registration.getUuid().toString())
+                .put(KEY_INFOBASE_NAME, registration.getName());
+        }
+        return result.toJson();
     }
 
     /**
@@ -882,7 +1074,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * {@code error} is non-null it carries a ready tool-result JSON and the other fields are unset;
      * otherwise {@code error} is {@code null} and the fields are populated (ibManager may be null).
      */
-    private static final class DeleteContext
+    static final class DeleteContext
     {
         final String error;
         final IProject project;
@@ -922,21 +1114,28 @@ public class DeleteInfobaseTool implements IMcpTool
     {
         final String error;
         final IApplication app;
+        final boolean nameAbsent;
 
-        private TargetApplication(String error, IApplication app)
+        private TargetApplication(String error, IApplication app, boolean nameAbsent)
         {
             this.error = error;
             this.app = app;
+            this.nameAbsent = nameAbsent;
         }
 
         static TargetApplication failed(String error)
         {
-            return new TargetApplication(error, null);
+            return new TargetApplication(error, null, false);
+        }
+
+        static TargetApplication absent(String error)
+        {
+            return new TargetApplication(error, null, true);
         }
 
         static TargetApplication of(IApplication app)
         {
-            return new TargetApplication(null, app);
+            return new TargetApplication(null, app, false);
         }
     }
 
@@ -953,6 +1152,7 @@ public class DeleteInfobaseTool implements IMcpTool
     {
         final String error;
         final InfobaseReference ibRef;
+        final InfobaseReference registrationSnapshot;
         final String resolvedName;
         final String resolvedId;
         final Path dbDir;
@@ -964,6 +1164,7 @@ public class DeleteInfobaseTool implements IMcpTool
         {
             this.error = error;
             this.ibRef = ibRef;
+            this.registrationSnapshot = ibRef == null ? null : org.eclipse.emf.ecore.util.EcoreUtil.copy(ibRef);
             this.resolvedName = resolvedName;
             this.resolvedId = resolvedId;
             this.dbDir = dbDir;
@@ -996,7 +1197,7 @@ public class DeleteInfobaseTool implements IMcpTool
      * <p><strong>Unattended-safety:</strong> {@code deleteServer} is non-modal and monitor-driven; it runs
      * inside a bounded background Job — never on the UI thread.
      */
-    private String deleteStandaloneServer(String projectName, IProject project,
+    String deleteStandaloneServer(String projectName, IProject project,
             IApplicationManager appManager, IApplication targetApp, boolean deleteRegistration,
             boolean deleteDatabaseFiles, boolean confirm)
     {

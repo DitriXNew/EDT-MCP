@@ -382,7 +382,7 @@
       "openWorldHint": false,
       "readOnlyHint": false
     },
-    "description": "Prepare an infobase for an EDT project by creating a database or registering an existing one. Passing user/password/access STORES those credentials in EDT's infobase settings - the secret PERSISTS beyond this call and is reused by later connections. Parameters and examples: get_tool_guide('create_infobase').",
+    "description": "Create a file infobase or register an existing file/cluster infobase and bind it to an EDT project. EDT may open a Designer connection during binding when a runtime is installed. Passing user/password/access STORES those credentials in EDT's infobase settings - the secret PERSISTS beyond this call and is reused by later connections. Parameters and examples: get_tool_guide('create_infobase').",
     "inputSchema": {
       "properties": {
         "access": {
@@ -400,10 +400,18 @@
           "type": "string"
         },
         "infobaseFile": {
-          "description": "Absolute path to the infobase directory. FILE infobases only - server/web are rejected.",
+          "description": "Absolute file-infobase directory. Required unless infobaseServer + infobaseRef are given.",
           "type": "string"
         },
         "infobaseName": {
+          "type": "string"
+        },
+        "infobaseRef": {
+          "description": "Existing infobase name on infobaseServer. Server registration requires applicationKind='infobase'; web URLs and connection strings are not accepted.",
+          "type": "string"
+        },
+        "infobaseServer": {
+          "description": "Existing cluster address, e.g. localhost:1541. Requires infobaseRef and mode='register'; mutually exclusive with infobaseFile. Does not create a server database.",
           "type": "string"
         },
         "mode": {
@@ -431,8 +439,7 @@
         }
       },
       "required": [
-        "projectName",
-        "infobaseFile"
+        "projectName"
       ],
       "type": "object"
     },
@@ -463,6 +470,12 @@
         "infobaseName": {
           "type": "string"
         },
+        "infobaseRef": {
+          "type": "string"
+        },
+        "infobaseServer": {
+          "type": "string"
+        },
         "message": {
           "type": "string"
         },
@@ -470,6 +483,9 @@
           "type": "integer"
         },
         "project": {
+          "type": "string"
+        },
+        "registrationId": {
           "type": "string"
         },
         "success": {
@@ -1215,6 +1231,10 @@
         },
         "projectName": {
           "type": "string"
+        },
+        "registrationId": {
+          "description": "Explicit GLOBAL launcher-entry UUID returned by create_infobase. Requires exact infobaseName, deleteRegistration=true, deleteDatabaseFiles=false and no applicationId. Clears credentials before removal; never selects a registration by name alone. Repeat this same UUID on confirm.",
+          "type": "string"
         }
       },
       "required": [
@@ -1261,6 +1281,9 @@
           "type": "string"
         },
         "project": {
+          "type": "string"
+        },
+        "registrationId": {
           "type": "string"
         },
         "success": {

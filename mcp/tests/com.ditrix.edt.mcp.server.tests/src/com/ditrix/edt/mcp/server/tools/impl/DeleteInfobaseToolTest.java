@@ -11,6 +11,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertSame;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -49,6 +50,130 @@ import com.google.gson.JsonParser;
  */
 public class DeleteInfobaseToolTest
 {
+    @Test
+    public void unavailableAssociationContextDoesNotBlockStandaloneDispatch() throws Exception
+    {
+        for (boolean standalone : new boolean[] {false, true})
+        {
+            for (boolean confirm : new boolean[] {false, true})
+            {
+                var project = mock(IProject.class);
+                var manager = mock(IApplicationManager.class);
+                var associations = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager.class);
+                var infobases = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager.class);
+                var app = mock(IApplication.class);
+                var type = mock(IApplicationType.class);
+                when(type.getId()).thenReturn(standalone ? StandaloneServerSupport.WST_SERVER_APP_TYPE
+                    : "com.e1c.g5.dt.applications.type.infobase"); //$NON-NLS-1$
+                when(app.getType()).thenReturn(type);
+                var captureAttempts = new java.util.concurrent.atomic.AtomicInteger();
+                when(manager.getApplication(project, "target")).thenAnswer(call -> { //$NON-NLS-1$
+                    assertEquals("context capture must remain before file/application lookup", 1, captureAttempts.get()); //$NON-NLS-1$
+                    return Optional.of(app);
+                });
+                var dispatched = new java.util.concurrent.atomic.AtomicBoolean();
+                var tool = new DeleteInfobaseTool()
+                {
+                    @Override
+                    String deleteStandaloneServer(String name, IProject target,
+                            IApplicationManager applications, IApplication resolved,
+                            boolean deleteRegistration, boolean deleteFiles, boolean accepted)
+                    {
+                        assertTrue(standalone);
+                        assertEquals(confirm, accepted);
+                        assertSame(app, resolved);
+                        dispatched.set(true);
+                        return com.ditrix.edt.mcp.server.protocol.ToolResult.success().put("standaloneDispatched", true).toJson(); //$NON-NLS-1$
+                    }
+                };
+                var context = DeleteInfobaseTool.DeleteContext.of(project, manager, associations, infobases);
+                var response = JsonParser.parseString(tool.deleteInfobase(context, "project", "target", //$NON-NLS-1$ //$NON-NLS-2$
+                    null, null, true, false, confirm, () -> {
+                        captureAttempts.incrementAndGet();
+                        throw new IllegalStateException("provider temporarily unavailable"); //$NON-NLS-1$
+                    })).getAsJsonObject();
+                assertEquals(standalone, response.get("success").getAsBoolean()); //$NON-NLS-1$
+                assertEquals(standalone, dispatched.get());
+                if (!standalone)
+                {
+                    assertTrue(response.get("error").getAsString().contains("current infobase context")); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                org.mockito.Mockito.verifyZeroInteractions(associations, infobases);
+            }
+        }
+    }
+
+    @Test
+    public void explicitUuidCleanupStillRequiresCapturedContextBeforeAnyLookup()
+    {
+        var project = mock(IProject.class);
+        var manager = mock(IApplicationManager.class);
+        var associations = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationManager.class);
+        var infobases = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager.class);
+        var result = JsonParser.parseString(new DeleteInfobaseTool().deleteInfobase(
+            DeleteInfobaseTool.DeleteContext.of(project, manager, associations, infobases),
+            "project", null, "exact-name", java.util.UUID.randomUUID().toString(), true, false, true, //$NON-NLS-1$ //$NON-NLS-2$
+            () -> null)).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result.get("error").getAsString().contains("current infobase context")); //$NON-NLS-1$ //$NON-NLS-2$
+        org.mockito.Mockito.verifyZeroInteractions(manager, associations, infobases);
+    }
+
+    @Test
+    public void normalApplicationDeregistrationClearsCredentialsAndRetainsRetryHandleOnFailure() throws Exception
+    {
+        for (boolean failClear : new boolean[] {false, true})
+        {
+            var manager = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseManager.class);
+            when(manager.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
+            var ref = new com.ditrix.edt.mcp.server.utils.ServerInfobaseTarget("host", "base").reference("launcher-name"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            var record = new java.util.concurrent.atomic.AtomicReference<>(ref);
+            when(manager.findInfobaseByUuid(ref.getUuid())).thenAnswer(call -> Optional.ofNullable(record.get()));
+            var cleared = new java.util.concurrent.atomic.AtomicBoolean();
+            org.mockito.Mockito.doAnswer(call -> {
+                assertTrue("native removal must follow credential clearing", cleared.get()); //$NON-NLS-1$
+                assertFalse(Thread.holdsLock(manager));
+                record.set(null);
+                return null;
+            }).when(manager).delete(org.mockito.ArgumentMatchers.any());
+            DeleteInfobaseTool tool = new DeleteInfobaseTool() {
+                @Override
+                protected void clearRegistrationCredentials(InfobaseReference reference,
+                        com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.CredentialWriteGuard guard) throws Exception
+                {
+                    guard.run(current -> {
+                        assertEquals(ref.getUuid(), current.getUuid());
+                        if (failClear)
+                        {
+                            throw new IllegalStateException("password-do-not-echo"); //$NON-NLS-1$
+                        }
+                        cleared.set(true);
+                    });
+                }
+            };
+            String result = tool.deregisterFileInfobase(manager, ref, ibId(),
+                new DeleteInfobaseTool.DbFileOutcome(true, DB_DIR, false,
+                    DeleteInfobaseTool.SharedDatabase.NOT_SHARED), true, () -> { });
+            if (failClear)
+            {
+                JsonObject data = parse(result);
+                assertFalse(data.get("deleteRegistration").getAsBoolean()); //$NON-NLS-1$
+                assertFalse(data.get("databaseFilesDeleted").getAsBoolean()); //$NON-NLS-1$
+                assertEquals(ref.getUuid().toString(), data.get("registrationId").getAsString()); //$NON-NLS-1$
+                assertEquals(ref.getName(), data.get("infobaseName").getAsString()); //$NON-NLS-1$
+                assertFalse(result.contains("password-do-not-echo")); //$NON-NLS-1$
+                assertNotNull(record.get());
+                org.mockito.Mockito.verify(manager, org.mockito.Mockito.never()).delete(org.mockito.ArgumentMatchers.any());
+            }
+            else
+            {
+                assertNull(result);
+                assertNull(record.get());
+                assertTrue(cleared.get());
+            }
+        }
+    }
+
     @Test
     public void testName()
     {
@@ -917,6 +1042,92 @@ public class DeleteInfobaseToolTest
 
         assertEquals("unknown", keptOf(unknown)); //$NON-NLS-1$
         assertNull("a completed deletion has no keep reason", keptOf(deleted)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testOnlyConclusiveNameAbsenceAllowsLauncherCleanup() throws Exception
+    {
+        IApplicationManager manager = mock(IApplicationManager.class);
+        IProject project = mock(IProject.class);
+        when(manager.getApplications(project)).thenReturn(java.util.Collections.emptyList());
+        assertTrue(DeleteInfobaseTool.resolveTargetApplication(manager, project,
+            "Project", null, "orphan", 1000L).nameAbsent); //$NON-NLS-1$ //$NON-NLS-2$
+        when(manager.getApplications(project)).thenReturn(null);
+        assertFalse(DeleteInfobaseTool.resolveTargetApplication(manager, project,
+            "Project", null, "orphan", 1000L).nameAbsent); //$NON-NLS-1$ //$NON-NLS-2$
+        when(manager.getApplications(project)).thenThrow(new com.e1c.g5.dt.applications.ApplicationException("unreadable")); //$NON-NLS-1$
+        assertFalse(DeleteInfobaseTool.resolveTargetApplication(manager, project,
+            "Project", null, "orphan", 1000L).nameAbsent); //$NON-NLS-1$ //$NON-NLS-2$
+        when(manager.getApplication(project, "  ")).thenReturn(java.util.Optional.empty()); //$NON-NLS-1$
+        assertFalse(DeleteInfobaseTool.resolveTargetApplication(manager, project,
+            "Project", "  ", "orphan", 1000L).nameAbsent); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    @Test
+    public void testRegistrationCleanupRequiresExactUuidNameAndSafeFlags()
+    {
+        String id = java.util.UUID.randomUUID().toString();
+        assertNull(DeleteInfobaseTool.registrationArgumentError(id, null, "probe", true, false)); //$NON-NLS-1$
+        for (Map<String, String> invalid : List.of(
+            Map.of("registrationId", "1-1-1-1-1", "infobaseName", "probe"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            Map.of("registrationId", "not-a-uuid", "infobaseName", "probe"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+            Map.of("registrationId", id), //$NON-NLS-1$
+            Map.of("registrationId", id, "infobaseName", "probe", "applicationId", "old"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            Map.of("registrationId", id, "infobaseName", "probe", "deleteRegistration", "false"), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+            Map.of("registrationId", id, "infobaseName", "probe", "deleteDatabaseFiles", "true"))) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
+        {
+            var params = new HashMap<>(invalid);
+            params.put("projectName", "MissingProject"); //$NON-NLS-1$ //$NON-NLS-2$
+            JsonObject result = JsonParser.parseString(new DeleteInfobaseTool().execute(params)).getAsJsonObject();
+            assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+            assertTrue(result.toString(), result.get("error").getAsString().contains("registrationId")); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+    }
+
+    @Test
+    public void testRegistrationPreviewAndDeletionReturnTheSameRegistrationIdNotAnApplicationId()
+    {
+        var id = java.util.UUID.randomUUID();
+        for (boolean deleted : List.of(false, true))
+        {
+            var result = JsonParser.parseString(DeleteInfobaseTool.registrationResult(
+                "project", "probe", id, deleted).toJson()).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+            assertEquals(id.toString(), result.get("registrationId").getAsString()); //$NON-NLS-1$
+            assertFalse(result.has("applicationId")); //$NON-NLS-1$
+            assertEquals(deleted ? "deleted" : "preview", result.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            assertFalse(result.get("databaseFilesDeleted").getAsBoolean()); //$NON-NLS-1$
+        }
+    }
+
+    @Test
+    public void testContextSwitchWhileConsentWaitsPreventsEveryMutation()
+    {
+        var expected = com.ditrix.edt.mcp.server.utils.git.BranchContexts.toContext("feat/original"); //$NON-NLS-1$
+        var current = new java.util.concurrent.atomic.AtomicReference<>(expected);
+        var mutation = mock(Runnable.class);
+        String result = DeleteInfobaseTool.afterConsent(expected, current::get, () -> {
+            current.set(com.ditrix.edt.mcp.server.utils.git.BranchContexts.toContext("feat/other")); //$NON-NLS-1$
+            return null;
+        }, () -> { mutation.run(); return "unexpected deletion"; }); //$NON-NLS-1$
+        var json = JsonParser.parseString(result).getAsJsonObject();
+        assertFalse(json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(result, result.contains("context changed")); //$NON-NLS-1$
+        org.mockito.Mockito.verify(mutation, org.mockito.Mockito.never()).run();
+    }
+
+    @Test
+    public void testStableContextAllowsMutationAndDeclinedConsentDoesNot()
+    {
+        var context = com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAssociationContext.empty();
+        var writes = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.function.Supplier<String> mutation = () -> { writes.incrementAndGet(); return "done"; }; //$NON-NLS-1$
+        assertEquals("done", DeleteInfobaseTool.afterConsent(context, () -> context, () -> null, mutation)); //$NON-NLS-1$
+        assertEquals("declined", DeleteInfobaseTool.afterConsent(context, () -> context, () -> "declined", mutation)); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, writes.get());
+        String result = DeleteInfobaseTool.afterConsent(context,
+            () -> { throw new IllegalStateException("provider unavailable"); }, () -> null, mutation); //$NON-NLS-1$
+        assertFalse(JsonParser.parseString(result).getAsJsonObject().get("success").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(1, writes.get());
     }
 
     private static IApplication app(String id)

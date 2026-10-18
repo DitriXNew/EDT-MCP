@@ -23,6 +23,57 @@ import threading
 import time
 import urllib.request
 import urllib.error
+import uuid
+
+def cleanup_cluster_registration_probe(name, server, reference, registration_id=None):
+    """Remove only an exact synthetic probe from the launcher file, even if EDT cannot see it.
+
+    Normal cleanup uses the application ID first. The fallback uses delete_infobase's
+    explicit registration UUID path, never rewrites the launcher file itself, and
+    returns the number of leftovers so the test fails on leaked registrations.
+    """
+    if not re.fullmatch(r"McpServerRegistration_McpRegistrationProbe_[0-9a-f]{16}", name):
+        raise ValueError("launcher cleanup requires a uniquely named cluster registration probe")
+    if name != "McpServerRegistration_" + reference or server != "localhost:1541":
+        raise ValueError("launcher cleanup target does not match the synthetic probe")
+    path = os.environ.get("EDT_MCP_INFOBASE_LIST")
+    if not path:
+        path = (os.path.join(os.environ["APPDATA"], "1C", "1CEStart", "ibases.v8i")
+                if os.name == "nt" else
+                os.path.expanduser("~/.1C/1cestart/ibases.v8i"))
+    if not os.path.isfile(path):
+        return 0
+    with open(path, "rb") as stream:
+        original = stream.read()
+    starts = list(re.finditer(rb"(?m)^(?:\xef\xbb\xbf)?\[([^\r\n]+)\]\r?$", original))
+    removals = []
+    for index, match in enumerate(starts):
+        # Some launcher files place a UTF-8 BOM before the first section header.
+        if match.group(1).decode("utf-8") != name:
+            continue
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(original)
+        section = original[match.start():end]
+        connect = re.search(rb"(?m)^Connect=(.*)\r?$", section)
+        if not connect or connect.group(1).rstrip(b"\r").decode("utf-8") != (
+                'Srvr="%s";Ref="%s";' % (server, reference)):
+            raise AssertionError("refusing to remove a probe whose launcher address differs")
+        identifier = re.search(rb"(?m)^ID=([^\r\n]+)", section)
+        if registration_id is None or identifier is None or (
+                identifier.group(1).decode("ascii").lower() != str(uuid.UUID(registration_id))):
+            raise AssertionError("refusing launcher cleanup without the exact returned registrationId")
+        removals.append((match.start(), end))
+    if not removals:
+        return 0
+    if len(removals) != 1:
+        raise AssertionError("ambiguous probe name in launcher list; inspect it in EDT")
+    result = call("delete_infobase", {"projectName": PROJECT, "infobaseName": name,
+                  "registrationId": registration_id,
+                  "deleteRegistration": True, "deleteDatabaseFiles": False, "confirm": True})
+    assert_ok(result, "cleanup a cluster probe independently of application visibility")
+    with open(path, "rb") as stream:
+        remaining = stream.read()
+    assert ("[" + name + "]").encode("utf-8") not in remaining, "probe is still in the launcher file"
+    return len(removals)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Configuration (read once at import; the orchestrator sets env BEFORE importing)

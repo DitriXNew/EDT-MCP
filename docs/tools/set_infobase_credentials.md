@@ -96,6 +96,8 @@ You do not have to use this tool. When the **MCP server is idle**, you can open 
 
 While an MCP tool is in flight (plus a short grace window for the asynchronous read-back that follows a tool), the server **auto-cancels** the "Configure Infobase access Settings" login dialog so an unattended call never blocks on it — the operation instead fails fast with a hint back to this tool. This auto-cancel is **on by default** and **activity-scoped** — it is NOT always-on, so an idle server leaves the GUI dialog usable (see above). To turn it off — e.g. to debug the login flow interactively — set **`EDT_MCP_SUPPRESS_AUTH_DIALOG=false`** (also `0` / `no`) on the EDT process before launch; any other value, or leaving it unset, keeps auto-cancel enabled.
 
+If a bounded call returns `mutationPending=true`, a native credential or launch-configuration write was already admitted and may still complete. Wait for that operation and inspect its result before retrying. Cancellation prevents admission of any further writes; it cannot undo a native write already in progress.
+
 ## Gotchas
 
 - **The user must exist in the infobase.** Storing credentials for a user that does not exist makes the next connect fail authentication (while a tool is running the MCP server auto-cancels the resulting dialog — see the auto-cancel note above — and the operation fails fast with a hint back to this tool). Add the user first, then set credentials.

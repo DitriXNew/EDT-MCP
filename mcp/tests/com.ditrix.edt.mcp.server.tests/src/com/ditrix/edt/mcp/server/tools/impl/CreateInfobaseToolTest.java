@@ -38,6 +38,7 @@ import com._1c.g5.v8.dt.platform.services.model.FileConnectionString;
 import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
 import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
 import com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.StoreResult;
+import com.ditrix.edt.mcp.server.utils.ServerInfobaseTarget;
 import com.e1c.g5.dt.applications.ApplicationException;
 import com.e1c.g5.dt.applications.IApplication;
 import com.e1c.g5.dt.applications.IApplicationManager;
@@ -193,7 +194,7 @@ public class CreateInfobaseToolTest
         assertTrue("schema must declare a required array", requiredIdx >= 0); //$NON-NLS-1$
         String tail = schema.substring(requiredIdx);
         assertTrue("projectName must be required", tail.contains("\"projectName\"")); //$NON-NLS-1$ //$NON-NLS-2$
-        assertTrue("infobaseFile must be required", tail.contains("\"infobaseFile\"")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertFalse("server registration must not require infobaseFile", tail.contains("\"infobaseFile\"")); //$NON-NLS-1$ //$NON-NLS-2$
         // Optional parameters must NOT be in the required array.
         // The required block is between the first '[' and ']' after "required".
         int open = schema.indexOf('[', requiredIdx);
@@ -261,6 +262,59 @@ public class CreateInfobaseToolTest
         String result = new CreateInfobaseTool().execute(params);
         assertTrue("missing infobaseFile must produce an error", //$NON-NLS-1$
             result.contains("infobaseFile is required")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testServerParametersAreDeclaredAndOptional()
+    {
+        JsonObject schema = JsonParser.parseString(new CreateInfobaseTool().getInputSchema()).getAsJsonObject();
+        assertTrue(schema.getAsJsonObject("properties").has("infobaseServer")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(schema.getAsJsonObject("properties").has("infobaseRef")); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(1, schema.getAsJsonArray("required").size()); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testServerCreateRejectedBeforeWorkspaceAccess()
+    {
+        Map<String, String> params = serverParams();
+        params.put("mode", "create"); //$NON-NLS-1$ //$NON-NLS-2$
+        String result = new CreateInfobaseTool().execute(params);
+        assertTrue(result.contains("mode='register'")); //$NON-NLS-1$
+        assertTrue(result.contains("\"success\":false")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testServerRegisterRequiresBothAddressParts()
+    {
+        Map<String, String> params = serverParams();
+        params.remove("infobaseRef"); //$NON-NLS-1$
+        assertTrue(new CreateInfobaseTool().execute(params).contains("required together")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testFileAndServerAreMutuallyExclusive()
+    {
+        Map<String, String> params = serverParams();
+        params.put("infobaseFile", "C:/test-infobase"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(new CreateInfobaseTool().execute(params).contains("not both")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testClusterRegistrationCannotCreateStandaloneServer()
+    {
+        Map<String, String> params = serverParams();
+        params.put("applicationKind", "standaloneServer"); //$NON-NLS-1$ //$NON-NLS-2$
+        assertTrue(new CreateInfobaseTool().execute(params).contains("require applicationKind='infobase'")); //$NON-NLS-1$
+    }
+
+    private static Map<String, String> serverParams()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "AnyProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("mode", "register"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseServer", "localhost:1541"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseRef", "TestInfobase"); //$NON-NLS-1$ //$NON-NLS-2$
+        return params;
     }
 
     @Test
@@ -1156,7 +1210,7 @@ public class CreateInfobaseToolTest
     @Test
     public void testUnreadableApplicationIdentityIsUnverifiedNotAbsence() throws Exception
     {
-        // An infobase application whose connection string cannot be read is NOT evidence that our
+        // An infobase application whose UUID cannot be read is NOT evidence that our
         // infobase is missing - it is evidence that we could not tell. Folding that into "no match"
         // would re-create exactly the reported defect, with the verdict flipped: a confident
         // boundToProject:false while the application may well be there.
@@ -1200,10 +1254,10 @@ public class CreateInfobaseToolTest
     }
 
     @Test
-    public void testUnreadableConnectionStringIsUnverifiedNotAbsence() throws Exception
+    public void testUnreadableUuidIsUnverifiedNotAbsence() throws Exception
     {
         // The other half of "identity could not be read": the application HAS an infobase reference,
-        // but reading its connection string throws. Same rule - we could not tell, so we do not say.
+        // but reading its UUID throws. Same rule - we could not tell, so we do not say.
         IProject project = mock(IProject.class);
         IApplicationManager mgr = mock(IApplicationManager.class);
         List<IApplication> opaque = Collections.singletonList(infobaseAppWithRef(throwingRef()));
@@ -1277,9 +1331,9 @@ public class CreateInfobaseToolTest
     }
 
     @Test
-    public void testMissingConnectionStringIsUnverifiedNotAbsence() throws Exception
+    public void testMissingUuidIsUnverifiedNotAbsence() throws Exception
     {
-        // The third undecidable shape: the reference exists but carries no connection string at all.
+        // The third undecidable shape: the reference exists but carries no UUID at all.
         IProject project = mock(IProject.class);
         IApplicationManager mgr = mock(IApplicationManager.class);
         InfobaseReference ref = mock(InfobaseReference.class);
@@ -1852,6 +1906,88 @@ public class CreateInfobaseToolTest
             .getAsJsonObject().get("id").getAsString()); //$NON-NLS-1$
     }
 
+    @Test
+    public void testServerResultReportsAddressAndVerifiedApplication() throws Exception
+    {
+        IProject project = mock(IProject.class);
+        IApplicationManager manager = mock(IApplicationManager.class);
+        ServerInfobaseTarget target = new ServerInfobaseTarget("localhost:1541", "TestInfobase"); //$NON-NLS-1$ //$NON-NLS-2$
+        InfobaseReference reference = target.reference("Server test"); //$NON-NLS-1$
+        IInfobaseApplication app = infobaseAppWithRef(reference);
+        when(app.getId()).thenReturn("server-app"); //$NON-NLS-1$
+        when(manager.getApplications(project)).thenReturn(Collections.singletonList(app));
+        CreateInfobaseTool.ResultContext context = new CreateInfobaseTool.ResultContext(
+            RB_PROJECT, null, "Server test", manager, project, target); //$NON-NLS-1$
+        JsonObject json = JsonParser.parseString(CreateInfobaseTool.buildSuccessResult(
+            context, reference, false, true, (String)null)).getAsJsonObject();
+        assertTrue(json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertTrue(json.get("boundToProject").getAsBoolean()); //$NON-NLS-1$
+        assertEquals("server-app", json.get("applicationId").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals("registered", json.get("action").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
+        assertEquals(target.server(), json.get("infobaseServer").getAsString()); //$NON-NLS-1$
+        assertEquals(target.infobase(), json.get("infobaseRef").getAsString()); //$NON-NLS-1$
+        assertFalse(json.has("infobaseFile")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testServerBindingRefusalKeepsServerAddress() throws Exception
+    {
+        IProject project = mock(IProject.class);
+        IApplicationManager manager = mock(IApplicationManager.class);
+        when(manager.getApplications(project)).thenReturn(Collections.emptyList());
+        ServerInfobaseTarget target = new ServerInfobaseTarget("localhost:1541", "TestInfobase"); //$NON-NLS-1$ //$NON-NLS-2$
+        CreateInfobaseTool.ResultContext context = new CreateInfobaseTool.ResultContext(
+            RB_PROJECT, null, "Server test", manager, project, target); //$NON-NLS-1$
+        JsonObject json = JsonParser.parseString(CreateInfobaseTool.buildSuccessResult(
+            context, target.reference("Server test"), false, true, (String)null)).getAsJsonObject(); //$NON-NLS-1$
+        assertFalse(json.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(json.get("boundToProject").getAsBoolean()); //$NON-NLS-1$
+        assertEquals(target.server(), json.get("infobaseServer").getAsString()); //$NON-NLS-1$
+        assertEquals(target.infobase(), json.get("infobaseRef").getAsString()); //$NON-NLS-1$
+        assertFalse(json.has("infobaseFile")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testSameAddressWithAnOlderUuidIsNotTheNewApplication() throws Exception
+    {
+        IProject project = mock(IProject.class);
+        IApplicationManager manager = mock(IApplicationManager.class);
+        ServerInfobaseTarget target = new ServerInfobaseTarget("host", "base"); //$NON-NLS-1$ //$NON-NLS-2$
+        InfobaseReference fresh = target.reference("fresh"); //$NON-NLS-1$
+        InfobaseReference old = target.reference("old"); //$NON-NLS-1$
+        assertEquals(old.getConnectionString().asConnectionString(), fresh.getConnectionString().asConnectionString());
+        assertFalse(old.getUuid().equals(fresh.getUuid()));
+        IInfobaseApplication oldApp = infobaseAppWithRef(old);
+        when(manager.getApplications(project)).thenReturn(Collections.singletonList(oldApp));
+        CreateInfobaseTool.ResultContext context = new CreateInfobaseTool.ResultContext(
+            RB_PROJECT, null, "fresh", manager, project, target); //$NON-NLS-1$
+        JsonObject result = JsonParser.parseString(CreateInfobaseTool.buildSuccessResult(
+            context, fresh, true, true, (String)null)).getAsJsonObject();
+        assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(result.get("boundToProject").getAsBoolean()); //$NON-NLS-1$
+        assertFalse(result.has("applicationId")); //$NON-NLS-1$
+        verify(manager, never()).setDefaultApplication(any(), any());
+    }
+
+    @Test
+    public void testBlankServerFieldsStillFollowTheFileValidationPath()
+    {
+        Map<String, String> params = new HashMap<>();
+        params.put("projectName", "MissingProject"); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseServer", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseRef", "  "); //$NON-NLS-1$ //$NON-NLS-2$
+        params.put("infobaseFile", Paths.get(System.getProperty("java.io.tmpdir"), //$NON-NLS-1$ //$NON-NLS-2$
+            "mcp-blank-server-fields-test").toString()); //$NON-NLS-1$
+        String result = new CreateInfobaseTool().execute(params);
+        assertFalse(result, result.contains("not both")); //$NON-NLS-1$
+        assertTrue(result, result.contains("Project not found: MissingProject")); //$NON-NLS-1$
+        assertFalse(result, result.contains("required together")); //$NON-NLS-1$
+        params.remove("infobaseFile"); //$NON-NLS-1$
+        result = new CreateInfobaseTool().execute(params);
+        assertTrue(result, result.contains("infobaseFile is required")); //$NON-NLS-1$
+        assertTrue(result, result.contains("or infobaseServer + infobaseRef")); //$NON-NLS-1$
+    }
+
     // -------------------- #412 helpers --------------------
 
     /** The infobase directory the read-back tests report (absolute, so it is platform-independent). */
@@ -1938,16 +2074,19 @@ public class CreateInfobaseToolTest
         when(connection.asConnectionString()).thenReturn(connectionString);
         InfobaseReference ref = mock(InfobaseReference.class);
         when(ref.getConnectionString()).thenReturn(connection);
+        when(ref.getUuid()).thenReturn(java.util.UUID.nameUUIDFromBytes(
+            connectionString.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         return ref;
     }
 
-    /** A reference whose connection string cannot be read at all. */
+    /** A reference whose UUID cannot be read at all. */
     private static InfobaseReference throwingRef()
     {
         FileConnectionString connection = mock(FileConnectionString.class);
         when(connection.asConnectionString()).thenThrow(new IllegalStateException("detached")); //$NON-NLS-1$
         InfobaseReference ref = mock(InfobaseReference.class);
         when(ref.getConnectionString()).thenReturn(connection);
+        when(ref.getUuid()).thenThrow(new IllegalStateException("detached")); //$NON-NLS-1$
         return ref;
     }
 

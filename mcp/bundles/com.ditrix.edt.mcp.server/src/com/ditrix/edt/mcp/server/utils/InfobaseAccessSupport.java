@@ -10,8 +10,8 @@ import java.lang.reflect.Method;
 import java.util.IdentityHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import org.eclipse.core.runtime.Adapters;
 import org.eclipse.core.runtime.Platform;
@@ -193,11 +193,11 @@ public final class InfobaseAccessSupport
         /**
          * @param publish records the latest safe result snapshot for the bounded caller
          * @param writeCommitted records the persistent-write boundary before read-back begins
-         * @param writeAllowed must be checked immediately before the persistent settings write;
-         *     false means the bounded caller has stopped waiting or cancelled the Job
+         * @param writeAllowed admission control: acquire a fresh permit immediately before each
+         *     persistent mutation; its pure predicate is suitable only for preliminary checks
          * @throws Exception any operation failure captured by {@link BoundedJob}
          */
-        void run(Consumer<T> publish, Runnable writeCommitted, BooleanSupplier writeAllowed)
+        void run(Consumer<T> publish, Runnable writeCommitted, CredentialWriteControl writeAllowed)
             throws Exception;
     }
 
@@ -207,13 +207,15 @@ public final class InfobaseAccessSupport
         private final BoundedJob.Result boundedResult;
         private final T publishedResult;
         private final boolean writeCommitted;
+        private final boolean writeInProgress;
 
         private BoundedStoreResult(BoundedJob.Result boundedResult, T publishedResult,
-            boolean writeCommitted)
+            boolean writeCommitted, boolean writeInProgress)
         {
             this.boundedResult = boundedResult;
             this.publishedResult = publishedResult;
             this.writeCommitted = writeCommitted;
+            this.writeInProgress = writeInProgress;
         }
 
         public BoundedJob.Result boundedResult()
@@ -224,6 +226,11 @@ public final class InfobaseAccessSupport
         public T publishedResult()
         {
             return publishedResult;
+        }
+
+        public boolean writeInProgress()
+        {
+            return writeInProgress;
         }
 
         public boolean writeCommitted()
@@ -244,29 +251,29 @@ public final class InfobaseAccessSupport
     {
         AtomicReference<T> published = new AtomicReference<>();
         AtomicBoolean writeCommitted = new AtomicBoolean();
-        AtomicBoolean callerFinished = new AtomicBoolean();
+        CredentialWriteControl writeAllowed = new CredentialWriteControl();
         BoundedJob.Result bounded;
         try
         {
-            bounded = BoundedJob.run("Store infobase credentials: " + target, //$NON-NLS-1$
+            bounded = BoundedJob.runWithCancellation("Store infobase credentials: " + target, //$NON-NLS-1$
                 timeoutMs, monitor -> {
-                    BooleanSupplier writeAllowed =
-                        () -> !callerFinished.get() && !monitor.isCanceled();
                     work.run(value -> {
                         if (writeAllowed.getAsBoolean())
                         {
                             published.set(value);
                         }
                     }, () -> writeCommitted.set(true), writeAllowed);
-                });
+                }, writeAllowed::close);
         }
         finally
         {
-            // Cancellation is cooperative. A worker that outlives the wait observes either its
-            // cancelled monitor or this flag before it can enter the persistent write.
-            callerFinished.set(true);
+            // Admission and cancellation share one short state transition; native SDK calls do not.
+            writeAllowed.close();
         }
-        return new BoundedStoreResult<>(bounded, published.get(), writeCommitted.get());
+        // Admission is closed. Read pending FIRST: a permit cannot disappear until its commit
+        // callback ran, and no new permit can appear between these two snapshots.
+        boolean pending = writeAllowed.writeInProgress();
+        return new BoundedStoreResult<>(bounded, published.get(), writeCommitted.get(), pending);
     }
 
     /** Credentials that may be supplied to an interactive platform command. */
@@ -381,7 +388,7 @@ public final class InfobaseAccessSupport
 
     /** Same store with the bounded caller's last-moment write permission. */
     public static StoreResult storeCredentials(IApplication application, String user, String password,
-            InfobaseAccess access, Runnable writeCommitted, BooleanSupplier writeAllowed)
+            InfobaseAccess access, Runnable writeCommitted, CredentialWriteControl writeAllowed)
     {
         InfobaseReference ref = resolveInfobaseReference(application);
         if (ref != null)
@@ -545,7 +552,7 @@ public final class InfobaseAccessSupport
 
     /** Same store with the bounded caller's last-moment write permission. */
     public static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
-            InfobaseAccess access, Runnable writeCommitted, BooleanSupplier writeAllowed)
+            InfobaseAccess access, Runnable writeCommitted, CredentialWriteControl writeAllowed)
     {
         if (ref == null)
         {
@@ -578,42 +585,50 @@ public final class InfobaseAccessSupport
      */
     static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
             InfobaseAccess access, IInfobaseAccessManager manager, Runnable writeCommitted,
-            BooleanSupplier writeAllowed)
+            CredentialWriteControl writeAllowed)
     {
         String requestedUser = user == null ? "" : user; //$NON-NLS-1$
         String requestedPassword = password == null ? "" : password; //$NON-NLS-1$
         synchronized (writeLockFor(ref))
         {
-            // This check deliberately lives INSIDE the same serialization as the write. A bounded
-            // worker that waited for an earlier write must re-read its deadline state after it
-            // acquires the lock; a worker already writing when its caller times out keeps the lock,
-            // so a later intentional write necessarily runs after it and wins.
-            if (writeAllowed != null && !writeAllowed.getAsBoolean())
+            try (var coordination = InfobaseMutationCoordinator.acquire())
             {
-                return StoreResult.failed(
-                    "Credential storage was cancelled before the settings write.", ref); //$NON-NLS-1$
+                if (InfobaseMutationCoordinator.isDeleting(ref.getUuid()))
+                {
+                    return StoreResult.failed("The registration is being removed or was removed; refresh get_applications before storing credentials.", ref); //$NON-NLS-1$
+                }
+                var permit = writeAllowed == null ? null : writeAllowed.tryBeginWrite();
+                if (writeAllowed != null && permit == null)
+                {
+                    return StoreResult.failed(
+                        "Credential storage was cancelled before the settings write.", ref); //$NON-NLS-1$
+                }
+                try (permit)
+                {
+                    manager.updateSettings(ref, new InfobaseAccessSettings(access,
+                        requestedUser, requestedPassword, "")); //$NON-NLS-1$
+                    if (writeCommitted != null)
+                    {
+                        writeCommitted.run();
+                    }
+                }
+                catch (Exception e) // NOSONAR a StorageException (secure-storage) or CoreException must surface
+                {
+                    String diagnostic = scrubCredentialText(
+                        PlatformFailures.describeWithRootCause(e), requestedPassword);
+                    String message = "Failed to store infobase access settings: " //$NON-NLS-1$
+                        + diagnostic;
+                    // Keep the platform diagnosis, cause chain and original stack frames in the EDT
+                    // log. A scrubbed copy is attached because logging the original throwable would
+                    // render its unsanitized messages again after the log line itself was scrubbed.
+                    Activator.logError("set credentials: updateSettings failed: " //$NON-NLS-1$
+                        + diagnostic, scrubCredentialFailureForLog(e, requestedPassword));
+                    return StoreResult.failed(message, ref);
+                }
             }
-            try
+            catch (InfobaseMutationCoordinator.Unavailable unavailable)
             {
-                manager.updateSettings(ref, new InfobaseAccessSettings(access,
-                    requestedUser, requestedPassword, "")); //$NON-NLS-1$
-            }
-            catch (Exception e) // NOSONAR a StorageException (secure-storage) or CoreException must surface
-            {
-                String diagnostic = scrubCredentialText(
-                    PlatformFailures.describeWithRootCause(e), requestedPassword);
-                String message = "Failed to store infobase access settings: " //$NON-NLS-1$
-                    + diagnostic;
-                // Keep the platform diagnosis, cause chain and original stack frames in the EDT
-                // log. A scrubbed copy is attached because logging the original throwable would
-                // render its unsanitized messages again after the log line itself was scrubbed.
-                Activator.logError("set credentials: updateSettings failed: " //$NON-NLS-1$
-                    + diagnostic, scrubCredentialFailureForLog(e, requestedPassword));
-                return StoreResult.failed(message, ref);
-            }
-            if (writeCommitted != null)
-            {
-                writeCommitted.run();
+                return StoreResult.failed(unavailable.getMessage(), ref);
             }
         }
 
@@ -760,11 +775,80 @@ public final class InfobaseAccessSupport
         return locks;
     }
 
+    /** A persistent credential mutation, receiving the freshly validated reference. */
+    @FunctionalInterface
+    public interface CredentialWrite
+    {
+        void run(InfobaseReference reference) throws Exception;
+    }
+
+    /** Validate state and execute the mutation in the same caller-owned critical section. */
+    @FunctionalInterface
+    public interface CredentialWriteGuard
+    {
+        void run(CredentialWrite write) throws Exception;
+    }
+
+    /** Clears this reference's settings, after any in-flight bounded store write. */
+    public static void clearCredentials(InfobaseReference ref) throws Exception
+    {
+        clearCredentials(ref, write -> {
+            InfobaseMutationCoordinator.requireWritable(ref.getUuid());
+            write.run(ref);
+        });
+    }
+
+    /** The guard runs inside the worker's UUID write stripe, immediately around updateSettings. */
+    public static void clearCredentials(InfobaseReference ref, CredentialWriteGuard guard) throws Exception
+    {
+        clearCredentials(ref, guard, InfobaseAccessSupport::resolveAccessManager, CREDENTIAL_STORE_TIMEOUT_MS);
+    }
+
+    static void clearCredentials(InfobaseReference ref, CredentialWriteGuard guard,
+            Supplier<IInfobaseAccessManager> managerSupplier, long timeoutMs) throws Exception
+    {
+        BoundedStoreResult<Boolean> result = runBoundedCredentialStore("clear infobase credentials", //$NON-NLS-1$
+            timeoutMs, (publish, committed, allowed) -> {
+                IInfobaseAccessManager manager = managerSupplier.get();
+                if (manager == null)
+                {
+                    throw new IllegalStateException("IInfobaseAccessManager is unavailable."); //$NON-NLS-1$
+                }
+                synchronized (writeLockFor(ref))
+                {
+                    try (var coordination = InfobaseMutationCoordinator.acquire())
+                    {
+                        guard.run(current -> {
+                            // Admission follows the potentially blocking identity/context guard.
+                            var permit = allowed.tryBeginWrite();
+                            if (permit == null)
+                            {
+                                throw new IllegalStateException("Credential cleanup was cancelled before the settings write."); //$NON-NLS-1$
+                            }
+                            try (permit)
+                            {
+                                manager.updateSettings(current, IInfobaseAccessSettings.NOT_DEFINED);
+                                committed.run();
+                            }
+                        });
+                    }
+                }
+                publish.accept(Boolean.TRUE);
+            });
+        if (!result.boundedResult().isSuccess() || !result.writeCommitted())
+        {
+            throw new IllegalStateException("Credential cleanup did not complete: " //$NON-NLS-1$
+                + result.boundedResult().getOutcome()
+                + (result.writeInProgress() ? "; an admitted native write may still complete; wait before retrying." : ""), //$NON-NLS-1$ //$NON-NLS-2$
+                result.boundedResult().getFailure());
+        }
+    }
+
     /**
      * Selects a stable write stripe from the infobase UUID, falling back to its non-secret name and
      * finally object identity for incomplete test/provisional references.
      */
-    private static Object writeLockFor(InfobaseReference ref)
+    static Object writeLockFor(InfobaseReference ref)
     {
         int hash = System.identityHashCode(ref);
         try

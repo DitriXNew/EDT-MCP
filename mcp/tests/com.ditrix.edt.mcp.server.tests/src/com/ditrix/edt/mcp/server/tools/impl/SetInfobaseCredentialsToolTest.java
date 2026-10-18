@@ -13,6 +13,8 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -471,9 +473,16 @@ public class SetInfobaseCredentialsToolTest
     private static final int LATCH_TIMEOUT_SECONDS = 30;
 
     /** The bounded caller is still waiting: the state every ordinary client write sees. */
-    private static BooleanSupplier writesAllowed()
+    private static com.ditrix.edt.mcp.server.utils.CredentialWriteControl writesAllowed()
     {
-        return () -> true;
+        return new com.ditrix.edt.mcp.server.utils.CredentialWriteControl();
+    }
+
+    private static com.ditrix.edt.mcp.server.utils.CredentialWriteControl writesClosed()
+    {
+        var control = writesAllowed();
+        control.close();
+        return control;
     }
 
     /**
@@ -574,7 +583,7 @@ public class SetInfobaseCredentialsToolTest
         ILaunchConfigurationWorkingCopy copy = mock(ILaunchConfigurationWorkingCopy.class);
         ILaunchConfiguration config = localConfig(copy);
 
-        String error = SetInfobaseCredentialsTool.configureClient(() -> false, CONFIG_NAME,
+        String error = SetInfobaseCredentialsTool.configureClient(writesClosed(), CONFIG_NAME,
             config, "Admin", "pwd", false); //$NON-NLS-1$ //$NON-NLS-2$
 
         assertNotNull("an abandoned client write must be reported, not silently skipped", error); //$NON-NLS-1$
@@ -582,6 +591,70 @@ public class SetInfobaseCredentialsToolTest
             error.contains("already returned")); //$NON-NLS-1$
         verify(config, never()).getWorkingCopy();
         verify(copy, never()).doSave();
+    }
+
+    @Test
+    public void clientSaveNeedsFreshAdmissionAfterPreparationAndReportsAnAdmittedSaveAsPending() throws Exception
+    {
+        for (boolean blockSave : new boolean[] {false, true})
+        {
+            var copy = mock(ILaunchConfigurationWorkingCopy.class);
+            var config = localConfig(copy);
+            var entered = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            var finished = new CountDownLatch(1);
+            if (blockSave)
+            {
+                doAnswer(call -> {
+                    entered.countDown();
+                    assertTrue(release.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+                    return config;
+                }).when(copy).doSave();
+            }
+            else
+            {
+                when(config.getWorkingCopy()).thenAnswer(call -> {
+                    entered.countDown();
+                    assertTrue(release.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+                    return copy;
+                });
+            }
+            BoundedStoreResult<String> outcome = InfobaseAccessSupport.runBoundedCredentialStore("client admission", 1_000L, //$NON-NLS-1$
+                (publish, committed, allowed) -> {
+                    try
+                    {
+                        assertTrue(allowed.getAsBoolean());
+                        committed.run(); // The independent agent-side store already succeeded.
+                        SetInfobaseCredentialsTool.configureClient(allowed, CONFIG_NAME,
+                            config, "Admin", "secret", false); //$NON-NLS-1$ //$NON-NLS-2$
+                    }
+                    finally
+                    {
+                        finished.countDown();
+                    }
+                });
+            try
+            {
+                assertEquals(0, entered.getCount());
+                assertEquals(blockSave, outcome.writeInProgress());
+                if (blockSave)
+                {
+                    var json = JsonParser.parseString(SetInfobaseCredentialsTool.finishBoundedStore(
+                        outcome, "project", "app")).getAsJsonObject(); //$NON-NLS-1$ //$NON-NLS-2$
+                    assertFalse(json.get("success").getAsBoolean()); //$NON-NLS-1$
+                    assertTrue(json.get("mutationPending").getAsBoolean()); //$NON-NLS-1$
+                    assertTrue(json.get("mutationOutcomeUnknown").getAsBoolean()); //$NON-NLS-1$
+                    assertTrue(json.get("mutationCommitted").getAsBoolean()); //$NON-NLS-1$
+                    assertTrue(json.get("error").getAsString().contains("may still complete")); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
+            finally
+            {
+                release.countDown();
+                assertTrue(finished.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            }
+            verify(copy, times(blockSave ? 1 : 0)).doSave();
+        }
     }
 
     @Test
