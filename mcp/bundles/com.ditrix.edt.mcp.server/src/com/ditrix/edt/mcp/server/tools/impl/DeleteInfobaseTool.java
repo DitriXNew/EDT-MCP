@@ -415,7 +415,12 @@ public class DeleteInfobaseTool implements IMcpTool
                     try
                     {
                         InfobaseRegistration.cleanupRegistration(manager, registrationId, name, connection,
-                            InfobaseAccessSupport::clearCredentials);
+                            InfobaseAccessSupport::clearCredentials, () -> {
+                                if (!contextMatches(context, () -> InfobaseRegistration.currentContext(project)))
+                                {
+                                    throw new IllegalStateException("The project's infobase context changed; request a new preview."); //$NON-NLS-1$
+                                }
+                            });
                         return registrationResult(projectName, name, registrationId, true).toJson();
                     }
                     catch (Exception e)

@@ -262,6 +262,78 @@ public class InfobaseAccessSupportTest
     }
 
     @Test
+    public void timedOutClearCannotWriteAfterItsGuardStopsWaiting() throws Exception
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        IInfobaseAccessManager manager = mock(IInfobaseAccessManager.class);
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        try
+        {
+            try
+            {
+                InfobaseAccessSupport.clearCredentials(ref, write -> {
+                    started.countDown();
+                    try
+                    {
+                        while (release.getCount() != 0)
+                        {
+                            try
+                            {
+                                if (!release.await(HANDOFF_WAIT_MS, TimeUnit.MILLISECONDS))
+                                {
+                                    throw new IllegalStateException("test guard was not released"); //$NON-NLS-1$
+                                }
+                            }
+                            catch (InterruptedException ignored)
+                            {
+                                // Model a native/monitor wait which outlives cooperative cancellation.
+                            }
+                        }
+                        write.run(ref);
+                    }
+                    finally
+                    {
+                        finished.countDown();
+                    }
+                }, () -> manager, 1_000L);
+                org.junit.Assert.fail("the waiting clear must time out"); //$NON-NLS-1$
+            }
+            catch (IllegalStateException expected)
+            {
+                assertTrue(expected.getMessage().contains("TIMED_OUT")); //$NON-NLS-1$
+            }
+            assertEquals("worker must have entered the guard", 0, started.getCount()); //$NON-NLS-1$
+            release.countDown();
+            assertTrue(finished.await(HANDOFF_WAIT_MS, TimeUnit.MILLISECONDS));
+            verify(manager, never()).updateSettings(any(), any());
+        }
+        finally
+        {
+            release.countDown();
+            finished.await(HANDOFF_WAIT_MS, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    @Test
+    public void aGuardWhichDoesNotPerformTheClearCannotReportSuccess() throws Exception
+    {
+        InfobaseReference ref = mock(InfobaseReference.class);
+        IInfobaseAccessManager manager = mock(IInfobaseAccessManager.class);
+        try
+        {
+            InfobaseAccessSupport.clearCredentials(ref, write -> { }, () -> manager, 5_000L);
+            org.junit.Assert.fail("completion without a settings write must not report cleanup success"); //$NON-NLS-1$
+        }
+        catch (IllegalStateException expected)
+        {
+            assertTrue(expected.getMessage().contains("did not complete")); //$NON-NLS-1$
+        }
+        verify(manager, never()).updateSettings(any(), any());
+    }
+
+    @Test
     public void cancelledBoundedStoreSkipsUpdateSettingsAtTheWriteBoundary() throws Exception
     {
         InfobaseReference ref = mock(InfobaseReference.class);

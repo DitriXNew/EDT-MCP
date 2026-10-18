@@ -72,11 +72,11 @@ public class InfobaseRegistrationTest
         var context = BranchContexts.toContext("feat/original"); //$NON-NLS-1$
         when(infobases.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
         when(infobases.findInfobaseByUuid(reference.getUuid())).thenReturn(
-            java.util.Optional.of(reference), java.util.Optional.empty());
+            java.util.Optional.of(reference), java.util.Optional.of(reference), java.util.Optional.empty());
         doThrow(new IllegalStateException("secret")).when(associations).dissociate(project, reference, context); //$NON-NLS-1$
         boolean[] cleared = {false};
         var result = InfobaseRegistration.rollback(associations, infobases, project, reference, context,
-            ref -> { assertSame(reference, ref); cleared[0] = true; });
+            (ref, guard) -> guard.run(current -> { assertSame(reference, current); cleared[0] = true; }));
         assertFalse(result.associationRemoved());
         assertTrue(result.registrationRemoved());
         assertTrue(result.credentialsRemoved());
@@ -98,7 +98,7 @@ public class InfobaseRegistrationTest
         when(infobases.findInfobaseByUuid(reference.getUuid())).thenReturn(java.util.Optional.of(reference));
         doThrow(new IllegalStateException("secret")).when(infobases).delete(reference); //$NON-NLS-1$
         var result = InfobaseRegistration.rollback(associations, infobases, project, reference, context,
-            ref -> { throw new IllegalStateException("secret"); }); //$NON-NLS-1$
+            (ref, guard) -> { throw new IllegalStateException("secret"); }); //$NON-NLS-1$
         assertTrue(result.associationRemoved());
         assertFalse(result.registrationRemoved());
         assertFalse(result.credentialsRemoved());
@@ -174,7 +174,8 @@ public class InfobaseRegistrationTest
         try
         {
             InfobaseRegistration.cleanupRegistration(manager, server.getUuid(), "probe", //$NON-NLS-1$
-                server.getConnectionString().asConnectionString(), ref -> fail("stale UUID must not clear credentials")); //$NON-NLS-1$
+                server.getConnectionString().asConnectionString(),
+                (ref, guard) -> fail("stale UUID must not clear credentials"), () -> { }); //$NON-NLS-1$
             fail("a stale UUID must never select a same-name replacement"); //$NON-NLS-1$
         }
         catch (IllegalArgumentException expected)
@@ -203,7 +204,7 @@ public class InfobaseRegistrationTest
         try
         {
             InfobaseRegistration.cleanupRegistration(manager, reference.getUuid(), "probe", connection, //$NON-NLS-1$
-                ref -> { throw new IllegalStateException("secure storage locked"); }); //$NON-NLS-1$
+                (ref, guard) -> { throw new IllegalStateException("secure storage locked"); }, () -> { }); //$NON-NLS-1$
             fail("credential failure must retain the registration"); //$NON-NLS-1$
         }
         catch (IllegalStateException expected)
@@ -213,7 +214,7 @@ public class InfobaseRegistrationTest
             verify(manager, never()).delete(any());
         }
         InfobaseRegistration.cleanupRegistration(manager, reference.getUuid(), "probe", connection, //$NON-NLS-1$
-            ref -> credentialsPresent[0] = false);
+            (ref, guard) -> guard.run(current -> credentialsPresent[0] = false), () -> { });
         assertNull(record.get());
         verify(manager).delete(reference);
     }
@@ -238,8 +239,9 @@ public class InfobaseRegistrationTest
         try
         {
             InfobaseRegistration.cleanupRegistration(manager, ref.getUuid(), "probe", original, //$NON-NLS-1$
-                target -> target.setConnectionString(new ServerInfobaseTarget("other-host", "base") //$NON-NLS-1$ //$NON-NLS-2$
-                    .reference("probe").getConnectionString())); //$NON-NLS-1$
+                (target, guard) -> guard.run(current -> current.setConnectionString(
+                    new ServerInfobaseTarget("other-host", "base") //$NON-NLS-1$ //$NON-NLS-2$
+                        .reference("probe").getConnectionString())), () -> { }); //$NON-NLS-1$
             fail("an address changed while cleanup waited must require a new preview"); //$NON-NLS-1$
         }
         catch (IllegalStateException expected)
@@ -247,6 +249,146 @@ public class InfobaseRegistrationTest
             assertTrue(expected.getMessage().contains("changed after preview")); //$NON-NLS-1$
         }
         verify(manager, never()).delete(any());
+    }
+
+    @Test
+    public void queuedCredentialClearRevalidatesNameAddressAndContextInsideTheWorker() throws Exception
+    {
+        for (int change = 0; change < 3; change++)
+        {
+            var manager = mock(IInfobaseManager.class);
+            var access = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager.class);
+            when(manager.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
+            var ref = new ServerInfobaseTarget("host", "base").reference("probe"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            when(manager.findInfobaseByUuid(ref.getUuid())).thenReturn(java.util.Optional.of(ref));
+            String connection = ref.getConnectionString().asConnectionString();
+            var contextValid = new java.util.concurrent.atomic.AtomicBoolean(true);
+            int mutation = change;
+            try
+            {
+                InfobaseRegistration.cleanupRegistration(manager, ref.getUuid(), "probe", connection, //$NON-NLS-1$
+                    (target, guard) -> InfobaseAccessSupport.clearCredentials(target, guard, () -> {
+                        if (mutation == 0)
+                        {
+                            ref.setName("replacement"); //$NON-NLS-1$
+                        }
+                        else if (mutation == 1)
+                        {
+                            ref.setConnectionString(new ServerInfobaseTarget("other", "base") //$NON-NLS-1$ //$NON-NLS-2$
+                                .reference("probe").getConnectionString()); //$NON-NLS-1$
+                        }
+                        else
+                        {
+                            contextValid.set(false);
+                        }
+                        return access;
+                    }, 5_000L), () -> {
+                        if (!contextValid.get())
+                        {
+                            throw new IllegalStateException("context changed"); //$NON-NLS-1$
+                        }
+                    });
+                fail("the worker must reject state changed after initial validation"); //$NON-NLS-1$
+            }
+            catch (IllegalStateException expected)
+            {
+                assertNotNull(expected.getCause());
+            }
+            verify(access, never()).updateSettings(any(), any());
+            verify(manager, never()).delete(any());
+        }
+    }
+
+    @Test
+    public void finalReloadRevalidatesIdentityAndContextBeforeDelete() throws Exception
+    {
+        for (int change = 0; change < 3; change++)
+        {
+            var manager = mock(IInfobaseManager.class);
+            var access = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager.class);
+            when(manager.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
+            var ref = new ServerInfobaseTarget("host", "base").reference("probe"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            when(manager.findInfobaseByUuid(ref.getUuid())).thenReturn(java.util.Optional.of(ref));
+            String connection = ref.getConnectionString().asConnectionString();
+            var reloads = new java.util.concurrent.atomic.AtomicInteger();
+            var contextValid = new java.util.concurrent.atomic.AtomicBoolean(true);
+            int mutation = change;
+            doAnswer(call -> {
+                if (reloads.incrementAndGet() == 3)
+                {
+                    if (mutation == 0)
+                    {
+                        ref.setName("replacement"); //$NON-NLS-1$
+                    }
+                    else if (mutation == 1)
+                    {
+                        ref.setConnectionString(new ServerInfobaseTarget("other", "base") //$NON-NLS-1$ //$NON-NLS-2$
+                            .reference("probe").getConnectionString()); //$NON-NLS-1$
+                    }
+                    else
+                    {
+                        contextValid.set(false);
+                    }
+                }
+                return null;
+            }).when(manager).reload(null);
+            try
+            {
+                InfobaseRegistration.cleanupRegistration(manager, ref.getUuid(), "probe", connection, //$NON-NLS-1$
+                    (target, guard) -> InfobaseAccessSupport.clearCredentials(target, guard, () -> access, 5_000L),
+                    () -> {
+                        if (!contextValid.get())
+                        {
+                            throw new IllegalStateException("context changed"); //$NON-NLS-1$
+                        }
+                    });
+                fail("the final reload must not delete changed state"); //$NON-NLS-1$
+            }
+            catch (IllegalStateException expected)
+            {
+                assertTrue(expected.getMessage().contains("changed")); //$NON-NLS-1$
+            }
+            verify(access).updateSettings(ref,
+                com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessSettings.NOT_DEFINED);
+            verify(manager, never()).delete(any());
+        }
+    }
+
+    @Test
+    public void guardedNativeClearUsesFreshReferenceWithoutHoldingTheManagerMonitor() throws Exception
+    {
+        var manager = mock(IInfobaseManager.class);
+        var access = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager.class);
+        when(manager.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
+        var original = new ServerInfobaseTarget("host", "base").reference("probe"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        var record = new java.util.concurrent.atomic.AtomicReference<>(original);
+        when(manager.findInfobaseByUuid(original.getUuid())).thenAnswer(call -> java.util.Optional.ofNullable(record.get()));
+        doAnswer(call -> {
+            if (record.get() != null)
+            {
+                record.set(org.eclipse.emf.ecore.util.EcoreUtil.copy(record.get()));
+            }
+            return null;
+        }).when(manager).reload(null);
+        doAnswer(call -> {
+            assertFalse("native settings writes must not invert manager/EDT domain locks", Thread.holdsLock(manager)); //$NON-NLS-1$
+            assertSame(record.get(), call.getArgument(0));
+            assertNotSame(original, call.getArgument(0));
+            return null;
+        }).when(access).updateSettings(any(), any());
+        doAnswer(call -> {
+            assertSame(record.get(), call.getArgument(0));
+            record.set(null);
+            return null;
+        }).when(manager).delete(any());
+        InfobaseRegistration.cleanupRegistration(manager, original.getUuid(), "probe", //$NON-NLS-1$
+            original.getConnectionString().asConnectionString(),
+            (ref, guard) -> InfobaseAccessSupport.clearCredentials(ref, guard, () -> access, 5_000L), () -> { });
+        assertNull(record.get());
+        var order = inOrder(access, manager);
+        order.verify(access).updateSettings(any(),
+            eq(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessSettings.NOT_DEFINED));
+        order.verify(manager).delete(any());
     }
 
     @Test

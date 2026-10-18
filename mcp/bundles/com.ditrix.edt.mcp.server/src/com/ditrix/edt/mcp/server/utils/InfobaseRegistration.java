@@ -129,16 +129,23 @@ public final class InfobaseRegistration
     /** Delete the reloaded object with the requested UUID, then verify persistence. */
     public static void remove(IInfobaseManager manager, InfobaseReference reference) throws Exception
     {
+        remove(manager, Identity.of(reference), () -> { });
+    }
+
+    private static void remove(IInfobaseManager manager, Identity expected, Runnable contextGuard) throws Exception
+    {
         synchronized (manager)
         {
             reload(manager);
-            var current = manager.findInfobaseByUuid(reference.getUuid());
+            var current = manager.findInfobaseByUuid(expected.id());
             if (current.isPresent())
             {
+                expected.requireMatch(current.get());
+                contextGuard.run();
                 manager.delete(current.get());
             }
             reload(manager);
-            if (manager.findInfobaseByUuid(reference.getUuid()).isPresent())
+            if (manager.findInfobaseByUuid(expected.id()).isPresent())
             {
                 throw new IllegalStateException("EDT did not remove the launcher entry from disk."); //$NON-NLS-1$
             }
@@ -208,31 +215,58 @@ public final class InfobaseRegistration
 
     /** Preserve the UUID handle if credential removal fails, or the selected entry changes. */
     public static void cleanupRegistration(IInfobaseManager manager, UUID registrationId, String name,
-            String connection, CredentialCleanup credentials) throws Exception
+            String connection, CredentialCleanup credentials, Runnable contextGuard) throws Exception
     {
+        Identity expected = new Identity(registrationId, name, connection);
         InfobaseReference reference = findRegistration(manager, registrationId, name);
-        requireConnection(reference, connection);
-        credentials.clear(reference);
-        synchronized (manager)
-        {
-            reference = findRegistration(manager, registrationId, name);
-            requireConnection(reference, connection);
-            remove(manager, reference);
-        }
+        expected.requireMatch(reference);
+        credentials.clear(reference, credentialGuard(manager, expected, contextGuard));
+        remove(manager, expected, contextGuard);
     }
 
-    private static void requireConnection(InfobaseReference reference, String connection)
+    /** No manager monitor is held while waiting for the bounded credentials worker. */
+    private static InfobaseAccessSupport.CredentialWriteGuard credentialGuard(IInfobaseManager manager,
+            Identity expected, Runnable contextGuard)
     {
-        if (!connection.equals(reference.getConnectionString().asConnectionString()))
+        return write -> {
+            InfobaseReference current;
+            synchronized (manager)
+            {
+                current = findRegistration(manager, expected.id(), expected.name());
+                expected.requireMatch(current);
+                contextGuard.run();
+            }
+            // Native updateSettings enters EDT's editing domain and calls back into the manager.
+            // Do not invert those locks by holding the manager during the native credential write.
+            expected.requireMatch(current);
+            contextGuard.run();
+            write.run(current);
+        };
+    }
+
+    private record Identity(UUID id, String name, String connection)
+    {
+        static Identity of(InfobaseReference reference)
         {
-            throw new IllegalStateException("The registration changed after preview; request a new preview. Nothing was removed."); //$NON-NLS-1$
+            return new Identity(reference.getUuid(), reference.getName(),
+                reference.getConnectionString().asConnectionString());
+        }
+
+        void requireMatch(InfobaseReference reference)
+        {
+            if (!id.equals(reference.getUuid()) || !name.equals(reference.getName())
+                || reference.getConnectionString() == null
+                || !connection.equals(reference.getConnectionString().asConnectionString()))
+            {
+                throw new IllegalStateException("The registration changed after preview; request a new preview. Nothing was removed."); //$NON-NLS-1$
+            }
         }
     }
 
     @FunctionalInterface
     public interface CredentialCleanup
     {
-        void clear(InfobaseReference reference) throws Exception;
+        void clear(InfobaseReference reference, InfobaseAccessSupport.CredentialWriteGuard guard) throws Exception;
     }
 
     public record Rollback(boolean associationRemoved, boolean registrationRemoved,
@@ -271,6 +305,7 @@ public final class InfobaseRegistration
         boolean associationRemoved = false;
         boolean registrationRemoved = false;
         boolean credentialsRemoved = credentials == null;
+        Identity expected = Identity.of(reference);
         try
         {
             associations.dissociate(project, reference, context);
@@ -284,7 +319,7 @@ public final class InfobaseRegistration
         {
             try
             {
-                credentials.clear(reference);
+                credentials.clear(reference, credentialGuard(infobases, expected, () -> { }));
                 credentialsRemoved = true;
             }
             catch (Exception e)
@@ -296,7 +331,7 @@ public final class InfobaseRegistration
         {
             try
             {
-                remove(infobases, reference);
+                remove(infobases, expected, () -> { });
                 registrationRemoved = true;
             }
             catch (Exception e)

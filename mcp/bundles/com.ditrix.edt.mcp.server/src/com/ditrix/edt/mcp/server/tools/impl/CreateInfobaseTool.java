@@ -670,9 +670,10 @@ public class CreateInfobaseTool implements IMcpTool
     }
 
     /** Clear through the shared bounded credential operation before removing the UUID handle. */
-    void clearRegistrationCredentials(InfobaseReference reference) throws Exception
+    void clearRegistrationCredentials(InfobaseReference reference,
+            InfobaseAccessSupport.CredentialWriteGuard guard) throws Exception
     {
-        InfobaseAccessSupport.clearCredentials(reference);
+        InfobaseAccessSupport.clearCredentials(reference, guard);
     }
 
     /**

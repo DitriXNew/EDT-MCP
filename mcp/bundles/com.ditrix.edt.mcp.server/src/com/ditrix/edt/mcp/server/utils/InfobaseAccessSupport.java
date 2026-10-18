@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import org.eclipse.core.runtime.Adapters;
 import org.eclipse.core.runtime.Platform;
@@ -760,24 +761,60 @@ public final class InfobaseAccessSupport
         return locks;
     }
 
-    /** Clears only this fresh reference's settings, after any in-flight bounded store write. */
+    /** A persistent credential mutation, receiving the freshly validated reference. */
+    @FunctionalInterface
+    public interface CredentialWrite
+    {
+        void run(InfobaseReference reference) throws Exception;
+    }
+
+    /** Validate state and execute the mutation in the same caller-owned critical section. */
+    @FunctionalInterface
+    public interface CredentialWriteGuard
+    {
+        void run(CredentialWrite write) throws Exception;
+    }
+
+    /** Clears this reference's settings, after any in-flight bounded store write. */
     public static void clearCredentials(InfobaseReference ref) throws Exception
     {
-        BoundedJob.Result result = BoundedJob.run("Rollback infobase credentials", //$NON-NLS-1$
-            CREDENTIAL_STORE_TIMEOUT_MS, monitor -> {
-                IInfobaseAccessManager manager = resolveAccessManager();
+        clearCredentials(ref, write -> write.run(ref));
+    }
+
+    /** The guard runs inside the worker's UUID write stripe, immediately around updateSettings. */
+    public static void clearCredentials(InfobaseReference ref, CredentialWriteGuard guard) throws Exception
+    {
+        clearCredentials(ref, guard, InfobaseAccessSupport::resolveAccessManager, CREDENTIAL_STORE_TIMEOUT_MS);
+    }
+
+    static void clearCredentials(InfobaseReference ref, CredentialWriteGuard guard,
+            Supplier<IInfobaseAccessManager> managerSupplier, long timeoutMs) throws Exception
+    {
+        BoundedStoreResult<Boolean> result = runBoundedCredentialStore("clear infobase credentials", //$NON-NLS-1$
+            timeoutMs, (publish, committed, allowed) -> {
+                IInfobaseAccessManager manager = managerSupplier.get();
                 if (manager == null)
                 {
                     throw new IllegalStateException("IInfobaseAccessManager is unavailable."); //$NON-NLS-1$
                 }
                 synchronized (writeLockFor(ref))
                 {
-                    manager.updateSettings(ref, IInfobaseAccessSettings.NOT_DEFINED);
+                    guard.run(current -> {
+                        // The guard can itself wait for a launcher lock: check the deadline last.
+                        if (!allowed.getAsBoolean())
+                        {
+                            throw new IllegalStateException("Credential cleanup was cancelled before the settings write."); //$NON-NLS-1$
+                        }
+                        manager.updateSettings(current, IInfobaseAccessSettings.NOT_DEFINED);
+                        committed.run();
+                    });
                 }
+                publish.accept(Boolean.TRUE);
             });
-        if (!result.isSuccess())
+        if (!result.boundedResult().isSuccess() || !result.writeCommitted())
         {
-            throw new IllegalStateException("Credential rollback did not complete: " + result.getOutcome()); //$NON-NLS-1$
+            throw new IllegalStateException("Credential cleanup did not complete: " //$NON-NLS-1$
+                + result.boundedResult().getOutcome(), result.boundedResult().getFailure());
         }
     }
 

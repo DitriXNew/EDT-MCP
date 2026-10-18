@@ -142,7 +142,8 @@ public class CreateInfobaseRegistrationTest
             }
 
             @Override
-            void clearRegistrationCredentials(InfobaseReference reference)
+            void clearRegistrationCredentials(InfobaseReference reference,
+                    com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.CredentialWriteGuard guard)
             {
                 throw new IllegalStateException("secure storage unavailable"); //$NON-NLS-1$
             }
