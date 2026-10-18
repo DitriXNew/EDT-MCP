@@ -19,6 +19,7 @@ import org.eclipse.emf.ecore.EStructuralFeature;
 
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
 import com._1c.g5.v8.dt.metadata.mdclass.StandardAttribute;
+import com._1c.g5.v8.dt.mcore.CommandGroup;
 import com._1c.g5.v8.dt.mcore.Field;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.TypeItem;
@@ -26,6 +27,7 @@ import com._1c.g5.v8.dt.mcore.util.McoreUtil;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.utils.FieldListSupport;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
+import com.ditrix.edt.mcp.server.utils.MetadataPropertyIntrospector;
 
 /**
  * Base class for metadata formatters with common utility methods.
@@ -736,13 +738,24 @@ public abstract class AbstractMetadataFormatter implements IMetadataFormatter
      * Formats a single {@link EObject} value via {@link EObjectInspector}, choosing the
      * rendering by its detected {@code FormatStyle}: a simple wrapper yields its primary
      * value, every other style (reference, expand, default) yields the formatted
-     * reference. Matches the inline EObject switch of {@link #formatDynamicValue}.
+     * reference. Matches the inline EObject switch of {@link #formatDynamicValue}. A command
+     * group is the exception: a standard group is such a wrapper, but its primary value is the
+     * category its whole panel shares, so it is printed by name (issue #733).
      *
      * @param eObj the object to render (non-{@code null})
      * @return the formatted value string
      */
     private static String formatEObjectValue(EObject eObj)
     {
+        if (eObj instanceof CommandGroup)
+        {
+            String label = MetadataPropertyIntrospector.commandGroupLabel(eObj);
+            if (label != null)
+            {
+                return label;
+            }
+        }
+
         // Use EObjectInspector to determine the best format style
         EObjectInspector.FormatStyle style = EObjectInspector.getFormatStyle(eObj);
 

@@ -1061,8 +1061,58 @@ public class MetadataPropertyIntrospectorTest
             MdClassFactory.eINSTANCE.createDataProcessorCommand(), "group"); //$NON-NLS-1$
         assertNotNull("a DataProcessorCommand's group must be assignable", group); //$NON-NLS-1$
         assertTrue("group must be a single REFERENCE", group.valueKind == ValueKind.REFERENCE); //$NON-NLS-1$
-        assertTrue("group must report its CommandGroup target type", //$NON-NLS-1$
-            group.allowedValues.contains("CommandGroup")); //$NON-NLS-1$
+        // Both forms modify_metadata takes, not the bare mcore interface name (issue #733).
+        assertEquals(Collections.singletonList(MetadataPropertyIntrospector.COMMAND_GROUP_ALLOWED),
+            group.allowedValues);
+        String allowed = group.allowedValues.get(0);
+        assertTrue(allowed, allowed.contains("CommandGroup.<Name>")); //$NON-NLS-1$
+        assertTrue("the standard-group form is named too: " + allowed, //$NON-NLS-1$
+            allowed.contains("ActionsPanelTools")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testAnOrdinaryReferenceStillReportsItsTargetType()
+    {
+        // The command-group cell is scoped to that one target type.
+        PropertyInfo coa = MetadataPropertyIntrospector.find(
+            MdClassFactory.eINSTANCE.createAccountingRegister(), "chartOfAccounts"); //$NON-NLS-1$
+        assertEquals(Collections.singletonList("ChartOfAccounts"), coa.allowedValues); //$NON-NLS-1$
+    }
+
+    // ---- commandGroupLabel (issue #733) -----------------------------------------------------
+
+    @Test
+    public void testCommandGroupLabelOfAConfigurationGroupIsItsFqn()
+    {
+        CommandGroup sales = MdClassFactory.eINSTANCE.createCommandGroup();
+        sales.setName("Sales"); //$NON-NLS-1$
+        assertEquals("CommandGroup.Sales", MetadataPropertyIntrospector.commandGroupLabel(sales)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCommandGroupLabelOfAStandardGroupIsItsName()
+    {
+        StandardCommandGroup group = McoreFactory.eINSTANCE.createStandardCommandGroup();
+        group.setName("ActionsPanelTools"); //$NON-NLS-1$
+        group.setCategory(CommandGroupCategory.ACTIONS_PANEL);
+        assertEquals("ActionsPanelTools", MetadataPropertyIntrospector.commandGroupLabel(group)); //$NON-NLS-1$
+    }
+
+    @Test
+    public void testCommandGroupLabelOfANamelessStandardGroupIsItsCategory()
+    {
+        StandardCommandGroup group = McoreFactory.eINSTANCE.createStandardCommandGroup();
+        group.setCategory(CommandGroupCategory.NAVIGATION_PANEL);
+        assertEquals(CommandGroupCategory.NAVIGATION_PANEL.getName(),
+            MetadataPropertyIntrospector.commandGroupLabel(group));
+    }
+
+    @Test
+    public void testCommandGroupLabelOfNothingIsNull()
+    {
+        assertNull(MetadataPropertyIntrospector.commandGroupLabel(null));
+        assertNull("an object the platform names nothing has no label", //$NON-NLS-1$
+            MetadataPropertyIntrospector.commandGroupLabel(McoreFactory.eINSTANCE.createStringValue()));
     }
 
     @Test

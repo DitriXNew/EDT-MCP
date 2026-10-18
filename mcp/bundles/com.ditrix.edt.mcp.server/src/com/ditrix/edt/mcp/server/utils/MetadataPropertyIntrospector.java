@@ -73,6 +73,14 @@ public final class MetadataPropertyIntrospector
      */
     public static final String COMMON_FEATURE = "common"; //$NON-NLS-1$
 
+    /**
+     * The "allowed values" cell of a command's {@code group}: both forms {@code modify_metadata} takes.
+     * The standard names themselves depend on the platform version; an unknown one is refused with the
+     * full list.
+     */
+    static final String COMMAND_GROUP_ALLOWED =
+        "CommandGroup.<Name> or a standard group name (e.g. ActionsPanelTools)"; //$NON-NLS-1$
+
     /** The kind of value an assignable property takes - drives validation and rendering. */
     public enum ValueKind
     {
@@ -780,6 +788,17 @@ public final class MetadataPropertyIntrospector
         return MdClassPackage.Literals.MD_OBJECT == target ? "metadata object" : target.getName(); //$NON-NLS-1$
     }
 
+    /**
+     * Whether a reference feature's declared target is the mcore {@code CommandGroup} interface - the
+     * base both a configuration {@code CommandGroup} (an {@code MdObject}, FQN-addressed) and a
+     * platform {@code StandardCommandGroup} (name-addressed) implement.
+     */
+    public static boolean isCommandGroupReference(EStructuralFeature feature)
+    {
+        return feature instanceof EReference
+            && ((EReference)feature).getEReferenceType() == McorePackage.Literals.COMMAND_GROUP;
+    }
+
     /** A localized-string map feature (e.g. the synonym) is a containment ref to a *MapEntry EClass. */
     private static boolean isMapEntry(EReference reference)
     {
@@ -907,6 +926,11 @@ public final class MetadataPropertyIntrospector
         }
         if (kind == ValueKind.REFERENCE || kind == ValueKind.MANY_REFERENCE)
         {
+            if (isCommandGroupReference(feature))
+            {
+                // Both forms modify_metadata takes, not the bare interface name (issue #733).
+                return Collections.singletonList(COMMAND_GROUP_ALLOWED);
+            }
             String target = referenceTargetTypeName(feature);
             return target != null ? Collections.singletonList(target) : null;
         }
@@ -1278,6 +1302,29 @@ public final class MetadataPropertyIntrospector
             }
         }
         return null;
+    }
+
+    /**
+     * How a command's {@code group} is printed wherever it is read back (issue #733): a configuration
+     * group as its {@code CommandGroup.<Name>} FQN, a platform standard group by the name
+     * {@code modify_metadata} takes ({@code ActionsPanelTools}), its category only when it has no name -
+     * the {@link #referenceTargetName} rule, qualified for an {@link MdObject}.
+     *
+     * <p>The formatter's generic "first enum attribute" rendering answers neither: it reads a
+     * configuration group's {@code objectBelonging} ({@code Native}) and a standard group's
+     * {@code category}, which every group of one panel shares.</p>
+     *
+     * @param group the group, may be {@code null}
+     * @return the label, or {@code null} when the platform gives the group no name or category
+     */
+    public static String commandGroupLabel(EObject group)
+    {
+        if (group == null)
+        {
+            return null;
+        }
+        String name = referenceTargetName(group);
+        return group instanceof MdObject && name != null ? qualifiedName(group, name) : name;
     }
 
     /**

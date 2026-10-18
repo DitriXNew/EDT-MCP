@@ -96,6 +96,28 @@ def _assignable_text(fqn):
     return r.text
 
 
+def _commands_group_cells(owner_fqn, command):
+    """The `Group` cell of `command`'s row in the owner's `### Commands` table, read in the default
+    and the `full: true` view (issue #733), as {full: cell}."""
+    cells_by_view = {}
+    for full in (False, True):
+        r = call("get_metadata_details",
+                 {"projectName": PROJECT, "objectFqns": [owner_fqn], "full": full})
+        assert_ok(r, "get_metadata_details(full=%s) for %s" % (full, owner_fqn))
+        in_commands = False
+        for line in r.text.splitlines():
+            if line.startswith("### "):
+                in_commands = line.strip() == "### Commands"
+                continue
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if in_commands and len(cells) >= 3 and cells[0] == command:
+                cells_by_view[full] = cells[2]
+                break
+        assert full in cells_by_view, \
+            "the Commands table (full=%s) must have a %r row: %r" % (full, command, r.text[:1500])
+    return cells_by_view
+
+
 def _first_enum_with_value(fqn):
     """Parse the assignable table for the first ENUM property and its first allowed value."""
     for line in _assignable_text(fqn).splitlines():
@@ -3020,6 +3042,10 @@ def test_set_command_group_reference():
         "the group change must force-export the owner .mdo: %r" % (r.structured,)
     poll_diff_contains("<group>CommandGroup.%s</group>" % grp,
                        ctx="the command's group reference must land in the owner .mdo")
+    # The Commands table names the group by its FQN, not by its objectBelonging (Native).
+    for full, cell in _commands_group_cells("DataProcessor." + dp, cmd).items():
+        assert cell == "CommandGroup." + grp, \
+            "the Commands table (full=%s) must show the configuration group, got %r" % (full, cell)
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
@@ -3046,6 +3072,10 @@ def test_command_group_is_assignable_and_listed():
     assert group_row is not None, "the assignable table must have a 'group' row: %r" % (text[:600],)
     assert len(group_row) >= 2 and group_row[1] == "REFERENCE", \
         "group's row must report the REFERENCE kind, got %r: %r" % (group_row, text[:600])
+    # Allowed names both forms modify_metadata takes, not the bare interface name (issue #733).
+    allowed = group_row[3] if len(group_row) >= 4 else ""
+    assert "CommandGroup.<Name>" in allowed and "ActionsPanelTools" in allowed, \
+        "group's Allowed cell must name both addressable forms, got %r" % (group_row,)
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
@@ -3120,10 +3150,7 @@ def test_set_command_group_to_standard_group_english():
     poll_diff_contains("<group>ActionsPanelTools</group>",
                        ctx="the platform writes a standard group by its bare English name")
 
-    # Read back through the ASSIGNABLE surface - the one MetadataPropertyIntrospector renders, and
-    # the only place a standard group's NAME appears. The `### Commands` table deliberately prints
-    # the group's CATEGORY enum instead (ActionsPanel), and does so for a configuration CommandGroup
-    # too, so it cannot say WHICH standard group was written.
+    # Read back through the ASSIGNABLE surface - the one MetadataPropertyIntrospector renders.
     text = _assignable_text(fqn)
     group_row = None
     for line in text.splitlines():
@@ -3135,6 +3162,11 @@ def test_set_command_group_to_standard_group_english():
     assert len(group_row) >= 3 and group_row[2] == "ActionsPanelTools", \
         "the reader must show the standard group that was just written, got %r: %r" \
         % (group_row, text[:600])
+    # The Commands table names it the same way, not by the ActionsPanel category every group of
+    # that panel shares (issue #733).
+    for full, cell in _commands_group_cells("DataProcessor.E2EMdStdGrpDp", "E2EMdStdGrpCmd").items():
+        assert cell == "ActionsPanelTools", \
+            "the Commands table (full=%s) must show the standard group, got %r" % (full, cell)
 
 
 @e2e_test(tool="modify_metadata", kind="write-metadata")
