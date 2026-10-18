@@ -10,7 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.BiFunction;
-import java.util.function.BooleanSupplier;
+import com.ditrix.edt.mcp.server.utils.CredentialWriteControl;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.CoreException;
@@ -285,7 +285,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
      * @return {@code null} when nothing failed — including the case where no launch configuration
      *     was named and nothing was written; otherwise the reason the write failed
      */
-    static String configureClient(BooleanSupplier writeAllowed, String configName,
+    static String configureClient(CredentialWriteControl writeAllowed, String configName,
             ILaunchConfiguration config, String user, String password, boolean osAuth)
     {
         if (configName == null || configName.isEmpty())
@@ -299,7 +299,7 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         {
             return CLIENT_WRITE_ABANDONED;
         }
-        return LaunchConfigUtils.applyClientCredentials(config, user, password, osAuth);
+        return LaunchConfigUtils.applyClientCredentials(config, user, password, osAuth, writeAllowed);
     }
 
     /**
@@ -625,6 +625,19 @@ public class SetInfobaseCredentialsTool implements IMcpTool
         String projectName, String applicationId)
     {
         BoundedJob.Result bounded = storeRun.boundedResult();
+        if (storeRun.writeInProgress())
+        {
+            ToolResult pending = ToolResult.errorWithUnknownMutationOutcome(
+                "Credential storage stopped waiting while an admitted native write " //$NON-NLS-1$
+                + "was still in progress; it may still complete. Inspect secure storage and the launch " //$NON-NLS-1$
+                + "configuration after the operation finishes before retrying.") //$NON-NLS-1$
+                .put("mutationPending", true); //$NON-NLS-1$
+            if (storeRun.writeCommitted())
+            {
+                pending.put("mutationCommitted", true); //$NON-NLS-1$
+            }
+            return pending.toJson();
+        }
         if (bounded.getOutcome() == BoundedJob.Outcome.INTERRUPTED)
         {
             if (storeRun.publishedResult() != null)

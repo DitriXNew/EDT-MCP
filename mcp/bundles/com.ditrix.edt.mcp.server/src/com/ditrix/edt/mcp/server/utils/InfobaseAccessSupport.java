@@ -10,7 +10,6 @@ import java.lang.reflect.Method;
 import java.util.IdentityHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -194,11 +193,11 @@ public final class InfobaseAccessSupport
         /**
          * @param publish records the latest safe result snapshot for the bounded caller
          * @param writeCommitted records the persistent-write boundary before read-back begins
-         * @param writeAllowed must be checked immediately before the persistent settings write;
-         *     false means the bounded caller has stopped waiting or cancelled the Job
+         * @param writeAllowed admission control: acquire a fresh permit immediately before each
+         *     persistent mutation; its pure predicate is suitable only for preliminary checks
          * @throws Exception any operation failure captured by {@link BoundedJob}
          */
-        void run(Consumer<T> publish, Runnable writeCommitted, BooleanSupplier writeAllowed)
+        void run(Consumer<T> publish, Runnable writeCommitted, CredentialWriteControl writeAllowed)
             throws Exception;
     }
 
@@ -208,13 +207,15 @@ public final class InfobaseAccessSupport
         private final BoundedJob.Result boundedResult;
         private final T publishedResult;
         private final boolean writeCommitted;
+        private final boolean writeInProgress;
 
         private BoundedStoreResult(BoundedJob.Result boundedResult, T publishedResult,
-            boolean writeCommitted)
+            boolean writeCommitted, boolean writeInProgress)
         {
             this.boundedResult = boundedResult;
             this.publishedResult = publishedResult;
             this.writeCommitted = writeCommitted;
+            this.writeInProgress = writeInProgress;
         }
 
         public BoundedJob.Result boundedResult()
@@ -225,6 +226,11 @@ public final class InfobaseAccessSupport
         public T publishedResult()
         {
             return publishedResult;
+        }
+
+        public boolean writeInProgress()
+        {
+            return writeInProgress;
         }
 
         public boolean writeCommitted()
@@ -245,29 +251,29 @@ public final class InfobaseAccessSupport
     {
         AtomicReference<T> published = new AtomicReference<>();
         AtomicBoolean writeCommitted = new AtomicBoolean();
-        AtomicBoolean callerFinished = new AtomicBoolean();
+        CredentialWriteControl writeAllowed = new CredentialWriteControl();
         BoundedJob.Result bounded;
         try
         {
-            bounded = BoundedJob.run("Store infobase credentials: " + target, //$NON-NLS-1$
+            bounded = BoundedJob.runWithCancellation("Store infobase credentials: " + target, //$NON-NLS-1$
                 timeoutMs, monitor -> {
-                    BooleanSupplier writeAllowed =
-                        () -> !callerFinished.get() && !monitor.isCanceled();
                     work.run(value -> {
                         if (writeAllowed.getAsBoolean())
                         {
                             published.set(value);
                         }
                     }, () -> writeCommitted.set(true), writeAllowed);
-                });
+                }, writeAllowed::close);
         }
         finally
         {
-            // Cancellation is cooperative. A worker that outlives the wait observes either its
-            // cancelled monitor or this flag before it can enter the persistent write.
-            callerFinished.set(true);
+            // Admission and cancellation share one short state transition; native SDK calls do not.
+            writeAllowed.close();
         }
-        return new BoundedStoreResult<>(bounded, published.get(), writeCommitted.get());
+        // Admission is closed. Read pending FIRST: a permit cannot disappear until its commit
+        // callback ran, and no new permit can appear between these two snapshots.
+        boolean pending = writeAllowed.writeInProgress();
+        return new BoundedStoreResult<>(bounded, published.get(), writeCommitted.get(), pending);
     }
 
     /** Credentials that may be supplied to an interactive platform command. */
@@ -382,7 +388,7 @@ public final class InfobaseAccessSupport
 
     /** Same store with the bounded caller's last-moment write permission. */
     public static StoreResult storeCredentials(IApplication application, String user, String password,
-            InfobaseAccess access, Runnable writeCommitted, BooleanSupplier writeAllowed)
+            InfobaseAccess access, Runnable writeCommitted, CredentialWriteControl writeAllowed)
     {
         InfobaseReference ref = resolveInfobaseReference(application);
         if (ref != null)
@@ -546,7 +552,7 @@ public final class InfobaseAccessSupport
 
     /** Same store with the bounded caller's last-moment write permission. */
     public static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
-            InfobaseAccess access, Runnable writeCommitted, BooleanSupplier writeAllowed)
+            InfobaseAccess access, Runnable writeCommitted, CredentialWriteControl writeAllowed)
     {
         if (ref == null)
         {
@@ -579,7 +585,7 @@ public final class InfobaseAccessSupport
      */
     static StoreResult storeCredentials(InfobaseReference ref, String user, String password,
             InfobaseAccess access, IInfobaseAccessManager manager, Runnable writeCommitted,
-            BooleanSupplier writeAllowed)
+            CredentialWriteControl writeAllowed)
     {
         String requestedUser = user == null ? "" : user; //$NON-NLS-1$
         String requestedPassword = password == null ? "" : password; //$NON-NLS-1$
@@ -587,23 +593,24 @@ public final class InfobaseAccessSupport
         {
             try (var coordination = InfobaseMutationCoordinator.acquire())
             {
-                // This check deliberately lives INSIDE the same serialization as the write. A bounded
-                // worker that waited for an earlier write must re-read its deadline state after it
-                // acquires the lock; a worker already writing when its caller times out keeps the lock,
-                // so a later intentional write necessarily runs after it and wins.
-                if (writeAllowed != null && !writeAllowed.getAsBoolean())
-                {
-                    return StoreResult.failed(
-                        "Credential storage was cancelled before the settings write.", ref); //$NON-NLS-1$
-                }
                 if (InfobaseMutationCoordinator.isDeleting(ref.getUuid()))
                 {
                     return StoreResult.failed("The registration is being removed or was removed; refresh get_applications before storing credentials.", ref); //$NON-NLS-1$
                 }
-                try
+                var permit = writeAllowed == null ? null : writeAllowed.tryBeginWrite();
+                if (writeAllowed != null && permit == null)
+                {
+                    return StoreResult.failed(
+                        "Credential storage was cancelled before the settings write.", ref); //$NON-NLS-1$
+                }
+                try (permit)
                 {
                     manager.updateSettings(ref, new InfobaseAccessSettings(access,
                         requestedUser, requestedPassword, "")); //$NON-NLS-1$
+                    if (writeCommitted != null)
+                    {
+                        writeCommitted.run();
+                    }
                 }
                 catch (Exception e) // NOSONAR a StorageException (secure-storage) or CoreException must surface
                 {
@@ -617,10 +624,6 @@ public final class InfobaseAccessSupport
                     Activator.logError("set credentials: updateSettings failed: " //$NON-NLS-1$
                         + diagnostic, scrubCredentialFailureForLog(e, requestedPassword));
                     return StoreResult.failed(message, ref);
-                }
-                if (writeCommitted != null)
-                {
-                    writeCommitted.run();
                 }
             }
             catch (InfobaseMutationCoordinator.Unavailable unavailable)
@@ -816,13 +819,17 @@ public final class InfobaseAccessSupport
                     try (var coordination = InfobaseMutationCoordinator.acquire())
                     {
                         guard.run(current -> {
-                            // The guard can itself wait for a launcher lock: check the deadline last.
-                            if (!allowed.getAsBoolean())
+                            // Admission follows the potentially blocking identity/context guard.
+                            var permit = allowed.tryBeginWrite();
+                            if (permit == null)
                             {
                                 throw new IllegalStateException("Credential cleanup was cancelled before the settings write."); //$NON-NLS-1$
                             }
-                            manager.updateSettings(current, IInfobaseAccessSettings.NOT_DEFINED);
-                            committed.run();
+                            try (permit)
+                            {
+                                manager.updateSettings(current, IInfobaseAccessSettings.NOT_DEFINED);
+                                committed.run();
+                            }
                         });
                     }
                 }
@@ -831,7 +838,9 @@ public final class InfobaseAccessSupport
         if (!result.boundedResult().isSuccess() || !result.writeCommitted())
         {
             throw new IllegalStateException("Credential cleanup did not complete: " //$NON-NLS-1$
-                + result.boundedResult().getOutcome(), result.boundedResult().getFailure());
+                + result.boundedResult().getOutcome()
+                + (result.writeInProgress() ? "; an admitted native write may still complete; wait before retrying." : ""), //$NON-NLS-1$ //$NON-NLS-2$
+                result.boundedResult().getFailure());
         }
     }
 

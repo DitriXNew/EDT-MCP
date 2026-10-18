@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -617,6 +618,32 @@ public class CreateInfobaseTool implements IMcpTool
             String projectName, InfobaseTarget target, String infobaseName, String platform,
             boolean setDefault, boolean register, Credentials credentials)
     {
+        return prepareInfobase(context, associationContext, projectName, target, infobaseName,
+            platform, setDefault, register, credentials,
+            () -> InfobaseRegistration.currentContext(context.project));
+    }
+
+    /** The provider seam keeps branch-change regressions on the production pipeline. */
+    String prepareInfobase(CreateContext context, InfobaseAssociationContext associationContext,
+            String projectName, InfobaseTarget target, String infobaseName, String platform,
+            boolean setDefault, boolean register, Credentials credentials,
+            Supplier<InfobaseAssociationContext> currentContext)
+    {
+        Runnable contextGuard = () -> {
+            boolean matches;
+            try
+            {
+                matches = associationContext.equals(currentContext.get());
+            }
+            catch (Exception unavailable)
+            {
+                matches = false;
+            }
+            if (!matches)
+            {
+                throw new ContextChangedException();
+            }
+        };
         if (infobaseName == null || infobaseName.isBlank())
         {
             infobaseName = generateDefaultInfobaseName(context.ibManager, projectName);
@@ -641,20 +668,34 @@ public class CreateInfobaseTool implements IMcpTool
             resultContext.putRegistrationIdentity(failure, reference);
             return failure.toString();
         }
-        // EDT's association listener can open a Designer session: persist access settings first.
-        CredentialStoreReport credentialStore = storeCredentialsIfRequested(reference, credentials, register);
-        String error = associateInfobase(context.assocManager, context.project, reference,
-            target.location(), projectName, register, associationContext);
-        String result = error == null
-            ? buildSuccessResult(resultContext, reference, setDefault, register, credentialStore) : error;
+        String result;
+        try
+        {
+            contextGuard.run();
+            // EDT's association listener can open a Designer session: persist access settings first.
+            CredentialStoreReport credentialStore = storeCredentialsIfRequested(reference, credentials, register);
+            contextGuard.run();
+            String error = associateInfobase(context.assocManager, context.project, reference,
+                target.location(), projectName, register, associationContext);
+            result = error == null
+                ? buildSuccessResult(resultContext, reference, setDefault, register, credentialStore, contextGuard)
+                : error;
+            contextGuard.run();
+        }
+        catch (ContextChangedException contextFailure)
+        {
+            result = ToolResult.error("The project's infobase context changed or could not be verified " //$NON-NLS-1$
+                + "during creation; refresh get_applications and retry in the intended branch.").toJson(); //$NON-NLS-1$
+        }
         JsonObject json = JsonParser.parseString(result).getAsJsonObject();
         resultContext.putRegistrationIdentity(json, reference);
-        if (register && !json.get("success").getAsBoolean()) //$NON-NLS-1$
+        if (!json.get("success").getAsBoolean()) //$NON-NLS-1$
         {
             InfobaseRegistration.Rollback rollback = InfobaseRegistration.rollback(
                 context.assocManager, context.ibManager, context.project, reference,
                 associationContext, this::clearRegistrationCredentials);
-            String message = json.get("error").getAsString() + " " + rollback.message(); //$NON-NLS-1$ //$NON-NLS-2$
+            String message = json.get("error").getAsString() + " " + rollback.message() //$NON-NLS-1$ //$NON-NLS-2$
+                + (register ? "" : " The newly created database files were kept; inspect them before retrying create."); //$NON-NLS-1$ //$NON-NLS-2$
             ToolResult failed = ToolResult.error(message);
             for (var entry : json.entrySet())
             {
@@ -667,6 +708,11 @@ public class CreateInfobaseTool implements IMcpTool
             return rollback.put(failed).toJson();
         }
         return json.toString();
+    }
+
+    private static final class ContextChangedException extends IllegalStateException
+    {
+        private static final long serialVersionUID = 1L;
     }
 
     /** Clear through the shared bounded credential operation before removing the UUID handle. */
@@ -918,7 +964,7 @@ public class CreateInfobaseTool implements IMcpTool
      * the SAME early-return cases (no runtime / timeout / interrupted / job error) the inline code
      * produced, else {@code null}.
      */
-    private static String createNewInfobase(InfobaseReference ibRef, String platform,
+    String createNewInfobase(InfobaseReference ibRef, String platform,
             String infobaseName, Path infobaseDir)
     {
         IInfobaseCreationOperation creationOp = resolveCreationOperation();
@@ -2711,10 +2757,19 @@ public class CreateInfobaseTool implements IMcpTool
     static String buildSuccessResult(ResultContext rc, InfobaseReference ibRef, boolean setDefault,
             boolean register, CredentialStoreReport credentialStore)
     {
+        return buildSuccessResult(rc, ibRef, setDefault, register, credentialStore, () -> { });
+    }
+
+    private static String buildSuccessResult(ResultContext rc, InfobaseReference ibRef, boolean setDefault,
+            boolean register, CredentialStoreReport credentialStore, Runnable contextGuard)
+    {
+        contextGuard.run();
         ApplicationReadBack readBack = pollForNewApplication(rc.appManager, rc.project,
             app -> isMatchingNewInfobaseApp(app, ibRef));
 
+        contextGuard.run();
         String setDefaultNote = setDefault ? applySetDefault(rc.appManager, rc.project, readBack) : null;
+        contextGuard.run();
         String note = concatNotes(setDefaultNote,
             credentialStore == null ? null : credentialStore.note);
         String verb = register ? ACTION_REGISTERED : ACTION_CREATED;

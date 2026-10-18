@@ -402,7 +402,7 @@ public class DeleteInfobaseTool implements IMcpTool
         }
         try
         {
-            InfobaseReference reference = InfobaseRegistration.findRegistration(manager, registrationId, name);
+            InfobaseReference reference = InfobaseRegistration.findCleanupRegistration(manager, registrationId, name);
             InfobaseReference captured = org.eclipse.emf.ecore.util.EcoreUtil.copy(reference);
             if (!confirm)
             {

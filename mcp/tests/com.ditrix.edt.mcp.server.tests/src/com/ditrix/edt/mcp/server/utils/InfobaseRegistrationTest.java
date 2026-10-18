@@ -555,6 +555,71 @@ public class InfobaseRegistrationTest
     }
 
     @Test
+    public void absentUuidCleanupCanRetryOnlyItsRetainedVerifiedSnapshot() throws Exception
+    {
+        for (boolean file : new boolean[] {false, true})
+        {
+            var manager = mock(IInfobaseManager.class);
+            when(manager.getLoadStatus()).thenReturn(org.eclipse.core.runtime.Status.OK_STATUS);
+            var captured = file
+                ? new com.ditrix.edt.mcp.server.utils.InfobaseTarget(java.nio.file.Path.of("recovery-base"), null).reference("recover") //$NON-NLS-1$ //$NON-NLS-2$
+                : new ServerInfobaseTarget("host", "base").reference("recover"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            var replacement = org.eclipse.emf.ecore.util.EcoreUtil.copy(captured);
+            replacement.setUuid(java.util.UUID.randomUUID());
+            when(manager.findInfobaseByUuid(captured.getUuid())).thenReturn(java.util.Optional.empty());
+            when(manager.findInfobaseByUuid(replacement.getUuid())).thenReturn(java.util.Optional.of(replacement));
+            try
+            {
+                InfobaseRegistration.cleanupRegistration(manager, captured,
+                    (target, guard) -> guard.run(current -> {
+                        current.setName("mutated SDK argument"); //$NON-NLS-1$
+                        throw new IllegalStateException("storage locked"); //$NON-NLS-1$
+                    }), () -> { });
+                fail("failed clear must remain recoverable"); //$NON-NLS-1$
+            }
+            catch (IllegalStateException expected)
+            {
+                assertTrue(InfobaseMutationCoordinator.isDeleting(captured.getUuid()));
+            }
+            var recovered = InfobaseRegistration.findCleanupRegistration(manager, captured.getUuid(), "recover"); //$NON-NLS-1$
+            assertNotSame(captured, recovered);
+            assertEquals(captured.getConnectionString().asConnectionString(), recovered.getConnectionString().asConnectionString());
+            for (var request : java.util.List.of(captured.getUuid(), java.util.UUID.randomUUID()))
+            {
+                try
+                {
+                    InfobaseRegistration.findCleanupRegistration(manager, request, "wrong name"); //$NON-NLS-1$
+                    fail("no fallback from an unverified UUID/name"); //$NON-NLS-1$
+                }
+                catch (IllegalArgumentException expected)
+                {
+                    // A UUID and its exact retained name are both required.
+                }
+            }
+            var cleared = new java.util.concurrent.atomic.AtomicBoolean();
+            InfobaseRegistration.cleanupRegistration(manager, recovered, (target, guard) ->
+                guard.run(current -> {
+                    assertEquals(captured.getUuid(), current.getUuid());
+                    assertEquals("recover", current.getName()); //$NON-NLS-1$
+                    cleared.set(true);
+                }), () -> { });
+            assertTrue(cleared.get());
+            assertTrue(InfobaseMutationCoordinator.isDeleting(captured.getUuid()));
+            try
+            {
+                InfobaseRegistration.findCleanupRegistration(manager, captured.getUuid(), "recover"); //$NON-NLS-1$
+                fail("completed cleanup must not authorize replay of an old UUID"); //$NON-NLS-1$
+            }
+            catch (IllegalArgumentException expected)
+            {
+                assertSame(replacement, manager.findInfobaseByUuid(replacement.getUuid()).orElseThrow());
+            }
+            verify(manager, never()).delete(any());
+            verify(manager, never()).add(any(), any());
+        }
+    }
+
+    @Test
     public void absenceDiscoveredAfterTheBoundedCallerTimesOutStillPreventsStaleStores() throws Exception
     {
         var manager = mock(IInfobaseManager.class);
@@ -632,8 +697,13 @@ public class InfobaseRegistrationTest
             var ref = new ServerInfobaseTarget("host", "base").reference("probe"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             var access = mock(com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAccessManager.class);
             var old = InfobaseMutationCoordinator.beginDeletion(ref.getUuid());
+            old.remember(ref);
             old.close();
             var retry = InfobaseMutationCoordinator.beginDeletion(ref.getUuid());
+            var fresh = new ServerInfobaseTarget("new-host", "new-base").reference("probe"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            fresh.setUuid(ref.getUuid());
+            retry.remember(fresh);
+            old.remember(ref);
             if (observeBeforeNewClose)
             {
                 old.observedAbsence();
@@ -644,6 +714,8 @@ public class InfobaseRegistrationTest
                 retry.close();
                 old.observedAbsence();
             }
+            assertEquals(fresh.getConnectionString().asConnectionString(),
+                InfobaseMutationCoordinator.recoverySnapshot(ref.getUuid()).getConnectionString().asConnectionString());
             assertNotNull(InfobaseAccessSupport.storeCredentials(ref, "stale", "secret", //$NON-NLS-1$ //$NON-NLS-2$
                 com._1c.g5.v8.dt.platform.services.model.InfobaseAccess.INFOBASE, access).error());
             verify(access, never()).updateSettings(any(), any());

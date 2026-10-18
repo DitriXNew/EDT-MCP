@@ -816,6 +816,13 @@ public final class LaunchConfigUtils
     public static String applyClientCredentials(ILaunchConfiguration config, String user, String password,
         boolean osAuth)
     {
+        return applyClientCredentials(config, user, password, osAuth, null);
+    }
+
+    /** Admit only the final save; preparing a working copy may outlive a bounded caller. */
+    public static String applyClientCredentials(ILaunchConfiguration config, String user, String password,
+        boolean osAuth, CredentialWriteControl writeAllowed)
+    {
         if (config == null)
         {
             return "launch configuration is not available"; //$NON-NLS-1$
@@ -840,7 +847,15 @@ public final class LaunchConfigUtils
                     copy.setAttribute(attribute.getKey(), (String)value);
                 }
             }
-            copy.doSave();
+            var permit = writeAllowed == null ? null : writeAllowed.tryBeginWrite();
+            if (writeAllowed != null && permit == null)
+            {
+                return "The bounded call already returned; client credentials were not saved."; //$NON-NLS-1$
+            }
+            try (permit)
+            {
+                copy.doSave();
+            }
             return null;
         }
         catch (CoreException e)

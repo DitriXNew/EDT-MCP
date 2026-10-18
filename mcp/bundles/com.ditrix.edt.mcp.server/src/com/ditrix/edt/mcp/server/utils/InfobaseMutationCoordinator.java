@@ -11,6 +11,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
+import org.eclipse.emf.ecore.util.EcoreUtil;
+
+import com._1c.g5.v8.dt.platform.services.model.InfobaseReference;
+
 /**
  * Coordinates MCP launcher mutations and native credential writes without owning an SDK monitor.
  * Credential workers acquire their UUID stripe BEFORE LOCK; callers never wait for a worker under
@@ -70,7 +74,8 @@ final class InfobaseMutationCoordinator
 
     static boolean isDeleting(UUID id)
     {
-        return id != null && DELETIONS.containsKey(id);
+        Deletion state = id == null ? null : DELETIONS.get(id);
+        return state != null && (state.active.get() || state.removalStarted);
     }
 
     static void requireWritable(UUID id)
@@ -91,9 +96,18 @@ final class InfobaseMutationCoordinator
             }
             // A retry must not erase the previous tombstone if lookup/cleanup fails.
             next.removalStarted = previous != null && previous.removalStarted;
+            next.recoverySnapshot = previous == null ? null : previous.recoverySnapshot;
             return next;
         });
         return next;
+    }
+
+    /** Only snapshots verified by an earlier cleanup may recover an absent UUID. */
+    static InfobaseReference recoverySnapshot(UUID id)
+    {
+        Deletion state = DELETIONS.get(id);
+        var snapshot = state == null ? null : state.recoverySnapshot;
+        return snapshot == null ? null : EcoreUtil.copy(snapshot);
     }
 
     static final class Deletion implements AutoCloseable
@@ -101,6 +115,8 @@ final class InfobaseMutationCoordinator
         private final UUID id;
         private final AtomicBoolean active = new AtomicBoolean(true);
         private volatile boolean removalStarted;
+        private volatile InfobaseReference recoverySnapshot;
+        private boolean cleanupCompleted;
 
         private Deletion(UUID id)
         {
@@ -119,6 +135,32 @@ final class InfobaseMutationCoordinator
         {
             requireActive();
             removalStarted = true;
+        }
+
+        /** Never expose the retained prototype: native settings writes may mutate their reference. */
+        void remember(InfobaseReference reference)
+        {
+            var snapshot = EcoreUtil.copy(reference);
+            DELETIONS.compute(id, (key, current) -> {
+                Deletion target = current == null ? this : current;
+                if (!target.cleanupCompleted && (target == this || target.recoverySnapshot == null))
+                {
+                    target.recoverySnapshot = snapshot;
+                }
+                return target;
+            });
+        }
+
+        void completed()
+        {
+            DELETIONS.computeIfPresent(id, (key, current) -> {
+                if (current == this)
+                {
+                    cleanupCompleted = true;
+                    recoverySnapshot = null;
+                }
+                return current;
+            });
         }
 
         /** Successful late reloads must preserve absence even after the bounded caller closed. */
@@ -143,7 +185,7 @@ final class InfobaseMutationCoordinator
             // Check and removal share the same map operation as observedAbsence: a late reload
             // either seals this claim before close, or reinstates an inactive tombstone afterward.
             DELETIONS.computeIfPresent(id, (key, current) ->
-                current == this && !removalStarted ? null : current);
+                current == this && !removalStarted && recoverySnapshot == null ? null : current);
             // Once deletion was attempted, retain a process-lifetime tombstone even if read-back
             // failed. Stale resolved applications must never recreate unreachable secure settings.
             // A new explicit cleanup may replace an inactive claim and verify/retry the same UUID.

@@ -74,7 +74,7 @@ public class CreateInfobaseRegistrationTest
                 var result = JsonParser.parseString(tool.prepareInfobase(
                     CreateInfobaseTool.CreateContext.of(project, applications, infobases, associations),
                     context, "project", target, "  ", null, false, true, //$NON-NLS-1$ //$NON-NLS-2$
-                    new CreateInfobaseTool.Credentials(null, null, null))).getAsJsonObject();
+                    new CreateInfobaseTool.Credentials(null, null, null), () -> context)).getAsJsonObject();
                 assertTrue(result.toString(), result.get("boundToProject").getAsBoolean()); //$NON-NLS-1$
                 assertEquals("fresh-app", result.get("applicationId").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$
                 var registered = org.mockito.ArgumentCaptor.forClass(InfobaseReference.class);
@@ -116,7 +116,7 @@ public class CreateInfobaseRegistrationTest
             var result = JsonParser.parseString(tool.prepareInfobase(
                 CreateInfobaseTool.CreateContext.of(project, applications, infobases, associations),
                 context, "project", new InfobaseTarget(null, new ServerInfobaseTarget("host", "base")), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                "test", null, false, true, new CreateInfobaseTool.Credentials(null, null, null))).getAsJsonObject(); //$NON-NLS-1$
+                "test", null, false, true, new CreateInfobaseTool.Credentials(null, null, null), () -> context)).getAsJsonObject(); //$NON-NLS-1$
             assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
             assertTrue(result.get("rollbackCompleted").getAsBoolean());
             assertTrue("rollback must clear credentials even when create supplied none", cleared[0]); //$NON-NLS-1$
@@ -162,7 +162,7 @@ public class CreateInfobaseRegistrationTest
             CreateInfobaseTool.CreateContext.of(project, applications, infobases, associations),
             BranchContexts.toContext("feat/test"), "project", //$NON-NLS-1$ //$NON-NLS-2$
             new InfobaseTarget(null, new ServerInfobaseTarget("host", "base")), //$NON-NLS-1$ //$NON-NLS-2$
-            " ", null, false, true, new CreateInfobaseTool.Credentials("Admin", "secret", null))) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            " ", null, false, true, new CreateInfobaseTool.Credentials("Admin", "secret", null), () -> BranchContexts.toContext("feat/test"))) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .getAsJsonObject();
         assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
         assertFalse(result.get("credentialsRemoved").getAsBoolean()); //$NON-NLS-1$
@@ -201,7 +201,7 @@ public class CreateInfobaseRegistrationTest
         var result = JsonParser.parseString(tool.prepareInfobase(
             CreateInfobaseTool.CreateContext.of(project, applications, infobases, associations),
             BranchContexts.toContext("feat/test"), "project", new InfobaseTarget(null, target), //$NON-NLS-1$ //$NON-NLS-2$
-            "duplicate", null, false, true, new CreateInfobaseTool.Credentials("Admin", "secret", null))) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            "duplicate", null, false, true, new CreateInfobaseTool.Credentials("Admin", "secret", null), () -> BranchContexts.toContext("feat/test"))) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             .getAsJsonObject();
         assertFalse(result.get("success").getAsBoolean()); //$NON-NLS-1$
         assertTrue(result.get("error").getAsString().contains("already registered")); //$NON-NLS-1$ //$NON-NLS-2$
@@ -209,6 +209,122 @@ public class CreateInfobaseRegistrationTest
         assertNotNull(result.get("registrationId")); //$NON-NLS-1$
         verifyZeroInteractions(associations, applications);
         verify(infobases, never()).add(any(), any());
+    }
+
+    @Test
+    public void branchChangesBeforeAssociationOrDuringReadBackCompensateBothModesAndKeepFiles() throws Exception
+    {
+        for (boolean register : new boolean[] {false, true})
+        {
+            for (int phase : new int[] {0, 1, 2})
+            {
+                var file = Files.createTempDirectory("mcp-context-change"); //$NON-NLS-1$
+                var database = file.resolve("1Cv8.1CD"); //$NON-NLS-1$
+                if (register)
+                {
+                    Files.writeString(database, "existing database sentinel"); //$NON-NLS-1$
+                }
+                try
+                {
+                    var project = mock(IProject.class);
+                    var applications = mock(IApplicationManager.class);
+                    var infobases = recordingInfobases();
+                    var associations = mock(IInfobaseAssociationManager.class);
+                    var original = BranchContexts.toContext("feat/original"); //$NON-NLS-1$
+                    var changed = BranchContexts.toContext("feat/changed"); //$NON-NLS-1$
+                    var current = new java.util.concurrent.atomic.AtomicReference<>(original);
+                    int switchPhase = phase;
+                    if (register && phase == 0)
+                    {
+                        doAnswer(call -> {
+                            current.set(changed);
+                            return null;
+                        }).when(infobases).reload(null);
+                    }
+                    var stored = new java.util.concurrent.atomic.AtomicBoolean();
+                    var cleared = new java.util.concurrent.atomic.AtomicBoolean();
+                    var tool = new CreateInfobaseTool()
+                    {
+                        @Override
+                        String createNewInfobase(InfobaseReference ref, String platform,
+                                String name, java.nio.file.Path directory)
+                        {
+                            try
+                            {
+                                Files.writeString(database, "new database sentinel"); //$NON-NLS-1$
+                                infobases.add(ref, null);
+                                if (switchPhase == 0)
+                                {
+                                    current.set(changed);
+                                }
+                                return null;
+                            }
+                            catch (Exception failure)
+                            {
+                                throw new AssertionError(failure);
+                            }
+                        }
+
+                        @Override
+                        CredentialStoreReport storeCredentialsIfRequested(InfobaseReference ref,
+                                Credentials credentials, boolean existing)
+                        {
+                            stored.set(true);
+                            if (switchPhase == 1)
+                            {
+                                current.set(changed);
+                            }
+                            return null;
+                        }
+
+                        @Override
+                        void clearRegistrationCredentials(InfobaseReference ref,
+                                com.ditrix.edt.mcp.server.utils.InfobaseAccessSupport.CredentialWriteGuard guard)
+                                throws Exception
+                        {
+                            guard.run(target -> cleared.set(true));
+                        }
+                    };
+                    doAnswer(call -> {
+                        var ref = (InfobaseReference)call.getArgument(1);
+                        var type = mock(IApplicationType.class);
+                        when(type.getId()).thenReturn("com.e1c.g5.dt.applications.type.infobase"); //$NON-NLS-1$
+                        var app = mock(IInfobaseApplication.class);
+                        when(app.getType()).thenReturn(type);
+                        when(app.getInfobase()).thenReturn(ref);
+                        when(app.getId()).thenReturn("new-app"); //$NON-NLS-1$
+                        when(applications.getApplications(project)).thenAnswer(read -> {
+                            current.set(changed);
+                            return List.of(app);
+                        });
+                        return null;
+                    }).when(associations).associate(any(), any(), any());
+                    var result = JsonParser.parseString(tool.prepareInfobase(
+                        CreateInfobaseTool.CreateContext.of(project, applications, infobases, associations),
+                        original, "project", new InfobaseTarget(file, null), "context-test", null, true, //$NON-NLS-1$ //$NON-NLS-2$
+                        register, new CreateInfobaseTool.Credentials("Admin", "secret", null), current::get)) //$NON-NLS-1$ //$NON-NLS-2$
+                        .getAsJsonObject();
+                    assertFalse(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
+                    assertTrue(result.toString(), result.get("rollbackCompleted").getAsBoolean()); //$NON-NLS-1$
+                    assertTrue(result.get("error").getAsString().contains("context changed")); //$NON-NLS-1$ //$NON-NLS-2$
+                    assertEquals(phase != 0, stored.get());
+                    assertTrue(cleared.get());
+                    verify(associations, times(phase == 2 ? 1 : 0)).associate(any(), any(), any());
+                    var removed = org.mockito.ArgumentCaptor.forClass(InfobaseReference.class);
+                    verify(infobases).delete(removed.capture());
+                    var unbound = org.mockito.ArgumentCaptor.forClass(InfobaseReference.class);
+                    verify(associations).dissociate(eq(project), unbound.capture(), eq(original));
+                    assertEquals(removed.getValue().getUuid(), unbound.getValue().getUuid());
+                    verify(applications, never()).setDefaultApplication(any(), any());
+                    assertEquals(register ? "existing database sentinel" : "new database sentinel", Files.readString(database)); //$NON-NLS-1$ //$NON-NLS-2$
+                }
+                finally
+                {
+                    Files.deleteIfExists(database);
+                    Files.delete(file);
+                }
+            }
+        }
     }
 
     private static IInfobaseManager recordingInfobases()

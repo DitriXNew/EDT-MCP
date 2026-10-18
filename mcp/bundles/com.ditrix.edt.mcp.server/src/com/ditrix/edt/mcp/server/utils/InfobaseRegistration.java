@@ -6,7 +6,6 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -218,14 +217,41 @@ public final class InfobaseRegistration
             InfobaseReference reference = manager.findInfobaseByUuid(registrationId).orElseThrow(() ->
                 new IllegalArgumentException("registrationId was not found; inspect the EDT launcher list. " //$NON-NLS-1$
                     + "Do not substitute a same-named registration.")); //$NON-NLS-1$
-            if (!name.equals(reference.getName())
-                || !(reference.getConnectionString() instanceof FileConnectionString
-                    || reference.getConnectionString() instanceof ServerConnectionString))
-            {
-                throw new IllegalArgumentException("registrationId does not match infobaseName or a file/cluster entry; " //$NON-NLS-1$
-                    + "inspect the EDT launcher list before retrying."); //$NON-NLS-1$
-            }
+            requireNameAndKind(reference, name);
             return reference;
+        }
+    }
+
+    private static void requireNameAndKind(InfobaseReference reference, String name)
+    {
+        if (!name.equals(reference.getName())
+            || !(reference.getConnectionString() instanceof FileConnectionString
+                || reference.getConnectionString() instanceof ServerConnectionString))
+        {
+            throw new IllegalArgumentException("registrationId does not match infobaseName or a file/cluster entry; " //$NON-NLS-1$
+                + "inspect the EDT launcher list before retrying."); //$NON-NLS-1$
+        }
+    }
+
+    /** Resume failed credential cleanup even if the previously verified UUID disappeared. */
+    public static InfobaseReference findCleanupRegistration(IInfobaseManager manager,
+            UUID registrationId, String name) throws Exception
+    {
+        try (var coordination = InfobaseMutationCoordinator.acquire())
+        {
+            reload(manager);
+            var present = manager.findInfobaseByUuid(registrationId);
+            if (present.isPresent())
+            {
+                requireNameAndKind(present.get(), name);
+                return present.get();
+            }
+            InfobaseReference snapshot = InfobaseMutationCoordinator.recoverySnapshot(registrationId);
+            if (snapshot == null || !name.equals(snapshot.getName()))
+            {
+                throw new IllegalArgumentException("registrationId has no pending cleanup for infobaseName; inspect the EDT launcher list. Do not substitute a same-named registration."); //$NON-NLS-1$
+            }
+            return snapshot;
         }
     }
 
@@ -249,10 +275,15 @@ public final class InfobaseRegistration
     {
         try (var deletion = InfobaseMutationCoordinator.beginDeletion(expected.id()))
         {
+            if (captured != null)
+            {
+                deletion.remember(captured);
+            }
             InfobaseReference reference = findForCleanup(manager, expected, captured, deletion);
             InfobaseReference snapshot = org.eclipse.emf.ecore.util.EcoreUtil.copy(reference);
             credentials.clear(reference, credentialGuard(manager, expected, snapshot, contextGuard, deletion));
             remove(manager, expected, contextGuard, deletion);
+            deletion.completed();
         }
     }
 
@@ -275,6 +306,7 @@ public final class InfobaseRegistration
                 current = captured;
             }
             expected.requireMatch(current);
+            deletion.remember(current);
             return current;
         }
     }
@@ -333,7 +365,7 @@ public final class InfobaseRegistration
                 + ", connection credentials " + outcome(credentialsRemoved) //$NON-NLS-1$
                 + (registrationRemoved ? "." : credentialsRemoved //$NON-NLS-1$
                     ? ". Launcher removal could not be verified; inspect the launcher and retry delete_infobase with its registrationId and infobaseName if still present." //$NON-NLS-1$
-                    : ". Inspect the launcher and secure storage; if the entry is still present, retry delete_infobase with its registrationId and infobaseName after fixing cleanup.") //$NON-NLS-1$
+                    : ". Fix secure storage and retry delete_infobase with the returned registrationId and infobaseName; pending cleanup remains available in this EDT session even if the launcher entry disappeared.") //$NON-NLS-1$
                 + " The existing database is untouched."; //$NON-NLS-1$
         }
 
