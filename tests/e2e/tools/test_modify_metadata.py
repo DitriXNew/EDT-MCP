@@ -3072,9 +3072,10 @@ def test_command_group_is_assignable_and_listed():
     assert group_row is not None, "the assignable table must have a 'group' row: %r" % (text[:600],)
     assert len(group_row) >= 2 and group_row[1] == "REFERENCE", \
         "group's row must report the REFERENCE kind, got %r: %r" % (group_row, text[:600])
-    # Allowed names both forms modify_metadata takes, not the bare interface name (issue #733).
+    # Allowed names both forms modify_metadata takes, not the bare interface name (issue #733),
+    # as inline code so a Markdown renderer does not swallow <Name> as an HTML tag.
     allowed = group_row[3] if len(group_row) >= 4 else ""
-    assert "CommandGroup.<Name>" in allowed and "ActionsPanelTools" in allowed, \
+    assert "`CommandGroup.<Name>`" in allowed and "ActionsPanelTools" in allowed, \
         "group's Allowed cell must name both addressable forms, got %r" % (group_row,)
 
 

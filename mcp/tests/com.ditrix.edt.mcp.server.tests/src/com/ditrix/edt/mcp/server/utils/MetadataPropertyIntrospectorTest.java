@@ -1065,7 +1065,8 @@ public class MetadataPropertyIntrospectorTest
         assertEquals(Collections.singletonList(MetadataPropertyIntrospector.COMMAND_GROUP_ALLOWED),
             group.allowedValues);
         String allowed = group.allowedValues.get(0);
-        assertTrue(allowed, allowed.contains("CommandGroup.<Name>")); //$NON-NLS-1$
+        // Inline code, so a Markdown renderer does not swallow <Name> as an HTML tag.
+        assertTrue(allowed, allowed.contains("`CommandGroup.<Name>`")); //$NON-NLS-1$
         assertTrue("the standard-group form is named too: " + allowed, //$NON-NLS-1$
             allowed.contains("ActionsPanelTools")); //$NON-NLS-1$
     }

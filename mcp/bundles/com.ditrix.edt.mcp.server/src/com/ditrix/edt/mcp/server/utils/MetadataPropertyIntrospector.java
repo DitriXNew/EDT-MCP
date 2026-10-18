@@ -76,10 +76,11 @@ public final class MetadataPropertyIntrospector
     /**
      * The "allowed values" cell of a command's {@code group}: both forms {@code modify_metadata} takes.
      * The standard names themselves depend on the platform version; an unknown one is refused with the
-     * full list.
+     * full list. The forms are inline code: a bare {@code <Name>} is an HTML tag to a Markdown renderer,
+     * which would show the cell as just {@code CommandGroup.}.
      */
     static final String COMMAND_GROUP_ALLOWED =
-        "CommandGroup.<Name> or a standard group name (e.g. ActionsPanelTools)"; //$NON-NLS-1$
+        "`CommandGroup.<Name>` or a standard group name (e.g. `ActionsPanelTools`)"; //$NON-NLS-1$
 
     /** The kind of value an assignable property takes - drives validation and rendering. */
     public enum ValueKind
