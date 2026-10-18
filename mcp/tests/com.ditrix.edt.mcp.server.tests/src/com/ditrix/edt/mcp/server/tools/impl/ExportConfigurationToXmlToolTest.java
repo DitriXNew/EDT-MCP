@@ -25,8 +25,9 @@ import com.ditrix.edt.mcp.server.tools.IMcpTool.ResponseType;
  * <p>
  * {@code execute()} requires {@code projectName} + {@code outputPath} up front, then
  * does a filesystem check ("outputPath exists but is not a directory") that touches
- * only {@code java.nio.file}, not EDT. The real export needs a live workspace and is
- * covered by the E2E suite.
+ * only {@code java.nio.file}, not EDT, then resolves the project (an unresolved name
+ * yields a value-naming "Project not found" error before the CLI API is touched). The
+ * real export needs a live workspace and is covered by the E2E suite.
  */
 public class ExportConfigurationToXmlToolTest
 {
@@ -122,6 +123,34 @@ public class ExportConfigurationToXmlToolTest
         finally
         {
             Files.deleteIfExists(tempFile);
+        }
+    }
+
+    @Test
+    public void testExecuteUnknownProjectIsNamedErrorAndCreatesNoDirectory() throws IOException
+    {
+        // #683: an unknown project is refused before the CLI API (which would throw a
+        // CliApiException logged at ERROR) and before outputPath is created.
+        Path parent = Files.createTempDirectory("export-cfg-unknown-project"); //$NON-NLS-1$
+        Path outputPath = parent.resolve("out"); //$NON-NLS-1$
+        try
+        {
+            String badProject = "NoSuchProject_" + System.nanoTime(); //$NON-NLS-1$
+            Map<String, String> params = new HashMap<>();
+            params.put("projectName", badProject); //$NON-NLS-1$
+            params.put("outputPath", outputPath.toString()); //$NON-NLS-1$
+            String result = new ExportConfigurationToXmlTool().execute(params);
+            assertTrue("an unknown project must be a 'Project not found' error: " + result, //$NON-NLS-1$
+                result.contains("Project not found")); //$NON-NLS-1$
+            assertTrue("the error must name the bad project", result.contains(badProject)); //$NON-NLS-1$
+            assertTrue("the error must point at list_projects", result.contains("list_projects")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse("the error must not come from the CLI API", result.contains("Export failed")); //$NON-NLS-1$ //$NON-NLS-2$
+            assertFalse("a refused export must not create outputPath", Files.exists(outputPath)); //$NON-NLS-1$
+        }
+        finally
+        {
+            Files.deleteIfExists(outputPath);
+            Files.deleteIfExists(parent);
         }
     }
 }

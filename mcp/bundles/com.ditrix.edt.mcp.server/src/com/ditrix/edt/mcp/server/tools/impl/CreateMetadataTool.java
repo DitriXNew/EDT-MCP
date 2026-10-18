@@ -12,10 +12,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.IPath;
+import org.eclipse.core.runtime.Path;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.ecore.EClass;
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 
@@ -27,6 +31,7 @@ import com._1c.g5.v8.dt.core.naming.ITopObjectFqnGenerator;
 import com._1c.g5.v8.dt.core.platform.IBmModelManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicForm;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
 import com._1c.g5.v8.dt.metadata.mdclass.CommonModule;
@@ -39,6 +44,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.ScriptVariant;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
+import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
 import com._1c.g5.v8.dt.xdto.model.ObjectType;
 import com._1c.g5.v8.dt.xdto.model.Package;
@@ -51,6 +57,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.BslModuleUtils;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
 import com.ditrix.edt.mcp.server.utils.ExternalObjectRoots;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
@@ -60,16 +67,19 @@ import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
 import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataNodeResolver.CreateTarget;
+import com.ditrix.edt.mcp.server.utils.MetadataPathResolver;
 import com.ditrix.edt.mcp.server.utils.MetadataScope;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeBuilder;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.PredefinedWriter;
 import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
+import com.ditrix.edt.mcp.server.utils.TemplateContentSupport;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
 import com.ditrix.edt.mcp.server.utils.XdtoWriter;
 import com.ditrix.edt.mcp.server.utils.WrittenObjectMarkers;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
@@ -195,7 +205,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             .objectArrayProperty("properties", //$NON-NLS-1$
                 "Optional properties to apply at creation, as [{name, value, language?}]. For most " //$NON-NLS-1$
                 + "kinds this applies 'synonym' (with optional 'language' code) and 'comment'; other " //$NON-NLS-1$
-                + "property names are rejected (set them via modify_metadata). A FORM CONTENT member " //$NON-NLS-1$
+                + "property names are rejected (set them via modify_metadata). Templates also accept " //$NON-NLS-1$
+                + "'templateType': TextDocument or SpreadsheetDocument (English or Russian). A FORM CONTENT member " //$NON-NLS-1$
                 + "('...Form.<F>.<Kind>.<Name>') takes a DIFFERENT vocabulary: 'title' (with optional " //$NON-NLS-1$
                 + "'language'), 'parent' (the group to nest a visual item under), 'dataPath' / " //$NON-NLS-1$
                 + "'attribute' (the bound attribute of a Field / Table), 'command' (a Button's " //$NON-NLS-1$
@@ -477,6 +488,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 + "get_tool_guide('create_metadata') for the full list). The parent must already " //$NON-NLS-1$
                 + "exist; use get_metadata_objects to check." + ctx.scope.addressingHint(normFqn))
                 .toJson();
+        }
+        EClass createClass = target.topLevel
+            ? resolveCollectionElementType(config, target.configFeatureName) : target.elementType;
+        if (props.templateType != null
+            && (createClass == null || !MdClassPackage.Literals.BASIC_TEMPLATE.isSuperTypeOf(createClass)))
+        {
+            return ToolResult.error("templateType applies only to a CommonTemplate or an owned Template; " //$NON-NLS-1$
+                + "use create_metadata with a template FQN.").toJson(); //$NON-NLS-1$
         }
         if (!isValidIdentifier(target.childName))
         {
@@ -1128,8 +1147,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String[] xdtoContentFqnHolder = { null };
         final String[] formContentFqnHolder = { null };
         final String[] rightsFqnHolder = { null };
+        final String[] templateContentFqnHolder = { null };
         final EClass createdKind;
-        try
+        try (TemplateContentSupport.Context templates = new TemplateContentSupport.Context(req.project))
         {
             createdKind = BmTransactions.<EClass>write(bm.bmModel, "CreateMetadataObject", (tx, pm) -> //$NON-NLS-1$
             {
@@ -1165,6 +1185,11 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                         (BasicForm)newObject, formFactory, fqnGenerator, version, russianAutoNames);
                 }
                 factory.fillDefaultReferences(newObject);
+                if (newObject instanceof BasicTemplate)
+                {
+                    templateContentFqnHolder[0] = templates.initialize((BasicTemplate)newObject,
+                        req.props.templateType == null ? TemplateType.SPREADSHEET_DOCUMENT : req.props.templateType, tx);
+                }
                 if (formContentFqnHolder[0] != null)
                 {
                     FormElementWriter.enforceContentFormCommandBarId((BasicForm)newObject);
@@ -1198,6 +1223,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 }
                 return newObject.eClass();
             });
+            templates.commit();
         }
         catch (RoleRightsWriter.RoleWriteException e)
         {
@@ -1224,6 +1250,10 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         if (xdtoContentFqn != null && !exportFqns.contains(xdtoContentFqn))
         {
             exportFqns.add(xdtoContentFqn);
+        }
+        if (templateContentFqnHolder[0] != null)
+        {
+            exportFqns.add(templateContentFqnHolder[0]);
         }
         boolean persisted = BmTransactions.forceExportToDisk(req.project, exportFqns);
         return success(new SuccessInfo(req.normFqn, createdKind, name, persisted, req.props,
@@ -1631,17 +1661,14 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final EStructuralFeature feature = target.feature;
         final EClass elementType = target.elementType;
         final String name = target.childName;
-        // Template / Recalculation / Form need the model-object factory (not a bare EcoreUtil.create)
-        // so the type's default content is wired (e.g. a Recalculation's produced types). They are
-        // still contained members, serialized inline in the owner's .mdo. See isFactoryInitializedChild.
-        final boolean factoryInitialized = isFactoryInitializedChild(elementType);
         // The top object that owns the member's .mdo file (members live inside the top object's file).
         final String topFqn = topFqn(normFqn);
         final IModelObjectFactory factory = bm.factory;
         final Version version = bm.version;
 
         final EClass createdKind;
-        try
+        final String[] templateContentFqn = { null };
+        try (TemplateContentSupport.Context templates = new TemplateContentSupport.Context(project))
         {
             createdKind = BmTransactions.<EClass>write(bm.bmModel, "CreateMetadataMember", (tx, pm) -> //$NON-NLS-1$
             {
@@ -1649,9 +1676,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 MemberChildSpec spec =
                     new MemberChildSpec(factory, elementType, owner, version, name, props,
                         synonymLanguage, feature);
-                MdObject child = createMemberChild(spec, factoryInitialized);
+                MdObject child = createMemberChild(spec);
+                if (child instanceof BasicTemplate)
+                {
+                    templateContentFqn[0] = templates.initialize((BasicTemplate)child,
+                        props.templateType == null ? TemplateType.SPREADSHEET_DOCUMENT : props.templateType, tx);
+                }
                 return child.eClass();
             });
+            templates.commit();
         }
         catch (Exception e)
         {
@@ -1659,7 +1692,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Failed to create member: " + unwrapCauseMessage(e)).toJson(); //$NON-NLS-1$
         }
 
-        boolean persisted = BmTransactions.forceExportToDisk(project, topFqn);
+        boolean persisted = BmTransactions.forceExportToDisk(project, templateContentFqn[0] == null
+            ? List.of(topFqn) : List.of(topFqn, templateContentFqn[0]));
         return success(new SuccessInfo(normFqn, createdKind, name, persisted, props, synonymLanguage,
             localesMissing, localeUnused, null, normReport));
     }
@@ -1696,7 +1730,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      * Immutable inputs for building one member child inside the write transaction, grouping the
      * arguments so the child-creation helpers stay within the parameter limit.
      */
-    private static final class MemberChildSpec
+    static final class MemberChildSpec
     {
         final IModelObjectFactory factory;
         final EClass elementType;
@@ -1706,10 +1740,26 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final Props props;
         final String synonymLanguage;
         final EStructuralFeature feature;
+        /** The platform type provider a member left without its mandatory type is defaulted with. */
+        final IEObjectProvider typeProvider;
 
+        /**
+         * The spec the write transaction builds: the type provider is the platform's one for the
+         * project's version, looked up only for a member with a value type
+         * ({@link CreateMetadataTool#typeProviderFor}).
+         */
         MemberChildSpec(IModelObjectFactory factory, EClass elementType, EObject owner, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             Version version, String name, Props props, String synonymLanguage,
             EStructuralFeature feature)
+        {
+            this(factory, elementType, owner, version, name, props, synonymLanguage, feature,
+                typeProviderFor(elementType, version));
+        }
+
+        /** A spec with an explicit type provider (the headless tests pass a mocked one). */
+        MemberChildSpec(IModelObjectFactory factory, EClass elementType, EObject owner, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+            Version version, String name, Props props, String synonymLanguage,
+            EStructuralFeature feature, IEObjectProvider typeProvider)
         {
             this.factory = factory;
             this.elementType = elementType;
@@ -1719,25 +1769,32 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             this.props = props;
             this.synonymLanguage = synonymLanguage;
             this.feature = feature;
+            this.typeProvider = typeProvider;
         }
     }
 
     /**
      * Creates and attaches one member child to its (tx-fetched) owner, dispatching to the
-     * factory-initialized or the plain construction path. Performs the irreversible BM mutation; runs
-     * inside the write transaction at the same point the inline code did.
+     * factory-initialized or the plain construction path ({@link #isFactoryInitializedChild}).
+     * Performs the irreversible BM mutation; runs inside the write transaction at the same point the
+     * inline code did.
      *
      * @return the created child
      */
-    private static MdObject createMemberChild(MemberChildSpec spec, boolean factoryInitialized)
+    static MdObject createMemberChild(MemberChildSpec spec)
     {
-        return factoryInitialized ? createFactoryInitializedChild(spec) : createPlainChild(spec);
+        return isFactoryInitializedChild(spec.elementType) ? createFactoryInitializedChild(spec)
+            : createPlainChild(spec);
     }
 
     /**
-     * Factory-initialized member path (Form / Template / Recalculation): the parent-aware factory
-     * wires the type's default content; a bare create is the fallback when the factory declines.
-     * Performs the BM mutation inside the write transaction.
+     * Factory-initialized member path (Form / Template / Recalculation, and every member with a value
+     * type): the parent-aware factory hands the member to its OWNER's type initializer, which wires
+     * the designer defaults - a Recalculation's produced types, an attribute's or a dimension's type
+     * and input flags. A bare create is the fallback when the factory declines, and a member left
+     * without its mandatory type gets the per-kind default ({@link #ensureMandatoryType}). Explicit
+     * synonym / comment are applied after the factory, so they win. Performs the BM mutation inside
+     * the write transaction.
      *
      * @return the created and attached child
      */
@@ -1758,6 +1815,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         {
             ((BasicTemplate)child).setTemplateType(TemplateType.SPREADSHEET_DOCUMENT);
         }
+        ensureMandatoryType(child, spec.typeProvider);
         applyScalarProps(child, spec.props, spec.synonymLanguage);
         addToFeature(spec.owner, spec.feature, child);
         spec.factory.fillDefaultReferences(child);
@@ -1765,8 +1823,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Plain member path (Attribute, Command, ...): a bare {@code EcoreUtil.create}, named, given a
-     * UUID and attached. Performs the BM mutation inside the write transaction.
+     * Plain member path (EnumValue, Command, TabularSection, ...: the members with no value type): a
+     * bare {@code EcoreUtil.create}, named, given a UUID and attached. Performs the BM mutation inside
+     * the write transaction.
      *
      * @return the created and attached child
      */
@@ -1786,7 +1845,9 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
      * Creates a member of a form's CONTENT model (a form attribute / command / visual item) addressed
      * by a form FQN. Forms are a separate top object reached from the {@code BasicForm} mdo via
      * {@code getForm()}; the mutation runs on the re-fetched content form inside a write transaction
-     * and the content form's OWN FQN is force-exported (it serializes to {@code Form.form}).
+     * and the content form's OWN FQN is force-exported (it serializes to {@code Form.form}). The
+     * success message comes from {@link #formMemberSuccessMessage}: a created COMMAND is told it has
+     * no action yet, and how to bind one.
      */
     private String createFormMember(String projectName, String normFqn,
         FormElementWriter.FormMemberRef ref, List<JsonObject> properties,
@@ -1860,6 +1921,8 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
         final String writeTitleLanguage = titleLanguage != null ? titleLanguage : resolvedTitleLanguage;
 
         final boolean persisted;
+        // The form as the model resolved it: its names, not the caller's spelling, locate its module.
+        final MdObject editedForm;
         try
         {
             FormElementWriter.FormEditContext fctx = FormElementWriter.resolveForEdit(project, scope,
@@ -1867,6 +1930,7 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                     + "'Type.Object.Form.FormName' or 'CommonForm.FormName'; check with " //$NON-NLS-1$
                     + "get_metadata_objects and get_metadata_details." //$NON-NLS-1$
                     + scope.addressingHint(ref.formPath));
+            editedForm = fctx.mdForm;
 
             // A Table auto-generates one column per tabular-section attribute; the column names come
             // from the metadata owner (the form model alone cannot enumerate them), resolved here.
@@ -1922,7 +1986,332 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
             }
         }
         normReport.addTo(formResult);
-        return formResult.put(McpKeys.MESSAGE, "Created " + normFqn).toJson(); //$NON-NLS-1$
+        // A created COMMAND has no action yet: the message says so and quotes the address that binds
+        // it, after a look into the form module for a method of the command's name (issue #628).
+        return formResult.put(McpKeys.MESSAGE,
+            formMemberSuccessMessage(project, fKind, normFqn, ref, editedForm)).toJson();
+    }
+
+    // ---- a created form command's unbound action (issue #628) ------------------------------------
+
+    /**
+     * The success message of a created form member. A COMMAND's message says the command has no
+     * action yet, after a look into the module of the form it was created on; every other kind keeps
+     * {@code Created <fqn>} and reads no file.
+     *
+     * <p>Creating a command never binds its action - only {@code ...Command.C.Handler.Action} does - so
+     * a created command is a button that does nothing until that second call. Told just "Created", an
+     * agent wired dead buttons, even on a form whose module already held the procedure it meant. The
+     * module is read best-effort and outside any BM transaction (it is a workspace file): a read that
+     * fails costs the message its precision, never the create its success.</p>
+     *
+     * @param project the project the form was edited in; ITS module is read - for an adopted form, the
+     *     extension's own copy, never the base configuration's
+     * @param kind the created member's kind
+     * @param fqn the address the member was created on, echoed back
+     * @param ref the parsed address: the form path and the member name
+     * @param mdForm the edited form as the model resolved it, or {@code null}
+     * @return the message for the success payload
+     */
+    static String formMemberSuccessMessage(IProject project, FormElementWriter.Kind kind, String fqn,
+        FormElementWriter.FormMemberRef ref, MdObject mdForm)
+    {
+        FormModuleLook look = kind == FormElementWriter.Kind.COMMAND
+            ? lookIntoFormModule(project, ref.formPath, mdForm, ref.name) : FormModuleLook.NOTHING;
+        return formMemberCreatedMessage(kind, fqn, ref.name, look);
+    }
+
+    /**
+     * The text of {@link #formMemberSuccessMessage}. For a COMMAND it says the action is missing and
+     * quotes the address that binds it, exactly as the caller can pass it back, together with what the
+     * form module holds under the command's name.
+     *
+     * <p>Every route BINDS before a procedure is written, because the other order costs warnings: a
+     * bind to a procedure that already exists changes only the form, EDT does not re-check the form
+     * module then, and the procedure keeps its {@code module-unused-method} and
+     * {@code module-structure-form-event-regions} warnings until the form's owner is revalidated
+     * (issue #628, item 3). So, for what the module holds under the name:</p>
+     * <ul>
+     * <li>nothing (or there is no module, or it could not be read): bind the action, then write the
+     * procedure the binding names - the command's own name by default. When a line of the module is a
+     * shape the text scan cannot read, a procedure of that name may be hiding there, and the append
+     * that would add one checks no names, so the advice to write it says so;</li>
+     * <li>a PROCEDURE: binding it is the one call left - named the way the module writes it - and, as
+     * the procedure came first, the revalidation that brings the module's warnings up to date;</li>
+     * <li>a FUNCTION: the generic advice would give the module a second method of that name, so the
+     * action is bound to a new name, and a procedure of that name is written afterwards.</li>
+     * </ul>
+     * Every variant ends a closed sentence: the written object's marker report is appended after it.
+     *
+     * @param kind the created member's kind
+     * @param fqn the address the member was created on
+     * @param name the member's name
+     * @param look what the look into the form found: the module's method of that name, a line the
+     *     scan cannot read, the owner to revalidate; {@link FormModuleLook#NOTHING} when there was
+     *     nothing to look at
+     * @return the message
+     */
+    static String formMemberCreatedMessage(FormElementWriter.Kind kind, String fqn, String name,
+        FormModuleLook look)
+    {
+        String created = "Created " + fqn; //$NON-NLS-1$
+        if (kind != FormElementWriter.Kind.COMMAND)
+        {
+            return created;
+        }
+        String action = "'" + fqn + ".Handler.Action'"; //$NON-NLS-1$ //$NON-NLS-2$
+        String unbound = created + ". The command has no action yet, so a button bound to it does nothing"; //$NON-NLS-1$
+        BslModuleUtils.TextMethod sameNamed = look != null ? look.sameNamed : null;
+        if (sameNamed == null || !sameNamed.found)
+        {
+            String route = unbound + ": bind the action with create_metadata on " + action //$NON-NLS-1$
+                + " (its 'procedure' defaults to the command name '" + name //$NON-NLS-1$
+                + "'), then add that procedure with write_module_source"; //$NON-NLS-1$
+            String unscanned = look != null ? look.unscanned : null;
+            return unscanned == null ? route + "." //$NON-NLS-1$
+                : route + " unless the form module already declares it: the module has " + unscanned //$NON-NLS-1$
+                    + ", which this look-up cannot read."; //$NON-NLS-1$
+        }
+        String method = "'" + sameNamed.matchedName + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+        if (sameNamed.isFunction)
+        {
+            return unbound + ". The form module's " + method //$NON-NLS-1$
+                + " is a function, and a command's action is a procedure, which cannot share that name: " //$NON-NLS-1$
+                + "bind the action with create_metadata on " + action //$NON-NLS-1$
+                + " with a new name as 'procedure', then add a procedure of that new name with " //$NON-NLS-1$
+                + "write_module_source."; //$NON-NLS-1$
+        }
+        String owner = look != null ? look.owner : null;
+        String revalidated = owner != null ? "'" + owner + "'" : "the object that owns the form"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return unbound + ". The form module already has procedure " + method + ": create_metadata on " //$NON-NLS-1$ //$NON-NLS-2$
+            + action + " with procedure " + method + " binds it in one call. Then run revalidate_objects on " //$NON-NLS-1$ //$NON-NLS-2$
+            + revalidated + ": EDT does not re-check the form module on that bind, so until then its " //$NON-NLS-1$
+            + "module-unused-method and module-structure-form-event-regions warnings on " + method //$NON-NLS-1$
+            + " still treat it as unbound."; //$NON-NLS-1$
+    }
+
+    /**
+     * What a look into a created command's form found: the module's method of the command's name, or -
+     * when there was none to see - a line whose shape the text scan cannot read, which could be hiding
+     * one; and the object that owns the form, whose revalidation a bind to an existing procedure needs.
+     */
+    static final class FormModuleLook
+    {
+        /** No module, an unreadable one, or one that plainly lacks the name - and no owner named. */
+        static final FormModuleLook NOTHING = new FormModuleLook(null, null, null);
+
+        /** The module's method of the command's name, or {@code null}. */
+        final BslModuleUtils.TextMethod sameNamed;
+
+        /**
+         * When no such method was seen: the module line the scan cannot read, as a phrase that
+         * completes "the module has ..." and names the line - or {@code null}.
+         */
+        final String unscanned;
+
+        /** The address of the object that owns the form, as revalidate_objects takes it, or {@code null}. */
+        final String owner;
+
+        FormModuleLook(BslModuleUtils.TextMethod sameNamed, String unscanned, String owner)
+        {
+            this.sameNamed = sameNamed;
+            this.unscanned = unscanned;
+            this.owner = owner;
+        }
+
+        /**
+         * This look, for a form the object at {@code ownerAddress} owns.
+         *
+         * @param ownerAddress the owner's address, or {@code null}
+         * @return the look with that owner
+         */
+        FormModuleLook ownedBy(String ownerAddress)
+        {
+            return new FormModuleLook(sameNamed, unscanned, ownerAddress);
+        }
+    }
+
+    /**
+     * Looks into the edited form's module for a method named like a just-created command, and names
+     * the form's owner. No module, or one that could not be read - logged once as a warning, never
+     * thrown - is {@link FormModuleLook#NOTHING}. A workspace file read, so it runs outside any BM
+     * transaction; the names the model resolved are read here too, inside the same guard, so a model
+     * read that fails after the write costs the message its precision, never the create its answer.
+     *
+     * <p>A module already on disk that the workspace tree does not show yet - written outside EDT and
+     * not refreshed - is read from disk all the same: it is the module EDT will load, and taking it
+     * for none would advise writing a procedure it may already declare.</p>
+     */
+    private static FormModuleLook lookIntoFormModule(IProject project, String formPath, MdObject mdForm,
+        String name)
+    {
+        String modulePath = null;
+        try
+        {
+            modulePath = formModulePath(formPath, mdForm);
+            IFile module = project == null || modulePath == null ? null
+                : project.getFile(new Path(modulePath));
+            if (module == null || !(module.exists() || isOnDisk(module)))
+            {
+                return FormModuleLook.NOTHING;
+            }
+            // readFileLines reads from the file system when the workspace cannot serve the file.
+            return lookInto(BslModuleUtils.readFileLines(module), name)
+                .ownedBy(formOwnerAddress(formPath, mdForm));
+        }
+        catch (Exception e)
+        {
+            String where = modulePath != null ? modulePath : formPath;
+            Activator.logWarning("create_metadata: could not look for a method named '" + name //$NON-NLS-1$
+                + "' in the form module " + where //$NON-NLS-1$
+                + ", so the created command's message gives the generic action route: " + e); //$NON-NLS-1$
+            return FormModuleLook.NOTHING;
+        }
+    }
+
+    /** Whether a workspace file the tree does not show is on disk all the same. */
+    private static boolean isOnDisk(IFile file)
+    {
+        IPath location = file.getLocation();
+        return location != null && location.toFile().isFile();
+    }
+
+    /**
+     * What {@code moduleLines} hold under {@code name}: the same-named method, or - when the scan sees
+     * none - the first line whose shape it cannot read, since a declaration could be hiding there.
+     *
+     * @param moduleLines the module's lines, may be {@code null}
+     * @param name the name looked for, may be {@code null}
+     * @return the look, naming no owner; {@link FormModuleLook#NOTHING} when the module plainly lacks
+     *     the name
+     */
+    static FormModuleLook lookInto(List<String> moduleLines, String name)
+    {
+        BslModuleUtils.TextMethod sameNamed = sameNamedMethod(moduleLines, name);
+        if (sameNamed != null)
+        {
+            return new FormModuleLook(sameNamed, null, null);
+        }
+        String unscanned = unscannedLine(moduleLines);
+        return unscanned == null ? FormModuleLook.NOTHING : new FormModuleLook(null, unscanned, null);
+    }
+
+    /**
+     * The first line of {@code moduleLines} whose shape the shared text scan cannot read, as a phrase
+     * that completes "the module has ..." - or {@code null} when it reads every line.
+     *
+     * <p>The scan sees a declaration only where one starts its own line. Legal BSL can put one
+     * elsewhere - behind its pragma on the same line, say, or with its name on the next line - and
+     * {@link BslModuleUtils#unaddressable} names those shapes. A module holding one cannot be said to
+     * lack the command's procedure, and write_module_source's append, which would add it, checks no
+     * names.</p>
+     *
+     * @param moduleLines the module's lines, may be {@code null}
+     * @return the phrase, naming the line, or {@code null}
+     */
+    static String unscannedLine(List<String> moduleLines)
+    {
+        BslModuleUtils.Unaddressable hidden = moduleLines == null || moduleLines.isEmpty() ? null
+            : BslModuleUtils.unaddressable(moduleLines);
+        return hidden == null ? null : hidden.what + " (line " + (hidden.line + 1) + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * The edited form's address in the names the MODEL resolved: {@code {Type, Owner, Form}} for a
+     * form an object owns, {@code {CommonForm, Form}} for a common form - or {@code null} when the
+     * model cannot give them.
+     *
+     * <p>The model lookup ignores case and the workspace path does not, so the caller's spelling of the
+     * owner and form names ({@code catalog.GOODS.Form.itemform}) would miss the folder EDT wrote
+     * ({@code Catalogs/Goods/Forms/ItemForm}). The TYPE token is taken from the path, as given: it only
+     * selects the type, which every consumer canonicalizes in either language and any case.</p>
+     *
+     * @param formPath the parsed form path - {@code Type.Object.forms.Form} or {@code CommonForm.Form}
+     * @param mdForm the form as the model resolved it; an owned form is contained by its owner
+     * @return the names, or {@code null}
+     */
+    private static String[] resolvedFormNames(String formPath, MdObject mdForm)
+    {
+        String formName = mdForm != null ? mdForm.getName() : null;
+        if (formPath == null || formName == null || formName.isEmpty())
+        {
+            return null;
+        }
+        String[] parts = formPath.split("\\."); //$NON-NLS-1$
+        if (parts.length == 2)
+        {
+            // CommonForm.Name: the common form IS the resolved object.
+            return new String[] {parts[0], formName};
+        }
+        EObject owner = mdForm.eContainer();
+        String ownerName = owner instanceof MdObject ? ((MdObject)owner).getName() : null;
+        if (parts.length != 4 || ownerName == null || ownerName.isEmpty())
+        {
+            return null;
+        }
+        return new String[] {parts[0], ownerName, formName};
+    }
+
+    /**
+     * Where the module of an edited form lives, relative to the project, built from the names the
+     * MODEL resolved (see {@link #resolvedFormNames}) - or {@code null} when it cannot give them.
+     *
+     * @param formPath the parsed form path - {@code Type.Object.forms.Form} or {@code CommonForm.Form}
+     * @param mdForm the form as the model resolved it; an owned form is contained by its owner
+     * @return the project-relative module path, or {@code null}
+     */
+    static String formModulePath(String formPath, MdObject mdForm)
+    {
+        String[] names = resolvedFormNames(formPath, mdForm);
+        if (names == null)
+        {
+            return null;
+        }
+        return MetadataPathResolver.resolveFormModulePath(names.length == 2
+            ? names[0] + "." + names[1] //$NON-NLS-1$
+            : FormElementWriter.formPathOf(names[0], names[1], names[2]));
+    }
+
+    /**
+     * The address of the object that owns an edited form, the way revalidate_objects takes it:
+     * {@code Type.Owner} for a form an object owns, {@code CommonForm.Name} for a common form - under
+     * the English type token and in the names the MODEL resolved, so it is the object's own FQN
+     * whatever case and language the caller typed - or {@code null} when the model cannot give them.
+     *
+     * <p>Revalidating that object is what brings the module's warnings up to date after a bind to a
+     * procedure that already exists, which EDT does not re-check (issue #628, item 3).</p>
+     *
+     * @param formPath the parsed form path - {@code Type.Object.forms.Form} or {@code CommonForm.Form}
+     * @param mdForm the form as the model resolved it; an owned form is contained by its owner
+     * @return the owner's FQN, or {@code null}
+     */
+    static String formOwnerAddress(String formPath, MdObject mdForm)
+    {
+        String[] names = resolvedFormNames(formPath, mdForm);
+        String type = names != null ? MetadataTypeUtils.toEnglishSingular(names[0]) : null;
+        return type != null ? type + "." + names[1] : null; //$NON-NLS-1$
+    }
+
+    /**
+     * The method of {@code moduleLines} named {@code name} - matched ignoring case, as 1C matches
+     * identifiers - or {@code null}. The shared text scan takes a declaration only where one STARTS
+     * its line, so neither a commented-out declaration ({@code // Procedure Go()}) nor one inside a
+     * string literal - whose continuation lines start with {@code |} - is a method of the module; and
+     * it compares whole names, so {@code Go2} is not a {@code Go}.
+     *
+     * @param moduleLines the module's lines, may be {@code null}
+     * @param name the name looked for, may be {@code null}
+     * @return the method - its name as the module writes it, and whether it is a function - or
+     *     {@code null}
+     */
+    static BslModuleUtils.TextMethod sameNamedMethod(List<String> moduleLines, String name)
+    {
+        if (moduleLines == null || moduleLines.isEmpty() || name == null || name.isEmpty())
+        {
+            return null;
+        }
+        BslModuleUtils.TextMethod method = BslModuleUtils.findMethodViaText(moduleLines, name);
+        return method.found ? method : null;
     }
 
     /**
@@ -2623,21 +3012,148 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * A child whose valid default content must be wired by the model-object factory (Form, Template,
-     * Recalculation) rather than by a bare {@code EcoreUtil.create}: a Recalculation needs its
-     * produced types, a Form its form type, a Template its template type. These are CONTAINED
-     * objects - the platform serializes them inline in the owner's {@code .mdo}, like other members
-     * (empirically: a Recalculation lands as {@code <recalculations><producedTypes/><name/></...>}
-     * inside the register file) - but creating them with {@code EcoreUtil.create} would leave them
-     * ill-formed. Plain members (Attribute, Command, ...) are everything else. The classification
-     * keys off the three platform base types, so it is robust to the concrete owner-specific
-     * element subtypes.
+     * A child whose valid default content must be wired by the model-object factory rather than by a
+     * bare {@code EcoreUtil.create}: a Recalculation needs its produced types, a Form its form type, a
+     * Template its template type, and every member with a value type ({@link #carriesMandatoryType})
+     * its type. These are CONTAINED objects - the platform serializes them inline in the owner's
+     * {@code .mdo}, like other members (empirically: a Recalculation lands as
+     * {@code <recalculations><producedTypes/><name/></...>} inside the register file) - but creating
+     * them with {@code EcoreUtil.create} would leave them ill-formed: a register dimension without a
+     * type breaks EDT's derived data for the whole register (issue #700). Plain members (EnumValue,
+     * Command, TabularSection, ...) are everything else. The classification keys off the platform
+     * base types and the metamodel, so it is robust to the concrete owner-specific element subtypes.
      */
     private static boolean isFactoryInitializedChild(EClass elementType)
     {
         return MdClassPackage.Literals.BASIC_FORM.isSuperTypeOf(elementType)
             || MdClassPackage.Literals.BASIC_TEMPLATE.isSuperTypeOf(elementType)
-            || MdClassPackage.Literals.RECALCULATION.isSuperTypeOf(elementType);
+            || MdClassPackage.Literals.RECALCULATION.isSuperTypeOf(elementType)
+            || carriesMandatoryType(elementType);
+    }
+
+    /** The name of a member's value-type feature in the metamodel ({@code contains TypeDescription[1] type}). */
+    private static final String TYPE_FEATURE = "type"; //$NON-NLS-1$
+
+    /**
+     * The member's MANDATORY value-type feature: a required, contained {@code TypeDescription} named
+     * {@code type}, or {@code null} when the class has none. Read from the metamodel rather than
+     * listed: every {@code BasicFeature} has it (attributes, dimensions, resources, tabular-section
+     * and addressing attributes, accounting flags), and so does {@code SequenceDimension}, which is
+     * NOT a {@code BasicFeature} ({@code MdClass.xcore}). A command's parameter type is a different,
+     * optional feature, so a command does not qualify.
+     *
+     * @param eClass the member's class
+     * @return the type feature, or {@code null}
+     */
+    static EReference mandatoryTypeFeature(EClass eClass)
+    {
+        EStructuralFeature feature = eClass.getEStructuralFeature(TYPE_FEATURE);
+        if (feature instanceof EReference reference && reference.isContainment() && reference.isRequired()
+            && McorePackage.Literals.TYPE_DESCRIPTION.isSuperTypeOf(reference.getEReferenceType()))
+        {
+            return reference;
+        }
+        return null;
+    }
+
+    /**
+     * Whether a member of {@code elementType} must carry a value type ({@link #mandatoryTypeFeature}).
+     *
+     * @param elementType the member's class
+     * @return {@code true} for a member with a mandatory value type
+     */
+    static boolean carriesMandatoryType(EClass elementType)
+    {
+        return mandatoryTypeFeature(elementType) != null;
+    }
+
+    /**
+     * The platform type provider {@link #ensureMandatoryType} defaults a member's type with: the
+     * registry's {@code TypeItem} provider for the project's version - the one the owner initializers
+     * and {@link MetadataTypeBuilder#build} use - or {@code null} for a member without a value type
+     * (it needs none) or an unknown version.
+     *
+     * @param elementType the member's class
+     * @param version the project's platform version (may be {@code null})
+     * @return the type provider, or {@code null}
+     */
+    static IEObjectProvider typeProviderFor(EClass elementType, Version version)
+    {
+        return carriesMandatoryType(elementType) && version != null
+            ? IEObjectProvider.Registry.INSTANCE.get(McorePackage.Literals.TYPE_ITEM, version) : null;
+    }
+
+    /**
+     * Gives a member that must carry a value type, but has none, the designer's default type for its
+     * kind ({@link #defaultTypeSpec}). This is the fallback for a factory that declined (an
+     * initializer's {@code IllegalArgumentException} reaches us as {@code null}) or returned its bare
+     * fallback object; a type the owner's initializer did set is kept. Runs inside the write
+     * transaction, before the member is attached.
+     *
+     * @param member the new member
+     * @param typeProvider the platform type provider for the project's version (may be {@code null})
+     * @throws IllegalStateException when the default type cannot be built - the create is then rolled
+     *     back rather than writing a member without its mandatory type
+     */
+    static void ensureMandatoryType(MdObject member, IEObjectProvider typeProvider)
+    {
+        EReference typeFeature = mandatoryTypeFeature(member.eClass());
+        if (typeFeature == null || member.eGet(typeFeature) != null)
+        {
+            return;
+        }
+        MetadataTypeBuilder.Result built = MetadataTypeBuilder.buildWithProvider(
+            defaultTypeSpec(member.eClass()), typeProvider, null, null, false,
+            MetadataTypeBuilder.TypeTarget.METADATA);
+        if (built.error != null)
+        {
+            throw built.asException("Cannot set the default type of the new " + member.eClass().getName() //$NON-NLS-1$
+                + " '" + member.getName() + "': " + built.error); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        member.eSet(typeFeature, built.typeDescription);
+    }
+
+    /** The default length of a string member and the default precision of a numeric resource. */
+    private static final int DEFAULT_TYPE_SIZE = 10;
+
+    /**
+     * The designer's default value type for a new member of {@code memberClass}, as the
+     * {@code create_metadata} type spec ({@code {types:[{kind, ...}]}}). It mirrors EDT's type
+     * initializers ({@code com._1c.g5.v8.dt.md.model.*Initializer}): {@code Number(10,0)} for an
+     * accumulation, accounting or calculation register resource; {@code Boolean} for a chart of
+     * accounts' accounting flag and ext-dimension accounting flag; {@code String(10)} for every other
+     * member - attributes, dimensions, an information register's resource, tabular-section and
+     * addressing attributes, a sequence's dimension.
+     *
+     * @param memberClass the member's class
+     * @return the type spec
+     */
+    static JsonObject defaultTypeSpec(EClass memberClass)
+    {
+        JsonObject item = new JsonObject();
+        if (MdClassPackage.Literals.ACCUMULATION_REGISTER_RESOURCE.isSuperTypeOf(memberClass)
+            || MdClassPackage.Literals.ACCOUNTING_REGISTER_RESOURCE.isSuperTypeOf(memberClass)
+            || MdClassPackage.Literals.CALCULATION_REGISTER_RESOURCE.isSuperTypeOf(memberClass))
+        {
+            item.addProperty("kind", "Number"); //$NON-NLS-1$ //$NON-NLS-2$
+            item.addProperty("precision", DEFAULT_TYPE_SIZE); //$NON-NLS-1$
+            item.addProperty("scale", 0); //$NON-NLS-1$
+        }
+        else if (MdClassPackage.Literals.ACCOUNTING_FLAG.isSuperTypeOf(memberClass)
+            || MdClassPackage.Literals.EXT_DIMENSION_ACCOUNTING_FLAG.isSuperTypeOf(memberClass))
+        {
+            item.addProperty("kind", "Boolean"); //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        else
+        {
+            item.addProperty("kind", "String"); //$NON-NLS-1$ //$NON-NLS-2$
+            item.addProperty("length", DEFAULT_TYPE_SIZE); //$NON-NLS-1$
+        }
+        JsonArray types = new JsonArray();
+        types.add(item);
+        JsonObject spec = new JsonObject();
+        spec.add("types", types); //$NON-NLS-1$
+        return spec;
     }
 
     // ---- helpers --------------------------------------------------------------------------------
@@ -2698,11 +3214,12 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     }
 
     /** The supported, parsed properties. */
-    private static final class Props
+    static final class Props
     {
         String synonym;
         String language;
         String comment;
+        TemplateType templateType;
     }
 
     /**
@@ -2729,9 +3246,17 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
                 case "comment": //$NON-NLS-1$
                     out.comment = normReport.apply("comment", value); //$NON-NLS-1$
                     break;
+                case "templatetype": //$NON-NLS-1$
+                    out.templateType = TemplateContentSupport.resolveType(value);
+                    String typeError = TemplateContentSupport.unsupportedTypeError(out.templateType, value);
+                    if (typeError != null)
+                    {
+                        return typeError;
+                    }
+                    break;
                 default:
                     return ToolResult.error(ERR_PROPERTY_PREFIX + name + "' is not supported yet in " //$NON-NLS-1$
-                        + "create_metadata. This version applies only: synonym, comment. Set other " //$NON-NLS-1$
+                        + "create_metadata. This version applies synonym, comment, and templateType on templates. Set other " //$NON-NLS-1$
                         + "properties (including type) via modify_metadata.").toJson(); //$NON-NLS-1$
             }
         }
@@ -2746,6 +3271,15 @@ public class CreateMetadataTool extends AbstractMetadataWriteTool
     /** Applies the synonym (keyed by language CODE) and comment to a freshly created node. */
     private static void applyScalarProps(MdObject obj, Props props, String synonymLanguage)
     {
+        if (props.templateType != null)
+        {
+            if (!(obj instanceof BasicTemplate))
+            {
+                throw new IllegalArgumentException("templateType applies only to a CommonTemplate or " //$NON-NLS-1$
+                    + "an owned Template; use create_metadata with a template FQN."); //$NON-NLS-1$
+            }
+            ((BasicTemplate)obj).setTemplateType(props.templateType);
+        }
         if (props.synonym != null && !props.synonym.isEmpty() && synonymLanguage != null)
         {
             obj.getSynonym().put(synonymLanguage, props.synonym);

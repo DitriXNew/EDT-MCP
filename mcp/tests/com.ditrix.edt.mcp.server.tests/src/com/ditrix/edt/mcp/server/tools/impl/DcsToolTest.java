@@ -99,6 +99,15 @@ public class DcsToolTest
     }
 
     @Test
+    public void testGuideSaysANullKindPeriodBoundIsNotSet()
+    {
+        // #672: the caller has to learn which value clears a grouping field's period bound. One
+        // substring on purpose: the behaviour itself is pinned by DcsSettingsWriterTest and the e2e.
+        String guide = new DcsTool().getGuide();
+        assertTrue(guide, guide.contains("`{kind:'null'}` means the bound is not set")); //$NON-NLS-1$
+    }
+
+    @Test
     public void testDynamicWriteAppliedClaimRequiresMatchingPostCommitModel()
     {
         DynamicListExtInfo actual = FormFactory.eINSTANCE.createDynamicListExtInfo();

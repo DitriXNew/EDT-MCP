@@ -6,9 +6,19 @@
 
 package com.ditrix.edt.mcp.server.tools.impl;
 
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.LongFunction;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ProjectScope;
@@ -23,15 +33,16 @@ import org.eclipse.emf.ecore.EClass;
 import org.osgi.framework.Bundle;
 import org.osgi.service.prefs.BackingStoreException;
 
+import com._1c.g5.v8.bm.integration.IBmModel;
 import com._1c.g5.v8.dt.core.model.IModelObjectFactory;
 import com._1c.g5.v8.dt.core.platform.IConfigurationProjectManager;
-import com._1c.g5.v8.dt.core.platform.IConfigurationProvider;
 import com._1c.g5.v8.dt.core.platform.IDtProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExternalObjectProject;
 import com._1c.g5.v8.dt.core.platform.IExternalObjectProjectManager;
 import com._1c.g5.v8.dt.core.platform.IExtensionProjectManager;
 import com._1c.g5.v8.dt.core.platform.IV8Project;
 import com._1c.g5.v8.dt.core.platform.IV8ProjectManager;
+import com._1c.g5.v8.dt.md.extension.adopt.IModelObjectAdopter;
 import com._1c.g5.v8.dt.metadata.mdclass.CompatibilityMode;
 import com._1c.g5.v8.dt.metadata.mdclass.Configuration;
 import com._1c.g5.v8.dt.metadata.mdclass.ConfigurationExtensionPurpose;
@@ -39,22 +50,28 @@ import com._1c.g5.v8.dt.metadata.mdclass.Language;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
-import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.metadata.mdclass.ScriptVariant;
 import com._1c.g5.v8.dt.platform.version.Version;
+import com._1c.g5.wiring.ServiceAccess;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
 import com.ditrix.edt.mcp.server.protocol.McpKeys;
 import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
+import com.ditrix.edt.mcp.server.utils.BmModelResolver;
+import com.ditrix.edt.mcp.server.utils.BmTransactions;
+import com.ditrix.edt.mcp.server.utils.BuildUtils;
+import com.ditrix.edt.mcp.server.utils.BuildUtils.DiskExportState;
+import com.ditrix.edt.mcp.server.utils.CommandInterfaceSupport;
+import com.ditrix.edt.mcp.server.utils.ExtensionRootBuilder;
 import com.ditrix.edt.mcp.server.utils.ExternalObjectRoots;
 import com.ditrix.edt.mcp.server.utils.LifecycleWaiter;
 import com.ditrix.edt.mcp.server.utils.McpJobs;
 import com.ditrix.edt.mcp.server.utils.MdNameNormalizer;
-import com.ditrix.edt.mcp.server.utils.MetadataLanguageUtils;
 import com.ditrix.edt.mcp.server.utils.MetadataTypeUtils;
 import com.ditrix.edt.mcp.server.utils.ProjectContext;
+import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
 
 /**
  * Tool that creates a new 1C project of one of three kinds:
@@ -68,13 +85,21 @@ import com.ditrix.edt.mcp.server.utils.ProjectContext;
  * fully reviewed machinery from the former extension-only tool:
  * <ol>
  *   <li>Validates inputs and checks that neither the new project nor the base are missing.</li>
- *   <li>Constructs a {@link Configuration}, or an optional external-object root, through the
- *       version-aware {@link IModelObjectFactory}.</li>
+ *   <li>Constructs a configuration's {@link Configuration}, or an optional external-object root,
+ *       through the version-aware {@link IModelObjectFactory}. An extension's root is instead the
+ *       base root ADOPTED the way EDT's own new-extension wizard builds it
+ *       ({@link ExtensionRootBuilder}, issue #706) - never a factory-made configuration.</li>
  *   <li>Calls the appropriate project manager's {@code create()} method in a background
  *       {@link Job} (never on the UI thread — unattended-safety rule) via the shared
  *       {@link #runCreateJob} helper, and joins with a {@link #CREATE_TIMEOUT_MS} timeout.</li>
  *   <li>Waits for the new project to reach the {@code STARTED} lifecycle state
- *       via {@link LifecycleWaiter}.</li>
+ *       via {@link LifecycleWaiter} - which reports at once a context {@code create()} already
+ *       started.</li>
+ *   <li>For {@code extension}: attaches the two command interfaces EDT's wizard creates,
+ *       force-exports them with the root, and answers {@code ready} only once the root file on
+ *       disk shows the wizard's shape and the root this call built (a bounded wait) - all of it only once
+ *       {@code create()} ended within the wait window: a create still running then gets an answer and no
+ *       write ({@link #afterExtensionCreate}).</li>
  *   <li>For {@code externalObjects}: if {@code scriptVariant} was supplied, calls
  *       {@link IExternalObjectProjectManager#setScriptVariant} after lifecycle wait
  *       (non-fatal on failure).</li>
@@ -97,6 +122,30 @@ public class CreateProjectTool implements IMcpTool
 
     /** Timeout (ms) for the lifecycle-STARTED wait after create(). */
     private static final long STARTED_TIMEOUT_MS = 60_000L;
+
+    /**
+     * Budget (ms) for confirming a new extension's root on disk: EDT's export queue drained - waited for with all of
+     * it but the second the look keeps for the root file - and the root file read back, and in the same budget its
+     * two command interface files seen. EDT saves them asynchronously after create() attached the root.
+     */
+    private static final long ROOT_CONFIRM_TIMEOUT_MS = 30_000L;
+
+    /** Pause (ms) between two reads of the root file while confirming it. */
+    private static final long ROOT_CONFIRM_POLL_MS = 250L;
+
+    /** Top-object FQN of a configuration root. */
+    private static final String CONFIGURATION_FQN = "Configuration"; //$NON-NLS-1$
+
+    /**
+     * Why a save submission was refused, as {@link BmTransactions#forceExportToDisk(IProject, List)} reports it: by a
+     * {@code false} that covers all of these at once.
+     */
+    private static final String EXPORT_NOT_ACCEPTED = "EDT accepted no save task for them (its project services " //$NON-NLS-1$
+        + "or the new project's DtProject were not available, or EDT declined or failed the submission; a failure " //$NON-NLS-1$
+        + "is in the EDT log)"; //$NON-NLS-1$
+
+    /** Parameter/output key: the extension compatibility mode. */
+    private static final String KEY_COMPATIBILITY_MODE = "compatibilityMode"; //$NON-NLS-1$
 
     /** Bundle symbolic name for the optional v8codestyle check plugin. */
     private static final String V8CODESTYLE_BUNDLE = "com.e1c.v8codestyle"; //$NON-NLS-1$
@@ -170,6 +219,15 @@ public class CreateProjectTool implements IMcpTool
     /** action/state value: created. */
     private static final String VAL_CREATED = "created"; //$NON-NLS-1$
 
+    /** state value: lifecycle STARTED reached (and, for an extension, its root seen on disk). */
+    private static final String VAL_READY = "ready"; //$NON-NLS-1$
+
+    /** Output value: {@code action} of a slow create whose result needs verification. */
+    private static final String VAL_VERIFICATION_REQUIRED = "verificationRequired"; //$NON-NLS-1$
+
+    /** Output value: {@code state} of a slow create whose root was not seen. */
+    private static final String VAL_ROOT_UNCONFIRMED = "rootUnconfirmed"; //$NON-NLS-1$
+
     /** Error prefix: project already exists in workspace. */
     private static final String ERR_PROJECT_EXISTS_PREFIX = "Project already exists in workspace: "; //$NON-NLS-1$
 
@@ -184,6 +242,10 @@ public class CreateProjectTool implements IMcpTool
 
     /** Message suffix: creation completed past the wait window. */
     private static final String MSG_WAIT_WINDOW_SUFFIX = "s wait window; project now exists)."; //$NON-NLS-1$
+
+    /** How an extension answer names the two command interface files EDT's new-extension wizard creates. */
+    private static final String COMMAND_INTERFACE_FILES = "The command interface files CommandInterface.cmi and " //$NON-NLS-1$
+        + "MainSectionCommandInterface.cmi that EDT's wizard creates"; //$NON-NLS-1$
 
     @Override
     public String getName()
@@ -249,10 +311,11 @@ public class CreateProjectTool implements IMcpTool
                     + "Default: Customization. " //$NON-NLS-1$
                     + "Customization = user adaptation; AddOn = add-on functionality; Patch = hotfix.", //$NON-NLS-1$
                 "Customization", "AddOn", "Patch") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            .stringProperty("compatibilityMode", //$NON-NLS-1$
+            .stringProperty(KEY_COMPATIBILITY_MODE,
                 "Optional extension compatibility-mode string matching a CompatibilityMode enum literal " //$NON-NLS-1$
-                    + "(e.g. 'Version8_3_10'); empty = factory default. Unknown values are rejected. " //$NON-NLS-1$
-                    + "Extension only; REJECTED for other kinds.") //$NON-NLS-1$
+                    + "(e.g. 'Version8_3_24'); omitted or empty = the base configuration's compatibility mode, " //$NON-NLS-1$
+                    + "the one EDT's new-extension wizard always uses. Unknown values are rejected, and so is " //$NON-NLS-1$
+                    + "8.3.13 or lower over a base above 8.3.13. Extension only; REJECTED for other kinds.") //$NON-NLS-1$
             .stringProperty("synonym", //$NON-NLS-1$
                 "Human-readable synonym for the Configuration (configuration and extension only; " //$NON-NLS-1$
                     + "REJECTED for externalObjects). Defaults to the 'name' value if omitted.") //$NON-NLS-1$
@@ -295,6 +358,9 @@ public class CreateProjectTool implements IMcpTool
                 "Name of the base configuration project it extends (extension only, conditional)") //$NON-NLS-1$
             .stringProperty(KEY_PREFIX, "NamePrefix applied (extension only, conditional)") //$NON-NLS-1$
             .stringProperty(KEY_PURPOSE, "ConfigurationExtensionPurpose value applied (extension only, conditional)") //$NON-NLS-1$
+            .stringProperty(KEY_COMPATIBILITY_MODE,
+                "Effective extension compatibility mode as its enum name, e.g. Version8_5_1 (extension only); the " //$NON-NLS-1$
+                    + "base configuration's unless one was requested") //$NON-NLS-1$
             .stringProperty(KEY_SCRIPT_VARIANT, "ScriptVariant applied or inherited") //$NON-NLS-1$
             .stringProperty(KEY_VERSION, "Platform version string used for project creation") //$NON-NLS-1$
             .stringProperty(KEY_EXTERNAL_OBJECT,
@@ -304,7 +370,8 @@ public class CreateProjectTool implements IMcpTool
             .stringArrayProperty("normalized", //$NON-NLS-1$
                 "Fields whose value was rewritten by the 'ё'->'е' normalization (when any)") //$NON-NLS-1$
             .stringProperty(KEY_STATE,
-                "'ready' when lifecycle STARTED was reached, 'created' otherwise, or " //$NON-NLS-1$
+                "'ready' when lifecycle STARTED was reached (for an extension, also once its root file was seen " //$NON-NLS-1$
+                    + "on disk), 'created' otherwise, or " //$NON-NLS-1$
                     + "'rootConfirmed'/'rootUnconfirmed' when a slow seeded create requires verification") //$NON-NLS-1$
             .objectProperty(KEY_CODESTYLE,
                 "v8codestyle preference application result: {applied: bool, note: string, autoSortNote: string}") //$NON-NLS-1$
@@ -342,7 +409,7 @@ public class CreateProjectTool implements IMcpTool
         String synonym = JsonUtils.extractStringArgument(params, "synonym"); //$NON-NLS-1$
         String comment = JsonUtils.extractStringArgument(params, "comment"); //$NON-NLS-1$
         String purposeStr = JsonUtils.extractStringArgument(params, KEY_PURPOSE);
-        String compatModeStr = JsonUtils.extractStringArgument(params, "compatibilityMode"); //$NON-NLS-1$
+        String compatModeStr = JsonUtils.extractStringArgument(params, KEY_COMPATIBILITY_MODE);
         String scriptVariantStr = JsonUtils.extractStringArgument(params, KEY_SCRIPT_VARIANT);
         boolean normalizeYo = JsonUtils.extractBooleanArgument(params, KEY_NORMALIZE_YO, true);
         boolean standardChecks = JsonUtils.extractBooleanArgument(params, PREF_STANDARD_CHECKS, true);
@@ -681,17 +748,14 @@ public class CreateProjectTool implements IMcpTool
         String effectiveProjectName = baseResolution.effectiveProjectName;
         IProject baseIProject = baseResolution.baseIProject;
 
-        // Resolve services and base-configuration model handles (read-only)
+        // Resolve services and the base project's model (read-only)
         ExtensionServices services = resolveExtensionServices(baseIProject, baseProjectName);
         if (services.error != null)
         {
             return services.error;
         }
         IExtensionProjectManager extMgr = services.extMgr;
-        IModelObjectFactory factory = services.factory;
-        Configuration baseConfig = services.baseConfig;
         Version version = services.version;
-        ScriptVariant scriptVariant = services.scriptVariant;
 
         // Validate purpose
         PurposeResolution purposeResolution = resolveExtensionPurpose(req.purposeStr);
@@ -709,31 +773,23 @@ public class CreateProjectTool implements IMcpTool
         }
         CompatibilityMode compatMode = compatModeResolution.compatMode;
 
-        // Build the extension Configuration model object
-        Configuration config = (Configuration) factory.create(MdClassPackage.Literals.CONFIGURATION, version);
-        factory.fillDefaultReferences(config);
-
-        config.setObjectBelonging(ObjectBelonging.ADOPTED);
-        config.setName(configName);
-        config.setNamePrefix(prefix);
-        config.setScriptVariant(scriptVariant);
-        config.setConfigurationExtensionPurpose(purpose);
-
-        if (compatMode != null)
+        // Build the root the way EDT's new-extension wizard does: the base root ADOPTED (read in a read
+        // transaction of the base's model), then the wizard's overrides. A refusal creates nothing.
+        ExtensionRootBuilder.Result built = ExtensionRootBuilder.buildFromBase(services.baseModel, services.adopter,
+            version, new ExtensionRootBuilder.Spec(baseProjectName, configName, prefix, purpose, compatMode,
+                req.comment, req.synonym));
+        if (built.error != null)
         {
-            config.setConfigurationExtensionCompatibilityMode(compatMode);
+            return ToolResult.error(built.error).toJson();
         }
-        applyComment(config, req.comment);
-
-        // Set synonym via language-code-keyed EMap
-        boolean synonymApplied = applyExtensionSynonym(config, baseConfig, configName, req.synonym);
+        ScriptVariant scriptVariant = built.scriptVariant != null ? built.scriptVariant : ScriptVariant.RUSSIAN;
 
         // Create the extension project in a background Job
         final IProject[] createdHolder = new IProject[1];
         final Throwable[] errorHolder = new Throwable[1];
         final String finalEffectiveProjectName = effectiveProjectName;
         final Version finalVersion = version;
-        final Configuration finalConfig = config;
+        final Configuration finalConfig = built.root;
         final IProject finalBaseIProject = baseIProject;
 
         Job createJob = new Job(LOG_PREFIX + finalEffectiveProjectName)
@@ -755,38 +811,275 @@ public class CreateProjectTool implements IMcpTool
         };
 
         ExtensionResponseData responseData = new ExtensionResponseData(finalEffectiveProjectName, configName,
-            baseProjectName, prefix, purpose, scriptVariant, version, synonymApplied);
+            baseProjectName, prefix, purpose, scriptVariant, version, built.synonymApplied);
+        ExtensionFacts facts = new ExtensionFacts(built.compatibilityMode, built.baseCompatibilityMode,
+            compatMode != null, built.compatibilityNote, built.identity);
 
         CreateJobResult jobResult = runCreateJob(createJob, finalEffectiveProjectName, KIND_EXTENSION);
-        if (jobResult.status == CreateStatus.SLOW_EXISTS)
-        {
-            // Creation completed past the wait window — build the full extension response
-            return buildExtensionSlowResponse(responseData);
-        }
-        if (jobResult.errorJson != null)
-        {
-            return jobResult.errorJson;
-        }
+        // The steps that write to the new project run only once EDT's create() has ended.
+        return afterExtensionCreate(jobResult.status, jobResult.errorJson, responseData, facts,
+            () -> concludeExtensionCreate(req, finalEffectiveProjectName, baseProjectName, createdHolder[0],
+                errorHolder[0], responseData, facts));
+    }
 
+    /**
+     * Where an extension's create goes once {@link #runCreateJob} has told how its job ended. Only a job that ENDED
+     * within the wait window ({@link CreateStatus#OK}) goes on to {@code concluded}: the steps after {@code create()} -
+     * those that write to the new project (its command interfaces, the save of them with its root), the look at its
+     * files and the codestyle preferences. On {@link CreateStatus#SLOW_EXISTS} the project exists but the job had not
+     * ended: {@link #runCreateJob} only asked it to stop, and EDT's {@code create()} may still be running - a write
+     * then would race it, and could wait on its model's locks past the window - so the answer
+     * ({@link #buildExtensionSlowResponse}) is all this call does, and it says what was not done. Any other outcome
+     * answers its error. Package-visible for tests.
+     *
+     * @param status how the create job ended
+     * @param errorJson the ready answer of {@link CreateStatus#TIMED_OUT} and {@link CreateStatus#INTERRUPTED}
+     * @param data the response data
+     * @param facts what the steps before {@code create()} found
+     * @param concluded the steps after an ended {@code create()}, and their answer
+     * @return the answer
+     */
+    static String afterExtensionCreate(CreateStatus status, String errorJson, ExtensionResponseData data,
+        ExtensionFacts facts, Supplier<String> concluded)
+    {
+        if (status == CreateStatus.OK)
+        {
+            return concluded.get();
+        }
+        if (status == CreateStatus.SLOW_EXISTS)
+        {
+            return buildExtensionSlowResponse(data, facts);
+        }
+        return errorJson;
+    }
+
+    /**
+     * The steps after an extension's {@code create()} that ENDED within the wait window
+     * ({@link #afterExtensionCreate}): its error, or the lifecycle wait, the command interfaces saved with the root and
+     * the bounded look at their files, and the codestyle preferences.
+     */
+    private static String concludeExtensionCreate(CreateRequest req, String projectName, String baseProjectName, // NOSONAR the extension path's state after create(), passed on as it is
+        IProject created, Throwable error, ExtensionResponseData responseData, ExtensionFacts facts)
+    {
         // Check for creation errors reported via errorHolder
-        if (errorHolder[0] != null)
+        if (error != null)
         {
-            Activator.logError("create_project (extension) failed", errorHolder[0]); //$NON-NLS-1$
-            return creationFailure(finalEffectiveProjectName,
-                "Failed to create extension project: " + errorHolder[0].getMessage()); //$NON-NLS-1$
+            Activator.logError("create_project (extension) failed", error); //$NON-NLS-1$
+            return creationFailure(projectName,
+                "Failed to create extension project: " + error.getMessage()); //$NON-NLS-1$
         }
 
-        Activator.logInfo(LOG_PREFIX + "created extension '" + finalEffectiveProjectName //$NON-NLS-1$
+        Activator.logInfo(LOG_PREFIX + "created extension '" + projectName //$NON-NLS-1$
             + "' extending '" + baseProjectName + "'"); //$NON-NLS-1$ //$NON-NLS-2$
 
-        // Wait for lifecycle STARTED
-        String projectState = waitForLifecycle(finalEffectiveProjectName, createdHolder[0], KIND_EXTENSION);
+        // Wait for lifecycle STARTED (create() started the context itself, so this is normally immediate)
+        IProject createdProject = created != null ? created : ProjectContext.of(projectName).project();
+        facts.lifecycleStarted = waitForStarted(projectName, created, KIND_EXTENSION);
+
+        // The two command interfaces EDT's wizard creates, exported with the root EDT attached; then the
+        // root file must show the wizard's shape and this call's root before the answer may say 'ready'. The command
+        // interface files are looked for in the same bounded look - the same budget, not a second one - and never
+        // change 'ready'.
+        saveAndLook(createdProject, ensureCommandInterfaces(createdProject, facts), facts,
+            ExtensionDisk.of(createdProject), ROOT_CONFIRM_TIMEOUT_MS, ROOT_CONFIRM_POLL_MS);
 
         // Apply v8codestyle preferences
-        Map<String, Object> codestyleMap =
-            applyCodestylePrefs(finalEffectiveProjectName, req.standardChecks, req.commonChecks);
+        Map<String, Object> codestyleMap = applyCodestylePrefs(projectName, req.standardChecks, req.commonChecks);
 
-        return buildExtensionSuccessResponse(responseData, projectState, codestyleMap);
+        return buildExtensionSuccessResponse(responseData, facts, codestyleMap);
+    }
+
+    /**
+     * Attaches the two command interfaces EDT's new-extension wizard creates ({@code CommandInterface.cmi},
+     * {@code MainSectionCommandInterface.cmi}) in one write of the new project's model. Non-fatal: the
+     * project and its root are valid without them, so a failure - or a root not yet in the model - is
+     * recorded in {@code facts} for the answer's message, never thrown.
+     *
+     * @param project the new extension project
+     * @param facts where a failure is recorded
+     * @return the command interfaces' FQNs to export, empty when none was ensured
+     */
+    private static List<String> ensureCommandInterfaces(IProject project, ExtensionFacts facts)
+    {
+        BmModelResolver.Resolution model = BmModelResolver.resolve(project);
+        if (!model.isAvailable())
+        {
+            facts.commandInterfaceFailure = "the new project's model was not available"; //$NON-NLS-1$
+            return Collections.emptyList();
+        }
+        try
+        {
+            CommandInterfaceSupport.Ensured ensured = BmTransactions.write(model.getModel(),
+                LOG_PREFIX + "command interfaces", //$NON-NLS-1$
+                (tx, monitor) -> CommandInterfaceSupport.ensureConfigurationCommandInterfaces(tx));
+            facts.commandInterfaceFailure = ensured.skipped;
+            return ensured.fqns;
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError(LOG_PREFIX + "the command interfaces of '" + project.getName() //$NON-NLS-1$
+                + "' were not created", e); //$NON-NLS-1$
+            facts.commandInterfaceFailure = e.getMessage() != null && !e.getMessage().isEmpty() ? e.getMessage()
+                : e.getClass().getSimpleName();
+            return Collections.emptyList();
+        }
+    }
+
+    /** Hands save tasks to EDT: {@link BmTransactions#forceExportToDisk(IProject, List)} outside tests. */
+    @FunctionalInterface
+    interface ExportSubmission
+    {
+        /**
+         * @param project the project the objects belong to
+         * @param topObjectFqns the top objects whose files to save
+         * @return whether EDT accepted a save task
+         */
+        boolean submit(IProject project, List<String> topObjectFqns);
+    }
+
+    /**
+     * The bounded wait for a project's export queue: {@link BuildUtils#waitForDiskExport(IProject, long)} outside
+     * tests. It is handed the project and how long it may take, and binds no timeout of its own: how long is the look's
+     * to decide - its share of the look's budget ({@link #saveAndLook}).
+     */
+    @FunctionalInterface
+    interface ExportWait
+    {
+        /**
+         * @param project the project whose export queue to wait for
+         * @param timeoutMs how long the wait may take
+         * @return how the wait ended
+         */
+        DiskExportState await(IProject project, long timeoutMs);
+    }
+
+    /**
+     * Queues the export of the root and of the command interfaces this call attached ({@code commandInterfaceFqns}),
+     * and records in {@code facts} a submission EDT did not accept - or one that threw - while there were command
+     * interfaces to save: they are then in the model, but this call queued no save of their files. EDT already
+     * scheduled its own save of the root it attached; queuing it here as well puts the root on the queue the
+     * confirmation waits for, and the root's file is judged on disk, so nothing is recorded for the root alone. Never
+     * throws. Package-visible for tests.
+     *
+     * @param project the new extension project
+     * @param commandInterfaceFqns the command interfaces' FQNs this call ensured (attached, or found attached); empty
+     *     for none
+     * @param facts where a refused submission is recorded
+     * @param submission hands the save tasks to EDT
+     */
+    static void exportWithRoot(IProject project, List<String> commandInterfaceFqns, ExtensionFacts facts,
+        ExportSubmission submission)
+    {
+        List<String> fqns = new ArrayList<>(commandInterfaceFqns.size() + 1);
+        fqns.add(CONFIGURATION_FQN);
+        fqns.addAll(commandInterfaceFqns);
+        String refused;
+        try
+        {
+            refused = submission.submit(project, fqns) ? null : EXPORT_NOT_ACCEPTED;
+        }
+        catch (RuntimeException e)
+        {
+            Activator.logError(LOG_PREFIX + "the save of the new root and command interfaces of '" //$NON-NLS-1$
+                + project.getName() + "' could not be queued", e); //$NON-NLS-1$
+            refused = e.getMessage() != null && !e.getMessage().isEmpty() ? e.getMessage()
+                : e.getClass().getSimpleName();
+        }
+        if (refused != null && !commandInterfaceFqns.isEmpty())
+        {
+            facts.commandInterfaceSaveFailure = refused;
+        }
+    }
+
+    /**
+     * The command interface files the bounded look waits for beside the root: both of them when this call attached
+     * the command interfaces, none when it did not (a failure the answer already names). Package-visible for tests.
+     *
+     * @param commandInterfaceFqns the command interfaces' FQNs this call ensured (attached, or found attached)
+     * @return the project-relative paths to look for
+     */
+    static List<String> commandInterfaceFiles(List<String> commandInterfaceFqns)
+    {
+        return commandInterfaceFqns.isEmpty() ? Collections.emptyList() : ExtensionRootBuilder.COMMAND_INTERFACE_FILES;
+    }
+
+    /**
+     * A new extension's files as the steps after create() reach them: EDT's save of top objects, the bounded wait for
+     * the project's export queue, the root file, and the check of a file beside it. {@link #of} binds EDT's own to a
+     * project; tests pass theirs. Package-visible for tests.
+     */
+    static final class ExtensionDisk
+    {
+        /** Hands save tasks to EDT. */
+        final ExportSubmission save;
+        /** The bounded wait for a project's export queue, handed the project and how long it may take. */
+        final ExportWait exportWait;
+        /** Reads the root file. */
+        final ExtensionRootBuilder.RootFileReader rootFile;
+        /** Whether a project-relative path is a file on disk. */
+        final Predicate<String> fileExists;
+
+        ExtensionDisk(ExportSubmission save, ExportWait exportWait, ExtensionRootBuilder.RootFileReader rootFile,
+            Predicate<String> fileExists)
+        {
+            this.save = save;
+            this.exportWait = exportWait;
+            this.rootFile = rootFile;
+            this.fileExists = fileExists;
+        }
+
+        /**
+         * EDT's own for {@code project}: its save ({@link BmTransactions#forceExportToDisk(IProject, List)}), its
+         * export wait ({@link BuildUtils#waitForDiskExport} as it is: {@link CreateProjectTool#saveAndLook} hands it
+         * the project and the share of the budget the look gives it), and the root file and the files beside it, read
+         * straight from the project's location ({@link ExtensionRootBuilder#readRootFile},
+         * {@link ExtensionRootBuilder#projectFileExists}) - unbounded reads the look runs only inside bounded reads of
+         * its own ({@link CreateProjectTool#saveAndLook}). Nothing is asked of the project until a step runs.
+         *
+         * @param project the new extension project
+         * @return its disk
+         */
+        static ExtensionDisk of(IProject project)
+        {
+            return new ExtensionDisk(BmTransactions::forceExportToDisk, BuildUtils::waitForDiskExport,
+                () -> ExtensionRootBuilder.readRootFile(project),
+                path -> ExtensionRootBuilder.projectFileExists(project).test(path));
+        }
+    }
+
+    /**
+     * The save and the bounded look a created extension gets: queues the save of the root and of the command
+     * interfaces this call attached ({@link #exportWithRoot}) and - once EDT reported the context started - looks for
+     * the root file and, in the same budget, for the files of those command interfaces
+     * ({@link #commandInterfaceFiles}), recording in {@code facts} a save EDT did not accept and what the look found.
+     * The files looked for are decided here, from what this call attached; and here the project's export wait is handed
+     * the share of the budget the look gives it - the budget less the second the look keeps for the root file. Every
+     * read of the look runs in a bounded job of its own under the project's claim on reads of its files, keyed by the
+     * project's name ({@link ExtensionRootBuilder#confirmOnDisk(String, ExtensionRootBuilder.RootIdentity,
+     * LongFunction, ExtensionRootBuilder.RootFileReader, List, Predicate, long, long)}), and it confirms only a root file
+     * that shows the root this call built ({@link ExtensionFacts#root}), so a file system that does not answer holds
+     * the call no longer than the bound that method states: the look's budget, the export wait included, plus
+     * BoundedJob's 0.5s grace for a last read whose job had not started by its deadline. Package-visible for tests.
+     *
+     * @param project the new extension project
+     * @param commandInterfaceFqns the command interfaces' FQNs this call ensured (attached, or found attached); empty
+     *     for none
+     * @param facts where a refused save and the look's findings are recorded
+     * @param disk the project's files ({@link ExtensionDisk#of} outside tests)
+     * @param budgetMs how long the whole look may take, the export wait included
+     * @param pollMs the pause between two rounds of the look
+     */
+    static void saveAndLook(IProject project, List<String> commandInterfaceFqns, ExtensionFacts facts, // NOSONAR the project, what to save, where to record, the disk and the two bounds
+        ExtensionDisk disk, long budgetMs, long pollMs)
+    {
+        exportWithRoot(project, commandInterfaceFqns, facts, disk.save);
+        if (facts.lifecycleStarted)
+        {
+            // The look decides the wait's share of its budget; this project's wait is handed that share as it is.
+            LongFunction<DiskExportState> exportWait = timeoutMs -> disk.exportWait.await(project, timeoutMs);
+            facts.disk = ExtensionRootBuilder.confirmOnDisk(project.getName(), facts.root, exportWait, disk.rootFile,
+                commandInterfaceFiles(commandInterfaceFqns), disk.fileExists, budgetMs, pollMs);
+        }
     }
 
     // ─────────────────────── CONFIGURATION path ──────────────────────────────
@@ -798,11 +1091,11 @@ public class CreateProjectTool implements IMcpTool
         // Derive default EDT project name: <configName>
         String effectiveProjectName = (req.projectName != null) ? req.projectName : configName;
 
-        // Check the new project name does not already exist
-        if (ProjectContext.of(effectiveProjectName).exists())
+        // Check the new project name is not taken - in the workspace or by a directory on disk
+        String taken = takenProjectRefusal(effectiveProjectName);
+        if (taken != null)
         {
-            return ToolResult.error(ERR_PROJECT_EXISTS_PREFIX + effectiveProjectName
-                + ERR_PROJECT_EXISTS_SUFFIX).toJson();
+            return taken;
         }
 
         // Parse version (read-only)
@@ -899,6 +1192,86 @@ public class CreateProjectTool implements IMcpTool
 
         return buildConfigurationSuccessResponse(finalEffectiveProjectName, configName, scriptVariant,
             finalVersion, projectState, codestyleMap, synonymApplied);
+    }
+
+    /**
+     * The refusal of a create whose project name is illegal or taken, or {@code null} when it is free. A name the
+     * workspace does not accept as a project name ({@code WorkspacePaths.projectNameProblem} - the same validation
+     * {@code IProject.create} applies, so EDT's create could not have used it either) is refused first, before anything
+     * looks it up: a name a path cannot hold would otherwise throw out of the call. The name is taken by a workspace
+     * project of that name, or - with none - by a directory or file at the place EDT's create would put the project.
+     * create_project passes
+     * EDT no location, and for every kind EDT's project manager then puts the project in the workspace location joined
+     * with its name ({@code ConfigurationProjectManager}, {@code AbstractDependentProjectManager} for extensions and
+     * external objects - EDT 2026.1.2, 2026.2.0 and 2026.2.1); {@code V8ProjectCreator} then creates the project over
+     * whatever that directory holds, and deletes the project WITH its content when the create fails. Such a directory
+     * is what {@code delete_project} without {@code deleteContent} leaves, and an extension created over it would find
+     * the old root file there. The check and EDT's create are not atomic: a directory made between them is not caught.
+     * Package-visible for tests.
+     *
+     * @param projectName the workspace project name the create would use
+     * @return the ready JSON refusal, or {@code null}
+     */
+    static String takenProjectRefusal(String projectName)
+    {
+        String problem = WorkspacePaths.projectNameProblem(projectName);
+        if (problem != null)
+        {
+            return ToolResult.error(illegalProjectNameRefusal(projectName, problem)).toJson();
+        }
+        if (ProjectContext.of(projectName).exists())
+        {
+            return ToolResult.error(ERR_PROJECT_EXISTS_PREFIX + projectName + ERR_PROJECT_EXISTS_SUFFIX).toJson();
+        }
+        Path directory;
+        try
+        {
+            directory = WorkspacePaths.defaultProjectFolder(projectName);
+        }
+        catch (InvalidPathException e)
+        {
+            // A name the workspace accepts but this file system's paths cannot hold. On Windows the workspace already
+            // refuses every character a path cannot hold; this keeps any other platform's case a refusal too.
+            return ToolResult.error(illegalProjectNameRefusal(projectName, e.getReason())).toJson();
+        }
+        String refusal = existingDirectoryRefusal(projectName, directory);
+        return refusal == null ? null : ToolResult.error(refusal).toJson();
+    }
+
+    /**
+     * The refusal text for a project name that cannot be a workspace project's name. Package-visible for tests.
+     *
+     * @param projectName the project name the create would use
+     * @param reason why it cannot, as the workspace or the file system says
+     * @return the refusal
+     */
+    static String illegalProjectNameRefusal(String projectName, String reason)
+    {
+        return "The project name '" + projectName + "' is not a legal workspace project name: " + reason //$NON-NLS-1$ //$NON-NLS-2$
+            + ". Nothing was created. Pass another projectName, or, without projectName, another name (the " //$NON-NLS-1$
+            + "project name defaults from it)."; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal text when {@code directory} - the place of project {@code projectName}, which no workspace project
+     * has - exists on disk; {@code null} when it does not, or is not known. Package-visible for tests.
+     *
+     * @param projectName the project name
+     * @param directory where EDT's create would put it, or {@code null} when the workspace has no local location
+     * @return the refusal, or {@code null}
+     */
+    static String existingDirectoryRefusal(String projectName, Path directory)
+    {
+        if (directory == null || !Files.exists(directory, LinkOption.NOFOLLOW_LINKS))
+        {
+            return null;
+        }
+        return "The directory " + directory + " of project '" + projectName + "' already exists on disk, though " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + "the workspace has no project of that name (delete_project without deleteContent leaves one): EDT " //$NON-NLS-1$
+            + "would create the new project over the files there, and delete them with it if that create failed. " //$NON-NLS-1$
+            + "Nothing was created. If a workspace project keeps its files there, delete it with delete_project and " //$NON-NLS-1$
+            + "deleteContent=true; otherwise check what the directory holds and remove it. Then retry, or pass " //$NON-NLS-1$
+            + "another name or projectName."; //$NON-NLS-1$
     }
 
     /**
@@ -1051,11 +1424,11 @@ public class CreateProjectTool implements IMcpTool
         // Derive default EDT project name: <configName>
         String effectiveProjectName = (req.projectName != null) ? req.projectName : configName;
 
-        // Check the new project name does not already exist
-        if (ProjectContext.of(effectiveProjectName).exists())
+        // Check the new project name is not taken - in the workspace or by a directory on disk
+        String taken = takenProjectRefusal(effectiveProjectName);
+        if (taken != null)
         {
-            return ToolResult.error(ERR_PROJECT_EXISTS_PREFIX + effectiveProjectName
-                + ERR_PROJECT_EXISTS_SUFFIX).toJson();
+            return taken;
         }
 
         // Parse version (read-only)
@@ -1243,7 +1616,7 @@ public class CreateProjectTool implements IMcpTool
         }
 
         boolean rootConfirmed = confirmExternalObject(effectiveProjectName, externalObject);
-        String rootState = rootConfirmed ? "rootConfirmed" : "rootUnconfirmed"; //$NON-NLS-1$ //$NON-NLS-2$
+        String rootState = rootConfirmed ? "rootConfirmed" : VAL_ROOT_UNCONFIRMED; //$NON-NLS-1$
         String typeToken = externalObject.canonicalFqn.substring(0,
             externalObject.canonicalFqn.indexOf('.'));
         String verification = " Once indexing finishes, verify the root with " //$NON-NLS-1$
@@ -1269,7 +1642,7 @@ public class CreateProjectTool implements IMcpTool
         }
 
         ToolResult slowResult = ToolResult.success()
-            .put(McpKeys.ACTION, "verificationRequired") //$NON-NLS-1$
+            .put(McpKeys.ACTION, VAL_VERIFICATION_REQUIRED)
             .put(McpKeys.PROJECT, effectiveProjectName)
             .put(KEY_PROJECT_KIND, KIND_EXTERNAL_OBJECTS)
             .put("name", configName) //$NON-NLS-1$
@@ -1452,8 +1825,8 @@ public class CreateProjectTool implements IMcpTool
         }
     }
 
-    /** Status codes returned by {@link #runCreateJob}. */
-    private enum CreateStatus
+    /** Status codes returned by {@link #runCreateJob}. Package-visible for tests. */
+    enum CreateStatus
     {
         /** Job completed within the timeout window; caller must check {@code errorHolder}. */
         OK,
@@ -1461,6 +1834,8 @@ public class CreateProjectTool implements IMcpTool
          * Job timed out but the project already exists in the workspace (slow creation
          * past the wait window). Existence is the only fact this status carries; the caller
          * must build a kind-specific response and verify any finer-grained mutation it needs.
+         * The job had NOT ended: its cancellation was only requested, so the project manager's
+         * {@code create()} may still be running - the caller writes nothing to the project.
          */
         SLOW_EXISTS,
         /** Job timed out and the project does NOT exist — return an error response. */
@@ -1521,39 +1896,37 @@ public class CreateProjectTool implements IMcpTool
 
     /**
      * Outcome of {@link #resolveExtensionServices}: either a ready-to-return JSON {@code error},
-     * or the platform services/model handles needed to build the extension Configuration. All
-     * value fields are non-null exactly when {@code error} is null.
+     * or the platform services/model handles needed to build the extension's root. All value
+     * fields are non-null exactly when {@code error} is null.
      */
     private static final class ExtensionServices
     {
         /** Ready-to-return JSON error, or {@code null} when resolution succeeded. */
         final String error;
         final IExtensionProjectManager extMgr;
-        final IModelObjectFactory factory;
-        final Configuration baseConfig;
+        final IModelObjectAdopter adopter;
+        final IBmModel baseModel;
         final Version version;
-        final ScriptVariant scriptVariant;
 
-        private ExtensionServices(String error, IExtensionProjectManager extMgr, IModelObjectFactory factory,
-            Configuration baseConfig, Version version, ScriptVariant scriptVariant)
+        private ExtensionServices(String error, IExtensionProjectManager extMgr, IModelObjectAdopter adopter,
+            IBmModel baseModel, Version version)
         {
             this.error = error;
             this.extMgr = extMgr;
-            this.factory = factory;
-            this.baseConfig = baseConfig;
+            this.adopter = adopter;
+            this.baseModel = baseModel;
             this.version = version;
-            this.scriptVariant = scriptVariant;
         }
 
         static ExtensionServices failure(String error)
         {
-            return new ExtensionServices(error, null, null, null, null, null);
+            return new ExtensionServices(error, null, null, null, null);
         }
 
-        static ExtensionServices ok(IExtensionProjectManager extMgr, IModelObjectFactory factory,
-            Configuration baseConfig, Version version, ScriptVariant scriptVariant)
+        static ExtensionServices ok(IExtensionProjectManager extMgr, IModelObjectAdopter adopter,
+            IBmModel baseModel, Version version)
         {
-            return new ExtensionServices(null, extMgr, factory, baseConfig, version, scriptVariant);
+            return new ExtensionServices(null, extMgr, adopter, baseModel, version);
         }
     }
 
@@ -1670,10 +2043,54 @@ public class CreateProjectTool implements IMcpTool
     }
 
     /**
-     * Immutable bundle of the common fields shared by the extension success and slow-path
-     * response builders (avoids an over-long parameter list).
+     * What the steps after an extension's {@code create()} found, from which its state and message are
+     * built. Package-visible for tests.
      */
-    private static final class ExtensionResponseData
+    static final class ExtensionFacts
+    {
+        /** The effective extension compatibility mode. */
+        final CompatibilityMode mode;
+        /** The base configuration's compatibility mode. */
+        final CompatibilityMode baseMode;
+        /** Whether the caller passed compatibilityMode. */
+        final boolean modeRequested;
+        /** The warning for a requested mode above the base's, or {@code null}. */
+        final String compatibilityNote;
+        /**
+         * The root handed to EDT's create, as its file must show it: the look confirms no root file that shows another
+         * name, prefix, purpose or mode, or lacks one ({@link ExtensionRootBuilder#missingOnDisk}) - hardening beyond
+         * {@link CreateProjectTool#takenProjectRefusal}, which keeps an earlier project's files out of a new project's
+         * directory.
+         */
+        final ExtensionRootBuilder.RootIdentity root;
+        /** Why the command interfaces were not created, or {@code null} when they were. */
+        String commandInterfaceFailure;
+        /** Why the save of the command interfaces this call created was not queued, or {@code null} when it was. */
+        String commandInterfaceSaveFailure;
+        /** Whether EDT reported the new project's context started. */
+        boolean lifecycleStarted;
+        /**
+         * What the bounded look at the root file - and at the command interface files - found, or {@code null} when it
+         * was not looked at.
+         */
+        ExtensionRootBuilder.RootOnDisk disk;
+
+        ExtensionFacts(CompatibilityMode mode, CompatibilityMode baseMode, boolean modeRequested,
+            String compatibilityNote, ExtensionRootBuilder.RootIdentity root)
+        {
+            this.mode = mode;
+            this.baseMode = baseMode;
+            this.modeRequested = modeRequested;
+            this.compatibilityNote = compatibilityNote;
+            this.root = root;
+        }
+    }
+
+    /**
+     * Immutable bundle of the common fields shared by the extension success and slow-path
+     * response builders (avoids an over-long parameter list). Package-visible for tests.
+     */
+    static final class ExtensionResponseData
     {
         final String effectiveProjectName;
         final String configName;
@@ -1684,7 +2101,7 @@ public class CreateProjectTool implements IMcpTool
         final Version version;
         final boolean synonymApplied;
 
-        private ExtensionResponseData(String effectiveProjectName, String configName, String baseProjectName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        ExtensionResponseData(String effectiveProjectName, String configName, String baseProjectName, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
             String prefix, ConfigurationExtensionPurpose purpose, ScriptVariant scriptVariant, Version version,
             boolean synonymApplied)
         {
@@ -1852,11 +2269,11 @@ public class CreateProjectTool implements IMcpTool
         String effectiveProjectName = (projectName != null) ? projectName
             : baseProjectName + "." + configName; //$NON-NLS-1$
 
-        // Check the new project name does not already exist
-        if (ProjectContext.of(effectiveProjectName).exists())
+        // Check the new project name is not taken - in the workspace or by a directory on disk
+        String taken = takenProjectRefusal(effectiveProjectName);
+        if (taken != null)
         {
-            return BaseProjectResolution.failure(ToolResult.error(ERR_PROJECT_EXISTS_PREFIX + effectiveProjectName
-                + ERR_PROJECT_EXISTS_SUFFIX).toJson());
+            return BaseProjectResolution.failure(taken);
         }
 
         // Validate the base project
@@ -1893,11 +2310,10 @@ public class CreateProjectTool implements IMcpTool
     }
 
     /**
-     * Resolves the platform services and base-configuration model handles needed to build the
-     * extension Configuration (read-only lookups). Resolves {@link IExtensionProjectManager},
-     * {@link IV8ProjectManager} (to read the base {@link Version}), {@link IModelObjectFactory},
-     * the base {@link Configuration} and its {@link ScriptVariant} (defaulting to
-     * {@link ScriptVariant#RUSSIAN} when unset).
+     * Resolves the platform services and the base project's handles needed to build the extension's root
+     * (read-only lookups): {@link IExtensionProjectManager}, the base {@link Version} (through
+     * {@link IV8ProjectManager}; EDT's wizard adopts with it), EDT's {@link IModelObjectAdopter} and the
+     * base project's BM model. Every refusal comes before anything is created.
      *
      * @return {@link ExtensionServices#ok} with the resolved handles, or
      *     {@link ExtensionServices#failure} carrying a ready-to-return JSON error
@@ -1926,32 +2342,39 @@ public class CreateProjectTool implements IMcpTool
 
         Version version = baseV8Project.getVersion();
 
-        IModelObjectFactory factory = Activator.getDefault().getModelObjectFactory();
-        if (factory == null)
+        IModelObjectAdopter adopter = resolveAdopter();
+        if (adopter == null)
         {
             return ExtensionServices.failure(
-                ToolResult.error("IModelObjectFactory (MD) not available. MdPlugin may not be ready.").toJson()); //$NON-NLS-1$
+                ToolResult.error(ExtensionRootBuilder.adopterUnavailable(baseProjectName)).toJson());
         }
 
-        // Resolve the base configuration for ScriptVariant and synonym language
-        IConfigurationProvider configProvider = Activator.getDefault().getConfigurationProvider();
-        Configuration baseConfig = (configProvider != null)
-            ? configProvider.getConfiguration(baseIProject)
-            : null;
-
-        if (baseConfig == null)
+        BmModelResolver.Resolution baseModel = BmModelResolver.resolve(baseIProject);
+        if (!baseModel.isAvailable())
         {
-            return ExtensionServices.failure(ToolResult.error("The configuration model of base project '" + baseProjectName //$NON-NLS-1$
-                + "' is not loaded yet (the project may still be indexing). " //$NON-NLS-1$
-                + "Wait until the project is ready and retry.").toJson()); //$NON-NLS-1$
-        }
-        ScriptVariant scriptVariant = baseConfig.getScriptVariant();
-        if (scriptVariant == null)
-        {
-            scriptVariant = ScriptVariant.RUSSIAN;
+            return ExtensionServices.failure(ToolResult.error(
+                baseModel.actionableError(NAME, "Nothing was created.")).toJson()); //$NON-NLS-1$
         }
 
-        return ExtensionServices.ok(extMgr, factory, baseConfig, version, scriptVariant);
+        return ExtensionServices.ok(extMgr, adopter, baseModel.getModel(), version);
+    }
+
+    /**
+     * EDT's model object adopter, or {@code null} when it is not available. {@link ServiceAccess#get} throws
+     * rather than returning {@code null} for a service that is not registered.
+     */
+    private static IModelObjectAdopter resolveAdopter()
+    {
+        try
+        {
+            return ServiceAccess.get(IModelObjectAdopter.class);
+        }
+        catch (RuntimeException e)
+        {
+            // The call is refused with an actionable error; the platform condition is a warning, not a failure.
+            Activator.logWarning(LOG_PREFIX + "model object adopter service not available: " + e); //$NON-NLS-1$
+            return null;
+        }
     }
 
     /**
@@ -2064,102 +2487,286 @@ public class CreateProjectTool implements IMcpTool
         return ToolResult.error("Unknown compatibilityMode value: '" + compatModeStr //$NON-NLS-1$
             + "'. Use a CompatibilityMode enum literal (e.g. " + examples //$NON-NLS-1$
             + (total > 3 ? " and " + (total - 3) + " more" : "") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-            + "), or omit for the factory default.").toJson(); //$NON-NLS-1$
+            + "), or omit to use the base configuration's mode.").toJson(); //$NON-NLS-1$
     }
 
     /**
-     * Applies the synonym to the in-memory extension {@link Configuration} via its
-     * language-code-keyed {@code synonym} EMap (in-memory model mutation only — no workspace
-     * side effects). The synonym value defaults to {@code configName} when {@code synonym} is
-     * blank; the language code is resolved from the base configuration, falling back to the new
-     * configuration.
-     *
-     * @return {@code true} when the synonym was applied; {@code false} when no language code or
-     *     synonym map was available
+     * Builds the JSON response for an extension whose create job had not ended when the wait window closed
+     * ({@link CreateStatus#SLOW_EXISTS}; read-only): the project exists, and the answer asks for verification as a
+     * slow seeded create does - {@code action="verificationRequired"}, {@code state="rootUnconfirmed"},
+     * {@code codestyle.applied=false} - with what names the project and none of the root's values (configuration name,
+     * prefix, purpose, script variant, compatibility mode): nobody checked that EDT attached that root. Nothing after
+     * {@code create()} ran, and the message says so: EDT's {@code create()} may still be running, so the root handed to it
+     * is not claimed as attached, and the command interface files EDT's wizard creates were not created - with how to
+     * get them once that create has ended, since no MCP tool attaches them to an existing extension and a delete or a
+     * second create while it runs would race it. Adds {@code synonymNote} when the synonym could not be applied.
+     * Package-visible for tests.
      */
-    private static boolean applyExtensionSynonym(Configuration config, Configuration baseConfig,
-        String configName, String synonym)
+    static String buildExtensionSlowResponse(ExtensionResponseData data, ExtensionFacts facts)
     {
-        String synonymValue = (synonym != null && !synonym.isEmpty()) ? synonym : configName;
-        String langCode = MetadataLanguageUtils.resolveLanguageCode(baseConfig, null);
-        if (langCode == null)
-        {
-            langCode = MetadataLanguageUtils.resolveLanguageCode(config, null);
-        }
-        if (langCode != null)
-        {
-            EMap<String, String> synonymMap = config.getSynonym();
-            if (synonymMap != null)
-            {
-                synonymMap.put(langCode, synonymValue);
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Builds the slow-path JSON response for a created extension project (read-only): creation
-     * completed past the wait window, so {@code state="created"} and {@code codestyle.applied=false}.
-     * Mirrors the normal success response, adding {@code synonymNote} when the synonym could not
-     * be applied.
-     */
-    private static String buildExtensionSlowResponse(ExtensionResponseData data)
-    {
-        ToolResult slowResult = ToolResult.success()
-            .put(McpKeys.ACTION, VAL_CREATED)
-            .put(McpKeys.PROJECT, data.effectiveProjectName)
-            .put(KEY_PROJECT_KIND, KIND_EXTENSION)
-            .put("name", data.configName) //$NON-NLS-1$
-            .put(KEY_BASE_PROJECT, data.baseProjectName)
-            .put(KEY_PREFIX, data.prefix)
-            .put(KEY_PURPOSE, data.purpose.getLiteral())
-            .put(KEY_SCRIPT_VARIANT, data.scriptVariant.getLiteral())
+        List<String> parts = new ArrayList<>();
+        parts.add("Extension project '" + data.effectiveProjectName //$NON-NLS-1$
+            + "' exists, but EDT's create of it was still running when the " + (CREATE_TIMEOUT_MS / 1000) //$NON-NLS-1$
+            + "s wait window ended; this call asked that create to stop and did not wait for it, so EDT may " //$NON-NLS-1$
+            + "still finish it or stop partway."); //$NON-NLS-1$
+        parts.add("Its root - the root of '" + data.baseProjectName //$NON-NLS-1$
+            + "' adopted the way EDT's new-extension wizard builds it - was handed to that create; nothing " //$NON-NLS-1$
+            + "checked that EDT attached it, so this answer reports none of the root's values (name, prefix, " //$NON-NLS-1$
+            + "purpose, scriptVariant, compatibilityMode) as applied."); //$NON-NLS-1$
+        addNotes(parts, facts, COMMAND_INTERFACE_FILES + " were not created: this call writes nothing to a " //$NON-NLS-1$
+            + "project EDT may still be creating, and no MCP tool attaches them to an existing extension. Do not " //$NON-NLS-1$
+            + "remove or recreate the project while that create may still be running - a delete or a second create " //$NON-NLS-1$
+            + "would race it: first make sure it has ended - restarting EDT ends it; until then EDT's Progress view " //$NON-NLS-1$
+            + "lists it as '" + LOG_PREFIX + data.effectiveProjectName + "'. Then check list_projects before using " //$NON-NLS-1$ //$NON-NLS-2$
+            + "the project; to have the command interface files, remove the project with delete_project and " //$NON-NLS-1$
+            + "deleteContent=true - without it the project's directory stays on disk and create_project refuses it - " //$NON-NLS-1$
+            + "and run create_project again."); //$NON-NLS-1$
+        // Only what names the project: a value of a root nobody checked is not reported as applied.
+        ToolResult slowResult = extensionProject(VAL_VERIFICATION_REQUIRED, data)
             .put(KEY_VERSION, data.version.toString())
-            .put(KEY_STATE, VAL_CREATED)
+            .put(KEY_STATE, VAL_ROOT_UNCONFIRMED)
             .put(KEY_CODESTYLE, slowPathCodestyleMap())
-            .put(McpKeys.MESSAGE, "Extension project '" + data.effectiveProjectName //$NON-NLS-1$
-                + "' created and bound to '" + data.baseProjectName //$NON-NLS-1$
-                + "' (creation completed past the " //$NON-NLS-1$
-                + (CREATE_TIMEOUT_MS / 1000) + MSG_WAIT_WINDOW_SUFFIX);
+            .put(McpKeys.MESSAGE, String.join(" ", parts)); //$NON-NLS-1$
         // Mirror the normal success path: report when the synonym could not be applied.
-        if (!data.synonymApplied)
-        {
-            slowResult.put(KEY_SYNONYM_NOTE,
-                "Synonym was not applied: could not determine a language code from " //$NON-NLS-1$
-                    + "the base configuration or the new extension configuration."); //$NON-NLS-1$
-        }
+        putSynonymNote(slowResult, data);
         return slowResult.toJson();
     }
 
     /**
      * Builds the normal success JSON response for a created extension project (read-only),
-     * adding {@code synonymNote} when the synonym could not be applied.
+     * adding {@code synonymNote} when the synonym could not be applied. Package-visible for tests.
      */
-    private static String buildExtensionSuccessResponse(ExtensionResponseData data, String projectState,
+    static String buildExtensionSuccessResponse(ExtensionResponseData data, ExtensionFacts facts,
         Map<String, Object> codestyleMap)
     {
-        ToolResult result = ToolResult.success()
-            .put(McpKeys.ACTION, VAL_CREATED)
+        ToolResult result = extensionResult(data, facts)
+            .put(KEY_STATE, extensionState(facts))
+            .put(KEY_CODESTYLE, codestyleMap)
+            .put(McpKeys.MESSAGE, extensionMessage(data, facts));
+        putSynonymNote(result, data);
+        return result.toJson();
+    }
+
+    /**
+     * The fields every extension answer carries: what names the project - not the configuration name ({@code name}),
+     * which outputSchema documents as the root's Configuration name, a value of the root.
+     */
+    private static ToolResult extensionProject(String action, ExtensionResponseData data)
+    {
+        return ToolResult.success()
+            .put(McpKeys.ACTION, action)
             .put(McpKeys.PROJECT, data.effectiveProjectName)
             .put(KEY_PROJECT_KIND, KIND_EXTENSION)
+            .put(KEY_BASE_PROJECT, data.baseProjectName);
+    }
+
+    /** The fields of an extension whose create ended: what names the project, then its root's values. */
+    private static ToolResult extensionResult(ExtensionResponseData data, ExtensionFacts facts)
+    {
+        ToolResult result = extensionProject(VAL_CREATED, data)
             .put("name", data.configName) //$NON-NLS-1$
-            .put(KEY_BASE_PROJECT, data.baseProjectName)
             .put(KEY_PREFIX, data.prefix)
             .put(KEY_PURPOSE, data.purpose.getLiteral())
             .put(KEY_SCRIPT_VARIANT, data.scriptVariant.getLiteral())
-            .put(KEY_VERSION, data.version.toString())
-            .put(KEY_STATE, projectState)
-            .put(KEY_CODESTYLE, codestyleMap)
-            .put(McpKeys.MESSAGE, "Extension project '" + data.effectiveProjectName //$NON-NLS-1$
-                + "' created and bound to '" + data.baseProjectName + "'."); //$NON-NLS-1$ //$NON-NLS-2$
+            .put(KEY_VERSION, data.version.toString());
+        if (facts.mode != null)
+        {
+            result.put(KEY_COMPATIBILITY_MODE, facts.mode.getName());
+        }
+        return result;
+    }
+
+    private static void putSynonymNote(ToolResult result, ExtensionResponseData data)
+    {
         if (!data.synonymApplied)
         {
             result.put(KEY_SYNONYM_NOTE,
                 "Synonym was not applied: could not determine a language code from " //$NON-NLS-1$
                     + "the base configuration or the new extension configuration."); //$NON-NLS-1$
         }
-        return result.toJson();
+    }
+
+    /**
+     * The state of a created extension: {@code ready} only when EDT reported its context started AND the
+     * root file on disk showed the wizard's shape and this call's root - never on a root nobody saw, nor on one that
+     * shows another name, prefix, purpose or mode, or lacks one; an earlier project's root is not left in the new
+     * project's directory, as {@link #takenProjectRefusal} refuses an existing one. The command interface files do not
+     * enter it: {@code ready} is documented as the root seen on disk, and {@link #commandInterfaceNote} names a command
+     * interface file that was not. Package-visible for tests.
+     *
+     * @param facts what the post-create steps found
+     * @return {@code ready} or {@code created}
+     */
+    static String extensionState(ExtensionFacts facts)
+    {
+        return facts.lifecycleStarted && facts.disk != null && facts.disk.confirmed ? VAL_READY : VAL_CREATED;
+    }
+
+    /**
+     * The message of a created extension: how its root was built, what was not confirmed, and what EDT's
+     * wizard does that this tool does not. Package-visible for tests.
+     *
+     * @param data the response data
+     * @param facts what the post-create steps found
+     * @return the message
+     */
+    static String extensionMessage(ExtensionResponseData data, ExtensionFacts facts)
+    {
+        List<String> parts = new ArrayList<>();
+        parts.add("Extension project '" + data.effectiveProjectName + "' created and bound to '" //$NON-NLS-1$ //$NON-NLS-2$
+            + data.baseProjectName + "'."); //$NON-NLS-1$
+        parts.add("Its root was adopted from the root of '" + data.baseProjectName //$NON-NLS-1$
+            + "' the way EDT's new-extension wizard builds it: " + mappingClause(data.version) //$NON-NLS-1$
+            + ", and its compatibility mode is " + modeClause(facts) + "."); //$NON-NLS-1$ //$NON-NLS-2$
+        if (!facts.lifecycleStarted)
+        {
+            // No duration: 'not started' also covers a project with no DT project yet and a wait that threw.
+            parts.add("EDT did not report the project's context as started; check list_projects before using it."); //$NON-NLS-1$
+        }
+        else if (facts.disk != null && !facts.disk.confirmed)
+        {
+            parts.add("Its root was not confirmed on disk: " + facts.disk.describe() + " after " //$NON-NLS-1$ //$NON-NLS-2$
+                + seconds(facts.disk.budgetMs) + "s (EDT's export queue: " + facts.disk.exportState //$NON-NLS-1$
+                + "). EDT may still be writing it; wait a few seconds before restarting EDT or running " //$NON-NLS-1$
+                + "clean_project on this project, which would race that save."); //$NON-NLS-1$
+        }
+        addNotes(parts, facts, commandInterfaceNote(facts));
+        return String.join(" ", parts); //$NON-NLS-1$
+    }
+
+    /**
+     * The notes every extension answer carries when they apply, in a stable order; {@code commandInterfaces} is the
+     * answer's note on the command interface files, or {@code null} for none.
+     */
+    private static void addNotes(List<String> parts, ExtensionFacts facts, String commandInterfaces)
+    {
+        if (facts.compatibilityNote != null)
+        {
+            parts.add(facts.compatibilityNote);
+        }
+        if (commandInterfaces != null)
+        {
+            parts.add(commandInterfaces);
+        }
+        String role = defaultRoleNote(facts.baseMode, facts.mode);
+        if (role != null)
+        {
+            parts.add(role);
+        }
+    }
+
+    /**
+     * What the answer says of the two command interface files EDT's wizard creates, or {@code null} when there is
+     * nothing to say. Their FILES are the evidence, as the root's file is the root's: a save submission EDT did not
+     * accept is reported only while the files were not seen - by a look that did not run or that ended without them -
+     * since EDT also saves a committed change on its own; files the look did see need no note. A file the look did not
+     * see is named. None of this changes {@code state}, which is the root's. Package-visible for tests.
+     *
+     * @param facts what the post-create steps found
+     * @return the note, or {@code null}
+     */
+    static String commandInterfaceNote(ExtensionFacts facts)
+    {
+        String files = COMMAND_INTERFACE_FILES;
+        if (facts.commandInterfaceFailure != null)
+        {
+            return files + " were not created: " + withoutFinalPeriod(facts.commandInterfaceFailure) + "."; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        List<String> notSeen = facts.disk == null ? Collections.emptyList() : facts.disk.missingFiles;
+        boolean refused = facts.commandInterfaceSaveFailure != null && (facts.disk == null || !notSeen.isEmpty());
+        if (!refused && notSeen.isEmpty())
+        {
+            return null;
+        }
+        StringBuilder note = new StringBuilder(files);
+        if (refused)
+        {
+            note.append(" were attached but not queued for saving: ") //$NON-NLS-1$
+                .append(withoutFinalPeriod(facts.commandInterfaceSaveFailure));
+            if (!notSeen.isEmpty())
+            {
+                note.append("; "); //$NON-NLS-1$
+            }
+        }
+        else
+        {
+            note.append(" were attached, but "); //$NON-NLS-1$
+        }
+        if (!notSeen.isEmpty())
+        {
+            // "Not seen", not "not found": a file whose check did not complete in time - or failed - was not seen either.
+            note.append(String.join(" and ", notSeen)).append(notSeen.size() == 1 ? " was" : " were") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                .append(" not seen on disk after ").append(seconds(facts.disk.budgetMs)).append('s'); //$NON-NLS-1$
+        }
+        note.append('.');
+        if (!notSeen.isEmpty() && facts.disk.confirmed)
+        {
+            // The root's own note gives the same advice when the root was not confirmed either.
+            note.append(" EDT may still be writing ").append(notSeen.size() == 1 ? "it" : "them") //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                .append("; wait a few seconds before restarting EDT or running clean_project on this project, ") //$NON-NLS-1$
+                .append("which would race that save."); //$NON-NLS-1$
+        }
+        return note.toString();
+    }
+
+    /**
+     * What the root's mapping flag means at the extension's platform version, which is its base's: EDT's adopter
+     * links an adopted object to its base object by ID only above 8.3.14
+     * ({@link ExtensionRootBuilder#versionMapsByNameOnly}),
+     * whatever the flag says.
+     */
+    private static String mappingClause(Version version)
+    {
+        if (ExtensionRootBuilder.versionMapsByNameOnly(version))
+        {
+            return "it keeps the flag that maps adopted objects to the base by IDs, but at platform version " //$NON-NLS-1$
+                + version + " EDT maps them by name (by ID only above 8.3.14)"; //$NON-NLS-1$
+        }
+        return "it keeps mapping adopted objects to the base by IDs"; //$NON-NLS-1$
+    }
+
+    /** Names the effective mode and, when it was requested, the base's beside it. */
+    private static String modeClause(ExtensionFacts facts)
+    {
+        String mode = facts.mode == null ? "unknown" : facts.mode.getName(); //$NON-NLS-1$
+        if (facts.modeRequested && facts.mode != facts.baseMode && facts.baseMode != null)
+        {
+            return mode + " (requested; the base configuration's is " + facts.baseMode.getName() + ")"; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        return mode + " (the base configuration's)"; //$NON-NLS-1$
+    }
+
+    /**
+     * What EDT's wizard does beyond the root that this tool does not: it creates a default role, and no MCP tool
+     * can add a role to the root's defaultRoles yet. The wizard decides on its root's extension mode, which in the
+     * wizard is always the BASE's, so the note is given only over a base above 8.3.13 - never over a base at 8.3.13
+     * or lower, whatever mode was requested - and only when the effective mode is above 8.3.13 too.
+     * Package-visible for tests.
+     *
+     * @param baseMode the base configuration's compatibility mode
+     * @param mode the effective extension compatibility mode
+     * @return the note, or {@code null} when the wizard would create no default role for this base
+     */
+    static String defaultRoleNote(CompatibilityMode baseMode, CompatibilityMode mode)
+    {
+        if (!ExtensionRootBuilder.wizardCreatesDefaultRole(baseMode)
+            || !ExtensionRootBuilder.wizardCreatesDefaultRole(mode))
+        {
+            return null;
+        }
+        return "EDT's wizard also creates a default role that gives users rights to the extension's new objects; " //$NON-NLS-1$
+            + "this tool does not, and no MCP path can add a role to the extension root's defaultRoles yet - " //$NON-NLS-1$
+            + "add it in EDT."; //$NON-NLS-1$
+    }
+
+    private static String withoutFinalPeriod(String text)
+    {
+        return text.endsWith(".") ? text.substring(0, text.length() - 1) : text; //$NON-NLS-1$
+    }
+
+    private static long seconds(long ms)
+    {
+        return Math.max(1L, (ms + 999L) / 1000L);
     }
 
     /**
@@ -2168,7 +2775,9 @@ public class CreateProjectTool implements IMcpTool
      * <ul>
      *   <li>{@link CreateStatus#OK} — job completed in time; caller checks {@code errorHolder}.</li>
      *   <li>{@link CreateStatus#SLOW_EXISTS} — timed out but project already exists; caller
-     *       builds a kind-specific response without inferring any finer-grained mutation.</li>
+     *       builds a kind-specific response without inferring any finer-grained mutation. The job
+     *       had not ended (its cancellation is only requested), so the caller writes nothing
+     *       to the project.</li>
      *   <li>{@link CreateStatus#TIMED_OUT} — timed out and project absent; {@code errorJson}
      *       is ready to return.</li>
      *   <li>{@link CreateStatus#INTERRUPTED} — job interrupted; {@code errorJson} is ready
@@ -2243,6 +2852,20 @@ public class CreateProjectTool implements IMcpTool
      */
     private static String waitForLifecycle(String effectiveProjectName, IProject newIProject, String kindLabel)
     {
+        return waitForStarted(effectiveProjectName, newIProject, kindLabel) ? VAL_READY : VAL_CREATED;
+    }
+
+    /**
+     * Waits for the newly created project to reach lifecycle STARTED - at once when {@code create()} already
+     * started it, which a project manager does before it returns ({@link LifecycleWaiter}).
+     *
+     * @param effectiveProjectName the workspace project name
+     * @param newIProject the {@link IProject} returned by the create call (may be null)
+     * @param kindLabel kind label for log messages
+     * @return whether STARTED was reached
+     */
+    private static boolean waitForStarted(String effectiveProjectName, IProject newIProject, String kindLabel)
+    {
         try
         {
             IDtProjectManager dtProjectManager = Activator.getDefault().getDtProjectManager();
@@ -2254,11 +2877,7 @@ public class CreateProjectTool implements IMcpTool
                     dtProjectManager.getDtProject(resolvedProject);
                 if (dtProject != null)
                 {
-                    boolean started = LifecycleWaiter.waitForProjectStarted(dtProject, STARTED_TIMEOUT_MS);
-                    if (started)
-                    {
-                        return "ready"; //$NON-NLS-1$
-                    }
+                    return LifecycleWaiter.waitForProjectStarted(dtProject, STARTED_TIMEOUT_MS);
                 }
             }
         }
@@ -2266,7 +2885,7 @@ public class CreateProjectTool implements IMcpTool
         {
             Activator.logError(LOG_PREFIX + "lifecycle wait error (" + kindLabel + ")", e); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        return VAL_CREATED;
+        return false;
     }
 
     /**

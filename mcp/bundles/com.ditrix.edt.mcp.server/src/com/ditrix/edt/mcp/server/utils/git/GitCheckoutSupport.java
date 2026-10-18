@@ -6,8 +6,12 @@
 
 package com.ditrix.edt.mcp.server.utils.git;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
@@ -35,6 +39,13 @@ import com.ditrix.edt.mcp.server.utils.McpJobs;
  * ORIGINAL branch, a create-then-checkout failure leaves a freshly created branch
  * that was simply never checked out), only the Job/refresh mechanics are shared
  * here.
+ * <p>
+ * The checkout runs under {@link BranchBindingLock}, the lock {@code set_branch_infobase}'s binding changes take
+ * (#656), so no checkout of this server lands between a detach's re-check and EDT's write; a call that waits
+ * {@link BranchBindingLock#WAIT_SECONDS} for it checks nothing out ({@link CheckoutOutcome#busy()}). A checkout
+ * Job that outlives its bounded wait is recorded as still running ({@link BranchBindingLock#awaitOrTrack}) before
+ * the lock is released, for every project in the repository's work tree, until the Job itself ends: a detach for
+ * one of them refuses meanwhile, instead of the lock being held across a Job that may never end.
  * <p>
  * Never touches the UI thread; bounded by {@link #CHECKOUT_TIMEOUT_SECONDS}
  * (mirrors {@code CreateInfobaseTool}'s Job pattern). The unconditional
@@ -64,10 +75,13 @@ public final class GitCheckoutSupport
      * post-checkout-refresh-failure note (only possible when the status is
      * {@link CheckoutResult.Status#OK});</li>
      * <li>{@link #timedOut()} - the Job did not finish within
-     * {@link #CHECKOUT_TIMEOUT_SECONDS} and was cancelled;</li>
+     * {@link #CHECKOUT_TIMEOUT_SECONDS} and was asked to cancel; it may still be running, and stays recorded
+     * as running until it ends ({@link BranchBindingLock#awaitOrTrack});</li>
      * <li>{@link #interrupted()} - the waiting thread was interrupted (the interrupt
-     * flag has already been restored on it);</li>
-     * <li>{@link #jobError()} - the checkout itself threw a {@link CoreException}.</li>
+     * flag has already been restored on it); the Job may still be running, recorded as above;</li>
+     * <li>{@link #jobError()} - the checkout itself threw a {@link CoreException};</li>
+     * <li>{@link #busy()} - another infobase-binding change or checkout held
+     * {@link BranchBindingLock} for the whole wait, so nothing was checked out.</li>
      * </ul>
      */
     public static final class CheckoutOutcome
@@ -82,14 +96,17 @@ public final class GitCheckoutSupport
 
         private final Exception jobError;
 
+        private final boolean busy;
+
         private CheckoutOutcome(CheckoutResult result, String refreshWarning, boolean timedOut,
-            boolean interrupted, Exception jobError)
+            boolean interrupted, Exception jobError, boolean busy)
         {
             this.result = result;
             this.refreshWarning = refreshWarning;
             this.timedOut = timedOut;
             this.interrupted = interrupted;
             this.jobError = jobError;
+            this.busy = busy;
         }
 
         /**
@@ -101,7 +118,7 @@ public final class GitCheckoutSupport
         static CheckoutOutcome forTest(CheckoutResult result, String refreshWarning, boolean timedOut,
             boolean interrupted, Exception jobError)
         {
-            return new CheckoutOutcome(result, refreshWarning, timedOut, interrupted, jobError);
+            return new CheckoutOutcome(result, refreshWarning, timedOut, interrupted, jobError, false);
         }
 
         /**
@@ -110,7 +127,7 @@ public final class GitCheckoutSupport
          */
         public boolean ranToCompletion()
         {
-            return !timedOut && !interrupted && jobError == null;
+            return !timedOut && !interrupted && jobError == null && !busy;
         }
 
         /** @return JGit's checkout result, or {@code null} unless {@link #ranToCompletion()}. */
@@ -145,6 +162,16 @@ public final class GitCheckoutSupport
         {
             return jobError;
         }
+
+        /**
+         * @return {@code true} if another infobase-binding change or checkout held {@link BranchBindingLock} for
+         *         the whole {@link BranchBindingLock#WAIT_SECONDS}: nothing was checked out
+         *         ({@link BranchBindingLock#busyReason()} words it)
+         */
+        public boolean busy()
+        {
+            return busy;
+        }
     }
 
     /**
@@ -157,12 +184,36 @@ public final class GitCheckoutSupport
      * {@link CheckoutOutcome#refreshWarning()} rather than failing the
      * already-successful checkout.
      *
+     * <p>
+     * Runs under {@link BranchBindingLock} (see the class javadoc), taken before anything is built and released
+     * when the join returns: a Job that outlived {@link #CHECKOUT_TIMEOUT_SECONDS} (or whose wait was
+     * interrupted) may still be finishing after that, and is recorded as running until it ends
+     * ({@link #awaitCheckout}).
+     *
      * @param project the project to refresh after a successful checkout
      * @param repo the repository to check out in
      * @param fullRef the full ref to check out (e.g. {@code refs/heads/feature/x})
      * @return the bounded outcome (never {@code null})
      */
     public static CheckoutOutcome checkout(IProject project, Repository repo, String fullRef)
+    {
+        if (!BranchBindingLock.tryLock())
+        {
+            boolean interrupted = Thread.currentThread().isInterrupted();
+            return new CheckoutOutcome(null, null, false, interrupted, null, !interrupted);
+        }
+        try
+        {
+            return checkoutLocked(project, repo, fullRef);
+        }
+        finally
+        {
+            BranchBindingLock.unlock();
+        }
+    }
+
+    /** {@link #checkout} under {@link BranchBindingLock}. */
+    private static CheckoutOutcome checkoutLocked(IProject project, Repository repo, String fullRef)
     {
         BranchOperation op = new BranchOperation(repo, fullRef);
         AtomicReference<Exception> jobError = new AtomicReference<>();
@@ -199,26 +250,58 @@ public final class GitCheckoutSupport
         checkoutJob.setSystem(true);
         McpJobs.schedule(checkoutJob);
 
-        try
+        CheckoutOutcome unfinished = awaitCheckout(checkoutJob, TimeUnit.SECONDS.toMillis(CHECKOUT_TIMEOUT_SECONDS),
+            () -> affectedProjects(project, repo));
+        if (unfinished != null)
         {
-            boolean finished = checkoutJob.join(TimeUnit.SECONDS.toMillis(CHECKOUT_TIMEOUT_SECONDS), null);
-            if (!finished)
-            {
-                checkoutJob.cancel();
-                return new CheckoutOutcome(null, null, true, false, null);
-            }
-        }
-        catch (InterruptedException e)
-        {
-            Thread.currentThread().interrupt();
-            return new CheckoutOutcome(null, null, false, true, null);
+            return unfinished;
         }
 
         if (jobError.get() != null)
         {
-            return new CheckoutOutcome(null, null, false, false, jobError.get());
+            return new CheckoutOutcome(null, null, false, false, jobError.get(), false);
         }
-        return new CheckoutOutcome(op.getResult(repo), refreshWarning.get(), false, false, null);
+        return new CheckoutOutcome(op.getResult(repo), refreshWarning.get(), false, false, null, false);
+    }
+
+    /**
+     * Joins the scheduled checkout Job for at most {@code timeoutMillis}, under {@link BranchBindingLock}. A Job that
+     * has not ended by then is asked to cancel - cooperatively: it may go on running - and a Job whose wait was
+     * interrupted is left running; either way it is recorded as still running for {@code affected} until it ends
+     * ({@link BranchBindingLock#awaitOrTrack}), before the caller releases the lock.
+     *
+     * @param affected names the projects whose branch the checkout moves
+     * @return {@code null} when the Job ended within the wait, otherwise the timed-out or interrupted outcome
+     */
+    static CheckoutOutcome awaitCheckout(Job checkoutJob, long timeoutMillis,
+        Supplier<? extends Collection<String>> affected)
+    {
+        try
+        {
+            if (BranchBindingLock.awaitOrTrack(checkoutJob, timeoutMillis, affected))
+            {
+                return null;
+            }
+            checkoutJob.cancel();
+            return new CheckoutOutcome(null, null, true, false, null, false);
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+            return new CheckoutOutcome(null, null, false, true, null, false);
+        }
+    }
+
+    /**
+     * The projects a checkout in {@code repo} moves to another branch: {@code project} and every workspace project in
+     * the repository's work tree.
+     */
+    private static List<String> affectedProjects(IProject project, Repository repo)
+    {
+        List<String> names = new ArrayList<>();
+        names.add(project.getName());
+        names.addAll(WorkTreeProjects.names(WorkTreeProjects.inside(repo.getWorkTree())));
+        return names;
     }
 
     /**

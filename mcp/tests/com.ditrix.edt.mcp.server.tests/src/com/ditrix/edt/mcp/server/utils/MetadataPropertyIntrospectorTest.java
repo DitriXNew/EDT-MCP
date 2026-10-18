@@ -31,6 +31,7 @@ import org.eclipse.emf.ecore.EcorePackage;
 import org.eclipse.emf.ecore.InternalEObject;
 import org.junit.Test;
 
+import com._1c.g5.v8.bm.core.BmUriUtil;
 import com._1c.g5.v8.dt.mcore.BinaryQualifiers;
 import com._1c.g5.v8.dt.mcore.CommandGroupCategory;
 import com._1c.g5.v8.dt.mcore.DateFractions;
@@ -40,6 +41,7 @@ import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.NumberQualifiers;
 import com._1c.g5.v8.dt.mcore.QName;
 import com._1c.g5.v8.dt.mcore.ReferenceValue;
+import com._1c.g5.v8.dt.mcore.SourceType;
 import com._1c.g5.v8.dt.mcore.StandardCommandGroup;
 import com._1c.g5.v8.dt.mcore.StringQualifiers;
 import com._1c.g5.v8.dt.mcore.StringValue;
@@ -47,6 +49,7 @@ import com._1c.g5.v8.dt.mcore.Type;
 import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean;
+import com._1c.g5.v8.dt.metadata.mdclass.BasicDbObject;
 import com._1c.g5.v8.dt.metadata.mdclass.Catalog;
 import com._1c.g5.v8.dt.metadata.mdclass.CatalogAttribute;
 import com._1c.g5.v8.dt.metadata.mdclass.CommandGroup;
@@ -55,6 +58,7 @@ import com._1c.g5.v8.dt.metadata.mdclass.Document;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassFactory;
 import com._1c.g5.v8.dt.metadata.mdclass.MdClassPackage;
 import com._1c.g5.v8.dt.metadata.mdclass.MdObject;
+import com._1c.g5.v8.dt.metadata.mdclass.ObjectBelonging;
 import com._1c.g5.v8.dt.metadata.mdclass.StandardCommand;
 import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
@@ -1836,5 +1840,162 @@ public class MetadataPropertyIntrospectorTest
             attribute.setUpperBound(-1);
         }
         owner.getEStructuralFeatures().add(attribute);
+    }
+
+    // ============ FIELD_LIST: inputByString / dataLockFields (issue #740) ============
+
+    /** A standard field the way EDT's MdFieldInferrer builds it, in {@code owner}'s derived fields. */
+    private static com._1c.g5.v8.dt.mcore.Field inferredField(BasicDbObject owner, String name,
+        String nameRu, SourceType... sources)
+    {
+        com._1c.g5.v8.dt.mcore.Field field = McoreFactory.eINSTANCE.createField();
+        field.setName(name);
+        field.setNameRu(nameRu);
+        field.setFieldIdPrefix("StandardAttribute"); //$NON-NLS-1$
+        field.getSourceTypes().addAll(java.util.Arrays.asList(sources));
+        owner.getFields().add(field);
+        return field;
+    }
+
+    /** The proxy EDT's own reader builds for a stored field address (MdSymbolicNameServiceDelegate). */
+    private static com._1c.g5.v8.dt.mcore.Field storedFieldProxy(String topFqn, String fieldId)
+    {
+        com._1c.g5.v8.dt.mcore.Field proxy = McoreFactory.eINSTANCE.createField();
+        ((InternalEObject)proxy).eSetProxyURI(BmUriUtil.createContainedBmObjectUri("engine-1", topFqn, //$NON-NLS-1$
+            "/fields:" + BmUriUtil.encodeCollectionItemId(fieldId))); //$NON-NLS-1$
+        return proxy;
+    }
+
+    private static Catalog goodsCatalog()
+    {
+        Catalog goods = newCatalog();
+        goods.setName("Goods"); //$NON-NLS-1$
+        return goods;
+    }
+
+    /** The eight concrete BasicDbObject kinds of MdClass.xcore all inherit the two lists. */
+    @Test
+    public void testInputByStringIsAFieldListOnEveryBasicDbObjectKind()
+    {
+        MdClassFactory f = MdClassFactory.eINSTANCE;
+        MdObject[] kinds = {f.createCatalog(), f.createDocument(), f.createChartOfCharacteristicTypes(),
+            f.createChartOfAccounts(), f.createChartOfCalculationTypes(), f.createExchangePlan(),
+            f.createBusinessProcess(), f.createTask()};
+        for (MdObject kind : kinds)
+        {
+            PropertyInfo info = MetadataPropertyIntrospector.find(kind, "inputByString"); //$NON-NLS-1$
+            assertNotNull(kind.eClass().getName() + " must offer inputByString", info); //$NON-NLS-1$
+            assertEquals(kind.eClass().getName(), ValueKind.FIELD_LIST, info.valueKind);
+            assertSame(MdClassPackage.Literals.BASIC_DB_OBJECT__INPUT_BY_STRING, info.feature);
+        }
+    }
+
+    @Test
+    public void testDataLockFieldsIsAFieldListToo()
+    {
+        Document order = MdClassFactory.eINSTANCE.createDocument();
+        PropertyInfo info = MetadataPropertyIntrospector.find(order, "dataLockFields"); //$NON-NLS-1$
+        assertNotNull(info);
+        assertEquals(ValueKind.FIELD_LIST, info.valueKind);
+        assertTrue(MetadataPropertyIntrospector.assignableNames(order).contains("inputByString")); //$NON-NLS-1$
+        assertTrue(MetadataPropertyIntrospector.assignableNames(order).contains("dataLockFields")); //$NON-NLS-1$
+    }
+
+    /**
+     * An external data source table declares the same three mcore.Field lists, and none of them is
+     * classified: they are outside the measured eligibility table (a guard, green by design on
+     * master - it is the test that fails when that table stops being consulted).
+     */
+    @Test
+    public void testAnExternalTableKeepsItsFieldListsExcluded()
+    {
+        EObject table = MdClassFactory.eINSTANCE.createTable();
+        for (String name : new String[] {"inputByString", "keyFields", "dataLockFields"}) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        {
+            assertNull(name, MetadataPropertyIntrospector.find(table, name));
+        }
+    }
+
+    /** A resolved field and a stored proxy render alike, as the addresses the .mdo holds, in order. */
+    @Test
+    public void testCurrentRendersTheStoredAddressesInOrder()
+    {
+        Catalog goods = goodsCatalog();
+        com._1c.g5.v8.dt.mcore.Field description = inferredField(goods, "Description", "\u041D\u0430\u0438\u043C\u0435\u043D\u043E\u0432\u0430\u043D\u0438\u0435", //$NON-NLS-1$ //$NON-NLS-2$
+            SourceType.INPUT_BY_STRING);
+        goods.getInputByString().add(description);
+        goods.getInputByString().add(storedFieldProxy("Catalog.Goods", "StandardAttribute:Code")); //$NON-NLS-1$ //$NON-NLS-2$
+
+        PropertyInfo info = MetadataPropertyIntrospector.find(goods, "inputByString"); //$NON-NLS-1$
+        assertEquals("[\"Catalog.Goods.StandardAttribute.Description\",\"Catalog.Goods.StandardAttribute.Code\"]", //$NON-NLS-1$
+            info.currentValue);
+        assertEquals(info.currentValue, info.valueIdentity);
+        assertFalse(info.readFailed);
+    }
+
+    @Test
+    public void testAnEntryWithNoAddressIsAFailedRead()
+    {
+        Catalog goods = goodsCatalog();
+        com._1c.g5.v8.dt.mcore.Field dangling = McoreFactory.eINSTANCE.createField();
+        ((InternalEObject)dangling).eSetProxyURI(URI.createURI("unresolved:/x")); //$NON-NLS-1$
+        goods.getInputByString().add(dangling);
+
+        PropertyInfo info = MetadataPropertyIntrospector.find(goods, "inputByString"); //$NON-NLS-1$
+        assertTrue("an entry nothing names is a failed read, never an absent value", info.readFailed); //$NON-NLS-1$
+        assertNull(info.currentValue);
+    }
+
+    /** C4: the wire clears with [], so an empty list reads back as [] - a value, not an absence. */
+    @Test
+    public void testAnEmptyFieldListIsAnEmptyArray()
+    {
+        PropertyInfo info = MetadataPropertyIntrospector.find(goodsCatalog(), "dataLockFields"); //$NON-NLS-1$
+        assertEquals("[]", info.currentValue); //$NON-NLS-1$
+        assertEquals("[]", info.valueIdentity); //$NON-NLS-1$
+        assertFalse(info.readFailed);
+    }
+
+    /** Allowed is what EDT offers for THAT list: the source type is read per feature from the model. */
+    @Test
+    public void testAllowedListsTheFieldsEdtOffersForEachList()
+    {
+        Catalog goods = goodsCatalog();
+        inferredField(goods, "Ref", "\u0421\u0441\u044B\u043B\u043A\u0430", SourceType.STANDARD_FIELDS); //$NON-NLS-1$ //$NON-NLS-2$
+        inferredField(goods, "DeletionMark", "\u041F\u043E\u043C\u0435\u0442\u043A\u0430\u0423\u0434\u0430\u043B\u0435\u043D\u0438\u044F", SourceType.STANDARD_FIELDS, //$NON-NLS-1$ //$NON-NLS-2$
+            SourceType.FIELDS_FOR_LOCKING);
+        inferredField(goods, "Description", "\u041D\u0430\u0438\u043C\u0435\u043D\u043E\u0432\u0430\u043D\u0438\u0435", SourceType.STANDARD_FIELDS, //$NON-NLS-1$ //$NON-NLS-2$
+            SourceType.INPUT_BY_STRING, SourceType.FIELDS_FOR_LOCKING);
+
+        assertEquals(Collections.singletonList("Catalog.Goods.StandardAttribute.Description"), //$NON-NLS-1$
+            MetadataPropertyIntrospector.find(goods, "inputByString").allowedValues); //$NON-NLS-1$
+        assertEquals(java.util.Arrays.asList("Catalog.Goods.StandardAttribute.DeletionMark", //$NON-NLS-1$
+            "Catalog.Goods.StandardAttribute.Description"), //$NON-NLS-1$
+            MetadataPropertyIntrospector.find(goods, "dataLockFields").allowedValues); //$NON-NLS-1$
+    }
+
+    /** C2: an adopted object keeps its Current row (comparisons see it) and offers nothing to write. */
+    @Test
+    public void testAnAdoptedObjectKeepsItsCurrentButOffersNothing()
+    {
+        Catalog goods = goodsCatalog();
+        goods.setObjectBelonging(ObjectBelonging.ADOPTED);
+        goods.getInputByString().add(inferredField(goods, "Code", "\u041A\u043E\u0434", SourceType.INPUT_BY_STRING)); //$NON-NLS-1$ //$NON-NLS-2$
+
+        PropertyInfo info = MetadataPropertyIntrospector.find(goods, "inputByString"); //$NON-NLS-1$
+        assertEquals("[\"Catalog.Goods.StandardAttribute.Code\"]", info.currentValue); //$NON-NLS-1$
+        assertTrue(info.allowedValues.isEmpty());
+    }
+
+    /** The lightweight lookup classifies only; the preparation re-derives the offered fields itself. */
+    @Test
+    public void testFindFeatureClassifiesAFieldListWithoutReadingTheOfferedFields()
+    {
+        Catalog goods = goodsCatalog();
+        inferredField(goods, "Description", "\u041D\u0430\u0438\u043C\u0435\u043D\u043E\u0432\u0430\u043D\u0438\u0435", SourceType.INPUT_BY_STRING); //$NON-NLS-1$ //$NON-NLS-2$
+
+        PropertyInfo info = MetadataPropertyIntrospector.findFeature(goods, "inputByString"); //$NON-NLS-1$
+        assertEquals(ValueKind.FIELD_LIST, info.valueKind);
+        assertTrue(info.allowedValues.isEmpty());
     }
 }

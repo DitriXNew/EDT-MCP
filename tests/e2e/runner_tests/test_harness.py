@@ -820,14 +820,18 @@ class FixtureResetTest(unittest.TestCase):
                 mock.patch.object(HARNESS, "_top_object_inventory",
                                   side_effect=lambda project=HARNESS.PROJECT: inventories[project]), \
                 mock.patch.object(HARNESS, "_probe_details", return_value="base details"), \
+                mock.patch.object(HARNESS, "_root_fingerprint",
+                                  side_effect=lambda project=HARNESS.PROJECT: "root of " + project), \
                 mock.patch.object(HARNESS, "_BASELINE_INVENTORY", None), \
                 mock.patch.object(HARNESS, "_BASELINE_DETAILS", None), \
                 mock.patch.dict(HARNESS._BASELINE_INVENTORY_BY_PROJECT, {}, clear=True), \
-                mock.patch.dict(HARNESS._BASELINE_DETAILS_BY_PROJECT, {}, clear=True):
+                mock.patch.dict(HARNESS._BASELINE_DETAILS_BY_PROJECT, {}, clear=True), \
+                mock.patch.dict(HARNESS._BASELINE_ROOT_BY_PROJECT, {}, clear=True):
             HARNESS.final_cleanup()
             HARNESS.snapshot_model_baseline()
             captured = dict(HARNESS._BASELINE_INVENTORY_BY_PROJECT)
             captured_details = dict(HARNESS._BASELINE_DETAILS_BY_PROJECT)
+            captured_roots = dict(HARNESS._BASELINE_ROOT_BY_PROJECT)
 
         self.assertEqual({
             HARNESS.PROJECT: "base inventory",
@@ -839,6 +843,11 @@ class FixtureResetTest(unittest.TestCase):
             HARNESS.TESTS_PROJECT: "base details",
             HARNESS.SUPPORTED_PROJECT: "base details",
         }, captured_details)
+        self.assertEqual({
+            HARNESS.PROJECT: "root of " + HARNESS.PROJECT,
+            HARNESS.TESTS_PROJECT: "root of " + HARNESS.TESTS_PROJECT,
+            HARNESS.SUPPORTED_PROJECT: "root of " + HARNESS.SUPPORTED_PROJECT,
+        }, captured_roots)
 
     def test_baseline_records_external_objects_after_its_sync_succeeded(self):
         inventories = {
@@ -855,14 +864,18 @@ class FixtureResetTest(unittest.TestCase):
                 mock.patch.object(HARNESS, "_top_object_inventory",
                                   side_effect=lambda project=HARNESS.PROJECT: inventories[project]), \
                 mock.patch.object(HARNESS, "_probe_details", return_value="base details"), \
+                mock.patch.object(HARNESS, "_root_fingerprint",
+                                  side_effect=lambda project=HARNESS.PROJECT: "root of " + project) as root, \
                 mock.patch.object(HARNESS, "_BASELINE_INVENTORY", None), \
                 mock.patch.object(HARNESS, "_BASELINE_DETAILS", None), \
                 mock.patch.dict(HARNESS._BASELINE_INVENTORY_BY_PROJECT, {}, clear=True), \
-                mock.patch.dict(HARNESS._BASELINE_DETAILS_BY_PROJECT, {}, clear=True):
+                mock.patch.dict(HARNESS._BASELINE_DETAILS_BY_PROJECT, {}, clear=True), \
+                mock.patch.dict(HARNESS._BASELINE_ROOT_BY_PROJECT, {}, clear=True):
             HARNESS.final_cleanup()
             HARNESS.snapshot_model_baseline()
             captured = dict(HARNESS._BASELINE_INVENTORY_BY_PROJECT)
             captured_details = dict(HARNESS._BASELINE_DETAILS_BY_PROJECT)
+            captured_roots = dict(HARNESS._BASELINE_ROOT_BY_PROJECT)
 
         self.assertIn(mock.call(HARNESS.EXT_OBJECTS_PROJECT, mock.ANY, ignore_projects=mock.ANY),
                       clean.call_args_list)
@@ -873,6 +886,13 @@ class FixtureResetTest(unittest.TestCase):
             HARNESS.EXT_OBJECTS_PROJECT: "base details",
             HARNESS.SUPPORTED_PROJECT: "base details",
         }, captured_details)
+        # An external-objects project has no configuration root of its own: never fingerprinted.
+        self.assertEqual({
+            HARNESS.PROJECT: "root of " + HARNESS.PROJECT,
+            HARNESS.TESTS_PROJECT: "root of " + HARNESS.TESTS_PROJECT,
+            HARNESS.SUPPORTED_PROJECT: "root of " + HARNESS.SUPPORTED_PROJECT,
+        }, captured_roots)
+        self.assertNotIn(mock.call(HARNESS.EXT_OBJECTS_PROJECT), root.call_args_list)
 
     def test_non_base_verify_fails_when_clean_disk_inventory_differs(self):
         with mock.patch.dict(
@@ -953,6 +973,89 @@ class FixtureResetTest(unittest.TestCase):
         self.assertIsNone(mismatch)
         inventory.assert_not_called()
         details.assert_not_called()
+
+    # -- the configuration-root brace (issue #741) --
+
+    def test_base_verify_fails_when_the_configuration_root_still_differs(self):
+        """A root write survives a reset with every name and every probe detail intact."""
+        with mock.patch.object(HARNESS, "_BASELINE_INVENTORY", "inventory"), \
+                mock.patch.object(HARNESS, "_BASELINE_DETAILS", "details"), \
+                mock.patch.dict(HARNESS._BASELINE_ROOT_BY_PROJECT,
+                                {HARNESS.PROJECT: "version: 1.0"}, clear=True), \
+                mock.patch.object(HARNESS, "_top_object_inventory", return_value="inventory"), \
+                mock.patch.object(HARNESS, "_probe_details", return_value="details"), \
+                mock.patch.object(HARNESS, "_root_fingerprint",
+                                  return_value="version: 7.4.1") as root:
+            mismatch = HARNESS._baseline_mismatch()
+
+        self.assertIsNotNone(mismatch)
+        self.assertIn("configuration root", mismatch)
+        root.assert_called_once_with(HARNESS.PROJECT)
+
+    def test_base_verify_passes_when_the_configuration_root_matches(self):
+        with mock.patch.object(HARNESS, "_BASELINE_INVENTORY", "inventory"), \
+                mock.patch.object(HARNESS, "_BASELINE_DETAILS", "details"), \
+                mock.patch.dict(HARNESS._BASELINE_ROOT_BY_PROJECT,
+                                {HARNESS.PROJECT: "version: 1.0"}, clear=True), \
+                mock.patch.object(HARNESS, "_top_object_inventory", return_value="inventory"), \
+                mock.patch.object(HARNESS, "_probe_details", return_value="details"), \
+                mock.patch.object(HARNESS, "_root_fingerprint", return_value="version: 1.0"):
+            self.assertIsNone(HARNESS._baseline_mismatch())
+
+    def test_an_unreadable_root_is_a_mismatch_once_its_baseline_exists(self):
+        with mock.patch.dict(HARNESS._BASELINE_ROOT_BY_PROJECT,
+                             {HARNESS.TESTS_PROJECT: "version: 1.0"}, clear=True), \
+                mock.patch.dict(HARNESS._BASELINE_INVENTORY_BY_PROJECT, {}, clear=True), \
+                mock.patch.dict(HARNESS._BASELINE_DETAILS_BY_PROJECT, {}, clear=True), \
+                mock.patch.object(HARNESS, "_disk_mismatch", return_value=None), \
+                mock.patch.object(HARNESS, "_root_fingerprint", return_value=None):
+            mismatch = HARNESS._non_base_mismatch(HARNESS.TESTS_PROJECT, HARNESS.TESTS_PROJECT_REL)
+
+        self.assertIsNotNone(mismatch)
+        self.assertIn("could not be read", mismatch)
+
+    def test_non_base_verify_fails_when_the_extension_root_still_differs(self):
+        with mock.patch.dict(HARNESS._BASELINE_ROOT_BY_PROJECT,
+                             {HARNESS.TESTS_PROJECT: "version: 1.0"}, clear=True), \
+                mock.patch.dict(HARNESS._BASELINE_INVENTORY_BY_PROJECT,
+                                {HARNESS.TESTS_PROJECT: "inventory"}, clear=True), \
+                mock.patch.dict(HARNESS._BASELINE_DETAILS_BY_PROJECT,
+                                {HARNESS.TESTS_PROJECT: "details"}, clear=True), \
+                mock.patch.object(HARNESS, "_disk_mismatch", return_value=None), \
+                mock.patch.object(HARNESS, "_top_object_inventory", return_value="inventory"), \
+                mock.patch.object(HARNESS, "_probe_details", return_value="details"), \
+                mock.patch.object(HARNESS, "_root_fingerprint", return_value="version: 7.4.1") as root:
+            mismatch = HARNESS._non_base_mismatch(HARNESS.TESTS_PROJECT, HARNESS.TESTS_PROJECT_REL)
+
+        self.assertIsNotNone(mismatch)
+        self.assertIn("configuration root of %s" % HARNESS.TESTS_PROJECT, mismatch)
+        root.assert_called_once_with(HARNESS.TESTS_PROJECT)
+
+    def test_the_root_brace_is_skipped_without_a_root_baseline(self):
+        with mock.patch.dict(HARNESS._BASELINE_ROOT_BY_PROJECT, {}, clear=True), \
+                mock.patch.dict(HARNESS._BASELINE_INVENTORY_BY_PROJECT, {}, clear=True), \
+                mock.patch.dict(HARNESS._BASELINE_DETAILS_BY_PROJECT, {}, clear=True), \
+                mock.patch.object(HARNESS, "_disk_mismatch", return_value=None), \
+                mock.patch.object(HARNESS, "_root_fingerprint") as root:
+            mismatch = HARNESS._non_base_mismatch(HARNESS.TESTS_PROJECT, HARNESS.TESTS_PROJECT_REL)
+
+        self.assertIsNone(mismatch)
+        root.assert_not_called()
+
+    def test_the_root_fingerprint_is_no_evidence_on_an_error_or_an_empty_body(self):
+        error = mock.Mock(is_error=True, text='{"success": false, "error": "Project not found: P"}')
+        empty = mock.Mock(is_error=False, text="   ")
+        good = mock.Mock(is_error=False, text="name: TestConfiguration\n")
+        with mock.patch.object(HARNESS, "call", side_effect=[error, empty, good]) as call:
+            self.assertIsNone(HARNESS._root_fingerprint("P"))
+            self.assertIsNone(HARNESS._root_fingerprint("P"))
+            self.assertEqual("name: TestConfiguration", HARNESS._root_fingerprint("P"))
+        call.assert_called_with("get_configuration_properties", {"projectName": "P"})
+
+    def test_a_root_fingerprint_timeout_propagates(self):
+        with mock.patch.object(HARNESS, "call", side_effect=HARNESS.E2ECallTimeout("hung")):
+            with self.assertRaises(HARNESS.E2ECallTimeout):
+                HARNESS._root_fingerprint("P")
 
 
 class SettleProgressNoteTest(unittest.TestCase):

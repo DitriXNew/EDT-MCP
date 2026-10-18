@@ -12,9 +12,13 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import org.eclipse.core.resources.IProject;
 import org.junit.Test;
 
+import com._1c.g5.v8.dt.platform.services.core.infobases.IInfobaseAssociationContextProvider;
 import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAssociationContext;
 import com._1c.g5.v8.dt.platform.services.core.infobases.InfobaseAssociationException;
 
@@ -246,5 +250,89 @@ public class BranchContextsTest
         assertFalse(BranchContexts.LEGACY_SHORT_KEY_MARKER.equals(BranchContexts.NON_BRANCH_REF_MARKER));
         assertFalse(BranchContexts.LEGACY_SHORT_KEY_MARKER.equals(BranchContexts.COMMIT_CONTEXT_MARKER));
         assertFalse(BranchContexts.NON_BRANCH_REF_MARKER.equals(BranchContexts.COMMIT_CONTEXT_MARKER));
+    }
+
+    // ==================== #656: current - the context EDT reads now ====================
+
+    private static IProject project(String name)
+    {
+        IProject project = mock(IProject.class);
+        when(project.getName()).thenReturn(name);
+        return project;
+    }
+
+    @Test
+    public void currentIsWhateverEdtsProviderAnswers()
+    {
+        // A branch, a detached-HEAD commit and the project-level context: EDT's answer, never one we derive.
+        for (InfobaseAssociationContext answer : new InfobaseAssociationContext[] {
+            InfobaseAssociationContext.of("refs/heads/feature/x"), //$NON-NLS-1$
+            InfobaseAssociationContext.of("0123456789abcdef0123456789abcdef01234567"), //$NON-NLS-1$
+            InfobaseAssociationContext.empty()})
+        {
+            IProject project = project("P"); //$NON-NLS-1$
+            IInfobaseAssociationContextProvider provider = mock(IInfobaseAssociationContextProvider.class);
+            when(provider.get(project)).thenReturn(answer);
+
+            BranchContexts.Current current = BranchContexts.current(provider, project);
+
+            assertTrue(String.valueOf(current.error()), current.ok());
+            assertEquals(answer, current.context());
+            assertNull(current.error());
+        }
+    }
+
+    @Test
+    public void aMissingProviderIsAnActionableRefusal()
+    {
+        BranchContexts.Current current = BranchContexts.current(null, project("P")); //$NON-NLS-1$
+
+        assertFalse(current.ok());
+        assertNull(current.context());
+        assertTrue(current.error(), current.error().contains("IInfobaseAssociationContextProvider")); //$NON-NLS-1$
+        assertTrue(current.error(), current.error().contains("Nothing was changed")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void aThrowingProviderIsARefusalWithEdtsText()
+    {
+        IProject project = project("P"); //$NON-NLS-1$
+        IInfobaseAssociationContextProvider provider = mock(IInfobaseAssociationContextProvider.class);
+        when(provider.get(project))
+            .thenThrow(new InfobaseAssociationException("Cannot get current infobase association context.")); //$NON-NLS-1$
+
+        BranchContexts.Current current = BranchContexts.current(provider, project);
+
+        assertFalse(current.ok());
+        assertTrue(current.error(), current.error().contains("Cannot get current infobase association context.")); //$NON-NLS-1$
+        assertTrue(current.error(), current.error().contains("project 'P'")); //$NON-NLS-1$
+        assertTrue(current.error(), current.error().contains("Nothing was changed.")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void anyRuntimeFailureOfTheProviderIsARefusalNotAnEscape()
+    {
+        // The git extension wraps only IOException; InfobaseAssociationContext.of throws IllegalArgumentException
+        // for a branch name git accepts but the file system does not.
+        IProject project = project("P"); //$NON-NLS-1$
+        IInfobaseAssociationContextProvider provider = mock(IInfobaseAssociationContextProvider.class);
+        when(provider.get(project)).thenThrow(new IllegalArgumentException("bad path")); //$NON-NLS-1$
+
+        BranchContexts.Current current = BranchContexts.current(provider, project);
+
+        assertFalse(current.ok());
+        assertTrue(current.error(), current.error().contains("bad path")); //$NON-NLS-1$
+    }
+
+    @Test
+    public void aProviderThatAnswersNothingIsARefusal()
+    {
+        IProject project = project("P"); //$NON-NLS-1$
+        IInfobaseAssociationContextProvider provider = mock(IInfobaseAssociationContextProvider.class);
+
+        BranchContexts.Current current = BranchContexts.current(provider, project);
+
+        assertFalse(current.ok());
+        assertTrue(current.error(), current.error().contains("Nothing was changed")); //$NON-NLS-1$
     }
 }

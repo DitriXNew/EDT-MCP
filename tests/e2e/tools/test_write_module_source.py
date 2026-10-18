@@ -15,15 +15,25 @@ strongest way per mode, plus the negative matrix:
 
 Fixture target: CommonModules/OK/Module.bsl (empty in the committed baseline).
 The orchestrator resets the fixture before every test, so each starts empty.
+
+ADOPTED OBJECTS (#711, at the end): a write into the module of an object adopted into the
+extension fixture records that module's state Extended in the owner's .mdo, proven on disk; a
+Checked state and a root without its extension block are left as they are, and the write answers
+a success that names them; the extension's own modules and base modules stay untouched.
 """
 
+import os
 import re
+import shutil
+import tempfile
+import time
 
 from harness import (
     call, assert_ok, assert_error, assert_error_quality,
     assert_contains, assert_not_contains,
     assert_diff_contains, assert_no_diff, e2e_test, settle_or_fail,
-    E2EAssertion, PROJECT,
+    poll_disk_contains_all, read_fixture_file, restore_extension_fixture,
+    E2EAssertion, E2ECallTimeout, PROJECT, REPO_ROOT, TESTS_PROJECT, TESTS_PROJECT_REL,
 )
 
 MODULE = "CommonModules/OK/Module.bsl"
@@ -757,3 +767,508 @@ def test_oldsource_is_matched_against_the_file_not_normalized():
     assert_ok(src, "read-back after the swap")
     assert_contains(src.text, "// replaced", "the swap happened")
     assert_not_contains(src.text, "// anchor", "the old line is gone")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ADOPTED OBJECTS (#711): writing the module of an object ADOPTED into an extension records that
+# module's state Extended in the owner's .mdo at once - the line EDT's UI records when code is added
+# to an adopted module. EDT's own listener sets the state only in its model, a few seconds after the
+# write, and never saves the .mdo. Nothing here asserts an export or infobase consequence of the
+# line: on the stand EDT's XML dump carried an adopted module that was not Extended as well.
+#
+# Every test here writes into the extension fixture (TESTS_PROJECT, at TESTS_PROJECT_REL) and puts it
+# back with harness.restore_extension_fixture in a finally block - except on E2ECallTimeout, where the
+# timed-out call may still be writing these very files (the orchestrator aborts the run on that).
+#
+# WHERE A JAR WITHOUT #711 FAILS - read this before reading a red run. Each test that expects the line
+# polls the owner's .mdo for it FIRST, for up to _STATE_POLL_S right after the write, and only then
+# asserts the response key. On the branch the tool reads that .mdo back for the line before it
+# answers, so the poll passes at once; a .mdo that never gets the line fails the WRITE instead
+# (errorAfterMutation at assert_ok: the .mdo "did not carry" the line), whether the tool switched the
+# state or found it Extended. On a jar without the step the POLL fails, on the .mdo line - the
+# effect. A run on such a jar that passes the poll and fails only at the key is the stand pin's H0:
+# EDT saved the line by itself, which falsifies the premise the step exports for - STOP and report
+# it. The two tests whose state is left as it is (Checked; a root without its block) fail on such a
+# jar at the key: the write answers a plain success that names nothing.
+#
+# The KEY's value is not pinned to `switchedToExtended`: EDT's own listener also flips the MODEL
+# state after it synchronizes the written file (it just never saves the .mdo), and when it wins that
+# race the tool reports `alreadyExtended` and exports the .mdo all the same. The .mdo line is the
+# effect, and it is asserted on disk; which of the two values said so depends on a race - and only
+# the value does: whether the write succeeds is decided by the .mdo alone, the same either way.
+# ──────────────────────────────────────────────────────────────────────────────
+
+_ADOPTED = "<objectBelonging>Adopted</objectBelonging>"
+_STATE_KEY = "moduleExtensionState"
+_STATE_VALUES = ("moduleExtensionState: switchedToExtended", "moduleExtensionState: alreadyExtended")
+# The base common module the reporter's flow adopts: not adopted in the committed fixture.
+_DRY_SIGNAL_MODULE = "CommonModules/DrySignal/Module.bsl"
+_DRY_SIGNAL_MDO = "src/CommonModules/DrySignal/DrySignal.mdo"
+# An interceptor of the base DrySignal.Test (the reporter's shape).
+_INTERCEPTOR = '&Before("Test")\nProcedure tests_TestBefore()\nEndProcedure\n'
+# Stable substring of export_configuration_to_xml's not-installed sentinel (CLI API absent).
+_DUMP_API_ABSENT = "IExportConfigurationFilesApi is not available"
+# How long the owner's .mdo is polled for its state line after a write: the stand pin's window. On the
+# branch the tool answers only after that export, so the poll passes at once.
+_STATE_POLL_S = 60
+# The extension root's own extension block, as the fixture commits it (the missing-block test removes it).
+_ROOT_BLOCK_OPEN = '<extension xsi:type="mdclassExtension:ConfigurationExtension">'
+# The adopted DrySignal's first extension-block line, as adopt_metadata_object writes it; a planted
+# module state goes right after it (the kept-state test).
+_DRY_SIGNAL_BLOCK_ANCHOR = "<extendedConfigurationObject>Checked</extendedConfigurationObject>"
+# The claim round 2 of #711 removed, in each phrasing it had: no response may say it again.
+_REMOVED_CLAIM = ("infobase", "left out", "leaves the module", "exports and loads", "whatever its state")
+# The claims the round-2 gate of #711 found broader than EDT's bytecode: EDT's module adopter, which its UI runs to
+# add a method to an extension, sets Extended without asking (its listener asks for None first), and 8.3.8's
+# property-type delegate lists no module.
+_OVERBROAD_CLAIM = ("like EDT,", "EDT never switches", "which EDT never", "EDT only switches", "every other module")
+
+
+def _assert_no_removed_claim(text, ctx):
+    """The response claims no export or infobase consequence of the module state, and nothing broader
+    than EDT's bytecode."""
+    for fragment in _REMOVED_CLAIM:
+        assert_not_contains(text or "", fragment, "%s: no export or infobase claim" % ctx)
+    for fragment in _OVERBROAD_CLAIM:
+        assert_not_contains(text or "", fragment, "%s: no claim broader than EDT's bytecode" % ctx)
+
+
+def _assert_module_state_key(r, ctx):
+    """The response carries the module-state key with one of its two values; returns the value line."""
+    text = r.text or ""
+    for value in _STATE_VALUES:
+        if value in text:
+            return value
+    raise E2EAssertion("expected the frontmatter to carry %s (switchedToExtended or alreadyExtended) [%s]; "
+                       "got:\n%s" % (_STATE_KEY, ctx, text[:600]))
+
+
+def _adopt(fqn, ctx):
+    """Adopt a base object into the single fixture extension; the adoption must really run."""
+    r = call("adopt_metadata_object", {"projectName": PROJECT, "fqn": fqn})
+    assert_ok(r, ctx)
+    s = r.structured
+    if not isinstance(s, dict) or s.get("action") != "adopted" or s.get("extensionProject") != TESTS_PROJECT:
+        raise E2EAssertion("expected %s to be adopted into %s [%s]; got %r" % (fqn, TESTS_PROJECT, ctx, s))
+
+
+def _is_transient_teardown_race(err):
+    """The two shapes in which EDT's shared WorkspaceOrchestrator refuses an export while a sibling
+    project's teardown drains - the same signatures test_export_configuration_to_xml retries on."""
+    e = (err or "").lower()
+    return "assertion failed" in e or ("closing" in e and "phase" in e)
+
+
+def _dump_extension(ctx):
+    """Dump the extension with export_configuration_to_xml into a fresh temp dir.
+
+    Returns the directory, or None when the CLI export API is not installed in this EDT (the tool's
+    documented sentinel - asserted here, so any OTHER error fails). The caller removes the directory."""
+    out_dir = tempfile.mkdtemp(prefix="edt_e2e_711_")
+    args = {"projectName": TESTS_PROJECT, "outputPath": out_dir}
+    r = call("export_configuration_to_xml", args)
+    for _ in range(8):
+        if not r.is_error or not _is_transient_teardown_race(r.error_text()):
+            break
+        time.sleep(3)
+        r = call("export_configuration_to_xml", args)
+    if r.is_error:
+        shutil.rmtree(out_dir, ignore_errors=True)
+        assert_contains(r.error_text(), _DUMP_API_ABSENT,
+                        "%s: the only acceptable export error is the not-installed API sentinel" % ctx)
+        return None
+    return out_dir
+
+
+def _assert_dump_carries(out_dir, module_dir, needle, ctx):
+    """The XML dump holds <module_dir>/Ext/Module.bsl containing `needle`: the module text is in the
+    extension EDT exports. A no-regression check - it says nothing about the module's state."""
+    path = os.path.join(out_dir, *module_dir.split("/"), "Ext", "Module.bsl")
+    if not os.path.exists(path):
+        raise E2EAssertion("expected the extension's XML dump to hold %s/Ext/Module.bsl [%s]"
+                           % (module_dir, ctx))
+    with open(path, encoding="utf-8-sig", errors="replace") as f:
+        text = f.read()
+    if needle not in text:
+        raise E2EAssertion("expected %s in the dumped %s/Ext/Module.bsl [%s]; it holds:\n%s"
+                           % (needle, module_dir, ctx, text[:400]))
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_adopted_common_module_gets_extended_module_state():
+    """#711 in the reporter's flow: adopt the base CommonModule.DrySignal, write an interceptor into
+    the adopted module, and the module must come out Extended - in its .mdo, then in the response.
+    Then the rerun recipe the errors teach (an empty append) reports alreadyExtended and leaves the
+    text as it is.
+
+    Red on a jar without #711 at the .mdo poll: no <module>Extended</module> in DrySignal.mdo (EDT's
+    listener may switch the model, but its commit never saves the .mdo).
+
+    The XML-dump check at the end is a NO-REGRESSION check, not evidence for the step: on the stand
+    EDT's dump carried an adopted module that was not Extended as well, so a jar without #711 passes
+    it too. After clean_project re-imports the extension from disk, the recorded line is still in the
+    .mdo - where the state is kept."""
+    try:
+        _adopt("CommonModule.DrySignal", "adopt the base common module DrySignal")
+        # Poll for the adoption first, then read what it left: the adoption alone sets no module state.
+        adopted = poll_disk_contains_all(_DRY_SIGNAL_MDO, [_ADOPTED],
+                                         ctx="the adopted DrySignal has its own .mdo in the extension",
+                                         fixture_rel=TESTS_PROJECT_REL)
+        if "<module>Extended</module>" in adopted:
+            raise E2EAssertion("precondition: adopting the object must not mark its module Extended - "
+                               "this test proves the WRITE does:\n%s" % adopted[:600])
+
+        r = call("write_module_source", {
+            "projectName": TESTS_PROJECT, "modulePath": _DRY_SIGNAL_MODULE,
+            "mode": "replace", "source": _INTERCEPTOR,
+        })
+        assert_ok(r, "write an interceptor into the adopted module")
+        poll_disk_contains_all(_DRY_SIGNAL_MDO, [_ADOPTED, "<module>Extended</module>"],
+                               timeout=_STATE_POLL_S, ctx="the adopted module is Extended in its .mdo",
+                               fixture_rel=TESTS_PROJECT_REL)
+        _assert_module_state_key(r, "a write into an adopted object's module reports its module state")
+        _assert_no_removed_claim(r.text, "the response to the write into the adopted module")
+        written = read_fixture_file(TESTS_PROJECT_REL, "src/" + _DRY_SIGNAL_MODULE)
+        assert_contains(written, "tests_TestBefore", "the interceptor text itself is on disk")
+
+        # The rerun recipe every failure of this step names: an empty append rewrites the same text.
+        again = call("write_module_source", {
+            "projectName": TESTS_PROJECT, "modulePath": _DRY_SIGNAL_MODULE,
+            "mode": "append", "source": "",
+        })
+        assert_ok(again, "the rerun recipe: an empty append into the adopted module")
+        assert_contains(again.text, "moduleExtensionState: alreadyExtended",
+                        "the second write finds the module already Extended")
+        if read_fixture_file(TESTS_PROJECT_REL, "src/" + _DRY_SIGNAL_MODULE) != written:
+            raise E2EAssertion("an empty append must leave the module text as it was")
+        poll_disk_contains_all(_DRY_SIGNAL_MDO, ["<module>Extended</module>"],
+                               ctx="the line survives the second write", fixture_rel=TESTS_PROJECT_REL)
+
+        # No-regression: the extension's XML dump carries the adopted module next to the fixture's own
+        # Extended one. A jar without #711 passes this too - it is no evidence for the step.
+        out_dir = _dump_extension("dump the extension after the write")
+        if out_dir is not None:
+            try:
+                _assert_dump_carries(out_dir, "CommonModules/Calc", "tests_Test",
+                                     "control: the fixture's own Extended module is dumped")
+                _assert_dump_carries(out_dir, "CommonModules/DrySignal", "tests_TestBefore",
+                                     "the adopted module is dumped")
+            finally:
+                shutil.rmtree(out_dir, ignore_errors=True)
+
+        # A re-import from disk rebuilds the model from the files; the recorded state stays in the .mdo.
+        assert_ok(call("clean_project", {"projectName": TESTS_PROJECT}),
+                  "re-import the extension from disk")
+        settle_or_fail("the extension after its re-import")
+        poll_disk_contains_all(_DRY_SIGNAL_MDO, [_ADOPTED, "<module>Extended</module>"],
+                               ctx="the recorded module state stays in the .mdo after a re-import from disk",
+                               fixture_rel=TESTS_PROJECT_REL)
+    except E2ECallTimeout:
+        # NO cleanup: the timed-out call may still be writing these very files.
+        raise
+    except BaseException:
+        restore_extension_fixture("a write into an adopted common module")
+        raise
+    else:
+        restore_extension_fixture("a write into an adopted common module")
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_adopted_module_addressed_in_russian_gets_extended_module_state():
+    """Bilingual: the object is adopted and the module addressed by the Russian type token, with a
+    Cyrillic programmatic Name. The owner is read off the written file's path, so the spelling of
+    the address must not matter. Red on a jar without #711 at the .mdo poll: no line in the .mdo."""
+    try:
+        _adopt("ОбщийМодуль.Вычисление", "adopt the base common module Вычисление by the Russian type token")
+        mdo = "src/CommonModules/Вычисление/Вычисление.mdo"
+        adopted = poll_disk_contains_all(mdo, [_ADOPTED], ctx="the adopted Вычисление has its own .mdo",
+                                         fixture_rel=TESTS_PROJECT_REL)
+        if "<module>Extended</module>" in adopted:
+            raise E2EAssertion("precondition: adopting the object must not mark its module Extended - "
+                               "this test proves the WRITE does:\n%s" % adopted[:600])
+        r = call("write_module_source", {
+            "projectName": TESTS_PROJECT, "objectName": "ОбщийМодуль.Вычисление", "moduleType": "Module",
+            "mode": "replace", "source": "Процедура tests_Расчет() Экспорт\nКонецПроцедуры\n",
+        })
+        assert_ok(r, "write into the adopted module addressed in Russian")
+        poll_disk_contains_all(mdo, [_ADOPTED, "<module>Extended</module>"], timeout=_STATE_POLL_S,
+                               ctx="the adopted Вычисление module is Extended in its .mdo",
+                               fixture_rel=TESTS_PROJECT_REL)
+        _assert_module_state_key(r, "the Russian address reports the module state too")
+    except E2ECallTimeout:
+        raise
+    except BaseException:
+        restore_extension_fixture("a write into a module adopted by its Russian address")
+        raise
+    else:
+        restore_extension_fixture("a write into a module adopted by its Russian address")
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_adopted_catalog_object_module_gets_extended_state():
+    """A second module kind, on the object the fixture already adopts: Catalog.Catalog has an
+    extension block without an objectModule state. Writing its ObjectModule marks THAT state, in the
+    catalog's .mdo, next to the adopted form's own <form>Extended</form>. Red on a jar without #711
+    at the .mdo poll."""
+    mdo = "src/Catalogs/Catalog/Catalog.mdo"
+    try:
+        before = read_fixture_file(TESTS_PROJECT_REL, mdo)
+        if "<objectModule>" in before:
+            raise E2EAssertion("precondition: the fixture's adopted catalog must not carry an objectModule "
+                               "state yet - this test proves the WRITE adds it:\n%s" % before[:600])
+        r = call("write_module_source", {
+            "projectName": TESTS_PROJECT, "objectName": "Catalog.Catalog", "moduleType": "ObjectModule",
+            "mode": "replace", "source": "Procedure tests_ObjectModuleProbe() Export\nEndProcedure\n",
+        })
+        assert_ok(r, "write the adopted catalog's object module")
+        poll_disk_contains_all(mdo, [_ADOPTED, "<objectModule>Extended</objectModule>", "<form>Extended</form>"],
+                               timeout=_STATE_POLL_S,
+                               ctx="the catalog's objectModule state is Extended and its form's stays",
+                               fixture_rel=TESTS_PROJECT_REL)
+        _assert_module_state_key(r, "an adopted catalog's object module reports its state")
+    except E2ECallTimeout:
+        raise
+    except BaseException:
+        restore_extension_fixture("a write into an adopted catalog's object module")
+        raise
+    else:
+        restore_extension_fixture("a write into an adopted catalog's object module")
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_extension_root_session_module_gets_extended_state():
+    """The extension ROOT's own modules go through the same step: Configuration is adopted, and the
+    fixture's ConfigurationExtension block carries no sessionModule state. Writing
+    Configuration/SessionModule.bsl adds <sessionModule>Extended</sessionModule> to the extension's
+    Configuration.mdo - the only path through the configuration owner. Red on a jar without #711 at
+    the .mdo poll."""
+    mdo = "src/Configuration/Configuration.mdo"
+    try:
+        before = read_fixture_file(TESTS_PROJECT_REL, mdo)
+        if "<sessionModule>" in before:
+            raise E2EAssertion("precondition: the fixture root must not carry a sessionModule state yet")
+        r = call("write_module_source", {
+            "projectName": TESTS_PROJECT, "modulePath": "Configuration/SessionModule.bsl",
+            "mode": "replace", "source": "Procedure tests_SessionProbe()\nEndProcedure\n",
+        })
+        assert_ok(r, "write the extension's session module")
+        poll_disk_contains_all(mdo, ["<sessionModule>Extended</sessionModule>", "<defaultRoles>Extended</defaultRoles>"],
+                               timeout=_STATE_POLL_S,
+                               ctx="the root's sessionModule is Extended; its other states are kept",
+                               fixture_rel=TESTS_PROJECT_REL)
+        _assert_module_state_key(r, "the extension root's module reports its state")
+    except E2ECallTimeout:
+        raise
+    except BaseException:
+        restore_extension_fixture("a write into the extension's session module")
+        raise
+    else:
+        restore_extension_fixture("a write into the extension's session module")
+
+
+def _remove_root_extension_block(mdo_rel):
+    """Remove the extension ROOT's own extension block from its .mdo on disk - the shape of a root an
+    earlier create_project made from a new configuration (#706) - keeping every other byte, line ends
+    included. Returns the removed block, so the caller can check what was in it."""
+    path = os.path.join(REPO_ROOT, *TESTS_PROJECT_REL.split("/"), *mdo_rel.split("/"))
+    with open(path, encoding="utf-8", newline="") as f:
+        text = f.read()
+    start = text.find(_ROOT_BLOCK_OPEN)
+    if start < 0:
+        raise E2EAssertion("setup failed: %s carries no %s" % (mdo_rel, _ROOT_BLOCK_OPEN))
+    end = text.index("</extension>", start) + len("</extension>")
+    first = text.rfind("\n", 0, start) + 1
+    after = text.find("\n", end) + 1
+    if text[first:start].strip() or text[end:after].strip():
+        raise E2EAssertion("setup failed: the root's extension block does not stand on lines of its own "
+                           "in %s" % mdo_rel)
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text[:first] + text[after:])
+    return text[start:end]
+
+
+def _read_extension_bytes(rel):
+    """The raw bytes of a file in the extension fixture - for a check that the file was left byte for byte."""
+    with open(os.path.join(REPO_ROOT, *TESTS_PROJECT_REL.split("/"), *rel.split("/")), "rb") as f:
+        return f.read()
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_adopted_root_without_its_extension_block_answers_a_success_with_a_note():
+    """An extension root adopted with NO extension block in its .mdo - the shape of a root an earlier
+    create_project made from a new configuration (#706) - has no place for a module state. A write of its
+    session module is still a SUCCESS - the text is written - and says what it found: `moduleExtensionState:
+    noExtensionBlock` and a note that names the root and the missing block, says that EDT's wizard and
+    create_project make roots with the block while an earlier create_project did not, and gives the way out -
+    recreating the extension, and no property state to set in EDT (#747 round 3: red on a jar without it at
+    those assertions). The .mdo is left byte for byte: no state is
+    recorded and no block is created.
+
+    The block is removed on disk and brought into the model with clean_project, the deterministic
+    re-import. That also proves live what the unit tests only mock: EDT's adopted-property service
+    answers a missing block without throwing. Red on a jar without #711: a plain success without the
+    key."""
+    mdo = "src/Configuration/Configuration.mdo"
+    module = "Configuration/SessionModule.bsl"
+    ctx = "a write into the session module of an extension root without its extension block"
+    try:
+        block = _remove_root_extension_block(mdo)
+        if "<sessionModule>" in block:
+            raise E2EAssertion("precondition: the fixture root must not carry a sessionModule state yet")
+        settle_or_fail("the extension before its root is re-imported without the block")
+        assert_ok(call("clean_project", {"projectName": TESTS_PROJECT}),
+                  "re-import the extension root without its extension block")
+        settle_or_fail("the extension after its root was re-imported without the block")
+        before = _read_extension_bytes(mdo)
+
+        r = call("write_module_source", {
+            "projectName": TESTS_PROJECT, "modulePath": module,
+            "mode": "replace", "source": "Procedure tests_SessionProbe()\nEndProcedure\n",
+        })
+        if r.is_error:
+            raise E2EAssertion("a root without its extension block must answer a success - the text is "
+                               "written - not an error:\n%s" % (r.error_text() or "")[:600])
+        text = r.text or ""
+        if "moduleExtensionState: noExtensionBlock" not in text:
+            why = ("another key: EDT's model of the re-imported root carries an extension block after all - "
+                   "the test's premise failed, not the step" if _STATE_KEY in text
+                   else "a plain success: nothing checked the module's state")
+            raise E2EAssertion("expected moduleExtensionState: noExtensionBlock for a root without its "
+                               "extension block (%s); got:\n%s" % (why, text[:600]))
+        assert_contains(text, "the extension's root object (Configuration)", "the note names the root")
+        assert_contains(text, "there is no extension block in src/Configuration/Configuration.mdo",
+                        "the note names the missing block and its .mdo")
+        assert_contains(text, "the module state cannot be recorded", "the note says no state could be recorded")
+        assert_contains(text, "new-extension wizard", "the note says which roots carry the block")
+        assert_contains(text, "and so does one that create_project creates",
+                        "the note says create_project's roots carry the block too (#747 round 3)")
+        assert_contains(text, "a root made by an earlier version of create_project",
+                        "the note names the roots that lack the block")
+        assert_contains(text, "recreate the extension with create_project", "the note gives the way out")
+        assert_not_contains(text, "default language",
+                            "no property state set in EDT is advised: on such a root a Checked default language is a "
+                            "critical error that stops EDT from updating an infobase")
+        assert_not_contains(text, "one of the root's properties",
+                            "not just any of the root's properties: 'Extended configuration object' gets a block "
+                            "of another class")
+        _assert_no_removed_claim(text, ctx)
+        assert_contains(read_fixture_file(TESTS_PROJECT_REL, "src/" + module), "tests_SessionProbe",
+                        "the module text itself is on disk")
+        if _read_extension_bytes(mdo) != before:
+            raise E2EAssertion("the root's .mdo must be left byte for byte - no state recorded, no block "
+                               "created:\n%s" % read_fixture_file(TESTS_PROJECT_REL, mdo)[:600])
+    except E2ECallTimeout:
+        raise
+    except BaseException:
+        restore_extension_fixture(ctx)
+        raise
+    else:
+        restore_extension_fixture(ctx)
+
+
+def _plant_module_state(mdo_rel, state):
+    """Plant <module>STATE</module> in an adopted common module's extension block on disk, on its own
+    line right after the block's first line, keeping every other byte, line ends included - a state
+    the author set in EDT. Returns the planted text."""
+    path = os.path.join(REPO_ROOT, *TESTS_PROJECT_REL.split("/"), *mdo_rel.split("/"))
+    with open(path, encoding="utf-8", newline="") as f:
+        text = f.read()
+    if text.count(_DRY_SIGNAL_BLOCK_ANCHOR) != 1:
+        raise E2EAssertion("setup failed: %s carries %d x %s" % (mdo_rel, text.count(_DRY_SIGNAL_BLOCK_ANCHOR),
+                                                                  _DRY_SIGNAL_BLOCK_ANCHOR))
+    if "<module>" in text:
+        raise E2EAssertion("precondition: the adopted module must carry no module state yet:\n%s" % text[:600])
+    nl = "\r\n" if "\r\n" in text else "\n"
+    start = text.index(_DRY_SIGNAL_BLOCK_ANCHOR)
+    indent = text[text.rfind("\n", 0, start) + 1:start]
+    end = start + len(_DRY_SIGNAL_BLOCK_ANCHOR)
+    planted = text[:end] + nl + indent + "<module>%s</module>" % state + text[end:]
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(planted)
+    return planted
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_adopted_module_in_state_checked_is_kept_and_named():
+    """A module state the author set - Checked - is left exactly as it is, and the write answers a
+    SUCCESS that names it - `moduleExtensionState: keptChecked` and a note - never an error: the text
+    is written. The .mdo is left byte for byte.
+
+    The state is planted in the adopted DrySignal's .mdo and brought into the model with clean_project,
+    the deterministic re-import (EDT's own listener acts only on None, so it leaves Checked alone). Red
+    on a jar without #711: a plain success without the key."""
+    ctx = "a write into an adopted module whose state is Checked"
+    try:
+        _adopt("CommonModule.DrySignal", "adopt the base common module DrySignal")
+        poll_disk_contains_all(_DRY_SIGNAL_MDO, [_ADOPTED, _DRY_SIGNAL_BLOCK_ANCHOR],
+                               ctx="the adopted DrySignal has its own .mdo with its extension block",
+                               fixture_rel=TESTS_PROJECT_REL)
+        settle_or_fail("the extension after the adoption")
+        _plant_module_state(_DRY_SIGNAL_MDO, "Checked")
+        settle_or_fail("the extension before its re-import with the planted state")
+        assert_ok(call("clean_project", {"projectName": TESTS_PROJECT}),
+                  "re-import the extension with the planted Checked state")
+        settle_or_fail("the extension after its re-import with the planted state")
+        before = _read_extension_bytes(_DRY_SIGNAL_MDO)
+        if b"<module>Checked</module>" not in before:
+            raise E2EAssertion("precondition: the re-imported .mdo must still carry the planted Checked state")
+
+        r = call("write_module_source", {
+            "projectName": TESTS_PROJECT, "modulePath": _DRY_SIGNAL_MODULE,
+            "mode": "replace", "source": _INTERCEPTOR,
+        })
+        assert_ok(r, "a module state left as it is is no failure: the text is written")
+        text = r.text or ""
+        if "moduleExtensionState: keptChecked" not in text:
+            raise E2EAssertion("expected moduleExtensionState: keptChecked for a Checked module (a plain success "
+                               "means nothing checked the module's state); got:\n%s" % text[:600])
+        assert_contains(text, "is Checked (<module>Checked</module> in " + _DRY_SIGNAL_MDO,
+                        "the note names the state and its .mdo")
+        assert_contains(text, "was left as it is", "the note says the state was left as it is")
+        assert_contains(text, "like EDT's own listener, this tool only switches a module's state from None to Extended",
+                        "the note compares the step with EDT's listener, which asks for None first as well")
+        _assert_no_removed_claim(text, ctx)
+        assert_contains(read_fixture_file(TESTS_PROJECT_REL, "src/" + _DRY_SIGNAL_MODULE), "tests_TestBefore",
+                        "the interceptor text itself is on disk")
+        if _read_extension_bytes(_DRY_SIGNAL_MDO) != before:
+            raise E2EAssertion("a state left as it is must leave the .mdo byte for byte:\n%s"
+                               % read_fixture_file(TESTS_PROJECT_REL, _DRY_SIGNAL_MDO)[:600])
+    except E2ECallTimeout:
+        raise
+    except BaseException:
+        restore_extension_fixture(ctx)
+        raise
+    else:
+        restore_extension_fixture(ctx)
+
+
+@e2e_test(tool="write_module_source", kind="write-metadata")
+def test_own_and_base_modules_carry_no_module_state():
+    """The guard: only an ADOPTED object's module is touched. A module of the extension's OWN object
+    and a module of the base configuration answer exactly as before - no key - and the own object's
+    .mdo is left byte for byte. Passes on master by design; dropping the ADOPTED check turns it red."""
+    own_mdo = "src/CommonModules/tests_MathHelper/tests_MathHelper.mdo"
+    try:
+        before = read_fixture_file(TESTS_PROJECT_REL, own_mdo)
+        own = call("write_module_source", {
+            "projectName": TESTS_PROJECT, "modulePath": "CommonModules/tests_MathHelper/Module.bsl",
+            "mode": "append", "source": "// e2e_711_own_module\n",
+        })
+        assert_ok(own, "append to the extension's own common module")
+        assert_not_contains(own.text, _STATE_KEY, "the extension's own module has no adopted state to report")
+        if read_fixture_file(TESTS_PROJECT_REL, own_mdo) != before:
+            raise E2EAssertion("a write into the extension's own module must not touch its .mdo")
+
+        base = call("write_module_source", {
+            "projectName": PROJECT, "modulePath": MODULE,
+            "mode": "append", "source": "// e2e_711_base_module\n",
+        })
+        assert_ok(base, "append to a base configuration module")
+        assert_not_contains(base.text, _STATE_KEY, "a base configuration module has no module state to report")
+    except E2ECallTimeout:
+        raise
+    except BaseException:
+        restore_extension_fixture("a write into the extension's own module")
+        raise
+    else:
+        restore_extension_fixture("a write into the extension's own module")

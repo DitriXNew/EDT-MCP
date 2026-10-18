@@ -54,7 +54,8 @@ import com.google.gson.JsonObject;
  *
  * Primitive kinds: String / Number / Boolean / Date (qualifiers given inline); ValueStorage / UUID /
  * ValueTable / ValueTree are platform types that carry no qualifiers - the last two are in-memory
- * collections the platform accepts on a FORM attribute only (issue #295). A reference is
+ * collections this builder builds only for a FORM attribute (issue #295) and for a DefinedType's own
+ * type (issue #727). A reference is
  * {@code {"kind":"Ref", "ref":"Type.Name"}} (the ref FQN is resolved bilingually) or
  * {@code {"kind":"CatalogRef", "ref":"Name"}}. A concrete produced type is
  * {@code {"kind":"DocumentObject", "ref":"Invoice"}} (a qualified {@code Document.Invoice}
@@ -70,9 +71,13 @@ import com.google.gson.JsonObject;
  * Planner, GeographicalSchema, GraphicalSchema, StandardPeriod, TypeDescription, Picture, Color,
  * FormattedString, DataCompositionSettingsComposer, ...), in EITHER language - the platform type
  * provider indexes each type under both its English and its Russian name, so no alias table is kept
- * here (issue #369). Those types live only in a form's data, so every other target refuses them with
- * {@code formOnlyTypeRefusal}. {@code DynamicList} is refused even on a form attribute: it needs its
- * query too, which {@code modify_metadata}'s {@code queryText} path owns.
+ * here (issue #369). Those types live only in a form's data, so the stored and parameter targets refuse
+ * them with {@code formOnlyTypeRefusal}. {@code DynamicList} is refused even on a form attribute: it
+ * needs its query too, which {@code modify_metadata}'s {@code queryText} path owns.
+ * <p>
+ * A {@link TypeTarget#DEFINED_TYPE} builds the same vocabulary as a FORM attribute and then leaves the
+ * verdict on every built item to EDT's own DefinedType category ({@link DefinedTypeCategory}); a
+ * defined type holds no query, so its {@code DynamicList} is that category's call too (issue #727).
  */
 public final class MetadataTypeBuilder
 {
@@ -568,9 +573,10 @@ public final class MetadataTypeBuilder
      * #295). EDT itself does NOT validate this - a ValueTable written into a {@code .mdo} attribute
      * passes a full revalidation silently and only breaks later, in the platform - which is exactly why
      * the refusal has to happen here.
-     * Produced runtime object types are accepted only for {@link #FORM_ATTRIBUTE} and
-     * {@link #EVENT_SOURCE}: a form attribute holds a runtime object because a form's data is where the
-     * platform materializes one, while an event subscription's source names the object whose events fire.
+     * Produced runtime object types are accepted only for {@link #FORM_ATTRIBUTE}, {@link #EVENT_SOURCE}
+     * and {@link #DEFINED_TYPE}: a form attribute holds a runtime object because a form's data is where
+     * the platform materializes one, an event subscription's source names the object whose events fire,
+     * and a defined type takes what EDT's DefinedType type editor offers.
      */
     public enum TypeTarget
     {
@@ -598,7 +604,22 @@ public final class MetadataTypeBuilder
          * FixedStructure / FixedMap), and owns its refusal wording for the same reason DCS_PARAMETER
          * does.
          */
-        SESSION_PARAMETER
+        SESSION_PARAMETER,
+        /**
+         * A DefinedType's own {@code type} - the type list a reusable defined type stands for (issue
+         * #727). Not a database-stored attribute, and its vocabulary is EDT's, not a list kept here: an
+         * item is built as for a FORM attribute (a concrete produced type such as
+         * {@code DocumentObject.X}, the collections, any platform type the version knows) and must then
+         * be a member of EDT's type category {@code UserDefinedTypeInfoCategory} - the one
+         * {@code MdTypeProvider} builds the DefinedType type editor from - for the project's platform
+         * version. An item that category does not offer ({@code CatalogList},
+         * {@code InformationRegisterRecordManager}, another DefinedType) is refused in this target's own
+         * words; a category that cannot answer refuses the whole type as the platform's failure, never as
+         * a pass and never by another target's rule. The category judges each item alone: EDT's rule for
+         * a composite type (a type that must stand alone, such as ValueTable, mixed with others) is left
+         * to EDT's own validation of the written DefinedType.
+         */
+        DEFINED_TYPE
     }
 
     /**
@@ -637,8 +658,9 @@ public final class MetadataTypeBuilder
     /**
      * Builds the {@link TypeDescription} from a validated spec, like {@link #build(JsonElement,
      * Configuration, Version, boolean)}, for an explicit {@code typeTarget}. Only
-     * {@link TypeTarget#FORM_ATTRIBUTE} accepts the in-memory collection kinds (issue #295); every
-     * other target refuses them with an actionable error naming where they ARE allowed.
+     * {@link TypeTarget#FORM_ATTRIBUTE} (issue #295) and {@link TypeTarget#DEFINED_TYPE} (issue #727,
+     * where EDT's DefinedType category decides) accept the in-memory collection kinds; every other
+     * target refuses them with an actionable error naming where they ARE allowed.
      *
      * @param spec the {@code type} value (object with a {@code types} array)
      * @param config the configuration (to resolve reference targets)
@@ -663,7 +685,8 @@ public final class MetadataTypeBuilder
      * @param spec the {@code type} value (object with a {@code types} array)
      * @param config the configuration (used by the existing reference-type paths)
      * @param scope the project resolution root; {@code null} falls back to the configuration scope
-     * @param version the platform version (to create primitive type proxies)
+     * @param version the platform version (to create primitive type proxies, and the version a
+     *     {@link TypeTarget#DEFINED_TYPE} asks EDT's DefinedType category for)
      * @param isExtensionProject whether the project being modified is a configuration EXTENSION
      * @param typeTarget what the built type description will be attached to
      * @return the result (type or error)
@@ -676,29 +699,171 @@ public final class MetadataTypeBuilder
         {
             return error(shapeError);
         }
+        return buildShaped(spec, IEObjectProvider.Registry.INSTANCE.get(McorePackage.Literals.TYPE_ITEM, version),
+            config, scope, version, isExtensionProject, typeTarget);
+    }
 
-        IEObjectProvider provider = IEObjectProvider.Registry.INSTANCE.get(
-            McorePackage.Literals.TYPE_ITEM, version);
+    /**
+     * Builds the {@link TypeDescription} against a platform type provider the caller already holds,
+     * instead of looking one up by platform version. Otherwise identical to {@link #build(JsonElement,
+     * Configuration, MetadataScope, Version, boolean, TypeTarget)}: the spec is validated first, and a
+     * missing provider is a platform failure. A spec naming only platform kinds (String / Number /
+     * Boolean / Date / ValueStorage / UUID ...) resolves against the provider alone, so its caller may
+     * pass {@code null} for {@code config} and {@code scope}; a reference kind needs the configuration.
+     *
+     * @param spec the {@code type} value (object with a {@code types} array)
+     * @param provider the platform type provider for the project's version (may be {@code null})
+     * @param config the configuration (used by the reference-type paths); may be {@code null}
+     * @param scope the project resolution root; {@code null} falls back to the configuration scope
+     * @param isExtensionProject whether the project being modified is a configuration EXTENSION
+     * @param typeTarget what the built type description will be attached to; a
+     *     {@link TypeTarget#DEFINED_TYPE} is refused here, because this overload carries no platform
+     *     version to ask EDT's DefinedType category for
+     * @return the result (type or error)
+     */
+    public static Result buildWithProvider(JsonElement spec, IEObjectProvider provider, Configuration config,
+        MetadataScope scope, boolean isExtensionProject, TypeTarget typeTarget)
+    {
+        return buildWithProvider(spec, provider, config, scope, null, isExtensionProject, typeTarget);
+    }
+
+    /**
+     * {@link #buildWithProvider(JsonElement, IEObjectProvider, Configuration, MetadataScope, boolean,
+     * TypeTarget)} with the project's platform version, which a {@link TypeTarget#DEFINED_TYPE} asks EDT's
+     * DefinedType category for.
+     *
+     * @param spec the {@code type} value (object with a {@code types} array)
+     * @param provider the platform type provider for the project's version (may be {@code null})
+     * @param config the configuration (used by the reference-type paths); may be {@code null}
+     * @param scope the project resolution root; {@code null} falls back to the configuration scope
+     * @param version the project's platform version; {@code null} when unknown
+     * @param isExtensionProject whether the project being modified is a configuration EXTENSION
+     * @param typeTarget what the built type description will be attached to
+     * @return the result (type or error)
+     */
+    static Result buildWithProvider(JsonElement spec, IEObjectProvider provider, Configuration config,
+        MetadataScope scope, Version version, boolean isExtensionProject, TypeTarget typeTarget)
+    {
+        String shapeError = validateShape(spec, typeTarget);
+        if (shapeError != null)
+        {
+            return error(shapeError);
+        }
+        return buildShaped(spec, provider, config, scope, version, isExtensionProject, typeTarget);
+    }
+
+    /**
+     * Builds an already shape-validated spec; a missing provider is the platform's failure. For a
+     * {@link TypeTarget#DEFINED_TYPE} it opens EDT's DefinedType category once and has it judge every
+     * type item each spec entry built (issue #727).
+     */
+    private static Result buildShaped(JsonElement spec, IEObjectProvider provider, Configuration config,
+        MetadataScope scope, Version version, boolean isExtensionProject, TypeTarget typeTarget)
+    {
         if (provider == null)
         {
             return platformError("Platform type provider is not available for this configuration version."); //$NON-NLS-1$
+        }
+        DefinedTypeCategory definedTypeCategory = null;
+        if (typeTarget == TypeTarget.DEFINED_TYPE)
+        {
+            try
+            {
+                definedTypeCategory = DefinedTypeCategory.open(version);
+            }
+            catch (DefinedTypeCategory.Unavailable e)
+            {
+                return platformError(definedTypeCategoryUnavailable(e), e.getCause());
+            }
         }
 
         TypeDescription td = McoreFactory.eINSTANCE.createTypeDescription();
         MetadataScope effectiveScope = scope == null ? MetadataScope.ofConfiguration(config) : scope;
         JsonArray types = spec.getAsJsonObject().getAsJsonArray("types"); //$NON-NLS-1$
-        for (JsonElement itemEl : types)
+        for (int index = 0; index < types.size(); index++)
         {
-            JsonObject item = itemEl.getAsJsonObject();
+            JsonObject item = types.get(index).getAsJsonObject();
             String kind = asString(item.get("kind")).trim(); //$NON-NLS-1$
+            int builtBefore = td.getTypes().size();
             Result failure = appendType(td, item, kind, provider, config, effectiveScope,
                 isExtensionProject, typeTarget);
+            if (failure == null && definedTypeCategory != null)
+            {
+                failure = requireOfferedForDefinedType(definedTypeCategory, td.getTypes(), builtBefore, index,
+                    kind);
+            }
             if (failure != null)
             {
                 return failure;
             }
         }
         return new Result(td, null, false, null);
+    }
+
+    /**
+     * Has EDT's DefinedType category judge the type items one spec entry built ({@code types} from
+     * {@code from} on). The first item the category does not offer refuses the whole type in the defined
+     * type's own words; a category that cannot answer refuses it as the platform's failure - never a
+     * pass, and never another target's rule.
+     *
+     * @return the failure, or {@code null} when the category offers every item
+     */
+    private static Result requireOfferedForDefinedType(DefinedTypeCategory category, List<TypeItem> types,
+        int from, int index, String kind)
+    {
+        for (int i = from; i < types.size(); i++)
+        {
+            DefinedTypeCategory.Verdict verdict;
+            try
+            {
+                verdict = category.judge(types.get(i));
+            }
+            catch (DefinedTypeCategory.Unavailable e)
+            {
+                return platformError(definedTypeItemUnchecked(index, kind, e), e.getCause());
+            }
+            if (!verdict.offered())
+            {
+                return error(definedTypeRefusal(index, kind, verdict.typeName()));
+            }
+        }
+        return null;
+    }
+
+    /** How a refusal names EDT's DefinedType category. */
+    private static final String DEFINED_TYPE_CATEGORY =
+        "EDT's DefinedType type category '" + DefinedTypeCategory.CATEGORY_NAME + "'"; //$NON-NLS-1$ //$NON-NLS-2$
+
+    /** The close of a refusal for a DefinedType category that could not answer. */
+    private static final String DEFINED_TYPE_UNAVAILABLE_ADVICE =
+        ". Nothing was written; retry, and restart EDT if it persists."; //$NON-NLS-1$
+
+    /**
+     * The refusal of a type EDT's DefinedType type editor does not offer (issue #727). It names the
+     * entry, the type the category judged and the category itself - and not the stored-feature rule,
+     * which a defined type does not follow.
+     */
+    private static String definedTypeRefusal(int index, String kind, String typeName)
+    {
+        String judged = typeName.equalsIgnoreCase(kind) ? "" : ", the type '" + typeName + "'"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return "Type kind '" + kind + "' (type.types[" + index + "]" + judged //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + ") cannot be part of a defined type: EDT's DefinedType type editor does not offer it (EDT type " //$NON-NLS-1$
+            + "category '" + DefinedTypeCategory.CATEGORY_NAME + "'). Remove it from the defined type's " //$NON-NLS-1$ //$NON-NLS-2$
+            + "type list."; //$NON-NLS-1$
+    }
+
+    /** The refusal of a whole defined type whose category could not be opened. */
+    private static String definedTypeCategoryUnavailable(DefinedTypeCategory.Unavailable reason)
+    {
+        return "A defined type's type list is checked against " + DEFINED_TYPE_CATEGORY //$NON-NLS-1$
+            + ", which is unavailable: " + reason.getMessage() + DEFINED_TYPE_UNAVAILABLE_ADVICE; //$NON-NLS-1$
+    }
+
+    /** The refusal of a whole defined type because the category could not judge one of its entries. */
+    private static String definedTypeItemUnchecked(int index, String kind, DefinedTypeCategory.Unavailable reason)
+    {
+        return "Type kind '" + kind + "' (type.types[" + index + "]) could not be checked against " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + DEFINED_TYPE_CATEGORY + ": " + reason.getMessage() + DEFINED_TYPE_UNAVAILABLE_ADVICE; //$NON-NLS-1$
     }
 
     /** The platform pseudo-type a form list attribute carries as its value type. */
@@ -1132,7 +1297,7 @@ public final class MetadataTypeBuilder
         String[] simpleTypeCandidates = platformSimpleTypeCandidates(kind);
         if (simpleTypeCandidates.length > 0)
         {
-            if (isCollectionKind(kind) && typeTarget != TypeTarget.FORM_ATTRIBUTE)
+            if (isCollectionKind(kind) && !buildsFormVocabulary(typeTarget))
             {
                 return error(collectionKindRefusal(kind, typeTarget));
             }
@@ -1146,11 +1311,13 @@ public final class MetadataTypeBuilder
         TypeItem platformType = probe.item();
         if (platformType != null)
         {
-            if (isDynamicListKind(kind))
+            // A form list needs its query; a DefinedType's type list holds none, so there EDT's
+            // DefinedType category decides a DynamicList like any other type.
+            if (isDynamicListKind(kind) && typeTarget != TypeTarget.DEFINED_TYPE)
             {
                 return error(dynamicListKindRefusal(kind));
             }
-            if (typeTarget != TypeTarget.FORM_ATTRIBUTE)
+            if (!buildsFormVocabulary(typeTarget))
             {
                 if ((typeTarget == TypeTarget.EVENT_SOURCE && producedKind != null
                     && producedKind.hasKnownMetadataType())
@@ -1180,15 +1347,41 @@ public final class MetadataTypeBuilder
             return error(unknownProducedTypePrefix(kind, producedKind));
         }
 
-        return error("Unknown type kind '" + kind //$NON-NLS-1$
+        return error(unknownTypeKindRefusal(kind, typeTarget));
+    }
+
+    /**
+     * The refusal of a kind that names no type this platform version knows, worded for the TARGET like
+     * {@link #formOnlyTypeRefusal}. A DefinedType's own type lists only what EDT's DefinedType category
+     * offers, so its advice names neither another DefinedType nor an abstract produced type, nor sends
+     * the caller to a FORM attribute - EDT refuses the first two there, and the third is not where the
+     * caller is setting a type (issue #727).
+     *
+     * @param kind the requested kind, as the caller spelled it
+     * @param typeTarget what the type description was being built for
+     * @return the actionable refusal
+     */
+    private static String unknownTypeKindRefusal(String kind, TypeTarget typeTarget)
+    {
+        if (typeTarget == TypeTarget.DEFINED_TYPE)
+        {
+            return "Unknown type kind '" + kind + "'. A defined type takes what EDT's DefinedType type " //$NON-NLS-1$ //$NON-NLS-2$
+                + "editor offers: String / Number / Boolean / Date / ValueStorage / UUID, a reference " //$NON-NLS-1$
+                + "({kind:'Ref', ref:'Type.Name'}), a produced type with its ref such as " //$NON-NLS-1$
+                + "{kind:'DocumentObject', ref:'Invoice'}, or a platform value such as ValueTable / " //$NON-NLS-1$
+                + "ValueTree / FixedArray / ValueList (English or Russian) - this one names no type this " //$NON-NLS-1$
+                + "platform version knows."; //$NON-NLS-1$
+        }
+        return "Unknown type kind '" + kind //$NON-NLS-1$
             + "'. Use String / Number / Boolean / Date / ValueStorage / " //$NON-NLS-1$
-            + "UUID, ValueTable / ValueTree (in-memory collections - a FORM attribute only), a " //$NON-NLS-1$
+            + "UUID, ValueTable / ValueTree (in-memory collections - a FORM attribute or a " //$NON-NLS-1$
+            + "DefinedType's own type only), a " //$NON-NLS-1$
             + "DefinedType ({kind:'DefinedType', ref:'Name'} or {kind:'DefinedType.Name'}), a " //$NON-NLS-1$
             + "produced type ({kind:'DocumentObject', ref:'Invoice'} or " //$NON-NLS-1$
             + "{kind:'ExchangePlanObject'}), or a reference ({kind:'Ref', ref:'Type.Name'}). On a " //$NON-NLS-1$
             + "FORM attribute any platform type name " //$NON-NLS-1$
             + "also works (ValueList / SpreadsheetDocument / Chart / StandardPeriod / ..., English or " //$NON-NLS-1$
-            + "Russian) - this one names no type this platform version knows."); //$NON-NLS-1$
+            + "Russian) - this one names no type this platform version knows."; //$NON-NLS-1$
     }
 
     private static boolean isEventSourceProducedType(ProducedTypeKind producedKind)
@@ -1211,12 +1404,23 @@ public final class MetadataTypeBuilder
             + "."; //$NON-NLS-1$
     }
 
+    /**
+     * Whether {@code typeTarget} builds the whole vocabulary a FORM attribute builds: concrete produced
+     * types, the in-memory collections and any platform type the version knows. A
+     * {@link TypeTarget#DEFINED_TYPE} builds it too, and then leaves the verdict on every built item to
+     * EDT's DefinedType category.
+     */
+    private static boolean buildsFormVocabulary(TypeTarget typeTarget)
+    {
+        return typeTarget == TypeTarget.FORM_ATTRIBUTE || typeTarget == TypeTarget.DEFINED_TYPE;
+    }
+
     /** Adds one concrete model-owned produced Type to the non-containment type list. */
     private static Result addConcreteProducedType(TypeDescription td, JsonObject item, String kind,
         ProducedTypeKind producedKind, MetadataScope scope, boolean isExtensionProject,
         TypeTarget typeTarget)
     {
-        if (typeTarget != TypeTarget.EVENT_SOURCE && typeTarget != TypeTarget.FORM_ATTRIBUTE)
+        if (typeTarget != TypeTarget.EVENT_SOURCE && !buildsFormVocabulary(typeTarget))
         {
             return error(producedTypeRefusal(kind));
         }
@@ -1227,16 +1431,21 @@ public final class MetadataTypeBuilder
             // type index does not publish, so echoing it hands back a retry that cannot resolve.
             String canonical = producedKind.hasKnownMetadataType()
                 ? producedKind.canonicalKind() : kind;
+            // A defined type gets no retry (issue #727): EDT's DefinedType category takes a one-segment
+            // name only from a fixed list of platform values (and the SettingsStorageManager type set),
+            // so the abstract form would be refused in turn.
+            String retry = typeTarget == TypeTarget.DEFINED_TYPE
+                ? " A defined type does not take its abstract form either: EDT's DefinedType type editor " //$NON-NLS-1$
+                    + "does not offer it. Remove it from the defined type's type list." //$NON-NLS-1$
+                : " Pass {kind:'" + canonical + "'} without ref to use its abstract form."; //$NON-NLS-1$ //$NON-NLS-2$
             if ("Recalculation".equals(producedKind.englishMetadataType)) //$NON-NLS-1$
             {
                 return error("Type kind '" + kind + "' is a produced type of a NESTED object (" //$NON-NLS-1$ //$NON-NLS-2$
                     + producedKind.englishMetadataType + " lives inside its owning register" //$NON-NLS-1$
-                    + "), which cannot be addressed by ref. Pass {kind:'" + canonical //$NON-NLS-1$
-                    + "'} without ref to use its abstract form."); //$NON-NLS-1$
+                    + "), which cannot be addressed by ref." + retry); //$NON-NLS-1$
             }
             return error("Type kind '" + kind + "' is a produced type of a NESTED object; a nested " //$NON-NLS-1$ //$NON-NLS-2$
-                + "object is addressed through its owner, not by ref. Pass {kind:'" + canonical //$NON-NLS-1$ //$NON-NLS-2$
-                + "'} without ref to use its abstract form."); //$NON-NLS-1$
+                + "object is addressed through its owner, not by ref." + retry); //$NON-NLS-1$
         }
         String rawRef = jsonString(item.get("ref")); //$NON-NLS-1$
         if (rawRef == null || rawRef.trim().isEmpty())
@@ -1480,8 +1689,10 @@ public final class MetadataTypeBuilder
     }
 
     /**
-     * The refusal of a platform type this version DOES know but which this tool builds only for a FORM
-     * attribute (SpreadsheetDocument, Chart, ValueList, StandardPeriod, ...). Worded per TARGET like
+     * The refusal of a platform type this version DOES know but which this tool does not build for the
+     * target at hand (SpreadsheetDocument, Chart, ValueList, StandardPeriod, ...): a FORM attribute takes
+     * it, and so does a DefinedType's own type when EDT's DefinedType category offers it (issue #727), so
+     * no wording may call a form attribute the ONLY place it is built. Worded per TARGET like
      * {@link #collectionKindRefusal}, and worded as a statement about what this TOOL builds rather than
      * about what the platform can store: the reachable set here is the whole platform type system, so a
      * blanket "the database cannot hold this" would over-claim for its edges. What every target can say
@@ -1499,8 +1710,8 @@ public final class MetadataTypeBuilder
         if (typeTarget == TypeTarget.DCS_PARAMETER)
         {
             return "Type kind '" + kind + "' is a platform value this tool does not build for a " //$NON-NLS-1$ //$NON-NLS-2$
-                + "data-composition parameter: a FORM attribute (fqn " //$NON-NLS-1$
-                + "'Type.Object.Form.FormName.Attribute.Name') is the only target that accepts it. Give " //$NON-NLS-1$
+                + "data-composition parameter: it belongs on a FORM attribute (fqn " //$NON-NLS-1$
+                + "'Type.Object.Form.FormName.Attribute.Name'). Give " //$NON-NLS-1$
                 + "the parameter a primitive or a reference type instead."; //$NON-NLS-1$
         }
         if (typeTarget == TypeTarget.SESSION_PARAMETER)
@@ -1508,8 +1719,9 @@ public final class MetadataTypeBuilder
             return "Type kind '" + kind + "' is a platform value this tool does not build for a " //$NON-NLS-1$ //$NON-NLS-2$
                 + "session parameter. " + SESSION_PARAMETER_VOCABULARY; //$NON-NLS-1$
         }
-        return "Type kind '" + kind + "' is a platform value this tool builds only for a FORM attribute " //$NON-NLS-1$ //$NON-NLS-2$
-            + "(fqn 'Type.Object.Form.FormName.Attribute.Name'), not for a stored metadata feature. Set " //$NON-NLS-1$
+        return "Type kind '" + kind + "' is a platform value this tool does not build for a stored " //$NON-NLS-1$ //$NON-NLS-2$
+            + "metadata feature: it belongs on a FORM attribute (fqn " //$NON-NLS-1$
+            + "'Type.Object.Form.FormName.Attribute.Name'). Set " //$NON-NLS-1$
             + "it on a form attribute; a stored feature takes String / Number / Boolean / Date / " //$NON-NLS-1$
             + "ValueStorage / UUID or a reference ({kind:'Ref', ref:'Type.Name'})."; //$NON-NLS-1$
     }
@@ -1540,9 +1752,9 @@ public final class MetadataTypeBuilder
         if (typeTarget == TypeTarget.DCS_PARAMETER)
         {
             return "Type kind '" + kind + "' is an IN-MEMORY collection, and this tool does not build " //$NON-NLS-1$ //$NON-NLS-2$
-                + "one for a data-composition parameter: a FORM attribute (fqn " //$NON-NLS-1$
-                + "'Type.Object.Form.FormName.Attribute.Name') is the only target that accepts the " //$NON-NLS-1$
-                + "collection kinds. Give the parameter a primitive or a reference type instead."; //$NON-NLS-1$
+                + "one for a data-composition parameter: the collection kinds belong on a FORM " //$NON-NLS-1$
+                + "attribute (fqn 'Type.Object.Form.FormName.Attribute.Name'). Give the parameter a " //$NON-NLS-1$
+                + "primitive or a reference type instead."; //$NON-NLS-1$
         }
         if (typeTarget == TypeTarget.SESSION_PARAMETER)
         {

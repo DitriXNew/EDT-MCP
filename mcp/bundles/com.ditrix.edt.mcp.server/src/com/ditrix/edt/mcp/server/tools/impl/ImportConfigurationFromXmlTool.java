@@ -642,8 +642,37 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
             return abandoned;
         }
         callerStoppedWaiting.set(true);
+        return concludeTheStep(project, projectName, lifecycle, result.getOutcome(),
+            result.getFailure(), phase, refreshDone, stepClaimed);
+    }
 
-        BoundedJob.Outcome runOutcome = result.getOutcome();
+    /**
+     * Decides what the post-import step observed once the bounded wait has ended: a step the
+     * body may not have entered is abandoned if the caller can still claim it, and otherwise the
+     * answer is how far the body got.
+     *
+     * <p>Separate from {@link #startImportedProject} so every wait outcome can be decided
+     * headless. One of them has no deterministic route through the scheduler seam: a
+     * {@code TIMED_OUT} whose cancelled job a worker held in {@code ABOUT_TO_RUN} past
+     * {@link BoundedJob}'s grace, the body never entered. Holding a worker there takes a job
+     * listener that blocks, and the platform answers one by logging a possible deadlock and
+     * delivering job events unserialised for the rest of the JVM - so that case is pinned here,
+     * at the decision, and not end to end.
+     *
+     * @param project the imported project
+     * @param projectName the imported project name, for the log line
+     * @param lifecycle the platform lifecycle to drive
+     * @param runOutcome how the bounded wait ended
+     * @param runFailure what the bounded run reported as its failure, or {@code null}
+     * @param phase how far the step has got, as the job body advanced it
+     * @param refreshDone set once the workspace refresh has returned
+     * @param stepClaimed the ownership token shared with the job body
+     * @return what was observed
+     */
+    static StartOutcome concludeTheStep(IProject project, String projectName,
+        IImportLifecycle lifecycle, BoundedJob.Outcome runOutcome, Throwable runFailure,
+        AtomicReference<StartPhase> phase, AtomicBoolean refreshDone, AtomicBoolean stepClaimed)
+    {
         if (mayNotHaveEnteredTheWork(runOutcome))
         {
             // Every outcome but COMPLETED may have left the body unentered - NOT_RUN from a
@@ -660,7 +689,7 @@ public class ImportConfigurationFromXmlTool implements IMcpTool
         // Only a COMPLETED run hands over the body's own failure. An INTERRUPTED one carries the
         // interruption of THIS wait, not a failure of the step - which is still running and owns
         // the latch - so it must not be rendered as a failed refresh whose latch "was released".
-        Throwable failure = runOutcome == BoundedJob.Outcome.COMPLETED ? result.getFailure() : null;
+        Throwable failure = runOutcome == BoundedJob.Outcome.COMPLETED ? runFailure : null;
         if (failure != null)
         {
             return new StartOutcome(

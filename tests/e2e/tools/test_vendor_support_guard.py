@@ -136,6 +136,56 @@ def test_vendor_modify_refused_on_a_locked_object_and_member():
     assert_not_contains(details.text, "E2E vendor", "the refused change must not be in the model")
 
 
+@e2e_test(tool="modify_metadata", kind="write")
+def test_vendor_modify_of_a_locked_configuration_root_is_refused():
+    """The configuration ROOT is locked in this fixture (see the module docstring), and a change to it
+    (issue #741) is judged on the root itself - not waved through as "not found", and not answered with
+    the advice to adopt it in an extension, which cannot change another configuration's root.
+
+    Mutation thinking: a guard without its root branch lets the version through (the fixture would
+    change); one with the shared remedy names adopt_metadata_object; the Russian token pins that the
+    root is recognized bilingually in the guard, before the write path ever sees it."""
+    before = _start()
+    for address in ("Configuration", "\u041a\u043e\u043d\u0444\u0438\u0433\u0443"
+                                     "\u0440\u0430\u0446\u0438\u044f"):
+        err = assert_error(call("modify_metadata",
+                                {"projectName": SUPPORTED_PROJECT, "fqn": address,
+                                 "properties": [{"name": "version", "value": "7.4.1.745"}]}),
+                           "change the locked root as %r" % address)
+        assert_error_quality(err, names=[address, "SupportedConfiguration"],
+                             suggests=["vendor support", "Nothing was changed", "support settings",
+                                       "its root is its own"],
+                             ctx="a locked root is refused, naming the configuration")
+        assert_not_contains(err, "adopt_metadata_object",
+                            "an extension cannot change the root of the configuration it extends")
+    _assert_byte_identical(before, "refused root changes")
+    props = call("get_configuration_properties", {"projectName": SUPPORTED_PROJECT})
+    assert_ok(props, "re-read the locked root")
+    assert_not_contains(props.text, "7.4.1.745", "the refused version must not be in the model")
+
+
+@e2e_test(tool="rename_metadata_object", kind="write")
+def test_vendor_rename_of_the_configuration_root_answers_not_found():
+    """rename_metadata_object cannot address the configuration ROOT, so the root's lock is never its
+    answer: naming the lock would send the caller to EDT's support settings for a rename that still could
+    not happen. The guard judges the root only for modify_metadata (issue #741), and this fixture's root
+    IS locked - so a rename of 'Configuration' must answer "Object not found", exactly as it did before
+    #741 made the root addressable.
+
+    A regression guard, green on a build without #741 by construction: it turns red only when the
+    guard's root branch reaches the rename."""
+    before = _start()
+    err = assert_error(call("rename_metadata_object",
+                            {"projectName": SUPPORTED_PROJECT, "objectFqn": "Configuration",
+                             "newName": "E2EVendorRenamedRoot"}),
+                       "rename the locked configuration root")
+    assert_error_quality(err, names=["Configuration"], suggests=["Object not found", "Type.Name"],
+                         ctx="the root is no rename target")
+    assert_not_contains(err, "vendor support", "the root's lock is not why it cannot be renamed")
+    assert_not_contains(err, "support settings", "no way out is offered for a rename that cannot happen")
+    _assert_byte_identical(before, "a refused rename of the root")
+
+
 @e2e_test(tool="delete_metadata", kind="write")
 def test_vendor_delete_refused_in_preview_and_with_force():
     """The lock is checked before any refactoring exists, for the preview and confirm alike, and

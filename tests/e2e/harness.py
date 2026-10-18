@@ -195,6 +195,10 @@ NON_BASE_PROBE_FQNS = {
     ],
 }
 
+# The fixture projects that HAVE a configuration root of their own (an external-objects project
+# has none), so the root brace of the reset post-condition is captured for exactly these.
+ROOT_FINGERPRINT_PROJECTS = (PROJECT, TESTS_PROJECT, SUPPORTED_PROJECT)
+
 # Kept as the single-value alias some tests/messages still read.
 BASELINE_PROBE_FQN = BASELINE_PROBE_FQNS[0]
 
@@ -712,6 +716,9 @@ _UNRESOLVED_CASCADE_CALLS = 0
 # verification deliberately continue to read it exactly as before.
 _BASELINE_INVENTORY_BY_PROJECT = {}
 _BASELINE_DETAILS_BY_PROJECT = {}
+# The third brace: the configuration ROOT's own properties, per project that has a root. See
+# _root_fingerprint.
+_BASELINE_ROOT_BY_PROJECT = {}
 _BASELINE_INVENTORY = None
 _BASELINE_DETAILS = None
 # The OPTIONAL fixtures, so final_cleanup cannot require their model refresh to succeed. A
@@ -1008,6 +1015,62 @@ def _probe_details(project=PROJECT, fqns=None):
     return text
 
 
+def _root_fingerprint(project=PROJECT):
+    """The project's configuration ROOT as get_configuration_properties renders it, or None when it
+    cannot be read AS EVIDENCE (a tool error or an empty body).
+
+    The third brace of the post-condition. modify_metadata writes the root's own properties (its
+    version, vendor, synonym, ... - issue #741), and neither of the other two braces reads the root:
+    the inventory lists the top objects, the detail probes read three of them. A root write that
+    survived a reset would therefore be certified as reset, and fail a later, innocent test - one that
+    asserts the fixture's synonym, say, or the languages it keeps in use. get_configuration_properties
+    renders exactly those properties, in one cheap call.
+
+    A TIMEOUT propagates, like every other probe's: it arms the global latch and means the request may
+    still be running server-side."""
+    try:
+        r = call("get_configuration_properties", {"projectName": project})
+    except E2ECallTimeout:
+        raise
+    except Exception:
+        return None
+    if r.is_error:
+        return None
+    text = (r.text or "").strip()
+    return text or None
+
+
+def _capture_root_baseline(project):
+    """Record the root fingerprint of `project` when it has a root and it can be read as evidence."""
+    if project not in ROOT_FINGERPRINT_PROJECTS:
+        return
+    root = _root_fingerprint(project)
+    if root is not None:
+        _BASELINE_ROOT_BY_PROJECT[project] = root
+    elif project == PROJECT:
+        # Degraded, not broken - but say so: without it a root write that survives a reset goes unseen.
+        print("!! the configuration root of %s could not be fingerprinted - the reset post-condition "
+              "cannot see a root write that survives it" % project, flush=True)
+
+
+def _root_mismatch(project):
+    """Why `project`'s configuration root no longer matches its captured baseline, or None.
+
+    Applied only when a root baseline was captured - the same degradation as the other braces: no
+    baseline, no brace. A root that cannot be read once the baseline exists is a mismatch, because a
+    post-condition must not certify what it could not look at."""
+    baseline = _BASELINE_ROOT_BY_PROJECT.get(project)
+    if baseline is None:
+        return None
+    root = _root_fingerprint(project)
+    if root is None:
+        return "the configuration root of %s could not be read as evidence" % project
+    if root != baseline:
+        return ("the configuration root of %s (get_configuration_properties) no longer matches the "
+                "baseline - a write to 'Configuration' survived" % project)
+    return None
+
+
 def snapshot_model_baseline():
     """Record the pristine fingerprints once, before the first test runs.
 
@@ -1024,12 +1087,14 @@ def snapshot_model_baseline():
     global _BASELINE_INVENTORY, _BASELINE_DETAILS
     _BASELINE_INVENTORY_BY_PROJECT.clear()
     _BASELINE_DETAILS_BY_PROJECT.clear()
+    _BASELINE_ROOT_BY_PROJECT.clear()
     _BASELINE_INVENTORY = _top_object_inventory()
     if _BASELINE_INVENTORY is not None:
         _BASELINE_INVENTORY_BY_PROJECT[PROJECT] = _BASELINE_INVENTORY
     _BASELINE_DETAILS = _probe_details()
     if _BASELINE_DETAILS is not None:
         _BASELINE_DETAILS_BY_PROJECT[PROJECT] = _BASELINE_DETAILS
+    _capture_root_baseline(PROJECT)
     for project in (TESTS_PROJECT,) + OPTIONAL_FIXTURE_PROJECTS:
         if project in OPTIONAL_FIXTURE_PROJECTS and project not in _OPTIONAL_MODELS_SYNCED:
             # Its disk was still reverted, but an absent, unloaded or otherwise uncleanable
@@ -1054,6 +1119,7 @@ def snapshot_model_baseline():
         details = _probe_details(project, NON_BASE_PROBE_FQNS[project])
         if details is not None:
             _BASELINE_DETAILS_BY_PROJECT[project] = details
+        _capture_root_baseline(project)
     return (_BASELINE_INVENTORY is not None, _BASELINE_DETAILS is not None)
 
 
@@ -1724,7 +1790,8 @@ def _baseline_mismatch():
 
     Both braces are needed and neither subsumes the other: the INVENTORY sees a top object that
     appeared, vanished or was renamed; the DETAIL of BASELINE_PROBE_FQNS sees a change INSIDE one
-    - a property, a child, a synonym - which leaves every name identical.
+    - a property, a child, a synonym - which leaves every name identical. A third brace, the ROOT
+    (_root_fingerprint), sees a write to the configuration root itself, which neither of them reads.
 
     Best-effort by construction: anything that cannot be read counts as a mismatch and the caller
     retries the whole revert+clean cycle (or, for the shortcut, simply does not skip it). A call
@@ -1746,7 +1813,8 @@ def _baseline_mismatch():
     if _BASELINE_DETAILS is not None and text != _BASELINE_DETAILS:
         return "%s still resolve, but their detail no longer matches the baseline - something "\
             "INSIDE one of them changed" % ", ".join(BASELINE_PROBE_FQNS)
-    return None
+    # The root brace: a write to the configuration root changes neither the inventory nor the probes.
+    return _root_mismatch(PROJECT)
 
 
 def _settle_progress_note(progress):
@@ -2351,6 +2419,11 @@ def _non_base_mismatch(project, rel):
             return "the top-object inventory for %s could not be read" % project
         if inventory != baseline:
             return _inventory_difference_against(inventory, baseline)
+    # The root brace, applied when its own baseline was captured (an extension's root is as writable
+    # as the base's, and neither the inventory nor the detail probes read it).
+    root_mismatch = _root_mismatch(project)
+    if root_mismatch is not None:
+        return root_mismatch
     detail_baseline = _BASELINE_DETAILS_BY_PROJECT.get(project)
     if detail_baseline is None:
         return None

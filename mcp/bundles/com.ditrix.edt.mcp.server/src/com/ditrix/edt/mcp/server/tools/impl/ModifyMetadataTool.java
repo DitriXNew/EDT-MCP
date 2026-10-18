@@ -18,6 +18,7 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.EMap;
@@ -45,6 +46,7 @@ import com._1c.g5.v8.dt.mcore.McorePackage;
 import com._1c.g5.v8.dt.mcore.QName;
 import com._1c.g5.v8.dt.mcore.ReferenceValue;
 import com._1c.g5.v8.dt.mcore.StringValue;
+import com._1c.g5.v8.dt.mcore.TypeDescription;
 import com._1c.g5.v8.dt.mcore.Value;
 import com._1c.g5.v8.dt.metadata.mdclass.AdjustableBoolean;
 import com._1c.g5.v8.dt.metadata.mdclass.BasicTemplate;
@@ -66,12 +68,12 @@ import com._1c.g5.v8.dt.metadata.mdclass.Subsystem;
 import com._1c.g5.v8.dt.metadata.mdclass.TemplateType;
 import com._1c.g5.v8.dt.metadata.mdclass.XDTOPackage;
 import com._1c.g5.v8.dt.moxel.SpreadsheetDocument;
-import com._1c.g5.v8.dt.moxel.sheet.SheetFactory;
 import com._1c.g5.v8.dt.xdto.model.ObjectType;
 import com._1c.g5.v8.dt.xdto.model.Package;
 import com._1c.g5.v8.dt.xdto.model.Property;
 import com._1c.g5.v8.dt.platform.IEObjectProvider;
 import com._1c.g5.v8.dt.platform.version.Version;
+import com._1c.g5.v8.dt.textdocument.model.FileAwareTextDocument;
 import com.ditrix.edt.mcp.server.Activator;
 import com.ditrix.edt.mcp.server.protocol.JsonSchemaBuilder;
 import com.ditrix.edt.mcp.server.protocol.JsonUtils;
@@ -80,17 +82,20 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.base.AbstractMetadataWriteTool;
 import com.ditrix.edt.mcp.server.tools.base.WriteScope;
 import com.ditrix.edt.mcp.server.utils.AdjustableBooleanSupport;
+import com.ditrix.edt.mcp.server.utils.AdoptedPropertyRouter;
 import com.ditrix.edt.mcp.server.utils.AppearanceValueBuilder;
 import com.ditrix.edt.mcp.server.utils.BmTransactions;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceAddress;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSection;
 import com.ditrix.edt.mcp.server.utils.CommandInterfaceSupport;
 import com.ditrix.edt.mcp.server.utils.CommonAttributeContentWriter;
+import com.ditrix.edt.mcp.server.utils.ConfigurationRoot;
 import com.ditrix.edt.mcp.server.utils.ConsentPreview;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate;
 import com.ditrix.edt.mcp.server.utils.DestructiveConsentGate.ConsentDecision;
 import com.ditrix.edt.mcp.server.utils.ExchangePlanContentWriter;
 import com.ditrix.edt.mcp.server.utils.ExtensionOriginUtils;
+import com.ditrix.edt.mcp.server.utils.FieldListSupport;
 import com.ditrix.edt.mcp.server.utils.FormElementWriter;
 import com.ditrix.edt.mcp.server.utils.FormStructureReader;
 import com.ditrix.edt.mcp.server.utils.FormValidationException;
@@ -113,6 +118,9 @@ import com.ditrix.edt.mcp.server.utils.RoleRightsWriter;
 import com.ditrix.edt.mcp.server.utils.SpreadsheetTemplateWriter;
 import com.ditrix.edt.mcp.server.utils.StyleValueBuilder;
 import com.ditrix.edt.mcp.server.utils.SubsystemUtils;
+import com.ditrix.edt.mcp.server.utils.TemplateContentSupport;
+import com.ditrix.edt.mcp.server.utils.ContentHash;
+import com.ditrix.edt.mcp.server.utils.TypeChangeDefaults;
 import com.ditrix.edt.mcp.server.utils.UseAlwaysSupport;
 import com.ditrix.edt.mcp.server.utils.VendorSupportGuard;
 import com.ditrix.edt.mcp.server.utils.XdtoWriteException;
@@ -341,7 +349,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             .stringProperty("fqn", //$NON-NLS-1$
                 "Full-name FQN of the node to modify (required), e.g. 'Catalog.Products' or " //$NON-NLS-1$
                 + "'Catalog.Products.Attribute.Weight'; a managed-form root is " //$NON-NLS-1$
-                + "'Catalog.Products.Form.ItemForm' or 'CommonForm.Main'. On CommonForm.Main, any " //$NON-NLS-1$
+                + "'Catalog.Products.Form.ItemForm' or 'CommonForm.Main'; the configuration root is " //$NON-NLS-1$
+                + "'Configuration'. On CommonForm.Main, any " //$NON-NLS-1$
                 + "mdclass-assignable property keeps the whole call on the mdclass surface; only " //$NON-NLS-1$
                 + "an all-root-only batch falls back to the content root. Type / kind tokens may " //$NON-NLS-1$
                 + "be English or Russian; the Name parts are the programmatic Name.", true) //$NON-NLS-1$
@@ -396,7 +405,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "on the same FQN lists the section's commands and groups. Cannot be combined with other " //$NON-NLS-1$
                 + "payloads.") //$NON-NLS-1$
             .objectProperty(KEY_TEMPLATE,
-                "SpreadsheetDocument (print form / макет) TEMPLATE FQN only: the spreadsheet content to " //$NON-NLS-1$
+                "TEMPLATE FQN only: TextDocument takes {text, expectedHash?}; read text and contentHash " //$NON-NLS-1$
+                + "with get_metadata_details before a guarded write. SpreadsheetDocument takes the content to " //$NON-NLS-1$
                 + "author, instead of 'properties'. An object with any of: 'cells' [{row, col (both " //$NON-NLS-1$
                 + "0-based, required), text? OR parameter? (a print-time parameter name), bold?, " //$NON-NLS-1$
                 + "fontSize?, hAlign? ('Left'/'Center'/'Right'/'Auto'/'Width'), vAlign? " //$NON-NLS-1$
@@ -413,7 +423,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "inheritance and null counts as omitted; bold:false alone and wrap:false are the same as " //$NON-NLS-1$
                 + "omitting them. " //$NON-NLS-1$
                 + "Setting a cell overwrites that (row, col); the rest of the content is kept. Valid " //$NON-NLS-1$
-                + "only for a SpreadsheetDocument template FQN; cannot be combined with 'properties' / " //$NON-NLS-1$
+                + "only for the matching template type; cannot be combined with 'properties' / " //$NON-NLS-1$
                 + "'content' / a Role payload.") //$NON-NLS-1$
             .booleanProperty("normalizeYo", //$NON-NLS-1$
                 "Normalize the Russian letter 'ё'->'е' / 'Ё'->'Е' in localized-string values (synonym / " //$NON-NLS-1$
@@ -466,7 +476,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "Catalog owners / Document register records / Subsystem content change (a plain " //$NON-NLS-1$
                 + "reference list, no per-entry flag) reports {added, removed}") //$NON-NLS-1$
             .objectProperty(KEY_TEMPLATE, "For a template content change: the applied counts object " //$NON-NLS-1$
-                + "{cells, merges, areas, columnWidths, rowHeights}") //$NON-NLS-1$
+                + "{cells, merges, areas, columnWidths, rowHeights}, or {contentHash} for text") //$NON-NLS-1$
             .objectProperty(KEY_COMMANDS, "For a command-interface change: how many commands changed " //$NON-NLS-1$
                 + "visibility / group, and how many groups got an explicit order {visibility, placement, " //$NON-NLS-1$
                 + "order}") //$NON-NLS-1$
@@ -530,6 +540,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         if (commandInterfaceResult != null)
         {
             return commandInterfaceResult;
+        }
+
+        // The configuration ROOT ('Configuration', issue #741) is its own address with a fixed set of
+        // settable properties; the generic resolver below has no root to offer.
+        String rootResult = dispatchConfigurationRoot(ctx, args);
+        if (rootResult != null)
+        {
+            return rootResult;
         }
 
         // A FQN that addresses a FORM member (item / attribute / command) is dispatched to its own
@@ -920,6 +938,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return ToolResult.error("Owner object is not a BM object").toJson(); //$NON-NLS-1$
         }
+        // The predefined items of an owner an extension adopted reach its .mdo only when the extension
+        // marks them; otherwise EDT's .mdo writer drops the whole list (issues #709 / #710).
+        String droppedPredefined = AdoptedPropertyRouter.refusalIfDropped(owner,
+            owner.eClass().getEStructuralFeature("predefined"), ref.ownerFqn(), ctx.project, //$NON-NLS-1$
+            resolvePlatformVersion(ctx));
+        if (droppedPredefined != null)
+        {
+            return droppedPredefined;
+        }
 
         IBmModelManager bmModelManager = Activator.getDefault().getBmModelManager();
         if (bmModelManager == null)
@@ -946,6 +973,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         final long ownerBmId = ((IBmObject)owner).bmGetId();
         final String itemName = ref.itemName;
+        final String ownerFqn = ref.ownerFqn();
         // Force-export must target the owner's CANONICAL FQN (its own bmGetFqn()), never the
         // caller's spelling (ownerResolved.fqn echoes the input) - a case/spelling variant that
         // still resolves would otherwise export a non-existent FQN and leave the change in memory.
@@ -961,7 +989,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     throw new RuntimeException("Owner object not found in transaction"); //$NON-NLS-1$
                 }
                 canonicalOwnerFqnHolder[0] = ((IBmObject)txOwner).bmGetFqn();
-                PredefinedWriter.WriteResult result = PredefinedWriter.modify(txOwner, itemName, props);
+                PredefinedWriter.WriteResult result = modifyPredefinedInWrite(txOwner, itemName, props, ownerFqn);
                 if (result.isError())
                 {
                     // A refusal: the message is OUR validation's, so mark it and keep the log quiet.
@@ -1065,6 +1093,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return templateOnlyForTemplateFqnError(normFqn, ERR_IS_A + subsystem.eClass().getName());
         }
+        // EDT's adopter marks an adopted subsystem's content Extended and EDT's .mdo writer then keeps the list, so
+        // this refuses only a content state of None (issues #709 / #710).
+        String dropped = AdoptedPropertyRouter.refusalIfDropped(subsystem, membershipList(subsystem), normFqn,
+            ctx.project, resolvePlatformVersion(ctx));
+        if (dropped != null)
+        {
+            return dropped;
+        }
         return modifySubsystemContent(ctx, normFqn, subsystem, args.properties, args.content,
             args.hasRolePayload);
     }
@@ -1137,6 +1173,144 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error(CommandInterfaceSupport.extensionRefusal(ctx.project.getName())).toJson();
         }
         return modifyCommandInterface(ctx, address, args.commands);
+    }
+
+    /**
+     * Dispatches the configuration ROOT (issue #741): {@code Configuration}, its Russian token, or
+     * {@code Configuration.<its Name>}. The root takes only 'properties', and of them only
+     * {@link ConfigurationRoot#settableProperties()}; every refusal comes before anything is written. An
+     * accepted call goes down the generic property path with the root as a top-level node, so its
+     * validation, its one BM write transaction, the export of the root's own top object
+     * ({@link ConfigurationRoot#FQN}) and its result are those of any other object. Returns {@code null}
+     * when the FQN is not a root address, so the caller continues down the normal path.
+     */
+    private String dispatchConfigurationRoot(ProjectContext ctx, ModifyArgs args)
+    {
+        return dispatchConfigurationRoot(ctx.scope, args.fqn, args.hasRolePayload, args.hasContentPayload,
+            args.hasTemplatePayload, args.properties,
+            root -> applyGenericPropertyChanges(ctx, args.projectName, ConfigurationRoot.FQN, root, root.object,
+                args.properties, args.normReport));
+    }
+
+    /**
+     * The root dispatch itself: resolves a root address, judges the call with
+     * {@link #configurationRootRefusal}, and hands the root to {@code write} only when nothing was
+     * refused. The allow-list is the only barrier between a root call and the generic property path,
+     * which can set ANY assignable feature of the root - its object collections included - so the order
+     * is the point: no refused call reaches {@code write}. Package-visible for tests.
+     *
+     * @param scope the project's resolution root
+     * @param fqn the requested address
+     * @param rolePayload whether a role payload was sent
+     * @param contentPayload whether a 'content' payload was sent
+     * @param templatePayload whether a 'template' payload was sent
+     * @param properties the 'properties' entries
+     * @param write writes the properties on the resolved root (a top-level node) and answers the result
+     * @return {@code null} when {@code fqn} is not a root address; else the refusal as ready JSON, or
+     *     what {@code write} answered
+     */
+    static String dispatchConfigurationRoot(MetadataScope scope, String fqn, boolean rolePayload,
+        boolean contentPayload, boolean templatePayload, List<JsonObject> properties,
+        Function<MetadataNodeResolver.MetadataNode, String> write)
+    {
+        ConfigurationRoot.Resolution root = ConfigurationRoot.resolve(scope, fqn);
+        if (root == null)
+        {
+            return null;
+        }
+        String refusal = configurationRootRefusal(root.error, rolePayload, contentPayload, templatePayload,
+            properties);
+        if (refusal != null)
+        {
+            return ToolResult.error(refusal).toJson();
+        }
+        return write.apply(root.node);
+    }
+
+    /**
+     * The refusal of a call on the configuration root, judged in the order the dispatch must: the address
+     * (another configuration's Name, a project with no root of its own), then the payload, then the
+     * properties. Package-visible for tests.
+     *
+     * @param resolutionError why the address does not name this project's root, or {@code null}
+     * @param rolePayload whether a role payload was sent
+     * @param contentPayload whether a 'content' payload was sent
+     * @param templatePayload whether a 'template' payload was sent
+     * @param properties the 'properties' entries
+     * @return the first refusal that applies, or {@code null} when the call may proceed
+     */
+    static String configurationRootRefusal(String resolutionError, boolean rolePayload, boolean contentPayload,
+        boolean templatePayload, List<JsonObject> properties)
+    {
+        if (resolutionError != null)
+        {
+            return resolutionError;
+        }
+        String payloadError = configurationRootPayloadError(rolePayload, contentPayload, templatePayload);
+        return payloadError != null ? payloadError : configurationRootPropertiesError(properties);
+    }
+
+    /**
+     * The refusal of a payload other than 'properties' on the configuration root (a 'commands' payload is
+     * refused by the command-interface dispatch before this). Package-visible for tests.
+     *
+     * @param rolePayload whether a role payload was sent
+     * @param contentPayload whether a 'content' payload was sent
+     * @param templatePayload whether a 'template' payload was sent
+     * @return the refusal naming the payload, or {@code null} when none was sent
+     */
+    static String configurationRootPayloadError(boolean rolePayload, boolean contentPayload,
+        boolean templatePayload)
+    {
+        String payload;
+        if (rolePayload)
+        {
+            payload = "a role payload ('rights' / 'templates' / 'roleProperties')"; //$NON-NLS-1$
+        }
+        else if (contentPayload)
+        {
+            payload = "'content'"; //$NON-NLS-1$
+        }
+        else if (templatePayload)
+        {
+            payload = "'template'"; //$NON-NLS-1$
+        }
+        else
+        {
+            return null;
+        }
+        return "'" + ConfigurationRoot.FQN + "' (the configuration root) accepts only 'properties'; " //$NON-NLS-1$ //$NON-NLS-2$
+            + payload + " is not taken there. Set its properties as properties=[{name, value, language?}]."; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal of the configuration root's 'properties' when any entry is not settable there - checked
+     * for the whole batch before anything is written, like the generic validation. Package-visible for
+     * tests.
+     *
+     * @param properties the 'properties' entries
+     * @return the refusal of the first entry without a name or with a property the root does not take, or
+     *     {@code null} when every entry is settable
+     */
+    static String configurationRootPropertiesError(List<JsonObject> properties)
+    {
+        if (properties == null)
+        {
+            return null;
+        }
+        for (JsonObject prop : properties)
+        {
+            String name = asString(prop.get("name")); //$NON-NLS-1$
+            if (name == null || name.isEmpty())
+            {
+                return "Each entry in 'properties' needs a non-empty 'name'."; //$NON-NLS-1$
+            }
+            if (!ConfigurationRoot.isSettable(name))
+            {
+                return ConfigurationRoot.notSettableMessage(name);
+            }
+        }
+        return null;
     }
 
     /**
@@ -1513,11 +1687,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         MetadataNodeResolver.MetadataNode node = resolved.node;
         if (node == null || node.object == null)
         {
-            return ResolvedTarget.notFound(
-                ToolResult.error("Node not found: " + fqn + ". Use 'Type.Name' for a top object or " //$NON-NLS-1$ //$NON-NLS-2$
-                    + "'Type.Name.Kind.Name' for a member. Use get_metadata_objects to find an FQN." //$NON-NLS-1$
-                    + MetadataNodeResolver.yoNotFoundHint(normFqn)
-                    + scope.addressingHint(normFqn)).toJson());
+            return ResolvedTarget.notFound(ToolResult.error(nodeNotFoundMessage(scope, fqn, normFqn)).toJson());
         }
         if (resolved.yoFallback)
         {
@@ -1527,6 +1697,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             normFqn = resolved.fqn;
         }
         return ResolvedTarget.of(node, normFqn);
+    }
+
+    /**
+     * The refusal of a modify target that resolves to no node: the address forms this tool takes - the
+     * configuration root's own among them (issue #741) - and where to find an FQN. Package-visible for
+     * tests.
+     *
+     * @param scope the project's resolution root
+     * @param fqn the address as the caller wrote it
+     * @param normFqn the normalized address
+     * @return the message
+     */
+    static String nodeNotFoundMessage(MetadataScope scope, String fqn, String normFqn)
+    {
+        return "Node not found: " + fqn + ". Use 'Type.Name' for a top object, " //$NON-NLS-1$ //$NON-NLS-2$
+            + "'Type.Name.Kind.Name' for a member, or '" + ConfigurationRoot.FQN + "' for the " //$NON-NLS-1$ //$NON-NLS-2$
+            + "configuration root. Use get_metadata_objects to find an FQN." //$NON-NLS-1$
+            + MetadataNodeResolver.yoNotFoundHint(normFqn)
+            + scope.addressingHint(normFqn);
     }
 
     /**
@@ -1642,6 +1831,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private String dispatchContentPayload(ProjectContext ctx, String normFqn, MdObject target,
         List<JsonObject> properties, List<JsonObject> content)
     {
+        // The list of an object an extension adopted reaches its .mdo only when the extension marks it;
+        // otherwise EDT's .mdo writer drops it (issues #709 / #710).
+        String dropped = AdoptedPropertyRouter.refusalIfDropped(target, membershipList(target), normFqn,
+            ctx.project, resolvePlatformVersion(ctx));
+        if (dropped != null)
+        {
+            return dropped;
+        }
         if (target instanceof CommonAttribute)
         {
             return modifyCommonAttributeContent(ctx, normFqn, (CommonAttribute)target, properties,
@@ -1664,6 +1861,34 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + ". Use 'properties' for its generic properties, or address a CommonAttribute.<Name> " //$NON-NLS-1$
             + "(owners), ExchangePlan.<Name> (content objects), Catalog.<Name> (owners), " //$NON-NLS-1$
             + "Document.<Name> (register records) or Subsystem.<Name> (content objects).").toJson(); //$NON-NLS-1$
+    }
+
+    /**
+     * The feature the membership {@code content} payload edits on {@code target}: a common attribute's or an
+     * exchange plan's content, a catalog's owners, a document's register records, a subsystem's content.
+     *
+     * @param target the resolved object
+     * @return the feature, or {@code null} for another kind
+     */
+    static EStructuralFeature membershipList(MdObject target)
+    {
+        if (target instanceof CommonAttribute)
+        {
+            return MdClassPackage.Literals.COMMON_ATTRIBUTE__CONTENT;
+        }
+        if (target instanceof ExchangePlan)
+        {
+            return MdClassPackage.Literals.EXCHANGE_PLAN__CONTENT;
+        }
+        if (target instanceof Catalog)
+        {
+            return MdClassPackage.Literals.CATALOG__OWNERS;
+        }
+        if (target instanceof Document)
+        {
+            return MdClassPackage.Literals.DOCUMENT__REGISTER_RECORDS;
+        }
+        return target instanceof Subsystem ? MdClassPackage.Literals.SUBSYSTEM__CONTENT : null;
     }
 
     /**
@@ -1696,30 +1921,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Populates a SpreadsheetDocument (.mxlx) template's content (the {@code template} payload) via
-     * {@link SpreadsheetTemplateWriter}: writes cells (text / print-time parameter + formatting), merged
-     * ranges, named areas and column / row sizes into the template's content SpreadsheetDocument. A
-     * template's content is authored through this dedicated surface, not the generic property bag, so
-     * mixing the template payload with a generic {@code properties} change, a membership {@code content}
-     * payload or a Role payload in the same call is refused (the same policy the Role rights / membership
-     * content branches enforce, so a sibling payload is never silently dropped while the tool reports
-     * success). Only a SpreadsheetDocument-typed template can be authored; a text / binary-data / DCS
-     * template is refused.
-     *
-     * <p>The write runs inside ONE {@link BmTransactions#write write} transaction on the template
-     * re-fetched by its BM id (the BM gotcha: capture {@code bmGetId()} up front, re-fetch inside the tx -
-     * a top object's {@code eContainer()} does not reliably climb); the content SpreadsheetDocument is
-     * created via {@link SheetFactory} as a CANONICAL document (templateMode + languageSettings + the
-     * platform's default format band, matching a designer template) when the template is still empty. A
-     * payload validation failure
-     * throws a {@link TemplateWriteException} carrying a ready JSON error BEFORE the commit, so the tx
-     * rolls back with no partial mutation. After the commit the TOP object's canonical FQN
-     * ({@code bmGetFqn()} - the template itself when it is a top object, else its OWNER via
-     * {@code bmGetTopObject()} for an object-owned template inline in the owner's .mdo - the #239
-     * canonical-FQN lesson) is force-exported so the sibling {@code .mxlx} content resource drains to disk;
-     * should EDT model that content as a DISTINCT top BM object, its own FQN is exported alongside
-     * (mirroring the way {@link #modifyRoleRights} also exports the separate {@code Rights.rights}
-     * sub-resource), so the authored cells are never left in-memory only.</p>
+     * Authors TextDocument file text or SpreadsheetDocument cells through the template payload.
+     * Rejects mixed payloads and type mismatches before writing, then rechecks the model in the
+     * BM write transaction. Spreadsheet content has its own export FQN; file-backed text uses the
+     * shared initializer and a file journal so a failed BM transaction restores its original bytes.
      */
     private String modifyTemplateContent(ProjectContext ctx, String normFqn, BasicTemplate template,
         List<JsonObject> properties, List<JsonObject> content, boolean hasRolePayload,
@@ -1731,15 +1936,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return mixError;
         }
 
-        // Only a SpreadsheetDocument template carries spreadsheet content; a text / binary-data / DCS /
-        // graphical template cannot host cells. Rejected up front (fail fast, no transaction).
+        String payloadError = TemplateContentSupport.payloadError(template, templateSpec, normFqn);
+        if (payloadError != null)
+        {
+            return payloadError;
+        }
+        if (template.getTemplateType() == TemplateType.TEXT_DOCUMENT)
+        {
+            return modifyTextTemplateContent(ctx, normFqn, template, templateSpec);
+        }
+
+        // Spreadsheet payloads retain their existing type guard.
         String nonSpreadsheetError = nonSpreadsheetTemplateError(template, normFqn);
         if (nonSpreadsheetError != null)
         {
             return nonSpreadsheetError;
         }
 
-        TemplateWriteContext writeCtx = resolveTemplateWriteContext(ctx, template, normFqn);
+        TemplateWriteContext writeCtx = resolveTemplateWriteContext(ctx, template, normFqn, true);
         if (writeCtx.error != null)
         {
             return writeCtx.error;
@@ -1783,11 +1997,89 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return buildTemplateResult(normFqn, result, persisted);
     }
 
+    /** Write the file-backed text in the same BM boundary used for spreadsheet content. */
+    private String modifyTextTemplateContent(ProjectContext ctx, String normFqn, BasicTemplate template,
+        JsonObject templateSpec)
+    {
+        TemplateWriteContext writeCtx = resolveTemplateWriteContext(ctx, template, normFqn, false);
+        if (writeCtx.error != null)
+        {
+            return writeCtx.error;
+        }
+        final String hash;
+        try (TemplateContentSupport.Context files = new TemplateContentSupport.Context(ctx.project))
+        {
+            hash = BmTransactions.write(writeCtx.bmModel, "ModifyTextTemplateContent", (tx, monitor) ->
+            {
+                Object object = tx.getObjectById(writeCtx.templateBmId);
+                if (!(object instanceof BasicTemplate))
+                {
+                    throw new TemplateWriteException(ToolResult.error("Template '" + normFqn
+                        + "' no longer exists; re-read get_metadata_details.").toJson());
+                }
+                BasicTemplate current = (BasicTemplate)object;
+                String error = TemplateContentSupport.payloadError(current, templateSpec, normFqn);
+                if (error != null)
+                {
+                    throw new TemplateWriteException(error);
+                }
+                EObject currentContent = current.getTemplate();
+                if (!(currentContent instanceof FileAwareTextDocument)
+                    && !TemplateContentSupport.isPlaceholder(currentContent))
+                {
+                    throw new TemplateWriteException(ToolResult.error("Template '" + normFqn //$NON-NLS-1$
+                        + "' has incompatible content. Create a separate TextDocument template with create_metadata.") //$NON-NLS-1$
+                        .toJson());
+                }
+                IFile file = TemplateContentSupport.contentFile(ctx.project, current);
+                error = TemplateContentSupport.writeText(current, file, templateSpec, files);
+                if (error != null)
+                {
+                    throw new TemplateWriteException(error);
+                }
+                TemplateContentSupport.initialize(current, TemplateType.TEXT_DOCUMENT, tx,
+                    writeCtx.dtProject, writeCtx.fqnGenerator, file);
+                return ContentHash.of(templateSpec.get("text").getAsString());
+            });
+            files.commit();
+        }
+        catch (TemplateWriteException error)
+        {
+            return error.getErrorJson();
+        }
+        catch (Exception error)
+        {
+            Refusals.log("Error modifying text template", error);
+            return ToolResult.error("Failed to modify template text: " + unwrapCauseMessage(error)).toJson();
+        }
+        boolean persisted = BmTransactions.forceExportToDisk(ctx.project, writeCtx.exportFqn);
+        JsonObject applied = new JsonObject();
+        applied.addProperty("contentHash", hash);
+        return ToolResult.success().put(McpKeys.ACTION, VAL_MODIFIED).put("fqn", normFqn)
+            .put(KEY_TEMPLATE, applied).put(KEY_PERSISTED, persisted)
+            .put(McpKeys.MESSAGE, "Modified text template " + normFqn).toJson();
+    }
+
+    /** The final templateType in a property batch, or null when it does not change this property. */
+    private static TemplateType requestedTemplateType(List<PreparedChange> changes)
+    {
+        TemplateType result = null;
+        for (PreparedChange change : changes)
+        {
+            if (change.feature() == MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE_TYPE)
+            {
+                result = (TemplateType)change.scalarValue;
+            }
+        }
+        return result;
+    }
+
     /**
      * Everything the template-content write boundary needs (built by
      * {@link #resolveTemplateWriteContext}): the template's BM id for the in-tx re-fetch, the TOP
      * object's canonical FQN to force-export, the BM model, the (nullable) {@link IDtProject}
-     * driving the canonical languageSettings block, and the external-property FQN generator. When
+     * driving the canonical languageSettings block, and the external-property FQN generator (only
+     * required for spreadsheet content). When
      * {@link #error} is non-null (a ready JSON error), the other fields must not be used.
      */
     private static final class TemplateWriteContext
@@ -1813,13 +2105,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /**
      * Resolves everything the template-content write needs up front: the template's BM id, the TOP
      * object's canonical FQN to force-export, the project's BM model, the (nullable)
-     * {@link IDtProject} and the external-property FQN generator. Returns a
+     * {@link IDtProject} and, when {@code attachSpreadsheet} is true, the external-property FQN
+     * generator needed to attach spreadsheet content. Returns a
      * {@link TemplateWriteContext} whose non-null {@code error} (a ready JSON error) reports a
      * missing service / unresolvable export target. Extracted verbatim from
      * {@link #modifyTemplateContent}.
      */
     private static TemplateWriteContext resolveTemplateWriteContext(ProjectContext ctx,
-        BasicTemplate template, String normFqn)
+        BasicTemplate template, String normFqn, boolean attachSpreadsheet)
     {
         TemplateWriteContext writeCtx = new TemplateWriteContext();
 
@@ -1879,11 +2172,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         // under its generated external-property FQN (the same machinery FormElementWriter uses for a form's
         // content), else committing the write fails with "Failed to persist reference value". Carried on
         // the write context captured by the write lambda.
-        writeCtx.fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
-        if (writeCtx.fqnGenerator == null)
+        if (attachSpreadsheet)
         {
-            writeCtx.error = ToolResult.error("ITopObjectFqnGenerator not available").toJson(); //$NON-NLS-1$
-            return writeCtx;
+            writeCtx.fqnGenerator = Activator.getDefault().getTopObjectFqnGenerator();
+            if (writeCtx.fqnGenerator == null)
+            {
+                writeCtx.error = ToolResult.error("ITopObjectFqnGenerator not available").toJson(); //$NON-NLS-1$
+                return writeCtx;
+            }
         }
         return writeCtx;
     }
@@ -1907,6 +2203,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 + "resolved inside the transaction.").toJson());
         }
         BasicTemplate txTemplate = (BasicTemplate)inTx;
+        String payloadError = TemplateContentSupport.payloadError(txTemplate, templateSpec, normFqn);
+        if (payloadError == null)
+        {
+            payloadError = nonSpreadsheetTemplateError(txTemplate, normFqn);
+        }
+        if (payloadError != null)
+        {
+            throw new TemplateWriteException(payloadError);
+        }
         SpreadsheetDocument doc =
             resolveSpreadsheetContent(txTemplate, tx, writeCtx.dtProject, writeCtx.fqnGenerator, normFqn);
         // The content doc is now an attached BM top object (pre-existing on disk, or freshly
@@ -1968,30 +2273,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
-     * Resolves the {@link SpreadsheetDocument} content of an in-transaction template, creating an empty
-     * CANONICAL one when the template has none usable yet. This "no content" branch is the PRIMARY path,
-     * not an edge case: {@code BasicTemplate.template} is a transient {@code @ExternalProperty} reference
-     * whose content lives in the separate, lazily-loaded {@code .mxlx}, so a template freshly made by
-     * {@code create_metadata} ({@code fillDefaultReferences} does not materialize a transient external ref)
-     * has NO usable content - either {@code getTemplate() == null} OR, on some EDT builds, a non-null
-     * PLACEHOLDER {@code EObject} that is not yet a {@link SpreadsheetDocument}. Both are treated as empty
-     * (the declared {@code templateType} is already verified {@code == SPREADSHEET_DOCUMENT} up front, so a
-     * non-spreadsheet content here is a placeholder to replace, never a real other-typed template). The
-     * empty content is therefore built with the platform
-     * factory {@link SheetFactory#createSpreadsheetDocument()} - NOT a raw
-     * {@code MoxelFactory.createSpreadsheetDocument()} - which seeds the print / view settings, the
-     * shared format band (a neutral format at index 0, so {@code SpreadsheetTemplateWriter.ensureBaseFormat}
-     * then no-ops on the non-empty pool) and {@code setDefaultFormatIndex(0)}; on top of that a print
-     * form (макет) is marked {@link SpreadsheetDocument#setTemplateMode(boolean) templateMode=true} and
-     * given the required {@code <languageSettings>} block (project-aware via
-     * {@link SheetFactory#createLanguageSettings} when the {@code dtProject} resolves), so the authored
-     * {@code .mxlx} matches a designer-created template rather than a non-canonical
-     * {@code templateMode=false} / no-{@code languageSettings} document.
-     *
-     * <p>A non-{@link SpreadsheetDocument} content is treated as an empty/placeholder and REPLACED with a
-     * fresh canonical document (it is not a genuine other-typed template - the up-front
-     * {@code templateType} guard already rejected those before the tx). MUST run inside the write
-     * boundary.</p>
+     * Reuses spreadsheet content or initializes an empty placeholder through EDT's creation helper.
+     * Real foreign content is refused. Must run inside the BM write boundary.
      */
     private static SpreadsheetDocument resolveSpreadsheetContent(BasicTemplate txTemplate, IBmTransaction tx,
         IDtProject dtProject, ITopObjectFqnGenerator fqnGenerator, String normFqn)
@@ -2001,36 +2284,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return (SpreadsheetDocument)contentObj;
         }
-        // No usable content yet - materialize a fresh canonical SpreadsheetDocument. This covers BOTH a null
-        // ref AND a non-null, non-SpreadsheetDocument PLACEHOLDER: a template freshly made by create_metadata
-        // does not always report getTemplate()==null - on some EDT builds the transient @ExternalProperty ref
-        // resolves to a placeholder EObject (not null), so keying only off null would wrongly reject a
-        // brand-new empty template ("its content is EObject"). The declared templateType is already verified
-        // == SPREADSHEET_DOCUMENT up front (nonSpreadsheetTemplateError), so any content that is not a real
-        // SpreadsheetDocument is an empty/placeholder to replace, never a genuine non-spreadsheet template.
-        // Built with the platform SheetFactory (seeds print/view settings, the neutral format band at index
-        // 0, setDefaultFormatIndex(0)); a print form is templateMode=true with the project-aware
-        // <languageSettings>, so the authored .mxlx matches a designer-created template.
-        SpreadsheetDocument doc = SheetFactory.createSpreadsheetDocument();
-        doc.setTemplateMode(true);
-        if (dtProject != null)
+        if (!TemplateContentSupport.isPlaceholder(contentObj))
         {
-            doc.setLanguageSettings(SheetFactory.createLanguageSettings(dtProject));
+            throw new TemplateWriteException(ToolResult.error("Template '" + normFqn
+                + "' has incompatible content. Create a separate SpreadsheetDocument template with create_metadata.")
+                .toJson());
         }
-        txTemplate.setTemplate(doc);
-        // The content is a transient @ExternalProperty (a separate .mxlx resource, NOT an inline BM ref), so
-        // the freshly-created doc must be ATTACHED as a BM top object under its canonical external-property
-        // FQN - else committing the write fails with "Failed to persist reference value". Mirrors
-        // FormElementWriter's content-form attach (generateExternalPropertyFqn + attachTopObject).
-        String contentFqn = fqnGenerator.generateExternalPropertyFqn(txTemplate,
-            MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE);
-        if (contentFqn == null || contentFqn.isEmpty())
-        {
-            throw new TemplateWriteException(ToolResult.error("Could not generate the content resource FQN " //$NON-NLS-1$
-                + "for template '" + normFqn + "'; report it with the template FQN.").toJson()); //$NON-NLS-1$ //$NON-NLS-2$
-        }
-        tx.attachTopObject((IBmObject)doc, contentFqn);
-        return doc;
+        TemplateContentSupport.initialize(txTemplate, TemplateType.SPREADSHEET_DOCUMENT,
+            tx, dtProject, fqnGenerator, null);
+        return (SpreadsheetDocument)txTemplate.getTemplate();
     }
 
     /**
@@ -2167,13 +2429,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     /**
      * The actionable error for a present-but-malformed {@code template} argument (unparseable JSON, or a
      * string / number / array rather than an object): the {@code template} payload authors a
-     * SpreadsheetDocument template's content, so it must be a JSON object.
+     * TextDocument or SpreadsheetDocument template's content, so it must be a JSON object.
      */
     private static String malformedTemplateError()
     {
         return ToolResult.error("'template' must be a JSON object, e.g. " //$NON-NLS-1$
             + "{cells:[{row:0,col:0,text:'Total'}]}. It authors a SpreadsheetDocument template's cells / " //$NON-NLS-1$
-            + "merges / areas / column & row sizes on a template FQN.").toJson(); //$NON-NLS-1$
+            + "merges / areas / column & row sizes on a template FQN. For a TextDocument use " //$NON-NLS-1$
+            + "{text:'...'} with optional expectedHash from get_metadata_details.").toJson(); //$NON-NLS-1$
     }
 
     /**
@@ -2255,10 +2518,28 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return prepErr;
         }
 
+        // A change of an object an extension ADOPTED goes where EDT keeps it - its extension block - or
+        // refuses the call, before the consent gate and the write (issues #709 / #710).
+        AdoptedPropertyRouter.Routing routing = routeAdopted(normFqn, ctx.project, ctx.scope, config, version,
+            target, changes, AdoptedPropertyRouter::route);
+        if (routing.isRefused())
+        {
+            return routing.refusal();
+        }
+        if (changes.isEmpty() && !routing.notes().isEmpty())
+        {
+            // Every change of the call leaves the object as it is: nothing to write, nothing to export -
+            // a finding, published as an empty writtenProjects (#408).
+            WriteScope.recordNothingQueued();
+            return buildModifiedResult(normFqn, List.of(), false, normReport, List.of(), null,
+                TypeChangeDefaults.Reset.NONE, routing.notes());
+        }
+
         // Ask the human before RETYPING an attribute (the destructive case): the preview is built from
         // the already-prepared changes, so a benign edit never prompts. On REJECT the tool returns the
         // error and mutates nothing; the gate itself is a no-op headless / when env or preference allows.
-        String consentErr = consentForTypeChanges(normFqn, changes);
+        // Then the base value a routed write of an adopted object was planned from is read again (#709/#710).
+        String consentErr = consentThenBaseCheck(normFqn, changes, routing);
         if (consentErr != null)
         {
             return consentErr;
@@ -2314,8 +2595,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         final LocalizedWriteReport localizedReport = new LocalizedWriteReport();
         final List<String> cascadedPackageNames = new ArrayList<>();
         final List<String> cascadedExportFqns = new ArrayList<>();
+        // What a type write reset besides the type (issue #700), for the confirmation message.
+        final TypeChangeDefaults.Reset[] typeReset = { TypeChangeDefaults.Reset.NONE };
+        final TemplateType requestedTemplateType = requestedTemplateType(changes);
 
-        try
+        try (TemplateContentSupport.Context templates = new TemplateContentSupport.Context(ctx.project))
         {
             BmTransactions.<Void>write(bmModel, "ModifyMetadata", (tx, pm) -> //$NON-NLS-1$
             {
@@ -2325,10 +2609,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 final String oldNamespace = (xdtoNamespaceChange && applyTo instanceof XDTOPackage)
                     ? ((XDTOPackage)applyTo).getNamespace() : null;
                 localizedReport.rememberPreState(applyTo, changes);
-                for (PreparedChange change : changes)
+                if (applyTo instanceof BasicTemplate && requestedTemplateType != null)
                 {
-                    change.applyTo(applyTo, tx);
+                    AdoptedPropertyRouter.requireStillWritten(applyTo,
+                        MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE_TYPE, null, normFqn);
+                    contentFqnHolder[0] = templates.retype((BasicTemplate)applyTo, requestedTemplateType, tx);
                 }
+                typeReset[0] = applyChanges(applyTo, changes, tx, normFqn);
                 localizedReport.collect(applyTo, changes, declaredCodes, config);
                 if (fqnGenerator != null && applyTo instanceof XDTOPackage)
                 {
@@ -2373,6 +2660,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 }
                 return null;
             });
+            templates.commit();
         }
         catch (Exception e)
         {
@@ -2401,8 +2689,152 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         }
         boolean persisted = BmTransactions.forceExportToDisk(ctx.project, exportFqns);
 
+        List<String> adoptedNotes = new ArrayList<>(routing.notes());
+        for (PreparedChange change : changes)
+        {
+            String note = change.routedNote();
+            if (note != null)
+            {
+                adoptedNotes.add(note);
+            }
+        }
         return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames,
-            localizedReport);
+            localizedReport, typeReset[0], adoptedNotes);
+    }
+
+    /**
+     * Routes the prepared batch of an object an extension ADOPTED (issues #709 / #710) and rewrites it in
+     * place: a defined type's {@code type} or an event subscription's {@code source} that EDT keeps in the
+     * extension block becomes the write of that block ({@link PreparedChange#typeExtension} /
+     * {@link PreparedChange#extendedSource}); a change that leaves the object as it is, or a type write a
+     * later one of the same call supersedes, is removed; a change EDT's {@code .mdo} writer would drop refuses
+     * the whole call - see {@link AdoptedPropertyRouter}. The batch of any other object comes back untouched.
+     * Package-visible: the headless tests pass a router over their own platform.
+     *
+     * @param normFqn the FQN the call addresses
+     * @param project the project
+     * @param scope its resolution root
+     * @param config its configuration
+     * @param version its runtime version, or {@code null}
+     * @param target the object the batch is written to
+     * @param changes the prepared batch, rewritten in place unless the call is refused
+     * @param router the router
+     * @return the routing; nothing may be written when it is refused
+     */
+    static AdoptedPropertyRouter.Routing routeAdopted(String normFqn, IProject project, MetadataScope scope, // NOSONAR the call's context is passed through to the router as is
+        Configuration config, Version version, MdObject target, List<PreparedChange> changes,
+        Function<AdoptedPropertyRouter.Request, AdoptedPropertyRouter.Routing> router)
+    {
+        List<AdoptedPropertyRouter.Change> requested = new ArrayList<>();
+        for (PreparedChange change : changes)
+        {
+            requested.add(new AdoptedPropertyRouter.Change(change.feature(), change.value(),
+                change.bindingFeature()));
+        }
+        AdoptedPropertyRouter.Routing routing = router.apply(
+            new AdoptedPropertyRouter.Request(target, normFqn, project, scope, config, version, requested));
+        if (routing.isRefused())
+        {
+            return routing;
+        }
+        List<PreparedChange> routed = new ArrayList<>();
+        for (int i = 0; i < changes.size(); i++)
+        {
+            AdoptedPropertyRouter.Decision decision = routing.decision(i);
+            switch (decision.kind())
+            {
+                case DROP:
+                    break;
+                case TYPE_EXTENSION:
+                    routed.add(PreparedChange.typeExtension(changes.get(i).feature(), decision.typePlan()));
+                    break;
+                case EXTENDED_SOURCE:
+                    routed.add(PreparedChange.extendedSource(changes.get(i).feature(), decision.sourcePlan()));
+                    break;
+                case PLAIN:
+                default:
+                    routed.add(changes.get(i));
+                    break;
+            }
+        }
+        changes.clear();
+        changes.addAll(routed);
+        return routing;
+    }
+
+    /**
+     * Applies a validated batch to its target inside the write transaction: the type writes first, then
+     * every other change, in batch order. A type write is EDT's type change, which resets the properties
+     * that depend on the type the way the designer does (see {@link TypeChangeDefaults}); applying it
+     * first keeps a property the same call sets explicitly - quick choice, indexing, full-text search,
+     * ... - from being undone by those resets. A repeated property is decided by its LAST write, and so
+     * is a repeated type: only the last type write of each feature is applied, so the resets compare the
+     * stored type with the type the batch ends with, never with one it merely passes through. A batch
+     * therefore means its end state in whatever order it lists its properties (issue #700).
+     * Package-visible for tests.
+     *
+     * @param target the object the batch is written to, inside {@code tx}
+     * @param changes the prepared changes, in the caller's order
+     * @param tx the write transaction
+     * @return what the type writes reset besides the type; {@link TypeChangeDefaults.Reset#NONE} when
+     *         they reset nothing
+     */
+    static TypeChangeDefaults.Reset applyChanges(EObject target, List<PreparedChange> changes,
+        IBmTransaction tx)
+    {
+        return applyChanges(target, changes, tx, null);
+    }
+
+    /**
+     * {@link #applyChanges(EObject, List, IBmTransaction)}, naming {@code fqn} in a refusal. Before anything is
+     * written, every change the adopted-object routing wrote as prepared is checked again on the object read
+     * inside the transaction ({@link AdoptedPropertyRouter#requireStillWritten}): an extension state set to
+     * None while the call waited would make EDT's {@code .mdo} writer drop the value, so the write refuses and
+     * rolls back instead of reporting a value the file never gets (#709 / #710).
+     *
+     * @param target the object the batch is written to, inside {@code tx}
+     * @param changes the prepared changes, in the caller's order
+     * @param tx the write transaction
+     * @param fqn the FQN the call addresses, for a refusal, or {@code null}
+     * @return what the type writes reset besides the type
+     */
+    static TypeChangeDefaults.Reset applyChanges(EObject target, List<PreparedChange> changes,
+        IBmTransaction tx, String fqn)
+    {
+        for (PreparedChange change : changes)
+        {
+            if (!change.isRoutedWrite())
+            {
+                AdoptedPropertyRouter.requireStillWritten(target, change.feature(), change.bindingFeature(), fqn);
+            }
+        }
+        Map<EStructuralFeature, PreparedChange> lastTypeWrites = new LinkedHashMap<>();
+        for (PreparedChange change : changes)
+        {
+            if (change.isTypeChange())
+            {
+                lastTypeWrites.put(change.feature(), change);
+            }
+        }
+        TypeChangeDefaults.Reset reset = TypeChangeDefaults.Reset.NONE;
+        for (PreparedChange change : lastTypeWrites.values())
+        {
+            TypeChangeDefaults.Reset applied = change.applyTo(target, tx);
+            if (applied != TypeChangeDefaults.Reset.NONE)
+            {
+                reset = applied;
+            }
+        }
+        for (PreparedChange change : changes)
+        {
+            // The complete batch was checked above; templateType was initialized by the caller.
+            if (!change.isTypeChange()
+                && change.feature() != MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE_TYPE)
+            {
+                change.applyTo(target, tx);
+            }
+        }
+        return reset;
     }
 
     /**
@@ -2605,6 +3037,29 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     }
 
     /**
+     * The predefined-item write inside its transaction: first checks again, on the owner read inside the
+     * transaction, that EDT's {@code .mdo} writer still keeps the owner's predefined items
+     * ({@link AdoptedPropertyRouter#requireStillWritten}). The guard before the consent gate of a retype judged
+     * it, and the extension state of 'predefined' can be set to None while the call waits there; written
+     * anyway, the item would not reach the file while the call reports it written (#709 / #710). A
+     * package-visible seam, so the check is pinned headless.
+     *
+     * @param txOwner the owner, read inside the write transaction
+     * @param itemName the predefined item's name
+     * @param props the parsed item properties
+     * @param ownerFqn the owner's FQN as the call addresses it, for a refusal
+     * @return the writer's result
+     * @throws IllegalStateException when the owner's predefined items would now be dropped (rolls back)
+     */
+    static PredefinedWriter.WriteResult modifyPredefinedInWrite(EObject txOwner, String itemName,
+        PredefinedWriter.ItemProps props, String ownerFqn)
+    {
+        AdoptedPropertyRouter.requireStillWritten(txOwner, txOwner.eClass().getEStructuralFeature("predefined"), //$NON-NLS-1$
+            null, ownerFqn);
+        return PredefinedWriter.modify(txOwner, itemName, props);
+    }
+
+    /**
      * The predefined-item counterpart of {@link #consentForTypeChanges}: a
      * {@code ChartOfCharacteristicTypes} predefined item's {@code valueType} is a real RETYPE (or a
      * clear), so it must pass the same destructive-consent gate an ordinary attribute retype does,
@@ -2655,30 +3110,78 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * gate's bounded wait (TIMEOUT — see {@link DestructiveConsentGate#consentDeniedMessage}) - the
      * caller returns it and mutates NOTHING - or {@code null} to proceed.</p>
      */
-    private static String consentForTypeChanges(String normFqn, List<PreparedChange> changes)
+    private String consentForTypeChanges(String normFqn, List<PreparedChange> changes)
+    {
+        ConsentPreview preview = typeChangePreview(normFqn, changes);
+        if (preview == null)
+        {
+            return null;
+        }
+        ConsentDecision consentDecision = consentRequester.request(NAME, preview);
+        if (consentDecision != ConsentDecision.ALLOW)
+        {
+            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
+        }
+        return null;
+    }
+
+    /**
+     * The last step before the write transaction of the generic path: the consent gate
+     * ({@link #consentForTypeChanges}), then - once the call may go on - the base value each routed write of an
+     * adopted object was planned from is read again ({@link AdoptedPropertyRouter.Routing#baseChangedRefusal}):
+     * the gate can hold the call, and the base configuration is another project, edited independently. In this
+     * order, so a denied call reads nothing and the base is read as late as it can be. Package-visible: a test
+     * pins the order and the refusal (issues #709 / #710).
+     *
+     * @param normFqn the FQN the call addresses
+     * @param changes the routed batch
+     * @param routing its routing
+     * @return a ready JSON error - the consent refusal, or a changed base - or {@code null} to write
+     */
+    String consentThenBaseCheck(String normFqn, List<PreparedChange> changes, AdoptedPropertyRouter.Routing routing)
+    {
+        String consentErr = consentForTypeChanges(normFqn, changes);
+        if (consentErr != null)
+        {
+            return consentErr;
+        }
+        return routing.baseChangedRefusal();
+    }
+
+    /**
+     * The consent preview of the type changes of a batch, or {@code null} when it has none. Package-visible:
+     * a test pins the wording of a routed write of an adopted object (issues #709 / #710).
+     */
+    static ConsentPreview typeChangePreview(String normFqn, List<PreparedChange> changes)
     {
         List<String> retyped = new ArrayList<>();
+        List<String> routedWarnings = new ArrayList<>();
         for (PreparedChange change : changes)
         {
             if (change.isTypeChange())
             {
                 retyped.add(change.featureName());
+                String warning = change.routedConsentWarning();
+                if (warning != null)
+                {
+                    routedWarnings.add(warning);
+                }
             }
         }
         if (retyped.isEmpty())
         {
             return null;
         }
-        ConsentPreview preview = new ConsentPreview(
-            "Change the data type of " + normFqn, //$NON-NLS-1$
-            "Retyping stored data can drop existing values on the next database update.", //$NON-NLS-1$
-            retyped.size(), retyped);
-        ConsentDecision consentDecision = DestructiveConsentGate.getInstance().requireConsent(NAME, preview);
-        if (consentDecision != ConsentDecision.ALLOW)
-        {
-            return ToolResult.error(DestructiveConsentGate.consentDeniedMessage(consentDecision, NAME)).toJson();
-        }
-        return null;
+        // A routed write of an adopted object (issues #709 / #710) adds types or sources in the extension
+        // block: the preview says what it adds and removes - the retype warning would be untrue for a pure
+        // addition.
+        return routedWarnings.size() == retyped.size()
+            ? new ConsentPreview("Change adopted " + normFqn + " in the extension", //$NON-NLS-1$ //$NON-NLS-2$
+                String.join(" ", routedWarnings), retyped.size(), retyped) //$NON-NLS-1$
+            : new ConsentPreview(
+                "Change the data type of " + normFqn, //$NON-NLS-1$
+                "Retyping stored data can drop existing values on the next database update.", //$NON-NLS-1$
+                retyped.size(), retyped);
     }
 
     /**
@@ -3051,6 +3554,30 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         MdNameNormalizer.Report normReport, List<String> cascadedPackageNames,
         LocalizedWriteReport localizedReport)
     {
+        return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames,
+            localizedReport, TypeChangeDefaults.Reset.NONE);
+    }
+
+    /**
+     * The full variant: also names, in the confirmation MESSAGE only, what a type change reset besides
+     * the type (issue #700) - the output schema is untouched.
+     */
+    private static String buildModifiedResult(String normFqn, List<String> applied, boolean persisted, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        MdNameNormalizer.Report normReport, List<String> cascadedPackageNames,
+        LocalizedWriteReport localizedReport, TypeChangeDefaults.Reset typeReset)
+    {
+        return buildModifiedResult(normFqn, applied, persisted, normReport, cascadedPackageNames,
+            localizedReport, typeReset, List.of());
+    }
+
+    /**
+     * The full variant: also says, in the confirmation MESSAGE only, what the writes of an adopted object
+     * did in its extension block, or that they changed nothing (issues #709 / #710).
+     */
+    private static String buildModifiedResult(String normFqn, List<String> applied, boolean persisted, // NOSONAR signature is inherent / public-or-test-contract; a parameter-object would not improve clarity
+        MdNameNormalizer.Report normReport, List<String> cascadedPackageNames,
+        LocalizedWriteReport localizedReport, TypeChangeDefaults.Reset typeReset, List<String> adoptedNotes)
+    {
         ToolResult result = ToolResult.success()
             .put(McpKeys.ACTION, VAL_MODIFIED)
             .put("fqn", normFqn) //$NON-NLS-1$
@@ -3061,13 +3588,52 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             localizedReport.addTo(result);
         }
         normReport.addTo(result);
-        String message = MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        return result.put(McpKeys.MESSAGE,
+            modifiedMessage(normFqn, applied, cascadedPackageNames, typeReset, adoptedNotes)).toJson();
+    }
+
+    /**
+     * The confirmation MESSAGE of a completed modify: the applied properties, the namespace cascade when
+     * there is one, and what a type change reset besides the type (issue #700). Package-visible for
+     * tests.
+     */
+    static String modifiedMessage(String normFqn, List<String> applied, List<String> cascadedPackageNames,
+        TypeChangeDefaults.Reset typeReset)
+    {
+        return modifiedMessage(normFqn, applied, cascadedPackageNames, typeReset, List.of());
+    }
+
+    /**
+     * The confirmation MESSAGE with what the writes of an adopted object did in its extension block, or
+     * that they changed nothing (issues #709 / #710): a call whose every change leaves the object as it is
+     * says so instead of naming applied properties. Package-visible for tests.
+     */
+    static String modifiedMessage(String normFqn, List<String> applied, List<String> cascadedPackageNames,
+        TypeChangeDefaults.Reset typeReset, List<String> adoptedNotes)
+    {
+        String message = applied.isEmpty() && !adoptedNotes.isEmpty()
+            ? "Nothing was changed on " + normFqn //$NON-NLS-1$
+            : MSG_MODIFIED_PREFIX + normFqn + " (" + String.join(", ", applied) + ")"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         if (!cascadedPackageNames.isEmpty())
         {
             message += "; namespace propagated to " + cascadedPackageNames.size() //$NON-NLS-1$
                 + " referencing package(s): " + String.join(", ", cascadedPackageNames); //$NON-NLS-1$ //$NON-NLS-2$
         }
-        return result.put(McpKeys.MESSAGE, message).toJson();
+        if (typeReset == TypeChangeDefaults.Reset.OWNER)
+        {
+            message += "; the type change also reset the properties that depend on the type, as EDT's " //$NON-NLS-1$
+                + "designer does"; //$NON-NLS-1$
+        }
+        else if (typeReset == TypeChangeDefaults.Reset.REFERRERS)
+        {
+            message += "; the type change also reset the fill value of every editable object typed " //$NON-NLS-1$
+                + "with it, as EDT's designer does"; //$NON-NLS-1$
+        }
+        for (String note : adoptedNotes)
+        {
+            message += "; " + note; //$NON-NLS-1$
+        }
+        return message;
     }
 
     /**
@@ -3535,6 +4101,14 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         List<JsonObject> properties, List<PreparedChange> changes, MdNameNormalizer.Report normReport,
         boolean isExtensionProject)
     {
+        // A field list is judged on the object as it stands; a property in the same batch that changes
+        // whether EDT offers a standard field the list names (a length, hierarchical, owners, ...) would
+        // change that state under the entry (issue #740).
+        String batchErr = fieldListBatchError(target, properties);
+        if (batchErr != null)
+        {
+            return batchErr;
+        }
         PrepareContext ctx = new PrepareContext(project, scope, config, version,
             declaredCodesAfterBatch(config, target, properties));
         for (JsonObject prop : properties)
@@ -4287,8 +4861,20 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             }
         }
         List<HolderChange> changes = new ArrayList<>();
+        boolean dataPathSeen = false;
         for (JsonObject prop : properties)
         {
+            if ("dataPath".equalsIgnoreCase(asString(prop.get("name")))) //$NON-NLS-1$ //$NON-NLS-2$
+            {
+                if (dataPathSeen)
+                {
+                    throw new FormValidationException(ToolResult.error(
+                        "Set 'dataPath' only once per modify_metadata call. An intermediate table binding " //$NON-NLS-1$
+                            + "can introduce binding-specific configuration; pass the final path in one property.") //$NON-NLS-1$
+                        .toJson());
+                }
+                dataPathSeen = true;
+            }
             String guard = guardFormProperty(prop);
             if (guard != null)
             {
@@ -4380,6 +4966,200 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private static boolean decidesFormExtInfo(HolderChange hc)
     {
         return !hc.onExtInfo && PROP_MAIN.equalsIgnoreCase(hc.change.featureName());
+    }
+
+    /**
+     * Refuses a field list ({@code inputByString} / {@code dataLockFields}) that NAMES a standard field whose
+     * offer for that list the same call changes, through a property of the same target that decides it -
+     * Code / Description / Number by {@code codeLength} / {@code descriptionLength} / {@code numberLength},
+     * Parent and IsFolder by {@code hierarchical}, a catalog's IsFolder by {@code hierarchyType} and its
+     * Owner by {@code owners}, ActionPeriodIsBasic by {@code actionPeriodUse} (issue #740; EDT's rules,
+     * judged by {@link FieldListSupport#offerChange}).
+     *
+     * <p>The list is checked against the fields EDT derived from the object AS IT STANDS, so an entry is
+     * judged right exactly when its field's offer is the same before and after the call - and such a batch
+     * shares the call: {@code codeLength} from 9 to 10 with [Code], another non-empty {@code owners} list with
+     * [Owner], {@code codeLength:0} with [Description]. When the call would END the offer, the entry would be
+     * written although the object no longer offers it, and nothing reliable catches that afterwards: EDT's
+     * model validator never re-checks a standard field of input by string and accepts a stale
+     * ActionPeriodIsBasic in the data-lock list; it marks the other stale data-lock entries (error 81), but
+     * only after modify_metadata has reported success. That refusal says to leave the field out of the list
+     * or not to change the property - a second call would not bring the field back. When the call would
+     * START the offer, the entry would be refused as not offered, and the refusal gives the separate-call
+     * recipe. Both name the deciding properties the call changes. For an exchange plan's data-lock Code and
+     * Description, which EDT's editor offers whatever the length, both speak of what EDT's validator accepts
+     * ({@link FieldListSupport.OfferChange#byValidator}).</p>
+     *
+     * <p>The batch's values are read with the parsers their own preparation uses, and a repeated property - a
+     * deciding one or a list - is decided by its last write, as when the batch is applied ({@link #mainFlagIn}
+     * reads the main flag the same way). A value whose shape or parse that preparation refuses is no end state:
+     * the property reads as unchanged, and its own refusal answers the call - nothing is written either way.
+     * Owner FQNs are read by their shape only: whether each resolves to an object that can own a catalog is
+     * checked by {@link #prepareManyReference}, against the project's scope, which the guard does not take. So an
+     * {@code owners} list of FQNs that do not resolve still counts as non-empty: on a catalog without owners
+     * the guard answers first, with the separate-call recipe, and the owners refusal comes on the next call -
+     * nothing is written either way. A deciding property the target does not have is left to its own "not
+     * assignable" refusal, and an adopted target to the field list's own refusal (its lists cannot be set at
+     * all). Package-visible for the headless test.</p>
+     *
+     * @param target the object being modified
+     * @param properties the raw batch
+     * @return the ready JSON error, or {@code null} when the batch is safe
+     */
+    static String fieldListBatchError(EObject target, List<JsonObject> properties)
+    {
+        if (FieldListSupport.isAdopted(target))
+        {
+            return null;
+        }
+        // Keyed by feature: a repeated list, like a repeated deciding property, is decided by its last write.
+        Map<EStructuralFeature, PropertyInfo> lists = new LinkedHashMap<>();
+        Map<EStructuralFeature, JsonElement> values = new LinkedHashMap<>();
+        Map<EStructuralFeature, Object> ends = new LinkedHashMap<>();
+        for (JsonObject prop : properties)
+        {
+            String name = prop == null ? null : asString(prop.get("name")); //$NON-NLS-1$
+            PropertyInfo info = name == null ? null : MetadataPropertyIntrospector.findFeature(target, name);
+            if (info == null)
+            {
+                continue;
+            }
+            if (info.valueKind == MetadataPropertyIntrospector.ValueKind.FIELD_LIST)
+            {
+                lists.put(info.feature, info);
+                values.put(info.feature, prop.get(KEY_VALUE));
+            }
+            else if (FieldListSupport.isDecidingProperty(info.feature))
+            {
+                Object end = batchEndValue(info, prop.get(KEY_VALUE));
+                if (end != null)
+                {
+                    ends.put(info.feature, end);
+                }
+                else
+                {
+                    ends.remove(info.feature);
+                }
+            }
+        }
+        for (Map.Entry<EStructuralFeature, PropertyInfo> list : lists.entrySet())
+        {
+            FieldListSupport.OfferChange change = FieldListSupport.offerChange(target, list.getKey(),
+                values.get(list.getKey()), ends);
+            if (change != null)
+            {
+                return ToolResult.error(change.offeredNow ? takesAwayRefusal(list.getValue().name, change)
+                    : bringsBackRefusal(list.getValue().name, change)).toJson();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The value a write of a deciding property leaves, read by the parser that property's own preparation
+     * uses ({@link #prepare}), or {@code null} when that parser refuses it: an {@code Integer} for a length, a
+     * {@code Boolean} for a flag, the literal's instance for an enum, the FQN strings of a list reference of
+     * the shape {@link #prepareManyReference} accepts (whether they resolve is that preparation's own check;
+     * the guard reads only whether the list is empty).
+     */
+    private static Object batchEndValue(PropertyInfo info, JsonElement raw)
+    {
+        switch (info.valueKind)
+        {
+            case INTEGER:
+                return parseInteger(asString(raw));
+            case BOOLEAN:
+                return parseBoolean(asString(raw));
+            case ENUM:
+                return enumInstance(info.feature, asString(raw));
+            case MANY_REFERENCE:
+                return referenceFqns(raw);
+            default:
+                return null;
+        }
+    }
+
+    /** The instance of the enum literal {@code value} names, resolved as {@link #prepareEnum} does, or {@code null}. */
+    private static Object enumInstance(EStructuralFeature feature, String value)
+    {
+        EEnumLiteral literal = MetadataPropertyIntrospector.resolveEnumLiteral(feature, value);
+        return literal == null ? null : literal.getInstance();
+    }
+
+    /**
+     * The FQN strings of a list-reference value, or {@code null} unless it is a JSON array of non-empty
+     * strings - the shape {@link #prepareManyReference} accepts.
+     */
+    private static List<String> referenceFqns(JsonElement raw)
+    {
+        if (raw == null || !raw.isJsonArray())
+        {
+            return null;
+        }
+        List<String> fqns = new ArrayList<>();
+        for (JsonElement el : raw.getAsJsonArray())
+        {
+            String fqn = (el != null && el.isJsonPrimitive()) ? el.getAsString() : null;
+            if (fqn == null || fqn.isEmpty())
+            {
+                return null;
+            }
+            fqns.add(fqn);
+        }
+        return fqns;
+    }
+
+    /**
+     * The refusal of a batch that would START the offer of the field the list names: the list is judged
+     * before the property changes, so the property goes first and the list into a separate call. For a field
+     * only EDT's validator decides ({@link FieldListSupport.OfferChange#byValidator}) the reason is what the
+     * validator accepts: EDT's editor offers that field whatever the property says.
+     */
+    private static String bringsBackRefusal(String list, FieldListSupport.OfferChange change)
+    {
+        String properties = quotedNames(change.properties, " and "); //$NON-NLS-1$
+        String judged = change.byValidator ? "whether EDT's validator accepts that field depends on " //$NON-NLS-1$
+            : "whether EDT offers that field depends on "; //$NON-NLS-1$
+        return "'" + list + "' cannot be set in the same call as " + properties + " while it names " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + change.address + ": " + judged + properties //$NON-NLS-1$
+            + ", and the list is checked against the object as it stands before the call. Set " + properties //$NON-NLS-1$
+            + " first, then '" + list + "' in a separate call - or leave " + change.address //$NON-NLS-1$ //$NON-NLS-2$
+            + " out of the list."; //$NON-NLS-1$
+    }
+
+    /**
+     * The refusal of a batch that would END the offer of the field the list names: the list would be left
+     * naming a field EDT no longer offers - or, for a field only EDT's validator decides
+     * ({@link FieldListSupport.OfferChange#byValidator}), one the validator rejects although EDT's editor
+     * still offers it - and a second call would not bring the field back: so leave it out, or keep the
+     * property.
+     */
+    private static String takesAwayRefusal(String list, FieldListSupport.OfferChange change)
+    {
+        String properties = quotedNames(change.properties, " and "); //$NON-NLS-1$
+        String why = change.byValidator
+            ? "EDT's validator accepts that field now, but would reject it once this call has changed " + properties //$NON-NLS-1$
+                + ", so the list would be left naming a field EDT's validator marks as an error" //$NON-NLS-1$
+            : "EDT offers that field now, but would no longer offer it once this call has changed " + properties //$NON-NLS-1$
+                + ", so the list would be left naming a field EDT does not offer"; //$NON-NLS-1$
+        return "'" + list + "' cannot be set in the same call as " + properties + " while it names " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + change.address + ": " + why + ". Leave " + change.address + " out of the list, or do not change " //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            + quotedNames(change.properties, " or ") + "."; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /** Property names quoted for a refusal: 'a', 'a' and 'b', 'a', 'b' and 'c' - {@code last} joins the last two. */
+    private static String quotedNames(List<String> names, String last)
+    {
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < names.size(); i++)
+        {
+            if (i > 0)
+            {
+                text.append(i == names.size() - 1 ? last : ", "); //$NON-NLS-1$
+            }
+            text.append('\'').append(names.get(i)).append('\'');
+        }
+        return text.toString();
     }
 
     /**
@@ -4487,6 +5267,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     private HolderChange prepareFormMemberChange(MetadataScope scope, Version version, EObject member,
         JsonObject prop, MdNameNormalizer.Report normReport)
     {
+        if ("dataPath".equalsIgnoreCase(asString(prop.get("name")))) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            JsonElement value = prop.get(KEY_VALUE);
+            if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString())
+            {
+                throw new FormValidationException(ToolResult.error(
+                    "'dataPath' takes a non-empty string naming a form attribute or its field/collection path.") //$NON-NLS-1$
+                    .toJson());
+            }
+            FormElementWriter.DataPathPlan plan =
+                FormElementWriter.planDataPathChange(formOf(member), member, value.getAsString());
+            if (plan.error() != null)
+            {
+                throw new FormValidationException(ToolResult.error(plan.error()).toJson());
+            }
+            return new HolderChange(false, PreparedChange.formDataPath(
+                member.eClass().getEStructuralFeature("dataPath"), plan)); //$NON-NLS-1$
+        }
         JsonObject normProp = normalizeFormProperty(member, prop);
         // The three retype guards below are about DATA BINDING - columns hanging off the member,
         // tables and fields bound to its data path. They identify their subject by NAME, and a
@@ -4627,6 +5425,11 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return FormElementWriter.dynamicListTypeUnavailableError(version);
     }
 
+    /** The implemented structural rebind route; tables must first release their old columns. */
+    private static final String FORM_DATA_PATH_REBIND_ADVICE =
+        "modify_metadata on each Field/Table FQN with properties:[{name:'dataPath', value:'<valid path>'}] " //$NON-NLS-1$
+            + "(for a table, remove its columns first)"; //$NON-NLS-1$
+
     /**
      * Refuses a form-attribute retype that would strand its COLUMNS. Retyping a collection attribute
      * to a non-collection leaves its {@code FormAttributeColumn} children hanging off something that
@@ -4669,8 +5472,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Form attribute '" + FormStructureReader.nameOf(member) //$NON-NLS-1$
                 + "' is the row source of " + rowConsumers.size() + " table(s) (" //$NON-NLS-1$ //$NON-NLS-2$
                 + String.join(", ", rowConsumers) + "), which a non-collection type cannot be. Delete " //$NON-NLS-1$ //$NON-NLS-2$
-                + "them with delete_metadata (or re-point them with modify_metadata 'dataPath') " //$NON-NLS-1$
-                + "first, or keep a collection type (ValueTable / ValueTree).").toJson(); //$NON-NLS-1$
+                + "them with delete_metadata, or use " + FORM_DATA_PATH_REBIND_ADVICE //$NON-NLS-1$
+                + " first, or keep a collection type (ValueTable / ValueTree).").toJson(); //$NON-NLS-1$
         }
         // ...and the same for items bound BELOW it - but ONLY when the requested type is terminal: a
         // field on 'Rows.Price' survives the retype and keeps pointing at a name a String does not
@@ -4689,7 +5492,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return ToolResult.error("Retyping '" + FormStructureReader.nameOf(member) //$NON-NLS-1$
                 + "' would leave " + below.size() + " form item(s) (" + String.join(", ", below) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                 + ") bound below it to a name the new type does not have. Delete them with " //$NON-NLS-1$
-                + "delete_metadata, or re-point them (modify_metadata with 'dataPath') first.") //$NON-NLS-1$
+                + "delete_metadata, or use " + FORM_DATA_PATH_REBIND_ADVICE + " first.") //$NON-NLS-1$ //$NON-NLS-2$
                 .toJson();
         }
         return null;
@@ -4811,7 +5614,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             + "collection would leave " + bound.size() + " form item(s) (" //$NON-NLS-1$ //$NON-NLS-2$
             + String.join(", ", bound) + ") bound to a name the collection does not own: under a " //$NON-NLS-1$ //$NON-NLS-2$
             + "ValueTable / ValueTree a dotted data path addresses a COLUMN. Delete those items with " //$NON-NLS-1$
-            + "delete_metadata, or re-point them (modify_metadata with 'dataPath') first.").toJson(); //$NON-NLS-1$
+            + "delete_metadata, or use " + FORM_DATA_PATH_REBIND_ADVICE + " first.").toJson(); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     /**
@@ -5488,7 +6291,9 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
         /**
          * The FORM-member variant. A form attribute is the one place the platform holds an in-memory
-         * collection type (ValueTable / ValueTree), so only this context admits those kinds (#295).
+         * collection type (ValueTable / ValueTree), so this context admits those kinds (#295); on the
+         * mdclass path only a defined type's own type does, through
+         * {@link ModifyMetadataTool#typeTargetForFeature} (#727).
          * {@code project} is {@code null} here, as the class doc explains.
          *
          * @param scope the resolution root the member belongs to
@@ -5668,6 +6473,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case LOCALIZED_STRING:
                 return prepareLocalized(ctx, name, value, prop, info, out, normReport);
             case ENUM:
+                if (target instanceof BasicTemplate
+                    && info.feature == MdClassPackage.Literals.BASIC_TEMPLATE__TEMPLATE_TYPE)
+                {
+                    TemplateType type = TemplateContentSupport.resolveType(value);
+                    String typeError = TemplateContentSupport.unsupportedRetypeError(type, value);
+                    if (typeError != null && (type == null || type != ((BasicTemplate)target).getTemplateType()))
+                    {
+                        return typeError;
+                    }
+                    out.add(PreparedChange.scalar(info.feature, type));
+                    return null;
+                }
                 return prepareEnum(name, value, info, out);
             case MANY_ENUM:
                 return prepareManyEnum(name, prop, info, out);
@@ -5678,7 +6495,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             case LONG:
                 return prepareLong(name, value, info, out);
             case TYPE_DESCRIPTION:
-                return prepareTypeDescription(ctx, name, prop, info, out, isExtensionProject);
+                return prepareTypeDescription(ctx, target, name, prop, info, out, isExtensionProject);
             case REFERENCE:
                 return prepareReference(ctx, target, name, value, info, out);
             case MANY_REFERENCE:
@@ -5698,6 +6515,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                 return prepareAppearance(ctx, target, name, prop, info, out);
             case USE_ALWAYS:
                 return prepareUseAlways(target, prop, info, out);
+            case FIELD_LIST:
+                return prepareFieldList(target, name, prop, info, out);
             case STRING:
             default:
                 return prepareString(name, value, info, out, normReport);
@@ -6004,6 +6823,25 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         return null;
     }
 
+    /**
+     * Validates a field list ({@code inputByString} / {@code dataLockFields}, issue #740) against the
+     * fields EDT offers for it on the object as it stands, and queues a whole-list replacement carrying
+     * field ids only - the derived fields are rebuilt by EDT between now and the write, a field id is
+     * not.
+     */
+    private static String prepareFieldList(EObject target, String name, JsonObject prop, PropertyInfo info,
+        List<PreparedChange> out)
+    {
+        List<String> fieldIds = new ArrayList<>();
+        String refusal = FieldListSupport.resolve(target, info.feature, name, prop.get(KEY_VALUE), fieldIds);
+        if (refusal != null)
+        {
+            return ToolResult.error(refusal).toJson();
+        }
+        out.add(PreparedChange.fieldList(info.feature, fieldIds));
+        return null;
+    }
+
     /** The form content model holding {@code member}, or {@code null} when it is detached. */
     private static EObject formOf(EObject member)
     {
@@ -6107,9 +6945,10 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
      * MetadataTypeBuilder.TypeTarget)} so an unresolved reference target's error can append the
      * extension-adopt hint (issue #262); {@code ctx.typeTarget} rides along so the in-memory collection
      * kinds are admitted on a form attribute and refused on a stored metadata feature (issue #295),
-     * with the feature-level exceptions of {@link #typeTargetForFeature}.
+     * with the feature-level exceptions of {@link #typeTargetForFeature}. A refusal of a defined type's
+     * own type names that defined type ({@link #definedTypeOwner}).
      */
-    private String prepareTypeDescription(PrepareContext ctx, String name,
+    private String prepareTypeDescription(PrepareContext ctx, EObject target, String name,
         JsonObject prop, PropertyInfo info, List<PreparedChange> out, boolean isExtensionProject)
     {
         if (ctx.version == null)
@@ -6122,7 +6961,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             ctx.scope, ctx.version, isExtensionProject, typeTarget);
         if (tr.error != null)
         {
-            String message = "Invalid 'type' for '" + name + "': " + tr.error; //$NON-NLS-1$ //$NON-NLS-2$
+            String message = "Invalid 'type' for '" + name + "'" + definedTypeOwner(typeTarget, target) //$NON-NLS-1$ //$NON-NLS-2$
+                + ": " + tr.error; //$NON-NLS-1$
             if (tr.platformFailure)
             {
                 // Not the caller's spec: the platform failed, so it reaches the log as an ERROR with a stack.
@@ -6136,7 +6976,8 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
 
     /**
      * Adds the feature-level exceptions on top of the call site's form-vs-mdclass target: an event
-     * subscription's source (#543) and a session parameter's type (#646).
+     * subscription's source (#543), a session parameter's type (#646) and a defined type's own type,
+     * which takes what EDT's DefinedType type editor offers (#727).
      */
     static MetadataTypeBuilder.TypeTarget typeTargetForFeature(
         MetadataTypeBuilder.TypeTarget contextTarget, EStructuralFeature feature)
@@ -6153,7 +6994,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         {
             return MetadataTypeBuilder.TypeTarget.SESSION_PARAMETER;
         }
+        if (feature == MdClassPackage.Literals.DEFINED_TYPE__TYPE)
+        {
+            return MetadataTypeBuilder.TypeTarget.DEFINED_TYPE;
+        }
         return contextTarget;
+    }
+
+    /**
+     * The clause naming the defined type a {@code type} refusal is about - {@code " of 'DefinedType.X'"} -
+     * for a {@link MetadataTypeBuilder.TypeTarget#DEFINED_TYPE} target (issue #727), else empty: the
+     * other targets' refusals keep their wording.
+     */
+    private static String definedTypeOwner(MetadataTypeBuilder.TypeTarget typeTarget, EObject target)
+    {
+        String address = typeTarget == MetadataTypeBuilder.TypeTarget.DEFINED_TYPE && target instanceof MdObject
+            ? MetadataNodeResolver.resolvableAddressOf((MdObject)target) : null;
+        return address == null ? "" : " of '" + address + "'"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
     }
 
     /**
@@ -6980,10 +7837,18 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
     {
         private enum Kind
         {
+            /** An adopted defined type's type, written to its type extension (#709); the value is the plan. */
+            TYPE_EXTENSION,
+            /** An adopted event subscription's source, extended (#710); the value is the plan. */
+            EXTENDED_SOURCE,
             SCALAR, LOCALIZED, REFERENCE, MANY_REFERENCE, MANY_ENUM, MCORE_VALUE_LIST, STYLE_VALUE,
             CONTAINED, ADJUSTABLE_BOOLEAN,
             /** A form attribute's {@code useAlways} checkboxes; the value is the list of plans. */
-            USE_ALWAYS
+            USE_ALWAYS,
+            /** A Field/Table dataPath validated by the same planner as creation (#728). */
+            FORM_DATA_PATH,
+            /** A field list (issue #740); the value is the list of field ids. */
+            FIELD_LIST
         }
 
         /**
@@ -7051,11 +7916,27 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return new PreparedChange(feature, Kind.ADJUSTABLE_BOOLEAN, edit, null, null, null, null, false);
         }
 
+        /** A form item's contained data path, planned without changing the model. */
+        static PreparedChange formDataPath(EStructuralFeature feature, FormElementWriter.DataPathPlan plan)
+        {
+            return new PreparedChange(feature, Kind.FORM_DATA_PATH, plan, null, null, null, null, false);
+        }
+
         /** A form attribute's {@code useAlways} change: the validated per-path plans (#661). */
         static PreparedChange useAlways(EStructuralFeature feature, List<UseAlwaysSupport.Plan> plans)
         {
             return new PreparedChange(feature, Kind.USE_ALWAYS, java.util.Collections.unmodifiableList(
                 new ArrayList<>(plans)), null, null, null, null, false);
+        }
+
+        /**
+         * A field list's whole-list replacement (issue #740): only the field ids cross into the write,
+         * where {@link FieldListSupport#apply} turns them into the proxies EDT stores.
+         */
+        static PreparedChange fieldList(EStructuralFeature feature, List<String> fieldIds)
+        {
+            return new PreparedChange(feature, Kind.FIELD_LIST, java.util.Collections.unmodifiableList(
+                new ArrayList<>(fieldIds)), null, null, null, null, false);
         }
 
         /**
@@ -7066,6 +7947,24 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
         static PreparedChange typeDescription(EStructuralFeature feature, Object typeDescription)
         {
             return new PreparedChange(feature, Kind.SCALAR, typeDescription, null, null, null, null, true);
+        }
+
+        /**
+         * An adopted defined type's {@code type}, written to its type extension as the router planned it
+         * (issue #709). Still a type change: the batch applies its last one, and the consent gate asks.
+         */
+        static PreparedChange typeExtension(EStructuralFeature feature, AdoptedPropertyRouter.TypePlan plan)
+        {
+            return new PreparedChange(feature, Kind.TYPE_EXTENSION, plan, null, null, null, null, true);
+        }
+
+        /**
+         * An adopted event subscription's {@code source}, extended as the router planned it (issue #710).
+         * Still a type change: the batch applies its last one, and the consent gate asks.
+         */
+        static PreparedChange extendedSource(EStructuralFeature feature, AdoptedPropertyRouter.SourcePlan plan)
+        {
+            return new PreparedChange(feature, Kind.EXTENDED_SOURCE, plan, null, null, null, null, true);
         }
 
         static PreparedChange localized(EStructuralFeature feature, String language, String value)
@@ -7164,6 +8063,15 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return kind == Kind.USE_ALWAYS ? UseAlwaysSupport.PROPERTY : feature.getName();
         }
 
+        /**
+         * Whether this change is a write the adopted-object routing planned (a type extension, an extended
+         * source), which checks the object again itself; every other change is written as prepared.
+         */
+        boolean isRoutedWrite()
+        {
+            return kind == Kind.TYPE_EXTENSION || kind == Kind.EXTENDED_SOURCE;
+        }
+
         /** Whether this change retypes data (a {@code TYPE_DESCRIPTION} / form {@code valueType} set). */
         boolean isTypeChange()
         {
@@ -7181,6 +8089,41 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return kind == Kind.LOCALIZED;
         }
 
+        /** The second feature a style value writes - the style item's {@code type} - else {@code null}. */
+        EStructuralFeature bindingFeature()
+        {
+            return styleBinding == null ? null : styleBinding.typeFeature;
+        }
+
+        /**
+         * What a routed write of an adopted object did (issues #709 / #710), once it ran; {@code null} for
+         * any other change or before the write.
+         */
+        String routedNote()
+        {
+            AdoptedPropertyRouter.Outcome outcome = null;
+            if (kind == Kind.TYPE_EXTENSION)
+            {
+                outcome = ((AdoptedPropertyRouter.TypePlan)scalarValue).outcome();
+            }
+            else if (kind == Kind.EXTENDED_SOURCE)
+            {
+                outcome = ((AdoptedPropertyRouter.SourcePlan)scalarValue).outcome();
+            }
+            return outcome == null ? null : outcome.note();
+        }
+
+        /** The consent preview's warning of a routed write (issues #709 / #710), else {@code null}. */
+        String routedConsentWarning()
+        {
+            if (kind == Kind.TYPE_EXTENSION)
+            {
+                return ((AdoptedPropertyRouter.TypePlan)scalarValue).consentWarning();
+            }
+            return kind == Kind.EXTENDED_SOURCE ? ((AdoptedPropertyRouter.SourcePlan)scalarValue).consentWarning()
+                : null;
+        }
+
         EStructuralFeature feature()
         {
             return feature;
@@ -7192,11 +8135,33 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
             return localizedLanguage;
         }
 
+        /**
+         * Writes this change to {@code target} inside {@code tx}. A type write is EDT's type change: on an
+         * owner EDT resets type-dependent properties for, and when the type really changes, those
+         * properties are reset as the designer resets them (issue #700, {@link TypeChangeDefaults}).
+         *
+         * @return what a type write reset besides the type; {@link TypeChangeDefaults.Reset#NONE} for
+         *         every other change
+         */
         @SuppressWarnings("unchecked")
-        void applyTo(EObject target, IBmTransaction tx)
+        TypeChangeDefaults.Reset applyTo(EObject target, IBmTransaction tx)
         {
             switch (kind)
             {
+                case TYPE_EXTENSION:
+                {
+                    // The extension block, never the native type: EDT's .mdo writer keeps an adopted
+                    // defined type's type there (issue #709).
+                    AdoptedPropertyRouter.applyTypeExtension(target, (AdoptedPropertyRouter.TypePlan)scalarValue);
+                    return TypeChangeDefaults.Reset.NONE;
+                }
+                case EXTENDED_SOURCE:
+                {
+                    // The base sources plus the additions, and the state Extended - or back to None
+                    // (issue #710).
+                    AdoptedPropertyRouter.applySource(target, (AdoptedPropertyRouter.SourcePlan)scalarValue);
+                    return TypeChangeDefaults.Reset.NONE;
+                }
                 case LOCALIZED:
                 {
                     Object map = target.eGet(feature);
@@ -7206,13 +8171,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                             + "' is not a map"); //$NON-NLS-1$
                     }
                     ((EMap<String, String>)map).put(localizedLanguage, localizedValue);
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case REFERENCE:
                 {
                     // BM normalizes the target to its in-tx counterpart by bmId on set.
                     target.eSet(feature, requireInTx(tx, referenceBmIds.get(0)));
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case MANY_REFERENCE:
                 {
@@ -7224,7 +8189,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     {
                         list.add(requireInTx(tx, id));
                     }
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case MANY_ENUM:
                 {
@@ -7233,7 +8198,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     EList<Object> list = (EList<Object>)target.eGet(feature);
                     list.clear();
                     list.addAll((List<Object>)scalarValue);
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case MCORE_VALUE_LIST:
                 {
@@ -7257,7 +8222,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                             list.add(string);
                         }
                     }
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case STYLE_VALUE:
                 {
@@ -7269,7 +8234,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         target.eSet(styleBinding.typeFeature, styleBinding.type);
                     }
                     target.eSet(feature, scalarValue);
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case CONTAINED:
                 {
@@ -7286,7 +8251,7 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     {
                         target.eSet(feature, value);
                     }
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case ADJUSTABLE_BOOLEAN:
                 {
@@ -7315,7 +8280,13 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                         }
                         AdjustableBooleanSupport.applyRoleEdits((AdjustableBoolean)flag, edit.rolesIn(tx));
                     }
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
+                }
+                case FORM_DATA_PATH:
+                {
+                    FormElementWriter.applyDataPathChange(formOf(target), target,
+                        (FormElementWriter.DataPathPlan)scalarValue);
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case USE_ALWAYS:
                 {
@@ -7325,12 +8296,23 @@ public class ModifyMetadataTool extends AbstractMetadataWriteTool
                     }
                     UseAlwaysSupport.apply(formOf(target), (FormAttribute)target,
                         (List<UseAlwaysSupport.Plan>)scalarValue);
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
+                }
+                case FIELD_LIST:
+                {
+                    // Proxies by field id on the re-fetched top object, through change notifications
+                    // (no eSetDeliver bracket - see FieldListSupport.replace).
+                    FieldListSupport.apply(target, feature, (List<String>)scalarValue);
+                    return TypeChangeDefaults.Reset.NONE;
                 }
                 case SCALAR:
                 default:
+                    if (typeChange && scalarValue instanceof TypeDescription)
+                    {
+                        return TypeChangeDefaults.setType(target, feature, (TypeDescription)scalarValue, tx);
+                    }
                     target.eSet(feature, scalarValue);
-                    return;
+                    return TypeChangeDefaults.Reset.NONE;
             }
         }
 

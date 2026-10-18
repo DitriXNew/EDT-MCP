@@ -13,7 +13,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.LongSupplier;
 
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
@@ -67,6 +69,26 @@ public final class BuildUtils
 
     /** Slot-key prefix of the bounded marker read of a write, apart from both waits. */
     private static final String MARKER_READ_SLOT_PREFIX = "markers:"; //$NON-NLS-1$
+
+    /**
+     * Slot-key prefix of a bounded read of a project's files - a module's state line read back from a {@code .mdo},
+     * and each read of the new-extension root look, of the root file and of each file beside it - apart from both
+     * waits and the marker read.
+     */
+    private static final String STATE_LINE_READ_SLOT_PREFIX = "mdo-state-line:"; //$NON-NLS-1$
+
+    /**
+     * The clock every slot's hold is measured on: {@link System#nanoTime()}, monotonic - never the wall clock. A claim
+     * lapses once its hold has ELAPSED, and the wall clock does not measure elapsed time: NTP corrects it, an operator
+     * sets it, a virtual machine resumed from a snapshot reads earlier than before. A step forward would lapse a claim
+     * while its platform call is still out, so a second job nobody can stop could be scheduled behind it; a step back
+     * would hold a claim longer than the three times its timeout it is stated to hold. One clock for every slot,
+     * because every slot is the one limiter ({@link #beginWait}). Only a test replaces it ({@link #useSlotClock}).
+     */
+    private static volatile LongSupplier slotClock = System::nanoTime;
+
+    /** Nanoseconds in a millisecond, for the slots' clock. */
+    private static final long NANOS_PER_MILLI = TimeUnit.MILLISECONDS.toNanos(1L);
 
     /**
      * The derived-data segments EDT's validation runs under: the check framework's model checks
@@ -649,26 +671,85 @@ public final class BuildUtils
         return beginWait(MARKER_READ_SLOT_PREFIX + projectName, timeoutMs);
     }
 
+    /**
+     * Claims the single slot for a bounded read of a project's files - a module's state line read back from a
+     * {@code .mdo} (AdoptedModuleState), and each read of ExtensionRootBuilder's look at a new extension's root file and
+     * at each file beside it, which share it: both read files under the project's location, and a file system that does
+     * not answer one of them answers neither - so reads stuck in it do not pile up one job per write: a read its
+     * deadline cut off keeps its job until the file system answers. A key of its own, so it never refuses - and is
+     * never refused by - the export wait, the validation wait or the marker read.
+     *
+     * @param projectName the project whose slot to claim
+     * @param timeoutMs sizes how long an unreturned claim holds: three times it
+     * @return the flag to set when the read's job ends - the read returned, or the job ended without running it - or
+     *     {@code null} when the job of a previous read for this project has not ended and its claim has not lapsed
+     */
+    static AtomicBoolean beginStateLineRead(String projectName, long timeoutMs)
+    {
+        return beginWait(STATE_LINE_READ_SLOT_PREFIX + projectName, timeoutMs);
+    }
+
+    /**
+     * How much longer a project's claim for a state-line read holds while its job has not ended - so a test can pin
+     * the size of the claim, which its caller chooses ({@link #beginStateLineRead}'s timeout), without waiting it out.
+     * Counted on {@link #slotClock}, the clock the claim lapses on.
+     *
+     * @param projectName the project
+     * @return the milliseconds until the claim lapses, rounded up - a claim with less than a millisecond left still
+     *     holds - or 0 when the project holds no such claim: none taken, its job ended, or the claim lapsed
+     */
+    static long stateLineReadHoldLeftMs(String projectName)
+    {
+        ExportWaitSlot slot = EXPORT_WAIT_RETURNED.get(STATE_LINE_READ_SLOT_PREFIX + projectName);
+        if (slot == null || slot.returned.get())
+        {
+            return 0L;
+        }
+        long leftNanos = slot.reopenAtNanos - slotClock.getAsLong();
+        return leftNanos <= 0L ? 0L : (leftNanos - 1L) / NANOS_PER_MILLI + 1L;
+    }
+
+    /**
+     * The one limiter behind every slot - the export wait, the validation wait, the marker read and the state-line
+     * read, each on a key of its own. A key is refused while its last claim holds: its flag is not set, and its hold -
+     * three times the holder's timeout ({@link #slotHoldMs}) - has not elapsed on {@link #slotClock} since the claim
+     * was taken. That is elapsed time on a monotonic clock, so a claim holds exactly that long whatever the system
+     * clock does; two readings are compared by their difference, as a monotonic reading's origin is arbitrary and the
+     * reading may wrap.
+     * <p>
+     * When the flag is set is for the holder to decide. The export wait, the validation wait and the marker read set
+     * it from their job's body when the platform call returns, and at once when their own cancel kept the job from
+     * starting - so a job that something else cancelled before it ran holds their claim until it lapses. The
+     * state-line read also sets it from the job's terminal notification - BoundedJob's completion callback, the job's
+     * {@code done} event, which EDT sends as well when it ends a job that never ran (AdoptedModuleState.readBounded);
+     * the same hook could serve the other three.
+     *
+     * @param slotKey the slot's key: its prefix, then the project's name
+     * @param timeoutMs the holder's timeout, which sizes the hold
+     * @return the new claim's flag, or {@code null} when the key's last claim still holds
+     */
     private static AtomicBoolean beginWait(String slotKey, long timeoutMs)
     {
         AtomicBoolean[] granted = new AtomicBoolean[1];
-        long reopenAtMs = System.currentTimeMillis() + slotHoldMs(timeoutMs);
+        long holdNanos = TimeUnit.MILLISECONDS.toNanos(slotHoldMs(timeoutMs));
         // compute(), not get()+put(): the map holds the bin lock across the whole decision, so two
         // writes finishing together cannot both see a free slot and both schedule a Job. A
         // check-then-act here would have made the limit hold only when it was not needed.
         EXPORT_WAIT_RETURNED.compute(slotKey, (name, prior) -> {
-            if (prior != null && !prior.returned.get() && System.currentTimeMillis() < prior.reopenAtMs)
+            long now = slotClock.getAsLong();
+            if (prior != null && !prior.returned.get() && now - prior.reopenAtNanos < 0)
             {
                 return prior;
             }
             granted[0] = new AtomicBoolean();
-            return new ExportWaitSlot(granted[0], reopenAtMs);
+            return new ExportWaitSlot(granted[0], now + holdNanos);
         });
         return granted[0];
     }
 
     /**
-     * How long a slot stays claimed by a wait that never came back.
+     * How long a slot stays claimed by a wait that never came back - elapsed on {@link #slotClock}, counted from the
+     * moment the claim is taken.
      * <p>
      * A stuck waiter must not shut a project out for the rest of the session, so the claim expires
      * even when nothing ever sets the flag. The platform wait can legitimately outlive its own
@@ -684,16 +765,16 @@ public final class BuildUtils
         return 3 * Math.max(1L, timeoutMs);
     }
 
-    /** A project's export-wait claim: the flag its job sets, and when the claim lapses anyway. */
+    /** A project's claim: the flag its holder sets, and when, on {@link #slotClock}, the claim lapses anyway. */
     private static final class ExportWaitSlot
     {
         private final AtomicBoolean returned;
-        private final long reopenAtMs;
+        private final long reopenAtNanos;
 
-        ExportWaitSlot(AtomicBoolean returned, long reopenAtMs)
+        ExportWaitSlot(AtomicBoolean returned, long reopenAtNanos)
         {
             this.returned = returned;
-            this.reopenAtMs = reopenAtMs;
+            this.reopenAtNanos = reopenAtNanos;
         }
     }
 
@@ -701,6 +782,20 @@ public final class BuildUtils
     static void forgetExportWaits()
     {
         EXPORT_WAIT_RETURNED.clear();
+    }
+
+    /**
+     * Puts every slot on {@code clock} and answers the clock they were on - for a test, which steps time instead of
+     * sleeping, and puts the original back afterwards.
+     *
+     * @param clock a monotonic reading in nanoseconds
+     * @return the clock the slots were on
+     */
+    static LongSupplier useSlotClock(LongSupplier clock)
+    {
+        LongSupplier previous = slotClock;
+        slotClock = clock;
+        return previous;
     }
 
     /**

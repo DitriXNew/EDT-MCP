@@ -20,6 +20,7 @@ import com.ditrix.edt.mcp.server.protocol.ToolResult;
 import com.ditrix.edt.mcp.server.tools.IMcpTool;
 import com.ditrix.edt.mcp.server.utils.CliReflectionErrors;
 import com.ditrix.edt.mcp.server.utils.FrontMatter;
+import com.ditrix.edt.mcp.server.utils.ProjectContext;
 import com.ditrix.edt.mcp.server.utils.WorkspacePaths;
 
 /**
@@ -95,6 +96,17 @@ public class ExportConfigurationToXmlTool implements IMcpTool
             {
                 return ToolResult.error(
                     "outputPath exists but is not a directory: " + outputPath).toJson(); //$NON-NLS-1$
+            }
+
+            // Resolve the project before the CLI API and before creating outputPath: an
+            // unknown name is a caller mistake, so it gets the standard value-naming error
+            // instead of a CliApiException that CliReflectionErrors logs at ERROR with a
+            // stack (#683), and no empty directory is left behind. This is the same lookup
+            // the API does (IWorkspaceRoot.getProject(name).exists()). A closed project is
+            // NOT refused: the API opens it itself (IWorkspaceSupport.setUpProject).
+            if (!ProjectContext.of(projectName).exists())
+            {
+                return ToolResult.error(ProjectContext.notFoundMessage(projectName)).toJson();
             }
             Files.createDirectories(outputPath);
 
