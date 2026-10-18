@@ -112,4 +112,104 @@ public class ApplicationDefaultChangeTest
         verify(manager, never()).setDefaultApplication(any(), any());
         assertEquals("newer-choice", raw.get()); //$NON-NLS-1$
     }
+
+    @Test
+    public void aPriorRemovedDuringNativeRestorationIsNotReportedAsRestored() throws Exception
+    {
+        var project = mock(IProject.class);
+        var manager = mock(IApplicationManager.class);
+        var previous = mock(IApplication.class);
+        var next = mock(IApplication.class);
+        when(previous.getId()).thenReturn("prior"); //$NON-NLS-1$
+        when(next.getId()).thenReturn("owned"); //$NON-NLS-1$
+        var present = new java.util.concurrent.atomic.AtomicBoolean(true);
+        when(manager.getApplication(project, "prior")).thenAnswer(call -> //$NON-NLS-1$
+            present.get() ? Optional.of(previous) : Optional.empty());
+        var raw = new AtomicReference<String>("prior"); //$NON-NLS-1$
+        doAnswer(call -> {
+            IApplication application = call.getArgument(1);
+            raw.set(application.getId());
+            if (application == previous)
+            {
+                present.set(false);
+            }
+            return null;
+        }).when(manager).setDefaultApplication(eq(project), any());
+        var change = ApplicationDefaultChange.capture(manager, project, raw::get);
+        assertNull(change.apply(next, () -> { }));
+        assertEquals(ApplicationDefaultChange.Restoration.UNVERIFIED, change.restore());
+        assertEquals("prior", raw.get()); //$NON-NLS-1$
+        verify(manager, never()).getDefaultApplication(any());
+    }
+
+    @Test
+    public void aNewChoiceDuringPriorResolutionIsPreserved() throws Exception
+    {
+        var project = mock(IProject.class);
+        var manager = mock(IApplicationManager.class);
+        var previous = mock(IApplication.class);
+        var next = mock(IApplication.class);
+        when(previous.getId()).thenReturn("prior"); //$NON-NLS-1$
+        when(next.getId()).thenReturn("owned"); //$NON-NLS-1$
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        var raw = new AtomicReference<String>("prior"); //$NON-NLS-1$
+        when(manager.getApplication(project, "prior")).thenAnswer(call -> { //$NON-NLS-1$
+            if (reads.incrementAndGet() > 1)
+            {
+                raw.set("newer"); //$NON-NLS-1$
+            }
+            return Optional.of(previous);
+        });
+        doAnswer(call -> { raw.set("owned"); return null; }).when(manager).setDefaultApplication(project, next); //$NON-NLS-1$
+        var change = ApplicationDefaultChange.capture(manager, project, raw::get);
+        assertNull(change.apply(next, () -> { }));
+        assertEquals(ApplicationDefaultChange.Restoration.PRESERVED_OTHER, change.restore());
+        assertEquals("newer", raw.get()); //$NON-NLS-1$
+        verify(manager, times(1)).setDefaultApplication(any(), any());
+    }
+
+    @Test
+    public void timedOutPriorResolutionCannotRestoreLater() throws Exception
+    {
+        var project = mock(IProject.class);
+        var manager = mock(IApplicationManager.class);
+        var previous = mock(IApplication.class);
+        var next = mock(IApplication.class);
+        when(previous.getId()).thenReturn("prior"); //$NON-NLS-1$
+        when(next.getId()).thenReturn("owned"); //$NON-NLS-1$
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CompletableFuture<Void>();
+        when(manager.getApplication(project, "prior")).thenAnswer(call -> { //$NON-NLS-1$
+            if (reads.incrementAndGet() > 1)
+            {
+                entered.countDown();
+                release.join(); // Emulate a native lookup that ignores cancellation.
+            }
+            return Optional.of(previous);
+        });
+        var raw = new AtomicReference<String>("prior"); //$NON-NLS-1$
+        doAnswer(call -> { raw.set("owned"); return null; }).when(manager).setDefaultApplication(project, next); //$NON-NLS-1$
+        var change = ApplicationDefaultChange.capture(manager, project, raw::get);
+        assertNull(change.apply(next, () -> { }));
+        var caller = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try
+        {
+            var result = caller.submit(() -> change.restore(1000));
+            assertTrue(entered.await(3, java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals(ApplicationDefaultChange.Restoration.UNVERIFIED,
+                result.get(3, java.util.concurrent.TimeUnit.SECONDS));
+            release.complete(null);
+            try (var coordination = InfobaseMutationCoordinator.acquire(3000))
+            {
+                assertEquals("owned", raw.get()); //$NON-NLS-1$
+                verify(manager, times(1)).setDefaultApplication(any(), any());
+            }
+        }
+        finally
+        {
+            release.complete(null);
+            caller.shutdownNow();
+        }
+    }
 }

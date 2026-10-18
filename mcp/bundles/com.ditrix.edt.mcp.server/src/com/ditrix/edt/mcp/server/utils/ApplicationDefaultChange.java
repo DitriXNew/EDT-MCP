@@ -6,6 +6,7 @@
 package com.ditrix.edt.mcp.server.utils;
 
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import org.eclipse.core.resources.IProject;
@@ -21,7 +22,6 @@ public final class ApplicationDefaultChange
     private final IProject project;
     private final Supplier<String> rawId;
     private String previousId;
-    private IApplication previous;
     private boolean captured;
     private String ownedId;
 
@@ -60,8 +60,7 @@ public final class ApplicationDefaultChange
                 var value = lookup.concluded() ? lookup.valueOrRethrow() : null;
                 if (value != null && value.isPresent())
                 {
-                    change.previous = value.get();
-                    change.captured = change.previousId.equals(change.previous.getId());
+                    change.captured = change.previousId.equals(value.get().getId());
                 }
             }
         }
@@ -140,21 +139,75 @@ public final class ApplicationDefaultChange
     /** Use the raw ID before dissociation; resolving a default here can erase the evidence. */
     public Restoration restore()
     {
+        return restore(ApplicationSupport.LOOKUP_TIMEOUT_MS);
+    }
+
+    Restoration restore(long timeoutMs)
+    {
         if (ownedId == null)
         {
             return Restoration.NOT_CHANGED;
         }
-        try (var coordination = InfobaseMutationCoordinator.acquire())
+        // Resolution may block: the caller never waits for a worker under the coordinator.
+        // The worker serializes explicit default/launcher writes and revalidates liveness.
+        // Association changes and GUI edits still have no atomic public SDK boundary here.
+        var restored = new AtomicReference<>(Restoration.UNVERIFIED);
+        try (var admission = new CredentialWriteControl())
         {
-            if (!ownedId.equals(rawId.get()))
-            {
-                return Restoration.PRESERVED_OTHER;
-            }
-            // Public SDK has no compare-and-set against independent GUI edits. This check/write
-            // is serialized with explicit MCP default writes only; SDK lookups can also clear
-            // a stale default. Do not claim atomic GUI or implicit-SDK-write safety.
-            manager.setDefaultApplication(project, previous);
-            return Objects.equals(previousId, rawId.get()) ? Restoration.RESTORED : Restoration.UNVERIFIED;
+            var result = BoundedJob.runWithCancellation("Restore explicit EDT application default", //$NON-NLS-1$
+                timeoutMs, monitor -> {
+                    try (var coordination = InfobaseMutationCoordinator.acquire())
+                    {
+                        if (!ownedId.equals(rawId.get()))
+                        {
+                            restored.set(Restoration.PRESERVED_OTHER);
+                            return;
+                        }
+                        IApplication livePrevious = null;
+                        if (previousId != null)
+                        {
+                            var found = manager.getApplication(project, previousId);
+                            if (found.isEmpty() || !previousId.equals(found.get().getId()))
+                            {
+                                return;
+                            }
+                            livePrevious = found.get();
+                        }
+                        // The lookup can block while a GUI choice or an implicit SDK clear occurs.
+                        if (!ownedId.equals(rawId.get()))
+                        {
+                            restored.set(Restoration.PRESERVED_OTHER);
+                            return;
+                        }
+                        if (monitor.isCanceled())
+                        {
+                            return;
+                        }
+                        try (var permit = admission.tryBeginWrite())
+                        {
+                            if (permit == null)
+                            {
+                                return;
+                            }
+                            // No public CAS against GUI edits/implicit SDK clears is available.
+                            manager.setDefaultApplication(project, livePrevious);
+                        }
+                        // A raw preference alone does not prove that its application still exists.
+                        if (previousId != null)
+                        {
+                            var found = manager.getApplication(project, previousId);
+                            if (found.isEmpty() || !previousId.equals(found.get().getId()))
+                            {
+                                return;
+                            }
+                        }
+                        if (Objects.equals(previousId, rawId.get()))
+                        {
+                            restored.set(Restoration.RESTORED);
+                        }
+                    }
+                }, admission::close);
+            return result.isSuccess() ? restored.get() : Restoration.UNVERIFIED;
         }
         catch (Exception failure)
         {

@@ -334,10 +334,17 @@ public class CreateInfobaseRegistrationTest
         {
             for (boolean hadExplicitDefault : new boolean[] {false, true})
             {
-                for (int choice : new int[] {0, 1, 2})
+                for (int choice : new int[] {0, 1, 2, 3, 4})
                 {
+                    if (!hadExplicitDefault && choice >= 3)
+                    {
+                        continue;
+                    }
                     boolean newerChoice = choice == 1;
                     boolean unavailable = choice == 2;
+                    boolean priorRemoved = choice == 3;
+                    boolean priorLookupFailed = choice == 4;
+                    boolean retain = unavailable || priorRemoved || priorLookupFailed;
                     var file = Files.createTempDirectory("mcp-default-rollback"); //$NON-NLS-1$
                     var database = file.resolve("1Cv8.1CD"); //$NON-NLS-1$
                     if (register)
@@ -356,7 +363,20 @@ public class CreateInfobaseRegistrationTest
                         var current = new java.util.concurrent.atomic.AtomicReference<>(original);
                         var prior = mock(com.e1c.g5.dt.applications.IApplication.class);
                         when(prior.getId()).thenReturn("prior-app"); //$NON-NLS-1$
-                        when(applications.getApplication(project, "prior-app")).thenReturn(java.util.Optional.of(prior)); //$NON-NLS-1$
+                        when(applications.getApplication(project, "prior-app")).thenAnswer(call -> { //$NON-NLS-1$
+                            if (current.get().equals(changed))
+                            {
+                                if (priorRemoved)
+                                {
+                                    return java.util.Optional.empty();
+                                }
+                                if (priorLookupFailed)
+                                {
+                                    throw new IllegalStateException("prior application lookup unavailable"); //$NON-NLS-1$
+                                }
+                            }
+                            return java.util.Optional.of(prior);
+                        });
                         var rawDefault = new java.util.concurrent.atomic.AtomicReference<String>(hadExplicitDefault ? "prior-app" : null); //$NON-NLS-1$
                         // Emulate EDT's trap: resolving a default after a branch switch clears the
                         // stale raw preference and may return an implicit, unrelated application.
@@ -427,7 +447,7 @@ public class CreateInfobaseRegistrationTest
                             }
                             return null;
                         }).when(applications).setDefaultApplication(eq(project), any());
-                        String expectedDefault = unavailable ? "owned-app" : newerChoice ? "concurrent-choice" : hadExplicitDefault ? "prior-app" : null; //$NON-NLS-1$ //$NON-NLS-2$
+                        String expectedDefault = retain ? "owned-app" : newerChoice ? "concurrent-choice" : hadExplicitDefault ? "prior-app" : null; //$NON-NLS-1$ //$NON-NLS-2$
                         doAnswer(call -> {
                             assertEquals("restore must precede removal, without a stale-clearing default lookup", expectedDefault, rawDefault.get()); //$NON-NLS-1$
                             return null;
@@ -437,14 +457,14 @@ public class CreateInfobaseRegistrationTest
                             original, "project", new InfobaseTarget(file, null), "default-test", null, true, //$NON-NLS-1$ //$NON-NLS-2$
                             register, new CreateInfobaseTool.Credentials(null, null, null), current::get)).getAsJsonObject();
                         assertFalse(result.toString(), result.get("success").getAsBoolean()); //$NON-NLS-1$
-                        assertEquals(result.toString(), !unavailable, result.get("rollbackCompleted").getAsBoolean()); //$NON-NLS-1$
-                        assertEquals(unavailable ? "UNVERIFIED" : newerChoice ? "PRESERVED_OTHER" : "RESTORED", result.get("defaultRollback").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        assertEquals(result.toString(), !retain, result.get("rollbackCompleted").getAsBoolean()); //$NON-NLS-1$
+                        assertEquals(retain ? "UNVERIFIED" : newerChoice ? "PRESERVED_OTHER" : "RESTORED", result.get("defaultRollback").getAsString()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                         assertEquals(expectedDefault, rawDefault.get());
                         verify(applications, never()).getDefaultApplication(any());
-                        verify(applications, times(newerChoice || unavailable ? 1 : 2)).setDefaultApplication(eq(project), any());
-                        verify(infobases, times(unavailable ? 0 : 1)).delete(any());
-                        verify(associations, times(unavailable ? 0 : 1)).dissociate(any(), any(), any());
-                        if (unavailable)
+                        verify(applications, times(newerChoice || retain ? 1 : 2)).setDefaultApplication(eq(project), any());
+                        verify(infobases, times(retain ? 0 : 1)).delete(any());
+                        verify(associations, times(retain ? 0 : 1)).dissociate(any(), any(), any());
+                        if (retain)
                         {
                             assertTrue(result.get("error").getAsString().contains("retained")); //$NON-NLS-1$ //$NON-NLS-2$
                         }
